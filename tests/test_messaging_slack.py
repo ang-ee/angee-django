@@ -798,7 +798,7 @@ def test_extract_reloads_credential_and_reused_client_between_pages(db: None, ch
 
         if change == "rotate":
             current = Credential.objects.get(pk=cached.pk)
-            current.update_material(api_key="xoxp-rotated-token")
+            current.replace_material({"api_key": "xoxp-rotated-token"})
         else:
             current = Credential.objects.create_local_credential(
                 channel.owner,

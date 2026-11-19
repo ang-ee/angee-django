@@ -10,6 +10,1153 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: one owner proposes same-person pairs. A pull-only
+  directory's contact that may only claim an address another live party is
+  linked to proposes them through `Party.objects.propose_same_person_as_system`
+  (reason `parties.directory.contact_claim`), citing the handle that links them,
+  once the page commits, instead of through the directory's own rule. The
+  `parties.directory_match` rule stays for what no address links, which the
+  verb cannot cite and its job would withdraw: the people of the records a merge
+  at the source replaced, and an account whose sign-in address no handle of
+  theirs carries. Its earlier proposals of address pairs stay in review as they
+  are, the pairing job states no second proposal beside one, and merging the two
+  withdraws it. A contact's phone number another live party is linked to is now
+  only claimed, like an email (`PartyManager._contested_addresses`, through the
+  pairing's read `same_person_links(addresses=, every_address=True)`): before, it
+  was stated in full and its holder moved to the contact's person. A number four
+  or more parties are linked to is still only claimed and pairs nobody. Changes
+  in what is proposed: a pair of a person later trashed or merged leaves the
+  review at once and is withdrawn by the next pairing run; two records of one
+  directory that share an address, and a party linked only by a name
+  suggester's claim, are no longer proposed. Upgrade: no migration, resource or
+  permission change. A number a directory already took this way keeps its holder
+  until a person merges or decides the pair, or the number is restated: an
+  unchanged record is not applied again, and a changed one finds the contact's
+  person holding the number and states it in full again.
+
+- `angee.parties`: the read of a directory's contacts is a stored grant alone.
+  `parties/directory#contact_read` is `contact_reader` (revision 31); the
+  integration owner's column arm is gone, because a column arm is never folded
+  away by an actor's grant profile and kept the chain from a party to a
+  directory in every read of a party, for every actor (a member's person
+  document planned about 17.9 MiB more). `Directory.objects.connect` grants the
+  connecting owner `contact_reader` (`Directory.grant_owner_contact_read`, the
+  one writer), and provision grants each existing directory's owner where
+  missing (`grant_directory_owner_contact_reads`, beside
+  `resolve_stale_owners`). A transfer moves no grant: a person grants a later
+  owner. Upgrade: `rebac sync`; provision runs the repair.
+
+- `angee.messaging`, `angee.workflows_integrate`: a send and a workflow step ask
+  about discovery again once they hold their lock. Both asked before taking
+  `delivery_lock()` or `sync_lock()`, so a secret re-entered while they waited
+  for it sent one reply, or ran one step's IO, on the new secret. Under the lock
+  they now ask the channel or bridge to re-read its own readiness columns
+  (`Integration.require_stored_discovery_ready`): a send defers as for a pending
+  discovery, and a step waits as for contention.
+
+- `angee.integrate`: the discovery checks cost no more than they need. A push
+  asked about discovery for each candidate before its pinned, held, unchanged and
+  released skips, each time reading the whole integration row; it now asks once
+  per write, after the skips, reading only the columns
+  `Integration.require_discovery_ready` uses (`Integration.discovery_readiness_fields`),
+  and every stream lock (`SyncStreamManager.lock_current`) joins only those
+  columns of its integration instead of the whole row. The exemption from the stream lock's discovery check is a module-level context,
+  `angee.integrate.states.exempt_from_discovery()`, instead of a stream manager
+  method that ignored its manager, so pinning a record and dismissing a failure
+  no longer read the stream row only to reach it.
+
+- `angee.integrate`: re-entering exactly what is stored changes nothing, even
+  beside a transient answer. `CredentialManager.reenter_secret` compared the
+  whole decrypted material, so the identical secret re-entered while a pairing
+  answer was stored (`Credential.update_material`) sent the integrations to
+  discover again. It now compares the kind and its own secret fields
+  (`CredentialKindHandler.secret_material_fields`), and holds only a keyed
+  digest of them across the caller's write, not the decrypted material in the
+  generator's frame, which an error reporter keeps.
+
+- `angee.integrate`: a disconnected integration waits for the discovery its
+  reconnect runs. A secret re-entered on a disconnected integration leaves
+  discovery unsettled until `connect` awaits it, but
+  `Integration.require_discovery_ready` took that for a discovery that failed
+  and refused permanently, so a queued reply failed for good. It now refuses
+  transiently ("Connection discovery runs when this integration is connected
+  again."), and delivery defers the send as it does for a pending discovery.
+
+- `angee.integrate`: one rule says which credential is derived. Once a source
+  grant was removed by a path that skips its disconnect, `Integration.derived_credential_id`
+  still called the attached credential derived while the manager's own query did
+  not: `CredentialManager.store_derived` refused an overwrite its contract allows,
+  and `reenter_secret` accepted re-entry of that credential into a discovery that
+  could only fail for want of its grant. The query is gone; the re-entry refusal
+  reads the property on the locked rows the credential serves, and `store_derived`
+  on the rows it serves. The refusal now also says to connect the integration
+  again when the grant is gone.
+
+- `angee.knowledge_integrate_notion`: a token of another workspace fails
+  discovery. Notion's discovery called `GET /v1/users/me` and recorded nothing,
+  so an internal token of another workspace, re-entered on a connection, passed
+  rediscovery, and the sync resumed on the old cursor and links and mixed two
+  workspaces into one vault. Discovery now reads the workspace the token's bot
+  belongs to (`bot.workspace_id`, which Notion's answer requires), and
+  `NotionBackend.apply_discovery` keeps the first one in
+  `Bridge.subscription_state`. Another workspace fails discovery with "This
+  connection belongs to another Notion workspace; create a separate connection.",
+  and an answer that names no workspace is refused rather than matched. A
+  connection discovered before it kept a workspace is checked against the
+  workspace its Notion account was authorized for (the OAuth token answer that
+  connect keeps in `ExternalAccount.identity_claims`); only one with no such
+  account, made with an API token, records the workspace its next discovery reads.
+
+- A deployment declares its static page head in `ANGEE_UI.shell.site` (`title`,
+  `description`, `icon`, `touchIcon`, `image`), selecting files addons name in
+  their `web/package.json` `angee.assets`; Vite emits them and writes the title,
+  description, Open Graph, `twitter:card` and icon tags. Behaviour change: a
+  deployment with `shell.brand` now gets the brand's name as its static
+  `<title>`, and nothing else without `shell.site`. Absolute preview URLs use the
+  stack's `ANGEE_PUBLIC_ORIGIN` environment variable, the only origin the web
+  build reads: one authored only in a settings file leaves `og:url` out and
+  `og:image` relative.
+
+- Addons require django-zed-rebac 0.36.1. With none of its new settings set,
+  statements, statement counts and decisions are 0.35.2's, so nothing changes for a
+  host. (0.36.0 cannot be imported before app population, which Angee's pytest
+  plugins and permission modules need; 0.36.1 restores it, and the floor keeps hosts
+  off 0.36.0.) It adds `REBAC_ENABLED` (default `True`): a private single-user
+  project may set `REBAC_ENABLED: false` in `settings.yaml` to enforce nothing,
+  which is also the baseline for profiling a document's own queries without REBAC.
+  The library still stores relationships and syncs the policy, so `rebac sync` and
+  provisioning are unchanged, and it emits the system check `rebac.W011` and one
+  startup warning while unenforced. Its experimental read settings stay unset here.
+
+- Parties: two people selected in the people list (or two organizations in theirs)
+  offer Merge… in the selection bar, which opens the existing compare-and-merge
+  page for that pair; one, or more than two, show it disabled with the reason. The
+  merge page's Cancel and Keep separate now go back to where the comparison was
+  opened (a list, a person, the review queue, in whichever app mounts the list)
+  instead of always to the review queue, which stays the fallback for a
+  comparison opened directly.
+
+- New addon `angee.parties_integrate_hubspot` (`angee-parties-integrate-hubspot`)
+  registers the `hubspot` directory backend: one HubSpot account's contacts read
+  one way into parties over HubSpot's `2026-09` REST paths, with no HubSpot SDK.
+  Its requests are integrate's pinned request (`HttpClient.request`), sent
+  through the backend's own client (`HubSpotClient(http, headers)`), whose
+  refusal rule (`HttpRefusal`) it shares; it adds a 423 as transient (at least two seconds), a
+  429 without `Retry-After` waits for its policy's window (ten seconds, or an
+  hour for the daily limit, which its message names), and HubSpot's rejection of
+  a key that lacks a service key's usual shape says to check it for extra or
+  missing characters. Its `credential_blocker` admits only a static-token
+  credential holding a service key with `crm.objects.contacts.read` that does not
+  need reconnecting, judging the key as the request sends it (only an empty one
+  is refused), and it declares no OAuth client. Connection discovery
+  (`requires_connection_discovery`) learns the account's hub id, and its web host
+  when HubSpot states one, into the directory's `subscription_state`, so a
+  directory syncs only after discovery and its source links open each contact in
+  HubSpot; a later discovery that finds another account refuses the key. The
+  connection test keeps the base's check, refusing a credential that needs
+  reconnecting without a request, then is one one-contact read. A baseline lists contacts by record id;
+  a delta searches by modified time without an offset, reaching back five minutes
+  for HubSpot's lagging search index only until a pass that started that long
+  after the newest change read has completed, so a quiet account costs one search
+  per poll; every pass keeps HubSpot's time (the `Date` of its first answer),
+  never the local clock; an unreadable stored cursor
+  starts a new baseline, and a transient refusal inside one page keeps what that
+  page read. A merge's survivor lands on a replaced record's person. A contact
+  that leaves HubSpot's id walk (archived, deleted or merged away) is withdrawn by
+  the second absence sweep; a read of the contact withdraws it at once only when
+  HubSpot names it not found or a survivor names it replaced, and an id HubSpot
+  merely leaves unanswered is a transient refusal; an empty id walk is believed
+  only when HubSpot's search counts no contact either. Each record of an answer is
+  validated alone: one HubSpot states unreadably is quarantined under its id
+  (`unreadable_record`) while its page lands, and one without a usable id is
+  logged and skipped. A platform admin connects an account
+  from the console: `@angee/parties-integrate-hubspot` adds a "HubSpot account"
+  entry to `parties.directories#toolbar`, whose dialog sends a name and the
+  service key (masked, trimmed) to `connect_hubspot_directory(name, service_key)`, which runs
+  `Directory.objects.connect`; discovery then arms the first sync. The `full`
+  project profile enables the addon. A consumer's `DirectoryMapping` of the
+  `hubspot` backend names contact properties by their internal names: while one
+  does, every read of contacts asks HubSpot for them beside the backend's own and
+  hands their values to the base, and a property the account does not define,
+  which HubSpot leaves out, reaches the mapping as not sent. `parse_string`,
+  `parse_options`, `parse_number`, `parse_bool`, `parse_datetime` and
+  `parse_date` (`angee.parties_integrate_hubspot.client`) read HubSpot's string
+  values by property type for mapping authors; each raises `ValueError` for a
+  value not of its type, which refuses that contact alone. A consumer reads
+  another HubSpot object type (deals, notes) as plain records with a
+  `HubSpotObjectMapping` registered under
+  `ANGEE_HUBSPOT_OBJECT_MAPPING_CLASSES.<key>` and checked at startup: each adds
+  one pull-only stream (`objects`, partitioned by the key) with the contacts
+  stream's pass, sweep and per-record refusals, on the type's own modified
+  property (`hs_lastmodifieddate`), asking for exactly the mapping's properties
+  and, when it names `contacts`, each record's associated contacts in one
+  association read per page (`HubSpotClient.associations`). Its `apply_record`
+  receives a `HubSpotObjectRecord` (id, properties as sent, contact ids, and
+  `person(contact_id)`) and states through the record's link as the integration;
+  `ContactNotLanded` makes a record wait for its contact on the driver's
+  missing-dependency refusal; `withdraw_record` runs when HubSpot says the record
+  is gone; its `version` is the stream's mapping, so a change replays every record
+  once. An optional `project(record)` turns the record as HubSpot sent it into the
+  values the link keeps and compares (by default the requested properties as
+  sent), so a note's body can be kept as its digest and a change the projection
+  hides applies nothing; `apply_record` receives those `values` and, held in
+  memory from the read that applies it and never stored or logged, the
+  `properties` HubSpot sent, so it can write the full text. Without them (an apply
+  that did not follow its own read, which no driver path makes today), reading
+  `properties` raises `PropertiesNotRead`, a missing-dependency refusal the rescan
+  answers with a new read. An association read
+  takes an id HubSpot names in its `NO_ASSOCIATIONS_FOUND` error as having no
+  contacts, and refuses any other error or an id neither answered nor named, for a
+  later retry. A directory declares its object streams only once it has read its
+  contacts in full, so a first sync lands the contacts and the next the objects,
+  and no record waits for a contact HubSpot already held. With no object mapping a
+  directory reads only contacts. Operator messages
+  never repeat HubSpot's message text or error category. The scripted account
+  (`angee.parties_integrate_hubspot.testing.server`) builds its invented keys at
+  runtime (`service_key`), so no literal in the repository has a real key's shape.
+
+- `angee.parties`' web fragment owns the connect ceremony of a contacts
+  directory: `ConnectDirectoryAction` (`@angee/parties`) renders the menu trigger
+  and the typed mutation dialog with the shared submit and failure wording, and a
+  vendor declares only its connect mutation, its fields, its message range in the
+  parties namespace (`<prefix>.button`, `.title` and `.description`) and how raw
+  values become the mutation's variables. CardDAV and HubSpot are reduced to those
+  declarations: their copied dialogs and their own i18n namespaces are deleted,
+  and their words join the parties namespace under `directory.carddav` and
+  `directory.hubspot`. A connect now refreshes the directories list, which is a
+  resource view (`useAuthoredResourceMutation`; before, only the live
+  subscription updated it), and its entered key or password leaves the mutation
+  cache once the connect settles (`transient`, whose `@angee/refine`
+  documentation now names secret inputs). The fragment exports the toolbar as
+  `DIRECTORIES_TOOLBAR`, and each connect entry `requires` `DIRECTORY_CREATE`
+  (`parties.Directory#create`, the permission `Directory.objects.connect`
+  checks), so the Connect menu is absent for an identity the mutation refuses.
+
+- `@angee/ui`: the `password` widget is the masked entry of a secret that is not
+  the person's own sign-in password, and tells the browser so
+  (`autocomplete="new-password"` when the field declares no hint of its own):
+  a vendor key after a name field no longer
+  reads as a login form the browser fills with the console's saved sign-in. The
+  sign-in form keeps its own `current-password` hint. The widget's read form
+  shows nothing for an empty value instead of a mask. The `textarea` widget shows
+  the field's placeholder, and its label only when the field declares none.
+
+- `angee.integrate`'s console credential form enters a static token's key in the
+  `password` widget (it was a plain text input) and drops the entered material
+  from the mutation cache once the create settles (`transient`). A private key
+  and a service-account key file are multi-line, so they stay in text areas,
+  which now show their placeholders.
+
+- `angee.knowledge`: a source's text about a person, as a note in their folder:
+  `RecordBindingManager.write_sourced_page(party, vault=, role=, folder_title=,
+  title=, body=, written=)` finds the note by its binding to the party under
+  `role` (a slug of the consumer's; knowledge's `related` and `folder` are
+  refused), the oldest live one, so a renamed or moved note stays the source's,
+  and makes one titled `title` under the folder only when there is none (a
+  taken title refuses it, saying so). It writes nothing for the same text, replaces a note
+  that still holds what the source last wrote (compare-and-set on its hash),
+  and appends the newer text, quoted under a marker line, below a person's
+  edit, never over it (`SourcedWrite`). `angee.parties`:
+  `DirectoryMapping.applied(link)` returns what the mapping's projection was
+  when the link last applied, which a mapping passes as `written`.
+- `angee.knowledge`: one vault for people. Knowledge's install tier provisions
+  `Vault.PEOPLE` (`knowledge.vault_people`), unowned and administered by
+  platform admins and knowledge's vault roles; a deployment grants it with a
+  vault's ordinary grants (viewers through its share surface, editors
+  administratively). Whoever reads it reads every person's pages, people they
+  cannot read in parties included; finer control is a later version.
+  `RecordBindingManager.party_folder(party, vault=, title=)` finds or makes a
+  party's folder page bound under the new `FOLDER_ROLE` (`folder`), locking the
+  party first, and returns the oldest when a merge left several.
+  `PageManager.create_in` without an actor, inside a system context, creates
+  the page as system work. Nothing changes in knowledge's permission schema.
+  Upgrade: load the install tier (provision does).
+- `angee.parties`: a directory mapping's refinement may set the preferred flag
+  of an email or phone the source sent (`REFINABLE_FIELDS` gains `emails` and
+  `phones`, `POINT_FIELDS`); a refinement changing an address's value, label or
+  order fails the extract. The mark on the contact's own address is then stated
+  by the ingest once and goes with the mapping; a handle the contact does not
+  bring keeps `Handle.objects.upsert(..., is_preferred=True)`.
+- `angee.parties`: a person's nickname is identity, like the name parts:
+  whoever reads the person reads it, a directory's contact readers, identity
+  readers and thread or task readers included. `parties/person` drops
+  `read__nickname` (revision 28), and `PersonType.nickname` is a non-null
+  `String`. The notes, the first-met note, the handle count, the birthday and
+  the anniversary stay private (`read_private`). Upgrade: `rebac sync`; clients
+  regenerate the nickname's type.
+- `angee.parties`: a directory mapping refines the neutral contact before the
+  ingest states it (`DirectoryMapping.refine` and `refines`, among
+  `REFINABLE_FIELDS`: the name parts, the dates, the employment), so a source
+  field that belongs in a group the ingest states, a house's name for a person
+  as the `nickname`, is compared, versioned and stated by the ingest's own
+  statement, and goes with it when the mapping is removed. A mapping may declare
+  no statement group: one that only refines, or writes tags
+  (`TagAssignment.objects.attach`) or a handle's preferred mark
+  (`Handle.objects.upsert(..., is_preferred=True)`) in its `apply_record`, which
+  now writes nothing by default. Tags and marks are not taken back when the
+  mapping or the link goes; the ingest keeps an address the contact itself lands
+  as preferred as its source says. `parties.E003` refuses only a group the
+  person has not; `parties.E005` a refined field outside `REFINABLE_FIELDS`;
+  `parties.E006` two mappings of one backend refining one field.
+- `angee.knowledge`: a party (a person or an organization) is a record-binding
+  target, read through the party's `read` and written through its `write`.
+  Parties cannot name knowledge (knowledge depends on messaging, which depends
+  on parties), so knowledge declares the arm in its own
+  `permissions.extends.zed` (revision 4) and now requires `angee-parties`
+  directly; a person's and an organization's records list
+  `knowledge.RecordBinding` and show knowledge's Pages group. A merge moves the
+  merged party's bindings to the survivor, collapsing one page bound to both
+  under one role. Upgrade: `rebac sync`.
+- `angee.parties`: a person has `languages`, the ISO 639 codes they use with
+  us, most preferred first (`LanguageCodesField`: a JSON list that stores a
+  two-letter code where one exists and refuses a region subtag), and
+  `occupation`, free text apart from an employment's title. Each is a statement
+  group of its own on the person, ranked person, system of record, directory,
+  import; no neutral contact carries them (`Person.MAPPED_ASPECTS`), so
+  `Person.contact_aspects()` leaves them out and a directory mapping states them.
+  The people resource reads and writes both and the person form shows them.
+  Upgrade: the host generates the parties migration (two person columns, the
+  same two on the person statement table, its aspect choices and per-group
+  constraints) and applies it.
+- `angee.parties`: each source creates its own people, and a merge joins them;
+  adoption is an option of a pull-only directory, off by default. A directory's
+  configuration has a model of its own, `DirectoryConfig`
+  (`angee.parties.backends`, the base backend's `config_model`, which a
+  backend's own model extends, as `CardDavConfig` now does), whose
+  `adopt_existing_people` turns adoption on; every save and
+  `Directory.objects.connect` validate it, and a directory that writes back
+  refuses it. Off, a contact lands on the person its own link names (through a
+  tombstone too), on the person a replaced record of its stream hands over, or on
+  a new person, which only claims an address someone else holds, claims or signs
+  in with and proposes that person as its same person;
+  `PartyManager.ingest_contact` refuses any other person a caller hands it. On,
+  adoption works as before, with every limit and `parties/person#adopt`, and its
+  known limit (an adopted person's values no statement holds) stands.
+  `DirectoryBackend.adopts_existing_people()` is the one predicate, asked by the
+  target decision before it enters adoption. Upgrade: an existing pull-only
+  directory adopts nobody until its configuration turns the option on; a link
+  already bound to an adopted person keeps it. A vendor backend implements
+  nothing new; one that declares its own config model extends `DirectoryConfig`
+  to offer the option. The permission schema is unchanged (revision 27).
+
+- `angee.parties`: taking control of an address never refuses.
+  `HandleManager.claim_control`, which OIDC login, `Directory.objects.connect`
+  and the attribution of a user's own messages (`HandleManager.for_user`) call,
+  states the address for the user's person as a claim for review at
+  `Party.CLAIM_CONFIDENCE` where someone holds it whom the user may not take it
+  from (`PartyManager.holding_blocker`), and leaves control and the holding as
+  they are. A login whose provider address another party holds signs in and
+  logs no error, and a connect whose account address another party holds
+  connects; both raised the holding rule's refusal since it moved to the handle's
+  resolution. Neither contested path (another controller, another holder)
+  rewrites the handle's display fields any more. The holding rule itself still
+  refuses a person's winning stance.
+
+- `angee.parties`, `angee.parties_integrate_carddav`, `angee.iam`: smaller
+  findings of the third adoption review. A directory's configuration is
+  validated strictly where a person edits it, `Directory.objects.connect`
+  (each vendor's connect mutation hands it its configuration): a setting the
+  backend's config model does not know is a `ValidationError` naming it, before
+  the connection test. A save that edits nothing keeps what is stored, so
+  CardDAV's configuration (`CardDavConfig`, `CardDavStreams`, `ContactsPolicy`)
+  keeps unknown keys at every level instead of dropping them on every save, and
+  its reader ignores them. `connect` resolves the backend once, before anything
+  else, and checks its vendor row before building, so an unknown backend is
+  refused as itself, never inside the handling of another error. An
+  organization link returning from a tombstone keeps its own organization
+  (`ingest_organization` refused it when handed it, and minted a second when
+  handed none). `UserManager.sign_in_addresses(emails, *, key=None)` also
+  compares by a caller's key, read among the person accounts at the given
+  addresses' domains in the same one query; parties passes the handle's
+  normalized key, so an account address spelled the provider's other way, which
+  neither the contact nor any handle uses, still counts. `Party.CLAIM_CONFIDENCE`
+  names the confidence of a claim for review (0.4), and a test holds the
+  schema's `stating_directory` threshold to `Party.REVIEW_CONFIDENCE`.
+
+- `angee.parties`: the directory mapping seam's loose ends. A mapping refuses a
+  record by raising `ValueError` only: a `TypeError` (or any other error) from
+  `project` or `apply_record` is a bug and fails the page with its traceback,
+  where it refused every record with no trace. A refusal is logged as a warning
+  with the mapping's key and the record's key, never the value. A refused record
+  is retried by the stream's rescan on its backoff, so a mapping fixed in code
+  applies it without a source change (it was documented as applying once its
+  source changes). A mapping may not declare a group the contact ingest states
+  (`parties.E004`, which would overwrite the ingest's statement); a mapping that
+  states a group no registered mapping declares fails the page with
+  `ImproperlyConfigured` (it used to be stated and withdrawn at once). The
+  ingest's groups are read from parties' own declarations,
+  `Person.contact_aspects()`, which replaces the hand-kept
+  `PartyManager.contact_aspects`; the base withdraws the groups nobody states
+  before the mappings apply.
+
+- `angee.parties`: locks and stale reads. `DirectoryBackend.prepare_page`'s one
+  lock call also takes the people its tombstones' links name and the person of
+  an account a page address signs in with (the new
+  `PartyManager.account_people(emails)`, the account rule `people_for_emails`
+  already answered by), with their handles, which a tombstone's withdrawal and a
+  proposal with such a person used to lock after the page's parties. A party
+  merge locks every participant's handles, then the participants, in one call
+  (`Party.lock_merge_records`, the base's own hook; `Party.lock_for_merge`, which
+  locked one participant's handles after another participant, is deleted). A
+  tombstone's withdrawal marks the addresses it stated changed in the page's
+  lookup (the new `PartyManager.withdraw_contact`), so a later contact of the
+  page with that address no longer claims an address nobody holds. The
+  PostgreSQL lane runs the directory backend's lock tests by node (a page
+  against mail ingestion, a merge, a confirmation and an account's adoption);
+  the module's strict expected failure (open decision O15) would read as a skip
+  in that lane's zero-skip gate.
+
+- `angee.parties`: the confirm rule is keyed on the address, at the owner of the
+  effect. Every person's stance that wins a handle for a party (a confirmation,
+  taking control with `HandleManager.claim_control`, a confirmation a history
+  revert restores) is checked in the handle's resolution (`Party.apply_handle`),
+  where its author needs write on every other holder of the address as the page
+  lookup reads them (the new `PartyManager.holding_blocker(party, handle, *,
+  author)`): each live party any spelling of the address resolves to, an
+  organization included, each lapsed holder, and the person of the account whose
+  sign-in address it is. An account takes its own sign-in address whoever holds
+  it, and nobody may while the account has no person. A refusal raises
+  `PermissionDenied("This address cannot be given to this party.")` whoever the
+  holder, and the whole write rolls back. The `Party.confirm_statement` override,
+  which read only the exact handle row's live holder, is deleted; a merge's own
+  maintenance is admitted.
+
+- `angee.parties`: a lapsed holder is still the holder. A trashed person whose
+  applied statement of an address is still current (the new
+  `PartyManager.lapsed_holders(platform, values)`) keeps the address for what a
+  pull-only contact may state: the contact only claims it, and a claim names
+  nobody to adopt by it, so trashing the holder before the contact first states
+  the address, while the source dropped it, or while another source only claims
+  it no longer hands the address to the directory's person for good once the
+  holder is restored. `EmailLookup.lapsed` carries them;
+  `PartyManager.people_for_emails` answers exactly as before. A contact link
+  leaving a person reads the addresses it withdrew again before the contact's
+  are judged.
+
+- `angee.parties`: every adoption limit is checked on rows read under the page's
+  locks, for every way a link reaches a person. Only a bound, observing link of
+  the contact's own stream keeps its person or hands a replaced record's over
+  (`PartyManager.holding_links`); any other link's person, a pull-only record
+  returning from a tombstone included, is admitted again, and a two-way stream's
+  own link keeps its person through a tombstone. "No other contact of the
+  directory names the person" counts every bound link that has not withdrawn it,
+  tombstoned ones included (the records a merge replaced are the contact's own).
+  `PartyManager.adoption_blocker(person, *, link, parsed, lookup=None,
+  replaces=())` replaces `through=` with the contact `parsed`: it refuses when any
+  address the contact carries, in any spelling a handle holds, is a person
+  account's sign-in address, whether or not the account has a person, and it
+  reads the person's liveness (neither trashed nor merged away) and account on a
+  freshly loaded row. A pull-only contact also only claims an address an account
+  signs in with. `DirectoryBackend.prepare_page` locks the page's whole handle set
+  (every spelling of its addresses and every handle stated on the parties its
+  links and addresses name) and those parties in one call, then reads who its
+  addresses name once (`PartyManager.lookup_emails`, returning the new
+  `EmailLookup`); the target decision and `ingest_contact(..., lookup=)` read it,
+  an address a record lands is read again by the next record that asks, and each
+  adoption verdict is kept for the page. `ingest_contact` takes the contact's
+  locks before it decides, whatever its target. `angee.iam`:
+  `UserManager.sign_in_addresses(emails)` answers which given addresses a person
+  account signs in with, by the key `person_for_email` reads, in one query.
+
+- `angee.parties`: smaller findings of the second adoption review.
+  `Directory.objects.connect` refuses to run inside a caller's transaction
+  (`RuntimeError`: its connection test is remote); only a missing vendor row reads
+  as "load resources", and any other `ImproperlyConfigured` stays itself; each
+  directory's credential is named `<backend label> — <display name> (<directory
+  id>)`, unique by construction, so a second connection or a reconnect of one name
+  gets its own credential, and the refusal of a taken name is gone (it counted
+  disconnected and trashed integrations too). The directory is created
+  disconnected and then connected with its credential, entering connection
+  discovery, and the first sync is requested only when the directory is ready for
+  work: a backend that requires discovery gets its first sync when discovery
+  completes, where connect used to log a refused request with a traceback. CardDAV's
+  configuration ignores unknown keys on every save and at read and validates the
+  keys it knows, where any full save of a directory carrying an unknown key was
+  refused. `parties/person#adopt` follows editors where they are granted, on the
+  party (`owner + editor + party->editor`): the person-level arm alone was empty
+  in practice. Schema revision 27: `rebac sync` after compose. A contact link
+  leaving a trashed person withdraws what it stated there even while another link
+  of its source names that person (`RecordLink.withdraw_statements` would move it
+  to that link), and the handle an adoption found the person by is read only from
+  the source's current asserted identity statement.
+
+- `angee.parties`: organizations take no existing target yet.
+  `PartyManager.ingest_organization` takes the record's locks (the passed
+  organization and every spelling of its handles) before it decides, and refuses
+  an existing organization new to its link with a `ValidationError`, where it
+  used to bind any organization it was handed, unadmitted, before locking, and
+  state its addresses in full there. A link keeps its own organization, and an
+  unbound one mints. Matching an existing organization, and its admission rule,
+  come with the organizations stream (open decision O9). No caller outside the
+  tests passes one today; no vendor stream lands organizations yet.
+
+- `angee.parties`: a claim stays a claim. An address a pull-only directory
+  already claims on its contact's person is claimed again on every record until
+  that person holds it through another statement or a person confirms the claim;
+  before, a holder that lapsed (trashed, or its statement withdrawn) left the
+  contact's claim as the only one, the next record stated it in full, and the
+  directory then outranked the returning holder's rule statement for good.
+  Confirming a handle statement another live party holds now needs write on that
+  holder too (`Party.confirm_statement`, so the review queue's accept and the
+  identity review's confirm both check it); it used to need write on the claimant
+  only. A claim for review lends a directory's contact readers nothing:
+  `parties/handle#stating_directory` reads current claims at confidence 0.5
+  (`Party.REVIEW_CONFIDENCE`) or above, so the holder's handle row, its display
+  name and its controlling account stay with their own gates. Schema revision 26:
+  `rebac sync` after compose.
+
+- `angee.parties`: a consumer addon maps a pull-only directory backend's source
+  fields onto its own person columns with a `DirectoryMapping`
+  (`angee.parties.backends`), registered under its key in the new
+  `ANGEE_DIRECTORY_MAPPING_CLASSES` setting from its `autoconfig.py`. It names
+  the backend, the source `fields` and a `version`; `project(row)` keeps what may
+  enter the system and `apply_record(person, values, *, link)` states it on the
+  landed person through the contact's link, after the ingest in its savepoint.
+  A backend asks its source for `DirectoryBackend.mapped_fields()` and passes
+  their values to `observe(..., row=...)`; the payload and the compared mapped
+  payload keep only the projections, under a `mappings` key that appears only
+  while a mapping applies. Each mapping is one `MappingContribution` of the
+  contacts stream, so adding, removing, exchanging or re-versioning one replays
+  every contact once. A mapping declares the person statement groups it states
+  (`aspects`), and on every pull-only record the base withdraws what the link
+  states in a person group neither the ingest (`PartyManager.contact_aspects`)
+  nor a registered mapping states, so a mapping no longer registered has its
+  statements withdrawn on its replay. A `project` or `apply_record` that raises
+  `ValueError` or `TypeError` for one record refuses that record alone
+  (`mapping_refused`, its details naming the mapping, never the value), where it
+  failed the whole page; it applies once its source changes. A backend's error
+  payload passes its other keys to the refusal's details. The system check
+  refuses a mapping of a backend that writes back (`parties.E002`), of no
+  registered backend (`parties.E001`), or declaring no group or one the person
+  has not (`parties.E003`). CardDAV and any backend without a mapping keep their
+  payloads, comparison and mapping version.
+
+- Sharing a directory shares its contacts. `parties/directory` has a stored,
+  grantable `contact_reader` relation (shared through the record-access surface
+  under the directory's `write`) and a `contact_read` permission: its grantees and
+  the integration's owner read the people and organizations the directory's live
+  links name, and the handles, addresses and employment edges those links
+  currently assert, never another source's, never `read_private` or a `read__*`
+  gate, and nothing of the directory, its integration, streams, links or
+  credential. A tombstoned or unbound link, or a withdrawn or superseded claim,
+  lends nothing. Schema revisions 21 to 24: a database synced at an intermediate
+  revision, where the derived permissions were named `read_contacts` (and the
+  party's `contact_reader` at 21), retires those names through provision's
+  `--skip-checks sync --prune-stale --yes`.
+
+- A statement member declared as a new foreign key keeps the `related_name` it
+  declares (`StatementRecords.copy_fields`); one that declares none stays hidden
+  as before. The parties handle member declares `%(class)s`, so `Handle` reaches
+  its party statements as `partystatement`, the same spelling Django gives the
+  statement subjects' reverses. A host generates one state-only `AlterField` on
+  `partystatement.handle` with `makemigrations parties`; Django issues no SQL.
+
+- The directory backend seam is neutral of CardDAV. `ParsedContact` loses `uid`,
+  `etag`, `raw_vcard`, `href` and `department` (a backend keeping wire facts
+  subclasses it, as CardDAV's `ParsedCard` does); `ParsedAddressbook.href` is
+  `key`. A backend returns payloads keyed by external key (`observe`,
+  `extract_contacts`, `read_contacts`, `contact_keys`, which seeks past `after`)
+  and the base builds and applies the records (`record_changes`). Its
+  `direction` is pull-only unless it declares otherwise; a pull-only stream
+  compares what its source last applied, withdraws a confirmed-absent contact's
+  statements and lets a payload name the keys a source merge replaced.
+  `DirectoryBackend.probe()` is folded into `test_connection()`, which
+  `Directory.test_connection` forwards to; the
+  `remote_delete` stream option, validated and never read, is removed. CardDAV
+  links need no migration and no re-download.
+
+- A merge at the source keeps a pull-only directory's pages to one record per
+  payload: `record_changes` no longer appends the replaced keys, which leave the
+  source's key walk so the absence sweep tombstones their links, and an identity
+  read of one answers it gone. The survivor lands on the first replaced record's
+  person in the source's order (`observe` now keeps `replaces` in that order), and
+  what only a replaced record stated on that person is withdrawn rather than moved
+  to the survivor's link (`ingest_contact(..., replaces=...)`). One function
+  decides a contact's target (`DirectoryBackend._contact_target`), once, under the
+  contact locks; a trashed person is nobody's target
+  (`PartyManager.contact_people`), so its record lands on a new person instead of
+  quarantining. `ingest_contact` and `ingest_organization` decide nothing: they
+  land on the target given or mint one, and refuse to move a link off a live
+  party, `target=None` included. `DirectoryBackend._local_states` is public as
+  `local_states`, the binding seam for a backend that builds its own records, and
+  `lock_contact` takes several parties. CardDAV admits only Basic-auth
+  credentials and names its server by host name and port in its connection
+  message. Its configuration is a typed config model (`CardDavConfig`:
+  `server_url`, and per address book a `ContactsPolicy` whose only key is
+  `local_delete`), so every save of a directory validates the keys it knows and
+  drops the others; a book's stream reads only what the policy knows, so a stored
+  setting the write never validated
+  no longer fails the sync (it did since the seam change). The directory's config
+  form shows the server URL and the book policies through the JSON control.
+
+- Connecting a directory is one verb, `Directory.objects.connect(owner, *,
+  backend_class, display_name, credential_kind, material, config=None)`
+  (`DirectoryManager`): the backend admits the unsaved credential and tests the
+  connection outside any transaction, a refusal is a `ValidationError` with the
+  backend's own operator message and nothing is saved, then the credential and
+  the directory are created atomically, the address the account signs in as
+  (`DirectoryBackend.account_address`, new, `""` by default) becomes the owner's
+  own handle, and the first sync is requested. CardDAV's connect mutation keeps
+  its GraphQL contract and calls it (its `connect.py` is gone), so connecting a
+  CardDAV account now queues its first sync, which it did not before; a refused
+  connection test now reaches the client as a `VALIDATION` error carrying the
+  server's refusal instead of `INTERNAL`. The `carddav` vendor is a master
+  resource adopted by slug: load resources before connecting the first one.
+
+- A directory's credential rule is integrate's one admission rule:
+  `DirectoryBackend.credential_blocker(credential)` returns a public-safe
+  refusal or `None` (the base admits any credential), `Directory.credential_blocker`
+  forwards to it, and `Integration.admit_credential` raises it on every
+  attachment, so the connect picker lists a credential the backend refuses as
+  refused instead of refusing it only once attached. `DirectoryBackend.admit_credential`
+  and `Directory.admit_credential` are removed: a vendor backend implements
+  `credential_blocker` (CardDAV's Basic-auth rule moved there), and an
+  `admit_credential` override on a directory backend is no longer called.
+
+- A pull-only directory adopts an existing person (rulings R2 and R9; an option,
+  off by default, since the entry above): a contact
+  with no person of its own or of a record it replaced lands on the first person
+  its emails name (`people_for_emails`, preferred email first) whose adoption
+  `PartyManager.adoption_blocker` admits; otherwise it mints its own. A two-way
+  directory, CardDAV included, never adopts. The rule sits on the binding owner:
+  `ingest_contact` refuses a person new to its link that no replaced link names
+  unless the rule admits them, so no caller of the ingest verbs binds past it
+  (integrate's own link writers do not ask it: a vendor overriding `apply_record`
+  and returning a target is trusted code). It admits a person only when the stream is
+  pull-only, the person is no account's own, the address that found them is no
+  account's sign-in address, the directory's owner holds the new `adopt`
+  permission on `parties/person` (owner or editor, no platform-admin arm: every
+  directory's owner is a platform admin, so `write` admitted everyone), no other
+  live link of the directory names them, and no live link of a stream that writes
+  back names them. A pull-only contacts page locks every spelling of its contacts'
+  addresses (by normalized value), the people they name and the parties its
+  links name before any record decides (`DirectoryBackend.prepare_page`), and
+  each record checks admission again under those locks. The handle that found the
+  person is the evidence of the directory's identity statement
+  (`ingest_contact(..., through=handle)`), restated on later records, and the
+  contact's spelling of that address lands on that handle row. The link's
+  `adopted_through` metadata and `angee.parties.backends.ADOPTED_THROUGH` are
+  removed: the driver replaces link metadata wholesale. Schema revision 25:
+  `rebac sync` after compose. Deferred, open with the architect: a source states
+  whole aspects, and survivorship applies a winning empty value, so a field of an
+  adopted person that no statement holds (written as system work, or stated by a
+  lower-ranked source) is cleared by a contact that lacks it. Provenance has no
+  option that keeps such a value for an adopted person without changing
+  survivorship for every source; the expected behaviour is a strict expected
+  failure in the pull-only directory tests.
+
+- A pull-only contact never moves an address away from its holder. An email the
+  lookup answers with a person other than the contact's own, who does not hold it
+  too, is stated as a claim for review (confidence 0.4, below
+  `Party.REVIEW_CONFIDENCE`), without touching the handle's display fields, and
+  each such person is proposed as the contact's same person by
+  `parties.directory_match`; one the contact claimed stays a claim while nobody
+  holds it. Before, a refused contact's minted person stated the address in full
+  as a directory source and resolution moved it, and what is attributed to it,
+  off its holder; so did a second contact colliding with an adopted person. The
+  ingest owner (`ingest_contact`) now makes these proposals, so the backend's
+  decision proposes only the other people a source merge's replaced records
+  name. A two-way directory (CardDAV) still states every address in full: its card
+  projects only applied handle statements, so a claim would drop the address from
+  the card, and what a two-way card publishes is open with the architect.
+
+- `people_for_emails` reads and never writes: on the account basis it answers an
+  account's existing person only. It used to create a person for every matched
+  account that had none (`for_user`); a caller that needs the account's person
+  asks `PartyManager.for_user` itself. `EmailHolder.person` and `.handle` are
+  typed as `Person` and `Handle | None`. The connections import's fallback (the
+  person its earlier run linked) passes over a trashed person, so such a
+  re-import mints a new one.
+
+- `Directory.objects.connect` checks that its owner may create a directory
+  before anything else. Each connected directory gets a credential of its own,
+  where a second connection of one display name used to update the first one's
+  credential. A backend whose vendor row is
+  not loaded is a `ValidationError` that says to run `manage.py resources load`
+  (it was an `ImproperlyConfigured`). The first sync is requested after the
+  transaction commits, and a failure to queue it is logged instead of raised.
+
+- A contact whose person was trashed lands on a new person, and its link now
+  withdraws what it stated on the trashed person before it binds the new one, with
+  the `directory_match` proposals pairing
+  the trashed person with the new person or with whom the contact's addresses
+  name. Before, those statements stayed asserted on the trashed person, and so
+  did the pair a refused adoption had proposed for it. The binding owner
+  (`ingest_contact`) does this on every rebinding, so the backend no longer
+  withdraws a refused adoption's pair itself.
+
+- A directory proposes for the same-as review each person its decision of a
+  contact's target passed over: a candidate an adoption limit refused, and the
+  other people the records a source merge replaced were linked to. The new
+  install rule `parties.directory_match` (a `parties_statement_source`) states
+  the pair (`PartyManager.propose_directory_match`), citing the contact's link
+  and the handle or the replaced link; the Review page lists it and its merge
+  and keep-separate verbs act on it. A pair kept separate is not proposed again,
+  an unchanged one is not restated, and merging the two (`Party.merge_fields`)
+  or the contact later adopting the refused person withdraws it
+  (`withdraw_directory_match`). `reconcile_same_as` withdraws only its own rule's
+  pairs, so it leaves these standing; that it never proposes two people who
+  claim one handle row by itself stays open. Load the install tier before a
+  directory's next sync, since the rule is looked up by key.
+
+- A person's merge never sets two live contacts of one pull-only directory on
+  one person (default pending ruling O16). A survivor takes every link of the
+  records merged into it, and two bound, live links of one pull-only directory
+  from different records would put two records the source keeps separate on one
+  person, whose statements overwrite each other on every sync:
+  `Party.validate_merge` refuses it (`PartyManager.directory_merge_blocker`) with
+  a message that says to merge or remove one of them at the source. A tombstoned
+  or withdrawn link does not count. Any other merge of people the merging person
+  writes goes through, an account's own person and a person a two-way card names
+  included.
+
+- `PartyManager.people_for_emails(emails)` answers who email addresses name: per
+  address, in the caller's preference order, an `EmailHolder(email, person,
+  basis, handle)` for each basis that names someone (`EmailBasis.ACCOUNT`, the
+  account's own person; `HELD`, the live person holding a handle of the address
+  through merge survivors; `CLAIM`, whenever no live person holds it, the one
+  person a current asserted contact claim proposes it for, so an address an
+  organization or a trashed person holds still finds the person claimed for it).
+  Handles compare by `normalized_value`; a trashed
+  person, an organization and a merged-away row are nobody's answer; any batch
+  reads in a bounded number of queries. The connections import finds a handle's
+  holder by the same rule, so a handle an organization or a trashed person holds
+  now falls back to the person the import's earlier run linked instead of minting
+  (organization) or landing on the trashed row unless the import linked it.
+
+- Parties land organizations and employment from a source.
+  `PartyManager.ingest_organization(parsed, *, stream, link, created_by_id,
+  target=None)` lands a `ParsedOrganization` (comparison shape:
+  `organization_projection`), states its legal identity whole or withdraws it
+  when the source carries neither field, and like `ingest_contact` refuses a
+  target of another kind or one that would rebind a bound link.
+  `RelationshipManager.land_employment(person, employers, *, created_by_id,
+  asserted_by, link, evidence=(), kinds=None)` replaces the free-text-only
+  `land_employment(person, *, organization, title, ...)`: an `Employment` names a
+  tracked Organization or a free-text name, a link may name several, an employer
+  named twice lands once, and the link's edges it no longer names lose its
+  statement. A connections import that renames or drops an employer now renames
+  or withdraws the link's own edge instead of keeping the old one asserted.
+
+- Creating a `parties.Address` or `parties.Relationship` takes write on its party
+  (`create = party->write + admin->member`, evaluated on the unsaved row; a
+  relationship's party is its anchor). It was `authenticated`, so anyone who could
+  read a party (an identity reader, a per-row reader, a directory's contact reader)
+  could attach a row its owner does not read, and a two-way directory wrote it to
+  the remote card. Sync and imports run under system context and are unaffected.
+  A caller that attached rows to parties it only reads is now refused: the
+  console's Relationships page and the `create_relationship` MCP tool offer any
+  readable party, and so does a consumer page with a party picker over
+  `parties.Address`. The permission is schema revision 23: `rebac sync` after
+  compose.
+
+- Parties: a person merges duplicates in a batch,
+  `Party.objects.merge_duplicates(actor=, sets=, certain=False)`, the
+  `merge_duplicates(sets, certain)` mutation: confirmed sets of two to ten
+  records (at most 50 sets), from the certain pairs the Review page lists
+  (`certain_same_as_pairs`, `certain=True` re-checks each) or a selection from a
+  list. `duplicate_set_previews(sets, certain)` reads what the dialog shows
+  (members oldest first with their statements and handles, the survivor, a
+  refusal, and, for a set that merges, the fields the records disagree on with
+  the value that will show, each field behind its own `read__<field>` gate per
+  record) in a fixed number of queries. Only an active person account writing
+  every record may (the party's new `batch_merge` permission,
+  `write & person->active_member`, parties schema revision 30), read on the
+  party whatever manager is asked; no agent tool offers it. A set holding an
+  account's own person, two kinds, a trashed or merged record or two records a
+  person kept apart refuses with its reason; a set of more than ten records, one
+  holding a record the person may not read, or one the person may not merge in a
+  batch is refused before anything is read further or locked; a set merges exactly as confirmed, judged again under
+  one lock pass of its members, their same-person partners and their handles; the oldest record survives and the others fold into it in
+  key order; a lock conflict (deadlock, lock not granted) is that set's
+  `stopped`, any other database error stops the call. A batch records no value
+  as the person's choice (`PartyManager.BATCH_CONFIRMED_FIELDS`): statements move
+  as their sources' own and an empty survivor field takes a merged record's
+  value as a plain value (`Party.merge_values`). A pair is certain when both are
+  people, neither is an account's own person, exactly the two are linked to an
+  address it cites, and their names are equal but for case, accents and hyphens
+  (`Party.comparable_name`); a name that is one of the pair's cited addresses
+  (`Party.names_an_address`) is no name. Every party merge now refuses a person
+  with an organization (`Party.validate_merge`). A person's `anniversary` is a
+  merge choice (the Merge page shows it). The web fragment's `DuplicatesDialog`
+  is the one batch surface: the Review page's "Merge certain pairs" action, and
+  the People and Organizations lists' Merge…, where one selected record opens
+  the person form's "Merge into…" (`useMergeIntoAction`, shared by both), two
+  open their compare page, and three or more open the dialog as one explicit
+  set, the whole selection.
+
+- Parties: `Party.objects.propose_same_person_as_system(left, right, *, evidence,
+  reason)` lets an importer propose that two parties are one person, citing the
+  handle rows that link them. It elevates, so it takes a named reason. It issues no
+  query and takes no lock in the caller's transaction: it registers the proposal
+  with `transaction.on_commit`, so a rolled-back caller proposes nothing, and runs
+  it after the commit in its own short transaction and changeset, returning
+  nothing. There it reads each cited handle as its merge survivor, requires it to
+  link one of the two and the two to be a same-person pair at a cited address, and
+  states the `parties.same_as` rule's normal pair statement, the one
+  `reconcile_same_as` states, keeps and withdraws. It writes nothing when the two
+  are one party, either is trashed or merged away, the pair already holds a
+  current assertion or a keep-separate decision, or the evidence does not hold; it
+  never merges, and a failure after the commit is logged for the job to heal. A
+  pair now locks both parties in one identity pass, Handles before Parties
+  (`StatementsMixin.lock_subjects`, which `Party` implements and its merges use);
+  locking one party after the other ran against the Handle, Party order. A party
+  merge also takes its same-person partners and every Handle its parties hold in
+  that pass (`Party.lock_merge_records`): the fold re-keys the merged party's
+  other pairs onto the survivor, which locked each partner's Handles after party
+  rows and could deadlock with a resolution of the partner's address (a defect
+  already on `main`); the pass reads the partners again under its lock and tops
+  the set up when a pair committed while it waited. The job
+  no longer withdraws a proposal stated after its run began, and restates a
+  standing proposal whose cited handle was deleted or merged away with the handles
+  that still link the two, so it never hides from the review list. Only the
+  rule's own undecided proposal is restated: a pair a person kept apart or
+  confirmed spends none of the run's budget, and a decided pair is read before
+  it is locked, so it takes no lock and makes no pair row.
+
+- Parties proposes a same-person pair for every two live parties of one kind
+  linked to one address (`PartyManager.reconcile_same_as`, over
+  `same_person_links`). A party is linked when it holds a handle of that
+  normalized value or when a source that states its own record names one for it
+  in a standing statement, a claim below review confidence included; before,
+  only two holders of two spellings were proposed, so one address claimed by a
+  second source's party was never proposed. The linking sources are an
+  allowlist: `PartyManager.LINKING_SOURCE_KINDS` (a person, a system of record,
+  a directory, an import) and `PartyManager.LINKING_RULES` (a source's claim, a
+  holder found on its row); any other rule or extraction, parties' suggesters
+  included, links nobody until it is named. Only a handle that names one account
+  links (`Handle.identifies_account`: an email address, a phone number, or a
+  platform id), so two friends an export records by one name are never one
+  person. A person is never paired with an organization, nor two accounts' own
+  persons with each other, and a contested control claim links nothing. An
+  address more than `PartyManager.SHARED_ADDRESS_LIMIT` (four) parties are linked
+  to, or one the shared-sender providers name, is shared and pairs nobody, and a
+  pair needs two sources between its parties, so one source's two records of one
+  address are not proposed. The job finds candidate addresses in SQL, reads only
+  their links, looks the rule up once, and withdraws exactly the rule's pairs no
+  link supports; the hourly task reads the shared-sender providers once for both
+  passes (`PartyManager.shared_sender_ids`, the new `shared=` argument of
+  `reconcile_suggestions` and `reconcile_same_as`). The review list
+  (`same_as_pairs`) drops a pair the reader cannot read before it fills a page,
+  and walks at most `PartyQuerySet.SAME_AS_REVIEW_PAGES` (four) pages to fill it.
+
+- Parties: a handle's holder is always the projection of a statement. A holder
+  written onto the row with no statement behind it lost its address the moment
+  anything resolved the handle, a claim below review confidence included.
+  `Handle.objects.upsert` now refuses `party`, `party_id` and
+  `party_link_confirmed`; a seeded handle row naming its holder is stated by the
+  new `parties.stored_holder` rule after its load
+  (`HandleManager.state_stored_holders`), and a seed that moves or clears a
+  holder withdraws what its earlier load stated for the old one; and the
+  `resolve_stale_owners` repair states every such holder before it re-resolves
+  stale ones, where it used to clear them. The rule is the last kind the handle
+  aspect ranks (below a person, a system of record, a directory and an import),
+  so the repair leaves a confirmed holder and one another party's applied
+  statement contests as they are, for a person, rather than clear the
+  confirmation or move the address; it leaves a trashed holder's address alone,
+  neither stating nor re-resolving it (resolution ignores a trashed party, so
+  either would clear the row), states it after a restore, and states a
+  merged-away holder for its survivor. It returns a `HolderRepair`, and the
+  command reports how many it stated, left confirmed, left contested and
+  re-resolved (`-v 2` lists the handles left). Every provision runs it
+  (`PartiesConfig.compose_provision`), after the install resources load the
+  rule; it is idempotent. One run writes at most `HandleManager.REPAIR_LIMIT`
+  (500) holders (`resolve_stale_owners(limit=)`, the command's `--limit`); past
+  the cap the command's last line, in the provision log too, says how many
+  remain (`HolderRepair.remaining`) and the next run continues. Test fixtures
+  that create a handle with `party=` still write a bare holder.
+
+- `angee.integrate`: a stream's mapping can be composed from several declarers.
+  `StreamDefinition.mapping_contributions` declares one
+  `MappingContribution(key, version, sequence=...)` per part; integrate orders
+  the parts by sequence, then key, and `SyncStream.mapping_contributions` retains
+  the ordered `[key, version]` list a generation ran with the version it was
+  assigned, `{"version": V, "parts": [...]}` (read through
+  `SyncStream.retained_contributions`). Any change of that list (a part added,
+  removed, exchanged, reordered or re-versioned), or a list that no longer names
+  the stream's version, opens one baseline under a version above the retained
+  one, above every version the stream's records were applied with and at least
+  the parts' sum, so each record replays once and a composed version never
+  lowers. A renumbering that keeps the order changes nothing. A plain
+  `mapping_version` keeps its rule, rollback included; declared on a stream that
+  composed, it reads as one part under the empty key. A declaration with
+  contributions leaves `mapping_version` at its default, and a malformed
+  declaration is refused with `ValidationError`.
+  Upgrade: a host runs `makemigrations integrate` for the `mapping_contributions`
+  column (one `AddField`, `JSONField(blank=True, db_default={}, default=dict)`),
+  then `migrate`. Existing streams hold the empty mapping and keep their
+  generation, cursor and version; nothing is read again until a stream first
+  declares contributions, which replays its records once. The database default
+  lets a release before the column, rolled back onto the migrated database,
+  still create stream generations.
+  Rollback: the stored `{"version", "parts"}` format is forward-only. Code from
+  this column's first form, which stored a bare `[[key, version], ...]` list,
+  reads `{}`, `[]` and bare lists, but fails on every composed stream this
+  release wrote: that stream's partition errors on each sync and writes nothing.
+  Before or after rolling back to it, run once on the host's PostgreSQL
+  database. The statement is idempotent and safe while the stack runs:
+
+  ```sql
+  UPDATE integrate_syncstream
+  SET mapping_contributions = CASE
+      WHEN (mapping_contributions ->> 'version')::bigint = mapping_version
+      THEN mapping_contributions -> 'parts' ELSE '[]'::jsonb END
+  WHERE jsonb_typeof(mapping_contributions) = 'object' AND mapping_contributions ? 'parts';
+  ```
+
+  A stream whose stored version is its own gets its bare list back, so it
+  replays nothing under that code. Any other stream gets `[]`, which that code
+  reads as never composed, so it replays once. Returning to this release then
+  replays each composed stream once, because a bare list carries no version.
+  Clearing every composed row to `[]` also recovers, but replays all of them.
+  It also leaves any stream the older code declares plain on the plain rule,
+  which can lower that stream's version onto a number its composed records
+  already carry, so those records are never replayed.
+
+- `angee.integrate.http` owns a vendor's typed JSON request
+  (`HttpClient.request_model`) and one rule for a refused answer
+  (`HttpRefusal`): a transport failure, a 408, a 429 or a 5xx other than 501
+  and 505 is transient and waits for `Retry-After` (`is_transient_status`: a
+  408 may be repeated, a 501 or 505 refuses the request itself); a transport
+  failure after sending is worded "<service> did not answer.", a connect
+  failure "<service> could not be reached."; a success that is oversized or unreadable, a body httpx2
+  cannot decode included, is permanent; an adapter that reads one record per
+  request makes that record's oversized or unreadable answer the record's
+  refusal (Notion does). The status decides before the
+  body: `HttpClient.request` keeps a refused answer's status, with no body,
+  when its body is over the cap or httpx2 cannot decode it, never reading past
+  the cap, and still follows a redirect hop whose body is over the cap.
+  `HttpRefusal.as_error` builds the
+  vendor's `IntegrationError`, with the vendor's own words, transience and wait
+  when it states them (a wait implies transience); a refusal keeps the answer's
+  headers, without credential or cookie headers and out of its `repr`, for a
+  vendor's own signal, and its `cause` tells a
+  request not sent from one whose outcome is uncertain. A request the HTTP
+  library will not build, a header value it cannot encode or will not send, is
+  `RequestNotBuiltError`: not sent, permanent, worded as a request that could
+  not be sent as configured, and chained to none of the library's text, which
+  quotes the value; callers read a not-sent failure's `transient`, so OAuth
+  answers such a token request with a permanent 400 and leaves such a
+  revocation best-effort. Notion, the Google
+  client (Drive and Calendar), ICS, GitHub and OAuth's JSON reads (discovery,
+  userinfo, JWKS) moved onto it, and `HttpClient.get_json` is removed. GitHub's
+  refusals are now `IntegrationError`s, a 429 or 5xx transient, and its rate
+  limit (a 403 or 429 with no requests remaining, or with a `Retry-After`)
+  transient until the window resets; OIDC discovery
+  keeps a provider's 5xx or 429 transient instead of a permanent configuration
+  error; Google's oversized and unreadable answers are no longer retried; a
+  Notion page over the cap or unreadable is quarantined instead of stalling its
+  stream. The posts feed's `request_json` sends through the refusal hook and
+  leaves integrate the status rule and the wait: a refused answer its adapter
+  does not name is integrate's refusal, so an unnamed 429 is transient and
+  waits (it was a permanent "refused" that ignored `Retry-After`), and a 3xx a
+  read did not follow is refused instead of returned as data; a GET's oversized
+  answer, and a GET success that is not a JSON object or that httpx2 cannot
+  decode, are permanent; a POST's 3xx is uncertain. A refusal factory that
+  returns the failure it was handed has it raised unchanged. Remaining:
+  `download_bounded` (with `download_capped`) and `stream` still signal a
+  refusal with `None` or a raw transport error, so calendar feeds, media and
+  attachment downloads and page analysis classify a failed download
+  themselves.
+  Google Drive and Google Calendar word a file's or an event's refusal in their
+  own phrases, never Google's reason. Capped JSON requests, GitHub's and
+  OAuth's included, ask for an unencoded answer, `is_transient_status`
+  reads only 500–599 as server errors, and a typed request answered with no
+  JSON body (a 204) is unreadable.
+
+- The CardDAV directory's requests compose that rule too
+  (`HttpClient.request(error=)` and `HttpRefusal.as_error`). A transport
+  failure, a 429 or a 5xx is now transient and waits for `Retry-After`; before,
+  a refused answer reached the operator as a permanent "CardDAV <method>
+  returned HTTP n." and a transport failure as a raw error. Integrate words every
+  other refusal, and a multistatus httpx2 cannot decode is a permanent unreadable
+  answer. CardDAV keeps only its own answers: a 412, or a 403 to a write, sets
+  that card aside; a cursor's 404, or a 403 naming `DAV:valid-sync-token`,
+  restarts the stream; a success over its byte cap splits a multiget, and a
+  listing over it says to use smaller address books. A tokenless book's listing
+  refused only for now stays transient instead of reading as a book with no
+  complete ETag listing, and a vCard photo's refusal keeps its words and takes
+  integrate's transience.
+
+- `angee.integrate`, `angee.workflows_integrate`: static-token and workflow loose
+  ends. Testing a connection whose static token is not a header (an ICS feed
+  address with a space or a non-ASCII character) failed with "Credential is not
+  usable", because the default probe built a header; the static-token probe now
+  checks the token is active and readable without one. An inactive static token
+  raised a plain `ValueError` on the header path, which a sync reported as an
+  unexpected failure; it raises a permanent `IntegrationError` asking for the
+  token again. A workflow step waiting for a discovery whose retry time had
+  passed woke every second and noted the same message each time; it backs off,
+  doubling from one second, and notes once per discovery attempt.
+
+- `angee.integrate`: the lock order is completed. Deleting an integration locked
+  the parent row with its child in one statement, the reverse of
+  `Integration.lock_capability`; `Integration.lock_for_delete` now takes the
+  capability lock first, on every delete path. An account's disconnect took the
+  integrations, the credential and the user before the account an OAuth connect
+  locks first; `CredentialManager.disconnect_account` now locks the account row
+  first. The README's lock order names the external account (first) and the
+  credential's user (after the credential). The savepoint retry in
+  `CredentialManager.lock_with_served_integrations` treats an integration deleted
+  between its read and its lock as a changed set, and gives up after three changed
+  sets with a transient `IntegrationError`. An unchanged re-entry of a
+  `jwt_bearer` key compares what was entered, not the cached scoped tokens the
+  re-entry drops, so it no longer sends the integrations it serves to discover
+  again. The PostgreSQL tests of the two inversions run only on PostgreSQL.
+
+- `angee.integrate`: derived credentials. `CredentialManager.store_derived` now
+  overwrites a credential of the derived name that nothing holds, so a row left
+  from an integration deleted before derived credentials left with it no longer
+  fails every later discovery of that name; it still refuses one something else
+  holds. `CredentialManager.unattached` derives what holds a credential from the
+  model's own reverse relations (each foreign key under its live policy), so an
+  agent's inference credential or an MCP server's is no longer deleted, and
+  silently nulled, when the integration that derived it leaves. The delete
+  cleanup reads the integration's links from its locked row (a `pre_delete`
+  receiver takes the delete lock, as every delete path then does), covers an
+  integration whose source grant was lost (`Integration.derived_credential_id`),
+  and locks the credential before deciding (`delete_unattached_derived`).
+
+- `angee.messaging`: outbound delivery waits for connection discovery.
+  `run_message_delivery` published through a channel whose integration was
+  discovering again, so a queued reply on a feed that requires discovery went out
+  with a grant discovery had not confirmed. The delivery now asks the transport
+  channel's integration (`Integration.require_discovery_ready`) before it sends:
+  a pending discovery defers it as lock contention does, spending no attempt, and
+  a failed discovery fails it with the discovery's own message.
+
+- `angee.integrate`: the discovery check on stream commits covers what rests on
+  remote facts, and says why it refuses. Pinning, unpinning, dismissing a failure
+  and reopening a conflict whose follow-through was refused change local state
+  only; they were refused until discovery succeeded, and the reopen left the
+  conflict closed with neither side applied. They now commit through
+  `angee.integrate.states.exempt_from_discovery()`, the one named way past
+  `lock_current`'s check. So does the reflection of a write already sent (and a
+  remote's refusal of it): a write that landed while a secret was re-entered is
+  recorded, so the next run neither repeats it nor conflicts with it. A two-way
+  page now asks before each write-back, not once. A discovery that failed
+  refuses permanently with its own operator message instead of a transient "must
+  finish", so a workflow sync step fails with it. The check before a remote write
+  is one read. Retrying a failure still waits for discovery. Known limit: an
+  adapter that reads its credential again between the check and the send can send
+  that one write with the new secret.
+
+- `angee.integrate`: a re-entered secret is discovered again.
+  `Credential.replace_material` kept every attached integration running on the
+  facts its connection discovery found with the old secret, so a key of another
+  remote account was read with the old account's cursor, links and identifiers.
+  Now each integration the credential serves (attached, or derived from it) whose
+  capability requires connection discovery awaits it again in the same
+  transaction, locked before the credential as an attachment is
+  (`CredentialManager.lock_with_served_integrations`), and sync waits for it. An
+  `apply_discovery` that refuses another account lands as failed discovery with
+  its operator message. Refreshed and minted tokens and transient material
+  (`Credential.update_material`) keep discovery. `Bridge.subscription_state` is
+  documented as holding the connection facts discovery learned, beside
+  live-session state.
+
+- `angee.integrate`: a secret re-entered in place or by name, or an account-less
+  credential adopted by its first account, is discovered again.
+  `CredentialManager.create_local_credential` with a name the user's credential
+  already has (the console's create, connect flows that key their credential by
+  name) replaced its material, and even its kind, without the integrations using
+  it discovering again. That update and `Credential.replace_material` now share
+  one owner, `CredentialManager.reenter_secret`. It refuses a credential an
+  integration attaches as derived material; when the kind or material changed,
+  every integration the credential serves admits it again
+  (`Integration.admit_credential`; a refusal rolls the re-entry back) and those
+  whose capability requires discovery await it again; an unchanged re-entry
+  changes nothing. Adopting an account-less OAuth credential sends the
+  integrations attaching it to discover again. Discovery stores the material it
+  derived through `CredentialManager.store_derived` instead, which sends no
+  integration to discover again, so two that derive a credential of one name do
+  not loop, and refuses to overwrite a hand-made credential of that name.
+  `Credential.update_material` refuses the fields the kind stores as its own
+  secret (`CredentialKindHandler.secret_material_fields`: `api_key`, `password`,
+  …, every token an OAuth grant stores, and for `jwt_bearer` the signing fields
+  its key file becomes) and points to `replace_material`; both judge by the kind
+  of the row as locked, so a concurrent kind change cannot let a stale instance
+  clear the real secret. A token refresh, a minted scoped token, transient material
+  and the reconnect of an account already bound keep discovery. The integrate
+  README states the lock order once: `CredentialManager.lock_with_served_integrations`
+  takes the integrations a credential serves before it on every path (re-entry,
+  reconnect, adoption, `Credential.lock_for_delete` for its deletion and
+  disconnect), and takes every lock again when what the credential serves
+  changed between its two reads.
+
+- `angee.integrate`: an owner can transfer their own integration.
+  `Integration.transfer_ownership` released the previous owner's connection on
+  an instance still pinned to that owner, who lost write with the row, and a
+  pinned actor outranks the system context, so an owner's transfer of an
+  integration running on their own credential was refused. The release now runs
+  on the locked capability row (`Integration.lock_capability`). The transfer
+  also locked the parent row before the concrete one, the reverse of bridge
+  work; `Integration.lock_for_record_access` now takes the capability lock
+  first, for a transfer and a record grant alike.
+
+- `angee.integrate`: a static token is clean, and dead when revoked. A token was
+  stored exactly as typed, so a pasted trailing space or an invisible character
+  made a header value no request could carry, failing every request. The
+  `static_token` handler now strips surrounding whitespace on creation and
+  re-entry and otherwise stores the value as entered, since some static tokens
+  are never a header (a calendar feed subscription keeps its feed address as
+  one). Where it builds the bearer header, a token with a space, a control
+  character or a character outside printable ASCII is refused with a permanent
+  `IntegrationError` saying the stored token cannot be sent and must be
+  re-entered, without quoting it. A revoked or expired static-token credential no
+  longer produces authorization headers: it fails closed through
+  `Credential.require_active`, as the scoped-token path does.
+
+- `angee.integrate`: an integration's refusal reaches the operator as its
+  message on integrate's own console actions. Retrying a sync failure, choosing a
+  side of a conflict, retrying discovery or resuming an integration let an
+  `IntegrationError` propagate, so the console showed a raw "An unexpected error
+  occurred." Those actions are now guarded by
+  `angee.integrate.schema.integration_action_guard`, `action_guard` with the
+  integration error expected: it answers in band with the error's public message,
+  keeps an `OAuthFlowError`'s code, and logs a permanent refusal at warning
+  level. The shared guard, `ActionResult.from_error` and `angee.base.exceptions`
+  are unchanged, so no other addon's guarded action changes behaviour.
+
+- `angee.integrate`: a derived credential leaves with its integration. Deleting
+  an integration left the credential its discovery derived, which
+  `CredentialManager.store_derived` then refused to overwrite, so the next
+  integration deriving the same name failed discovery until an operator removed
+  it. A `post_delete` receiver (bound through `angee.base.signals.connect_for_models`
+  from `IntegrateConfig.ready`) now removes it in the delete's transaction, after
+  the integration row, unless another integration still uses it. The refusal
+  stays for a hand-made row or one left from before, and names the credential
+  to remove or rename.
+
+- `angee.workflows_integrate`: a sync step waits for a pending connection
+  discovery instead of failing. The discovery refusal reached `bridge_io`'s
+  catch-all as a retryable "Stream transport failed.", so a step was failed
+  within seconds of a re-entered secret, with the wrong message, before
+  discovery could finish; a single-sync bridge's attempts also held the lock
+  discovery needs. `bridge_io` now asks the bridge before any IO or lock: a
+  pending discovery parks the step in a time wait until discovery's next attempt
+  is due, without spending an attempt or beginning an effect, and notes the
+  discovery message; a failed discovery fails the step with that message. Known
+  limit: a step already in its IO when discovery turns pending spends that one
+  attempt before the next one waits.
+
+- `angee.integrate`: a sync run already in flight sends and commits nothing once
+  a secret is re-entered or a credential attached. Admission was fenced, but a
+  run admitted before the change read the fresh credential and went on with the
+  facts discovered from the old one. Every commit to a stream or its links passes
+  `SyncStreamManager.lock_current` (a page, a push's reflection, a sweep, an
+  absence, a retained failure, a conflict decision), which now asks the stream's
+  integration `Integration.require_discovery_ready()`; the driver asks again on
+  the stored row before each remote write (a two-way page's write-back, each push
+  candidate, `RecordLink.resolve_conflict`) and each reset (`reset_stream`, which
+  `begin_stream_cycle` now resets through). A pending discovery refuses with a
+  transient `IntegrationError`; earlier pages and their cursor stay, and the next
+  run waits for discovery. An operator's resolve or retry of a retained failure
+  and a calendar publish wait for discovery too. Known limits: a multi-partition
+  workflow step runs without the sync lock, so a discovery that succeeds between a
+  page's extraction and its commit lets that page commit; an attach on a
+  capability that requires no discovery does not stop a run.
+
 - The UX guard accepts manifest `vocabulary` field tones by structure while rejecting local tone maps and switches.
 
 - Integrate compares synchronized JSON as JSON values (`json_equal` in
@@ -417,7 +1564,11 @@ live in code docstrings.
     its events stream's mapping version (`CalendarBackend.events_mapping_version`),
     and a test pins what a push writes to it.
   - Hosts add the `RecordLink.local_version` column (`makemigrations`). Existing
-    links start unknown, so the first poll reads every published event once.
+    links start unknown, so the first poll reads every published event once. Its
+    database default is that unknown version (`CharField(blank=True,
+    db_default="", default="", max_length=255)`), so a release before the column,
+    rolled back onto the migrated database, still creates links. A host that
+    already added the column gets one `AlterField` for the default.
 - **Breaking (`delete_blocker` overrides):** `AngeeModel.delete_blocker(*,
   cascaded=False)` says where the row sits in the delete: `DeletePreview` judges
   its target as the start and every collected row as cascaded, and a model's

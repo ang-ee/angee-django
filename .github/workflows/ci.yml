@@ -6,6 +6,10 @@ on:
   pull_request:
 
 # A new push to a pull request cancels the run it supersedes; every main commit runs.
+# A pull request's run tests its merge commit (`framework-ref` is `github.sha`), which is the
+# tree main gets, so a push to main repeats nothing of it: it runs the quality lane and the
+# PostgreSQL selection, which a pull request runs in part only. That holds while main has not
+# moved since the pull request's run started; merge only then, or run the pull request again.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -24,7 +28,8 @@ jobs:
       # against generated GraphQL documents in the composed-stack lane.
       pnpm-enabled: true
       stack-enabled: true
+      pr-checks-enabled: ${{ github.event_name == 'pull_request' }}
       framework-repository: ${{ github.repository }}
       framework-ref: ${{ github.sha }}
       # Match the bridge dependency artifacts to this framework's manifests.
-      bridges-ref: "8bb1ec74d77ec376bedc44c7f7261e6c6bbf4e5a"
+      bridges-ref: "ef4da950a3d9c08058a4f64b6c96a39e068cf09c"

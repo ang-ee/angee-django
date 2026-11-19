@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import re
 import secrets
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping
 from copy import copy
 from datetime import timedelta
 from email.utils import parseaddr
@@ -413,12 +413,15 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
 
         return (email or "").strip().lower()
 
-    def _person_email_matches(self, email: str | None) -> UserQuerySet[UserT]:
-        key = self.normalize_email(email)
+    def _person_email_matches(self, *emails: str | None, domains: Iterable[str] = ()) -> UserQuerySet[UserT]:
+        keys = sorted({key for email in emails if (key := self.normalize_email(email))})
         people = self.system_context(reason="iam.person.email_lookup").people()
-        if not key:
+        if not keys:
             return people.none()
-        return people.filter(email=key)
+        matches = Q(email__in=keys)
+        for domain in sorted(set(domains)):
+            matches |= Q(email__endswith=f"@{domain}")
+        return people.filter(matches)
 
     def person_for_email(self, email: str) -> UserT | None:
         """Look up one person by email, including inactive and staff accounts.
@@ -432,6 +435,28 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
         if len(matches) > 1:
             raise AmbiguousAccountEmail
         return matches[0] if matches else None
+
+    def sign_in_addresses(self, emails: Iterable[str], *, key: Callable[[str], str] | None = None) -> set[str]:
+        """Return the given addresses a person account signs in with, each as given; decide nothing.
+
+        An address compares by :meth:`normalize_email`, the key
+        :meth:`person_for_email` reads, so inactive and staff accounts count
+        whether or not the account has a Person yet; a service account or an
+        empty address signs in as nobody. ``key`` is a caller's own comparison
+        of addresses, which may also collapse spellings that one keeps apart (a
+        provider's local-part rules): an account whose address shares a given
+        address's ``key`` signs in with it too, read among the person accounts
+        at the given addresses' domains. A system identity lookup in one query:
+        the caller gates what it reveals.
+        """
+
+        given = {email: self.normalize_email(email) for email in emails}
+        if not any(given.values()):
+            return set()
+        domains = {address.rpartition("@")[2] for address in given.values() if "@" in address} if key else set()
+        found = set(self._person_email_matches(*given, domains=domains).values_list("email", flat=True))
+        keyed = {key(address) for address in found} if key else set()
+        return {email for email, address in given.items() if address in found or (key and key(email) in keyed)}
 
     def get_by_natural_key(self, username: str | None) -> UserT:
         """Return a user for credential checks without row-scope filtering."""

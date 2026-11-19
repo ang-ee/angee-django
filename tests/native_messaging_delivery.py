@@ -1,6 +1,6 @@
 """Delivery and feed contracts against the actual composed model graph."""
 
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from smtplib import SMTPDataError, SMTPServerDisconnected
@@ -39,7 +39,7 @@ from angee.base.models.locks import StaleRevisionError
 from angee.graphql.actions import MAX_ACTION_SELECTION, ActionSelectionInput
 from angee.graphql.ids import PublicID
 from angee.graphql.schema import GraphQLSchemas
-from angee.integrate.errors import IntegrationError, RequestNotSentError
+from angee.integrate.errors import IntegrationError, IntegrationFailure, RequestNotSentError
 from angee.integrate.http import RedirectOriginError, ResponseTooLargeError
 from angee.integrate.signals import discovery_finished
 from angee.integrate.states import StreamDefinition
@@ -51,7 +51,14 @@ from angee.messaging.email import AnymailEmailChannelBackend
 from angee.messaging.events import message_ingested
 from angee.messaging.managers import DeliveryReconciliationBusy
 from angee.posts import mcp_tools
-from angee.posts.backends import RECONCILIATION_SKEW_MARGIN, FeedBackend, FeedChannelBackend, ParsedPost, RecordRefusal
+from angee.posts.backends import (
+    RECONCILIATION_SKEW_MARGIN,
+    FeedBackend,
+    FeedChannelBackend,
+    ManualFeedBackend,
+    ParsedPost,
+    RecordRefusal,
+)
 from angee.posts.models import validate_reply_hold
 from angee.provenance.context import changeset_model
 
@@ -434,6 +441,81 @@ class DeliveryContracts(DeliveryFixtures):
             self.assertEqual(row.status, "sent")
             self.assertEqual(row.external_id, "client")
             self.assertEqual(row.local_metadata["delivery_conflict"], "published")
+
+    def test_a_channel_awaiting_discovery_defers_delivery_and_a_failed_discovery_fails_it(self):
+        row = self.outbound()
+        # A capability that learns its account at discovery: attaching a key sends it to discover.
+        self.enterContext(patch.object(ManualFeedBackend, "requires_connection_discovery", True))
+        with system_context(reason="delivery while the channel discovers"):
+            credential = apps.get_model("integrate", "Credential").objects.create_local_credential(
+                self.operator, kind="static_token", name="Feed key", material={"api_key": "feed-key"},
+            )
+            self.feed.attach_connection(credential)
+            self.assertTrue(self.feed.discovery_pending)
+            row.deliver()
+            self.assertEqual(self.run_delivery(row)["status"], "retry")
+            row.refresh_from_db()
+            # Deferred as lock contention is: no attempt spent, nothing sent.
+            self.assertEqual(row.status, "queued")
+            self.assertGreater(row.scheduled_at, timezone.now())
+            self.assertNotIn("delivery_attempts", row.local_metadata)
+            self.backend.deliver.assert_not_called()
+            self.assertTrue(self.feed.finish_discovery(
+                credential_pk=credential.pk, generation=self.feed.discovery_generation,
+                error=IntegrationFailure("This key reads another account."),
+            ))
+            Message.objects.filter(pk=row.pk).update(scheduled_at=None)
+            self.assertEqual(self.run_delivery(row)["status"], "failed")
+            row.refresh_from_db()
+        self.assertEqual(row.local_metadata["delivery_error"], "This key reads another account.")
+        self.backend.deliver.assert_not_called()
+
+    def test_a_key_re_entered_on_a_disconnected_channel_defers_delivery_until_it_reconnects(self):
+        row = self.outbound()
+        self.enterContext(patch.object(ManualFeedBackend, "requires_connection_discovery", True))
+        with system_context(reason="delivery while the channel is disconnected"):
+            credential = apps.get_model("integrate", "Credential").objects.create_local_credential(
+                self.operator, kind="static_token", name="Feed key", material={"api_key": "feed-key"},
+            )
+            self.feed.attach_connection(credential)
+            self.assertTrue(self.feed.finish_discovery(
+                credential_pk=credential.pk, generation=self.feed.discovery_generation,
+            ))
+            self.feed.set_lifecycle("disconnected")
+            # Discovery for the new key runs when the channel is connected again; until then it is not a failure.
+            credential.replace_material({"api_key": "re-entered"})
+            row.deliver()
+            self.assertEqual(self.run_delivery(row)["status"], "retry")
+            row.refresh_from_db()
+        self.assertEqual(row.status, "queued")
+        self.assertNotIn("delivery_attempts", row.local_metadata)
+        self.backend.deliver.assert_not_called()
+
+    def test_a_key_re_entered_while_the_send_waits_for_its_lock_holds_the_send_back(self):
+        row = self.outbound()
+        self.enterContext(patch.object(ManualFeedBackend, "requires_connection_discovery", True))
+        with system_context(reason="delivery while a key is re-entered"):
+            credential = apps.get_model("integrate", "Credential").objects.create_local_credential(
+                self.operator, kind="static_token", name="Feed key", material={"api_key": "feed-key"},
+            )
+            self.feed.attach_connection(credential)
+            self.assertTrue(self.feed.finish_discovery(
+                credential_pk=credential.pk, generation=self.feed.discovery_generation,
+            ))
+
+            @contextmanager
+            def re_entered_while_waiting():
+                credential.replace_material({"api_key": "re-entered"})
+                yield True
+
+            self.backend.delivery_lock = re_entered_while_waiting
+            row.deliver()
+            # Admitted on the channel as loaded, asked again under the lock: nothing is sent on the new key.
+            self.assertEqual(self.run_delivery(row)["status"], "retry")
+            row.refresh_from_db()
+        self.assertEqual(row.status, "queued")
+        self.assertNotIn("delivery_attempts", row.local_metadata)
+        self.backend.deliver.assert_not_called()
 
     def test_bad_due_row_does_not_abort_batch_and_invalid_claim_fails(self):
         row = self.outbound(scheduled_at=timezone.now() - timedelta(seconds=1))

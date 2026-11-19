@@ -32,7 +32,7 @@ from angee.storage import exceptions as storage_exceptions
 from angee.storage import views
 from angee.storage_integrate.models import MountMode
 from angee.storage_integrate_google_drive.backends import GoogleDriveStorageBackend
-from angee.storage_integrate_google_drive.client import FOLDER_MIME, GoogleDriveError
+from angee.storage_integrate_google_drive.client import FOLDER_MIME, DriveFileError, GoogleDriveClient, GoogleDriveError
 from tests.conftest import (
     Backend,
     Credential,
@@ -722,7 +722,7 @@ def test_serving_reads_with_the_mounts_own_credential_while_it_is_connected(
     assert set(fake.bearers) == {TOKEN}
 
     fake.tokens.add("rotated-token")
-    drive_env.credential.update_material(access_token="rotated-token")
+    drive_env.credential.replace_material({"access_token": "rotated-token"})
     fake.bearers.clear()
     assert _read(storage, "x-served") == b"served"
     assert set(fake.bearers) == {"rotated-token"}
@@ -999,3 +999,38 @@ def test_an_alias_root_is_normalized_before_the_mounted_check(
     with pytest.raises(ValidationError) as again:
         _connect(drive_env, MY_DRIVE_ID, name="Again")
     assert set(again.value.message_dict) == {"root"}
+
+
+def _client() -> GoogleDriveClient:
+    """A Drive client on a credential that needs no refresh and is never renewed."""
+
+    credential = SimpleNamespace(
+        refreshable=False, ensure_fresh=lambda: None, auth_headers=lambda scopes=(): {"Authorization": "Bearer x"},
+    )
+    return GoogleDriveClient(credential)
+
+
+def _drive_refusal(status: int, reason: str = "") -> httpx2.Response:
+    return httpx2.Response(status, json={"error": {"errors": [{"reason": reason}]}} if reason else None)
+
+
+@pytest.mark.parametrize(("reason", "message"), [
+    pytest.param(
+        "cannotDownloadFile", "Google Drive does not allow downloading this file.", id="a-known-reason-in-our-words",
+    ),
+    pytest.param(
+        "someReasonGoogleMayAdd", "Google Drive refused this file (HTTP 403).", id="any-other-reason-one-phrase",
+    ),
+])
+def test_a_file_refusal_names_the_file_in_the_addons_words_never_googles(reason: str, message: str) -> None:
+    with mock_transport(lambda request: _drive_refusal(403, reason)), pytest.raises(DriveFileError) as refused:
+        _client().get("file-1")
+
+    assert str(refused.value) == message
+
+
+def test_a_refusal_that_reaches_no_file_names_its_status() -> None:
+    with mock_transport(lambda request: _drive_refusal(400)), pytest.raises(GoogleDriveError) as refused:
+        list(_client().shared_drives())
+
+    assert (str(refused.value), refused.value.transient) == ("Google Drive refused the request (HTTP 400).", False)

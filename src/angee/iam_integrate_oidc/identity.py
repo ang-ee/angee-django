@@ -300,7 +300,9 @@ def _claim_login_handle(user: Any, email: str, claims: dict[str, Any]) -> None:
     OIDC first login is the earliest Person-establishing path: the parties owner
     ``Handle.objects.claim_control`` writes both the control fact (``Handle.controller``) and
     the normal person identity statement for ``Person.objects.for_user(user)`` — so the login
-    address resolves to the user's own party.
+    address resolves to the user's own party. An address someone else holds, which the user
+    may not take from them, is only claimed for review: signing in never settles who holds an
+    address.
     """
 
     handle_model = apps.get_model("parties", "Handle")

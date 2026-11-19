@@ -47,6 +47,7 @@ dependencies = [
     "angee-operator==3.0.0",
     "angee-parties==3.0.0",
     "angee-parties-integrate-carddav==3.0.0",
+    "angee-parties-integrate-hubspot==3.0.0",
     "angee-platform==3.0.0",
     "angee-platform-integrate-operator==3.0.0",
     "angee-platform-integrate-vcs==3.0.0",
@@ -96,7 +97,7 @@ postgres = ["psycopg[binary,pool]>=3.2"]
 dev = [
     "angee-base[testing]==3.0.0",
     "daphne>=4.0",
-    "django-zed-rebac[caveats]>=0.35.2,<0.36",
+    "django-zed-rebac[caveats]>=0.36.1,<0.37",
     "faker>=30.0",
     "hypothesis>=6.100",
     "import-linter>=2.1",
@@ -167,6 +168,7 @@ angee-nexus = {workspace = true}
 angee-operator = {workspace = true}
 angee-parties = {workspace = true}
 angee-parties-integrate-carddav = {workspace = true}
+angee-parties-integrate-hubspot = {workspace = true}
 angee-platform = {workspace = true}
 angee-platform-integrate-operator = {workspace = true}
 angee-platform-integrate-vcs = {workspace = true}

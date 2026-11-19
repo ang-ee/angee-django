@@ -47,8 +47,11 @@ def test_stale_owner_repair_unowns_a_handle_a_suggestion_decided(db: None) -> No
         repeated = Handle.objects.resolve_stale_owners()
         handle.refresh_from_db()
         party.refresh_from_db()
-    assert output.getvalue() == "Resolved 1 stale handle owner(s).\n"
-    assert repeated == 0
+    assert output.getvalue() == (
+        "Stated 0 stored holder(s); left 0 confirmed and 0 contested holder(s) for a person; "
+        "re-resolved 1 stale holder(s).\n"
+    )
+    assert repeated == (0, (), (), 0, 0)
     assert handle.party_id is None
     assert party.handle_count == 0
 

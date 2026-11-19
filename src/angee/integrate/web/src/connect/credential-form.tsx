@@ -1,6 +1,6 @@
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import type { Row } from "@angee/metadata";
-import { useAuthoredMutation, type DocumentVariables } from "@angee/refine";
+import { useAuthoredMutation } from "@angee/refine";
 import {
   savedFormSubmitResult, useUiT, Action,
   Field,
@@ -85,6 +85,7 @@ export function CredentialForm({
   const [refresh] = useRecordActionMutation<ActionFieldName>("refresh_credential", {
     defaultMessage: t("credentials.refresh.done"),
   });
+  // The entered secret leaves the mutation cache once the create settles.
   const [createCredential] = useAuthoredResourceMutation(IntegrateCreateCredential, {
     invalidateModels: INTEGRATE_CREATE_CREDENTIAL_INVALIDATES,
     transient: true, errorNotification: false,
@@ -121,7 +122,7 @@ export function CredentialForm({
 
   const submitCredential = React.useCallback<FormSubmit>(
     async (data) => {
-      const variables = {
+      const result = await createCredential({
         data: {
           name: String(data.name ?? ""),
           kind: String(data.kind ?? ""),
@@ -129,8 +130,7 @@ export function CredentialForm({
           private_key: String(data.private_key ?? ""),
           key_file: String(data.key_file ?? ""),
         },
-      } as DocumentVariables<typeof IntegrateCreateCredential>;
-      const result = await createCredential(variables);
+      });
       return savedFormSubmitResult(result?.create_credential, uiT("form.genericSaveError"));
     },
     [createCredential, uiT],

@@ -11,6 +11,7 @@ _Settings = TypedDict(
         "ANGEE_PARTIES_SIGNING_PROVIDERS": list[str],
         "CELERY_BEAT_SCHEDULE:append": dict[str, dict[str, object]],
         "ANGEE_DIRECTORY_BACKEND_CLASSES": dict[str, str],
+        "ANGEE_DIRECTORY_MAPPING_CLASSES": dict[str, str],
     },
 )
 
@@ -33,5 +34,9 @@ SETTINGS: _Settings = {
     "ANGEE_DIRECTORY_BACKEND_CLASSES": {
         "manual": "angee.parties.backends.ManualDirectoryBackend",
     },
+    # Consumer mappings of a pull-only backend's source fields onto their own
+    # person columns (``angee.parties.backends.DirectoryMapping``), each
+    # contributed under its key: ``"ANGEE_DIRECTORY_MAPPING_CLASSES.<key>"``.
+    "ANGEE_DIRECTORY_MAPPING_CLASSES": {},
 }
 """Django settings contributed when the parties addon is installed."""

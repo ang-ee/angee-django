@@ -75,16 +75,34 @@ class IntegrationError(Exception):
 
 
 class RequestNotSentError(IntegrationError):
-    """Connect, DNS or TLS handshake failed before any HTTP request bytes were written.
+    """No HTTP request bytes were written: here, the connect, DNS or TLS handshake failed.
 
-    Delivery owners may retry this refusal as not sent. Write/read failures after
-    sending are deliberately outside this type because their outcome is uncertain.
+    Its ``transient`` says whether a later attempt can send it: this one can, a
+    :class:`RequestNotBuiltError` cannot. Delivery owners may retry a transient
+    one as not sent; read ``transient``, never the type, for that. Write/read
+    failures after sending are deliberately outside this type because their
+    outcome is uncertain.
     """
 
     transient = True
 
+    def __init__(
+        self, public_message: str = "The HTTP request was not sent; the connection could not be established.",
+    ) -> None:
+        super().__init__(public_message)
+
+
+class RequestNotBuiltError(RequestNotSentError):
+    """The HTTP library would not build the request as configured: a header value it cannot encode or will not send.
+
+    Nothing was written, so it is not sent; the same request fails the same way, so it is permanent. It never
+    chains the library's error, whose text quotes the header value, which can be a credential.
+    """
+
+    transient = False
+
     def __init__(self) -> None:
-        super().__init__("The HTTP request was not sent; the connection could not be established.")
+        super().__init__("The HTTP request was not sent; it could not be built as configured.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +112,16 @@ class IntegrationFailure:
     message: str
 
 
+def is_transient_status(status: int) -> bool:
+    """Whether a later attempt can outlive an HTTP answer with ``status`` (RFC 9110 §15).
+
+    A 408 request timeout, which the client may repeat, a 429 rate limit, and a 5xx server error can; a 501 or a
+    505 cannot, since they refuse the request itself (a method or an HTTP version the server does not implement).
+    """
+
+    return status in (408, 429) or (500 <= status < 600 and status not in (501, 505))
+
+
 def is_transient_failure(error: BaseException) -> bool:
     """Whether retrying an idempotent connection attempt can succeed unchanged.
 
@@ -101,9 +129,10 @@ def is_transient_failure(error: BaseException) -> bool:
     so from its HTTP status. Of the unclassified infrastructure failures, only
     the ones a later attempt can outlive are retryable: a refused, reset or
     timed-out connection, a DNS lookup failure, an exhausted OS resource
-    (:data:`RETRYABLE_ERRNOS`), an HTTP transport failure or 5xx answer, and a
-    dropped database connection. A known-broken setup — a failed certificate
-    verification, a missing file or binary, a permission refusal — is not.
+    (:data:`RETRYABLE_ERRNOS`), an HTTP transport failure or an answer whose
+    status :func:`is_transient_status` names, and a dropped database connection.
+    A known-broken setup — a failed certificate verification, a missing file or
+    binary, a permission refusal — is not.
     Callers whose attempt may already have caused a side effect (a sent message)
     decide uncertainty themselves instead.
     """
@@ -111,7 +140,7 @@ def is_transient_failure(error: BaseException) -> bool:
     if isinstance(error, IntegrationError):
         return error.transient
     if isinstance(error, httpx2.HTTPStatusError):
-        return error.response.status_code >= 500
+        return is_transient_status(error.response.status_code)
     if isinstance(error, ssl.SSLCertVerificationError):
         return False
     if isinstance(error, (ConnectionError, TimeoutError, socket.gaierror)):

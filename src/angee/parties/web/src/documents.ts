@@ -1,8 +1,7 @@
-// Bespoke console operation for connecting a CardDAV directory — a single action
-// that creates the Basic-auth credential + the Directory (two models), the
-// sanctioned multi-model-create shape. The directories list/detail are model-driven
-// (ResourceList reads the SDL) and sync is the single-id `sync_integration` action, so
-// neither needs a document here.
+// The parties console's authored operations. A directory's connect mutation belongs
+// to its vendor addon, which hands it to `ConnectDirectoryAction`; the directories
+// list/detail are model-driven (ResourceList reads the SDL) and sync is the single-id
+// `sync_integration` action, so neither needs a document here.
 
 import { graphql, type DocumentType } from "@angee/gql/console";
 
@@ -201,6 +200,7 @@ export const PartyMergeComparison = graphql(`
       name_suffix
       nickname
       birthday
+      anniversary
     }
     right_person: people_by_pk(id: $right) {
       id
@@ -212,6 +212,7 @@ export const PartyMergeComparison = graphql(`
       name_suffix
       nickname
       birthday
+      anniversary
     }
   }
 `);
@@ -230,6 +231,47 @@ export const SameAsPairs = graphql(`
         display_name
         display_avatar { id url }
       }
+    }
+  }
+`);
+
+export const CertainSameAsPairs = graphql(`
+  query CertainSameAsPairs($limit: Int = 50) {
+    certain_same_as_pairs(limit: $limit) {
+      normalized_value
+      left { id display_name }
+      right { id display_name }
+      survivor { id }
+    }
+  }
+`);
+
+export const DuplicateSetPreviews = graphql(`
+  query DuplicateSetPreviews($sets: [[ID!]!]!, $certain: Boolean = false) {
+    duplicate_set_previews(sets: $sets, certain: $certain) {
+      outcome
+      reason
+      survivor { id }
+      members {
+        id
+        display_name
+        concrete_kind
+        created_at
+        first_met_note
+        statements { id source_kind handle { id platform value } }
+      }
+      disagreements { field values shown }
+    }
+  }
+`);
+
+export const MergeDuplicates = graphql(`
+  mutation MergeDuplicates($sets: [[ID!]!]!, $certain: Boolean = false) {
+    merge_duplicates(sets: $sets, certain: $certain) {
+      members
+      outcome
+      reason
+      survivor { id display_name concrete_kind }
     }
   }
 `);
@@ -297,3 +339,7 @@ export type MergePartyRecord = NonNullable<
 export type MergePersonRecord = NonNullable<
   DocumentType<typeof PartyMergeComparison>["left_person"]
 >;
+
+export type DuplicateSetPreview = DocumentType<typeof DuplicateSetPreviews>["duplicate_set_previews"][number];
+export type DuplicateSetMember = DuplicateSetPreview["members"][number];
+export type DuplicateSetOutcome = DocumentType<typeof MergeDuplicates>["merge_duplicates"][number];

@@ -639,7 +639,7 @@ class GooglePublishingCalendarBackend(_GoogleBackend, PublishingCalendarBackend)
         except PreconditionFailed:
             raise RemoteRejected() from None
         except EventRefused as refused:
-            details = {"status": refused.status, "reason": refused.reason}
+            details = {"status": refused.status, "message": refused.public_message}
             raise RemoteRejected("event_refused", details=details, conflict=False) from None
         if written is None:
             raise RemoteRejected("remote_deleted")

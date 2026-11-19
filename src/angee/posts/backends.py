@@ -35,7 +35,7 @@ from rebac import system_context
 
 from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.errors import IntegrationError, RequestNotSentError
-from angee.integrate.http import HttpClientMixin, ResponseTooLargeError
+from angee.integrate.http import HttpClientMixin, HttpRefusal
 from angee.integrate.http import retry_after as http_retry_after
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.net import AddressNotAllowedError
@@ -272,25 +272,33 @@ class FeedBackend(BridgeImpl, HttpClientMixin):
         retry_delay: Callable[[httpx2.Response], timedelta] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Send a GET/POST through self.http and classify one JSON-object response.
+        """Send a GET/POST through self.http and return its JSON object.
 
-        Pass native HttpClient.request keyword arguments. RequestNotSentError is
-        re-raised unchanged. Transport/OSError, oversized responses, 5xx, a success
-        whose body is not a JSON object, and is_transient(response, data) are
-        uncertain for POST and native transient IntegrationError for GET. The
-        transient predicate runs before refusal even on 5xx. A 4xx whose body is not
-        a JSON object answered the request: both predicates run with empty data, and
-        it is never uncertain.
+        Pass native HttpClient.request keyword arguments. Integrate classifies
+        every refusal (``HttpRefusal``): whether a later attempt can outlive it
+        and its ``Retry-After``. The feed adds only what a write needs and its
+        adapter's own cases. A request not sent (``RequestNotSentError``, its own
+        ``transient`` included) is raised unchanged. A POST that may have taken
+        effect is ``DeliveryUncertain``: a transport failure after sending, an
+        oversized or unreadable success, a 3xx or 5xx, or is_transient(response,
+        data). For GET, a transport failure is transient, and an oversized or
+        unreadable success permanent (the same read brings the same answer).
 
-        refusal(response, data) returns a provider-owned exception or None. Use
-        native IntegrationError(transient=True, retry_after=...) for definite rate
-        or quota refusals, permanent IntegrationError for rejection, CursorInvalid
-        for cursor refusal, or SemanticError for record-local read refusal. A generic
-        HTTP >= 400 refusal follows if neither predicate handled it. Predicate
+        is_transient(response, data) marks the adapter's ambiguous temporary
+        failures; it runs first, and a GET it marks is transient. A server error
+        (5xx) is never an adapter's refusal: a GET's is integrate's. Then
+        refusal(response, data) returns the adapter's own exception or None: a
+        definite rate or quota refusal its answer names (IntegrationError with
+        transient=True and retry_after=...), a rejection (permanent
+        IntegrationError), CursorInvalid, or SemanticError for a record-local read
+        refusal. Any other refused answer, a 3xx included, is integrate's refusal:
+        transient or permanent by its status rule. A refused answer whose body
+        is not a JSON object runs the predicates with empty data. Predicate
         exceptions propagate. All public messages must be bounded and safe.
 
-        retry_delay(response) may combine usage headers with retry_after(response);
-        by default self.retry_after parses Retry-After (including overrides).
+        A transient answer waits retry_delay(response), the adapter's own wait
+        (usage headers, say), by default self.retry_after: the answer's
+        Retry-After, else one minute.
         This helper never debits quota; stream callers debit before it and delivery
         hooks use deliver()'s debit. Only GET and POST are accepted.
         """
@@ -298,43 +306,41 @@ class FeedBackend(BridgeImpl, HttpClientMixin):
         method = method.upper()
         if method not in {"GET", "POST"}:
             raise ValueError("Feed JSON requests must use GET or POST.")
+        write = method == "POST"
+        wait = retry_delay or self.retry_after
+
+        def unanswered(failed: HttpRefusal) -> Exception:
+            """A request that brought no answer: one not sent passes on, a write may have taken effect."""
+
+            if isinstance(failed.failure, RequestNotSentError):
+                return failed.failure
+            if write:
+                return DeliveryUncertain("The feed reply acknowledgement was lost.")
+            return failed.as_error(IntegrationError, "The feed")
+
         try:
-            response = self.http.request(method, url, **kwargs)
-        except RequestNotSentError:
-            raise
+            response = self.http.request(method, url, error=unanswered, **kwargs)
         except AddressNotAllowedError as error:
             raise IntegrationError("The feed address is not allowed.") from error
-        except (OSError, httpx2.TransportError, ResponseTooLargeError) as error:
-            if method == "POST":
-                raise DeliveryUncertain("The feed reply acknowledgement was lost.") from error
-            raise IntegrationError("The feed could not be read.", transient=True) from error
         try:
             data = response.json()
             if not isinstance(data, dict):
                 raise ValueError("Expected a JSON object.")
         except ValueError as error:
-            if not 400 <= response.status_code < 500:
-                if method == "POST":
-                    raise DeliveryUncertain("The feed reply acknowledgement was unreadable.") from error
-                raise IntegrationError(
-                    "The feed response was unreadable.",
-                    retry_after=(retry_delay or self.retry_after)(response),
-                ) from error
-            # A 4xx answered the request: classify it with the predicates, without a body.
-            data = {}
-        if is_transient(response, data) or response.status_code >= 500:
-            if method == "POST":
-                raise DeliveryUncertain("The feed reply acknowledgement was lost.")
-            raise IntegrationError(
-                "The feed is temporarily unavailable.",
-                retry_after=(retry_delay or self.retry_after)(response),
-            )
-        refusal_error = refusal(response, data)
-        if refusal_error is not None:
-            raise refusal_error
-        if response.status_code >= 400:
-            raise IntegrationError("The feed refused the request.")
-        return data
+            if response.is_success:
+                raise unanswered(HttpRefusal(failure=error)) from error
+            data = {}  # a refused answer states its status; its body states nothing more
+        marked = is_transient(response, data)
+        if write and (marked or not (response.is_success or response.is_client_error)):
+            raise DeliveryUncertain("The feed reply acknowledgement was lost.")
+        if marked:
+            raise IntegrationError("The feed is temporarily unavailable.", transient=True, retry_after=wait(response))
+        if not response.is_server_error and (own := refusal(response, data)) is not None:
+            raise own
+        if response.is_success:
+            return data
+        answer = HttpRefusal.of(response)
+        raise answer.as_error(IntegrationError, "The feed", retry_after=wait(response) if answer.transient else None)
 
     @staticmethod
     def retry_after(response: Any, *, now: datetime | None = None) -> timedelta:

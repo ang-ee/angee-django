@@ -938,8 +938,14 @@ data through REBAC, never a queryset bypass.
   - A model's own system verb folding a duplicate (no actor to authorize) calls
     the system entry [`MergeableMixin.fold`](../../src/angee/base/models/merge.py),
     which joins the open changeset and runs the same hooks under a system
-    boundary. Before core row locks, both entries call `lock_for_merge()`
-    so a domain can acquire its earlier lock class. Querysets use
+    boundary. Before core row locks, both entries call the model's
+    `lock_merge_records(records)` once for the whole batch, so a domain can
+    acquire its earlier lock class for every record in one pass; the default
+    calls each record's `lock_for_merge()` in key order. A model whose merge
+    also locks related rows overrides the classmethod and takes them all
+    before any record row, as [`Party`](../../src/angee/parties/models.py)
+    takes the records' same-person partners and every handle they state or
+    hold. Querysets use
     `redirect_group(survivor)` for the survivor plus its flattened one-hop
     redirects.
 - Native REBAC `create`/`insert` evaluates the unsaved candidate's field- and
@@ -1121,7 +1127,11 @@ which scopes rows to the subjects the actor may read. A statement read never
 widens what the subject reader may see: related rows (the member, the asserting
 principal) resolve through their own read gates at the serving seam, no group or
 filter axis reads a related row's columns, and serving surfaces own gated-field
-redaction. Writes use the asserting source's native REBAC write scope on the
+redaction. A subject's own definition may still read through statements: a
+directory's contact readers read the handles, addresses and employment edges its
+live links currently assert, and nothing another source asserts
+([parties permissions](../../src/angee/parties/permissions.zed), `stating_directory`).
+Writes use the asserting source's native REBAC write scope on the
 subject. Merge collisions remain retained as superseded rows outside the current
 per-aspect key. `Statement.sort_key(aspect)` is the one trust ordering — preferred
 rank, the aspect's source precedence (`Aspect.priority`), confidence, the row
@@ -1979,7 +1989,13 @@ lock both current and proposed scopes without invoking guarded transitions.
 This candidate is only for lock selection; it never becomes the write target.
 Callers reload through their original actor and surface scope and recheck write
 permission after waiting. Statement-member identity remains the hook's optional
-`members` argument. Plain Django models retain native row locking.
+`members` argument. A write spanning several subjects of one model, such as a
+statement pair's two endpoints, locks them through
+[`StatementsMixin.lock_subjects`](../../src/angee/provenance/statements.py): the
+default locks each subject in key order, and an owner whose subject lock takes
+prerequisite rows overrides it to take every subject's prerequisites before any
+subject row, so two subjects never interleave their lock order. Plain Django
+models retain native row locking.
 
 ### Direct record access
 
@@ -2225,8 +2241,9 @@ bridge advisory lock as polling and delivery settlement.
   before its commit. Its stream's sweep (`SyncStream.sweep_due`) still compares
   every row, so what no version names converges.
 - **Applied evidence has one promoter.** Adapters return the actual mapped
-  payload and dependency digest in `ApplyResult`; the driver takes the declared
-  mapping version from the stream, promotes the primary link and pins the history
+  payload and dependency digest in `ApplyResult`; the driver takes the mapping
+  version of the stream's generation (a plain declaration's, or the one the stream
+  assigned its composed mapping), promotes the primary link and pins the history
   row written for that application. Observation saves the source on the link without changing that
   protected pointer. History is the observation log; inbound state retains
   simultaneous and closed failures, and refused writes retain link outbox state.

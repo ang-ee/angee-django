@@ -3,7 +3,7 @@
 The optional web addon's build projector. It is deliberately offline and pure: it reads
 native ``web/package.json`` documents for enabled apps and renders two files under ``runtime/web/`` —
 ``manifest.json`` (the package graph, each package's addon ancestry, codegen
-contributions and the deployment's ``ANGEE_UI`` layer) and
+and named asset declarations, and the deployment's ``ANGEE_UI`` layer) and
 ``tailwind.sources.css`` (the Tailwind ``@source`` include). It holds **no**
 GraphQL-schema knowledge: which schemas exist, whether each is live, and the
 shape of their operation documents are owned by the SDL on disk and the
@@ -19,7 +19,7 @@ import os
 import re
 from collections.abc import Iterable, Mapping
 from graphlib import TopologicalSorter
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING, Any, cast
 
 from django.apps import AppConfig
@@ -77,6 +77,7 @@ class WebRuntime:
         codegen_entries: list[dict[str, Any]] = []
         packages_seen: dict[str, str] = {}
         schemas_seen: dict[str, str] = {}
+        assets_seen: dict[str, str] = {}
         providers = installed_components("angee.addons").providers
         for addon in addons:
             if addon.name not in providers:
@@ -87,22 +88,31 @@ class WebRuntime:
             package = document.get("name")
             if not isinstance(package, str) or not WEB_PACKAGE_RE.fullmatch(package):
                 raise ImproperlyConfigured(f"{addon.name} web/package.json name must be a valid npm package name")
-            if package is not None:
-                if package in packages_seen:
-                    raise ImproperlyConfigured(
-                        f"Duplicate web/package.json name {package!r}: {packages_seen[package]} and {addon.name}"
-                    )
-                packages_seen[package] = addon.name
-                entry: dict[str, Any] = {
-                    "package": package, "sourceRoot": "src", "app": addon.name, "label": addon.label,
-                }
-                if self.runtime_dir is not None:
-                    package_root = Path(addon.path).resolve() / "web"
-                    entry["root"] = Path(os.path.relpath(package_root, self.runtime_dir.resolve() / "web")).as_posix()
-                addon_packages.append(entry)
+            if package in packages_seen:
+                raise ImproperlyConfigured(
+                    f"Duplicate web/package.json name {package!r}: {packages_seen[package]} and {addon.name}"
+                )
+            packages_seen[package] = addon.name
+            entry: dict[str, Any] = {
+                "package": package, "sourceRoot": "src", "app": addon.name, "label": addon.label,
+            }
+            if self.runtime_dir is not None:
+                package_root = Path(addon.path).resolve() / "web"
+                entry["root"] = Path(os.path.relpath(package_root, self.runtime_dir.resolve() / "web")).as_posix()
+            addon_packages.append(entry)
             web = document.get("angee", {})
             if not isinstance(web, Mapping):
                 raise ImproperlyConfigured(f"{addon.name} web/package.json angee must be an object")
+            assets = self._asset_entries(addon, web.get("assets", {}))
+            for name in sorted(assets):
+                if name in assets_seen:
+                    raise ImproperlyConfigured(
+                        f"Duplicate web/package.json angee.assets name {name!r}: "
+                        f"{assets_seen[name]} and {addon.name}"
+                    )
+                assets_seen[name] = addon.name
+            if assets:
+                entry["assets"] = assets
             if "codegen" in web:
                 codegen = self._codegen_entry(addon, web["codegen"], package)
                 schema = codegen["schema"]
@@ -181,7 +191,7 @@ class WebRuntime:
 
     @staticmethod
     def _package_document(addon: AppConfig) -> Mapping[str, Any] | None:
-        """Read the native npm owner of fragment identity and codegen intent once."""
+        """Read the native npm owner of fragment identity, assets and codegen intent once."""
 
         package_json = Path(addon.path) / "web" / "package.json"
         if not package_json.is_file():
@@ -193,6 +203,25 @@ class WebRuntime:
         if not isinstance(document, Mapping):
             raise ImproperlyConfigured(f"{addon.name} web/package.json must be an object")
         return document
+
+    @staticmethod
+    def _asset_entries(addon: AppConfig, raw: object) -> dict[str, str]:
+        """Admit named package-relative POSIX paths; the web generator checks the selected files."""
+
+        where = f"{addon.name} web/package.json angee.assets"
+        if not isinstance(raw, Mapping):
+            raise ImproperlyConfigured(f"{where} must be an object")
+        for name, value in sorted(raw.items()):
+            if not name or name != name.strip():
+                raise ImproperlyConfigured(f"{where} name {name!r} must be non-empty without surrounding whitespace")
+            parts = PurePosixPath(value).parts if isinstance(value, str) else ()
+            # npm paths are POSIX; the Windows anchor still catches drive and UNC forms.
+            if not parts or ".." in parts or value != value.strip() or "\\" in value or PureWindowsPath(value).anchor:
+                raise ImproperlyConfigured(
+                    f"{where}[{name!r}] must be a relative POSIX path to a file, without surrounding whitespace, "
+                    "backslashes or '..' segments"
+                )
+        return dict(raw)
 
     @staticmethod
     def _codegen_entry(addon: AppConfig, raw: object, package: str) -> dict[str, Any]:

@@ -332,6 +332,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   ```python
   ANGEE_UI = {"shell": {
       "brand": {"name": "Suite", "mark": "suite"},  # nothing selected: every root
+      "site": {"description": "Tools for the whole team", "icon": "suite.icon", "image": "suite.preview"},
       "theme": "suite.light",
       "apps": {
           "payables": {"rail": ["accounting", "files"], "home": "accounting.bills"},
@@ -346,6 +347,29 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   never the environment. It is a compiler input, so a change to it alone
   recomposes on the stack's `compose --if-stale`
   ([integration inputs](../composer.md#runtime-build-and-import)).
+
+  `brand` owns runtime identity; `site` owns the static HTML head, one per
+  deployment on every ingress alias. Its keys are `title`, `description`,
+  `icon`, `touchIcon` and `image`. The title defaults to `shell.brand.name`, so
+  without a shell brand declare `site.title`; a `brand` with no `site` sets only
+  the static title, and `site: {}` writes the whole head. The addon that ships a
+  public asset declares its name and package-relative path in `web/package.json`
+  (`"angee": { "assets": { "suite.icon": "./src/assets/icon.svg" } }`); the
+  deployment selects names, `icon` a .svg, .png or .ico file, `touchIcon` a .png
+  and `image` a .png, .jpg or .jpeg (see
+  [`ShellSettings`](../../packages/app/src/define-addon.ts) and
+  [`generateWebRuntime`](../../packages/app/src/web-codegen.mjs)). Vite emits the
+  selected files and writes the title, description, Open Graph, `twitter:card`
+  and icon tags before JavaScript runs. It replaces the host `index.html`'s
+  `<title>` and refuses a host head tag for any other fact the site writes, or
+  any Open Graph tag. The web build reads the public origin only from the stack's
+  `ANGEE_PUBLIC_ORIGIN` environment variable, so an origin authored only in a
+  settings file is not seen. `og:url` is written only with an origin and a
+  root-path `base`, which together also make `og:image` absolute. Otherwise
+  `og:image` is the asset's URL under the `base`: absolute under a full-URL
+  `base`, relative under a relative `base` or a root-path one without an origin.
+  Asset declarations are compose inputs; changing only image bytes needs no
+  compose, and Vite rereads them on build or dev reload.
 
   [`selectApp`](../../packages/app/src/boot-app.tsx) takes `?app=<root id |
   apps name>`, else the hostname's `hosts` entry, else `shell.app`, else

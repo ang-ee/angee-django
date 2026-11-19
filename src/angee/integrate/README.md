@@ -50,7 +50,9 @@ apply learned.
 
 A push adapter may version its local projection. It yields each row's exact
 `LocalChange.local_version`, read with the projection, and the push records the
-version it read beside the base it wrote (`RecordLink.local_version`). A full
+version it read beside the base it wrote (`RecordLink.local_version`). That
+column's database default is the unknown version `""`, so a release before it,
+rolled back onto a migrated database, still creates links. A full
 read may then skip every row a link already holds at its current version
 (`RecordLinkManager.changed_since_base`). A projection that reads only the row's
 own tracked columns, plus a container setting, takes the row's history version
@@ -82,15 +84,16 @@ The adapter's `StreamDefinition` declaration owns every stream policy knob.
 Its `authoritative` flag marks the source as the system of record for
 what the stream states (`SyncStream.authoritative`, read by statement survivorship);
 changing it re-derives the linked subjects through `SyncStreamManager.set_authoritative`.
-Direction, snapshot or newer mapping-version declarations open a new baseline
-generation and retain links, policy and failures. Adapter-private deletion policy
-remains in stream `config`.
+Direction, snapshot, newer mapping-version and changed mapping-contribution
+declarations open a new baseline generation and retain links, policy and failures.
+Adapter-private deletion policy remains in stream `config`.
 A changed declaration reaches an existing stream when a drain opens it:
 [`open_stream`](streams.py) always reconciles the stream with its declaration, on
 the generic sync and on a workflow cycle alike. What reaches it is limited to the
 declaration's facts: `authoritative` flips and re-derives, a changed `direction` or
-`snapshot` or increased `mapping_version` opens a new baseline generation (a full
-re-read of that stream), and a changed `kind` is refused. The generation records
+`snapshot`, an increased `mapping_version` or a changed `mapping_contributions` list
+opens a new baseline generation (a full re-read of that stream), and a changed
+`kind` is refused. The generation records
 its active mapping version, so reopening the same declaration preserves progress.
 A lower declaration preserves the cursor and generation but updates that active
 version: rollback output must retain its actual mapping. Returning to the newer
@@ -102,6 +105,30 @@ quarantines do not lower it. Only a newer declaration starts a baseline.
 `cursor`, `reconcile_interval`, `absence_threshold`,
 `tombstone_retention` and `config` seed the first generation only; changing them in
 a declaration never changes an existing stream.
+
+A mapping composed from several declarers (a capability's base and the consumer
+addons that map more source fields) declares `mapping_contributions` instead: one
+`MappingContribution(key, version, sequence=...)` per part. Integrate applies the
+parts in sequence order, ties broken by key, whatever order they were collected
+in. The stream then owns the version. Its generation retains the ordered keys and
+versions it ran with the version it assigned them (`SyncStream.mapping_contributions`),
+and any other list (a part added, removed, exchanged, reordered or re-versioned)
+opens one baseline under a version above the retained one, above every version
+its records were applied with and at least the parts' sum, so every record
+replays once and a version never stamps two lists' output. A renumbering that
+keeps the order changes nothing. The retained list keeps its version, and a
+composed stream's version never lowers: a plain version declared on it later
+reads as one part under the empty key, which no declared part may use. A retained
+list that no longer names the stream's version counts as changed: a release
+before the retained list lowers that version in place and stamps its output with
+it, so returning to the same list replays every record once. A declaration with
+contributions leaves `mapping_version` at its default; any other version beside
+them is refused. The list is a deployment-wide fact: workers declaring different
+lists for one stream open a new baseline on every open. Streams written before
+the column hold the empty mapping and keep the plain rule. The column's database
+default is that empty mapping, so a release before it, rolled back onto a
+migrated database, still creates stream generations; they read as never composed.
+
 A declared snapshot with no reconciliation interval closes after its baseline;
 explicit resync opens a new generation. Missing cadence alone never means read-once.
 
@@ -144,7 +171,8 @@ changes silently discard open failures or domain rows.
 See the [Integration and worker contracts](../../../docs/backend/guidelines.md#integration-and-worker-contracts)
 for invariants, the owners above for exact contracts, and
 [`preview_push`](streams.py) for read-only push inspection. The
-[Directory addon](../parties/README.md) composes this protocol for CardDAV.
+[Directory addon](../parties/README.md) composes this protocol for its directory
+backends, CardDAV among them, each syncing in the direction its backend declares.
 
 RecordLink declares `merge_policy = MOVE`: merging a target moves its links to
 the survivor. Both remote cards receive the survivor's projection, subject to
@@ -230,6 +258,16 @@ metadata discovery resolves OAuth endpoints independently of connection
 discovery. Host
 settings are applied through `oauth_clients` after resources load.
 `Credential.is_reconnect_required` uses status, failed refresh or mint, and expiry.
+A `static_token` is stored without the whitespace a paste brings around it and
+otherwise as entered, since not every one becomes a header (a calendar feed
+subscription keeps its feed address as one). Where it becomes a bearer header,
+a token with a space, a control character or anything outside printable ASCII is
+refused with a permanent `IntegrationError` asking for it to be re-entered, which
+never quotes it; a connection test that sends a request meets it. The kind's own
+probe (`Integration.probe_credential`) checks the token without building a
+header, so a feed address tests usable. An inactive static token produces no
+headers: it fails closed through `Credential.require_active`, as a minted scoped
+token does, with a permanent `IntegrationError` asking for the token again.
 A `jwt_bearer` credential holds a provider signing key (a pasted key file, such as a
 Google service-account key) and mints one access token per scope set through the
 JWT bearer grant (RFC 7523); consumers call `Credential.auth_headers(scopes=...)`.
@@ -267,14 +305,52 @@ responses contain no secret.
 Replacement keeps the credential id, owner and integration attachments. The
 locked replacement uses the handler's `carry_forward` to decide what survives,
 discards stale material and cached scoped tokens, and applies handler-derived metadata.
-Attached integrations read the new material on their next credential load; this
-does not revoke a remote key or restart an already authenticated connection.
+Attached integrations read the new material on their next credential load. One
+whose capability requires connection discovery discovers again first, below;
+otherwise replacement does not restart an already authenticated connection, and
+it never revokes a remote key.
 
 Connection discovery locates the external resource; a REBAC binding grants a
 relationship. Integration owns the `discovery_*` handshake, and the task is
 named `integrate.discover_connection`. Every credential attach
 enters `await_discovery`, clears completion and advances `discovery_generation`.
-No-op discovery settles synchronously. The worker runs
+So does a re-entered secret, on either path: `Credential.replace_material`, and
+`create_local_credential` with a name the user's credential already has (the
+console's create, a connect flow that keys its credential by name). Both go
+through `CredentialManager.reenter_secret`. It refuses a credential an
+integration attaches as material its discovery derived: re-enter the grant it was
+derived from. When the write changed the row's kind or decrypted material, every
+integration the credential serves admits it again (`Integration.admit_credential`,
+the rule attachment and the connect picker use; a refusal rolls the re-entry
+back), and in the same transaction each whose capability requires discovery
+awaits it again, so none syncs on facts found with the old secret. An unchanged
+re-entry changes nothing. An account-less OAuth credential adopted by the first
+account its user connects sends the integrations attaching it to discover again
+too; reconnecting an account already bound does not. `update_material` refuses the
+fields the kind stores as its own secret (`CredentialKindHandler.secret_material_fields`:
+its input fields, every token an OAuth grant stores, or what a `jwt_bearer` key file
+becomes). It and `replace_material`'s validation read the kind of the row as locked,
+never a stale instance's. No-op discovery settles synchronously.
+
+Lock order. Integrate's owners take row locks in one order: the external account
+first (an OAuth connect links it, `ExternalAccountManager.link`, and an account's
+disconnect, `CredentialManager.disconnect_account`, locks it before anything
+else); then an integration's capability rows (`Integration.lock_capability`: the
+concrete row, then its multi-table ancestors), several integrations in
+primary-key order, before the credential they use and before the integration's
+streams; then the credential; then the credential's user, which a sign-in
+method's disconnect check locks (`Credential.check_disconnect`); a stream's
+current epoch before its record links. `CredentialManager.lock_with_served_integrations`
+is the one place that takes a credential with the integrations it serves, for a
+re-entry, a reconnect, an adoption and a credential's deletion or disconnect
+(`Credential.lock_for_delete`); when what the credential serves changed between
+its two reads, or an integration it read was deleted before its lock, it
+releases every lock to a savepoint and takes them again in that order, and after
+three changed sets it gives up with a transient `IntegrationError`. A grant, an
+ownership transfer and a delete of an integration take its capability rows the
+same way (`Integration.lock_for_record_access`, `Integration.lock_for_delete`).
+A page's stream lock reads its integration without locking it.
+The worker runs
 `IntegrationImpl.discover_connection(credential) -> ConnectionDiscovery` outside
 transactions under the sync advisory lock. The result contains adapter-owned
 `data` and, optionally, a `DerivedCredential(kind, name, material)`.
@@ -282,17 +358,30 @@ transactions under the sync advisory lock. The result contains adapter-owned
 `finish_discovery(credential_pk=…, generation=…, discovery=…)` locks the
 integration, verifies both original task values, and invokes the adapter's
 `apply_discovery(discovery)` with a freshly loaded row. This hook performs only
-database work. Integrate persists derived material through the credential
-manager and `attach_connection`; adapters never persist credentials or implement
+database work. An adapter that keeps the remote account it found refuses another
+there with `IntegrationError`; discovery then fails with that operator message and
+sync stays refused. Integrate persists derived material through the credential
+manager (`store_derived`, which sends no integration already using that name to
+discover again and overwrites a credential of the name that nothing holds or that
+another integration attaches as derived; one something else holds fails the
+discovery with a message naming the credential to rename)
+and `attach_connection`; adapters never persist credentials or implement
 the generation fence. Integrate then settles and sends
 `signals.discovery_finished.send(sender=type(instance), instance=instance)` on commit.
 The source grant is retained in `discovery_credential` so reconnect can regenerate
-resource-specific credentials. Ordinary refresh preserves discovery. Re-consent
+resource-specific credentials. Ordinary refresh, a minted scoped token and
+transient material (`Credential.update_material`) preserve discovery. Re-consent
 preserves direct attachments but regenerates tokens derived from the old grant.
 A callback also reconnects a disconnected attachment of the same credential.
 A changed credential identity
 invalidates its attachments, preserving pauses. Disconnecting a source grant
-releases its derived attachments and disposes of unused derived material. Switching
+releases its derived attachments and disposes of unused derived material. So do
+detaching a derived credential and deleting the integration that holds it (its
+grant lost or not), in the same transaction, unless something else still uses it.
+What holds a credential is read from its model's reverse relations
+(`CredentialManager.unattached`: another integration, an account, an agent's or
+an MCP server's reference); the delete reads the integration's links from its
+locked row, and the credential is locked before it is judged unheld. Switching
 the external account on an in-use credential is refused.
 
 The minute scheduler redispatches due pending discovery, with robust sends and
@@ -308,10 +397,95 @@ an existing session cooperatively releases the advisory lock. It leaves sync
 stages and retained workflow runs intact. `discovery_ready` / `ready_for_work()`
 are the shared admission rule; generation zero preserves existing integrations
 until their next attachment or Resume. There is no separate polling repair scan.
+A run already admitted stops once discovery is pending. Every commit to a stream
+or its links takes the stream lock (`SyncStreamManager.lock_current`): a page, a
+push's reflection, a sweep's phase and absences, a retained failure, a conflict
+decision. There the stream's integration, read with the stream, is asked
+`require_discovery_ready()`: a pending discovery refuses transiently, and so does
+a disconnected integration's, which runs when it is connected again; one that
+finished without success refuses permanently with its own operator message. The
+driver asks again, on the integration as stored (one read), before each remote
+write (each write-back of a two-way page, each push candidate,
+`RecordLink.resolve_conflict`) and each reset (`reset_stream`). A secret
+re-entered or a credential attached since admission leaves discovery pending, so
+the run sends nothing more and commits nothing it read (a transient
+`IntegrationError`); earlier pages and their cursor stay, and the next run waits
+for discovery. A commit that rests on no remote fact goes through
+`angee.integrate.states.exempt_from_discovery()`, the one way past that check, named
+where it commits: pinning and unpinning a record, dismissing a failure, and
+reopening a conflict whose follow-through was refused. So does the reflection of a
+write already sent, and the remote's refusal of one: its effect has landed, so a
+page that sent a write commits what it read and sent, then stops. Retrying a
+failure asks for remote work and waits for discovery.
+A workflow sync step checks readiness before any IO or lock
+(`workflows_integrate.steps.bridge_io`): a pending discovery parks it in a time
+wait, with the discovery message as a note and no attempt spent, and a failed
+one fails it with that message. Once it holds the bridge lock it asks again, on
+the bridge as stored (`Integration.require_stored_discovery_ready`), and waits as
+for contention when that refuses. One limit is left there: a step already in its IO
+when discovery turns pending meets the refusal inside it, spends that one attempt
+(as a transport failure caused by the refusal), and the next attempt waits.
+Outbound delivery asks the transport channel's integration the same way
+(`angee.messaging.delivery.run_message_delivery`), before and again under the
+delivery lock: a pending discovery defers the send as lock contention does,
+spending no attempt, and a failed one fails it with the discovery's message.
+Discovery's own apply writes no stream. While a run holds the sync lock discovery
+cannot settle, so readiness stands for the generation the run was admitted under.
+Three limits still hold: a multi-partition workflow step runs without the sync
+lock, so a discovery that succeeds between a page's extraction and its commit
+lets that page commit; an attach on a capability that requires no discovery
+settles at once and does not stop a run; and the check before a write is not
+atomic with a re-entry, so an adapter that reads its credential again between
+the check and the send can send that one write with the new secret.
+
+A vendor's JSON request is `HttpClient.request_model` ([outbound HTTP](http.py)):
+one pinned, size-capped request whose answer is validated into a Pydantic model;
+a capped request asks for an unencoded answer. Whatever brings it no usable
+answer is one `HttpRefusal`, classified once: a transport failure, a 408, a 429
+or a 5xx other than 501 and 505 is transient and waits for the answer's
+`Retry-After`; any other status, and
+a success that is over the cap, cannot be decoded or does not validate, are
+permanent, because the same request brings the same answer. The status decides
+before the body does: a refused answer whose body is over the cap or cannot be
+decoded keeps its status, with no body, and is never read past the cap. A
+whole-resource poll reads a permanent answer again on its next run. The rest is
+the adapter's to state: a pager shrinks its page, and an adapter that reads one
+record per request raises that record's oversized or unreadable answer as the
+record's `SemanticError`, so the driver quarantines it while the page of results
+continues (Notion's page content does). The vendor's
+`error=` factory turns the refusal into its `IntegrationError` with
+`HttpRefusal.as_error(error, service, *, public_message=None, transient=None, retry_after=None)`,
+whose default message names the service and nothing the answer said. The vendor
+states its own cases through that hand-off, reading their signals from the
+refusal's `status`, `body` and `headers`: its words as `public_message`, a
+refusing status it knows a later attempt outlives (a rate limit answered with a
+403) as `transient=True`, and a wait its body or headers name as `retry_after`,
+used instead of the answer's `Retry-After` and implying transience. The
+refusal's `headers` are a read-only copy of the answer's without the credential
+and cookie headers, and neither its `repr` nor any owner message shows a header
+value. A refusal keeps the failure that stopped its request: its `cause` tells a request
+`not_sent` ("could not be reached") from one `unreachable` after it may have
+been sent ("did not answer"). Not yet on the refusal: `download_bounded` (and
+`download_capped` over it) returns `None` alike for its size, deadline and
+redirect limits, and it and `stream` raise the raw transport error, so their
+callers (calendar feeds, media and attachment downloads, page analysis) word and
+classify a failed download themselves; moving them onto the refusal is the
+remaining work. A request the
+HTTP library will not build, a header value it cannot encode or will not send,
+is `not_sent` and permanent (`RequestNotBuiltError`), worded as a request that
+could not be sent as configured; it chains none of the library's text, which
+quotes the value, a credential perhaps.
 
 `IntegrationError(public_message, transient=…, retry_after=…)` owns the optional
-positive provider horizon. `RequestNotSentError` declares that connect, DNS or
-TLS handshake failed before HTTP request bytes were written and is safe to retry.
+positive provider horizon. Integrate's own console actions are guarded by
+`integrate.schema.integration_action_guard`, `action_guard` with an
+`IntegrationError` as an expected refusal: it is answered in band with its public
+message (an `OAuthFlowError` keeps its code), and a permanent one is logged at
+warning level. `RequestNotSentError` declares that no HTTP request
+bytes were written; its `transient` says whether a later attempt can send it: a
+failed connect, DNS or TLS handshake can be retried safely, a request the library
+would not build (`RequestNotBuiltError`) cannot. Callers read `transient`, never
+the type.
 Failures after sending retain an uncertain transport outcome. A hint implies transience unless explicitly declared
 otherwise. Aggregate failures retain a partition's horizon even when another
 partition has a permanent refusal. `BridgeSyncError` retains stream

@@ -2,7 +2,7 @@
 
 Install `angee.storage_integrate_google_drive` in the project's `INSTALLED_APPS`. It
 adds a Google Drive backend to the storage Mounts that `angee.storage_integrate`
-owns: open **Storage → Mounts** and choose **Connect Google Drive**.
+owns: open **Files → Mounts** and choose **Connect → Connect Google Drive**.
 
 ## Connecting
 
@@ -77,3 +77,27 @@ granted it are offered. Google classifies `drive.readonly` as a **restricted** s
 app that requests it from users outside its own Google Workspace organization
 needs Google's OAuth verification, including a security assessment. An
 internal app (a Workspace organization's own users only) does not.
+
+## Checking it against Google
+
+Set up Google and the deployment's `google` client as
+[Google Calendar's check](../calendar_integrate_google/README.md#set-up) does:
+the Google Drive API enabled, `drive.readonly` among its Data Access scopes,
+and the redirect URI `<console origin>/integrate/oauth/callback`. Then:
+
+1. **Files → Mounts** (`/storage/mounts`) → **Connect → Connect Google Drive**.
+   Choose an account, or **Connect another account**: Google asks for read-only
+   Drive access and returns to Mounts. An account connected only for another
+   Google feature is offered once it grants Drive this way, and keeps what it
+   granted before.
+2. Under **Source folder**, browse My Drive and the shared drives, choose a
+   folder and **Use this folder**. With **Leave files in place**, **Connect**: the
+   first sync is queued.
+3. Browse the mount's drive in **Files** and open a file: its bytes are read
+   from Google Drive. Google-native documents and shortcuts are counted as
+   skipped.
+4. Connect another folder with **Copy files** into **Default storage**: its
+   files' bytes are copied there, and opening one reads the copy.
+
+The mount's **Sync** fields and the worker logs show what each sync did;
+[Syncing](#syncing) is what to expect of a later one.

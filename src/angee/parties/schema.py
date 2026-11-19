@@ -14,13 +14,14 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.db.models import Exists, OuterRef, Prefetch
+from django.db.models import Exists, OuterRef, Prefetch, prefetch_related_objects
 from rebac.graphql.strawberry_django import optimize
 from strawberry import auto
 from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.queryset import run_type_get_queryset
 
 from angee.base.identity import public_subject_ref
+from angee.base.lineage import concrete_child_accessor, concrete_child_models
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, session_user
 from angee.graphql.data.hasura import (
     AngeeHasuraWriteBackend,
@@ -35,7 +36,7 @@ from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
 from angee.integrate.schema import BridgeTypeMixin
-from angee.parties.managers import DisplayAvatarPrefetches
+from angee.parties.managers import DisplayAvatarPrefetches, DuplicateMergeOutcome
 from angee.parties.models import Circle as CircleModel
 from angee.parties.models import Party as PartyModel
 from angee.parties.models import RelationshipKind as RelationshipKindModel
@@ -55,6 +56,7 @@ CircleMember = apps.get_model("parties", "CircleMember")
 SameAsStatement = Party.same_as.model.statements.model
 RelationshipKind = apps.get_model("parties", "RelationshipKind")
 strawberry.enum(cast(Any, RelationshipKind.PartyKind))
+strawberry.enum(DuplicateMergeOutcome)
 Relationship = apps.get_model("parties", "Relationship")
 
 _PARTY_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(Party, "hasura_updatable_fields")
@@ -168,9 +170,11 @@ class PersonType(PartyType):
     additional_name: auto
     family_name: auto
     name_suffix: auto
-    nickname: str | None
+    nickname: auto
     birthday: auto
     anniversary: auto
+    languages: auto
+    occupation: auto
 
     @strawberry_django.field(only=["id"])
     def circle_names(self) -> list[str]:
@@ -408,6 +412,77 @@ class SameAsPairType:
     normalized_value: str
 
 
+@strawberry.type
+class CertainSameAsPairType:
+    """A same-person pair one confirm would merge now: the two, the address linking them, and the older survivor."""
+
+    left: PartyType
+    right: PartyType
+    normalized_value: str
+    survivor: PartyType
+
+
+@strawberry.type
+class FieldDisagreementType:
+    """A merge field the members of a set disagree on: each member's value, and the value the survivor will show."""
+
+    field: str
+    values: list[str | None]
+    shown: str | None
+
+
+@strawberry.type
+class DuplicateSetPreviewType:
+    """A set of records a person says are one, as the batch merge would merge it now.
+
+    ``members`` come oldest first, each with what tells it apart (its statements'
+    handles and sources, its dates); the first survives. Only a set that merges
+    lists ``disagreements``, and only fields the reader may read on every member.
+    """
+
+    members: list[PartyType]
+    survivor: PartyType | None
+    outcome: DuplicateMergeOutcome | None
+    reason: str
+    disagreements: list[FieldDisagreementType]
+
+
+@strawberry.type
+class DuplicateSetOutcomeType:
+    """What one confirmed set of records came to: merged into ``survivor``, or left, and why."""
+
+    members: list[strawberry.ID]
+    outcome: DuplicateMergeOutcome
+    survivor: PartyType | None
+    reason: str
+
+
+def _prefetch_member_facts(members: list[Any], actor: Any) -> None:
+    """Load what the duplicate dialog shows of every member in one batch: kind, statements, avatars.
+
+    The members reach the schema in a plain list, outside the optimizer, so these
+    prefetches stand in for its hints: the MTI children ``concrete_kind`` reads,
+    and the reader's handle statements, each statement's handle read through
+    ``actor`` so ``actor_scoped_to_one`` reuses it. A member's addresses are its
+    statements' handles: every holder is the projection of one (the
+    ``stored_holder`` rule states a bare one), so ``handles`` adds no address.
+    """
+
+    files = apps.get_model("storage", "File").objects.with_actor(actor)
+    prefetch_related_objects(
+        members,
+        *(concrete_child_accessor(Party, child) for child in concrete_child_models(Party)),
+        Prefetch(
+            "partystatement_set",
+            queryset=Party.objects.handle_statements()
+            .for_reader(actor)
+            .prefetch_related(Prefetch("handle", queryset=Handle.objects.with_actor(actor))),
+            to_attr="_readable_handle_statements",
+        ),
+        *Party.objects.display_avatar_prefetches(actor, avatars=files),
+    )
+
+
 @strawberry.enum
 class PeopleWorkbenchScope(StrEnum):
     """The bounded smart-view vocabulary for the People workbench."""
@@ -442,6 +517,28 @@ class PartiesReviewQuery:
             "list[SameAsPairType]",
             Party.objects.all().same_as_pairs(limit=limit),
         )
+
+    @strawberry.field
+    def certain_same_as_pairs(self, info: strawberry.Info, limit: int = 50) -> list[CertainSameAsPairType]:
+        """Return the certain same-person pairs awaiting the signed-in person's review, at most 50."""
+
+        return cast(
+            "list[CertainSameAsPairType]",
+            Party.objects.certain_same_as_pairs(actor=session_user(info), limit=limit),
+        )
+
+    @strawberry.field
+    def duplicate_set_previews(
+        self, info: strawberry.Info, sets: list[list[strawberry.ID]], certain: bool = False,
+    ) -> list[DuplicateSetPreviewType]:
+        """Return each set of records as the batch merge would merge it now, with what tells its members apart."""
+
+        actor = session_user(info)
+        previews = Party.objects.preview_duplicates(
+            actor=actor, sets=[[str(pk) for pk in ids] for ids in sets], certain=certain,
+        )
+        _prefetch_member_facts([member for preview in previews for member in preview.members], actor)
+        return cast("list[DuplicateSetPreviewType]", previews)
 
     @strawberry.field
     def search_parties(self, query: str, limit: int = 20) -> list[PersonType]:
@@ -569,6 +666,19 @@ class PartiesIdentityMutation:
         )
 
     @strawberry.mutation
+    def merge_duplicates(
+        self, info: strawberry.Info, sets: list[list[strawberry.ID]], certain: bool = False,
+    ) -> list[DuplicateSetOutcomeType]:
+        """Merge each confirmed set of records into its oldest member as the signed-in person; return every outcome."""
+
+        return cast(
+            "list[DuplicateSetOutcomeType]",
+            Party.objects.merge_duplicates(
+                actor=session_user(info), sets=[[str(pk) for pk in ids] for ids in sets], certain=certain,
+            ),
+        )
+
+    @strawberry.mutation
     def dismiss_same_as(self, a_id: strawberry.ID, b_id: strawberry.ID) -> SameAsStatementType:
         """Persist the durable keep-separate decision for two writable parties."""
 
@@ -660,6 +770,8 @@ _PERSON_RESOURCE = hasura_model_resource(
         "nickname",
         "birthday",
         "anniversary",
+        "languages",
+        "occupation",
         *_PERSON_EXTENSION_INSERT_FIELDS,
     ],
     updatable=[
@@ -673,6 +785,8 @@ _PERSON_RESOURCE = hasura_model_resource(
         "nickname",
         "birthday",
         "anniversary",
+        "languages",
+        "occupation",
         *_PERSON_EXTENSION_UPDATE_FIELDS,
     ],
     delete=False,
@@ -1007,6 +1121,10 @@ _PARTIES_SCHEMA_BUCKET = {
         CircleMemberType,
         SameAsStatementType,
         SameAsPairType,
+        CertainSameAsPairType,
+        FieldDisagreementType,
+        DuplicateSetPreviewType,
+        DuplicateSetOutcomeType,
         PeopleWorkbenchScope,
         PeopleWorkbenchType,
         RelationshipKindType,

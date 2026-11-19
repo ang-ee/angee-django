@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@angee/app": "workspace:*",
+    "@angee/parties": "workspace:*",
     "@angee/refine": "workspace:*",
     "@angee/ui": "workspace:*"
   },

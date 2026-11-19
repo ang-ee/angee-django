@@ -1,4 +1,4 @@
-"""Canonical country-code fields for party-owned postal identities."""
+"""Canonical code fields of parties: a postal identity's country, a person's languages."""
 
 from __future__ import annotations
 
@@ -76,3 +76,51 @@ class CountryCodeField(models.CharField):
 
 
 register_field_type(CountryCodeField, str)
+
+
+def normalize_language_codes(value: Any) -> list[str]:
+    """Return languages as stored: ISO 639 codes, in the order given, each once.
+
+    Each entry is a two-letter ISO 639-1 code or, for a language without one, its
+    three-letter ISO 639-3 code, in any case; a three-letter code of a language
+    that has a two-letter one is stored as the two-letter code (pycountry's
+    catalogue, as for countries). A region or script subtag (``en-GB``) is no
+    language and is refused, as is anything but a list of strings.
+    """
+
+    if value in (None, ""):
+        return []
+    if not isinstance(value, (list, tuple)):
+        raise ValidationError("Languages are a list of language codes.", code="invalid_languages")
+    codes: list[str] = []
+    for item in value:
+        candidate = item.strip().lower() if isinstance(item, str) else ""
+        language = (
+            pycountry.languages.get(alpha_2=candidate)
+            if len(candidate) == 2
+            else pycountry.languages.get(alpha_3=candidate) if len(candidate) == 3 else None
+        )
+        if language is None:
+            raise ValidationError(
+                "%(value)s is not an ISO 639 language code.", code="invalid_language", params={"value": item}
+            )
+        code = getattr(language, "alpha_2", None) or language.alpha_3
+        if code not in codes:
+            codes.append(code)
+    return codes
+
+
+class LanguageCodesField(models.JSONField):
+    """A JSON list of ISO 639 language codes, most preferred first (:func:`normalize_language_codes`)."""
+
+    def to_python(self, value: Any) -> list[str] | None:
+        value = super().to_python(value)
+        return None if value is None else normalize_language_codes(value)
+
+    def pre_save(self, model_instance: models.Model, add: bool) -> list[str] | None:
+        value = self.to_python(getattr(model_instance, self.attname))
+        setattr(model_instance, self.attname, value)
+        return value
+
+
+register_field_type(LanguageCodesField, list[str])

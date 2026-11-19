@@ -10,9 +10,10 @@ related row.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from enum import StrEnum
-from functools import partial
-from typing import Any, Self, cast
+from functools import partial, wraps
+from typing import Any, ParamSpec, Self, cast
 
 import strawberry
 import strawberry_django
@@ -77,6 +78,37 @@ from angee.integrate.oauth.registrations import OAuthRegistrationExtension, oper
 from angee.integrate.states import ConflictKeep, StreamState, SyncFailure, SyncFailureKind, SyncFailureStatus
 
 logger = logging.getLogger(__name__)
+
+_P = ParamSpec("_P")
+
+
+def integration_action_guard(summary: str) -> Callable[[Callable[_P, ActionResult]], Callable[_P, ActionResult]]:
+    """Guard one of integrate's console actions: ``action_guard``, with an integration's refusal expected.
+
+    An ``IntegrationError`` the action meets (discovery still pending, an account
+    the integration refuses) is answered in band with its operator-safe
+    ``public_message``, and an ``OAuthFlowError`` keeps its code. A permanent one
+    is logged at warning level, since only an operator clears it. Every other
+    error is ``action_guard``'s, so other addons' guarded actions are unchanged.
+    """
+
+    def decorate(resolver: Callable[_P, ActionResult]) -> Callable[_P, ActionResult]:
+        @wraps(resolver)
+        def refused_in_band(*args: _P.args, **kwargs: _P.kwargs) -> ActionResult:
+            try:
+                return resolver(*args, **kwargs)
+            except IntegrationError as refusal:
+                if not refusal.transient:
+                    logger.warning("GraphQL action %s refused: %s", resolver.__name__, refusal.public_message)
+                return ActionResult(
+                    ok=False,
+                    message=refusal.public_message,
+                    code=refusal.code if isinstance(refusal, OAuthFlowError) else None,
+                )
+
+        return action_guard(summary)(refused_in_band)
+
+    return decorate
 
 Vendor = apps.get_model("integrate", "Vendor")
 Integration = apps.get_model("integrate", "Integration")
@@ -1710,7 +1742,7 @@ class SyncRecordActionMutation:
     """Admin-gated operational transitions on the bridge-owned record protocol."""
 
     @strawberry.mutation(name="resolveSyncFailure", permission_classes=_ADMIN_PERMISSION_CLASSES)
-    @action_guard("Could not resolve the failure.")
+    @integration_action_guard("Could not resolve the failure.")
     def resolve_sync_failure(
         self,
         info: strawberry.Info,
@@ -1729,7 +1761,7 @@ class SyncRecordActionMutation:
         return ActionResult(ok=True, message=_("Failure resolved."))
 
     @strawberry.mutation(name="retrySyncFailure", permission_classes=_ADMIN_PERMISSION_CLASSES)
-    @action_guard("Could not retry the failure.")
+    @integration_action_guard("Could not retry the failure.")
     def retry_sync_failure(
         self,
         info: strawberry.Info,
@@ -1743,21 +1775,21 @@ class SyncRecordActionMutation:
         return ActionResult(ok=True, message=_("Failure retry requested."))
 
     @strawberry.mutation(name="pinRecordLink", permission_classes=_ADMIN_PERMISSION_CLASSES)
-    @action_guard("Could not pin the record link.")
+    @integration_action_guard("Could not pin the record link.")
     def pin_record_link(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """Withhold automatic sync through the authorized link owner."""
         authorized_action_target(info, RecordLink, id, "write").pin()
         return ActionResult(ok=True, message=_("Record link pinned."))
 
     @strawberry.mutation(name="unpinRecordLink", permission_classes=_ADMIN_PERMISSION_CLASSES)
-    @action_guard("Could not unpin the record link.")
+    @integration_action_guard("Could not unpin the record link.")
     def unpin_record_link(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """Resume automatic sync through the authorized link owner."""
         authorized_action_target(info, RecordLink, id, "write").unpin()
         return ActionResult(ok=True, message=_("Record link unpinned."))
 
     @strawberry.mutation(name="resyncSyncStream", permission_classes=_ADMIN_PERMISSION_CLASSES)
-    @action_guard("Could not request a stream resync.")
+    @integration_action_guard("Could not request a stream resync.")
     def resync_sync_stream(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """Request the driver-owned baseline transition without running a cycle."""
 
@@ -1935,7 +1967,7 @@ class IntegrationActionMutation:
     """Operational actions on an integration (sync, connection test)."""
 
     @strawberry.mutation
-    @action_guard("Could not retry connection discovery.")
+    @integration_action_guard("Could not retry connection discovery.")
     def retry_discovery(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """Retry discovery through the integration's bounded handshake owner."""
 
@@ -1944,7 +1976,7 @@ class IntegrationActionMutation:
         return ActionResult(ok=True, message="Connection discovery requested.")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    @action_guard("Could not resume integration.")
+    @integration_action_guard("Could not resume integration.")
     def mark_integration_connected(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """Move an integration to CONNECTED through its guarded transition."""
 

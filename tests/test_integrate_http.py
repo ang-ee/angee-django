@@ -14,19 +14,25 @@ used.
 from __future__ import annotations
 
 import gzip
+import json
 import socket
+import traceback
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from email.utils import format_datetime
+from typing import Any, assert_type
 
 import httpcore2
 import httpx2
 import pytest
 from django.core.exceptions import ValidationError
+from django.utils import timezone
+from pydantic import BaseModel
 
-from angee.integrate.errors import RequestNotSentError
+from angee.integrate.errors import IntegrationError, RequestNotSentError
 from angee.integrate.http import (
     HttpClient,
+    HttpRefusal,
     OutboundBudget,
     OutboundBudgetState,
     PinnedTransport,
@@ -368,24 +374,44 @@ def test_capped_request_requires_positive_limit(max_bytes: int) -> None:
         HttpClient().request("REPORT", URL, max_bytes=max_bytes)
 
 
+class _Chunks(httpx2.SyncByteStream):
+    """A 320-byte body in 16-byte chunks that counts the chunks read and records its closing."""
+
+    def __init__(self) -> None:
+        self.reads, self.closed = 0, False
+
+    def __iter__(self) -> Iterator[bytes]:
+        for _index in range(20):
+            self.reads += 1
+            yield b"x" * 16
+
+    def close(self) -> None:
+        self.closed = True
+
+
 @pytest.mark.parametrize("follow_redirects", [False, True])
-def test_capped_request_refuses_oversized_redirect_before_next_hop(
+def test_capped_request_follows_a_redirect_without_reading_its_body_past_the_cap(
     follow_redirects: bool,
 ) -> None:
-    requests: list[httpx2.Request] = []
+    """A redirect hop's body over the cap is absent, as a refusing answer's is: unread past the cap, the hop taken."""
+
+    hop = _Chunks()
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        requests.append(request)
-        return httpx2.Response(302, headers={"Location": "/target"}, stream=httpx2.ByteStream(b"oversized"))
+        if request.url.path == "/target":
+            return httpx2.Response(200, content=b"ok")
+        return httpx2.Response(302, headers={"Location": "/target"}, stream=hop)
 
-    with mock_transport(handler):
-        with pytest.raises(ResponseTooLargeError, match="byte limit"):
-            HttpClient().request(
-                "REPORT", URL, max_bytes=5,
-                follow_redirects=follow_redirects,
-                same_origin_redirects=0 if follow_redirects else 3,
-            )
-        assert len(requests) == 1
+    with mock_transport(handler) as requests:
+        response = HttpClient().request(
+            "REPORT", URL, max_bytes=5,
+            follow_redirects=follow_redirects,
+            same_origin_redirects=0 if follow_redirects else 3,
+        )
+
+    assert (response.status_code, response.content) == (200, b"ok")
+    assert [request.url.path for request in requests] == ["/path", "/target"]
+    assert hop.closed and hop.reads < 20
 
 
 def test_redirect_to_an_unsafe_host_is_rejected_at_the_hop() -> None:
@@ -622,21 +648,6 @@ def test_stream_retains_native_response_until_context_exit(fail: bool) -> None:
     assert request.content == b"request"
 
 
-@pytest.mark.parametrize(("answer", "outcome"), [
-    (httpx2.Response(200, json={"ready": True}), {"ready": True}),
-    (httpx2.Response(503), httpx2.HTTPStatusError),
-    (httpx2.Response(200, text="bad json"), ValueError),
-], ids=["json", "http-error", "decode-error"])
-def test_json_get_uses_shared_headers_and_preserves_http_and_decode_errors(answer: Any, outcome: Any) -> None:
-    with mock_transport(lambda request: answer) as requests:
-        if isinstance(outcome, dict):
-            assert HttpClient().get_json(URL) == outcome
-        else:
-            with pytest.raises(outcome):
-                HttpClient().get_json(URL)
-    assert requests[0].headers["Accept"] == "application/json"
-
-
 @pytest.mark.parametrize(
     ("header", "delay"),
     [
@@ -655,3 +666,435 @@ def test_retry_after_reads_delay_seconds_or_a_future_http_date(header: str | Non
 
     response = httpx2.Response(429, headers={} if header is None else {"Retry-After": header})
     assert retry_after(response, now=datetime(2026, 10, 10, 12, 0, tzinfo=UTC)) == delay
+
+
+class _VendorError(IntegrationError):
+    """A vendor refusal; ``refusal`` keeps the facts its factory saw before the owner chained the failure."""
+
+    refusal: HttpRefusal
+
+
+def _vendor_error(refusal: HttpRefusal) -> _VendorError:
+    """The vendor's one factory, through the one hand-off: its own words for a 401, its own wait for a 423 (which
+    makes that status transient), the refusal's facts otherwise."""
+
+    own = "Example API rejected this credential." if refusal.status == 401 else None
+    wait = (refusal.retry_after or timedelta(seconds=2)) if refusal.status == 423 else None
+    error = refusal.as_error(_VendorError, "Example API", public_message=own, retry_after=wait)
+    error.refusal = refusal
+    return error
+
+
+class _Page(BaseModel):
+    items: list[str]
+
+
+def _answer(answer: httpx2.Response | Exception) -> Any:
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    return respond
+
+
+@pytest.mark.parametrize(
+    ("answer", "cause", "status", "transient", "wait", "message"),
+    [
+        pytest.param(
+            httpx2.Response(429, headers={"Retry-After": "30"}), "status", 429, True, timedelta(seconds=30),
+            "Example API is rate limiting requests (HTTP 429).", id="rate-limit-waits-for-retry-after",
+        ),
+        pytest.param(
+            httpx2.Response(503), "status", 503, True, None,
+            "Example API is temporarily unavailable (HTTP 503).", id="server-error",
+        ),
+        pytest.param(
+            httpx2.Response(404, json={"message": "secret vendor text"}), "status", 404, False, None,
+            "Example API refused the request (HTTP 404).", id="client-error",
+        ),
+        pytest.param(
+            httpx2.Response(401), "status", 401, False, None,
+            "Example API rejected this credential.", id="vendor-words-its-own-case",
+        ),
+        pytest.param(
+            httpx2.Response(423), "status", 423, True, timedelta(seconds=2),
+            "Example API refused the request (HTTP 423).", id="vendor-adds-a-transient-status-and-its-wait",
+        ),
+        pytest.param(
+            httpx2.Response(200, json={"items": "not a list"}), "unreadable", None, False, None,
+            "Example API returned an unreadable response.", id="fails-validation",
+        ),
+        pytest.param(
+            httpx2.Response(200, text="not json"), "unreadable", None, False, None,
+            "Example API returned an unreadable response.", id="not-json",
+        ),
+        pytest.param(
+            httpx2.Response(200, headers={"Content-Encoding": "gzip"}, stream=httpx2.ByteStream(b"not gzip")),
+            "unreadable", None, False, None, "Example API returned an unreadable response.",
+            id="a-body-httpx2-cannot-decode",
+        ),
+        pytest.param(
+            httpx2.Response(200, content=b"x" * 65), "oversized", None, False, None,
+            "Example API returned an oversized response.", id="oversized-is-permanent",
+        ),
+        pytest.param(
+            httpx2.Response(408), "status", 408, True, None,
+            "Example API is temporarily unavailable (HTTP 408).", id="a-request-timeout-may-be-repeated",
+        ),
+        pytest.param(
+            httpx2.Response(501), "status", 501, False, None,
+            "Example API refused the request (HTTP 501).", id="a-method-not-implemented-is-permanent",
+        ),
+        pytest.param(
+            httpx2.Response(204), "unreadable", None, False, None,
+            "Example API returned an unreadable response.", id="a-typed-request-answered-with-no-content",
+        ),
+        pytest.param(
+            httpx2.ReadTimeout("slow"), "unreachable", None, True, None,
+            "Example API did not answer.", id="a-transport-failure-after-sending",
+        ),
+        pytest.param(
+            httpx2.ConnectError("refused"), "not_sent", None, True, None,
+            "Example API could not be reached.", id="a-connect-failure-sent-nothing",
+        ),
+        pytest.param(
+            RequestNotSentError(), "not_sent", None, True, None,
+            "Example API could not be reached.", id="not-sent",
+        ),
+    ],
+)
+def test_the_typed_request_raises_the_callers_error_from_the_facts_of_each_refusal(
+    answer: httpx2.Response | Exception, cause: str, status: int | None, transient: bool,
+    wait: timedelta | None, message: str,
+) -> None:
+    """One status rule; the caller composes the message and never sees the answer's text."""
+
+    with mock_transport(_answer(answer)), pytest.raises(_VendorError) as refused:
+        HttpClient().request_model("GET", URL, model=_Page, error=_vendor_error, max_bytes=64)
+
+    facts = refused.value.refusal
+    assert (facts.cause, facts.status, refused.value.transient, refused.value.retry_after) == (
+        cause, status, transient, wait,
+    )
+    assert str(refused.value) == message
+    assert facts.body == ({"message": "secret vendor text"} if status == 404 else None)
+    # The factory saw the failure the owner then chained, so it can tell a request not sent from an uncertain one.
+    assert facts.failure is refused.value.__cause__
+    if isinstance(answer, Exception):
+        assert facts.failure is answer
+
+
+def _answer_with(status: int, body: str, headers: dict[str, str] | None = None) -> tuple[Any, _Chunks]:
+    """Answer ``status`` with a body httpx2 cannot decode (``"undecodable"``), or with :class:`_Chunks`.
+
+    The chunks are over the tests' 64-byte cap.
+    """
+
+    chunks = _Chunks()
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        del request
+        if body == "undecodable":
+            return httpx2.Response(
+                status, headers={"Content-Encoding": "gzip", **(headers or {})}, stream=httpx2.ByteStream(b"not gzip"),
+            )
+        return httpx2.Response(status, headers=headers, stream=chunks)
+
+    return respond, chunks
+
+
+@pytest.mark.parametrize("body", ["undecodable", "over-the-cap"])
+@pytest.mark.parametrize(
+    ("status", "headers", "transient", "wait", "message"),
+    [
+        pytest.param(
+            503, {"Retry-After": "30"}, True, timedelta(seconds=30),
+            "Example API is temporarily unavailable (HTTP 503).", id="an-outage-is-transient-and-waits",
+        ),
+        pytest.param(
+            429, {"Retry-After": "30"}, True, timedelta(seconds=30),
+            "Example API is rate limiting requests (HTTP 429).", id="a-rate-limit-is-transient-and-waits",
+        ),
+        pytest.param(404, {}, False, None, "Example API refused the request (HTTP 404).", id="a-refusal-is-permanent"),
+    ],
+)
+def test_a_refusing_status_decides_before_its_body_does(
+    status: int, headers: dict[str, str], transient: bool, wait: timedelta | None, message: str, body: str,
+) -> None:
+    """The status is the stronger fact: the refusal keeps it and its wait, and a body httpx2 cannot decode, or one
+    over the cap, is absent. Reading still stops at the cap.
+
+    Only a success's such body is an unreadable or oversized answer (``a-body-httpx2-cannot-decode`` and
+    ``oversized-is-permanent`` above).
+    """
+
+    respond, chunks = _answer_with(status, body, headers)
+    with mock_transport(respond), pytest.raises(_VendorError) as refused:
+        HttpClient().request_model("GET", URL, model=_Page, error=_vendor_error, max_bytes=64)
+
+    facts = refused.value.refusal
+    assert (facts.cause, facts.status, facts.body, facts.failure) == ("status", status, None, None)
+    assert (refused.value.transient, refused.value.retry_after, str(refused.value)) == (transient, wait, message)
+    if body == "over-the-cap":
+        assert chunks.closed and chunks.reads < 20
+
+
+@pytest.mark.parametrize("max_bytes", [64, None], ids=["capped", "uncapped"])
+def test_a_raw_request_returns_a_refusing_answer_whose_body_httpx2_cannot_decode(max_bytes: int | None) -> None:
+    """Capped or not, with a factory or without, a refusing answer comes back with no body.
+
+    A success's undecodable body is still the factory's unreadable refusal.
+    """
+
+    with mock_transport(_answer_with(503, "undecodable")[0]):
+        response = HttpClient().request("GET", URL, max_bytes=max_bytes)
+    with mock_transport(_answer_with(200, "undecodable")[0]), pytest.raises(_VendorError) as unreadable:
+        HttpClient().request("GET", URL, max_bytes=max_bytes, error=_vendor_error)
+
+    assert (response.status_code, response.content) == (503, b"")
+    assert unreadable.value.refusal.cause == "unreadable"
+    assert isinstance(unreadable.value.__cause__, httpx2.DecodingError)
+
+
+@pytest.mark.parametrize("declared", [False, True], ids=["streamed", "declared-length"])
+def test_a_raw_request_returns_a_refusing_answer_over_the_cap_without_reading_past_it(declared: bool) -> None:
+    """A 502 whose error page is over a small cap is a 502 with no body, retried like any other 502.
+
+    A 200 over the cap is still oversized. Neither body is read past the cap; a declared length is not read at all.
+    """
+
+    headers = {"Content-Length": "320"} if declared else {}
+    gateway, page = _answer_with(502, "over-the-cap", headers)
+    with mock_transport(gateway):
+        response = HttpClient().request("GET", URL, max_bytes=64, error=_vendor_error)
+    with mock_transport(_answer_with(200, "over-the-cap", headers)[0]), pytest.raises(_VendorError) as oversized:
+        HttpClient().request("GET", URL, max_bytes=64, error=_vendor_error)
+
+    assert (response.status_code, response.content) == (502, b"")
+    assert HttpRefusal.of(response).transient
+    assert page.closed and page.reads < (1 if declared else 20)
+    assert oversized.value.refusal.cause == "oversized"
+    assert isinstance(oversized.value.__cause__, ResponseTooLargeError)
+
+
+def test_a_refusal_has_a_status_or_a_failure() -> None:
+    with pytest.raises(ValueError):
+        HttpRefusal()
+    with pytest.raises(ValueError):
+        HttpRefusal(status=503, failure=RequestNotSentError())
+
+
+@pytest.mark.parametrize(
+    ("header", "own", "wait"),
+    [
+        pytest.param(None, timedelta(minutes=1), timedelta(minutes=1), id="a-wait-only-the-vendor-states"),
+        pytest.param("30", timedelta(minutes=1), timedelta(minutes=1), id="the-vendors-own-wait-when-given"),
+        pytest.param("30", None, timedelta(seconds=30), id="else-the-answers-retry-after"),
+    ],
+)
+def test_the_hand_off_takes_the_vendors_own_wait_and_the_refusal_keeps_the_answers(
+    header: str | None, own: timedelta | None, wait: timedelta,
+) -> None:
+    """A vendor whose error body names its wait states it at the hand-off; the refusal claims no header it lacked."""
+
+    refusal = HttpRefusal.of(httpx2.Response(429, headers={} if header is None else {"Retry-After": header}))
+    error = refusal.as_error(_VendorError, "Example API", retry_after=own)
+
+    assert (error.transient, error.retry_after) == (True, wait)
+    assert str(error) == "Example API is rate limiting requests (HTTP 429)."
+    assert refusal.retry_after == (None if header is None else timedelta(seconds=30))
+
+
+def test_the_typed_request_sends_native_json_and_returns_the_validated_model_or_the_parsed_json() -> None:
+    with mock_transport(lambda request: httpx2.Response(200, json={"items": ["a"]})) as requests:
+        page = HttpClient().request_model("POST", URL, json={"q": "ada"}, model=_Page, error=_vendor_error)
+        parsed = HttpClient().request_model(
+            "GET", URL, headers={"accept": "application/vnd.example+json"}, error=_vendor_error,
+        )
+
+    assert_type(page, _Page)
+    assert page == _Page(items=["a"]) and parsed == {"items": ["a"]}
+    assert json.loads(requests[0].content) == {"q": "ada"}
+    assert requests[0].headers["content-type"] == "application/json"
+    # The caller's header replaces the default whatever its case.
+    assert [request.headers.get_list("accept") for request in requests] == [
+        ["application/json"], ["application/vnd.example+json"],
+    ]
+
+
+def test_a_request_with_an_error_factory_returns_any_status_and_refuses_what_it_could_not_read() -> None:
+    """The raw request keeps every status for its caller; its factory tells a request not sent from an uncertain one."""
+
+    with mock_transport(lambda request: httpx2.Response(404, content=b"xy")):
+        assert HttpClient().request("GET", URL, max_bytes=2, error=_vendor_error).status_code == 404
+        over_the_cap = HttpClient().request("GET", URL, max_bytes=1, error=_vendor_error)
+    with mock_transport(lambda request: httpx2.Response(200, content=b"xy")), pytest.raises(_VendorError) as oversized:
+        HttpClient().request("GET", URL, max_bytes=1, error=_vendor_error)
+    # Over the cap a refusing status is still the answer, with no body; only a success is oversized.
+    assert (over_the_cap.status_code, over_the_cap.content) == (404, b"")
+    causes = {}
+    for failure in (httpx2.ReadTimeout("slow"), RequestNotSentError()):
+        with mock_transport(_answer(failure)), pytest.raises(_VendorError) as refused:
+            HttpClient().request("POST", URL, error=_vendor_error)
+        causes[refused.value.refusal.cause] = (refused.value.refusal.failure is failure, refused.value.transient)
+
+    assert oversized.value.refusal.cause == "oversized" and isinstance(oversized.value.__cause__, ResponseTooLargeError)
+    assert causes == {"unreachable": (True, True), "not_sent": (True, True)}
+
+
+def test_a_failure_the_factory_returns_is_raised_unchanged() -> None:
+    """A caller that passes a request not sent on returns its failure; the owner re-raises it, its chain intact."""
+
+    failure = RequestNotSentError()
+    failure.__cause__ = ConnectionRefusedError("refused")
+    with mock_transport(_answer(failure)), pytest.raises(RequestNotSentError) as raised:
+        HttpClient().request("POST", URL, error=lambda refusal: refusal.failure or _VendorError())
+
+    assert raised.value is failure and isinstance(raised.value.__cause__, ConnectionRefusedError)
+
+
+_KEY = "example-key-5f3a"
+"""An invented credential: no refusal may carry it in its message, its ``repr`` or its exception chain."""
+
+_API = "https://api.example.test/items"
+
+
+def _dial_the_real_http_stack(monkeypatch: pytest.MonkeyPatch, *refusals: BaseException) -> None:
+    """Send through the real pinned transport, httpcore2 and h11, with only DNS and the socket scripted.
+
+    ``mock_transport`` replaces the transport, so it never reaches h11's header validation. Here the raw dial
+    returns httpcore2's own ``MockStream`` answering one JSON page, or raises each of ``refusals`` in turn.
+    """
+
+    _resolve_to(monkeypatch, "93.184.216.34")
+    page = b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{"items":[]}'
+    queue = list(refusals)
+
+    def connect(self: Any, host: str, port: int, **kwargs: Any) -> httpcore2.NetworkStream:
+        if queue:
+            raise queue.pop(0)
+        return httpcore2.MockStream([page])
+
+    monkeypatch.setattr(httpcore2.SyncBackend, "connect_tcp", connect)
+
+
+def _texts(error: BaseException) -> Iterator[str]:
+    """Yield every text ``error`` carries: its rendered traceback, as a log or an error tracker records it, and the
+    ``str`` and ``repr`` of each link of its chain, a suppressed context included."""
+
+    yield "".join(traceback.format_exception(error))
+    link: BaseException | None = error
+    while link is not None:
+        yield str(link)
+        yield repr(link)
+        link = link.__cause__ or link.__context__
+
+
+def test_a_refusal_keeps_the_answers_headers_for_its_vendor_but_no_credential_and_never_shows_them() -> None:
+    """A vendor reads its rate-limit headers from the refusal; cookies and credentials are not kept, and no header
+    value reaches the refusal's ``repr`` or the vendor's error."""
+
+    cookie = f"session={_KEY}"
+    answer = httpx2.Response(403, json={}, headers={
+        "X-RateLimit-Remaining": "0", "Set-Cookie": cookie, "Authorization": f"Bearer {_KEY}",
+    })
+    with mock_transport(lambda request: answer), pytest.raises(_VendorError) as refused:
+        HttpClient().request_model("GET", URL, error=_vendor_error)
+
+    refusal = refused.value.refusal
+    assert refusal.headers.get("x-ratelimit-remaining") == "0"
+    assert "set-cookie" not in refusal.headers and "authorization" not in refusal.headers
+    assert "x-ratelimit" not in repr(refusal).lower()
+    assert not [text for text in _texts(refused.value) if _KEY in text or "X-RateLimit" in text]
+    # A copy: nothing a reader does to it reaches the answer.
+    assert answer.headers.get("set-cookie") == cookie
+
+
+@pytest.mark.parametrize(
+    ("status", "transient", "retry_after", "expected"),
+    [
+        pytest.param(403, True, None, (True, None), id="a-vendors-own-transient-refusal"),
+        pytest.param(403, None, timedelta(minutes=10), (True, timedelta(minutes=10)), id="its-wait-implies-transience"),
+        pytest.param(501, False, None, (False, None), id="a-vendor-may-call-a-status-permanent"),
+    ],
+)
+def test_the_hand_off_states_a_vendors_own_transience_and_wait(
+    status: int, transient: bool | None, retry_after: timedelta | None, expected: tuple[bool, timedelta | None],
+) -> None:
+    """The vendor's keywords replace the refusal's facts; a wait it states implies transience."""
+
+    refusal = HttpRefusal.of(httpx2.Response(status))
+    error = refusal.as_error(
+        _VendorError, "Example API", public_message="Example API is busy.",
+        transient=transient, retry_after=retry_after,
+    )
+
+    assert (error.transient, error.retry_after, str(error)) == (*expected, "Example API is busy.")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(f"Bearer {_KEY} ", id="trailing-space-h11-will-not-send"),
+        pytest.param(f"Bearer {_KEY}\t", id="trailing-tab-h11-will-not-send"),
+        pytest.param(f"Bearer {_KEY}​", id="zero-width-space-that-cannot-be-encoded"),
+        pytest.param(f"Bearer {_KEY}", id="no-break-space-that-cannot-be-encoded"),
+    ],
+)
+def test_a_request_the_library_will_not_build_is_a_permanent_not_sent_refusal_that_keeps_no_header_value(
+    monkeypatch: pytest.MonkeyPatch, value: str,
+) -> None:
+    """The request could not be built: not sent, permanent, worded so, and none of the library's text is kept."""
+
+    _dial_the_real_http_stack(monkeypatch)
+    legal = {"Authorization": f"Bearer {_KEY}"}
+    # The path is real: the same request with a legal value is sent and answered.
+    assert HttpClient().request_model("GET", _API, headers=legal, model=_Page, error=_vendor_error) == _Page(items=[])
+
+    headers = {"Authorization": value}
+    with pytest.raises(_VendorError) as refused:
+        HttpClient().request_model("GET", _API, headers=headers, model=_Page, error=_vendor_error)
+    with pytest.raises(RequestNotSentError) as raw:
+        HttpClient().request("GET", _API, headers=headers)
+    with pytest.raises(RequestNotSentError) as streamed, HttpClient().stream("GET", _API, headers=headers):
+        pass
+
+    error, facts = refused.value, refused.value.refusal
+    assert (facts.cause, facts.status, error.transient, error.retry_after) == ("not_sent", None, False, None)
+    assert str(error) == "The request to Example API could not be sent as configured."
+    assert error.__cause__ is None
+    for failure in (facts.failure, raw.value, streamed.value):
+        assert isinstance(failure, RequestNotSentError) and not failure.transient
+        assert failure.__cause__ is None and failure.__context__ is None
+    for carrier in (error, raw.value, streamed.value):
+        assert not [text for text in _texts(carrier) if _KEY in text]
+    assert _KEY not in repr(facts)
+
+
+def test_a_refused_connection_stays_a_transient_not_sent_refusal_that_chains_its_cause(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A connection that could not be made can be outlived: transient, the usual words, its failure chained."""
+
+    _dial_the_real_http_stack(monkeypatch, ConnectionRefusedError("refused"))
+    with pytest.raises(_VendorError) as refused:
+        HttpClient().request_model("GET", _API, headers={"Authorization": f"Bearer {_KEY}"}, error=_vendor_error)
+
+    error = refused.value
+    assert (error.refusal.cause, error.transient, str(error)) == ("not_sent", True, "Example API could not be reached.")
+    assert error.__cause__ is error.refusal.failure
+    assert isinstance(error.__cause__, RequestNotSentError) and error.__cause__.transient
+
+
+def test_retry_after_dates_reach_the_refusal_of_a_bounded_download() -> None:
+    """``DownloadResult`` keeps native headers, so the one ``Retry-After`` parser reads them."""
+
+    later = format_datetime(timezone.now() + timedelta(minutes=5), usegmt=True)
+    with mock_transport(lambda request: httpx2.Response(503, headers={"Retry-After": later})):
+        result = HttpClient().download_bounded(URL, statuses={503})
+
+    assert result is not None
+    refusal = HttpRefusal.of(result)
+    assert (refusal.cause, refusal.status, refusal.transient, refusal.body) == ("status", 503, True, None)
+    assert refusal.retry_after is not None and timedelta(minutes=4) < refusal.retry_after <= timedelta(minutes=5)

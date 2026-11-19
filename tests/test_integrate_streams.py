@@ -10,6 +10,7 @@ from threading import Barrier, Lock
 from typing import Any, ClassVar
 
 import pytest
+from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import (
     DataError,
@@ -20,7 +21,9 @@ from django.db import (
     models,
     transaction,
 )
+from django.db.migrations.state import ProjectState
 from django.db.models.signals import pre_delete
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from hypothesis import example, given, settings
 from hypothesis import strategies as st
@@ -29,12 +32,13 @@ from rebac import system_context
 from angee.base.models.merge_references import has_live_references
 from angee.base.serialization import canonical_json
 from angee.integrate import streams as stream_driver
-from angee.integrate.errors import IntegrationError
+from angee.integrate.errors import IntegrationError, IntegrationFailure
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.models import merge_json_state
 from angee.integrate.states import (
     EXTERNAL_KEY_LENGTH,
     LinkStatus,
+    MappingContribution,
     StreamDefinition,
     StreamDirection,
     StreamKind,
@@ -67,6 +71,8 @@ from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.backends import ChannelBackend, ParsedMessage, ParsedPart
 from angee.messaging.testing.models import Channel, Message
 from tests.conftest import current_stream, make_integration
+from tests.integrate_fixtures import ConnectionBridge
+from tests.lock_waits import submit, wait_for_lock
 from tests.stream_adapters import applied_history, failure_state
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -803,6 +809,371 @@ def test_deploy_seeds_unknown_stream_mapping_before_deciding_to_replay(
     assert SyncStream.objects.current(stream_bridge, definition).pk == current.pk
     assert SyncStream.objects.count() == 1 + int(should_replay)
     assert set(RecordLink.objects.values_list("stream_id", flat=True)) == ({current.pk} if records else set())
+
+
+@dataclass
+class ComposedMappingAdapter(MemoryAdapter):
+    """Declares a plain or composed mapping; a baseline redelivers two unchanged rows, a delta cursor ``delta``."""
+
+    mapping_version: int = 1
+    contributions: tuple[MappingContribution, ...] = ()
+    direction: StreamDirection = StreamDirection.PULL
+    delta: tuple[str, ...] = ()
+
+    def streams(self, *, deadline=None):
+        return (StreamDefinition(
+            "records", kind=StreamKind.RECORD_REPLICA, direction=self.direction,
+            mapping_version=self.mapping_version, mapping_contributions=self.contributions,
+        ),)
+
+    def extract(self, stream, page_bound, *, deadline=None):
+        records = []
+        for key in self.delta if stream.cursor else ("person:1", "person:2"):
+            target = AppliedRecord.objects.filter(key=key).first()
+            records.append(RecordChange(
+                key, {"name": key}, "unchanged-source", mapped_payload={"name": key},
+                target=target, projection=target.payload if target else None,
+            ))
+        return StreamPage(tuple(records), {"done": True})
+
+
+def drain_records(bridge: Channel, adapter: ComposedMappingAdapter) -> tuple[Any, int]:
+    """Open the declared stream and drain it; return its current generation and the records it applied."""
+
+    stream = open_stream(bridge, "records", "", adapter)
+    result = advance_stream(stream, adapter)
+    assert result.exhausted
+    return result.stream, result.count
+
+
+def composed_adapter(bridge: Channel, **facts: Any) -> ComposedMappingAdapter:
+    adapter = ComposedMappingAdapter(**facts)
+    adapter.integration = bridge
+    return adapter
+
+
+def parts(*pairs: tuple[Any, Any]) -> tuple[MappingContribution, ...]:
+    """Declare ``(key, version)`` parts applying in the order given."""
+
+    return tuple(MappingContribution(key, version, sequence=index) for index, (key, version) in enumerate(pairs))
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        pytest.param((("base", 1),), (("base", 1), ("extra", 1)), id="added"),
+        pytest.param((("base", 1), ("extra", 1)), (("base", 1),), id="removed"),
+        pytest.param((("base", 1), ("first", 1)), (("base", 1), ("second", 1)), id="exchanged-at-equal-sum"),
+        pytest.param((("base", 1), ("extra", 1)), (("extra", 1), ("base", 1)), id="reordered"),
+        pytest.param((("base", 1), ("extra", 2)), (("base", 1), ("extra", 1)), id="version-lowered"),
+        pytest.param((("base", 1),), (("base", 2),), id="version-raised"),
+    ],
+)
+def test_a_changed_contribution_list_replays_each_record_once(
+    stream_bridge: Channel, before: tuple[tuple[str, int], ...], after: tuple[tuple[str, int], ...]
+) -> None:
+    # The delta redelivers both rows unchanged, so a drain that lands nothing proves the version held.
+    adapter = composed_adapter(stream_bridge, contributions=parts(*before), delta=("person:1", "person:2"))
+    initial, landed = drain_records(stream_bridge, adapter)
+    assert landed == 2 and initial.mapping_version == sum(version for _key, version in before)
+    assert initial.retained_contributions == before
+    same, landed = drain_records(stream_bridge, adapter)
+    assert (same.pk, landed) == (initial.pk, 0)
+
+    adapter.contributions = parts(*after)
+    changed, landed = drain_records(stream_bridge, adapter)
+    assert changed.generation == initial.generation + 1 and landed == 2
+    assert changed.mapping_version == max(initial.mapping_version + 1, sum(version for _key, version in after))
+    assert changed.retained_contributions == after
+    assert set(RecordLink.objects.values_list("mapping_version", flat=True)) == {changed.mapping_version}
+    again, landed = drain_records(stream_bridge, adapter)
+    assert (again.pk, landed) == (changed.pk, 0)
+    assert SyncStream.objects.count() == 2 and applied_history().count() == 4
+
+
+def test_contribution_round_trips_open_a_baseline_each_time_and_never_lower_the_version(
+    stream_bridge: Channel,
+) -> None:
+    """A, B, A replays every time; a plain version declared after composing reads as one contribution."""
+
+    adapter = composed_adapter(stream_bridge)
+    first, second = parts(("base", 1), ("first", 1)), parts(("base", 1), ("second", 1))
+    declarations = [(first, 1), (second, 1), (first, 1), (first, 1), ((), 1), ((), 1), ((), 2), ((), 1)]
+    seen = []
+    for contributions, version in declarations:
+        adapter.contributions, adapter.mapping_version = contributions, version
+        stream, landed = drain_records(stream_bridge, adapter)
+        seen.append((stream.generation, stream.mapping_version, landed))
+    assert seen == [(1, 2, 2), (2, 3, 2), (3, 4, 2), (3, 4, 0), (4, 5, 2), (4, 5, 0), (5, 6, 2), (6, 7, 2)]
+    assert SyncStream.objects.order_by("-generation").first().retained_contributions == (("", 1),)
+
+
+def test_a_plain_version_after_composing_never_reads_as_a_part_keyed_like_the_stream(stream_bridge: Channel) -> None:
+    """The stand-in for a plain version is keyed empty, which no declared part may use."""
+
+    adapter = composed_adapter(stream_bridge, contributions=parts(("records", 1)))
+    composed, landed = drain_records(stream_bridge, adapter)
+    assert (composed.mapping_version, landed) == (1, 2)
+    adapter.contributions = ()
+    plain, landed = drain_records(stream_bridge, adapter)
+    assert (plain.generation, plain.mapping_version, landed) == (composed.generation + 1, 2, 2)
+    assert plain.retained_contributions == (("", 1),)
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "replays"),
+    [
+        pytest.param(((10, "base"), (20, "extra")), ((20, "extra"), (10, "base")), False, id="collected-reversed"),
+        pytest.param(((10, "base"), (20, "extra")), ((1, "base"), (2, "extra")), False, id="renumbered-in-order"),
+        pytest.param(((5, "extra"), (5, "base")), ((5, "base"), (5, "extra")), False, id="tie-broken-by-key"),
+        pytest.param(((10, "base"), (20, "extra")), ((20, "base"), (10, "extra")), True, id="sequence-order-changed"),
+    ],
+)
+def test_contributions_apply_by_sequence_then_key_whatever_order_they_are_declared_in(
+    stream_bridge: Channel,
+    before: tuple[tuple[int, str], ...],
+    after: tuple[tuple[int, str], ...],
+    replays: bool,
+) -> None:
+    def declared(entries: tuple[tuple[int, str], ...]) -> tuple[MappingContribution, ...]:
+        return tuple(MappingContribution(key, 1, sequence=sequence) for sequence, key in entries)
+
+    adapter = composed_adapter(stream_bridge, contributions=declared(before))
+    initial, _landed = drain_records(stream_bridge, adapter)
+    assert initial.retained_contributions == (("base", 1), ("extra", 1))
+    adapter.contributions = declared(after)
+    current, landed = drain_records(stream_bridge, adapter)
+    assert (current.generation, landed) == ((initial.generation + 1, 2) if replays else (initial.generation, 0))
+    assert current.retained_contributions == ((("extra", 1), ("base", 1)) if replays else (("base", 1), ("extra", 1)))
+
+
+def test_a_created_or_bumped_stream_holds_its_retained_list_as_a_reloaded_one_does(stream_bridge: Channel) -> None:
+    created = current_stream(stream_bridge, "records", kind=StreamKind.RECORD_REPLICA, mapping_contributions=parts(
+        ("base", 1),
+    ))
+    changed = current_stream(stream_bridge, "records", kind=StreamKind.RECORD_REPLICA, mapping_contributions=parts(
+        ("base", 1), ("extra", 1),
+    ))
+    inherited = SyncStream.objects.bump_generation(changed)
+    for stream in (created, changed, inherited):
+        assert stream.mapping_contributions == SyncStream.objects.get(pk=stream.pk).mapping_contributions
+    assert inherited.retained_contributions == changed.retained_contributions == (("base", 1), ("extra", 1))
+
+
+@pytest.mark.parametrize("reason", ["direction", "resync"])
+def test_a_list_change_beside_another_baseline_reason_opens_one_generation(stream_bridge: Channel, reason: str) -> None:
+    adapter = composed_adapter(stream_bridge, contributions=parts(("base", 1)))
+    initial, _landed = drain_records(stream_bridge, adapter)
+    if reason == "direction":
+        adapter.direction = StreamDirection.BIDIRECTIONAL
+    else:
+        SyncStream.objects.request_resync(initial)
+    adapter.contributions = parts(("base", 1), ("extra", 1))
+    changed, landed = drain_records(stream_bridge, adapter)
+    assert (changed.generation, changed.mapping_version, landed) == (initial.generation + 1, 2, 2)
+    assert not changed.resync_required and SyncStream.objects.count() == 2
+
+
+@pytest.mark.parametrize("unknown", ["", "seeded-by-plain", "seeded-by-composed"])
+def test_a_first_composed_version_lands_above_every_applied_stamp(stream_bridge: Channel, unknown: str) -> None:
+    """A plain rollback, or the lowest-stamp seed, leaves a record stamped above the retained version.
+
+    Plain 5, then 3: a delta applies one record at 3, the other keeps 5. Parts summing
+    to 5 must still replay both, so the stream counts what landed, not only the stamps.
+    """
+
+    adapter = composed_adapter(stream_bridge, mapping_version=5)
+    stream, landed = drain_records(stream_bridge, adapter)
+    assert landed == 2
+    adapter.mapping_version, adapter.delta = 3, ("person:1",)
+    rolled_back, landed = drain_records(stream_bridge, adapter)
+    assert (rolled_back.pk, rolled_back.mapping_version, landed) == (stream.pk, 3, 1)
+    stamps = dict(RecordLink.objects.values_list("external_key", "mapping_version"))
+    assert stamps == {"person:1": 3, "person:2": 5}
+    if unknown:
+        SyncStream.objects.filter(pk=stream.pk).update(mapping_version=None)
+    if unknown == "seeded-by-plain":
+        seeded, landed = drain_records(stream_bridge, adapter)
+        assert (seeded.pk, seeded.mapping_version, landed) == (stream.pk, 3, 0)
+
+    adapter.contributions, adapter.mapping_version, adapter.delta = parts(("base", 2), ("extra", 3)), 1, ()
+    composed, landed = drain_records(stream_bridge, adapter)
+    assert (composed.generation, landed) == (stream.generation + 1, 2)
+    assert composed.mapping_version == 6
+    assert set(RecordLink.objects.values_list("mapping_version", flat=True)) == {6}
+
+
+@pytest.mark.parametrize("left", ["lowered-in-place", "bare-list"])
+def test_a_retained_list_that_no_longer_names_the_stream_version_replays_once(
+    stream_bridge: Channel, left: str
+) -> None:
+    """Plain 3, then ``[base:1]`` at 4; an earlier release then leaves the list without the stream's version.
+
+    A release before the retained list lowers the version in place and applies a
+    record under it; a release that stored the list without its version leaves a
+    bare list. The same list declared again replays every record once, above every stamp.
+    """
+
+    adapter = composed_adapter(stream_bridge, mapping_version=3)
+    plain, landed = drain_records(stream_bridge, adapter)
+    adapter.contributions, adapter.mapping_version = parts(("base", 1)), 1
+    composed, landed = drain_records(stream_bridge, adapter)
+    assert (composed.generation, composed.mapping_version, landed) == (plain.generation + 1, 4, 2)
+
+    if left == "lowered-in-place":
+        SyncStream.objects.filter(pk=composed.pk).update(mapping_version=3)
+        composed.refresh_from_db()
+        adapter.delta = ("person:1",)
+        assert advance_stream(composed, adapter).count == 1
+        adapter.delta = ()
+        stamps = {"person:1": 3, "person:2": 4}
+    else:
+        SyncStream.objects.filter(pk=composed.pk).update(mapping_contributions=[["base", 1]])
+        stamps = {"person:1": 4, "person:2": 4}
+    assert dict(RecordLink.objects.values_list("external_key", "mapping_version")) == stamps
+    assert SyncStream.objects.get(pk=composed.pk).retained_contributions is None
+
+    returned, landed = drain_records(stream_bridge, adapter)
+    assert (returned.generation, returned.mapping_version, landed) == (composed.generation + 1, 5, 2)
+    assert returned.retained_contributions == (("base", 1),)
+    assert set(RecordLink.objects.values_list("mapping_version", flat=True)) == {5}
+
+
+def test_a_stream_written_before_retained_contributions_keeps_its_generation(stream_bridge: Channel) -> None:
+    """A row the previous release wrote has no contribution column; ``AddField`` fills it with the column's default.
+
+    ``AddField`` adds the column to the model of the migration state before it,
+    which has no such field, so the test adds it the same way.
+    """
+
+    adapter = composed_adapter(stream_bridge, mapping_version=3)
+    initial, landed = drain_records(stream_bridge, adapter)
+    assert landed == 2
+    column = SyncStream._meta.get_field("mapping_contributions")
+    state = ProjectState.from_apps(apps)
+    del state.models[SyncStream._meta.app_label, SyncStream._meta.model_name].fields[column.name]
+    previous = state.apps.get_model(SyncStream._meta.app_label, SyncStream._meta.model_name)
+    with connection.schema_editor() as editor:
+        editor.remove_field(SyncStream, column)
+        editor.add_field(previous, column)
+
+    upgraded, landed = drain_records(stream_bridge, adapter)
+    assert (upgraded.pk, upgraded.generation, upgraded.mapping_version, upgraded.cursor, landed) == (
+        initial.pk, initial.generation, 3, {"done": True}, 0,
+    )
+    assert upgraded.retained_contributions == () and applied_history().count() == 2
+
+    # Starting to compose is a change of the list: one baseline, above the plain version.
+    adapter.contributions, adapter.mapping_version = parts(("base", 1)), 1
+    composed, landed = drain_records(stream_bridge, adapter)
+    assert (composed.generation, composed.mapping_version, landed) == (initial.generation + 1, 4, 2)
+
+
+def insert_as_an_earlier_release(row: models.Model, omitted: str, **expressions: str) -> None:
+    """Copy ``row`` with an INSERT that names no ``omitted`` column, as a release whose model lacks it writes.
+
+    ``expressions`` replace columns by SQL over the copied row, so the copy keeps its unique constraints.
+    """
+
+    quote = connection.ops.quote_name
+    meta = type(row)._meta
+    columns = [field.column for field in meta.concrete_fields if not field.primary_key and field.name != omitted]
+    values = ", ".join(expressions.get(column, quote(column)) for column in columns)
+    table = quote(meta.db_table)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"INSERT INTO {table} ({', '.join(map(quote, columns))}) SELECT {values} FROM {table}"
+            f" WHERE {quote(meta.pk.column)} = %s",
+            [row.pk],
+        )
+
+
+def test_a_release_before_the_retained_list_still_creates_stream_generations(stream_bridge: Channel) -> None:
+    """Its model has no such column, so its insert takes the database default: a stream that never composed."""
+
+    adapter = composed_adapter(stream_bridge, contributions=parts(("base", 1)))
+    composed, landed = drain_records(stream_bridge, adapter)
+    assert (composed.mapping_version, landed) == (1, 2)
+    insert_as_an_earlier_release(composed, "mapping_contributions", generation="generation + 1")
+    successor = SyncStream.objects.order_by("-generation").first()
+    RecordLink.objects.filter(stream=composed).update(stream=successor)
+    assert successor.generation == composed.generation + 1
+    assert (successor.mapping_contributions, successor.retained_contributions) == ({}, ())
+
+    returned, landed = drain_records(stream_bridge, adapter)
+    assert (returned.generation, returned.mapping_version, landed) == (successor.generation + 1, 2, 2)
+
+
+def test_a_release_before_the_local_version_still_creates_links(stream_bridge: Channel) -> None:
+    """Its model has no ``local_version``, so its insert takes the database default: an unknown local version."""
+
+    _stream, landed = drain_records(stream_bridge, composed_adapter(stream_bridge))
+    assert landed == 2
+    insert_as_an_earlier_release(
+        RecordLink.objects.get(external_key="person:1"), "local_version", external_key="external_key || ':copy'"
+    )
+    assert RecordLink.objects.get(external_key="person:1:copy").local_version == ""
+
+
+@pytest.mark.parametrize("composed", [False, True])
+def test_a_mapping_change_replays_records_refused_under_the_older_version(
+    stream_bridge: Channel, composed: bool
+) -> None:
+    """A changed contribution list re-reads a refusal as a raised plain version does."""
+
+    adapter = composed_adapter(stream_bridge, semantic_key="person:2")
+    adapter.contributions = parts(("base", 1)) if composed else ()
+    stream, landed = drain_records(stream_bridge, adapter)
+    refused = RecordLink.objects.get(external_key="person:2")
+    [failure] = refused.failures(open_only=True)
+    assert landed == 1 and failure.mapping_version == stream.mapping_version
+    adapter.semantic_key = ""
+    same, landed = drain_records(stream_bridge, adapter)
+    refused.refresh_from_db()
+    assert (same.pk, landed) == (stream.pk, 0) and refused.failures(open_only=True)
+
+    if composed:
+        adapter.contributions = parts(("base", 1), ("extra", 1))
+    else:
+        adapter.mapping_version = 2
+    changed, landed = drain_records(stream_bridge, adapter)
+    refused.refresh_from_db()
+    assert changed.generation == stream.generation + 1 and landed == 2
+    assert refused.status == LinkStatus.CURRENT and not refused.failures(open_only=True)
+    assert refused.mapping_version == changed.mapping_version
+
+
+@pytest.mark.parametrize(
+    ("facts", "message"),
+    [
+        pytest.param({"mapping_version": 2, "mapping_contributions": parts(("base", 1))}, "not both", id="both"),
+        pytest.param({"mapping_contributions": parts(("base", 1), ("base", 2))}, "distinct", id="repeated-key"),
+        pytest.param({"mapping_contributions": parts(("", 1))}, "parts with", id="empty-key"),
+        pytest.param({"mapping_contributions": parts((7, 1))}, "parts with", id="key-not-a-string"),
+        pytest.param({"mapping_contributions": parts(("base", 0))}, "parts with", id="zero-version"),
+        pytest.param({"mapping_contributions": parts(("base", True))}, "parts with", id="boolean-version"),
+        pytest.param({"mapping_contributions": parts(("base", 1.0))}, "parts with", id="float-version"),
+        pytest.param({"mapping_contributions": parts(("base", "1"))}, "parts with", id="string-version"),
+        pytest.param(
+            {"mapping_contributions": (MappingContribution("base", 1, sequence="1"),)},
+            "parts with",
+            id="string-sequence",
+        ),
+        pytest.param({"mapping_contributions": (("base", 1),)}, "parts with", id="pair-without-sequence"),
+        pytest.param({"mapping_contributions": None}, "parts with", id="no-parts-sequence"),
+        pytest.param({"mapping_version": True}, "positive integer", id="boolean-plain-version"),
+        pytest.param({"mapping_version": 1.5}, "positive integer", id="float-plain-version"),
+        pytest.param({"mapping_version": 0}, "positive integer", id="zero-plain-version"),
+    ],
+)
+def test_a_malformed_mapping_declaration_is_refused(
+    stream_bridge: Channel, facts: dict[str, Any], message: str
+) -> None:
+    """Every refusal is a ``ValidationError``, never a ``TypeError`` or ``ValueError``, and creates no stream."""
+
+    with pytest.raises(ValidationError, match=message):
+        current_stream(stream_bridge, "records", kind=StreamKind.RECORD_REPLICA, **facts)
+    assert not SyncStream.objects.exists()
 
 
 @pytest.mark.parametrize(("remote_version", "snapshots"), [("v1", 1), ("v2", 2)])
@@ -2214,6 +2585,33 @@ def test_json_merge_preserves_concurrent_partition_writes(stream_bridge: Channel
     }
 
 
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="Concurrent declarers require PostgreSQL row locks.")
+def test_concurrent_declarers_of_a_changed_contribution_list_open_one_generation(stream_bridge: Channel) -> None:
+    """The second declarer waits on the bridge lock, then finds the list retained and opens nothing."""
+
+    initial = current_stream(stream_bridge, "records", kind=StreamKind.RECORD_REPLICA, mapping_contributions=parts(
+        ("base", 1),
+    ))
+    changed = StreamDefinition(
+        "records", kind=StreamKind.RECORD_REPLICA, mapping_contributions=parts(("base", 1), ("extra", 1)),
+    )
+
+    def declare() -> Any:
+        with system_context(reason="test concurrent mapping declarer"):
+            return SyncStream.objects.current(Channel.objects.get(pk=stream_bridge.pk), changed).pk
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with transaction.atomic():
+            first = SyncStream.objects.current(stream_bridge, changed)
+            contender, pid = submit(pool, declare)
+            wait_for_lock(pid, contender)
+        assert contender.result(timeout=10) == first.pk
+    assert first.generation == initial.generation + 1
+    assert list(SyncStream.objects.order_by("generation").values_list("generation", "mapping_version")) == [
+        (1, 1), (2, 2),
+    ]
+
+
 def test_due_semantic_rescan_never_overwrites_concurrent_local_changes(stream_bridge: Channel) -> None:
     stream = current_stream(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
     adapter = ReadKeysAdapter(
@@ -2892,3 +3290,305 @@ def test_keeping_the_remote_of_a_push_stream_accepts_its_version_until_the_next_
     adapter.candidates = (LocalChange("one", {"n": 2}),)
     assert push_stream(stream, adapter).count == 1
     assert adapter.written[-1] == ("one", {"n": 2}, "v2")
+
+
+# While an integration awaits discovery (a re-entered secret, an attach), no run
+# writes to its remote or commits to its streams and links.
+
+_DISCOVERY_PENDING = "Connection discovery must finish before syncing."
+
+
+@pytest.fixture
+def discovered_bridge(db: None) -> Iterator[ConnectionBridge]:
+    """A bridge whose capability learns its account at discovery, with that discovery settled."""
+
+    with system_context(reason="test stream work on discovered facts"):
+        bridge = make_integration("stream-discovered", model=ConnectionBridge)
+        assert bridge.finish_discovery(credential_pk=bridge.credential_id, generation=bridge.discovery_generation)
+        yield bridge
+
+
+def _two_way(bridge: Any, *keys: str) -> SyncStream:
+    """Open a two-way replica past its baseline, with one applied link per key."""
+
+    stream = current_stream(
+        bridge, "contacts", kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.BIDIRECTIONAL
+    )
+    for key in keys:
+        link = RecordLink.objects.observe(stream, key)
+        RecordLink.objects.promote(link, source_payload={}, source_hash="base", mapped_payload={}, remote_version="v1")
+    SyncStream.objects.advance(stream, {}, exhausted=True)
+    return stream
+
+
+def test_a_push_writes_and_reflects_nothing_while_discovery_is_pending(discovered_bridge: ConnectionBridge) -> None:
+    stream = _two_way(discovered_bridge, "one")
+    adapter = MemoryAdapter(candidates=(LocalChange("one", {"n": 1}), LocalChange("new", {"n": 2})))
+    discovered_bridge.await_discovery()
+
+    with pytest.raises(IntegrationError, match=_DISCOVERY_PENDING) as refused:
+        push_stream(stream, adapter)
+
+    assert refused.value.transient and adapter.written == []
+    link = RecordLink.objects.with_sync_evidence().get(stream=stream, external_key="one")
+    assert (link.remote_version, link.applied_base.source_hash) == ("v1", "base")
+    assert not RecordLink.objects.filter(stream=stream, external_key="new").exists()
+
+
+def _integration_reads(queries: CaptureQueriesContext) -> list[str]:
+    """The statements that read the integration row on its own (a stream lock reads it joined)."""
+
+    table = SyncStream._meta.get_field("integration").related_model._meta.db_table
+    return [query["sql"] for query in queries.captured_queries if f'FROM "{table}"' in query["sql"]]
+
+
+def test_a_push_asks_discovery_once_per_write_and_reads_only_its_columns(
+    discovered_bridge: ConnectionBridge,
+) -> None:
+    stream = _two_way(discovered_bridge, "a", "b", "c")
+    with system_context(reason="test pinned candidates"):
+        for key in ("b", "c"):
+            RecordLink.objects.get(stream=stream, external_key=key).pin()
+    adapter = MemoryAdapter(candidates=tuple(LocalChange(key, {"n": 1}) for key in ("a", "b", "c")))
+
+    with CaptureQueriesContext(connection) as queries:
+        push_stream(stream, adapter)
+
+    # Two pinned candidates are skipped before the check; the one write asks once.
+    reads = _integration_reads(queries)
+    assert [written[0] for written in adapter.written] == ["a"] and len(reads) == 1
+    assert "use_count_24h" not in reads[0]
+
+
+def test_the_stream_lock_reads_only_the_readiness_columns_of_its_integration(
+    discovered_bridge: ConnectionBridge,
+) -> None:
+    stream = _two_way(discovered_bridge, "a")
+    table = SyncStream._meta.get_field("integration").related_model._meta.db_table
+    with system_context(reason="test the stream lock's read"), CaptureQueriesContext(connection) as queries:
+        with transaction.atomic():
+            SyncStream.objects.lock_current(stream)
+    (joined,) = [query["sql"] for query in queries.captured_queries if f'JOIN "{table}"' in query["sql"]]
+    assert "discovery_retry_at" in joined and "use_count_24h" not in joined
+
+
+@pytest.mark.parametrize(("verb", "statements"), [("pin", 21), ("resolve_failure", 22)])
+def test_a_local_link_verb_reads_no_stream_row_to_pass_the_discovery_check(
+    discovered_bridge: ConnectionBridge, verb: str, statements: int,
+) -> None:
+    stream = _two_way(discovered_bridge, "a")
+    with system_context(reason="test a local verb on a link"):
+        link = RecordLink.objects.get(stream=stream, external_key="a")
+        if verb == "resolve_failure":
+            link.record_failure(kind=SyncFailureKind.SEMANTIC, code="invalid_record", source_hash="base")
+            link = RecordLink.objects.get(pk=link.pk)
+        assert not RecordLink._meta.get_field("stream").is_cached(link)
+        with CaptureQueriesContext(connection) as queries:
+            link.pin() if verb == "pin" else link.resolve_failure(0)
+    # The exemption is a context, not a manager reached through a stream row loaded for it.
+    assert len(queries.captured_queries) == statements
+
+
+def test_a_two_way_page_sends_no_write_back_while_discovery_is_pending(discovered_bridge: ConnectionBridge) -> None:
+    stream = _two_way(discovered_bridge, "one")
+    local_edit = RecordChange("one", {}, "base", "v1", mapped_payload={}, projection={"value": "local"})
+    adapter = MemoryAdapter(pages=[StreamPage((local_edit,), {"offset": 1})])
+    discovered_bridge.await_discovery()
+
+    with pytest.raises(IntegrationError, match=_DISCOVERY_PENDING):
+        advance_stream(stream, adapter)
+
+    stream.refresh_from_db()
+    assert adapter.written == [] and stream.cursor == {}
+
+
+@pytest.mark.parametrize("keep", ["remote", "local"])
+def test_a_conflict_choice_is_refused_while_discovery_is_pending(
+    discovered_bridge: ConnectionBridge, monkeypatch: pytest.MonkeyPatch, keep: str
+) -> None:
+    stream = _two_way(discovered_bridge, "one")
+    link = RecordLink.objects.get(stream=stream, external_key="one")
+    failure = link.record_failure(kind=SyncFailureKind.CONFLICT, code="both_changed", source_hash="base")
+    remote = RecordChange("one", {"name": "remote"}, "remote", "v2", mapped_payload={"name": "remote"})
+    adapter = ReadKeysAdapter(remote={"one": remote}, candidates=(LocalChange("one", {"name": "local"}),))
+    monkeypatch.setattr(ConnectionBridge, "capability_impl", property(lambda self: adapter))
+    retained = RecordLink.objects.get(pk=link.pk).inbound
+    discovered_bridge.await_discovery()
+
+    with pytest.raises(IntegrationError, match=_DISCOVERY_PENDING):
+        failure.resolve_conflict(keep=keep)
+
+    assert adapter.reads == [] and adapter.written == []
+    assert RecordLink.objects.get(pk=link.pk).inbound == retained
+
+
+@pytest.mark.parametrize("phase", ["enumerate", "roots"])
+def test_a_sweep_commits_no_phase_absence_or_withdrawal_while_discovery_is_pending(
+    discovered_bridge: ConnectionBridge, phase: str
+) -> None:
+    stream = current_stream(
+        discovered_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, reconcile_interval=timedelta(0),
+        absence_threshold=1,
+    )
+    observed = RecordLink.objects.observe(stream, "gone")
+    # Every link predates this sweep: an empty enumeration moves it on, the absence pass finds "gone".
+    state = {"started_at": (timezone.now() + timedelta(hours=1)).isoformat(), "phase": phase, "after": None}
+    SyncStream.objects.filter(pk=stream.pk).update(reconcile_state=state)
+    withdrawn: list[str] = []
+
+    class WithdrawingAdapter(MemoryAdapter):
+        def on_absent(self, stream: Any, links: Sequence[Any]) -> None:
+            withdrawn.extend(link.external_key for link in links)
+
+    discovered_bridge.await_discovery()
+
+    with pytest.raises(IntegrationError, match=_DISCOVERY_PENDING):
+        reconcile_stream(stream, WithdrawingAdapter())
+
+    stream.refresh_from_db()
+    link = RecordLink.objects.get(pk=observed.pk)
+    assert stream.reconcile_state == state
+    assert (link.status, link.absence_count, withdrawn) == (observed.status, 0, [])
+
+
+@pytest.mark.parametrize("trigger", ["invalid_cursor", "page_flag", "stream_flag"])
+def test_no_answer_resets_a_stream_while_discovery_is_pending(
+    discovered_bridge: ConnectionBridge, trigger: str
+) -> None:
+    stream = current_stream(discovered_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+    adapter = MemoryAdapter(
+        pages=[CursorInvalid() if trigger == "invalid_cursor" else StreamPage((), {}, resync_required=True)]
+    )
+    if trigger == "stream_flag":
+        SyncStream.objects.filter(pk=stream.pk).update(resync_required=True)
+    discovered_bridge.await_discovery()
+
+    with pytest.raises(IntegrationError, match=_DISCOVERY_PENDING):
+        advance_stream(stream, adapter)
+
+    generations = SyncStream.objects.filter(integration_id=discovered_bridge.pk).values_list("pk", "generation")
+    assert list(generations) == [(stream.pk, stream.generation)]
+
+
+def test_local_repairs_commit_while_discovery_is_pending(discovered_bridge: ConnectionBridge) -> None:
+    stream = _two_way(discovered_bridge, "one")
+    link = RecordLink.objects.get(stream=stream, external_key="one")
+    linked = link.record_failure(kind=SyncFailureKind.SEMANTIC, code="refused")
+    streamed = stream.record_failure(kind=SyncFailureKind.SEMANTIC, code="refused")
+    later = link.record_failure(kind=SyncFailureKind.SEMANTIC, code="later")
+    discovered_bridge.await_discovery()
+
+    link.pin()
+    assert RecordLink.objects.get(pk=link.pk).pinned
+    link.unpin()
+    linked.resolve()
+    streamed.resolve()
+    # A retry asks for remote work, so it waits for discovery.
+    with pytest.raises(IntegrationError, match=_DISCOVERY_PENDING):
+        later.retry()
+
+    current = RecordLink.objects.get(pk=link.pk)
+    assert not current.pinned
+    assert [(row.code, row.status) for row in current.failures(open_only=True)] == [("later", SyncFailureStatus.OPEN)]
+    assert SyncStream.objects.get(pk=stream.pk).failures(open_only=True) == ()
+
+
+def test_a_conflict_whose_follow_through_meets_pending_discovery_is_reopened(
+    discovered_bridge: ConnectionBridge, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stream = _two_way(discovered_bridge, "one")
+    link = RecordLink.objects.get(stream=stream, external_key="one")
+    failure = link.record_failure(kind=SyncFailureKind.CONFLICT, code="both_changed", source_hash="base")
+    remote = RecordChange("one", {"name": "remote"}, "remote", "v2", mapped_payload={"name": "remote"})
+
+    @dataclass
+    class ReEnteringAdapter(ReadKeysAdapter):
+        def local_changes(self, stream: Any, *, keys: frozenset[str] | None = None) -> Iterable[LocalChange]:
+            # A secret re-entered after the choice committed, before its push reads the local side.
+            discovered_bridge.await_discovery()
+            return super().local_changes(stream, keys=keys)
+
+    adapter = ReEnteringAdapter(remote={"one": remote}, candidates=(LocalChange("one", {"name": "local"}),))
+    monkeypatch.setattr(ConnectionBridge, "capability_impl", property(lambda self: adapter))
+
+    with pytest.raises(IntegrationError, match=_DISCOVERY_PENDING):
+        failure.resolve_conflict(keep="local")
+
+    assert adapter.written == []
+    [reopened] = RecordLink.objects.get(pk=link.pk).failures(open_only=True)
+    assert (reopened.kind, reopened.code) == (SyncFailureKind.CONFLICT, "both_changed")
+
+
+@dataclass
+class _ReEnteringWriter(MemoryAdapter):
+    """Sends each write, then has the secret re-entered while the answer is on its way back."""
+
+    bridge: Any = None
+
+    def write_back(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
+        result = super().write_back(link, projection, expected_version=expected_version)
+        self.bridge.await_discovery()
+        return result
+
+
+def test_a_push_reflects_the_write_it_sent_when_discovery_turns_pending(discovered_bridge: ConnectionBridge) -> None:
+    stream = _two_way(discovered_bridge, "one", "two")
+    adapter = _ReEnteringWriter(
+        candidates=(LocalChange("one", {"n": 1}), LocalChange("two", {"n": 2})), bridge=discovered_bridge,
+    )
+
+    with pytest.raises(IntegrationError, match=_DISCOVERY_PENDING):
+        push_stream(stream, adapter)
+
+    # The write that landed is the link's new base; the next one is not sent.
+    assert [key for key, _projection, _version in adapter.written] == ["one"]
+    one = RecordLink.objects.with_sync_evidence().get(stream=stream, external_key="one")
+    two = RecordLink.objects.with_sync_evidence().get(stream=stream, external_key="two")
+    assert (one.remote_version, one.applied_base.mapped_payload) == ("v2", {"n": 1})
+    assert (two.remote_version, two.applied_base.source_hash) == ("v1", "base")
+
+
+def test_a_two_way_page_reflects_the_write_it_sent_when_discovery_turns_pending(
+    discovered_bridge: ConnectionBridge,
+) -> None:
+    stream = _two_way(discovered_bridge, "one", "two")
+    edits = tuple(
+        RecordChange(key, {}, "base", "v1", mapped_payload={}, projection={"value": key}) for key in ("one", "two")
+    )
+    adapter = _ReEnteringWriter(pages=[StreamPage(edits, {"offset": 2})], bridge=discovered_bridge)
+
+    with pytest.raises(IntegrationError, match=_DISCOVERY_PENDING):
+        advance_stream(stream, adapter)
+
+    # Each write asks first: the second is not sent, and the first is reflected.
+    assert [key for key, _projection, _version in adapter.written] == ["one"]
+    one = RecordLink.objects.with_sync_evidence().get(stream=stream, external_key="one")
+    two = RecordLink.objects.with_sync_evidence().get(stream=stream, external_key="two")
+    assert (one.remote_version, one.applied_base.mapped_payload) == ("v2", {"value": "one"})
+    assert (two.remote_version, two.applied_base.source_hash) == ("v1", "base")
+
+
+def test_a_failed_discovery_refuses_stream_work_with_its_own_message(discovered_bridge: ConnectionBridge) -> None:
+    stream = _two_way(discovered_bridge, "one")
+    discovered_bridge.await_discovery()
+    assert discovered_bridge.finish_discovery(
+        credential_pk=discovered_bridge.credential_id, generation=discovered_bridge.discovery_generation,
+        error=IntegrationFailure("This key reads another account."),
+    )
+    adapter = MemoryAdapter(candidates=(LocalChange("one", {"n": 1}),))
+
+    with pytest.raises(IntegrationError) as refused:
+        push_stream(stream, adapter)
+
+    # Only an operator clears a failed discovery: the refusal is permanent and says why.
+    assert (str(refused.value), refused.value.transient) == ("This key reads another account.", False)
+    assert adapter.written == []
+
+
+def test_the_check_before_a_remote_write_is_one_read(
+    discovered_bridge: ConnectionBridge, django_assert_num_queries: Any
+) -> None:
+    stream = SyncStream.objects.get(pk=_two_way(discovered_bridge).pk)
+
+    with django_assert_num_queries(1):
+        stream_driver._require_discovery_ready(stream)

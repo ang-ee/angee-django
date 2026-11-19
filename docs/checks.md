@@ -108,6 +108,7 @@ also runs every remaining PostgreSQL-only contract: row locks, hierarchy, IAM,
 [OIDC disconnect admission under the user lock](../tests/test_oidc.py),
 knowledge, [pgvector test-database readiness](../tests/test_postgresql_extensions.py),
 messaging with its [channel owner](../tests/test_messaging_channel_concurrency.py) races,
+parties' [same-person pair](../tests/test_parties_same_as_concurrency.py) locks,
 [portfolio report](../tests/test_portfolio_concurrency.py) locks, proposals,
 sequences, spaces, storage with its
 [window-aligned download URLs and expiry](../tests/test_storage_access_campaign.py),
@@ -126,7 +127,8 @@ messaging inbox's [explorer](../tests/test_inbox_explorer.py),
 [project access and projections](../tests/test_projects_access_projections.py).
 `test_connections.py`, `test_system_queryset.py`, `test_integrate_scheduler.py` and
 `test_transitions.py` contribute only their PostgreSQL test nodes because each also has
-SQLite-only tests;
+SQLite-only tests, and `test_parties_directory_backend.py` its lock nodes because its strict
+expected failure would read as a skip;
 the PostgreSQL branches in `test_extraction_models.py` and
 `test_knowledge_access_campaign.py`, the [resource ledger's](../tests/test_resource_ledger.py)
 concurrent upsert, and the composed profiles that carry PostgreSQL contracts also run by
