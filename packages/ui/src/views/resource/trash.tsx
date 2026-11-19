@@ -159,12 +159,13 @@ function TrashSelectionActions({ modelMetadata, selectedRows, unprocessedCount, 
 }): React.ReactElement {
   const t = useUiT();
   const resource = modelMetadata.resource;
-  const declaresPermissions = Boolean(modelMetadata.fields.permissions);
+  // List rows do not select `permissions`: the shared verb checks `delete` per row
+  // and a refused row is reported in the outcome.
   const selections = [false, true].map((restore) => ({
     restore,
     ids: selectedRows.flatMap((row) => {
       const id = rowPublicId(row);
-      return id && allowsRecordPermission(row, TRASH_PERMISSION, declaresPermissions) && row[flag] === restore ? [id] : [];
+      return id && row[flag] === restore ? [id] : [];
     }),
   }));
   const askTrash = useTrashPrompt(Math.min(selections[0]!.ids.length, BULK_ACTION_LIMIT));

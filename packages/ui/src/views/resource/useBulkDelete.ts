@@ -6,7 +6,7 @@ import {
   type DeletePreviewGroup,
   type DeletePreviewNode,
 } from "@angee/refine";
-import { allowsRecordPermission, refineResourceName, rowPublicId, useModelMetadata, useModelRootFields, type Row } from "@angee/metadata";
+import { refineResourceName, useModelMetadata, useModelRootFields, type Row } from "@angee/metadata";
 
 import { errorMessage, useToast } from "../../feedback";
 import { useUiT } from "../../i18n";
@@ -54,12 +54,10 @@ export function useBulkDelete(
   const rootFields = useModelRootFields(resource);
   const metadata = useModelMetadata(resource);
   const dataResource = metadata?.resource ?? null;
-  const declaresPermissions = Boolean(metadata?.fields.permissions);
-  const selectedIdList = React.useMemo(() => {
-    if (!selectedRows) return [...selectedIds];
-    const rows = new Map(selectedRows.map((row) => [rowPublicId(row), row]));
-    return [...selectedIds].filter((id) => allowsRecordPermission(rows.get(id), "delete", declaresPermissions));
-  }, [declaresPermissions, selectedIds, selectedRows]);
+  // Delete is gated by the resource's delete-preview root; the server authorizes each
+  // row. A type's `permissions` field projects only the names it declares, and list
+  // rows do not select it, so a row cannot be refused here for lacking `delete`.
+  const selectedIdList = React.useMemo(() => [...selectedIds], [selectedIds]);
   const deletePreviewOperation = useDeletePreviewOperation(dataResource);
   const refineResource = refineResourceName(dataResource);
   const deleteAccess = useCan({

@@ -3,7 +3,6 @@ import { useWatch } from "react-hook-form";
 import { developmentMode } from "../../lib/development-mode";
 import { useLatestRef } from "../../lib/use-latest-ref";
 import {
-  allowsRecordPermission,
   archiveFlagField,
   lineReadSelectionPaths,
   modelFieldForPath,
@@ -837,7 +836,6 @@ export function useFormViewSurface({
   const visibleDeleteAction =
     readOnly || deleteAction === undefined ||
     (trashFlag !== null && save.displayRecord?.[trashFlag] !== true) ||
-    !allowsRecordPermission(save.displayRecord, "delete", Boolean(modelMetadata?.fields.permissions)) ||
     (deleteVisibleWhen !== undefined &&
       (save.displayRecord == null || !deleteVisibleWhen(save.displayRecord)))
       ? undefined
