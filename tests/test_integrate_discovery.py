@@ -1313,14 +1313,18 @@ def test_a_derived_credential_another_integration_attaches_stays_when_one_leaves
     assert bridge.credential_id == derived_pk and bridge.discovery_ready
 
 
+@pytest.mark.parametrize("transient", [False, True])
 @pytest.mark.parametrize("path", ["replace", "create"])
-def test_a_re_entry_that_changes_nothing_keeps_discovery(bridge, sent_tasks, path):
+def test_a_re_entry_that_changes_nothing_keeps_discovery(bridge, sent_tasks, path, transient):
     with system_context(reason="test an unchanged re-entry"):
         credential = Credential.objects.create_local_credential(
             bridge.owner, kind="static_token", name="Same key", material={"api_key": "same"},
         )
         bridge.attach_credential(credential)
         assert settle(bridge)["ok"]
+        if transient:
+            # A pairing answer stored beside the secret is not what is entered.
+            credential.update_material(recovery_key="transient-answer")
         generation = bridge.discovery_generation
         sent_tasks.clear()
         if path == "replace":

@@ -53,6 +53,7 @@ from django.db.models import (
 )
 from django.db.models.functions import Cast, Concat, JSONObject, NullIf
 from django.utils import timezone
+from django.utils.crypto import salted_hmac
 from django.utils.text import capfirst
 from django.views.decorators.debug import sensitive_variables
 from django_compose.models import Composable
@@ -1266,14 +1267,20 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         whose capability requires connection discovery awaits it again
         (:meth:`Integration.await_discovery`): a new secret may read another
         remote account than the one discovery found. An unchanged re-entry
-        changes nothing: what was entered is compared, not the tokens minted
-        from it, which every re-entry drops.
+        changes nothing: the kind and its own secret fields
+        (:meth:`CredentialKindHandler.secret_material_fields`) are compared, not
+        a transient answer stored beside them or the tokens minted from them.
+        Only a keyed digest of them is held across the caller's write.
         """
 
-        def entered(row: Any) -> tuple[str, dict[str, Any]]:
+        @sensitive_variables("material", "secret")
+        def entered(row: Any) -> str:
             material = row.reveal()
-            material.pop(_SCOPED_TOKENS, None)
-            return row.kind, material
+            secret = {field: material.get(field) for field in row.handler.secret_material_fields()}
+            return salted_hmac(
+                "angee.integrate.reenter_secret", canonical_json({"kind": row.kind, "secret": secret}),
+                algorithm="sha256",
+            ).hexdigest()
 
         credential, integrations = self.lock_with_served_integrations(credential_pk)
         if any(integration.derived_credential_id == credential_pk for integration in integrations):

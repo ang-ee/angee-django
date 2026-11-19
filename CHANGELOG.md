@@ -10,6 +10,15 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.integrate`: re-entering exactly what is stored changes nothing, even
+  beside a transient answer. `CredentialManager.reenter_secret` compared the
+  whole decrypted material, so the identical secret re-entered while a pairing
+  answer was stored (`Credential.update_material`) sent the integrations to
+  discover again. It now compares the kind and its own secret fields
+  (`CredentialKindHandler.secret_material_fields`), and holds only a keyed
+  digest of them across the caller's write, not the decrypted material in the
+  generator's frame, which an error reporter keeps.
+
 - `angee.integrate`: a disconnected integration waits for the discovery its
   reconnect runs. A secret re-entered on a disconnected integration leaves
   discovery unsettled until `connect` awaits it, but
