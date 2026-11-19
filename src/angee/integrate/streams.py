@@ -41,6 +41,7 @@ from angee.integrate.states import (
     StreamPhase,
     StreamState,
     SyncFailureKind,
+    exempt_from_discovery,
 )
 from angee.integrate.sync import (
     current_progress_bridge,
@@ -352,13 +353,14 @@ def _require_discovery_ready(stream: Any) -> None:
     """Refuse a remote write or a reset while the stream's integration is not discovery-ready.
 
     The driver asks before each one, outside the page transaction, on the
-    integration as it is stored now, in one read (``Integration.require_discovery_ready``);
-    every commit resting on remote facts is also refused under the stream lock
-    (``SyncStreamManager.lock_current``).
+    integration as it is stored now, in one read of the columns the check uses
+    (``Integration.discovery_readiness_fields``); every commit resting on remote
+    facts is also refused under the stream lock (``SyncStreamManager.lock_current``).
     """
 
     integration_model = stream._meta.get_field("integration").related_model
-    integration_model._base_manager.get(pk=stream.integration_id).require_discovery_ready()
+    readiness = integration_model._base_manager.only(*integration_model.discovery_readiness_fields)
+    readiness.get(pk=stream.integration_id).require_discovery_ready()
 
 
 def reset_stream(stream: Any, *, cursor: dict[str, Any]) -> PageResult:
@@ -631,7 +633,7 @@ def _apply_page(
     # before the first one, after the extraction, confirmed what the page read.
     with (
         changeset(fresh=True, activity="pull", origin=stream),
-        type(stream).objects.exempt_from_discovery() if written else nullcontext(),
+        exempt_from_discovery() if written else nullcontext(),
         transaction.atomic(),
     ):
         current_changeset(record=True)
@@ -870,7 +872,6 @@ def push_stream(
         for candidate, link in push_candidates(stream, adapter, external_keys, settle=True):
             if (limit := sync_deadline()) is not None and monotonic() >= limit:
                 return PageResult(stream, count, failure_ids=tuple(failures))
-            _require_discovery_ready(stream)
             candidates.add(candidate.external_key)
             if link is None:
                 link, revision = links.observe(stream, candidate.external_key), None
@@ -898,19 +899,21 @@ def push_stream(
                 dependency_digest=revision.dependency_digest if revision is not None else "",
                 local_version=candidate.local_version,
             )
+            # Asked once per write, after the skips: a skipped candidate sends nothing.
+            _require_discovery_ready(stream)
             bases = link.sync_precondition
             try:
                 result = adapter.write_back(link, candidate.projection, expected_version=link.remote_version)
             except RemoteRejected as error:
                 # The remote answered the write it was sent: its refusal is recorded whatever discovery says.
-                with type(stream).objects.exempt_from_discovery():
+                with exempt_from_discovery():
                     failures.append(_quarantine(stream, record, error, link=link).pk)
                 continue
             # The write landed: it is reflected whatever discovery says, so the next push neither repeats nor
             # conflicts with it. The next candidate asks again before it is sent.
             with (
                 changeset(fresh=True, activity="push", origin=stream),
-                type(stream).objects.exempt_from_discovery(),
+                exempt_from_discovery(),
                 transaction.atomic(),
             ):
                 current_changeset(record=True)

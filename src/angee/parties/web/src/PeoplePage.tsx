@@ -17,8 +17,8 @@ const MODEL = "parties.Person";
  * People (the person-kind contacts): a circle/smart-view workbench around the
  * shared create/edit/list/detail surface. The primary pane owns scope selection
  * and circle drops; the list keeps its generated facets and generic record
- * behavior, and a selection of two people opens their comparison; the
- * registered Person form carries the record tabs and verbs.
+ * behavior, and its selection merges (`merge-selection.tsx`); the registered
+ * Person form carries the record tabs and verbs.
  */
 export function PeoplePage(): React.ReactElement {
   const t = usePartiesT();

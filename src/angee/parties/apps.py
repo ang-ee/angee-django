@@ -23,14 +23,17 @@ class PartiesConfig(AppConfig):
     name = "angee.parties"
 
     def compose_provision(self, context: ProvisionContext) -> None:
-        """Repair handle holders on every provision, after the resources load parties' install rules.
+        """Repair handle holders and directory owners' contact read on every provision, after the resources load.
 
         ``resolve_stale_owners`` states each holder written onto its row, leaves a
-        confirmed or contested one for a person and re-resolves stale ones; it is
-        idempotent, so a deployment never depends on someone running it.
+        confirmed or contested one for a person and re-resolves stale ones;
+        ``grant_directory_owner_contact_reads`` grants each directory's owner the
+        read of its contacts where missing (connecting grants it). Both are
+        idempotent, so a deployment never depends on someone running them.
         """
 
         context.call("resolve_stale_owners")
+        context.call("grant_directory_owner_contact_reads")
 
     def ready(self) -> None:
         """Run parties ready-time hooks after app population."""

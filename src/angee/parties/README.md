@@ -353,9 +353,15 @@ the row changes the party's projection, which a two-way directory writes to its
 card, so no read grant attaches anything.
 
 Sharing a directory shares its contacts: `contact_reader`, granted on the
-directory row through its share surface, and the directory's owner read the
-people and organizations its live links name and the handles, addresses and
-relationships those links state (`contact_read` in [permissions.zed](permissions.zed)).
+directory row through its share surface, reads the people and organizations its
+live links name and the handles, addresses and relationships those links state
+(`contact_read` in [permissions.zed](permissions.zed)). Connecting a directory
+grants its owner `contact_reader` (`Directory.grant_owner_contact_read`, the one
+writer), and every provision grants it to an existing directory's owner where
+missing (`grant_directory_owner_contact_reads`). A transfer does not move it: a
+person grants a later owner, and the previous owner keeps the grant until
+someone removes it. The read is a stored grant alone, so a party's read plans
+the directory chain only for an actor who holds one.
 Each statement arm walks from the row to the statements naming it by the
 statement model's name (`addressstatement`, `relationshipstatement`, and
 `partystatement`, which the handle member declares as its reverse name). A
@@ -418,14 +424,29 @@ pointing owners union statements, retaining collisions as superseded. Where the
 records disagree on a merge field, the merging person confirms the value kept
 (the survivor's, or the chosen override), so no moved statement outranks it.
 
-Nothing merges unattended. A person merges the certain pairs awaiting their
-review in one action, `PartyManager.merge_certain_same_as_pairs` (the
-`merge_certain_same_as_pairs` mutation and agent tool), as their own merges: both
-people, neither an account's own person, exactly the two linked to an address the
-pair cites, and names equal but for case, accents and hyphens. The older record
-survives and loses no value: a merge field it leaves empty takes the newer record's
-value (`Party.merge_values`), its own stands where both have one, and each kept
-value is recorded as that person's choice. The merge's own permission and guards
-decide each pair, and the action returns every pair it read with its outcome, a
-bounded number per call. A person's `anniversary` is a merge choice like their
-birthday; a party's `avatar` is not one yet.
+Nothing merges unattended. A person may also merge in a batch: confirmed sets of
+two to ten records each (`PartyManager.merge_duplicates`, the `merge_duplicates`
+mutation; at most 50 sets), either the certain pairs the Review page lists
+(`certain_same_as_pairs`) or a selection from the People or Organizations list.
+There, two selected records of an ungrouped list open their compare page; three
+or more are one set, and a grouped list gives one set per group of two or more
+selected (a group without a value is never a set). Only an active person account that writes every record may (the party's
+`batch_merge` permission, `write & person->active_member`); a service or agent
+account merges nothing, and no agent tool offers it. A set never holds an account's
+own person (merged by hand, on the compare page), records of two kinds, a trashed
+or merged record, or two records a person kept apart; each is refused for that set
+with its reason, and a set merges exactly as the person confirmed it or not at all.
+A pair is certain when both are people, neither is an account's own person,
+exactly the two are linked to an address the pair cites, and both bear a real
+name, none of the pair's cited addresses (a record named after its e-mail has no
+name of its own), equal to the other's but for case, accents and hyphens. In each
+set the oldest record survives and the others fold into it in key order, under one
+lock pass. A batch records no value as the person's choice: each record's
+statements move to the survivor as their sources' own and the provenance ranking
+decides what shows; a field the survivor leaves empty takes a merged record's
+value as a plain value no one states (`Party.merge_values`). The dialog shows, for
+each set, the fields its records disagree on and the value that will show; a
+person who wants to choose merges that pair on the compare page instead. A merge,
+batch or not, reverts from its changeset. A person's `anniversary` is a merge
+choice like their birthday; a party's `avatar` is not one yet. Merging a person
+with an organization is refused by every merge.

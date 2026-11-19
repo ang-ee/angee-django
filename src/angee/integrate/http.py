@@ -102,6 +102,10 @@ CA bundle is parsed once rather than on every outbound request."""
 RETRY_AFTER_LIMIT = timedelta(days=1)
 """The longest ``Retry-After`` delay honoured; a longer hint is treated as absent."""
 
+_CREDENTIAL_HEADERS = frozenset({"authorization", "proxy-authorization", "cookie", "set-cookie"})
+"""The headers HTTP defines to carry a credential or a cookie (RFC 9110 §11.6.2, §11.7.2; RFC 6265): a refusal
+never keeps them."""
+
 
 def retry_after(response: httpx2.Response | DownloadResult, *, now: datetime | None = None) -> timedelta | None:
     """Return the ``Retry-After`` of ``response`` as a positive delay, or ``None`` (RFC 9110 §10.2.3).
@@ -174,17 +178,24 @@ class DownloadResult:
 class HttpRefusal:
     """Why one request brought no usable answer: the facts a caller composes its error from, never their text.
 
-    A refused answer has its non-success ``status``, its ``Retry-After`` and its
-    parsed JSON ``body`` (:meth:`of`); the status decides, so a body over the
-    cap or one httpx2 cannot decode is simply absent. Any other refusal keeps
-    the ``failure`` that stopped the request, which the caller's factory sees
-    before the owner chains it.
+    A refused answer has its non-success ``status``, its ``Retry-After``, its
+    parsed JSON ``body`` and its ``headers`` (:meth:`of`); the status decides,
+    so a body over the cap or one httpx2 cannot decode is simply absent. Any
+    other refusal keeps the ``failure`` that stopped the request, which the
+    caller's factory sees before the owner chains it.
+
+    ``headers`` are a copy of the answer's, httpx2's case-insensitive type, for
+    a vendor's own signal (a rate limit's remaining requests and reset): read
+    them, never show them. They exclude the credential and cookie headers
+    (:data:`_CREDENTIAL_HEADERS`), and neither the refusal's ``repr`` nor any
+    message the owner composes includes a header value.
     """
 
     status: int | None = None
     retry_after: timedelta | None = None
     body: Any = None
     failure: Exception | None = None
+    headers: Mapping[str, str] = field(default_factory=httpx2.Headers, repr=False)
 
     def __post_init__(self) -> None:
         if (self.status is None) == (self.failure is None):
@@ -199,20 +210,25 @@ class HttpRefusal:
             parsed = json.loads(content) if content else None
         except ValueError:
             parsed = None
-        return cls(status=answer.status_code, retry_after=retry_after(answer), body=parsed)
+        headers = httpx2.Headers(
+            [(name, value) for name, value in answer.headers.multi_items() if name.lower() not in _CREDENTIAL_HEADERS]
+        )
+        return cls(status=answer.status_code, retry_after=retry_after(answer), body=parsed, headers=headers)
 
     @property
     def cause(self) -> Literal["status", "not_sent", "unreachable", "oversized", "unreadable"]:
         """What stopped the request: a ``"status"``, or a failure. ``"not_sent"`` left no request bytes, so
-        even a write may be sent again: a connection that could not be made, or a request the HTTP library
-        would not build (:class:`RequestNotBuiltError`); ``"unreachable"``, any other transport failure, may
-        have taken effect; ``"oversized"`` is a success answer over the byte cap; ``"unreadable"`` is a success
-        answer whose body httpx2 cannot decode or does not validate.
+        even a write may be sent again: a connection that could not be made (:class:`RequestNotSentError`, or
+        httpx2's own connect failure from a transport other than the pinned one), or a request the HTTP library
+        would not build (:class:`RequestNotBuiltError`); ``"unreachable"``, any other transport failure (a read
+        timeout, a dropped connection), brought no answer and may have taken effect; ``"oversized"`` is a success
+        answer over the byte cap; ``"unreadable"`` is a success answer whose body httpx2 cannot decode or does not
+        validate.
         """
 
         if self.status is not None:
             return "status"
-        if isinstance(self.failure, RequestNotSentError):
+        if isinstance(self.failure, (RequestNotSentError, httpx2.ConnectError, httpx2.ConnectTimeout)):
             return "not_sent"
         if isinstance(self.failure, ResponseTooLargeError):
             return "oversized"
@@ -239,8 +255,10 @@ class HttpRefusal:
         if isinstance(self.failure, RequestNotBuiltError):
             return f"The request to {service} could not be sent as configured."
         cause = self.cause
-        if cause in ("not_sent", "unreachable"):
+        if cause == "not_sent":
             return f"{service} could not be reached."
+        if cause == "unreachable":
+            return f"{service} did not answer."
         if cause == "oversized":
             return f"{service} returned an oversized response."
         if cause == "unreadable":
@@ -252,16 +270,20 @@ class HttpRefusal:
         return f"{service} refused the request (HTTP {self.status})."
 
     def as_error[E: IntegrationError](
-        self, error: type[E], service: str, *, public_message: str | None = None, retry_after: timedelta | None = None,
+        self, error: type[E], service: str, *, public_message: str | None = None, transient: bool | None = None,
+        retry_after: timedelta | None = None,
     ) -> E:
-        """Return ``error`` for ``service`` built from these facts.
+        """Return ``error`` for ``service`` built from these facts, or from the vendor's statement of its own case.
 
-        ``public_message`` words a vendor's own case. ``retry_after`` is the vendor's own wait (one its error body
-        names), used when given, the answer's ``Retry-After`` otherwise; the refusal keeps stating only the answer.
+        Each keyword is used when given, the refusal's fact otherwise: ``public_message`` words the case;
+        ``transient`` says whether a later attempt can outlive it (a rate limit the vendor answers with a refusing
+        status); ``retry_after`` is the vendor's own wait (one its body or headers name), which implies transience
+        unless ``transient`` says otherwise, as on ``IntegrationError``. The refusal keeps stating only the answer.
         """
 
         return error(
-            public_message or self.public_message(service), transient=self.transient,
+            public_message or self.public_message(service),
+            transient=(self.transient if retry_after is None else None) if transient is None else transient,
             retry_after=self.retry_after if retry_after is None else retry_after,
         )
 
@@ -716,7 +738,9 @@ class HttpClient:
         ``json`` is the body; ``Accept: application/json`` is sent unless
         ``headers`` names another. Every :class:`HttpRefusal` (a transport failure,
         a non-success status whatever its body, a success over ``max_bytes``, one
-        that cannot be decoded or does not validate) raises what ``error`` returns for it: the caller's
+        that cannot be decoded or does not validate, a 204 or any success with no
+        JSON body included: send a request that may answer without one through
+        :meth:`request`) raises what ``error`` returns for it: the caller's
         ``IntegrationError`` (:meth:`HttpRefusal.as_error`), or a domain signal it
         owns (a ``FileNotFoundError`` for a 404). The URL gate's and address
         policy's ``ValidationError`` propagate.

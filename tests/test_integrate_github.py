@@ -9,13 +9,14 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
 import httpx2
 import pytest
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from rebac import system_context
 
 from angee.integrate.errors import is_transient_failure, safe_integration_failure
@@ -118,10 +119,31 @@ def test_ls_tree_filters_by_path_and_rejects_truncation() -> None:
     assert "is truncated" in safe_integration_failure(refused.value).message
 
 
+_NOW = datetime(2026, 10, 10, 12, 0, tzinfo=UTC)
+_EXHAUSTED = {"x-ratelimit-remaining": "0", "x-ratelimit-reset": str(int(_NOW.timestamp()) + 600)}
+"""GitHub's answer to an exhausted quota: no requests remain until the window resets, ten minutes after ``_NOW``."""
+
+
 @pytest.mark.parametrize(("answer", "transient", "wait", "message"), [
     pytest.param(
-        httpx2.Response(403, json={"message": "vendor text"}), False, None, "GitHub refused the request (HTTP 403).",
-        id="a-refusal-is-an-integration-error-in-the-backends-words",
+        httpx2.Response(403, json={"message": "vendor text"}, headers={"x-ratelimit-remaining": "4999"}), False, None,
+        "GitHub refused the request (HTTP 403).", id="a-403-naming-no-rate-limit-is-a-refusal-in-the-backends-words",
+    ),
+    pytest.param(
+        httpx2.Response(403, headers=_EXHAUSTED), True, timedelta(minutes=10),
+        "GitHub is rate limiting requests (HTTP 403).", id="a-403-with-no-requests-remaining-waits-for-the-reset",
+    ),
+    pytest.param(
+        httpx2.Response(403, headers={"Retry-After": "60"}), True, timedelta(seconds=60),
+        "GitHub is rate limiting requests (HTTP 403).", id="a-403-with-a-retry-after-waits-for-it",
+    ),
+    pytest.param(
+        httpx2.Response(429, headers=_EXHAUSTED), True, timedelta(minutes=10),
+        "GitHub is rate limiting requests (HTTP 429).", id="a-429-without-a-retry-after-waits-for-the-reset",
+    ),
+    pytest.param(
+        httpx2.Response(403, headers={"x-ratelimit-remaining": "0", "x-ratelimit-reset": "not a time"}), True, None,
+        "GitHub is rate limiting requests (HTTP 403).", id="an-exhausted-quota-with-no-readable-reset-backs-off",
     ),
     pytest.param(
         httpx2.Response(503, headers={"Retry-After": "30"}), True, timedelta(seconds=30),
@@ -131,7 +153,7 @@ def test_ls_tree_filters_by_path_and_rejects_truncation() -> None:
         httpx2.Response(429, headers={"Retry-After": "30"}), True, timedelta(seconds=30),
         "GitHub is rate limiting requests (HTTP 429).", id="a-rate-limit-is-transient-and-waits",
     ),
-    pytest.param(httpx2.ReadTimeout("slow"), True, None, "GitHub could not be reached.", id="a-transport-failure"),
+    pytest.param(httpx2.ReadTimeout("slow"), True, None, "GitHub did not answer.", id="a-transport-failure"),
     pytest.param(
         httpx2.Response(200, text="not json"), False, None, "GitHub returned an unreadable response.",
         id="an-unreadable-answer-is-permanent",
@@ -143,7 +165,12 @@ def test_ls_tree_filters_by_path_and_rejects_truncation() -> None:
 ])
 def test_github_refusals_are_integration_errors_classified_by_the_shared_rule(
     answer: httpx2.Response | Exception, transient: bool, wait: timedelta | None, message: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Integrate's status rule, and GitHub's own rate limit read from the refusal's headers."""
+
+    monkeypatch.setattr(timezone, "now", lambda: _NOW)
+
     def respond(request: httpx2.Request) -> httpx2.Response:
         if isinstance(answer, Exception):
             raise answer

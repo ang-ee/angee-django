@@ -23,7 +23,7 @@ reach one record (a file, an event). Every message names the API (``service``).
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 from typing import Any
 
 import httpx2
@@ -119,26 +119,31 @@ class GoogleApi:
 
         reason = error_reason(refusal.body)
         if refusal.status == 429 or (refusal.status == 403 and reason in _RATE_LIMIT_REASONS):
-            return self.error(
-                f"{self.service} is rate limiting this account; try the sync again later.",
-                transient=True,
-                retry_after=refusal.retry_after,
-            )
+            message = f"{self.service} is rate limiting this account; try the sync again later."
+            return refusal.as_error(self.error, self.service, public_message=message, transient=True)
         if refusal.status == 401:
-            return self.error(f"{self.service} no longer accepts this account; reconnect the Google account.")
+            message = f"{self.service} no longer accepts this account; reconnect the Google account."
+            return refusal.as_error(self.error, self.service, public_message=message)
         if refusal.status == 403 and reason in _GRANT_REASONS:
-            return self.error(
-                f"This Google account has not granted {self.grant} access; reconnect it with {self.grant} access."
-            )
+            message = f"This Google account has not granted {self.grant} access; reconnect it with {self.grant} access."
+            return refusal.as_error(self.error, self.service, public_message=message)
         return refusal.as_error(self.error, self.service) if refusal.transient else None
 
-    def raise_for_status(self, response: httpx2.Response, body: bytes | None = None) -> None:
-        """Raise the account-wide refusal of a failed response, else the API's generic refusal."""
+    def raise_for_status(
+        self, response: httpx2.Response, body: bytes | None = None, *,
+        own: Callable[[HttpRefusal], Exception | None] | None = None,
+    ) -> None:
+        """Raise a failed response's refusal, built once: the account-wide one (:meth:`account_error`), else the
+        client's ``own`` error for it (one record's, say), else the API's generic refusal.
+
+        ``body`` is a streamed response's bounded read (:func:`bounded_body`).
+        """
 
         if response.is_success:
             return
         refusal = HttpRefusal.of(response, body)
-        raise self.account_error(refusal) or refusal.as_error(self.error, self.service)
+        error = self.account_error(refusal) or (own(refusal) if own is not None else None)
+        raise error or refusal.as_error(self.error, self.service)
 
     def headers(self) -> dict[str, str]:
         """Return a fresh authorization for the next request."""
@@ -149,10 +154,14 @@ class GoogleApi:
     def _send(
         self, method: str, url: str, *, body: Any, headers: Mapping[str, str] | None, max_bytes: int
     ) -> httpx2.Response:
-        """Send once with ``body`` as JSON; a transport failure or an oversized answer is the API's refusal."""
+        """Send once with ``body`` as JSON; a transport failure or an oversized answer is the API's refusal.
 
-        sent = httpx2.Headers(self.headers())
-        sent.update(headers)
+        The headers stay plain strings, a caller's replacing the transport's own whatever its case: integrate's
+        request encodes them, so a value it cannot encode is that request's refusal.
+        """
+
+        own = {name.lower() for name in headers or {}}
+        sent = {name: value for name, value in self.headers().items() if name.lower() not in own} | dict(headers or {})
         return self.http.request(
             method, url, headers=sent, json=body, max_bytes=max_bytes,
             error=lambda refusal: refusal.as_error(self.error, self.service),

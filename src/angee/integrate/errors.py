@@ -75,10 +75,13 @@ class IntegrationError(Exception):
 
 
 class RequestNotSentError(IntegrationError):
-    """Connect, DNS or TLS handshake failed before any HTTP request bytes were written.
+    """No HTTP request bytes were written: here, the connect, DNS or TLS handshake failed.
 
-    Delivery owners may retry this refusal as not sent. Write/read failures after
-    sending are deliberately outside this type because their outcome is uncertain.
+    Its ``transient`` says whether a later attempt can send it: this one can, a
+    :class:`RequestNotBuiltError` cannot. Delivery owners may retry a transient
+    one as not sent; read ``transient``, never the type, for that. Write/read
+    failures after sending are deliberately outside this type because their
+    outcome is uncertain.
     """
 
     transient = True
@@ -110,9 +113,13 @@ class IntegrationFailure:
 
 
 def is_transient_status(status: int) -> bool:
-    """Whether a later attempt can outlive an HTTP answer with ``status``: a 429 rate limit or any 5xx."""
+    """Whether a later attempt can outlive an HTTP answer with ``status`` (RFC 9110 §15).
 
-    return status == 429 or 500 <= status < 600
+    A 408 request timeout, which the client may repeat, a 429 rate limit, and a 5xx server error can; a 501 or a
+    505 cannot, since they refuse the request itself (a method or an HTTP version the server does not implement).
+    """
+
+    return status in (408, 429) or (500 <= status < 600 and status not in (501, 505))
 
 
 def is_transient_failure(error: BaseException) -> bool:

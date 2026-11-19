@@ -10,6 +10,71 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: the read of a directory's contacts is a stored grant alone.
+  `parties/directory#contact_read` is `contact_reader` (revision 31); the
+  integration owner's column arm is gone, because a column arm is never folded
+  away by an actor's grant profile and kept the chain from a party to a
+  directory in every read of a party, for every actor (a member's person
+  document planned about 17.9 MiB more). `Directory.objects.connect` grants the
+  connecting owner `contact_reader` (`Directory.grant_owner_contact_read`, the
+  one writer), and provision grants each existing directory's owner where
+  missing (`grant_directory_owner_contact_reads`, beside
+  `resolve_stale_owners`). A transfer moves no grant: a person grants a later
+  owner. Upgrade: `rebac sync`; provision runs the repair.
+
+- `angee.integrate`: the discovery checks cost no more than they need. A push
+  asked about discovery for each candidate before its pinned, held, unchanged and
+  released skips, each time reading the whole integration row; it now asks once
+  per write, after the skips, reading only the columns
+  `Integration.require_discovery_ready` uses (`Integration.discovery_readiness_fields`),
+  and every stream lock (`SyncStreamManager.lock_current`) joins only those
+  columns of its integration instead of the whole row. The exemption from the stream lock's discovery check is a module-level context,
+  `angee.integrate.states.exempt_from_discovery()`, instead of a stream manager
+  method that ignored its manager, so pinning a record and dismissing a failure
+  no longer read the stream row only to reach it.
+
+- `angee.integrate`: re-entering exactly what is stored changes nothing, even
+  beside a transient answer. `CredentialManager.reenter_secret` compared the
+  whole decrypted material, so the identical secret re-entered while a pairing
+  answer was stored (`Credential.update_material`) sent the integrations to
+  discover again. It now compares the kind and its own secret fields
+  (`CredentialKindHandler.secret_material_fields`), and holds only a keyed
+  digest of them across the caller's write, not the decrypted material in the
+  generator's frame, which an error reporter keeps.
+
+- `angee.integrate`: a disconnected integration waits for the discovery its
+  reconnect runs. A secret re-entered on a disconnected integration leaves
+  discovery unsettled until `connect` awaits it, but
+  `Integration.require_discovery_ready` took that for a discovery that failed
+  and refused permanently, so a queued reply failed for good. It now refuses
+  transiently ("Connection discovery runs when this integration is connected
+  again."), and delivery defers the send as it does for a pending discovery.
+
+- `angee.integrate`: one rule says which credential is derived. Once a source
+  grant was removed by a path that skips its disconnect, `Integration.derived_credential_id`
+  still called the attached credential derived while the manager's own query did
+  not: `CredentialManager.store_derived` refused an overwrite its contract allows,
+  and `reenter_secret` accepted re-entry of that credential into a discovery that
+  could only fail for want of its grant. The query is gone; the re-entry refusal
+  reads the property on the locked rows the credential serves, and `store_derived`
+  on the rows it serves. The refusal now also says to connect the integration
+  again when the grant is gone.
+
+- `angee.knowledge_integrate_notion`: a token of another workspace fails
+  discovery. Notion's discovery called `GET /v1/users/me` and recorded nothing,
+  so an internal token of another workspace, re-entered on a connection, passed
+  rediscovery, and the sync resumed on the old cursor and links and mixed two
+  workspaces into one vault. Discovery now reads the workspace the token's bot
+  belongs to (`bot.workspace_id`, which Notion's answer requires), and
+  `NotionBackend.apply_discovery` keeps the first one in
+  `Bridge.subscription_state`. Another workspace fails discovery with "This
+  connection belongs to another Notion workspace; create a separate connection.",
+  and an answer that names no workspace is refused rather than matched. A
+  connection discovered before it kept a workspace is checked against the
+  workspace its Notion account was authorized for (the OAuth token answer that
+  connect keeps in `ExternalAccount.identity_claims`); only one with no such
+  account, made with an API token, records the workspace its next discovery reads.
+
 - A deployment declares its static page head in `ANGEE_UI.shell.site` (`title`,
   `description`, `icon`, `touchIcon`, `image`), selecting files addons name in
   their `web/package.json` `angee.assets`; Vite emits them and writes the title,
@@ -110,7 +175,10 @@ live in code docstrings.
   answers with a new read. An association read
   takes an id HubSpot names in its `NO_ASSOCIATIONS_FOUND` error as having no
   contacts, and refuses any other error or an id neither answered nor named, for a
-  later retry. With no object mapping a directory reads only contacts. Operator messages
+  later retry. A directory declares its object streams only once it has read its
+  contacts in full, so a first sync lands the contacts and the next the objects,
+  and no record waits for a contact HubSpot already held. With no object mapping a
+  directory reads only contacts. Operator messages
   never repeat HubSpot's message text or error category. The scripted account
   (`angee.parties_integrate_hubspot.testing.server`) builds its invented keys at
   runtime (`service_key`), so no literal in the repository has a real key's shape.
@@ -650,21 +718,33 @@ live in code docstrings.
   `parties.Address`. The permission is schema revision 23: `rebac sync` after
   compose.
 
-- Parties: a person merges the certain same-person pairs awaiting their review in
-  one action, `Party.objects.merge_certain_same_as_pairs(actor=, limit=)`,
-  exposed as the `merge_certain_same_as_pairs(limit)` mutation and the agent
-  tool of the same name. A pair is certain when both are people, neither is an
-  account's own person, exactly the two are linked to an address it cites, and
-  their names are equal but for case, accents and hyphens
-  (`Party.comparable_name`). Each merges into the older record as the acting
-  person's own merge, through the merge's permission and guards, and loses no
-  value: a merge field the survivor leaves empty takes the newer record's value
-  (`Party.merge_values`), the survivor's stands where both have one, and each
-  kept value is recorded as that person's choice. It returns every pair it read
-  with its outcome (`SameAsMergeOutcome`: merged, or the reason it was left), at
-  most `limit` per call. Nothing merges without a person. A person's
-  `anniversary` is now a merge choice (the Merge page shows it); before, a merge
-  that confirmed a differing birthday pinned the survivor's anniversary.
+- Parties: a person merges duplicates in a batch,
+  `Party.objects.merge_duplicates(actor=, sets=, certain=False)`, the
+  `merge_duplicates(sets, certain)` mutation: confirmed sets of two to ten
+  records (at most 50 sets), from the certain pairs the Review page lists
+  (`certain_same_as_pairs`, `certain=True` re-checks each) or a selection from a
+  list. `duplicate_set_previews(sets, certain)` reads what the dialog shows
+  (members oldest first with their statements and handles, the survivor, a
+  refusal, and the fields the records disagree on with the value that will
+  show) in a fixed number of queries. Only an active person account writing
+  every record may (the party's new `batch_merge` permission,
+  `write & person->active_member`, parties schema revision 30), read on the
+  party whatever manager is asked; no agent tool offers it. A set holding an
+  account's own person, two kinds, a trashed or merged record or two records a
+  person kept apart refuses with its reason; a set merges exactly as confirmed,
+  judged again under one lock pass of its members, their same-person partners
+  and their handles; the oldest record survives and the others fold into it in
+  key order; a lock conflict (deadlock, lock not granted) is that set's
+  `stopped`, any other database error stops the call. A batch records no value
+  as the person's choice (`PartyManager.BATCH_CONFIRMED_FIELDS`): statements move
+  as their sources' own and an empty survivor field takes a merged record's
+  value as a plain value (`Party.merge_values`). A pair is certain when both are
+  people, neither is an account's own person, exactly the two are linked to an
+  address it cites, and their names are equal but for case, accents and hyphens
+  (`Party.comparable_name`); a name that is one of the pair's cited addresses
+  (`Party.names_an_address`) is no name. Every party merge now refuses a person
+  with an organization (`Party.validate_merge`). A person's `anniversary` is a
+  merge choice (the Merge page shows it).
 
 - Parties: `Party.objects.propose_same_person_as_system(left, right, *, evidence,
   reason)` lets an importer propose that two parties are one person, citing the
@@ -681,10 +761,19 @@ live in code docstrings.
   never merges, and a failure after the commit is logged for the job to heal. A
   pair now locks both parties in one identity pass, Handles before Parties
   (`StatementsMixin.lock_subjects`, which `Party` implements and its merges use);
-  locking one party after the other ran against the Handle, Party order. The job
+  locking one party after the other ran against the Handle, Party order. A party
+  merge also takes its same-person partners and every Handle its parties hold in
+  that pass (`Party.lock_merge_records`): the fold re-keys the merged party's
+  other pairs onto the survivor, which locked each partner's Handles after party
+  rows and could deadlock with a resolution of the partner's address (a defect
+  already on `main`); the pass reads the partners again under its lock and tops
+  the set up when a pair committed while it waited. The job
   no longer withdraws a proposal stated after its run began, and restates a
   standing proposal whose cited handle was deleted or merged away with the handles
-  that still link the two, so it never hides from the review list.
+  that still link the two, so it never hides from the review list. Only the
+  rule's own undecided proposal is restated: a pair a person kept apart or
+  confirmed spends none of the run's budget, and a decided pair is read before
+  it is locked, so it takes no lock and makes no pair row.
 
 - Parties proposes a same-person pair for every two live parties of one kind
   linked to one address (`PartyManager.reconcile_same_as`, over
@@ -749,31 +838,66 @@ live in code docstrings.
   contributions leaves `mapping_version` at its default, and a malformed
   declaration is refused with `ValidationError`.
   Upgrade: a host runs `makemigrations integrate` for the `mapping_contributions`
-  column (one `AddField`, `JSONField(default=dict, blank=True)`), then `migrate`.
-  Existing streams hold the empty mapping and keep their generation, cursor and
-  version; nothing is read again until a stream first declares contributions,
-  which replays its records once.
+  column (one `AddField`, `JSONField(blank=True, db_default={}, default=dict)`),
+  then `migrate`. Existing streams hold the empty mapping and keep their
+  generation, cursor and version; nothing is read again until a stream first
+  declares contributions, which replays its records once. The database default
+  lets a release before the column, rolled back onto the migrated database,
+  still create stream generations.
+  Rollback: the stored `{"version", "parts"}` format is forward-only. Code from
+  this column's first form, which stored a bare `[[key, version], ...]` list,
+  reads `{}`, `[]` and bare lists, but fails on every composed stream this
+  release wrote: that stream's partition errors on each sync and writes nothing.
+  Before or after rolling back to it, run once on the host's PostgreSQL
+  database. The statement is idempotent and safe while the stack runs:
+
+  ```sql
+  UPDATE integrate_syncstream
+  SET mapping_contributions = CASE
+      WHEN (mapping_contributions ->> 'version')::bigint = mapping_version
+      THEN mapping_contributions -> 'parts' ELSE '[]'::jsonb END
+  WHERE jsonb_typeof(mapping_contributions) = 'object' AND mapping_contributions ? 'parts';
+  ```
+
+  A stream whose stored version is its own gets its bare list back, so it
+  replays nothing under that code. Any other stream gets `[]`, which that code
+  reads as never composed, so it replays once. Returning to this release then
+  replays each composed stream once, because a bare list carries no version.
+  Clearing every composed row to `[]` also recovers, but replays all of them.
+  It also leaves any stream the older code declares plain on the plain rule,
+  which can lower that stream's version onto a number its composed records
+  already carry, so those records are never replayed.
 
 - `angee.integrate.http` owns a vendor's typed JSON request
   (`HttpClient.request_model`) and one rule for a refused answer
-  (`HttpRefusal`): a transport failure, a 429 or a 5xx is transient and waits
-  for `Retry-After`; a success that is oversized or unreadable, a body httpx2
-  cannot decode included, is permanent, and one record's oversized or
-  unreadable answer is that record's refusal. The status decides before the
+  (`HttpRefusal`): a transport failure, a 408, a 429 or a 5xx other than 501
+  and 505 is transient and waits for `Retry-After` (`is_transient_status`: a
+  408 may be repeated, a 501 or 505 refuses the request itself); a transport
+  failure after sending is worded "<service> did not answer.", a connect
+  failure "<service> could not be reached."; a success that is oversized or unreadable, a body httpx2
+  cannot decode included, is permanent; an adapter that reads one record per
+  request makes that record's oversized or unreadable answer the record's
+  refusal (Notion does). The status decides before the
   body: `HttpClient.request` keeps a refused answer's status, with no body,
   when its body is over the cap or httpx2 cannot decode it, never reading past
   the cap, and still follows a redirect hop whose body is over the cap.
   `HttpRefusal.as_error` builds the
-  vendor's `IntegrationError`, with the vendor's own words and wait when it
-  states them, and a refusal's `cause` tells a
+  vendor's `IntegrationError`, with the vendor's own words, transience and wait
+  when it states them (a wait implies transience); a refusal keeps the answer's
+  headers, without credential or cookie headers and out of its `repr`, for a
+  vendor's own signal, and its `cause` tells a
   request not sent from one whose outcome is uncertain. A request the HTTP
   library will not build, a header value it cannot encode or will not send, is
   `RequestNotBuiltError`: not sent, permanent, worded as a request that could
   not be sent as configured, and chained to none of the library's text, which
-  quotes the value. Notion, the Google
+  quotes the value; callers read a not-sent failure's `transient`, so OAuth
+  answers such a token request with a permanent 400 and leaves such a
+  revocation best-effort. Notion, the Google
   client (Drive and Calendar), ICS, GitHub and OAuth's JSON reads (discovery,
   userinfo, JWKS) moved onto it, and `HttpClient.get_json` is removed. GitHub's
-  refusals are now `IntegrationError`s, a 429 or 5xx transient; OIDC discovery
+  refusals are now `IntegrationError`s, a 429 or 5xx transient, and its rate
+  limit (a 403 or 429 with no requests remaining, or with a `Retry-After`)
+  transient until the window resets; OIDC discovery
   keeps a provider's 5xx or 429 transient instead of a permanent configuration
   error; Google's oversized and unreadable answers are no longer retried; a
   Notion page over the cap or unreadable is quarantined instead of stalling its
@@ -784,11 +908,16 @@ live in code docstrings.
   read did not follow is refused instead of returned as data; a GET's oversized
   answer, and a GET success that is not a JSON object or that httpx2 cannot
   decode, are permanent; a POST's 3xx is uncertain. A refusal factory that
-  returns the failure it was handed has it raised unchanged.
+  returns the failure it was handed has it raised unchanged. Remaining:
+  `download_bounded` (with `download_capped`) and `stream` still signal a
+  refusal with `None` or a raw transport error, so calendar feeds, media and
+  attachment downloads and page analysis classify a failed download
+  themselves.
   Google Drive and Google Calendar word a file's or an event's refusal in their
   own phrases, never Google's reason. Capped JSON requests, GitHub's and
-  OAuth's included, ask for an unencoded answer, and `is_transient_status`
-  reads only 500–599 as server errors.
+  OAuth's included, ask for an unencoded answer, `is_transient_status`
+  reads only 500–599 as server errors, and a typed request answered with no
+  JSON body (a 204) is unreadable.
 
 - The CardDAV directory's requests compose that rule too
   (`HttpClient.request(error=)` and `HttpRefusal.as_error`). A transport
@@ -856,7 +985,7 @@ live in code docstrings.
   and reopening a conflict whose follow-through was refused change local state
   only; they were refused until discovery succeeded, and the reopen left the
   conflict closed with neither side applied. They now commit through
-  `SyncStreamManager.exempt_from_discovery()`, the one named way past
+  `angee.integrate.states.exempt_from_discovery()`, the one named way past
   `lock_current`'s check. So does the reflection of a write already sent (and a
   remote's refusal of it): a write that landed while a secret was re-entered is
   recorded, so the next run neither repeats it nor conflicts with it. A two-way
@@ -1390,7 +1519,11 @@ live in code docstrings.
     its events stream's mapping version (`CalendarBackend.events_mapping_version`),
     and a test pins what a push writes to it.
   - Hosts add the `RecordLink.local_version` column (`makemigrations`). Existing
-    links start unknown, so the first poll reads every published event once.
+    links start unknown, so the first poll reads every published event once. Its
+    database default is that unknown version (`CharField(blank=True,
+    db_default="", default="", max_length=255)`), so a release before the column,
+    rolled back onto the migrated database, still creates links. A host that
+    already added the column gets one `AlterField` for the default.
 - **Breaking (`delete_blocker` overrides):** `AngeeModel.delete_blocker(*,
   cascaded=False)` says where the row sits in the delete: `DeletePreview` judges
   its target as the start and every collected row as cascaded, and a model's

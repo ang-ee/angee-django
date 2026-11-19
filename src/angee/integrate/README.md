@@ -50,7 +50,9 @@ apply learned.
 
 A push adapter may version its local projection. It yields each row's exact
 `LocalChange.local_version`, read with the projection, and the push records the
-version it read beside the base it wrote (`RecordLink.local_version`). A full
+version it read beside the base it wrote (`RecordLink.local_version`). That
+column's database default is the unknown version `""`, so a release before it,
+rolled back onto a migrated database, still creates links. A full
 read may then skip every row a link already holds at its current version
 (`RecordLinkManager.changed_since_base`). A projection that reads only the row's
 own tracked columns, plus a container setting, takes the row's history version
@@ -123,7 +125,9 @@ it, so returning to the same list replays every record once. A declaration with
 contributions leaves `mapping_version` at its default; any other version beside
 them is refused. The list is a deployment-wide fact: workers declaring different
 lists for one stream open a new baseline on every open. Streams written before
-the column hold the empty mapping and keep the plain rule.
+the column hold the empty mapping and keep the plain rule. The column's database
+default is that empty mapping, so a release before it, rolled back onto a
+migrated database, still creates stream generations; they read as never composed.
 
 A declared snapshot with no reconciliation interval closes after its baseline;
 explicit resync opens a new generation. Missing cadence alone never means read-once.
@@ -397,7 +401,8 @@ A run already admitted stops once discovery is pending. Every commit to a stream
 or its links takes the stream lock (`SyncStreamManager.lock_current`): a page, a
 push's reflection, a sweep's phase and absences, a retained failure, a conflict
 decision. There the stream's integration, read with the stream, is asked
-`require_discovery_ready()`: a pending discovery refuses transiently, and one that
+`require_discovery_ready()`: a pending discovery refuses transiently, and so does
+a disconnected integration's, which runs when it is connected again; one that
 finished without success refuses permanently with its own operator message. The
 driver asks again, on the integration as stored (one read), before each remote
 write (each write-back of a two-way page, each push candidate,
@@ -406,7 +411,7 @@ re-entered or a credential attached since admission leaves discovery pending, so
 the run sends nothing more and commits nothing it read (a transient
 `IntegrationError`); earlier pages and their cursor stay, and the next run waits
 for discovery. A commit that rests on no remote fact goes through
-`SyncStreamManager.exempt_from_discovery()`, the one way past that check, named
+`angee.integrate.states.exempt_from_discovery()`, the one way past that check, named
 where it commits: pinning and unpinning a record, dismissing a failure, and
 reopening a conflict whose follow-through was refused. So does the reflection of a
 write already sent, and the remote's refusal of one: its effect has landed, so a
@@ -434,23 +439,36 @@ the check and the send can send that one write with the new secret.
 A vendor's JSON request is `HttpClient.request_model` ([outbound HTTP](http.py)):
 one pinned, size-capped request whose answer is validated into a Pydantic model;
 a capped request asks for an unencoded answer. Whatever brings it no usable
-answer is one `HttpRefusal`, classified once: a transport failure, a 429 or a
-5xx is transient and waits for the answer's `Retry-After`; any other status, and
+answer is one `HttpRefusal`, classified once: a transport failure, a 408, a 429
+or a 5xx other than 501 and 505 is transient and waits for the answer's
+`Retry-After`; any other status, and
 a success that is over the cap, cannot be decoded or does not validate, are
 permanent, because the same request brings the same answer. The status decides
 before the body does: a refused answer whose body is over the cap or cannot be
 decoded keeps its status, with no body, and is never read past the cap. A
-whole-resource poll reads a permanent answer again on its next run, a pager
-shrinks its page, and one record's oversized or unreadable answer is that
-record's refusal, quarantined while the page of results continues. The vendor's
+whole-resource poll reads a permanent answer again on its next run. The rest is
+the adapter's to state: a pager shrinks its page, and an adapter that reads one
+record per request raises that record's oversized or unreadable answer as the
+record's `SemanticError`, so the driver quarantines it while the page of results
+continues (Notion's page content does). The vendor's
 `error=` factory turns the refusal into its `IntegrationError` with
-`HttpRefusal.as_error(error, service, *, public_message=None, retry_after=None)`,
+`HttpRefusal.as_error(error, service, *, public_message=None, transient=None, retry_after=None)`,
 whose default message names the service and nothing the answer said. The vendor
-states its own cases through that hand-off: its words as `public_message`, and
-a wait its error body names as `retry_after`, used instead of the answer's
-`Retry-After`. It builds the error of a status it adds as transient by hand. A
-refusal keeps the failure that stopped its request: its `cause` tells a request
-`not_sent` from one `unreachable` after it may have been sent. A request the
+states its own cases through that hand-off, reading their signals from the
+refusal's `status`, `body` and `headers`: its words as `public_message`, a
+refusing status it knows a later attempt outlives (a rate limit answered with a
+403) as `transient=True`, and a wait its body or headers name as `retry_after`,
+used instead of the answer's `Retry-After` and implying transience. The
+refusal's `headers` are a read-only copy of the answer's without the credential
+and cookie headers, and neither its `repr` nor any owner message shows a header
+value. A refusal keeps the failure that stopped its request: its `cause` tells a request
+`not_sent` ("could not be reached") from one `unreachable` after it may have
+been sent ("did not answer"). Not yet on the refusal: `download_bounded` (and
+`download_capped` over it) returns `None` alike for its size, deadline and
+redirect limits, and it and `stream` raise the raw transport error, so their
+callers (calendar feeds, media and attachment downloads, page analysis) word and
+classify a failed download themselves; moving them onto the refusal is the
+remaining work. A request the
 HTTP library will not build, a header value it cannot encode or will not send,
 is `not_sent` and permanent (`RequestNotBuiltError`), worded as a request that
 could not be sent as configured; it chains none of the library's text, which
@@ -461,8 +479,11 @@ positive provider horizon. Integrate's own console actions are guarded by
 `integrate.schema.integration_action_guard`, `action_guard` with an
 `IntegrationError` as an expected refusal: it is answered in band with its public
 message (an `OAuthFlowError` keeps its code), and a permanent one is logged at
-warning level. `RequestNotSentError` declares that connect, DNS or
-TLS handshake failed before HTTP request bytes were written and is safe to retry.
+warning level. `RequestNotSentError` declares that no HTTP request
+bytes were written; its `transient` says whether a later attempt can send it: a
+failed connect, DNS or TLS handshake can be retried safely, a request the library
+would not build (`RequestNotBuiltError`) cannot. Callers read `transient`, never
+the type.
 Failures after sending retain an uncertain transport outcome. A hint implies transience unless explicitly declared
 otherwise. Aggregate failures retain a partition's horizon even when another
 partition has a permanent refusal. `BridgeSyncError` retains stream

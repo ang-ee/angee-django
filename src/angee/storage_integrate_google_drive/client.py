@@ -214,18 +214,17 @@ class GoogleDriveClient:
         the account-wide ones (``GoogleApi.account_error``) are that file's.
         """
 
-        if response.is_success:
-            return
-        if response.status_code == 404:
-            raise FileNotFoundError("Google Drive item not found.")
-        refusal = HttpRefusal.of(response, body)
-        account = self.api.account_error(refusal)
-        if account is not None:
-            raise account
-        reason = error_reason(refusal.body)
-        if refusal.status == 416 or reason in _FILE_REASONS or per_file:
-            raise DriveFileError(_FILE_REASONS.get(reason, f"Google Drive refused this file (HTTP {refusal.status})."))
-        raise refusal.as_error(self.api.error, self.api.service)
+        def own(refusal: HttpRefusal) -> Exception | None:
+            if refusal.status == 404:
+                return FileNotFoundError("Google Drive item not found.")
+            reason = error_reason(refusal.body)
+            if refusal.status == 416 or reason in _FILE_REASONS or per_file:
+                return DriveFileError(
+                    _FILE_REASONS.get(reason, f"Google Drive refused this file (HTTP {refusal.status}).")
+                )
+            return None
+
+        self.api.raise_for_status(response, body, own=own)
 
 
 class _MediaStream(io.RawIOBase):

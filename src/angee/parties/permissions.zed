@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 28
+// @rebac_schema_revision: 31
 
 // Parties, folders and circles are grant roots: each is owned through its
 // transferable `owner` column (OwnerMixin), which an insert defaults to the row's
@@ -44,6 +44,7 @@ definition parties/party {
     relation statement_role: provenance/role // rebac:const=parties_statement_source
     permission statement_source = directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin
+    relation person: iam/kind // rebac:const=person
 
     permission create = authenticated
     // Whoever reads the contacts of a directory linking this party reads its identity.
@@ -60,6 +61,9 @@ definition parties/party {
     permission read__first_met_note = read_private
     permission read__handle_count = read_private
     permission write = owner + editor + statement_source + admin->member
+    // Merging records in a batch (certain same-person pairs, a selection) is a person's
+    // decision: an active person account that writes the party, never a service or agent account.
+    permission batch_merge = write & person->active_member
     permission delete = owner + admin->member
     permission transfer = owner + admin->member
     permission write__owner = transfer
@@ -256,9 +260,12 @@ definition parties/relationship {
 // live links name and the handles, addresses and relationships those links
 // state, never their private fields, and grants nothing of the directory, its
 // integration, streams, links or credential. Its holders are the stored
-// `contact_reader` grantees, shared through the record-access surface, and the
-// integration's owner, who already reads every link and record of it, so a
-// transferred directory's new owner reads the people synced before.
+// `contact_reader` grantees only, shared through the record-access surface:
+// connecting a directory grants its owner (`Directory.grant_owner_contact_read`).
+// A stored arm alone folds away for every actor who holds no such grant, so the
+// chain from a party through its record links to a directory is planned only for
+// an actor who may read a directory's contacts; a column arm (the integration's
+// owner) would keep it in every read of a party, for every actor.
 definition parties/directory {
     relation integration: integrate/integration // rebac:field=integration_ptr
     relation contact_reader: auth/user | auth/group#member
@@ -268,6 +275,6 @@ definition parties/directory {
     permission read   = integration->read + admin->member
     permission write  = integration->write + admin->member
     permission delete = integration->write + admin->member
-    permission contact_read = contact_reader + integration->owner
+    permission contact_read = contact_reader
     permission write__owner = integration->transfer
 }

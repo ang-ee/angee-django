@@ -38,11 +38,10 @@ def _registered_tools() -> dict[str, Any]:
 
 
 @pytest.mark.usefixtures("parties_discovery")
-def test_the_bulk_merge_tool_is_a_bounded_write_over_its_mutation() -> None:
-    """Agents merge certain pairs through the same mutation the Review page calls, as themselves."""
+def test_every_parties_tool_compiles_and_no_agent_merges_certain_pairs() -> None:
+    """Merging the certain pairs is a person's action: no agent tool offers it."""
 
-    tool = _registered_tools()["merge_certain_same_as_pairs"]
+    tools = _registered_tools()
 
-    assert tool.annotations.readOnlyHint is False
-    assert "merge_certain_same_as_pairs(" in tool.document
-    assert set(tool.parameters["properties"]) == {"limit"}
+    assert "merge_parties" in tools
+    assert not {"merge_certain_same_as_pairs", "merge_duplicates"} & set(tools)
