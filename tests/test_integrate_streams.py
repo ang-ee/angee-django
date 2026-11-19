@@ -219,15 +219,18 @@ def _as_tuples(value: Any) -> Any:
 @example(values=([1], [2], [3]), local="edit", remote="base", tombstone=False, mapping_changed=False)  # local only
 @example(values=([1], [2], [3]), local="base", remote="base", tombstone=False, mapping_changed=True)  # remap only
 @example(values=([1], [2], [3]), local="base", remote="base", tombstone=True, mapping_changed=False)  # known delete
+@example(values=([False], [0], None), local="base", remote="edit", tombstone=False, mapping_changed=False)  # False != 0
 def test_classify_change_decides_by_which_side_moved_from_the_base(
     values: tuple[Any, Any, Any], local: str, remote: str, tombstone: bool, mapping_changed: bool
 ) -> None:
-    """A side moved when its canonical JSON differs from the base, however a projection spells it.
+    """A side moved when its JSON value differs from the base, however a projection spells it.
 
-    A mapping change is a remote move, so it never leaves a record unchanged. A
-    local edit beside a tombstone or a mapping change always needs a choice, even
-    when the values agree; the same plain edit on both sides applies. A tombstone
-    the base already holds, with no local edit, changes nothing.
+    The drawn values hold no floats, so their canonical JSON spells each value
+    once, and ``false`` is never ``0``. A mapping change is a remote move, so it
+    never leaves a record unchanged. A local edit beside a tombstone or a mapping
+    change always needs a choice, even when the values agree; the same plain edit
+    on both sides applies. A tombstone the base already holds, with no local
+    edit, changes nothing.
     """
     side = dict(zip(SIDES, values))
     spelled = {name: canonical_json(value) for name, value in side.items()}
@@ -243,6 +246,77 @@ def test_classify_change_decides_by_which_side_moved_from_the_base(
     assert kind is expected
     respelled = {"local": _as_tuples(side[local]), "remote": _as_tuples(side[remote])}
     assert classify_change(base=side["base"], **respelled, **flags) is kind
+
+
+@pytest.mark.parametrize(
+    ("base", "moved", "kind"),
+    [
+        ([False], [0], ChangeKind.APPLY),
+        (True, 1, ChangeKind.APPLY),
+        ({"a": False}, {"a": 0}, ChangeKind.APPLY),
+        ({"a": [None]}, {"a": [False]}, ChangeKind.APPLY),
+        (1, 1.0, ChangeKind.UNCHANGED),
+        ({"a": [1]}, {"a": [1.0]}, ChangeKind.UNCHANGED),
+    ],
+)
+def test_classify_change_compares_json_values_never_python_ones(base: Any, moved: Any, kind: ChangeKind) -> None:
+    """A bool turned into the number Python equates it with is a move; ``1`` and ``1.0`` are one JSON number.
+
+    The move applies from the remote, writes back from the local side, and
+    converges when both sides make it.
+    """
+
+    assert classify_change(base=base, local=base, remote=moved) is kind
+    assert classify_change(base=base, local=moved, remote=base) is (
+        ChangeKind.WRITE_BACK if kind is ChangeKind.APPLY else kind
+    )
+    assert classify_change(base=base, local=moved, remote=moved) is kind
+
+
+def test_a_stored_base_compares_as_the_json_value_its_projection_wrote(stream_bridge: Channel) -> None:
+    """A base whose numbers PostgreSQL's ``jsonb`` respells still equals the projection that wrote it.
+
+    ``jsonb`` reads ``1e+16`` back as ``10000000000000000`` and ``-0.0`` as
+    ``0.0``, and keeps ``1.0``. A bool stays a bool, so a projection that turns
+    one into a number still moves.
+    """
+
+    stream = current_stream(stream_bridge, "records", kind=StreamKind.RECORD_REPLICA)
+    projection = {"count": 1e16, "offset": -0.0, "ratio": 1.0, "flags": [False, True]}
+    link = RecordLink.objects.observe(stream, "one")
+    RecordLink.objects.promote(
+        link, source_payload={}, source_hash="base", mapped_payload=projection, remote_version="v1"
+    )
+    link = RecordLink.objects.select_related("applied_base").get(pk=link.pk)
+    assert link.applied_base is not None
+    stored = link.applied_base.mapped_payload
+    if connection.vendor == "postgresql":
+        assert canonical_json(stored) != canonical_json(projection)
+    flipped = {**projection, "flags": [0, True]}
+
+    assert not link.local_changed(projection)
+    assert classify_change(base=stored, local=projection, remote=projection) is ChangeKind.UNCHANGED
+    assert link.local_changed(flipped)
+    assert classify_change(base=stored, local=projection, remote=flipped) is ChangeKind.APPLY
+
+
+def test_the_stream_fence_compares_its_cursor_as_a_json_value(stream_bridge: Channel) -> None:
+    """An advanced cursor fences as itself however ``jsonb`` respells it; a bool turned into a number moved it.
+
+    ``advance`` leaves the cursor on the stream as the adapter wrote it, and
+    PostgreSQL reads ``1e+23`` back as the integer it denotes, which Python's
+    ``==`` tells apart from the float.
+    """
+
+    stream = current_stream(stream_bridge, "records", kind=StreamKind.RECORD_REPLICA)
+    stream = SyncStream.objects.advance(stream, {"seen": 1e23, "more": False})
+    moved = SyncStream.objects.get(pk=stream.pk)
+    moved.cursor = {"seen": 1e23, "more": 0}
+
+    with transaction.atomic():
+        assert SyncStream.objects.lock_current(stream, fenced_to=stream).pk == stream.pk
+    with transaction.atomic(), pytest.raises(RuntimeError, match="Stream state changed"):
+        SyncStream.objects.lock_current(stream, fenced_to=moved)
 
 
 @pytest.mark.parametrize(

@@ -2177,8 +2177,11 @@ managers retain identity and ingest policy. Event feeds are append-only and
 idempotent by domain identity, so they never create replica links. Mutable record
 replicas pin their own applied link history row as the comparison base.
 Adapters provide comparable JSON-native local and remote mapped projections;
-the driver normalizes both sides through the canonical JSON serializer before
-upstream `DeepDiff` compares them with that base. `canonical_json_sha256` is the sole
+the driver compares each side with that base as a JSON value
+([`json_equal`](../../src/angee/base/serialization.py)), never with Python's `==`,
+for which `False == 0`: a bool is never a number, and a number is the value its
+spelling denotes, so a base read back from `jsonb` compares as it was written.
+`canonical_json_sha256` is the sole
 source-hash owner; event feeds deduplicate through domain
 identity and are never payload-hashed. Cursors contain plain finite JSON,
 validated at the driver boundary.

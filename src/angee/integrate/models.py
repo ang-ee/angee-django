@@ -30,7 +30,6 @@ from itertools import batched
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 from urllib.parse import urlsplit, urlunsplit
 
-from deepdiff import DeepDiff
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -85,7 +84,7 @@ from angee.base.models.transitions import StateTransitions, save_state, transiti
 from angee.base.permissions import actor_user_id, instance_actor
 from angee.base.querysets import row_lock_queryset
 from angee.base.refs import generic_pointer_model, generic_pointer_target
-from angee.base.serialization import canonical_json, canonical_json_sha256
+from angee.base.serialization import canonical_json, canonical_json_sha256, json_equal
 from angee.graphql.capabilities import held_permissions
 from angee.graphql.mixins import ImplementationChoicesMixin
 from angee.integrate.constants import DISCOVERY_ATTEMPT_LIMIT, DISCOVERY_TASK, DISCOVERY_TASK_EXPIRES
@@ -4906,7 +4905,7 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 generation__gt=locked.generation,
             ).exists():
                 raise RuntimeError("The extracted page belongs to a superseded stream generation.")
-            if fenced_to is not None and locked.operation_fence != fenced_to.operation_fence:
+            if fenced_to is not None and not json_equal(locked.operation_fence, fenced_to.operation_fence):
                 raise RuntimeError("Stream state changed during external work; retry the operation.")
             return locked
 
@@ -5238,7 +5237,7 @@ class SyncStream(ImmutableFieldsMixin, SyncStateMixin, AuditMixin, AngeeDataMode
 
     @property
     def operation_fence(self) -> tuple[Any, ...]:
-        """Return all mutable stream facts that external work must fence."""
+        """Return all mutable stream facts that external work must fence, compared as JSON (``json_equal``)."""
 
         return self.state, self.phase, self.cursor, self.reconcile_state, self.resync_required, self.mapping_version
 
@@ -6325,15 +6324,10 @@ class RecordLink(
                 adapter.close()
 
     def local_changed(self, projection: Any) -> bool:
-        """Compare a JSON-native projection with this link's protected applied base."""
+        """Compare a JSON-native projection with this link's protected applied base as JSON values (``json_equal``)."""
         if self.applied_base is None:
             return projection is not None
-        return bool(
-            DeepDiff(
-                json.loads(canonical_json(self.applied_base.mapped_payload)),
-                json.loads(canonical_json(projection)),
-            )
-        )
+        return not json_equal(self.applied_base.mapped_payload, projection)
 
     def pin(self) -> None:
         """Withhold automatic inbound application and write-back."""
