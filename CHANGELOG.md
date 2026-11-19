@@ -10,6 +10,27 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: each source creates its own people, and a merge joins them;
+  adoption is an option of a pull-only directory, off by default. A directory's
+  configuration has a model of its own, `DirectoryConfig`
+  (`angee.parties.backends`, the base backend's `config_model`, which a
+  backend's own model extends, as `CardDavConfig` now does), whose
+  `adopt_existing_people` turns adoption on; every save and
+  `Directory.objects.connect` validate it, and a directory that writes back
+  refuses it. Off, a contact lands on the person its own link names (through a
+  tombstone too), on the person a replaced record of its stream hands over, or on
+  a new person, which only claims an address someone else holds, claims or signs
+  in with and proposes that person as its same person;
+  `PartyManager.ingest_contact` refuses any other person a caller hands it. On,
+  adoption works as before, with every limit and `parties/person#adopt`, and its
+  known limit (an adopted person's values no statement holds) stands.
+  `DirectoryBackend.adopts_existing_people()` is the one predicate, asked by the
+  target decision before it enters adoption. Upgrade: an existing pull-only
+  directory adopts nobody until its configuration turns the option on; a link
+  already bound to an adopted person keeps it. A vendor backend implements
+  nothing new; one that declares its own config model extends `DirectoryConfig`
+  to offer the option. The permission schema is unchanged (revision 27).
+
 - `angee.parties`: taking control of an address never refuses.
   `HandleManager.claim_control`, which OIDC login, `Directory.objects.connect`
   and the attribution of a user's own messages (`HandleManager.for_user`) call,
@@ -304,7 +325,8 @@ live in code docstrings.
   `credential_blocker` (CardDAV's Basic-auth rule moved there), and an
   `admit_credential` override on a directory backend is no longer called.
 
-- A pull-only directory adopts an existing person (rulings R2 and R9): a contact
+- A pull-only directory adopts an existing person (rulings R2 and R9; an option,
+  off by default, since the entry above): a contact
   with no person of its own or of a record it replaced lands on the first person
   its emails name (`people_for_emails`, preferred email first) whose adoption
   `PartyManager.adoption_blocker` admits; otherwise it mints its own. A two-way
