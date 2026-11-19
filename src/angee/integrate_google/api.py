@@ -23,7 +23,7 @@ reach one record (a file, an event). Every message names the API (``service``).
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 from typing import Any
 
 import httpx2
@@ -129,13 +129,21 @@ class GoogleApi:
             return refusal.as_error(self.error, self.service, public_message=message)
         return refusal.as_error(self.error, self.service) if refusal.transient else None
 
-    def raise_for_status(self, response: httpx2.Response, body: bytes | None = None) -> None:
-        """Raise the account-wide refusal of a failed response, else the API's generic refusal."""
+    def raise_for_status(
+        self, response: httpx2.Response, body: bytes | None = None, *,
+        own: Callable[[HttpRefusal], Exception | None] | None = None,
+    ) -> None:
+        """Raise a failed response's refusal, built once: the account-wide one (:meth:`account_error`), else the
+        client's ``own`` error for it (one record's, say), else the API's generic refusal.
+
+        ``body`` is a streamed response's bounded read (:func:`bounded_body`).
+        """
 
         if response.is_success:
             return
         refusal = HttpRefusal.of(response, body)
-        raise self.account_error(refusal) or refusal.as_error(self.error, self.service)
+        error = self.account_error(refusal) or (own(refusal) if own is not None else None)
+        raise error or refusal.as_error(self.error, self.service)
 
     def headers(self) -> dict[str, str]:
         """Return a fresh authorization for the next request."""
