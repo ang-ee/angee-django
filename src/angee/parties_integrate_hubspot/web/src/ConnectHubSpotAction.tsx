@@ -13,7 +13,7 @@ const fields: ConnectDirectoryFields = (t) => [
     required: true,
   },
   {
-    name: "token",
+    name: "serviceKey",
     label: t("directory.hubspot.serviceKey"),
     widget: "password",
     required: true,
@@ -25,7 +25,8 @@ function parseValues(
 ): AuthoredVariables<typeof ConnectHubSpotDirectory> {
   return {
     name: mutationDialogValueCodecs.requiredString(values.name, "name"),
-    token: mutationDialogValueCodecs.verbatimString(values.token, "token"),
+    // Trimmed: a stray space pasted with the key is invisible in the masked field.
+    serviceKey: mutationDialogValueCodecs.requiredString(values.serviceKey, "serviceKey"),
   };
 }
 

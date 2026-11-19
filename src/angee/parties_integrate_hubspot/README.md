@@ -41,9 +41,11 @@ separate messages.
 
 A platform admin connects an account from the console's Directories page: the
 addon's web fragment adds "HubSpot account" to the Connect menu
-(`parties.directories#toolbar`), a dialog that takes a name and the service key
-in a masked field and sends the key as entered. Its `connect_hubspot_directory`
-mutation calls `Directory.objects.connect`, which tests the key with HubSpot
+(`parties.directories#toolbar`), shown to whoever may create a directory, through
+the parties connect dialog (`ConnectDirectoryAction`). The dialog takes a name and
+the service key in a masked field and sends the key trimmed of surrounding
+whitespace. Its `connect_hubspot_directory(name, service_key)` mutation calls
+`Directory.objects.connect`, which tests the key with HubSpot
 before it saves the credential and the directory, so a rejected key saves
 nothing and shows the message for HubSpot's refusal. Each directory gets a
 credential of its own.

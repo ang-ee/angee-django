@@ -49,7 +49,7 @@ OTHER_KEY = service_key("f")
 SECOND_KEY = service_key("1")
 OTHER_HUB_ID = 9876543
 CONNECTED = "Connected to HubSpot: the service key reads this account's contacts."
-REJECTED = "HubSpot rejected the access token. Enter a valid HubSpot service key."
+REJECTED = "HubSpot rejected this service key: enter a valid one."
 CHECK_THE_KEY = "This key lacks a service key's usual shape: check it for extra or missing characters."
 MISSING_SCOPE = f"The HubSpot service key is missing a scope this connection needs: {CONTACTS_READ}."
 UNREADABLE = "HubSpot returned an unreadable response."
@@ -322,7 +322,7 @@ def test_a_quiet_accounts_polls_after_its_baseline_send_one_search_and_save_noth
 
 def test_a_burst_is_read_again_only_until_a_poll_starts_an_overlap_after_it(hubspot: HubSpot) -> None:
     """A burst of changes, then silence: polls re-read the window behind the newest change until one starts the
-    overlap after it; that poll settles the window, and every later one searches strictly after it."""
+    overlap after it; that poll catches up, and every later one searches strictly after the newest change."""
 
     ada = hubspot.server.add("contacts", ADA, modified=IMPORTED)
     hubspot.server.clock = IMPORTED + timedelta(days=1)
@@ -350,7 +350,7 @@ def test_a_burst_is_read_again_only_until_a_poll_starts_an_overlap_after_it(hubs
 )
 def test_hubspots_clock_paces_every_pass_whatever_the_local_clock_says(hubspot: HubSpot, ahead: timedelta) -> None:
     """The local clock runs ``ahead`` of HubSpot's: HubSpot edits one contact the baseline already read and,
-    nine minutes later, one it has not; the delta reads the first edit, and the window then settles."""
+    nine minutes later, one it has not; the delta reads the first edit, and the stream then catches up."""
 
     hubspot.server.clock = start = (timezone.now() - ahead).replace(microsecond=0)
     ada, grace, mary = (

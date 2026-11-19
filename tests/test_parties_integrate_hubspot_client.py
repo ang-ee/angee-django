@@ -379,7 +379,7 @@ def test_a_search_at_one_modified_time_reads_its_records_above_an_id_in_id_order
     ]
 
 
-REJECTED = "HubSpot rejected the access token. Enter a valid HubSpot service key."
+REJECTED = "HubSpot rejected this service key: enter a valid one."
 CHECK_THE_KEY = "This key lacks a service key's usual shape: check it for extra or missing characters."
 RATE_LIMITED = "HubSpot is rate limiting requests (HTTP 429)."
 DAILY_LIMIT = "This HubSpot account has used its daily API request limit."

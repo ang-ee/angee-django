@@ -83,8 +83,8 @@ live in code docstrings.
   (`unreadable_record`) while its page lands, and one without a usable id is
   logged and skipped. A platform admin connects an account
   from the console: `@angee/parties-integrate-hubspot` adds a "HubSpot account"
-  entry to `parties.directories#toolbar`, whose dialog sends a name and the key
-  (masked, as entered) to `connect_hubspot_directory(name, token)`, which runs
+  entry to `parties.directories#toolbar`, whose dialog sends a name and the
+  service key (masked, trimmed) to `connect_hubspot_directory(name, service_key)`, which runs
   `Directory.objects.connect`; discovery then arms the first sync. The `full`
   project profile enables the addon. A consumer's `DirectoryMapping` of the
   `hubspot` backend names contact properties by their internal names: while one

@@ -122,7 +122,7 @@ class HubSpotError(IntegrationError):
                 wait = _RATE_LIMIT_WAITS.get(facts.policy_name or "", _RATE_LIMIT_WAITS["TEN_SECONDLY_ROLLING"])
             message = None
             if refusal.status == 401:
-                message = "HubSpot rejected the access token. Enter a valid HubSpot service key."
+                message = "HubSpot rejected this service key: enter a valid one."
                 if not usual_key:
                     message += " This key lacks a service key's usual shape: check it for extra or missing characters."
             elif refusal.status == 403 and facts.category == MISSING_SCOPES:
@@ -151,7 +151,7 @@ class _HubSpotErrorBody(_HubSpotModel):
 
 
 class HubSpotTokenInfo(_HubSpotModel):
-    """What HubSpot's token introspection states about one access token: the account (hub) it belongs to.
+    """What HubSpot's token introspection states about one service key: the account (hub) it belongs to.
 
     The answer also lists scopes, which this client never reads: HubSpot need not
     list every scope a key holds there.
@@ -161,7 +161,7 @@ class HubSpotTokenInfo(_HubSpotModel):
 
 
 class HubSpotAccount(_HubSpotModel):
-    """The account (portal, or hub) a token belongs to, and the host its web app serves it from.
+    """The account (portal, or hub) a service key belongs to, and the host its web app serves it from.
 
     ``ui_domain`` is ``None`` when the answer states no host name: it only names
     source links, so an absent or unexpected one never refuses the account.
@@ -363,7 +363,7 @@ class HubSpotClient:
         )
 
     def account(self) -> HubSpotAccount:
-        """Return the account the token belongs to."""
+        """Return the account the service key belongs to."""
 
         return self._request(HubSpotAccount, "GET", f"/account-info/{API_VERSION}/details")
 

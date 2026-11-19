@@ -17,7 +17,7 @@ class HubSpotMutation:
     """Connect the account this addon reads."""
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
-    def connect_hubspot_directory(self, info: strawberry.Info, name: str, token: str) -> DirectoryType:
+    def connect_hubspot_directory(self, info: strawberry.Info, name: str, service_key: str) -> DirectoryType:
         """Connect the HubSpot account a service key reads, its connection tested before anything is saved."""
 
         return cast(DirectoryType, apps.get_model("parties", "Directory").objects.connect(
@@ -25,7 +25,7 @@ class HubSpotMutation:
             backend_class=HubSpotDirectoryBackend.key,
             display_name=name,
             credential_kind=CredentialKind.STATIC_TOKEN,
-            material={"api_key": token},
+            material={"api_key": service_key},
         ))
 
 

@@ -35,14 +35,14 @@ from tests.conftest import Credential, Vendor, addon_schema, create_platform_adm
 pytestmark = pytest.mark.django_db(transaction=True)
 
 SYNC_TASK = "integrate.sync_bridge_now"
-REJECTED = "HubSpot rejected the access token. Enter a valid HubSpot service key."
+REJECTED = "HubSpot rejected this service key: enter a valid one."
 CHECK_THE_KEY = "This key lacks a service key's usual shape: check it for extra or missing characters."
 NAME_TAKEN = "An account is already connected under that name; choose another name."
 # The presence ref the console's connect entry requires (`DIRECTORY_CREATE`, the parties web fragment).
 CONNECT_ENTRY = "parties.Directory#create"
 CONNECT = """
-mutation ConnectHubSpot($name: String!, $token: String!) {
-  connect_hubspot_directory(name: $name, token: $token) {
+mutation ConnectHubSpot($name: String!, $serviceKey: String!) {
+  connect_hubspot_directory(name: $name, service_key: $serviceKey) {
     id
     display_name
     backend_class
@@ -73,11 +73,11 @@ def sent_tasks(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str, Any
     return sent
 
 
-def connect(user: Any, *, name: str = "Example contacts", token: str = TOKEN) -> Any:
+def connect(user: Any, *, name: str = "Example contacts", service_key: str = TOKEN) -> Any:
     """Run the console's HubSpot connect mutation as ``user``."""
 
     schema = addon_schema(parties_schema.schemas, "console", hubspot_schema.schemas)
-    return execute_schema(schema, CONNECT, {"name": name, "token": token}, user=user)
+    return execute_schema(schema, CONNECT, {"name": name, "serviceKey": service_key}, user=user)
 
 
 def saved_rows() -> tuple[int, int]:
@@ -158,16 +158,16 @@ def test_a_caller_who_is_no_platform_admin_is_not_offered_the_connect_entry_and_
 
 
 @pytest.mark.parametrize(
-    ("token", "message"),
+    ("key", "message"),
     [
         pytest.param(service_key("f"), REJECTED, id="a-key-of-the-usual-shape"),
         pytest.param(f"{TOKEN}7", f"{REJECTED} {CHECK_THE_KEY}", id="a-stray-digit"),
     ],
 )
 def test_a_key_hubspot_rejects_answers_its_operator_message_and_saves_nothing(
-    hubspot: HubSpotServer, sent_tasks: list[tuple[str, dict[str, Any]]], token: str, message: str
+    hubspot: HubSpotServer, sent_tasks: list[tuple[str, dict[str, Any]]], key: str, message: str
 ) -> None:
-    result = connect(create_platform_admin("hubspot-rejected-admin"), token=token)
+    result = connect(create_platform_admin("hubspot-rejected-admin"), service_key=key)
 
     assert result.errors is not None
     assert result.errors[0].extensions["code"] == "VALIDATION"

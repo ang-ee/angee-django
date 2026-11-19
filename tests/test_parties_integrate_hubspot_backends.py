@@ -101,7 +101,7 @@ def test_a_baseline_records_its_start_and_walks_every_record_by_id(hubspot_serve
     assert (opening, opening.is_open) == (HubSpotCursor(), False)
     assert (first.started, first.after, first.is_open) == (T0, "102", True)
     assert read == ids
-    assert closed == HubSpotCursor(watermark=T0 - timedelta(days=1), settled=True)
+    assert closed == HubSpotCursor(watermark=T0 - timedelta(days=1), caught_up=True)
     assert not closed.is_open
 
 
@@ -128,11 +128,11 @@ def test_a_delta_searches_from_the_watermark_minus_the_overlap(hubspot_server: H
     opened = baseline.begin(DELTA)
     delta, read = run_pass(hubspot_server, baseline, DELTA, now=later)
 
-    assert not baseline.settled
+    assert not baseline.caught_up
     assert (opened.since, opened.started, opened.after) == (T0 - timedelta(minutes=1) - OVERLAP, None, "")
     assert read == [recent, changed]
     assert searches(hubspot_server) == [("GT", T0 - timedelta(minutes=1) - OVERLAP, "")]
-    assert delta == HubSpotCursor(watermark=T0 + timedelta(minutes=10), settled=True)
+    assert delta == HubSpotCursor(watermark=T0 + timedelta(minutes=10), caught_up=True)
 
 
 def test_a_change_the_search_shows_late_within_the_overlap_is_read_by_the_next_pass(
@@ -195,7 +195,7 @@ def test_a_delta_searches_again_after_the_last_time_each_page_read_in_full(hubsp
     assert searches(hubspot_server) == [("GT", T0 - OVERLAP, "")] + [
         ("GT", T0 + timedelta(minutes=minute), "") for minute in range(1, 6)
     ]
-    assert closed == HubSpotCursor(watermark=T0 + timedelta(minutes=7), settled=True)
+    assert closed == HubSpotCursor(watermark=T0 + timedelta(minutes=7), caught_up=True)
 
 
 def test_a_block_of_one_modified_time_is_drained_by_id_from_its_lowest_and_the_search_moves_on_past_it(
@@ -217,7 +217,7 @@ def test_a_block_of_one_modified_time_is_drained_by_id_from_its_lowest_and_the_s
         ("EQ", moment, block[1]),
         ("GT", moment, ""),
     ]
-    assert closed == HubSpotCursor(watermark=moment + timedelta(minutes=2), settled=True)
+    assert closed == HubSpotCursor(watermark=moment + timedelta(minutes=2), caught_up=True)
 
 
 def test_a_request_asks_for_no_more_records_than_hubspots_page_limits(
@@ -239,8 +239,8 @@ def test_begin_continues_an_open_pass_of_the_stream_phase_and_reopens_for_anothe
     assert walking.begin(BASELINE) is walking
     assert walking.begin(DELTA) == HubSpotCursor(since=EPOCH)
     assert HubSpotCursor(watermark=T0).begin(DELTA).since == T0 - OVERLAP
-    assert HubSpotCursor(watermark=T0, settled=True).begin(DELTA) == HubSpotCursor(
-        since=T0, watermark=T0, settled=True
+    assert HubSpotCursor(watermark=T0, caught_up=True).begin(DELTA) == HubSpotCursor(
+        since=T0, watermark=T0, caught_up=True
     )
     with pytest.raises(HubSpotError) as undated:
         HubSpotCursor().begin(DELTA).advance(HubSpotPage(), object_type="contacts")
@@ -270,7 +270,7 @@ def test_an_unreadable_modified_time_moves_nothing_and_a_page_of_changes_with_no
         "HubSpot sent a page of changed records without a readable modified time."
     )
     assert not refused.value.transient
-    assert searching.advance(page_of("soon"), object_type="contacts") == HubSpotCursor(watermark=T0, settled=True)
+    assert searching.advance(page_of("soon"), object_type="contacts") == HubSpotCursor(watermark=T0, caught_up=True)
 
 
 @settings(deadline=None, max_examples=80)
@@ -365,7 +365,7 @@ def test_polls_through_bursts_late_index_entries_and_quiet_read_every_change_the
     or polls. A pass runs at once, at HubSpot's time. Every record's latest change is
     read by a pass at or after it. Once the overlap and a second (the resolution of
     the ``Date`` a pass starts at) have passed since the last change, one more poll
-    settles the window, and from then on a poll sends one search and reads nothing.
+    catches up with the watermark, and from then on a poll sends one search and reads nothing.
     """
 
     with serve(HubSpotServer()) as server:

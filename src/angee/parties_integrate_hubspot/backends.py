@@ -7,7 +7,7 @@ the base's payloads, and the base builds and applies the records.
 A HubSpot pass is a baseline or a delta. The stream owns which
 (``SyncStream.phase``, a ``StreamPhase``) and passes it in to open a pass;
 :class:`HubSpotCursor` carries only the position inside a pass, the
-modified-time watermark and whether the watermark's window is settled. It sends
+modified-time watermark and whether the stream has caught up with it. It sends
 the request its position names (:meth:`HubSpotCursor.fetch`) and decides the
 next one from the answer (:meth:`HubSpotCursor.advance`). Every time it keeps is
 HubSpot's: a pass starts when its first answer says it was sent (the ``Date``
@@ -24,8 +24,8 @@ HubSpot states), never by the local clock.
   past that pass's own start, so every change made once a pass has started is
   newer than the watermark it leaves;
 - HubSpot's search index shows a change up to :data:`OVERLAP` late, so a delta
-  reaches back from the watermark by the overlap until the window is settled: a
-  pass that started at least the overlap after the watermark has completed. Every
+  reaches back from the watermark by the overlap until the stream has caught up:
+  a pass that started at least the overlap after the watermark has completed. Every
   change at or before the watermark was searchable when that pass ran, so it was
   read, and later deltas search strictly after the watermark until a change moves
   it. A quiet account then costs one search per poll that reads nothing.
@@ -67,7 +67,7 @@ from angee.parties_integrate_hubspot.client import (
 logger = logging.getLogger(__name__)
 
 OVERLAP = timedelta(minutes=5)
-"""The longest HubSpot's search index takes to show a change, and so how far an unsettled delta reaches back.
+"""The longest HubSpot's search index takes to show a change, and so how far a delta reaches back until caught up.
 
 It also absorbs the time HubSpot takes to answer the first request of a pass,
 whose ``Date`` the pass starts at: at most the request timeout of 30 seconds.
@@ -96,7 +96,7 @@ _BOOK = ParsedAddressbook(key="contacts", name="HubSpot contacts")
 
 
 class HubSpotCursor(BaseModel):
-    """One HubSpot stream's position inside its open pass, its watermark, and whether that is settled.
+    """One HubSpot stream's position inside its open pass, its watermark, and whether it has caught up with that.
 
     ``started`` is the open pass's start on HubSpot's clock: the time its first
     answer was sent (``HubSpotPage.sent_at``); ``None`` between passes and until
@@ -106,7 +106,7 @@ class HubSpotCursor(BaseModel):
     draining by record id, ``None`` otherwise. ``after`` is the position inside
     the open query: the record id a baseline walk continues from, or the last
     record id a drain read. ``watermark`` is the highest modified time read so far,
-    never past the start of the pass that read it. ``settled`` states that every
+    never past the start of the pass that read it. ``caught_up`` states that every
     change at or before the watermark has been read: the last pass to complete
     started at least :data:`OVERLAP` after it. The driver persists the cursor with
     the records it covers.
@@ -119,7 +119,7 @@ class HubSpotCursor(BaseModel):
     block: datetime | None = None
     started: datetime | None = None
     watermark: datetime | None = None
-    settled: bool = False
+    caught_up: bool = False
 
     @property
     def is_open(self) -> bool:
@@ -132,7 +132,7 @@ class HubSpotCursor(BaseModel):
 
         An open pass of that phase continues. Otherwise a new pass opens, and starts
         at its first answer (:meth:`advance`): a baseline walks from the first record
-        id; a delta searches strictly after the watermark once it is settled, and
+        id; a delta searches strictly after the watermark once it has caught up, and
         until then after the watermark minus :data:`OVERLAP` (after the epoch before
         there is a watermark).
         """
@@ -143,9 +143,9 @@ class HubSpotCursor(BaseModel):
         since = None
         if delta:
             since = EPOCH if self.watermark is None else self.watermark
-            if self.watermark is not None and not self.settled:
+            if self.watermark is not None and not self.caught_up:
                 since = max(self.watermark - OVERLAP, EPOCH)
-        return HubSpotCursor(since=since, watermark=self.watermark, settled=self.settled)
+        return HubSpotCursor(since=since, watermark=self.watermark, caught_up=self.caught_up)
 
     def fetch(
         self, client: HubSpotClient, object_type: str, *, limit: int, properties: Sequence[str]
@@ -186,8 +186,8 @@ class HubSpotCursor(BaseModel):
         last page moves the search past the block. A record whose modified time
         cannot be read moves nothing; a search page that more results follow and
         whose records state no readable time is refused, since no request could
-        move past it. A completed pass leaves the watermark settled when it started
-        at least :data:`OVERLAP` after it.
+        move past it. A completed pass leaves the stream caught up when it started
+        at least :data:`OVERLAP` after the watermark.
         """
 
         started = self.started if self.started is not None else page.sent_at
@@ -205,8 +205,8 @@ class HubSpotCursor(BaseModel):
         if self.block is not None:
             return read.model_copy(update={"since": self.block, "block": None, "after": ""})
         if not more:
-            settled = watermark is not None and watermark <= started - OVERLAP
-            return HubSpotCursor(watermark=watermark, settled=settled)
+            caught_up = watermark is not None and watermark <= started - OVERLAP
+            return HubSpotCursor(watermark=watermark, caught_up=caught_up)
         if self.since is None:
             return read.model_copy(update={"after": page.next_after})
         if not moments:

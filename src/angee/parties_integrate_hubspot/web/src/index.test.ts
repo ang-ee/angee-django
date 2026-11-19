@@ -10,8 +10,8 @@ describe("angee.parties_integrate_hubspot addon manifest", () => {
     expect(() => expectValidBaseAddon(partiesIntegrateHubSpot)).not.toThrow();
   });
 
-  test("contributes its connect verb to the directories toolbar, after CardDAV's", () => {
-    // The parties owner declares the container; this addon adds its verb at the sequence after CardDAV's (10).
+  test("contributes its connect verb to the directories toolbar at sequence 20", () => {
+    // The parties owner declares the container; this addon's verb sits after CardDAV's (10), which this test leaves out.
     const { containers } = composeAddons(
       [{ id: parties.id, containers: parties.containers }, { ...partiesIntegrateHubSpot, dependsOn: ["parties"] }],
       { canonicalModelLabel: (model) => model },
