@@ -371,7 +371,9 @@ for discovery. Operator actions on a stream's retained failures wait for it too.
 A workflow sync step checks readiness before any IO or lock
 (`workflows_integrate.steps.bridge_io`): a pending discovery parks it in a time
 wait, with the discovery message as a note and no attempt spent, and a failed
-one fails it with that message.
+one fails it with that message. One limit is left there: a step already in its IO
+when discovery turns pending meets the refusal inside it, spends that one attempt
+(as a transport failure caused by the refusal), and the next attempt waits.
 Discovery's own apply writes no stream. While a run holds the sync lock discovery
 cannot settle, so readiness stands for the generation the run was admitted under.
 Two limits still hold: a multi-partition workflow step runs without the sync

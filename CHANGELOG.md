@@ -105,7 +105,9 @@ live in code docstrings.
   discovery needs. `bridge_io` now asks the bridge before any IO or lock: a
   pending discovery parks the step in a time wait until discovery's next attempt
   is due, without spending an attempt or beginning an effect, and notes the
-  discovery message; a failed discovery fails the step with that message.
+  discovery message; a failed discovery fails the step with that message. Known
+  limit: a step already in its IO when discovery turns pending spends that one
+  attempt before the next one waits.
 
 - `angee.integrate`: a sync run already in flight sends and commits nothing once
   a secret is re-entered or a credential attached. Admission was fenced, but a

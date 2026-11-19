@@ -38,7 +38,12 @@ the existing bridge sync/webhook advisory lock through the operation. Another
 partition or run waits in the native time-wait state with its checkpoint and
 retry count unchanged, before beginning an external effect. Native map fan-out
 still owns admission; this seam guarantees serialization for the exact-one cap,
-not arbitrary workflow concurrency limits above one.
+not arbitrary workflow concurrency limits above one. A bridge awaiting connection
+discovery (a re-entered secret, an attach) waits the same way, before any IO or
+lock, until discovery's next attempt is due, with the discovery message as a
+note; once discovery has failed, the step fails with that message. A step
+already in its IO when discovery turns pending spends that one attempt, then
+the next one waits.
 
 Cycles pull only. No stage pushes local changes or retries a refused write, and
 the rescan leaves refused writes to the push, so `StreamStage` and the coverage
