@@ -10,6 +10,18 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Parties: a handle's holder is always the projection of a statement. A holder
+  written onto the row with no statement behind it lost its address the moment
+  anything resolved the handle, a claim below review confidence included.
+  `Handle.objects.upsert` now refuses `party`, `party_id` and
+  `party_link_confirmed`; a seeded handle row naming its holder is stated by the
+  new `parties.stored_holder` rule after its load
+  (`HandleManager.state_stored_holders`); and the `resolve_stale_owners` repair
+  states every such holder before it re-resolves stale ones, where it used to
+  clear them. Run `manage.py resolve_stale_owners` once per deployment after the
+  install resources load the new rule; a second run repairs nothing. Test
+  fixtures that create a handle with `party=` still write a bare holder.
+
 - The UX guard accepts manifest `vocabulary` field tones by structure while rejecting local tone maps and switches.
 
 - Integrate compares synchronized JSON as JSON values (`json_equal` in

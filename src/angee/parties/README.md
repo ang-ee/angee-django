@@ -22,7 +22,12 @@ Relationship keep their own identities and statements. Missing members withdraw
 only that source. Canonical scopes retain unasserted rows and exclude trash and
 wholly withdrawn rows. [Handle sources](managers.py) compose `Party.statements`
 through the shared Handle, Party lock order; resolution owns the cross-party
-winner and derived counters outside Party history.
+winner and derived counters outside Party history. A handle's holder is that
+winner's subject, so sources state links and never write `party`. A holder a row
+carries with no statement behind it (a seeded row, an older write) is stated by
+the `parties.stored_holder` rule after its resource load and by the
+`resolve_stale_owners` repair, which runs once per deployment and again harmlessly;
+until then the next resolution of that handle would clear it.
 
 A card's `PHOTO` is stored as the person's avatar through storage's idempotent
 `File.objects.ingest_image` before the page transaction; a photo storage refuses

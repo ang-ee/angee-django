@@ -10,9 +10,12 @@ from rebac import system_context
 
 
 class Command(BaseCommand):
-    """Run the explicit stale handle-owner repair."""
+    """Run the explicit handle-owner repair; a second run repairs nothing."""
 
-    help = "Re-resolve handles whose materialized party no longer has a decisive statement."
+    help = (
+        "State each handle holder no statement names, then re-resolve handles whose "
+        "materialized party no longer has a decisive statement."
+    )
 
     def handle(self, *args: Any, **options: Any) -> None:
         """Dispatch to the Handle manager and report the repaired count."""

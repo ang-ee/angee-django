@@ -22,7 +22,7 @@ is a typed, directed party↔party edge whose vocabulary
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any, ClassVar, cast
 
@@ -592,7 +592,9 @@ class Organization(Composable, metaclass=RebacModelBase, inherits="parties.Party
         rebac_resource_type = "parties/organization"
 
 
-class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataModel, concrete=True):
+class Handle(
+    ResourceLoadMixin, MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataModel, concrete=True,
+):
     """A reachable address or handle of a party on one platform.
 
     Keyed on ``(platform, value)`` and, when present, ``(platform, external_id)``
@@ -602,6 +604,14 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
     unknown sender is still a valid row. A handle carries tags of its own, apart
     from its party's (a consumer marks a company's accounts-payable address).
     """
+
+    @classmethod
+    def after_resource_load(cls, instances: Iterable[Any], *, tier: str, source: str) -> None:
+        """A seeded row naming its holder states it (``HandleManager.state_stored_holders``), so resolution keeps it."""
+
+        instances = tuple(instances)
+        cast(HandleManager, cls._default_manager).state_stored_holders(instances)
+        super().after_resource_load(instances, tier=tier, source=source)
 
     _angee_base = AngeeHistoryMergeableUnscopedManager()
 
@@ -667,6 +677,14 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
         on_delete=models.SET_NULL,
         related_name="handles",
     )
+    """The holder: the subject of the winning applied handle statement, written only by :meth:`resolve`.
+
+    A source states the link (``PartyManager.assert_handle``); ``HandleManager.upsert``
+    refuses a holder. A holder written onto the row with no statement behind it
+    (a resource row, an older write) is stated by the ``stored_holder`` rule
+    (``HandleManager.state_stored_holders``) after a resource load and by the
+    ``resolve_stale_owners`` repair; until then a resolution of the handle clears it.
+    """
     party_link_confirmed = models.BooleanField(default=False, editable=False)
     """Whether the winning link materialised into ``party`` is human-confirmed."""
 

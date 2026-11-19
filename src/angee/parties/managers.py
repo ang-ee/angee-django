@@ -255,6 +255,26 @@ class HandleQuerySet[HandleT: Handle](MergeableQuerySet[HandleT], AngeeHistoryQu
         )
         return Subquery(rows.values("confidence")[:1])
 
+    def stored_holders(self) -> Self:
+        """Live handles whose live holder no current statement names: written onto the row, never stated.
+
+        ``party`` is the projection of the winning applied handle statement
+        (:meth:`~angee.parties.models.Handle.resolve`). A holder a row carries with
+        no statement behind it (a resource row, an older write) is no candidate,
+        so the next resolution of the handle, such as a claim stated on it, clears
+        it. A holder some statement names, withdrawn or below review confidence,
+        is not stored but stale: resolution owns it.
+        """
+
+        named = (
+            apps.get_model("parties", "Party")
+            .objects.handle_statements()
+            .filter(handle_id=OuterRef("pk"), subject_id=OuterRef("party_id"))
+        )
+        return self.filter(
+            merged_into__isnull=True, party__is_trashed=False, party__merged_into__isnull=True,
+        ).exclude(Exists(named))
+
     def excluding_identity_of(self, user_id: Any) -> Self:
         """Drop the user's own handles: controlled by them or confirmed on their Person."""
 
@@ -320,6 +340,8 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         is deliberately excluded from the generic refresh loop; :meth:`claim_control`
         writes it and handle folding carries a merged alias's controller onto a handle
         without one, so a routine upsert cannot silently move an account between users.
+        The holder is refused too: it is the projection of the winning statement, so a
+        source states the link (``Party.objects.assert_handle``) and resolution writes it.
         ``normalized_value`` tracks ``value`` on every hit. Display fields refresh
         on every hit; blank values never clobber. Source display text is truncated
         to its field limit; identifiers are validated without changing their meaning.
@@ -327,6 +349,8 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
 
         if "controller" in fields or "controller_id" in fields:
             raise TypeError("Handle control must be written through claim_control().")
+        if {"party", "party_id", "party_link_confirmed"}.intersection(fields):
+            raise TypeError("Handle.party is resolved from statements: state it with Party.objects.assert_handle().")
         if "normalized_value" in fields:
             raise TypeError("Handle.normalized_value is maintained by Handle.save().")
         normalized_value = self.model.normalize_value(platform, value)
@@ -557,11 +581,50 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             )
         return handle
 
+    def state_stored_holders(self, handles: Iterable[Any] | None = None) -> int:
+        """State each stored holder's link as the ``stored_holder`` rule, so resolution keeps it; return how many.
+
+        A holder no current statement names (:meth:`HandleQuerySet.stored_holders`)
+        gains that rule's normal statement at full confidence, with the handle as its
+        evidence, as named system work, and the handle re-resolves under its lock. The
+        rule ranks below every source in the handle aspect's precedence: a source's
+        full statement still decides the address, while a claim below review
+        confidence never takes it from its holder. ``handles`` narrows the pass to
+        those rows (a resource load's). Idempotent.
+        """
+
+        party_model = apps.get_model("parties", "Party")
+        stored = self.stored_holders()
+        if handles is not None:
+            stored = stored.filter(pk__in=[row.pk for row in handles])
+        stated = 0
+        with system_context(reason="parties.handle.state_stored_holders"):
+            pending = list(stored.order_by("pk").values_list("pk", "party_id"))
+            source = party_model.objects.rule_source("stored_holder") if pending else None
+            for pk, party_id in pending:
+                with transaction.atomic():
+                    locked, parties = party_model.objects.lock_identity_rows(party_ids=(party_id,), handle_ids=(pk,))
+                    if not self.stored_holders().filter(pk=pk, party_id=party_id).exists():
+                        continue
+                    party_model.objects.assert_handle(
+                        parties[party_id], locked[pk], asserted_by=source, evidence=[locked[pk]],
+                    )
+                stated += 1
+        return stated
+
     def resolve_stale_owners(self) -> int:
+        """Make every holder the projection of its statements again; return the handles repaired.
+
+        A stored holder no statement names is stated first
+        (:meth:`state_stored_holders`), so the repair keeps it; a holder whose
+        statements no longer decide it (a withdrawn link, a suggestion below review
+        confidence) re-resolves. Idempotent: a second run repairs nothing.
+        """
+
+        repaired = self.state_stored_holders()
         statements = apps.get_model("parties", "Party").objects.handle_statements()
         decisive = statements.applied().filter(handle_id=OuterRef("pk"), subject_id=OuterRef("party_id"))
         stale = self.filter(party__isnull=False).exclude(Exists(decisive)).order_by("pk")
-        repaired = 0
         for handle in stale.iterator():
             handle.resolve()
             repaired += 1
