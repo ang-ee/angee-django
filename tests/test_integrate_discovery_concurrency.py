@@ -135,3 +135,35 @@ def test_reconsent_waits_for_resume_without_locking_its_source_credential(bridge
         assert bridge.credential_id == source.pk
         source.refresh_from_db()
         assert source.reveal()["api_key"] == "renewed"
+
+
+def test_a_replaced_secret_waits_for_the_integration_without_locking_its_credential(bridge):
+    with system_context(reason="test derived connection before re-entry"):
+        source = bridge.credential
+        bridge.config = {"derived": True}
+        bridge.save(update_fields=["config"])
+        assert bridge.run_discovery(credential_pk=source.pk, generation=bridge.discovery_generation)["ok"]
+        bridge.refresh_from_db()
+        generation = bridge.discovery_generation
+
+    def re_enter():
+        with system_context(reason="test independent re-entry"):
+            Credential.objects.get(pk=source.pk).replace_material({"api_key": "re-entered"})
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with system_context(reason="test attachment holds the integration lock"), transaction.atomic():
+            bridge.lock_capability()
+            contender, pid = submit(pool, re_enter)
+            wait_for_lock(pid, contender)
+            # Re-attaching the source grant takes its key-share lock: fail in finite
+            # time on a credential -> integration inversion.
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL lock_timeout = '3s'")
+            bridge.await_discovery()
+        contender.result(timeout=10)
+    with system_context(reason="test re-entry after the attachment"):
+        bridge.refresh_from_db()
+        source.refresh_from_db()
+    assert source.reveal() == {"api_key": "re-entered"}
+    assert bridge.credential_id == source.pk
+    assert bridge.discovery_generation == generation + 2 and bridge.discovery_pending

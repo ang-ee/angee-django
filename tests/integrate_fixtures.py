@@ -49,12 +49,21 @@ class ConnectionAdapter(BridgeImpl):
             derived = DerivedCredential(
                 kind="static_token", name=f"Resource {self.bridge.pk}", material={"api_key": "fake"},
             )
-        return ConnectionDiscovery(data={"display_name": "Discovered resource"}, credential=derived)
+        data = {"display_name": "Discovered resource"}
+        # A scripted provider: ``accounts`` names the remote account each secret reads.
+        if account := self.bridge.config.get("accounts", {}).get(credential.secret_value()):
+            data["account"] = account
+        return ConnectionDiscovery(data=data, credential=derived)
 
     def apply_discovery(self, discovery: ConnectionDiscovery) -> None:
         assert connection.in_atomic_block
+        account, stored = discovery.data.get("account"), self.bridge.subscription_state.get("account")
+        if account and stored and account != stored:
+            raise IntegrationError(f"This key reads {account}, not {stored}.")
         self.bridge.display_name = discovery.data.get("display_name", "")
         self.bridge.save(update_fields=["display_name"])
+        if account:
+            self.bridge.merge_subscription_state(account=account)
 
     def streams(self, *, deadline: float | None = None) -> tuple[StreamDefinition, ...]:
         return (

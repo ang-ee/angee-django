@@ -10,6 +10,20 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.integrate`: a re-entered secret is discovered again.
+  `Credential.replace_material` kept every attached integration running on the
+  facts its connection discovery found with the old secret, so a key of another
+  remote account was read with the old account's cursor, links and identifiers.
+  Now each integration the credential serves (attached, or derived from it) whose
+  capability requires connection discovery awaits it again in the same
+  transaction, locked before the credential as an attachment is
+  (`CredentialManager.lock_with_served_integrations`), and sync waits for it. An
+  `apply_discovery` that refuses another account lands as failed discovery with
+  its operator message. Refreshed and minted tokens and transient material
+  (`Credential.update_material`) keep discovery. `Bridge.subscription_state` is
+  documented as holding the connection facts discovery learned, beside
+  live-session state.
+
 - The UX guard accepts manifest `vocabulary` field tones by structure while rejecting local tone maps and switches.
 
 - Integrate compares synchronized JSON as JSON values (`json_equal` in

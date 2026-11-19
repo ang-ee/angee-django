@@ -267,14 +267,20 @@ responses contain no secret.
 Replacement keeps the credential id, owner and integration attachments. The
 locked replacement uses the handler's `carry_forward` to decide what survives,
 discards stale material and cached scoped tokens, and applies handler-derived metadata.
-Attached integrations read the new material on their next credential load; this
-does not revoke a remote key or restart an already authenticated connection.
+Attached integrations read the new material on their next credential load. One
+whose capability requires connection discovery discovers again first, below;
+otherwise replacement does not restart an already authenticated connection, and
+it never revokes a remote key.
 
 Connection discovery locates the external resource; a REBAC binding grants a
 relationship. Integration owns the `discovery_*` handshake, and the task is
 named `integrate.discover_connection`. Every credential attach
 enters `await_discovery`, clears completion and advances `discovery_generation`.
-No-op discovery settles synchronously. The worker runs
+So does a re-entered secret: `Credential.replace_material` locks the integrations
+the credential serves before the credential, as an attach does, and in the same
+transaction each whose capability requires discovery awaits it again, so none
+syncs on facts found with the old secret. No-op discovery settles synchronously.
+The worker runs
 `IntegrationImpl.discover_connection(credential) -> ConnectionDiscovery` outside
 transactions under the sync advisory lock. The result contains adapter-owned
 `data` and, optionally, a `DerivedCredential(kind, name, material)`.
@@ -282,12 +288,15 @@ transactions under the sync advisory lock. The result contains adapter-owned
 `finish_discovery(credential_pk=…, generation=…, discovery=…)` locks the
 integration, verifies both original task values, and invokes the adapter's
 `apply_discovery(discovery)` with a freshly loaded row. This hook performs only
-database work. Integrate persists derived material through the credential
+database work. An adapter that keeps the remote account it found refuses another
+there with `IntegrationError`; discovery then fails with that operator message and
+sync stays refused. Integrate persists derived material through the credential
 manager and `attach_connection`; adapters never persist credentials or implement
 the generation fence. Integrate then settles and sends
 `signals.discovery_finished.send(sender=type(instance), instance=instance)` on commit.
 The source grant is retained in `discovery_credential` so reconnect can regenerate
-resource-specific credentials. Ordinary refresh preserves discovery. Re-consent
+resource-specific credentials. Ordinary refresh, a minted scoped token and
+transient material (`Credential.update_material`) preserve discovery. Re-consent
 preserves direct attachments but regenerates tokens derived from the old grant.
 A callback also reconnects a disconnected attachment of the same credential.
 A changed credential identity

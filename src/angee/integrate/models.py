@@ -1182,6 +1182,39 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         if credential_pk is not None:
             self.unattached().filter(pk=credential_pk).delete()
 
+    def served_integrations(self, credential_pk: int) -> models.QuerySet[Any]:
+        """Return the integrations ``credential_pk`` serves, in lock order.
+
+        An integration serves the credential it attaches and the grant its
+        discovered material derives from (``Integration.discovery_credential``).
+        """
+
+        return (
+            apps.get_model("integrate", "Integration")
+            .objects.filter(Q(credential_id=credential_pk) | Q(discovery_credential_id=credential_pk))
+            .order_by("pk")
+        )
+
+    def lock_with_served_integrations(self, credential_pk: int) -> tuple[Any, list[Any]]:
+        """Lock the integrations ``credential_pk`` serves, then the credential; return both, locked.
+
+        Integrations lock first (``Integration.lock_capability``), the order every
+        attachment takes. One that attached the credential meanwhile is locked
+        after it: an attachment cannot commit while the credential is locked (its
+        foreign-key check needs the row), so that second read is final. The
+        caller's transaction holds the locks.
+        """
+
+        integrations = [integration.lock_capability() for integration in self.served_integrations(credential_pk)]
+        credential = self.lock_if_supported().get(pk=credential_pk)
+        locked = {integration.pk for integration in integrations}
+        integrations += [
+            integration.lock_capability()
+            for integration in self.served_integrations(credential_pk)
+            if integration.pk not in locked
+        ]
+        return credential, integrations
+
     def live_oauth_for_user(
         self, user: Any, oauth_client: Any, *, external_account: Any, oauth_scopes: Iterable[str] = (),
     ) -> Any | None:
@@ -1245,23 +1278,18 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         if not str(create_values.get("name") or ""):
             create_values["name"] = self._oauth_credential_name(oauth_client, external_account)
         identity = {"user_id": user.pk, "oauth_client_id": oauth_client.pk, "external_account_id": account_id}
-        integration_model = apps.get_model("integrate", "Integration")
-
-        def served(credential_pk: int) -> Any:
-            return integration_model.objects.filter(
-                Q(credential_id=credential_pk) | Q(discovery_credential_id=credential_pk),
-            ).order_by("pk")
-
         with system_context(reason=self._REASON), transaction.atomic():
             if account_id is not None and not self.filter(**identity).exists():
-                self._adopt_unlinked(user, oauth_client, external_account, served)
+                self._adopt_unlinked(user, oauth_client, external_account)
             existing = self.filter(**identity).only("pk").first()
             integrations = []
             if existing is not None and reconnect:
                 # Match Retry/Resume: concrete integration and ancestors, then the
                 # source credential. Refresh-only writes never touch integrations
                 # and may already hold the credential lock.
-                integrations = [integration.lock_capability() for integration in served(existing.pk)]
+                integrations = [
+                    integration.lock_capability() for integration in self.served_integrations(existing.pk)
+                ]
             instance, created = self.lock_if_supported().get_or_create(**identity, defaults=create_values)
             stored = material
             if not created:
@@ -1273,7 +1301,7 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
                     locked = {integration.pk for integration in integrations}
                     integrations += [
                         integration.lock_capability()
-                        for integration in served(instance.pk)
+                        for integration in self.served_integrations(instance.pk)
                         if integration.pk not in locked
                     ]
                 stored = handler.carry_forward(material, instance.reveal())
@@ -1298,26 +1326,20 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
                     integration.attach_connection(instance, connect_disconnected=False)
         return instance
 
-    def _adopt_unlinked(self, user: Any, oauth_client: Any, external_account: Any, served: Any) -> None:
+    def _adopt_unlinked(self, user: Any, oauth_client: Any, external_account: Any) -> None:
         """Give the user's account-less credential at this client to its first connected account.
 
         Such a row predates per-account credentials; the integrations it serves
-        without a binding bind to that account too. Integrations lock before the
-        credential, the order every attachment takes; saves keep their history.
+        without a binding bind to that account too. They lock before the
+        credential (:meth:`lock_with_served_integrations`); saves keep their history.
         """
 
         legacy = self.filter(user_id=user.pk, oauth_client_id=oauth_client.pk, external_account__isnull=True).first()
         if legacy is None:
             return
-        integrations = [integration.lock_capability() for integration in served(legacy.pk)]
-        legacy = self.lock_if_supported().get(pk=legacy.pk)
+        legacy, integrations = self.lock_with_served_integrations(legacy.pk)
         if legacy.external_account_id is not None:
             return
-        # As in a reconnect, an integration that attached it meanwhile is locked after the credential.
-        locked = {integration.pk for integration in integrations}
-        integrations += [
-            integration.lock_capability() for integration in served(legacy.pk) if integration.pk not in locked
-        ]
         legacy.external_account = external_account
         legacy.save(update_fields=["external_account", "updated_at"])
         for integration in integrations:
@@ -1647,7 +1669,10 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         same authoritative lock canon as :meth:`Bridge.merge_subscription_state`
         so one key's consume-once edit cannot clobber another writer's material.
         Kind handlers validate required keys at credential creation; transient
-        extra keys remain permitted here.
+        extra keys remain permitted here. A transient key (an answer a live
+        session consumes) is not the kind's secret, so the integrations this
+        credential serves keep their discovery; the secret is re-entered through
+        :meth:`replace_material`.
         """
 
         self._merge_material(changes)
@@ -1682,8 +1707,15 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         as at creation, then replaces under the row lock with the fields the handler
         derives from it (:meth:`CredentialKindHandler.upsert_fields`) in the same
         save — the row, its kind, and its owner stay as they are, so every
-        integration attached to it keeps working without re-attachment. Only
-        material the handler explicitly carries forward survives replacement.
+        integration attached to it keeps its attachment. Only material the
+        handler explicitly carries forward survives replacement.
+
+        A new secret may read another remote account than the one discovery
+        found, so in the same transaction every integration this credential
+        serves whose capability requires connection discovery awaits it again
+        (:meth:`Integration.await_discovery`), and syncs only once it settles.
+        They lock before this row, as an attachment does
+        (:meth:`CredentialManager.lock_with_served_integrations`).
         """
 
         handler = self.handler
@@ -1692,11 +1724,14 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         assigned = handler.upsert_fields(replacement)
         updated = ["material", *assigned, "updated_at"]
         with system_context(reason="integrate.credential.replace"), transaction.atomic():
-            row = type(self).objects.lock_if_supported().get(pk=self.pk)
+            row, integrations = type(self).objects.lock_with_served_integrations(self.pk)
             row.material = self.encode_material(handler.carry_forward(replacement, row.reveal()))
             for name, value in assigned.items():
                 setattr(row, name, value)
             row.save(update_fields=updated)
+            for integration in integrations:
+                if integration.requires_connection_discovery:
+                    integration.await_discovery()
             self.refresh_from_db(fields=updated)
 
     def auth_headers(self, *, scopes: Collection[str] = ()) -> dict[str, str]:
@@ -3673,6 +3708,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
     """Bridge-scoped settings interpreted by the selected backend."""
     poll_interval = models.PositiveIntegerField(default=300)
     subscription_state = models.JSONField(default=dict, blank=True)
+    """Live-session state and the connection facts a capability learned at discovery (an account or workspace id)."""
     live_retry_at = models.DateTimeField(null=True, blank=True)
     """Earliest time the reconciler may restart a transiently failed live session.
 
@@ -4566,7 +4602,8 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         This method merges only — a key can never be removed; consumed markers
         settle to a sentinel value defined by their owning flow.
         ``subscription_state`` has disjoint owners — the operator writes
-        ``desired`` (start/stop), a live session writes its own pairing facts —
+        ``desired`` (start/stop), a live session writes its own pairing facts,
+        discovery's apply hook writes the connection facts it learned —
         that may write concurrently from separately-loaded instances. A full
         read-modify-write from a stale instance would clobber the other owner's
         key, so this re-reads the row locked, merges only the given keys, and

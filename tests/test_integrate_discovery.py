@@ -27,7 +27,9 @@ from angee.integrate import scheduler, tasks
 from angee.integrate.connect import complete_account_connect, complete_external_account_link
 from angee.integrate.constants import DISCOVERY_ATTEMPT_LIMIT, DISCOVERY_TASK
 from angee.integrate.discovery import ConnectionDiscovery
+from angee.integrate.errors import IntegrationError
 from angee.integrate.oauth import state
+from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.schema import (
     IntegrationActionMutation,
     IntegrationCredentialMutation,
@@ -268,6 +270,132 @@ def test_reconsent_preserves_direct_attachments_and_rediscovers_derived_credenti
             row.refresh_from_db()
             assert row.discovery_generation == generations[row.pk]
         assert bridge.credential_id == completion.credential.pk
+
+
+def test_a_replaced_secret_awaits_discovery_again_and_sync_waits_for_it(bridge, sent_tasks):
+    with system_context(reason="test re-entered secret"):
+        assert settle(bridge)["ok"]
+        credential, generation = bridge.credential, bridge.discovery_generation
+        sent_tasks.clear()
+        credential.replace_material({"api_key": "re-entered"})
+        bridge.refresh_from_db()
+        assert bridge.discovery_generation == generation + 1
+        assert bridge.discovery_pending and not bridge.discovery_ready
+        assert bridge.runtime_status == "pending" and bridge.next_sync_at is None
+        task = {"integration_pk": bridge.pk, "credential_pk": credential.pk, "generation": generation + 1}
+        assert [(name, options["kwargs"]) for name, options in sent_tasks] == [(DISCOVERY_TASK, task)]
+        assert not bridge.mark_sync_started(now=timezone.now())
+        with pytest.raises(IntegrationError, match="discovery must finish"):
+            bridge.request_sync()
+        assert settle(bridge)["ok"]
+    assert bridge.discovery_ready and bridge.next_sync_at is not None
+    assert credential.reveal() == {"api_key": "re-entered"}
+
+
+def test_a_replaced_secret_commits_only_with_its_rediscovery(bridge, sent_tasks, monkeypatch):
+    def refuse(self):
+        raise RuntimeError("rediscovery could not start")
+
+    with system_context(reason="test re-entry is one transaction"):
+        assert settle(bridge)["ok"]
+        credential, generation = bridge.credential, bridge.discovery_generation
+        sent_tasks.clear()
+        monkeypatch.setattr(ConnectionBridge, "prepare_connection_discovery", refuse)
+        with pytest.raises(RuntimeError, match="could not start"):
+            credential.replace_material({"api_key": "re-entered"})
+        credential.refresh_from_db()
+        bridge.refresh_from_db()
+    assert credential.reveal() == {"api_key": "x"}
+    assert bridge.discovery_generation == generation and bridge.discovery_ready
+    assert sent_tasks == []
+
+
+def test_a_replaced_secret_leaves_a_capability_without_discovery_untouched(sent_tasks, monkeypatch):
+    monkeypatch.setattr(LiveConnectionAdapter, "requires_connection_discovery", False)
+    with system_context(reason="test re-entry without discovery"):
+        row = make_integration(
+            "re-entry-no-discovery", model=ConnectionBridge, connection_impl="live",
+            subscription_state={"desired": ConnectionBridge.LiveState.LIVE, "own_id": "resource"},
+        )
+        before = (row.discovery_generation, row.discovery_completed_at, row.next_sync_at, row.runtime_status)
+        sent_tasks.clear()
+        row.credential.replace_material({"api_key": "re-entered"})
+        row.refresh_from_db()
+    assert (row.discovery_generation, row.discovery_completed_at, row.next_sync_at, row.runtime_status) == before
+    assert row.discovery_ready and row.subscription_state["desired"] == row.LiveState.LIVE
+    assert sent_tasks == []
+
+
+@pytest.mark.parametrize("change", ["refresh", "transient"])
+def test_a_refreshed_token_or_transient_material_preserves_discovery(sent_tasks, monkeypatch, change):
+    monkeypatch.setattr(
+        OAuthClientProtocol, "refresh_token",
+        lambda protocol, *, refresh_token: {"access_token": "refreshed", "expires_in": 3600},
+    )
+    with system_context(reason="test credential-owned material changes"):
+        bridge = make_integration(
+            f"material-{change}", model=ConnectionBridge, kind="oauth",
+            material={"access_token": "granted", "refresh_token": "refresh"},
+        )
+        assert settle(bridge)["ok"]
+        before = (bridge.discovery_generation, bridge.discovery_completed_at, bridge.next_sync_at)
+        credential = bridge.credential
+        sent_tasks.clear()
+        if change == "refresh":
+            credential.refresh_now()
+        else:
+            credential.update_material(password="transient-answer")
+        bridge.refresh_from_db()
+    assert (bridge.discovery_generation, bridge.discovery_completed_at, bridge.next_sync_at) == before
+    assert bridge.discovery_ready and sent_tasks == []
+    assert credential.reveal()["access_token"] == ("refreshed" if change == "refresh" else "granted")
+
+
+@pytest.mark.parametrize("derived", [False, True])
+def test_a_replaced_secret_awaits_discovery_for_every_integration_it_serves(bridge, sent_tasks, derived):
+    with system_context(reason="test shared re-entered secret"):
+        source = bridge.credential
+        sibling = ConnectionBridge.objects.create(
+            vendor=bridge.vendor, owner=bridge.owner, credential=source, lifecycle="paused",
+            config={"derived": derived},
+        )
+        for row in (bridge, sibling):
+            assert settle(row)["ok"]
+        assert (sibling.credential_id != source.pk) is derived
+        generations = {row.pk: row.discovery_generation for row in (bridge, sibling)}
+        sent_tasks.clear()
+        source.replace_material({"api_key": "re-entered"})
+        for row in (bridge, sibling):
+            row.refresh_from_db()
+            assert row.discovery_generation == generations[row.pk] + 1
+            assert row.discovery_pending and not row.discovery_ready
+            # Material derived from the replaced secret is released with it.
+            assert row.credential_id == source.pk
+        assert sibling.lifecycle == "paused"
+        assert not Credential.objects.filter(name=f"Resource {sibling.pk}").exists()
+    assert sorted(options["kwargs"]["integration_pk"] for _name, options in sent_tasks) == [bridge.pk, sibling.pk]
+
+
+def test_a_secret_of_another_account_reaches_the_operator_as_failed_discovery(bridge):
+    with system_context(reason="test re-entered key of another account"):
+        bridge.config = {"accounts": {"x": "account-one", "second-key": "account-one", "foreign-key": "account-two"}}
+        bridge.save(update_fields=["config"])
+        assert settle(bridge)["ok"]
+        assert bridge.subscription_state["account"] == "account-one"
+        credential = bridge.credential
+        credential.replace_material({"api_key": "second-key"})
+        bridge.refresh_from_db()
+        assert settle(bridge)["ok"] and bridge.discovery_ready
+        credential.replace_material({"api_key": "foreign-key"})
+        bridge.refresh_from_db()
+        assert settle(bridge) == {"ok": False, "reason": "discovery-failed"}
+        with pytest.raises(IntegrationError, match="discovery must finish"):
+            bridge.request_sync()
+    assert bridge.runtime_status == "error"
+    assert bridge.last_error == "This key reads account-two, not account-one."
+    assert not bridge.discovery_ready and not bridge.discovery_pending
+    assert bridge.subscription_state["account"] == "account-one"
+    assert bridge.next_sync_at is None
 
 
 def test_derived_material_applies_after_fencing_and_retains_the_source_for_reconnect(bridge):
