@@ -120,7 +120,7 @@ class ProjectSurfaceCampaign(WorkCase):
           project_milestones(limit: $limit) { id permissions }
         }"""
         for user, project_expected, milestone_expected in (
-            (self.owner, {"write", "share", "delete"}, {"write", "reach"}),
+            (self.owner, {"write", "share", "delete", "transfer"}, {"write", "reach"}),
             (self.reader, set(), set()),
         ):
             counts = []

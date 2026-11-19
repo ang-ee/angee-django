@@ -1,6 +1,7 @@
 import * as React from "react";
 import {
   ResourceQuery,
+  resourceLifecycle,
   isClientRowModel,
   modelMetadataForLabel,
   useModelMetadata,
@@ -13,6 +14,8 @@ import { modelChain, useAppRuntime, useContainer, useResourceRecordMatchFields, 
 import { useContainerAdmission } from "../../form/container-admission";
 import type { CardFrame } from "../../../ui/card";
 import { withResourceViewScope, useResourceViewMaybe, type ResourceViewContextValue } from "../resource-view-context";
+import { ResourceViewArchiveScopeContext, useArchiveScopeFilter } from "../surface/archive-scope";
+import { useRecordChromeContextMaybe } from "../record-chrome-context";
 import { DEFAULT_TEXT_FILTER_FIELD, Filter, isBuiltInResourceViewKind } from "../resource-view-model";
 import { ResourceViewKindsProvider, useOfferedResourceViewKinds, useResourceViewKindContent } from "../resource-view-kinds";
 import { ContributedViewSurface } from "./contributed-view-surface";
@@ -51,6 +54,8 @@ function ListViewFrame<TRow extends Row = Row>(
   props: ListViewProps<TRow>,
 ): React.ReactElement {
   const resourceView = useResourceViewMaybe();
+  const recordChrome = useRecordChromeContextMaybe();
+  const archiveScope = props.presentation !== "embedded" || recordChrome === null;
   const metadata = useModelMetadata(props.source ? "" : props.resource);
   const modelMetadata = props.source ? null : metadata;
   const initial = React.useMemo(() => {
@@ -82,7 +87,9 @@ function ListViewFrame<TRow extends Row = Row>(
     presentation: props.presentation,
     initialState: initial.state,
     children: (scopedResourceView) => (
-      <ValidatedListViewBody {...props} resourceView={scopedResourceView} />
+      <ResourceViewArchiveScopeContext.Provider value={archiveScope}>
+        <ValidatedListViewBody {...props} resourceView={scopedResourceView} />
+      </ResourceViewArchiveScopeContext.Provider>
     ),
   });
 }
@@ -383,17 +390,22 @@ function ListViewBody<TRow extends Row = Row>({
     () => Filter.combineOptional(resourceView.baseFilter, resourceView.state.filter),
     [resourceView.state.filter, resourceView.baseFilter],
   );
-  const selectable = declaredSelectable ?? presentation !== "embedded";
+  const facetFilter = useArchiveScopeFilter(modelMetadata?.resource, mergedFilter);
+  const lifecycle = resourceLifecycle(modelMetadata?.resource, modelMetadata);
+  const hasSelectionAction = Boolean(bulkActions) || (!source && Boolean(
+    lifecycle.archiveFlag || lifecycle.trashFlag || lifecycle.canDelete || modelMetadata?.resource.grantable?.length,
+  ));
+  const selectable = declaredSelectable ?? (presentation !== "embedded" && hasSelectionAction);
   const declaredFacets = useRelationFacets(
     source ? "" : resource,
     facets,
-    mergedFilter,
+    facetFilter,
   );
   const scalarFacets = useScalarFacets(
     resource,
     resolvedColumns,
     modelMetadata,
-    mergedFilter,
+    facetFilter,
   );
   const laneSourceGroup = React.useMemo(
     () =>

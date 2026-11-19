@@ -37,7 +37,6 @@ from angee.graphql.actions import (
 )
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
-from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
@@ -587,25 +586,6 @@ class AgentChatEndpointPermission(BasePermission):
         return not agent.runtime_backend.chat_requires_admin or PlatformAdminPermission().has_permission(source, info)
 
 
-@strawberry.type
-class AgentDeletePreviewMutation:
-    """Authored cascade delete preview for agents under the caller's permissions."""
-
-    @strawberry.mutation(name="delete_agent")
-    def delete_agent(self, id: PublicID, confirm: bool = False) -> DeletePreview:
-        """Preview or confirm deletion of one agent by public id."""
-
-        return delete_by_public_id(Agent, str(id), confirm=confirm, queryset=Agent.objects.for_write())
-
-
-attach_delete_preview_metadata(
-    AgentDeletePreviewMutation,
-    model=Agent,
-    node=AgentType,
-    field="delete_agent",
-)
-
-
 def _provisioning_result(verb: Callable[[Any], str], id: PublicID, *, reason: str) -> ActionResult:
     """Run one provisioning verb on the addressed agent and format its outcome in band."""
 
@@ -710,7 +690,6 @@ schemas = {
         ],
         "mutation": [
             _AGENT_RESOURCE.mutation,
-            AgentDeletePreviewMutation,
             _AGENT_SESSION_RESOURCE.mutation,
             _AGENT_TURN_RESOURCE.mutation,
             InferenceProviderConnectMutation,

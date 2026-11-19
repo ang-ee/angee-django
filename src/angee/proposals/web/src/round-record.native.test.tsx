@@ -42,3 +42,19 @@ test("Open round stays hidden when the server withholds it", () => {
   renderProject(round({ can_open: false }));
   expect(screen.queryByRole("button", { name: "Open round" })).toBeNull();
 });
+
+test("an opened round offers Close round on the project's toolbar", async () => {
+  renderProject(round({ status: "OPENED", can_open: false }));
+  expect(await screen.findByRole("button", { name: "Close round" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Open round" })).toBeNull();
+});
+
+test.each(["COLLECTING", "CLOSED", "CANCELED"])("a %s round offers no Close round", (status) => {
+  renderProject(round({ status, can_open: false }));
+  expect(screen.queryByRole("button", { name: "Close round" })).toBeNull();
+});
+
+test("an opened round still requires write permission to close", () => {
+  renderProject(round({ status: "OPENED", can_open: false, permissions: [] }));
+  expect(screen.queryByRole("button", { name: "Close round" })).toBeNull();
+});

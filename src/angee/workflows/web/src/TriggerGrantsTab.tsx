@@ -43,7 +43,7 @@ export function TriggerGrantsTab({ recordId }: { recordId: string }) {
       body: () => t("trigger.revokeGrantDescription"),
       confirm: () => t("trigger.revokeGrant"),
     },
-    toast: { title: () => t("trigger.revokeGrantError"), description: () => t("trigger.revokeGrantError") },
+    toast: { successTitle: () => t("trigger.grantRevoked"), failureTitle: () => t("trigger.revokeGrantError"), description: () => t("trigger.revokeGrantError") },
     variant: "danger",
     pendingPolicy: "active-row",
   })], [recordId, t, trigger?.can_edit]);

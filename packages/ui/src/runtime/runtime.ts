@@ -176,6 +176,8 @@ export interface RuntimeAuthUser {
   id: string;
   name: string;
   username?: string;
+  /** Session-user fact; absent on identity payloads that did not select it. */
+  hasUsablePassword?: boolean;
   email?: string;
   roles?: readonly string[];
   /**

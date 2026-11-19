@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   // `RecordVerb` (the `@angee/ui` owner) renders the descriptor through
   // `RecordActionBar`, which owns the confirm, the args form and the feedback.
   verbs: [] as Record<string, unknown>[],
+  options: vi.fn(),
 }));
 
 vi.mock("@angee/ui", () => ({
@@ -34,12 +35,14 @@ vi.mock("@angee/ui", () => ({
     return <button type="button">{action.label as React.ReactNode}</button>;
   },
   useRecordChromeContext: () => mocks.chrome,
-  useRecordChromeActionMutation: (field: string) => {
+  useRecordChromeActionMutation: (field: string, options: unknown) => {
+    mocks.options("mutation", options);
     const action = mocks.actions.get(field) ?? vi.fn(async () => undefined);
     mocks.actions.set(field, action);
     return [action, { fetching: false, error: null }];
   },
-  useRecordChromeActionOutcome: (field: string) => {
+  useRecordChromeActionOutcome: (field: string, options: unknown) => {
+    mocks.options("outcome", options);
     const action = mocks.outcomes.get(field) ?? vi.fn(async () => ({ ok: true, message: "done" }));
     mocks.outcomes.set(field, action);
     return [action, { fetching: false, error: null }];
@@ -49,7 +52,7 @@ vi.mock("@angee/ui", () => ({
 import { ConditionalMutationButton } from "./ConditionalMutationButton";
 
 type Declared = {
-  id: string; label: React.ReactNode; placement: string; danger: boolean; primary: boolean;
+  id: string; label: React.ReactNode; placement?: string; danger: boolean; primary: boolean;
   confirm?: unknown; args?: unknown;
   run?: () => Promise<unknown>;
   submit?: (values: Record<string, unknown>, context: unknown, options?: { errorNotification?: false }) => Promise<unknown>;
@@ -69,6 +72,7 @@ describe("ConditionalMutationButton", () => {
     mocks.actions.clear();
     mocks.outcomes.clear();
     mocks.verbs.length = 0;
+    mocks.options.mockClear();
   });
 
   test("declares a verb only when its record predicate matches", () => {
@@ -112,6 +116,11 @@ describe("ConditionalMutationButton", () => {
     });
   });
 
+  test("a primary verb lets primary supply its toolbar placement", () => {
+    render(<ConditionalMutationButton field="pause_integration" label="Pause" when={() => true} variant="primary" />);
+    expect(mocks.verbs.at(-1)).toMatchObject({ primary: true, placement: undefined });
+  });
+
   test("rejects a destructive verb that declares no confirm", () => {
     // A type-level assertion: `@ts-expect-error` fails `pnpm run typecheck` the moment
     // the props union stops rejecting a danger verb without its confirm.
@@ -127,7 +136,9 @@ describe("ConditionalMutationButton", () => {
       { name: "first_name", label: "First name" },
       { name: "expected_revision", label: "Revision", widget: "number" },
     ];
-    render(<ConditionalMutationButton field="rename_user" label="Rename user" when={() => true} args={args} />);
+    render(<ConditionalMutationButton field="rename_user" label="Rename user" when={() => true} args={args} transient />);
+    expect(mocks.options).toHaveBeenCalledWith("mutation", expect.objectContaining({ transient: true }));
+    expect(mocks.options).toHaveBeenCalledWith("outcome", expect.objectContaining({ transient: true, errorNotification: false }));
     const declared = mocks.verbs.at(-1) as Declared;
     expect(declared).toMatchObject({ id: "rename_user", args });
     expect(declared.run).toBeUndefined();

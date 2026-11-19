@@ -22,7 +22,7 @@ The write path lives on the managers.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import getaddresses
@@ -89,6 +89,7 @@ from angee.messaging.constants import DELIVERY_TASK_EXPIRES
 from angee.messaging.delivery import queue_message_delivery
 from angee.messaging.managers import (
     ChannelManager,
+    DeliveryReconciliationBusy,
     FragmentManager,
     MessageEdgeManager,
     MessageManager,
@@ -1315,9 +1316,51 @@ class Message(
     def delivery_blocked(self) -> bool:
         """Whether removal, discard, or a provider identity collision prevents a send."""
 
-        return (self.is_trashed and not self.delivery_needs_reconciliation) or bool(
-            self.local_metadata.get("delivery_conflict")
+        if self.is_trashed and not self.delivery_needs_reconciliation:
+            return True
+        conflict = self.__dict__.get("_delivery_conflict", models.DEFERRED)
+        if conflict is models.DEFERRED:
+            conflict = self.local_metadata.get("delivery_conflict")
+        return bool(conflict)
+
+    delivery_action_permission: ClassVar[str] = "send_held"
+
+    def delivery_actions(self, permissions: Collection[str]) -> list[str]:
+        """Delivery recovery verbs admitted by the held permission and retained envelope."""
+
+        if self.delivery_action_permission not in permissions:
+            return []
+        return [
+            action for action in ("retry", "acknowledge")
+            if self.delivery_resolution_error(retry=action == "retry") is None
+        ]
+
+    def delivery_resolution_error(self, *, retry: bool) -> ValidationError | None:
+        """The retained row's admission for an operator retry or acknowledgement.
+
+        The locked mutation and the viewer's delivery-actions projection use
+        this predicate. Authorization and observed-revision checks stay with
+        their respective owners.
+        """
+
+        if (
+            self.status == self.MessageStatus.UNCERTAIN and self.scheduled_at is None
+            and self.delivery_lease_until is not None and self.delivery_lease_until > timezone.now()
+        ):
+            return DeliveryReconciliationBusy()
+        allowed = (
+            (self.MessageStatus.UNCERTAIN, self.MessageStatus.FAILED) if retry else (self.MessageStatus.UNCERTAIN,)
         )
+        if self.status not in allowed or self.delivery_blocked:
+            return ValidationError(
+                "Retry requires a retained failed or uncertain delivery; acknowledgement requires uncertainty."
+            )
+        if retry:
+            try:
+                self.validate_delivery()
+            except ValidationError as error:
+                return error
+        return None
 
     @property
     def delivery_held(self) -> bool:

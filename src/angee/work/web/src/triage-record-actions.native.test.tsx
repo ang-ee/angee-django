@@ -29,6 +29,7 @@ function renderActions({ record, stage = null, readOnly = false, start }: {
     project_tasks_by_pk: (args) => ({ id: args.id, stage }),
     start_task: start ?? ((args) => ({ ok: true, message: "Started.", id: args.id, validation_errors: null })),
     return_task_to_triage: (args) => ({ ok: true, message: "Returned to triage.", id: args.id, validation_errors: null }),
+    wake_task: (args) => ({ ok: true, message: "Task woken.", id: args.task, validation_errors: null }),
   }, (request) => requests.push(request)).public!, metadata: { angee: { resources } } } };
   render(<RuntimeFixture activeSchema="console" schemas={schemas} operationDocuments={{ console: operationDocuments }}>
     <RecordChromeProvider value={{ resource: "projects.Task", canonicalResource: "projects.Task", dataProviderName: "console",
@@ -42,6 +43,27 @@ function renderActions({ record, stage = null, readOnly = false, start }: {
 async function openVerbs(): Promise<void> {
   fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
 }
+
+test("Wake ends the open task's observed hold through the record menu", async () => {
+  const requests = renderActions({ record: queued({
+    stage: { category: "TRIAGE" }, started_triage_at: "2026-11-01T10:00:00Z", triaged_at: null,
+    task_actions: ["wake"], revision: 4,
+  }) });
+  await openVerbs();
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Wake" }));
+  expect(await screen.findByText("Task woken.")).toBeTruthy();
+  expect(requests.find(({ fields }) => fields.includes("wake_task"))?.variables)
+    .toEqual({ task: "tsk_toolbar", expected_revision: 4 });
+});
+
+test.each([
+  { task_actions: [], snoozed_at: "2026-11-02T10:00:00Z", revision: 4, permissions: ["write"] },
+  { task_actions: ["wake"] },
+])("Wake requires the projected verb and an observed revision: %j", async (overrides) => {
+  renderActions({ record: queued({ ...overrides }) });
+  if (screen.queryByRole("button", { name: "Actions" })) await openVerbs();
+  expect(screen.queryByRole("menuitem", { name: "Wake" })).toBeNull();
+});
 
 test.each(["BACKLOG", "unstarted"])("a %s task offers Start and Return to triage, each sent for the open record", async (category) => {
   const requests = renderActions({ record: queued({ stage: { category } }), stage: { category } });

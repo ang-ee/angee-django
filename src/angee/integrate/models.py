@@ -53,6 +53,7 @@ from django.db.models import (
 from django.db.models.functions import Cast, Concat, JSONObject, NullIf
 from django.utils import timezone
 from django.utils.text import capfirst
+from django.views.decorators.debug import sensitive_variables
 from django_compose.models import Composable
 from rebac import (
     PermissionDenied,
@@ -1099,7 +1100,7 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         the delete (an actor's ``with_action("delete")``). A credential an
         integration still attaches directly keeps its ``PROTECT``: detach it first,
         or use :meth:`retire_unattached`. Two other paths delete a credential
-        without it: the admin delete preview (``delete_credential``), which runs
+        without it: the admin delete preview (``credentials_delete``), which runs
         :meth:`prepare_disconnect` itself, and :meth:`delete_unattached_derived`,
         which drops discovery-created material without a remote revocation.
         """
@@ -1592,6 +1593,41 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
 
         return CredentialKind(self.kind).handler
 
+    @property
+    def editable_fields(self) -> list[str]:
+        """The manual label; expiry is reported health, never a manual validity limit."""
+
+        return [] if self.kind == CredentialKind.OAUTH else ["name"]
+
+    @property
+    def replacement_fields(self) -> list[str]:
+        """Write-only inputs for manual secret replacement; OAuth uses its connection flow."""
+
+        return [] if self.kind == CredentialKind.OAUTH else list(self.handler.input_material_fields())
+
+    def validate_details(self, changes: Mapping[str, Any]) -> None:
+        """Refuse manual edits of exchange-owned metadata before the native resource update."""
+
+        if refused := (changes.keys() & {"name"}) - set(self.editable_fields):
+            raise ValidationError({field: "OAuth manages this field; reconnect the account instead."
+                                   for field in sorted(refused)})
+
+    @sensitive_variables("material")
+    def replace_secret(self, material: Mapping[str, Any], *, confirmed: bool) -> None:
+        """Confirm a non-OAuth manual replacement, preserving write gates and kind validation.
+
+        The Zed permission composes the administrator and write gates. Other
+        capability owners continue to compose ``replace_material`` after their
+        own admission, such as the IMAP connection's credential edit.
+        """
+
+        self.require_access("replace_secret")
+        if confirmed is not True:
+            raise ValidationError({"confirmed": "Confirm replacing this credential's secret."})
+        if not self.replacement_fields:
+            raise ValidationError("OAuth secrets are managed by the connection flow; reconnect the account instead.")
+        self.replace_material(material)
+
     def reveal(self) -> dict[str, Any]:
         """Decode this row's decrypted JSON material."""
 
@@ -1637,21 +1673,31 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
                 row.save(update_fields=updated)
             self.refresh_from_db(fields=updated)
 
+    @sensitive_variables("material", "replacement")
     def replace_material(self, material: Mapping[str, Any]) -> None:
         """Re-enter this credential's secret(s) under the kind handler's validation.
 
         The operator's "the password changed" path: ``material`` carries the
         kind's own input fields (the handler names them), is cleaned exactly
-        as at creation, then merges under the row lock with the fields the handler
+        as at creation, then replaces under the row lock with the fields the handler
         derives from it (:meth:`CredentialKindHandler.upsert_fields`) in the same
         save — the row, its kind, and its owner stay as they are, so every
-        integration attached to it keeps working without re-attachment. Tokens
-        minted from the replaced material are dropped with it.
+        integration attached to it keeps working without re-attachment. Only
+        material the handler explicitly carries forward survives replacement.
         """
 
         handler = self.handler
+        handler.validate_replacement(material)
         replacement = handler.clean(material)
-        self._merge_material({**replacement, _SCOPED_TOKENS: None}, fields=handler.upsert_fields(replacement))
+        assigned = handler.upsert_fields(replacement)
+        updated = ["material", *assigned, "updated_at"]
+        with system_context(reason="integrate.credential.replace"), transaction.atomic():
+            row = type(self).objects.lock_if_supported().get(pk=self.pk)
+            row.material = self.encode_material(handler.carry_forward(replacement, row.reveal()))
+            for name, value in assigned.items():
+                setattr(row, name, value)
+            row.save(update_fields=updated)
+            self.refresh_from_db(fields=updated)
 
     def auth_headers(self, *, scopes: Collection[str] = ()) -> dict[str, str]:
         """Return authorization headers through the kind handler.

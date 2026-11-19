@@ -2,8 +2,10 @@
 
 from contextlib import contextmanager
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.core.exceptions import ValidationError
+from django.db.models import Q
 from django.utils import timezone
 from rebac import PermissionDenied, actor_context, system_context
 
@@ -159,6 +161,29 @@ class TaskHoldTests(WorkCase):
         due.refresh_from_db()
         self.assertEqual((due.snoozed_at, due.revision), (None, before + 1))
         self.assertIsNotNone(self.hold(later)[0])
+
+    def test_a_hand_verb_blocker_does_not_stop_due_or_reply_wakes(self):
+        due, reply = self.task("Triage"), self.task("Triage")
+        self.snooze(due, timezone.now() + timedelta(hours=1))
+        self.snooze(reply, awaiting=self.owner)
+        blockers = self.Task.action_blockers
+
+        def hand_only(action):
+            return ((Q(pk__isnull=False), "Hand wake is unavailable."),) if action == "wake" else blockers(action)
+
+        with patch.object(self.Task, "action_blockers", side_effect=hand_only), self.woken() as events:
+            for task in (due, reply):
+                projected = self.graphql(
+                    "query($id: String!) { project_tasks_by_pk(id: $id) { task_actions } }", {"id": task.sqid},
+                )["project_tasks_by_pk"]
+                self.assertNotIn("wake", projected["task_actions"])
+            with system_context(reason="tests.work.holds.hand_blocker"):
+                self.assertEqual(self.Task.work.wake_due_snoozes(now=timezone.now() + timedelta(hours=2)), 1)
+            with actor_context(self.owner):
+                message = self.as_user(reply).message_post("Next week.")
+        self.assertEqual(events, [(due.pk, "due", None), (reply.pk, "reply", message.pk)])
+        self.assertIsNone(self.hold(due)[0])
+        self.assertIsNone(self.hold(reply)[0])
 
     def test_leaving_triage_ends_a_hold_without_a_wake(self):
         for verb in ("accept", "decline"):

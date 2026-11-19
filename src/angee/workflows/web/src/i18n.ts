@@ -2,6 +2,7 @@ import { createNamespaceT } from "@angee/ui/i18n";
 import { enCatalogueMessages } from "./i18n-catalogue";
 
 export const enWorkflowsMessages = {
+  "trigger.grantRevoked": "Grant revoked",
   "action.runWorkflow": "Run workflow",
   "action.startFailed": "Start workflow failed.",
   "timeline.continuedBy": "Continued at the request of {name}",

@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import { Glyph } from "../chrome/Glyph";
+import { cn } from "../lib/cn";
 import { Button, type ButtonSize, type ButtonVariant } from "../ui/button";
 import { DropdownMenu, type DropdownMenuPositionerProps } from "../ui/dropdown-menu";
 import { ActionMenuContext } from "../ui/action-menu-context";
@@ -101,9 +102,20 @@ export interface ActionMenuProps {
   className?: string;
 }
 
+/** The glyphs that mean "more": a menu behind one of them is its group's overflow menu. */
+const OVERFLOW_GLYPHS: ReadonlySet<string> = new Set(["more-vertical", "more-horizontal"]);
+
 /** A toolbar menu whose contributed dialogs survive item activation and closing.
  * Its content stays mounted while closed, so it knows whether any item rendered:
  * a menu whose contributions all render nothing shows no trigger.
+ *
+ * An overflow menu (the `more-vertical` default or `more-horizontal`, labeled or
+ * not) is the last control of its group and never sits between two buttons: its
+ * trigger orders itself after every sibling of its row (`order-last`,
+ * `data-overflow-trigger`), whichever owner, contribution or portal rendered them
+ * and in whatever order. No caller positions it. A menu behind any other glyph
+ * (New, Connect, a column picker) is a button of its own and stays where it is
+ * written.
  * @kind primitive
  */
 export function ActionMenu({
@@ -121,6 +133,7 @@ export function ActionMenu({
   className,
 }: ActionMenuProps): React.ReactElement {
   const t = useUiT();
+  const overflow = glyph !== null && OVERFLOW_GLYPHS.has(glyph);
   const triggerRef = React.useRef<HTMLElement>(null);
   const [pendingCount, setPendingCount] = React.useState(0);
   const registerPending = React.useCallback(() => {
@@ -140,8 +153,8 @@ export function ActionMenu({
     <DropdownMenu.Root>
       <DropdownMenu.Trigger render={
         <Button ref={triggerRef} type="button" variant={variant} size={size} disabled={disabled} badge={badge}
-          className={className} aria-label={ariaLabel} loading={loading || pendingCount > 0}
-          hidden={itemCount === 0}>
+          className={cn(overflow && "order-last", className)} aria-label={ariaLabel} loading={loading || pendingCount > 0}
+          hidden={itemCount === 0} data-overflow-trigger={overflow ? "" : undefined}>
           {glyph ? <Glyph decorative name={glyph} /> : null}
           {label === undefined ? t("list.actions") : label}
         </Button>

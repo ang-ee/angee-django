@@ -1,6 +1,9 @@
 import { createNamespaceT } from "@angee/ui/i18n";
 
 export const enPartiesMessages: Record<string, string> = {
+  "circle.membership.removed": "Member removed",
+  "identity.confirmed": "Identity confirmed",
+  "identity.dismissed": "Identity dismissed",
   "partyPicker.label": "Party",
   "partyRedirect.loading": "Opening party…",
   "partyRedirect.unavailable": "Party record unavailable",

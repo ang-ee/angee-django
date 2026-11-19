@@ -49,7 +49,7 @@ export function GroupMembersTab({ recordId }: RecordPanelContext): ReactElement 
       body: (row: IAMGroupMember) => t("group.removeDescription", { name: row.label }),
       confirm: () => t("group.remove"),
     },
-    toast: { title: () => t("group.removeError"), description: () => t("group.removeError") },
+    toast: { successTitle: () => t("group.removed"), failureTitle: () => t("group.removeError"), description: () => t("group.removeError") },
     variant: "danger",
     pendingPolicy: "active-row",
   })], [recordId, t]);

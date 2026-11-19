@@ -13,6 +13,7 @@ export type FilterPrimitive = string | number | boolean | null;
 export type FilterValue = FilterPrimitive | readonly FilterValue[] | { readonly [key: string]: FilterValue };
 export type QueryFilter = { readonly [field: string]: FilterValue };
 export type FilterRecord = QueryFilter;
+
 export interface FilterChoice { value: FilterPrimitive; description?: string | null }
 export interface GroupBucket { key?: Readonly<Record<string, unknown>> | null }
 export interface GroupDimension { input: string; key: string; granularity?: string; rangeKey?: string }

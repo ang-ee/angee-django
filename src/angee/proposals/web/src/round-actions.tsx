@@ -159,7 +159,7 @@ export function useRoundCeremonyActions(
         id: "close-round",
         label: t("round.action.close"),
         icon: "proposals-award",
-        danger: true,
+        primary: true,
         args: [
           {
             name: "outcome",

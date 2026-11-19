@@ -123,6 +123,124 @@ class DeliveryFixtures(TransactionTestCase):
         return delivery.run_message_delivery(message._meta.label_lower, message.pk, message.external_id)
 
 
+class DeliveryActionAdmission(DeliveryFixtures):
+    """The row projection and revision-checked mutations agree on delivery admission."""
+
+    def execute(self, document, values, actor=None):
+        actor = actor or self.operator
+        with actor_context(actor):
+            result = GraphQLSchemas.from_discovery().build("console").execute_sync(
+                document, variable_values=values,
+                context_value=SimpleNamespace(request=SimpleNamespace(user=actor)),
+            )
+        self.assertIsNone(result.errors, result.errors)
+        return result.data
+
+    def test_projection_and_mutation_agree_for_retention_conflicts_leases_and_status(self):
+        future = timezone.now() + timedelta(hours=1)
+        past = timezone.now() - timedelta(hours=1)
+        cases = (
+            ({"status": "failed"}, {"retry"}),
+            ({"status": "failed", "channel_id": None}, set()),
+            ({"status": "sent"}, set()),
+            ({"status": "uncertain"}, {"retry", "acknowledge"}),
+            ({"status": "failed", "is_trashed": True}, set()),
+            ({"status": "uncertain", "is_trashed": True, "delivery_possibly_accepted": True}, {"retry", "acknowledge"}),
+            ({"status": "uncertain", "metadata": {"local": {"delivery_conflict": "other"}}}, set()),
+            ({"status": "uncertain", "metadata": {"local": {"delivery_conflict": False}}}, {"retry", "acknowledge"}),
+            ({"status": "uncertain", "delivery_lease_until": future}, set()),
+            ({"status": "uncertain", "delivery_lease_until": past}, {"retry", "acknowledge"}),
+            ({"status": "uncertain", "delivery_lease_until": future, "scheduled_at": future}, {"retry", "acknowledge"}),
+        )
+        query = """query($id: String!) { messages_by_pk(id: $id) { delivery_actions revision } }"""
+        for index, (values, offered) in enumerate(cases):
+            for verb, field in (("retry", "retry_message_delivery"), ("acknowledge", "acknowledge_message_delivery")):
+                with self.subTest(index=index, verb=verb):
+                    row = self.outbound(external_id=f"admission-{index}-{verb}")
+                    with system_context(reason="delivery admission fixture"):
+                        Message.objects.filter(pk=row.pk).update(**values)
+                        row.refresh_from_db()
+                    projected = self.execute(query, {"id": row.public_id})["messages_by_pk"]
+                    self.assertEqual(set(projected["delivery_actions"]), offered)
+                    result = self.execute(
+                        f"mutation($id: ID!, $revision: Int!) {{ "
+                        f"{field}(id: $id, expected_revision: $revision) {{ ok }} }}",
+                        {"id": row.public_id, "revision": row.revision},
+                    )
+                    self.assertEqual(result[field]["ok"], verb in offered)
+
+    def test_retry_requires_the_delivery_envelope_but_acknowledgement_does_not(self):
+        query = """query($id: String!) { messages_by_pk(id: $id) { delivery_actions } }"""
+        for index, invalid in enumerate(({"direction": "inbound"}, {"channel_id": None}, {"external_id": " "})):
+            with self.subTest(invalid=invalid):
+                row = self.outbound(status="uncertain", external_id=f"invalid-envelope-{index}")
+                with system_context(reason="incomplete delivery envelope fixture"):
+                    Message.objects.filter(pk=row.pk).update(**invalid)
+                    row.refresh_from_db()
+                projected = self.execute(query, {"id": row.public_id})["messages_by_pk"]
+                self.assertEqual(projected["delivery_actions"], ["acknowledge"])
+                for verb, allowed in (("retry", False), ("acknowledge", True)):
+                    result = self.execute(
+                        f"mutation($id: ID!, $revision: Int!) {{ "
+                        f"{verb}_message_delivery(id: $id, expected_revision: $revision) {{ ok }} }}",
+                        {"id": row.public_id, "revision": row.revision},
+                    )
+                    self.assertEqual(result[f"{verb}_message_delivery"]["ok"], allowed)
+
+    def test_a_non_admin_channel_owner_can_resolve_delivery_through_graphql(self):
+        owner = get_user_model().objects.create_person_as_system(
+            username="channel-owner", email="channel-owner@example.test", reason="delivery channel owner fixture",
+        )
+        with actor_context(self.operator):
+            self.feed.with_actor(self.operator).transfer_ownership(owner)
+        for verb, expected in (("retry", "queued"), ("acknowledge", "sent")):
+            with self.subTest(verb=verb):
+                row = self.outbound(status="uncertain", external_id=f"owner-{verb}")
+                projected = self.execute(
+                    "query($id: String!) { messages_by_pk(id: $id) { permissions delivery_actions } }",
+                    {"id": row.public_id}, owner,
+                )["messages_by_pk"]
+                self.assertIn("send_held", projected["permissions"])
+                self.assertIn(verb, projected["delivery_actions"])
+                result = self.execute(
+                    f"mutation($id: ID!, $revision: Int!) {{ "
+                    f"{verb}_message_delivery(id: $id, expected_revision: $revision) {{ ok }} }}",
+                    {"id": row.public_id, "revision": row.revision}, owner,
+                )
+                self.assertTrue(result[f"{verb}_message_delivery"]["ok"])
+                with system_context(reason="delivery channel owner result"):
+                    row.refresh_from_db()
+                self.assertEqual(row.status, expected)
+                self.assertEqual(row.acknowledged_by_id, owner.pk)
+
+    def test_reader_gets_no_delivery_verbs_and_list_cost_does_not_grow_per_row(self):
+        self.outbound(status="uncertain", external_id="admission-first")
+        query = """{ messages { id delivery_actions } }"""
+        rows = self.execute(query, {}, self.agent)["messages"]
+        self.assertTrue(rows)
+        self.assertTrue(all(row["delivery_actions"] == [] for row in rows))
+        resolve = Message.delivery_actions
+
+        def without_metadata(row, permissions):
+            self.assertIn("metadata", row.get_deferred_fields())
+            return resolve(row, permissions)
+
+        self.enterContext(patch.object(Message, "delivery_actions", without_metadata))
+        self.execute(query, {})
+        with CaptureQueriesContext(connection) as queries:
+            one = self.execute(query, {})["messages"]
+            self.assertTrue(one)
+            self.assertTrue(all(row["delivery_actions"] for row in one))
+        single_count = len(queries)
+        for index in range(3):
+            self.outbound(status="failed", external_id=f"admission-extra-{index}")
+        with CaptureQueriesContext(connection) as queries:
+            many = self.execute(query, {})["messages"]
+            self.assertTrue(all(row["delivery_actions"] for row in many))
+        self.assertEqual(len(many), len(one) + 3)
+        self.assertEqual(len(queries), single_count)
+
+
 class FakeFeedBackend(FeedBackend):
     """A deterministic provider exercising the public publication and lookup hooks."""
 

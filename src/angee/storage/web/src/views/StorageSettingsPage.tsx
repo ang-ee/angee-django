@@ -34,7 +34,6 @@ export function StorageSettingsPage(): ReactElement {
             <Field name="slug" createOnly />
             <Field name="prefix" />
             <Field name="description" widget="textarea" />
-            <Field name="is_archived" label={t("settings.archived")} widget="switch" />
           </Form>
         </DrawerResourceList>
       </SettingsSection>
@@ -55,7 +54,6 @@ export function StorageSettingsPage(): ReactElement {
             <Field name="slug" createOnly />
             <Field name="backend_class" label={t("settings.backendClass")} />
             <Field name="backend_config" label={t("settings.config")} widget="json" />
-            <Field name="is_archived" label={t("settings.archived")} widget="switch" editOnly />
           </Form>
         </DrawerResourceList>
       </SettingsSection>

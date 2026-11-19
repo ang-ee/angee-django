@@ -24,6 +24,7 @@ import { RecordActionBar } from "./RecordActionBar";
 import { SaveDiscardActions, dirtyControlBandClassName } from "./SaveDiscardActions";
 import { ActionFormProvider } from "./ActionFormProvider";
 import type {
+  ActionDescriptor,
   FieldDescriptor,
   PageFieldKind,
 } from "../page";
@@ -186,6 +187,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     saveError,
     saveConflict,
     declaredActions,
+    genericActions,
     actionsBlocked,
     recordChromeContext: surfaceChromeContext,
     recordActions,
@@ -216,9 +218,9 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     () => surfaceChromeContext && { ...surfaceChromeContext, toolbarHost },
     [surfaceChromeContext, toolbarHost],
   );
-  const availableDeclaredActions = readOnly
-    ? declaredActions.filter((action) => action.run || action.submit)
-    : declaredActions;
+  const actionAvailable = (action: ActionDescriptor) => !isCreate && (!formReadOnly || action.run || action.submit);
+  const availableDeclaredActions = declaredActions.filter(actionAvailable);
+  const availableGenericActions = genericActions.filter(actionAvailable);
   useBreadcrumbLeafLabel(
     isCreate ? t("resourceToolbar.create") : titleText(
       recordRepresentationValue(displayRecord, surface.modelMetadata),
@@ -338,6 +340,10 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     event.preventDefault();
     void submitForm();
   };
+  // Contributed band buttons render inside the action bar, before its overflow menu:
+  // the menu is the band's last verb control whatever contributes a button.
+  const contributedBandVerbs = !awaitingRecord && !readOnly && recordChromeContext && primaryRecordActions.length > 0
+    ? <ContainerOutlet entries={primaryRecordActions} /> : null;
   const rawControlBand = readOnly && props.hideRecordChrome && !toolbarStartNode && !toolbar ? null : (
     <CommandBand
       className={formIsDirty ? dirtyControlBandClassName : undefined}
@@ -355,14 +361,16 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
           onSave={() => { void submitForm(); }}
         />
         <span ref={setToolbarHost} className="contents" />
-        {!awaitingRecord && (
+        {!isCreate && !awaitingRecord && (
           availableDeclaredActions.length > 0 ||
+          availableGenericActions.length > 0 ||
           visibleDeleteAction !== undefined ||
           (!readOnly && menuRecordActions.length > 0)
         ) ? (
           <RecordActionBar
             record={displayRecord ?? null}
             actions={availableDeclaredActions}
+            genericActions={availableGenericActions}
             applyPatch={applyPatch}
             reload={reload}
             deleteAction={visibleDeleteAction}
@@ -371,13 +379,12 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
                 <ContainerOutlet entries={menuRecordActions} />
               ) : undefined
             }
+            contributedVerbs={contributedBandVerbs ?? undefined}
             blocked={actionsBlocked}
-            menuPlacement="leading"
+            menuTrigger="icon"
+            fillBand
           />
-        ) : null}
-        {!awaitingRecord && !readOnly && recordChromeContext ? (
-          <ContainerOutlet entries={primaryRecordActions} />
-        ) : null}
+        ) : contributedBandVerbs}
       </>}
       chrome={recordChromeContext && !props.hideRecordChrome ? recordChromeContext : null}
       end={toolbar}

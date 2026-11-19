@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import strawberry
 import strawberry_django
 from django.apps import apps
 from strawberry import auto
@@ -10,8 +9,6 @@ from strawberry import auto
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data.contracts import DataResourceSubtitleMetadata
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource
-from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
-from angee.graphql.ids import PublicID
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
@@ -40,30 +37,6 @@ class NoteType(AuthoredRefMixin, AngeeNode):
     permissions = permissions_field(("write", "share", "delete"))
 
 
-@strawberry.type
-class NoteDeletePreviewMutation:
-    """Authored delete-preview operation for notes."""
-
-    @strawberry.mutation(name="delete_note")
-    def delete_note(self, id: PublicID, confirm: bool = False) -> DeletePreview:
-        """Preview or confirm deletion of one note by public id."""
-
-        return delete_by_public_id(
-            Note,
-            str(id),
-            confirm=confirm,
-            queryset=Note.objects.for_write(),
-        )
-
-
-NoteDeletePreviewMutation = attach_delete_preview_metadata(
-    NoteDeletePreviewMutation,
-    model=Note,
-    node=NoteType,
-    field="delete_note",
-)
-
-
 _NOTE_RESOURCE = hasura_model_resource(
     NoteType,
     model=Note,
@@ -81,7 +54,7 @@ _NOTE_RESOURCE = hasura_model_resource(
 
 _NOTE_SCHEMA_BUCKET = {
     "query": [_NOTE_RESOURCE.query],
-    "mutation": [_NOTE_RESOURCE.mutation, NoteDeletePreviewMutation],
+    "mutation": [_NOTE_RESOURCE.mutation],
     "types": [NoteType, *_NOTE_RESOURCE.types],
 }
 

@@ -14,7 +14,7 @@ export function TagCategoriesPage(): React.ReactElement {
   const t = useTagsT();
   return (
     <ResourceList resource={CATEGORY_MODEL} placement="inline" routed>
-      <List resource={CATEGORY_MODEL} defaultGroup={{ field: "is_archived" }}>
+      <List resource={CATEGORY_MODEL}>
         <Column field="name" header={t("col.name")} />
         <Column field="max_per_record" header={t("col.maxPerRecord")} />
         <Column field="position" />
@@ -27,9 +27,6 @@ export function TagCategoriesPage(): React.ReactElement {
           <Field name="position" />
         </Group>
         <Field name="description" />
-        <Group savedOnly>
-          <Field name="is_archived" />
-        </Group>
       </Form>
     </ResourceList>
   );

@@ -68,6 +68,11 @@ class CredentialKindHandler:
     def validate(self, material: dict[str, Any]) -> None:
         """Require the kind's secret material before it is stored."""
 
+        self.validate_replacement(material)
+
+    def validate_replacement(self, material: Mapping[str, Any]) -> None:
+        """Require every replacement input, even for kinds allowing creation placeholders."""
+
         missing = {
             field: "This field is required."
             for field in self.input_material_fields()

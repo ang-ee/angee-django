@@ -107,7 +107,7 @@ test.each([
   </ResourceViewProvider></Provider></RouterContextProvider>);
   await screen.findByLabelText("Schedule chart");
   await waitFor(() => expect(drawing.props?.resources).toHaveLength(2));
-  if (props.selectable ?? props.presentation !== "embedded") {
+  if (props.selectable === true) {
     expect(screen.getByText("1 selected")).toBeDefined();
     expect(drawing.props?.selectedRows).toEqual(["lane-a"]);
     expect(drawing.props?.onSelectedRowsChange).toBeTypeOf("function");

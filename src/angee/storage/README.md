@@ -68,6 +68,12 @@ uploads and bulk actions), and `FilePreviewFrame` (preview, inline Details and
 the shell's Download/Trash control band, reading its own file). Upload state survives list/record
 navigation, and the shared explorer keeps its mounted tree and selection.
 
+A file's removal is the trash. The `files` resource declares `delete=False`;
+clients use the shared `trash_record` and `restore_record` verbs, both gated by
+the file's `delete` permission. Trashing keeps the row and backend bytes.
+For model callers, `File.delete()` moves the file to the trash and `File.purge()`
+permanently removes it. Folders retain their resource delete surface.
+
 Folders compose the native hierarchy and transferable ownership, scoped to their
 drive. Files, folders and FileAttachment edges retain changeset history; a merge
 can restore an attachment's former target without moving the file's bytes.

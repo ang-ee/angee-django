@@ -83,6 +83,7 @@ interface ActionArgBase extends Pick<
   | "kind"
   | "options"
   | "placeholder"
+  | "autoComplete"
   | "description"
   | "currencyField"
   | "statusDisplay"
@@ -203,9 +204,9 @@ export interface ActionProps extends ActionBinding {
   danger?: boolean;
   /** The verb on the collected form's submit button when it differs from the trigger's label ("Run report"). */
   submitLabel?: ReactNode;
-  /** Promote a frequent record verb out of the default Actions menu. */
+  /** Explicit placement wins over `primary` and band filling. Otherwise `primary` uses the toolbar; on a saved record the form's band fills to two buttons with its own visible, unplaced, non-danger verbs in declaration order, counting verbs already on the toolbar. Inside an Actions menu every verb stays in the menu. */
   placement?: "menu" | "toolbar";
-  /** The page's one primary verb: rendered as the primary button when it is on the toolbar and visible. */
+  /** Implies toolbar placement unless explicitly placed in the menu. The first visible toolbar action declaring `primary` gets primary styling (danger verbs keep their danger tone); verbs that fill the band stay secondary. */
   primary?: boolean;
   /** Static confirmation copy, or copy derived from the loaded record; a danger verb's copy takes the danger tone. */
   confirm?: ActionConfirm | ((record: Row) => ActionConfirm);

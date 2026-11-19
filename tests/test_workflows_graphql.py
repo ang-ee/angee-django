@@ -89,6 +89,7 @@ def test_execution_resources_expose_reads_without_engine_crud(schema):
         "insert_trigger_one",
         "update_trigger_by_pk",
         "delete_trigger_by_pk",
+        "trigger_delete",
         "save_workflow_draft",
         "publish_workflow",
     }

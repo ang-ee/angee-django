@@ -73,6 +73,8 @@ export function AddonsPage(): ReactElement {
   return (
     <ListView<AddonResourceRow>
       resource={ADDON_MODEL}
+      // Reflected addons have per-card lifecycle verbs, not selection actions.
+      selectable={false}
       columns={columns(t)}
       fields={CARD_FIELDS}
       textFilterField="name"

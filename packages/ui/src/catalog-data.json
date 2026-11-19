@@ -8622,6 +8622,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "useRelationPickerSearch",
+    "source": "packages/ui/src/views/relation/relation-options.ts",
+    "kind": "contribution",
+    "owner": "@angee/ui:RelationFieldWidget",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "useRelationSelectedOption",
     "source": "packages/ui/src/views/relation/relation-options.ts",
     "kind": "contribution",
@@ -8909,16 +8918,6 @@
   },
   {
     "package": "@angee/ui",
-    "name": "useTrashActions",
-    "source": "packages/ui/src/views/resource/trash.tsx",
-    "kind": "region",
-    "owner": "@angee/ui:RecordActionBar",
-    "region": "command-band",
-    "status": "stable",
-    "storyId": "library-owners--hooks"
-  },
-  {
-    "package": "@angee/ui",
     "name": "useTrashPrompt",
     "source": "packages/ui/src/views/resource/trash.tsx",
     "kind": "surface",
@@ -8934,15 +8933,6 @@
     "owner": "@angee/ui:DeletePreviewDialog",
     "status": "stable",
     "storyId": null
-  },
-  {
-    "package": "@angee/ui",
-    "name": "useTrashRowActions",
-    "source": "packages/ui/src/views/resource/trash.tsx",
-    "kind": "contribution",
-    "owner": "@angee/ui:Action",
-    "status": "stable",
-    "storyId": "library-owners--hooks"
   },
   {
     "package": "@angee/ui",

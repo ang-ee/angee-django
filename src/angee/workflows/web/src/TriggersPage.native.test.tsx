@@ -20,8 +20,7 @@ test("enable and disable dispatch the displayed trigger through native actions",
   await screen.findByText("Trigger enabled.");
   await waitFor(() => expect(screen.getByRole("checkbox", { name: "Enabled" }).getAttribute("aria-checked")).toBe("true"));
   expect(requests.find(({ fields }) => fields.includes("enable_workflow_trigger"))?.variables).toEqual({ id: "wft_review" });
-  fireEvent.click((await screen.findAllByRole("button", { name: "Actions" })).at(-1)!);
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Disable trigger" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Disable trigger" }));
   await screen.findByText("Trigger disabled.");
   expect(requests.find(({ fields }) => fields.includes("disable_workflow_trigger"))?.variables).toEqual({ id: "wft_review" });
 });

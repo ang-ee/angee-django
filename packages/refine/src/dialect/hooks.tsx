@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { useQueries, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+import { useQueries, type UseQueryResult } from "@tanstack/react-query";
 import {
   useCustomMutation,
   useDataProvider,
@@ -37,12 +37,18 @@ import {
   type ResourceSaveVariables,
 } from "../operations";
 import {
+  maybeOperationDocument,
   operationDocument,
   useOperationDocuments,
 } from "../operation-documents";
 import { useActiveDataProviderName } from "./data-provider-context";
-import { invalidateAuthoredQueries } from "../query-invalidation";
-import { useAuthoredQueryBatch, type AuthoredMutateOptions, type AuthoredQueryOptions } from "./authored-hooks";
+import {
+  useAuthoredMutation,
+  useAuthoredQueryBatch,
+  type AuthoredMutateOptions,
+  type AuthoredMutationOptions,
+  type AuthoredQueryOptions,
+} from "./authored-hooks";
 import type { TypedDocumentNode } from "../typed-document";
 import { graphqlDocumentIdentity } from "./wire";
 import { stableKey, useStableArray } from "../stable-deps";
@@ -161,7 +167,7 @@ export type ActionMutate = (
   options?: AuthoredMutateOptions,
 ) => Promise<ActionOutcome | undefined>;
 
-export interface UseActionMutationOptions {
+export interface UseActionMutationOptions extends Pick<AuthoredMutationOptions, "transient" | "errorNotification"> {
   dataProviderName?: string;
   /** Declared record argument. Defaults to `id`; null sends only explicit arguments. */
   idArgument?: string | null;
@@ -564,14 +570,20 @@ export function useActionMutation<TField extends string = string>(
   const dataProviderName =
     options.dataProviderName ?? activeDataProviderName ?? "default";
   const operationDocuments = useOperationDocuments();
-  const invalidate = useInvalidate();
-  const invalidateModels = useStableArray(options.invalidateModels ?? []);
-  const invalidates = options.invalidates ?? EMPTY_INVALIDATIONS;
-  const queryClient = useQueryClient();
-  const run = useCustomMutation<BaseRecord, HttpError, Record<string, unknown>>();
+  // Generated registry documents carry this action envelope. Keep missing-document
+  // validation at dispatch, so a not-yet-visible action need not have a document.
+  const document = maybeOperationDocument(operationDocuments, dataProviderName, "actions", field) as
+    TypedDocumentNode<Record<string, unknown>, Record<string, unknown>>;
+  const [run, state] = useAuthoredMutation(document, {
+    ...options,
+    dataProviderName,
+    shouldInvalidate: (data) => {
+      const outcome = extractActionOutcome(data, field);
+      return !outcome || outcome.ok || options.invalidateOnFailure === true;
+    },
+  });
   const mutate = useCallback<ActionMutate>(
     async (id, arguments_ = {}, callOptions) => {
-      const errorNotification = callOptions?.errorNotification;
       const idArgument = options.idArgument === undefined ? "id" : options.idArgument;
       const variables = idArgument === null ? { ...arguments_ } : { ...arguments_, [idArgument]: id };
       const request = actionRequest(field, variables, {
@@ -583,53 +595,18 @@ export function useActionMutation<TField extends string = string>(
           field,
         ),
       });
-      const response = await run.mutateAsync({
-        url: "",
-        method: "post",
-        values: variables,
-        dataProviderName: request.dataProviderName,
-        meta: request.meta,
-        ...(errorNotification === false ? { errorNotification } : {}),
-      });
-      const outcome =
-        extractActionOutcome(response.data, request.root) ?? undefined;
-      // A domain failure (ok=false) normally mutated nothing — skip invalidation
-      // so a failed write never refreshes caches (the same posture as the
-      // authored hooks' errorFrom gating) — unless the verb declares that its
-      // failures are recorded state.
-      if (!outcome || outcome.ok || options.invalidateOnFailure) {
-        await Promise.all([
-          ...invalidates.map((target) => invalidate(target)),
-          ...(invalidateModels.length > 0
-            ? [invalidateAuthoredQueries(queryClient, invalidateModels)]
-            : []),
-        ]);
-      }
-      return outcome;
+      return extractActionOutcome(await run(variables, callOptions), request.root) ?? undefined;
     },
     [
       dataProviderName,
       field,
-      invalidate,
-      invalidateModels,
-      invalidates,
       operationDocuments,
       options.idArgument,
-      options.invalidateOnFailure,
-      queryClient,
-      run.mutateAsync,
+      run,
     ],
   );
-  return [
-    mutate,
-    {
-      fetching: run.mutation.isPending,
-      error: run.mutation.error as Error | null,
-    },
-  ];
+  return [mutate, state];
 }
-
-const EMPTY_INVALIDATIONS: readonly InvalidateParams[] = [];
 
 function errorFromHttp(error: unknown): Error | null {
   if (!error) return null;

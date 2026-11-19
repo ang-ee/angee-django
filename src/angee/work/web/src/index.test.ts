@@ -32,7 +32,7 @@ describe("work addon manifest", () => {
   test("gates the task triage verbs on the task's server-projected admission", () => {
     // Start and Return read the task's server-projected admission, whichever form hosts them.
     expect(work.containers?.["projects.Task#actions-menu"]).toMatchObject({
-      "work.task-triage-actions": { requiredFields: ["task_actions"] },
+      "work.task-triage-actions": { requiredFields: ["task_actions", "revision"] },
     });
   });
 });

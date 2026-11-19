@@ -41,7 +41,10 @@ export function createAngeeAccessControlProvider(
       if (!metadata) return { can: true };
 
       const capability = capabilityForRefineAction(action);
-      const can = metadata.capabilities.includes(capability);
+      // A resource that deletes only through its preview root (a separately
+      // gated delete, `delete=False`) is still a delete surface.
+      const can = metadata.capabilities.includes(capability)
+        || (capability === "delete" && metadata.capabilities.includes("deletePreview"));
       return can
         ? { can: true }
         : {

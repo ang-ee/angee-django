@@ -1,4 +1,4 @@
-"""Delivery, feed and webform contracts on emitted messaging models, one composed host per profile."""
+"""Delivery admission, feed and webform contracts on emitted models, one composed host per profile."""
 
 from pathlib import Path
 
