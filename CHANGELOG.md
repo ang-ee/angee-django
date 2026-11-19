@@ -10,6 +10,17 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Parties proposes a same-person pair for every two live parties linked to one
+  address (`PartyManager.reconcile_same_as`, over `same_person_links`). A party
+  is linked when it holds a handle of that normalized value or when a source's
+  standing statement names one for it, a claim below review confidence
+  included; before, only two holders of two spellings were proposed, so one
+  address claimed by a second source's party was never proposed. Links parties'
+  own suggester rules infer (`PartyManager.SUGGESTER_RULES`: a shared name, a
+  mail domain, a twin spelling, a signature) link nobody. The job now reads every
+  link in one pass and the existing pairs in one query, and withdraws exactly the
+  rule's pairs no link supports.
+
 - Parties: a handle's holder is always the projection of a statement. A holder
   written onto the row with no statement behind it lost its address the moment
   anything resolved the handle, a claim below review confidence included.

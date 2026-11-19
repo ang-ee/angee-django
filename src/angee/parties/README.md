@@ -70,9 +70,15 @@ Source admission follows RecordLinks and seeded Rule/Seed role membership.
 Sources gain no private reads. Imports supply their
 Integration and observed links; parties binds targets in the application transaction.
 
-Identity matching writes normal RULE same_as statements on the ordered Party
-pair, skipping current assertions and dismissals before each run's cap without
-continuation state. A preferred no_value is the symmetric anti-link; preferred value
+Identity matching (`PartyManager.reconcile_same_as`) writes normal RULE same_as
+statements on the ordered Party pair for every two live parties linked to one
+address: a party holds a handle of that normalized value, or a source's standing
+statement names one for it (a claim below review confidence counts). A link
+parties' own suggester rules inferred (a shared name, a domain, a twin spelling, a
+signature) counts for nothing, so a shared name alone proposes no one. The job
+skips current assertions and dismissals before each run's cap without
+continuation state, and withdraws its statements no link supports any more. A
+preferred no_value is the symmetric anti-link; preferred value
 awaits a person's survivor choice. `survivor.merge` owns the changeset and redirect;
 pointing owners union statements, retaining collisions as superseded. Where the
 records disagree on a merge field, the merging person confirms the value kept

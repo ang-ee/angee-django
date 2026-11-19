@@ -12,6 +12,7 @@ from rebac import actor_context, system_context
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
 from angee.graphql.testing import capture_broadcasts
 from angee.messaging.testing.models import Handle, Party, Person
+from tests.conftest import create_user
 
 
 def _same_as_pair(owner: Any) -> set[Any]:
@@ -110,3 +111,128 @@ def test_reverting_a_merge_publishes_the_survivors_restored_values_on_its_record
         and "display_name" in event["changed_fields"]
         for event in sent
     ), sent
+
+
+def _address(owner: Any, value: str = "ada@example.com", **fields: Any) -> Any:
+    """One email address row, with no holder yet."""
+
+    with system_context(reason="same_as address"):
+        return Handle._base_manager.create(platform="email", value=value, created_by=owner, **fields)
+
+
+def _holder(owner: Any, handle: Any, name: str = "Ada Example") -> Any:
+    """A party whose own statement of ``handle`` decides it: the address's holder."""
+
+    with system_context(reason="same_as holder"):
+        party = Party._base_manager.create(display_name=name, created_by=owner)
+        Party.objects.assert_handle(party, handle, asserted_by=owner)
+    return party
+
+
+def _claimant(owner: Any, handle: Any, name: str = "A. Example") -> Any:
+    """Another source's party, which claims ``handle`` below review confidence as an importer does."""
+
+    with system_context(reason="same_as claimant"):
+        party = Party._base_manager.create(display_name=name, created_by=owner)
+        Party.objects.propose_claimed_handle_as_system(party, handle, evidence=handle, reason="tests.parties.claim")
+    return party
+
+
+def _pairs() -> list[tuple[set[Any], tuple[Any, ...]]]:
+    """Each pair awaiting review, as its two parties and the handles it cites."""
+
+    with system_context(reason="same_as review"):
+        return [({pair.left.pk, pair.right.pk}, pair.handles) for pair in Party.objects.same_as_pairs()]
+
+
+def _reconcile() -> int:
+    with system_context(reason="same_as reconcile"):
+        return Party.objects.reconcile_same_as()
+
+
+def test_a_holder_and_a_claimant_of_one_address_are_paired(db: None) -> None:
+    """One address row: its holder and a party a source states it for are proposed as one person."""
+
+    del db
+    owner = create_user("same-as-holder-claimant")
+    handle = _address(owner)
+    holder, claimant = _holder(owner, handle), _claimant(owner, handle)
+
+    assert (_reconcile(), _reconcile()) == (1, 0)
+    assert _pairs() == [({holder.pk, claimant.pk}, (handle,))]
+
+
+def test_two_claimants_of_one_address_nobody_holds_are_paired(db: None) -> None:
+    del db
+    owner = create_user("same-as-two-claimants")
+    handle = _address(owner)
+    first, second = _claimant(owner, handle, "Ada Example"), _claimant(owner, handle, "A. Example")
+
+    assert _reconcile() == 1
+    assert _pairs() == [({first.pk, second.pk}, (handle,))]
+
+
+def test_links_parties_infer_from_a_shared_name_pair_nobody(db: None) -> None:
+    """Two same-named people suggested for one unresolved handle are not proposed as one person."""
+
+    del db
+    owner = create_user("same-as-inferred")
+    with system_context(reason="same_as inferred links"):
+        phone = Handle._base_manager.create(
+            platform="phone", value="+442079460958", display_name="Ada Lovelace", created_by=owner,
+        )
+    for value in ("ada@example.com", "lovelace@example.org"):
+        _holder(owner, _address(owner, value, display_name="Ada Lovelace"), name="Ada Lovelace")
+    with system_context(reason="same_as inferred links"):
+        assert Party.objects.reconcile_suggestions() == 2
+        assert Party.statements.model._base_manager.filter(handle=phone, confidence=0.4).count() == 2
+
+    assert _reconcile() == 0
+    assert _pairs() == []
+
+
+def test_a_link_a_person_dismissed_pairs_nobody(db: None) -> None:
+    del db
+    owner = create_user("same-as-dismissed-link")
+    handle = _address(owner)
+    _holder(owner, handle)
+    claimant = _claimant(owner, handle)
+    claim = Party.statements.model._base_manager.get(subject=claimant, handle=handle)
+    claim.with_actor(owner).dismiss()
+
+    assert _reconcile() == 0
+    assert _pairs() == []
+
+
+def test_a_pair_kept_separate_is_not_proposed_again(db: None) -> None:
+    del db
+    owner = create_user("same-as-kept-separate")
+    handle = _address(owner)
+    holder, claimant = _holder(owner, handle), _claimant(owner, handle)
+    assert _reconcile() == 1
+
+    Party.objects.apply_same_as_pair(
+        left_id=holder.public_id, right_id=claimant.public_id, survivor="left", action="keep_separate", actor=owner,
+    )
+
+    assert _reconcile() == 0
+    assert _pairs() == []
+    with system_context(reason="same_as readback"):
+        assert Party.same_as.kept_separate(holder, claimant)
+
+
+def test_withdrawing_the_claim_withdraws_the_pair(db: None) -> None:
+    del db
+    owner = create_user("same-as-withdrawn-claim")
+    handle = _address(owner)
+    holder, claimant = _holder(owner, handle), _claimant(owner, handle)
+    assert _reconcile() == 1
+
+    with system_context(reason="the source drops the address"):
+        Party.statements.withdraw(Party.objects.rule_source("source_sender"), [claimant])
+
+    assert _reconcile() == 1
+    assert _pairs() == []
+    with system_context(reason="same_as readback"):
+        pair = Party.same_as.model._base_manager.get(left_id=min(holder.pk, claimant.pk))
+        assert [row.status for row in pair.statements.all()] == ["withdrawn"]

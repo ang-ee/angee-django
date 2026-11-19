@@ -20,14 +20,27 @@ from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
-from itertools import chain, combinations, groupby, islice
-from typing import TYPE_CHECKING, Any, NamedTuple, Self, TypedDict
+from itertools import chain, combinations, groupby
+from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, Self, TypedDict
 
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import IntegrityError, models, transaction
-from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Prefetch, Q, Subquery, TextField, Value, When
+from django.db.models import (
+    Case,
+    Count,
+    Exists,
+    F,
+    IntegerField,
+    OuterRef,
+    Prefetch,
+    Q,
+    Subquery,
+    TextField,
+    Value,
+    When,
+)
 from django.db.models.functions import Coalesce, NullIf
 from django.db.models.lookups import Exact
 from django.utils.crypto import salted_hmac
@@ -984,10 +997,90 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
         return apps.get_model("parties", "Party").statements.handles()
 
+    SUGGESTER_RULES: ClassVar[tuple[str, ...]] = ("normalized_twin", "email_domain", "display_name", "signature_phone")
+    """Parties' rules that infer a handle link from other evidence, by :meth:`rule_source` key.
+
+    A twin spelling (:meth:`suggest_for`), an organization's mail domain
+    (:meth:`suggest_for`), a shared full name and a signature
+    (:meth:`reconcile_suggestions`): their links are guesses, never a source's
+    statement about its own record, so they link nobody to an address
+    (:meth:`same_person_links`).
+    """
+
     @staticmethod
     def rule_source(key: str) -> Any:
         with system_context(reason="parties.rule"):
             return apps.get_model("provenance", "Rule").objects.get(key=f"parties.{key}")
+
+    def same_person_links(self) -> Any:
+        """Each link of a live party to an address, as ``(platform, normalized value, party id, handle id)``.
+
+        A party is linked to an address when it holds a handle row of that
+        normalized value, or when a source states that handle for it and the
+        statement stands (asserted, current, a value, not dismissed by a person),
+        whatever its confidence: an importer's claim, a directory's or an import's
+        statement, a person's own. A link one of parties' own
+        :attr:`SUGGESTER_RULES` inferred is no link. Live means neither trashed nor
+        merged away. Rows come ordered by address, then party and handle, so one
+        address's links are adjacent; a held and stated link repeats its row.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        statements = self.handle_statements()
+        stance = statements.model
+        suggesters = [
+            str(to_subject_ref(rule))
+            for rule in apps.get_model("provenance", "Rule")
+            ._base_manager.filter(key__in=[f"parties.{key}" for key in self.SUGGESTER_RULES])
+            .order_by("pk")
+        ]
+        dismissed = statements.filter(
+            subject_id=OuterRef("subject_id"),
+            handle_id=OuterRef("handle_id"),
+            status=stance.StatementStatus.ASSERTED,
+            rank=stance.StatementRank.PREFERRED,
+            snak=stance.StatementSnak.NO_VALUE,
+        )
+        columns = ("link_platform", "link_value", "link_party", "link_handle")
+        held = (
+            handle_model._base_manager.exclude(normalized_value="")
+            .filter(merged_into__isnull=True, party__is_trashed=False, party__merged_into__isnull=True)
+            .annotate(
+                link_platform=F("platform"), link_value=F("normalized_value"), link_party=F("party_id"),
+                link_handle=F("pk"),
+            )
+            .values_list(*columns)
+            .order_by()
+        )
+        stated = (
+            statements.filter(
+                status=stance.StatementStatus.ASSERTED,
+                snak=stance.StatementSnak.VALUE,
+                handle__merged_into__isnull=True,
+                subject__is_trashed=False,
+                subject__merged_into__isnull=True,
+            )
+            .exclude(handle__normalized_value="")
+            .exclude(asserted_by__in=suggesters)
+            .exclude(Exists(dismissed))
+            .annotate(
+                link_platform=F("handle__platform"), link_value=F("handle__normalized_value"),
+                link_party=F("subject_id"), link_handle=F("handle_id"),
+            )
+            .values_list(*columns)
+            .order_by()
+        )
+        return held.union(stated, all=True).order_by(*columns)
+
+    def _same_person_candidates(self) -> Iterable[tuple[Any, Any, tuple[Any, ...]]]:
+        """Yield every two parties linked to one address, ordered, with the handle ids that link them."""
+
+        for _address, rows in groupby(self.same_person_links().iterator(), key=lambda row: row[:2]):
+            linked: defaultdict[Any, dict[Any, None]] = defaultdict(dict)
+            for _platform, _value, party_id, handle_id in rows:
+                linked[party_id][handle_id] = None
+            for left_id, right_id in combinations(sorted(linked), 2):
+                yield left_id, right_id, tuple(dict.fromkeys((*linked[left_id], *linked[right_id])))
 
     def assert_handle(
         self,
@@ -1253,64 +1346,50 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         return None
 
     def reconcile_same_as(self, *, limit: int = 1000) -> int:
-        """Process at most ``limit`` unsupported or unasserted pairs per run.
+        """Propose every two parties linked to one address as one person; withdraw what lost its link.
 
-        Current assertions and dismissals are skipped before the cap, so retained
-        statements advance discovery without continuation state. Withdrawal
-        checks support independently; unvisited pairs are never withdrawn.
+        Links are :meth:`same_person_links`. Each pair is stated once by the
+        ``parties.same_as`` rule, citing the handles that link it; a pair holding
+        any current assertion or a person's keep-separate decision is skipped
+        before the cap, so retained statements advance discovery without
+        continuation state. One pass reads every link, so the rule's statements
+        no link supports any more are withdrawn exactly. Each run withdraws and
+        proposes at most ``limit`` pairs between them.
         """
 
         limit = max(0, min(int(limit), 1000))
         if not limit:
             return 0
         source = self.rule_source("same_as")
-        handles = (
-            apps.get_model("parties", "Handle")
-            ._base_manager.exclude(normalized_value="")
-            .filter(
-                party__merged_into__isnull=True,
-                party__is_trashed=False,
-                party__isnull=False,
-            )
-            .order_by("platform", "normalized_value", "party_id", "pk")
-        )
         source_ref = to_subject_ref(source)
         statements = self.model.same_as.model.statements
         current = statements.current().filter(status=statements.model.StatementStatus.ASSERTED)
-        shared = handles.filter(party_id=OuterRef("subject__left_id")).filter(
-            Exists(
-                handles.filter(
-                    party_id=OuterRef(OuterRef("subject__right_id")),
-                    platform=OuterRef("platform"),
-                    normalized_value=OuterRef("normalized_value"),
-                )
-            )
-        )
-        unsupported = list(
-            current.filter(asserted_by=str(source_ref))
-            .exclude(Exists(shared))
+        decided = set(current.values_list("subject__left_id", "subject__right_id"))
+        supported: set[tuple[Any, Any]] = set()
+        proposals: list[tuple[Any, Any, tuple[Any, ...]]] = []
+        for left_id, right_id, handle_ids in self._same_person_candidates():
+            supported.add((left_id, right_id))
+            if (left_id, right_id) not in decided and len(proposals) < limit:
+                decided.add((left_id, right_id))
+                proposals.append((left_id, right_id, handle_ids))
+        unsupported = [
+            subject_id
+            for subject_id, left_id, right_id in current.filter(asserted_by=str(source_ref))
             .order_by("subject__left_id", "subject__right_id")
-            .values_list("subject_id", flat=True)[:limit]
-        )
+            .values_list("subject_id", "subject__left_id", "subject__right_id")
+            if (left_id, right_id) not in supported
+        ][:limit]
         changed = statements.withdraw(source, unsupported) if unsupported else 0
-
-        def candidates() -> Iterable[Any]:
-            for _, grouped in groupby(handles.iterator(), key=lambda row: (row.platform, row.normalized_value)):
-                parties: defaultdict[Any, list[Any]] = defaultdict(list)
-                for handle in grouped:
-                    parties[handle.party_id].append(handle)
-                for left_id, right_id in combinations(sorted(parties), 2):
-                    if not current.filter(subject__left_id=left_id, subject__right_id=right_id).exists():
-                        yield left_id, right_id, (*parties[left_id], *parties[right_id])
-
-        for left_id, right_id, evidence in islice(candidates(), limit - changed):
+        handles = apps.get_model("parties", "Handle")._base_manager
+        for left_id, right_id, handle_ids in proposals[: limit - changed]:
             left, right = (self.model._base_manager.get(pk=pk) for pk in (left_id, right_id))
+            evidence = handles.in_bulk(handle_ids)
             pair = self.model.same_as.for_pair(left.with_actor(source_ref), right)
             pair.statements.set(
                 aspect="same_as",
                 values={},
                 asserted_by=source,
-                evidence=[EvidenceReference.of(row) for row in evidence],
+                evidence=[EvidenceReference.of(evidence[pk]) for pk in handle_ids],
             )
             changed += 1
         return changed
