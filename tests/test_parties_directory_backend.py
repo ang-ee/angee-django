@@ -709,6 +709,32 @@ def test_by_default_a_contact_whose_address_the_owners_person_holds_lands_on_a_n
     assert link.target_object_id is None
 
 
+def test_by_default_a_contact_only_claims_each_address_someone_else_is_linked_to_and_proposes_them(pull: Pull) -> None:
+    """Whoever holds an address, claims it or signs in with it keeps it; each is proposed as the contact's person."""
+
+    holder, held = _existing(_user("someone-else"), email="ada@work.example")
+    claimant = Person.objects.create(display_name="Ada (claimed)", created_by=pull.directory.owner)
+    claimed = Handle.objects.upsert(platform="email", value="ada@home.example", created_by_id=pull.directory.owner_id)
+    rule = Party.objects.rule_source("display_name")
+    Party.objects.assert_handle(claimant, claimed, asserted_by=rule, confidence=Party.CLAIM_CONFIDENCE)
+    account = get_user_model().objects.create_user(username="ada-signin", email="ada@example.com")
+    signer = Person.objects.create(display_name="Ada (account)", created_by=pull.directory.owner, user=account)
+    addresses = ("ada@example.com", "ada@work.example", "ada@home.example")
+    pull.source.put("ada", replace(_ADA, emails=tuple((address, "home", False) for address in addresses)))
+
+    pull.sync()
+
+    ada = pull.link("ada")
+    minted = ada.target_object_id
+    assert minted not in (None, str(holder.pk), str(claimant.pk), str(signer.pk))
+    assert [_claim_confidences(minted, address) for address in addresses] == [[Party.CLAIM_CONFIDENCE]] * 3
+    assert {pair: evidence for pair, _status, evidence in _proposals()} == {
+        frozenset({minted, str(holder.pk)}): _refs(ada, held),
+        frozenset({minted, str(claimant.pk)}): _refs(ada, claimed),
+        frozenset({minted, str(signer.pk)}): _refs(ada),
+    }
+
+
 @pytest.mark.usefixtures("adoption")
 def test_a_pull_only_contact_adopts_the_person_its_email_names_when_the_owner_owns_them(pull: Pull) -> None:
     """The record attaches to the existing person, keeps one handle row, and cites the handle as its evidence.

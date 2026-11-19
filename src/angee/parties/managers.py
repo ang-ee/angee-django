@@ -1363,10 +1363,11 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     def propose_directory_match(self, person: Any, other: Any, *, evidence: Sequence[Any]) -> Any | None:
         """Propose, as the ``directory_match`` rule, that a directory's ``person`` and ``other`` are one person.
 
-        A directory proposes it for each other person a contact's address names
-        (:meth:`ingest_contact`: a person a limit refused the contact's adoption of,
-        or one a collision leaves holding the address) and for the person of
-        another record the source merged into it (``DirectoryBackend.apply_record``).
+        A directory proposes it for each other person a contact's address names,
+        whoever holds, claims or signs in with it, whether or not the directory
+        adopts (:meth:`ingest_contact`, the one call site for an address), and for
+        the person of another record the source merged into it
+        (``DirectoryBackend.apply_record``).
         ``evidence`` names what ties them (the contact's link, then the handle its
         email found ``other`` by, or the merged record's link). The
         pair joins the same-as review (:meth:`PartyQuerySet.same_as_pairs`), where a
@@ -2833,13 +2834,15 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         contact's locks, taken first. ``through`` is the handle an adoption
         found ``target`` by: the identity statement cites it as evidence,
         restated on every later record, and the contact's spelling of its address
-        lands on it. On a pull-only stream ``lookup`` (the page's,
-        :meth:`lookup_emails`; else one read here) says who each address names:
-        an email someone else holds, or an account signs in with, is only
-        claimed, for review, and each such person is proposed as the contact's
-        same person (:meth:`_contested_emails`, :meth:`propose_directory_match`),
-        so a contact never moves an address away from its holder; the addresses
-        it lands are marked changed in the lookup. A link leaving a person
+        lands on it. On a pull-only stream, whether or not its directory adopts,
+        ``lookup`` (the page's, :meth:`lookup_emails`; else one read here) says
+        who each address names: an email another person is linked to (holds it,
+        claims it, keeps it as a lapsed holder, or signs in with it) is only
+        claimed, for review, and each such live person is proposed here as the
+        contact's same person, the directory's one proposal for an address
+        (:meth:`_contested_emails`, :meth:`propose_directory_match`), so a
+        contact never moves an address away from anyone; the addresses it lands
+        are marked changed in the lookup. A link leaving a person
         withdraws what it stated on them before it binds its new person (the
         addresses it withdrew are read again before the contact's are judged),
         and,

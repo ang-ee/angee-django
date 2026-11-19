@@ -877,9 +877,9 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         then :meth:`_contact_target` decides its person once, the ingest binds a
         person new to the link only where the directory adopts and adoption
         admits them (the page's lookup keeps the verdict), cites the handle an
-        adoption found them by, claims for review
-        an address someone else holds or an account signs in with and proposes
-        them, withdraws what neither its link nor a replaced link still supports,
+        adoption found them by, claims for review an address another person is
+        linked to and proposes them, withdraws what neither its link nor a
+        replaced link still supports,
         and, for a link leaving a person, what it stated there. Each other person
         the contact's links name is proposed for the same-as review as the landed
         person's same person
