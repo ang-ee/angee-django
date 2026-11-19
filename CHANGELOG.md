@@ -115,6 +115,14 @@ live in code docstrings.
   (`parties.Directory#create`, the permission `Directory.objects.connect`
   checks), so the Connect menu is absent for an identity the mutation refuses.
 
+- `@angee/ui`: the `password` widget is the masked entry of a secret that is not
+  the person's own sign-in password, and tells the browser so
+  (`autocomplete="new-password"`): a vendor key after a name field no longer
+  reads as a login form the browser fills with the console's saved sign-in. The
+  sign-in form keeps its own `current-password` hint. The widget's read form
+  shows nothing for an empty value instead of a mask. The `textarea` widget shows
+  the field's placeholder, and its label only when the field declares none.
+
 - Sharing a directory shares its contacts. `parties/directory` has a stored,
   grantable `contact_reader` relation (shared through the record-access surface
   under the directory's `write`) and a `contact_read` permission: its grantees and
