@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ResourceQuery, rowPublicId, useModelMetadata, type Row } from "@angee/metadata";
+import { ResourceQuery, rowPublicId, unarchivedFilter, useModelMetadata, type Row } from "@angee/metadata";
 import { MAX_PAGE_SIZE } from "@angee/refine";
 import { getCoreRowModel, useReactTable } from "@tanstack/react-table";
 import { useNavigate } from "@tanstack/react-router";
@@ -73,6 +73,7 @@ export function GanttCollectionSurface<TRow extends Row>({
   const label = labelField ?? dataResource?.recordRepresentation ?? "id";
   const fields = useValueStable([...(surfaceProps.fields ?? []), startField, endField, label, ...(toneField ? [toneField] : [])]);
   const facts = useResourceViewQueryFacts({
+    embedded: surfaceProps.embedded,
     columns, fields, filter: surfaceProps.filter, order: surfaceProps.order,
     resourceView, modelMetadata: metadata, laneSource, groupStack,
   });
@@ -107,16 +108,17 @@ export function GanttCollectionSurface<TRow extends Row>({
         throw new Error(`Gantt marker field "${markerSpec.lane}" must reference the lane resource "${laneSource.relation.resource}".`);
       }
       const label = markerSpec.label ?? markerMetadata.resource.recordRepresentation ?? "id";
+      const filter = ganttLaneFilter(markerQuery, markerSpec.lane, lanes.map((lane) => lane.value), markerSpec.filter);
       return {
         fields: ["id", markerSpec.date, label, ...(markerSpec.tone ? [markerSpec.tone] : []), ...markerQuery.selection([{ field: markerSpec.lane }])],
-        filter: ganttLaneFilter(markerQuery, markerSpec.lane, lanes.map((lane) => lane.value), markerSpec.filter),
+        filter: surfaceProps.embedded ? filter : unarchivedFilter(markerMetadata.resource, filter),
         order: markerQuery.fields.id?.sort ? { id: "ASC" as const } : undefined,
         error: null,
       };
     } catch (cause) {
       return { fields: [], filter: undefined, order: undefined, error: errorFromUnknown(cause) };
     }
-  }, [markerSpec, markerMetadata, laneSource.relation.resource, lanes]);
+  }, [markerSpec, markerMetadata, laneSource.relation.resource, lanes, surfaceProps.embedded]);
   const markerFields = useValueStable(markerSource.fields);
   const markers = useGanttRecords({
     resource: markerMetadata?.resource ?? null, fields: markerFields, filter: markerSource.filter, order: markerSource.order,

@@ -1,3 +1,4 @@
+import type { CrudFilter } from "@refinedev/core";
 import { FILTER_OPERATORS, type FilterOperator } from "./query-schema.js";
 import { QueryParseError } from "./query-error.js";
 import type { FilterValue, QueryFilter } from "./query.js";
@@ -14,6 +15,11 @@ export class Filter {
   static combineOptional(left: unknown, right: unknown): QueryFilter | undefined {
     const value = Filter.combine(left, right);
     return Object.keys(value).length ? value : undefined;
+  }
+  /** Match an exact predicate field in any Boolean branch, never a relation's
+   * same-named leaf. Native Refine predicates keep their own operator vocabulary. */
+  static references(filter: QueryFilter | readonly CrudFilter[] | undefined, field: string): boolean {
+    return filterFieldNames(Array.isArray(filter) ? filter : Filter.from(filter).value).includes(field);
   }
   static facetFromFilter(value: QueryFilter): FilterFacet | null {
     const filter = Filter.from(value);
@@ -99,15 +105,8 @@ export class Filter {
   /** Keep declared fields through nested Boolean branches without losing their grouping. */
   onlyFields(fields: Iterable<string>): QueryFilter {
     const kept = new Set(fields);
-    const names = (filter: QueryFilter): string[] =>
-      Object.entries(filter).flatMap(([field, operand]) => {
-        if (field === "AND" || field === "OR")
-          return (operand as readonly QueryFilter[]).flatMap(names);
-        if (field === "NOT") return names(operand as QueryFilter);
-        return [field];
-      });
     return this.withoutFields(
-      names(this.value).filter((field) => !kept.has(field)),
+      filterFieldNames(this.value).filter((field) => !kept.has(field)),
     );
   }
   /** An authored preset replaces the selected fields as a unit. Single-value facets toggle individually. */
@@ -170,6 +169,21 @@ export class Filter {
     const value = this.value[field];
     return isFilterObject(value) ? value : undefined;
   }
+}
+
+/** Shared predicate walk for field projection and reference checks. */
+function filterFieldNames(filter: QueryFilter | readonly CrudFilter[]): string[] {
+  if (Array.isArray(filter)) {
+    return (filter as readonly CrudFilter[]).flatMap((predicate) =>
+      "field" in predicate ? [predicate.field] : filterFieldNames(predicate.value),
+    );
+  }
+  return Object.entries(filter).flatMap(([field, operand]) => {
+    if (field === "AND" || field === "OR")
+      return (operand as readonly QueryFilter[]).flatMap(filterFieldNames);
+    if (field === "NOT") return filterFieldNames(operand as QueryFilter);
+    return [field];
+  });
 }
 
 /** Structural boundary only; executable field/operator checks require a ResourceQuery. */

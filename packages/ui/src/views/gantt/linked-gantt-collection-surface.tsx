@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ResourceQuery, rowPublicId, useModelMetadata, type Row } from "@angee/metadata";
+import { ResourceQuery, rowPublicId, unarchivedFilter, useModelMetadata, type Row } from "@angee/metadata";
 import { MAX_PAGE_SIZE } from "@angee/refine";
 import { useNavigate } from "@tanstack/react-router";
 import { useInAppNavigator } from "../../lib/in-app-link";
@@ -57,7 +57,7 @@ export function LinkedGanttCollectionSurface<TRow extends Row>({
     return field.row.paths;
   }, [gantt.current, laneQuery]);
   const laneFields = useValueStable([...(surfaceProps.fields ?? []), laneLabel, ...currentPaths, ...(gantt.lane?.fields ?? [])]);
-  const laneFacts = useResourceViewQueryFacts({ columns, fields: laneFields, order: surfaceProps.order, resourceView, modelMetadata });
+  const laneFacts = useResourceViewQueryFacts({ embedded: surfaceProps.embedded, columns, fields: laneFields, filter: surfaceProps.filter, order: surfaceProps.order, resourceView, modelMetadata });
   const pageSize = Math.min(MAX_PAGE_SIZE, resourceView.state.pagination.pageSize);
   const scope = React.useMemo(() => ({ filter: laneFacts.mergedFilter, order: laneFacts.sortOrder,
     page: resourceView.state.pagination.pageIndex + 1, pageSize }),
@@ -71,15 +71,16 @@ export function LinkedGanttCollectionSurface<TRow extends Row>({
       if (barQuery.relation(linked.lane)?.model !== laneResource?.modelLabel) {
         throw new Error(`Gantt linked field "${linked.lane}" must reference "${laneResource?.modelLabel}".`);
       }
+      const filter = ganttLaneFilter(barQuery, linked.lane, laneIds, linked.filter);
       return {
         fields: [barQuery.contract.identity.field, gantt.start, gantt.end, barLabel, ...(gantt.tone ? [gantt.tone] : []), ...barQuery.selection([{ field: linked.lane }])],
-        filter: laneIds.length ? ganttLaneFilter(barQuery, linked.lane, laneIds, linked.filter) : undefined,
+        filter: surfaceProps.embedded ? filter : unarchivedFilter(barResource, filter),
         error: null,
       };
     } catch (cause) {
       return { fields: [], filter: undefined, error: errorFromUnknown(cause) };
     }
-  }, [barQuery, laneQuery, linked, gantt.start, gantt.end, gantt.tone, barLabel, laneIds, laneResource?.modelLabel]);
+  }, [barQuery, barResource, laneQuery, linked, gantt.start, gantt.end, gantt.tone, barLabel, laneIds, laneResource?.modelLabel, surfaceProps.embedded]);
   const barFields = useValueStable(barSource.fields);
   const bars = useGanttRecords({ resource: barResource, fields: barFields, filter: barSource.filter,
     enabled: Boolean(barResource && laneIds.length && !barSource.error) });

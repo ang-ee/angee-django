@@ -12,6 +12,16 @@ import { expect, test } from "vitest";
 import { columnsWithMetadataDefaults } from "./model-metadata-defaults";
 import { requestedFieldPaths } from "./resource-view-codecs";
 
+test("archivable rows carry their flag beside identity without a declared column", () => {
+  const resource = testDataResource("example.Record", {
+    fields: [field("name", "scalar"), field("retired", "scalar", { scalar: "Boolean", archivable: true })],
+    query: testResourceQuery({ identity: { field: "public_key" }, fields: { name: testQueryField("name") } }),
+  });
+  const model = schemaFieldMetadataFromDataResources([resource]).labels[resource.modelLabel]!;
+  expect(requestedFieldPaths([{ field: "name" }], undefined, model)).toEqual(["public_key", "retired", "name"]);
+  expect(requestedFieldPaths([{ field: "retired" }], ["retired"], model)).toEqual(["public_key", "retired"]);
+});
+
 test("selects native relation representation leaves for resolved sublines", () => {
   const invoice = testDataResource("billing.Invoice", {
     fields: [

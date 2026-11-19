@@ -23,7 +23,7 @@ import {
   useRelationQuickCreate,
   type RelationDialogState,
 } from "./RelationRecordDialog";
-import { relationSelectedOption, useRelationOptions, useRelationSelectedOptions } from "./relation-options";
+import { relationSelectedOption, useRelationPickerSearch, useRelationSelectedOptions } from "./relation-options";
 
 export interface RelationMultiFieldWidgetProps {
   /** Related records (`{ id, … }`) or their public ids, in any mix. */
@@ -93,7 +93,7 @@ export function RelationMultiFieldWidget({
   const [searchText] = useDebounce(search, 250);
   const forms = useRelationForms(relation, create);
   const quickCreate = useRelationQuickCreate(forms.create);
-  const { options, list } = useRelationOptions(relation, {
+  const { options, list } = useRelationPickerSearch(relation, {
     enabled: !readOnly,
     filters,
     where,

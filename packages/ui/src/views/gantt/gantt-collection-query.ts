@@ -15,7 +15,7 @@ export function ganttLaneFilter(query: ResourceQuery, field: string, lanes: read
     if (!filter) throw new Error(`Gantt row field "${field}" cannot filter its related rows.`);
     return filter;
   });
-  return Filter.combineOptional(baseFilter, { OR: filters });
+  return Filter.combine(baseFilter, { OR: filters });
 }
 
 /** Load every page on the selected lanes, shared by bars and point markers. */

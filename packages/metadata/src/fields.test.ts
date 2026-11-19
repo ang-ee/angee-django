@@ -1,5 +1,5 @@
 import { testDataResource, testQueryField, testResourceQuery } from "./testing";
-import { resourceOrderFieldForPath, trashFlagField } from "./fields";
+import { archiveFlagField, resourceOrderFieldForPath, trashFlagField } from "./fields";
 import { describe, expect, test } from "vitest";
 
 import {
@@ -186,4 +186,17 @@ test("the trashable facet names a resource's trash flag field", () => {
   expect(trashFlagField(trashable)).toBe("is_trashed");
   expect(trashFlagField(archivable)).toBeNull();
   expect(trashFlagField(null)).toBeNull();
+});
+
+test("the archive facet names the declared flag without guessing from names or trash", () => {
+  const resource = testDataResource("example.Record", { fields: [
+    resourceField({ name: "is_archived", kind: "scalar", scalar: "Boolean" }),
+    resourceField({ name: "is_trashed", kind: "scalar", scalar: "Boolean", trashable: true }),
+    resourceField({ name: "retired", kind: "scalar", scalar: "Boolean", archivable: true }),
+  ] });
+  expect(archiveFlagField(resource)).toBe("retired");
+  expect(archiveFlagField({ ...resource, fields: resource.fields?.slice(0, 2) })).toBeNull();
+  expect(archiveFlagField(testDataResource("example.Plain"))).toBeNull();
+  expect(archiveFlagField(null)).toBeNull();
+  expect(archiveFlagField(undefined)).toBeNull();
 });

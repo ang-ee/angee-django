@@ -1,5 +1,5 @@
 import * as React from "react";
-import { type QueryFilter, type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
+import { unarchivedFilter, type QueryFilter, type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
 import { stableKey } from "@angee/refine";
 import { functionalUpdate, type ColumnDef, type OnChangeFn, type PaginationState, type RowSelectionState, type SortingState, type Table, type VisibilityState } from "@tanstack/react-table";
 import { filterForResourceTextSearch, queryForColumns } from "../resource-query";
@@ -124,6 +124,7 @@ export function listResultFromPageState<TRow extends Row>({
 }
 
 export interface UseResourceViewQueryFactsProps<TRow extends Row> {
+  embedded?: boolean;
   columns: readonly ColumnDescriptor<TRow>[];
   fields?: readonly string[];
   filter?: ResourceFilterInput;
@@ -138,6 +139,7 @@ export interface UseResourceViewQueryFactsProps<TRow extends Row> {
 
 /** Shared request facts derived by every server/client resource surface. */
 export function useResourceViewQueryFacts<TRow extends Row>({
+  embedded = false,
   columns,
   fields,
   filter,
@@ -157,11 +159,14 @@ export function useResourceViewQueryFacts<TRow extends Row>({
     [columns, fields, laneSource, modelMetadata, groupStack],
   );
   const mergedFilter = React.useMemo(
-    () => filterForResourceTextSearch(
-      modelMetadata,
-      Filter.combineOptional(filter, Filter.combineOptional(resourceView.baseFilter, resourceView.state.filter)),
-    ),
-    [filter, resourceView.state.filter, resourceView.baseFilter, modelMetadata],
+    () => {
+      const merged = filterForResourceTextSearch(
+        modelMetadata,
+        Filter.combineOptional(filter, Filter.combineOptional(resourceView.baseFilter, resourceView.state.filter)),
+      );
+      return embedded ? merged : unarchivedFilter(modelMetadata?.resource, merged);
+    },
+    [embedded, filter, resourceView.state.filter, resourceView.baseFilter, modelMetadata],
   );
   const sortOrder = React.useMemo(
     () => {

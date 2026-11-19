@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ResourceQuery, useModelMetadata } from "@angee/metadata";
+import { ResourceQuery, unarchivedFilter, useModelMetadata } from "@angee/metadata";
 import { useAngeeAggregate, useAngeeGroupBy, type AggregateBucket, type AggregateMeasure } from "@angee/refine";
 import { useAggregateOperation, useGroupOperation } from "../views/resource/resource-operations";
 import { Filter, type ResourceViewFilter } from "../views/resource/resource-view-model";
@@ -64,7 +64,7 @@ export function useDashboardWidgetData(
     try {
       const query = ResourceQuery.from(resource);
       const pageFilter = pageScope?.resource === source.resource ? pageScope.filter : undefined;
-      const filter = Filter.combineOptional(source.filter as ResourceViewFilter | undefined, pageFilter);
+      const filter = unarchivedFilter(resource, Filter.combine(source.filter as ResourceViewFilter | undefined, pageFilter));
       const where = query.toWhere(filter);
       const groups = query.groupsFrom(source.groups ?? []);
       const sort = query.sortFrom(source.sort);

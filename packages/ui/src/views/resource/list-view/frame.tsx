@@ -420,6 +420,7 @@ function ListViewBody<TRow extends Row = Row>({
     effectiveGroupStack.length > 0 &&
     !clientRowModel;
   const surfaceProps: UseResourceViewSurfaceProps<TRow> = {
+    embedded: presentation === "embedded",
     resource,
     relatedModels,
     source,

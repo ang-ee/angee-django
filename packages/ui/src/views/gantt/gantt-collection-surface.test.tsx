@@ -37,6 +37,7 @@ afterEach(() => { cleanup(); clearClients(); vi.useRealTimers(); });
 function renderCollection(options: {
   rows?: Row[]; total?: number; page?: number; pageSize?: number; strict?: boolean; anchor?: string;
   resources?: readonly DataResourceMetadata[];
+  embedded?: boolean;
   getList?: (params: Partial<GetListParams>) => Promise<{ data: Row[]; total: number }>;
   onRowClick?: (row: Row) => void;
   rowHref?: (row: Row) => string;
@@ -51,6 +52,7 @@ function renderCollection(options: {
   function Collection() {
     state = useResourceView();
     return <ListView resource={ganttRecord.modelLabel}
+      presentation={options.embedded ? "embedded" : "page"} scope="inherit"
       columns={[{ field: "name", header: "Name" }]}
       baseFilter={{ status: { exact: "active" } }}
       gantt={{ start: "start", end: "end", tone: "status",
@@ -65,6 +67,75 @@ function renderCollection(options: {
   </Provider></RouterContextProvider>, { reactStrictMode: options.strict ?? false });
   return { ...view, getList, state: () => state, barRequests: () => getList.mock.calls.filter(([params]) => params.resource === "schedules") };
 }
+
+function archivable(resource: DataResourceMetadata): DataResourceMetadata {
+  return { ...resource,
+    fields: [...(resource.fields ?? []), { name: "is_archived", kind: "scalar", scalar: "Boolean", archivable: true,
+      readable: true, aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false }],
+    query: { ...resource.query, fields: { ...resource.query.fields,
+      is_archived: testQueryField("is_archived", { scalar: "Boolean",
+        filter: { field: "is_archived", scalar: "Boolean", operators: ["exact"], values: [] } }),
+    } },
+  };
+}
+
+test.each([false, true])("Gantt bars and markers share archive scope, with embedded exemption=%s", async (embedded) => {
+  const f = renderCollection({ embedded,
+    resources: [archivable(ganttRecord), archivable(ganttLane), archivable(ganttMarker)],
+    gantt: { markers: { resource: ganttMarker.modelLabel, lane: "lane", date: "due" } },
+    getList: async ({ resource }) => ({
+      data: resource === "lanes" ? ganttLanes : resource === "schedules" ? [scheduledRecord] : [],
+      total: resource === "lanes" ? 2 : resource === "schedules" ? 1 : 0,
+    }),
+  });
+  await waitFor(() => expect(f.getList.mock.calls.some(([request]) => request.resource === "checkpoints")).toBe(true));
+  await waitFor(() => expect(drawing.props?.events).toHaveLength(1));
+  for (const [request] of f.getList.mock.calls) {
+    if (request.resource === "lanes") {
+      expect(request.meta?.gqlVariables?.where).toBeUndefined();
+    } else {
+      const where = JSON.stringify(request.meta?.gqlVariables?.where);
+      expect(where.includes('"is_archived":{"_eq":false}')).toBe(!embedded);
+      expect(where).toContain("lane-a");
+    }
+  }
+});
+
+test("a marker's authored archive filter overrides its default scope", async () => {
+  const f = renderCollection({
+    resources: [ganttRecord, ganttLane, archivable(ganttMarker)],
+    gantt: { markers: { resource: ganttMarker.modelLabel, lane: "lane", date: "due", filter: { is_archived: true } } },
+    getList: async ({ resource }) => ({ data: resource === "lanes" ? ganttLanes : [], total: resource === "lanes" ? 2 : 0 }),
+  });
+  await waitFor(() => expect(f.getList.mock.calls.some(([request]) => request.resource === "checkpoints")).toBe(true));
+  const where = JSON.stringify(f.getList.mock.calls.find(([request]) => request.resource === "checkpoints")?.[0].meta?.gqlVariables?.where);
+  expect(where).toContain('"is_archived":{"_eq":true}');
+  expect(where).not.toContain('"is_archived":{"_eq":false}');
+});
+
+test.each(["default", "explicit", "embedded"] as const)("linked Gantt bars use their own resource's %s archive scope", async (mode) => {
+  const getList = vi.fn(async ({ resource }: Partial<GetListParams>) => ({
+    data: resource === "lanes" ? ganttLanes : [scheduledRecord], total: resource === "lanes" ? 2 : 1,
+  }));
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  render(<RouterContextProvider router={router}><Provider resources={[ganttLane, archivable(ganttRecord)]} dataProvider={{ getList }}>
+    <ResourceViewProvider resource={ganttLane.modelLabel} scope="local" initialState={{ view: "gantt", anchor: "2026-09-01" }}>
+      <ListView resource={ganttLane.modelLabel} columns={[{ field: "name" }]} scope="inherit"
+        presentation={mode === "embedded" ? "embedded" : "page"}
+        gantt={{ start: "start", end: "end", linked: { resource: ganttRecord.modelLabel, lane: "lane",
+          filter: mode === "explicit" ? { is_archived: true } : undefined } }} />
+    </ResourceViewProvider>
+  </Provider></RouterContextProvider>);
+  await waitFor(() => expect(drawing.props?.events).toHaveLength(1));
+  const where = JSON.stringify(getList.mock.calls.find(([request]) => request.resource === "schedules")?.[0].meta?.gqlVariables?.where);
+  expect(where).toContain("lane-a");
+  expect(where).toContain("lane-b");
+  if (mode === "embedded") expect(where).not.toContain("is_archived");
+  else {
+    expect(where).toContain(`"is_archived":{"_eq":${mode === "explicit"}}`);
+    expect(where).not.toContain(`"is_archived":{"_eq":${mode !== "explicit"}}`);
+  }
+});
 
 describe("Gantt collection over native list data", () => {
   test("bar destinations use the inherited content navigator", async () => {

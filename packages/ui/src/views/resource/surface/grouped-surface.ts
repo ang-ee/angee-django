@@ -43,6 +43,7 @@ import type { GroupedResourceViewSurface, ResourceListResult, UseResourceViewSur
  * board bodies compose this surface; neither fetches.
  */
 export function useGroupedResourceViewSurface<TRow extends Row = Row>({
+  embedded,
   resource,
   relatedModels,
   source,
@@ -70,6 +71,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
 
   const { requestedFields, mergedFilter, sortOrder } =
     useResourceViewQueryFacts({
+      embedded,
       columns,
       fields,
       filter,

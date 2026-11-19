@@ -18,6 +18,7 @@ import type { ResourceListResult, ResourceViewSurface, RowRecord, RowsResourceVi
  * only the active path issues a query and resolves a data provider.
  */
 export function useClientResourceViewSurface<TRow extends Row = Row>({
+  embedded,
   relatedModels,
   columns,
   fields,
@@ -30,6 +31,7 @@ export function useClientResourceViewSurface<TRow extends Row = Row>({
   onListStateChange,
 }: UseResourceViewSurfaceProps<TRow>): ResourceViewSurface<TRow> {
   const { requestedFields, mergedFilter, sortOrder } = useResourceViewQueryFacts({
+    embedded,
     columns,
     fields,
     filter,

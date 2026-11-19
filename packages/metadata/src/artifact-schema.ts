@@ -30,6 +30,8 @@ const ResourceFieldSchema = v.looseObject({
   nullable: v.optional(v.boolean()),
   /** The backend `TrashMixin` flag: its resource offers the shared trash verbs. */
   trashable: v.optional(v.boolean()),
+  /** The backend `ArchiveMixin` flag: default collections hide archived rows. */
+  archivable: v.optional(v.boolean()),
   relationModelLabel: OptionalString,
   relationObject: v.nullish(v.boolean()),
 });
