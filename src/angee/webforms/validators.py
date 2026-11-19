@@ -43,6 +43,7 @@ TEXT_KEYS = frozenset({
     "maxRateDescription", "html", "text",
 })
 LANGUAGE_TAG = re.compile(r"^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$")
+SUBMISSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 MAX_QUESTIONS = 200
 MAX_PANEL_DEPTH = 3
 TEXT_LIMIT = 2_000
@@ -66,10 +67,20 @@ def _definition_validator() -> Draft202012Validator:
     return validator(definition_schema())
 
 
+def validate_submission_id(value: Any) -> str:
+    """Return the id a client chose for one submission, the key that makes a resend the same response."""
+
+    if not isinstance(value, str) or not SUBMISSION_ID.fullmatch(value):
+        raise ValidationError({"submission_id": "Use 1-128 letters, numbers, dots, underscores, colons, or hyphens."})
+    return value
+
+
 def validate_languages(languages: Sequence[str], default_language: str) -> None:
     """Refuse a language list that is empty, repeats a tag, holds a malformed one or lacks the default."""
 
     errors: dict[str, list[str]] = {}
+    if not isinstance(languages, (list, tuple)):
+        raise ValidationError({"languages": ["A form's languages are a list of language tags."]})
     bad = [tag for tag in languages if not isinstance(tag, str) or not LANGUAGE_TAG.fullmatch(tag)]
     if not languages:
         errors["languages"] = ["A form is written in at least one language."]

@@ -74,6 +74,7 @@ INSTALLED_APPS = [
     "angee.spaces",
     "angee.work",
     "angee.intake",
+    "angee.webforms",
     "angee.nexus",
     "angee.posts",
     "angee.platform",
