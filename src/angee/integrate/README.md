@@ -82,15 +82,16 @@ The adapter's `StreamDefinition` declaration owns every stream policy knob.
 Its `authoritative` flag marks the source as the system of record for
 what the stream states (`SyncStream.authoritative`, read by statement survivorship);
 changing it re-derives the linked subjects through `SyncStreamManager.set_authoritative`.
-Direction, snapshot or newer mapping-version declarations open a new baseline
-generation and retain links, policy and failures. Adapter-private deletion policy
-remains in stream `config`.
+Direction, snapshot, newer mapping-version and changed mapping-contribution
+declarations open a new baseline generation and retain links, policy and failures.
+Adapter-private deletion policy remains in stream `config`.
 A changed declaration reaches an existing stream when a drain opens it:
 [`open_stream`](streams.py) always reconciles the stream with its declaration, on
 the generic sync and on a workflow cycle alike. What reaches it is limited to the
 declaration's facts: `authoritative` flips and re-derives, a changed `direction` or
-`snapshot` or increased `mapping_version` opens a new baseline generation (a full
-re-read of that stream), and a changed `kind` is refused. The generation records
+`snapshot`, an increased `mapping_version` or a changed `mapping_contributions` list
+opens a new baseline generation (a full re-read of that stream), and a changed
+`kind` is refused. The generation records
 its active mapping version, so reopening the same declaration preserves progress.
 A lower declaration preserves the cursor and generation but updates that active
 version: rollback output must retain its actual mapping. Returning to the newer
@@ -102,6 +103,20 @@ quarantines do not lower it. Only a newer declaration starts a baseline.
 `cursor`, `reconcile_interval`, `absence_threshold`,
 `tombstone_retention` and `config` seed the first generation only; changing them in
 a declaration never changes an existing stream.
+
+A mapping composed from several declarers (a capability's base and the consumer
+addons that map more source fields) declares `mapping_contributions` instead: its
+`(key, version)` parts in the order they apply, which the declarer sorts by its own
+explicit sequence, then key. The stream then owns the version. Its generation
+retains the list it ran (`SyncStream.mapping_contributions`), and any other list
+(a part added, removed, exchanged, reordered or re-versioned) opens one baseline
+under a version strictly above the retained one and at least the parts' sum, so
+every record replays once and a version never stamps two lists' output. The
+retained list keeps its version, and a composed stream's version never lowers: a
+plain version declared on it later reads as the one part under the stream's key. A
+declaration names a version or contributions, never both. Streams written before
+the column hold the empty list and keep the plain rule.
+
 A declared snapshot with no reconciliation interval closes after its baseline;
 explicit resync opens a new generation. Missing cadence alone never means read-once.
 

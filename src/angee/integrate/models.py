@@ -4882,6 +4882,11 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         An unknown version is seeded from the oldest applied link mapping, or
         the declaration when no applied links exist, so deployment alone never replays
         records already applied at the declared version.
+        A composed mapping (``StreamDefinition.mapping_contributions``) has no
+        declared version: the generation retains the list it ran, and any other
+        list opens one baseline under a version past the retained one and at
+        least the contributions' sum (``_mapping_identity``), so its version
+        never lowers.
         ``authoritative`` is the declaration's fact: a changed declaration flips the
         current generation through :meth:`set_authoritative`, so an adapter never
         flips it from inside a page.
@@ -4896,6 +4901,12 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
             raise ValidationError("A stream absence threshold must be positive.")
         if definition.mapping_version < 1:
             raise ValidationError("A stream mapping version must be positive.")
+        parts = definition.mapping_contributions
+        if parts and definition.mapping_version != 1:
+            raise ValidationError("A stream declares a mapping version or mapping contributions, not both.")
+        keys = [key for key, _version in parts]
+        if len(set(keys)) != len(keys) or any(not key or version < 1 for key, version in parts):
+            raise ValidationError("Mapping contributions need distinct nonempty keys and positive versions.")
         if definition.container is not None and definition.holds_containers:
             # Containers nest one level (a source's address books or calendars, then their records):
             # ``SyncStreamQuerySet.in_lock_order``'s roots-then-contained order is then a depth order.
@@ -4920,7 +4931,9 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
             }
             stream = self.filter(**identity).order_by("-generation").first()
             if stream is None:
-                return self.create(integration_id=bridge.pk, **definition.stream_fields())
+                version, contributions = self._mapping_identity(definition)
+                resolved = replace(definition, mapping_version=version, mapping_contributions=contributions)
+                return self.create(integration_id=bridge.pk, **resolved.stream_fields())
             if stream.kind != definition.kind:
                 raise ValidationError("A stream's kind cannot change between declarations.")
             if container is not None and stream.container_id is None:
@@ -4935,26 +4948,52 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 )["version"]
                 stream.mapping_version = applied_version if applied_version is not None else definition.mapping_version
                 stream.save(update_fields=["mapping_version", "updated_at"])
+            version, contributions = self._mapping_identity(definition, stream)
             if (
                 stream.direction != definition.direction
                 or stream.snapshot != definition.snapshot
-                or definition.mapping_version > stream.mapping_version
+                or version > stream.mapping_version
                 or stream.state == StreamState.RETIRED
             ):
                 stream = self.bump_generation(
                     stream,
                     direction=definition.direction,
                     snapshot=definition.snapshot,
-                    mapping_version=definition.mapping_version,
+                    mapping_version=version,
+                    mapping_contributions=contributions,
                 )
-            elif stream.mapping_version != definition.mapping_version:
-                stream.mapping_version = definition.mapping_version
+            elif stream.mapping_version != version:
+                stream.mapping_version = version
                 stream.save(update_fields=["mapping_version", "updated_at"])
             if stream.holds_containers != definition.holds_containers:
                 stream.holds_containers = definition.holds_containers
                 stream.save(update_fields=["holds_containers", "updated_at"])
             change_authority = stream.authoritative != definition.authoritative
         return self.set_authoritative(stream, definition.authoritative) if change_authority else stream
+
+    @staticmethod
+    def _mapping_identity(definition: StreamDefinition, stream: Any = None) -> tuple[int, tuple[tuple[str, int], ...]]:
+        """Return the version ``definition`` runs under after ``stream``, and the contributions to retain.
+
+        A plain declaration on a stream that never composed keeps its declared
+        version, rollback included. Otherwise the contributions are the identity,
+        compared in order: the retained list keeps the retained version, and any
+        other list (added, removed, exchanged, reordered or re-versioned) takes a
+        version strictly above it and at least the contributions' sum. A plain
+        version on a stream that composed reads as the one contribution under the
+        stream's key, so a composed stream's version never lowers onto an integer
+        it already stamped with another list's output.
+        """
+
+        declared = tuple((key, version) for key, version in definition.mapping_contributions)
+        retained = () if stream is None else tuple((key, version) for key, version in stream.mapping_contributions)
+        if not declared and not retained:
+            return definition.mapping_version, ()
+        declared = declared or ((definition.key, definition.mapping_version),)
+        if declared == retained:
+            return stream.mapping_version, declared
+        floor = sum(version for _key, version in declared)
+        return (floor if stream is None else max(stream.mapping_version + 1, floor)), declared
 
     def bump_generation(
         self,
@@ -4964,6 +5003,7 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         direction: StreamDirection | None = None,
         snapshot: bool | None = None,
         mapping_version: int | None = None,
+        mapping_contributions: tuple[tuple[str, int], ...] | None = None,
     ) -> Any:
         """Create one new baseline while retaining identities and history.
 
@@ -4989,6 +5029,9 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 direction=latest.direction if direction is None else direction,
                 snapshot=latest.snapshot if snapshot is None else snapshot,
                 mapping_version=latest.mapping_version if mapping_version is None else mapping_version,
+                mapping_contributions=(
+                    latest.mapping_contributions if mapping_contributions is None else mapping_contributions
+                ),
             )
             successor = self.create(
                 integration_id=latest.integration_id,
@@ -5169,7 +5212,17 @@ class SyncStream(ImmutableFieldsMixin, SyncStateMixin, AuditMixin, AngeeDataMode
     """
     generation = models.PositiveIntegerField(default=1)
     mapping_version = models.PositiveIntegerField(null=True, blank=True)
-    """Active declared mapping version; unknown until seeded by :meth:`SyncStreamManager.current`."""
+    """The mapping version this generation stamps on its evidence.
+
+    A plain declaration's version, or the one the manager gave the contributions
+    this generation ran; unknown until seeded by :meth:`SyncStreamManager.current`.
+    """
+    mapping_contributions = models.JSONField(default=list, blank=True)
+    """The ``[key, version]`` contributions of a composed mapping this generation ran, in order.
+
+    Empty for a stream that never composed, which is also what a stream written
+    before this column holds, so it keeps the plain rule.
+    """
     phase = StateField(choices_enum=StreamPhase, default=StreamPhase.BASELINE)
     state = StateField(choices_enum=StreamState, default=StreamState.OPEN)
     cursor = models.JSONField(default=dict, blank=True)
