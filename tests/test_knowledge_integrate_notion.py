@@ -27,6 +27,8 @@ from angee.integrate.testing.http import mock_transport, request_fields
 from angee.knowledge_integrate_notion.backend import NotionBackend, NotionResponseError
 from angee.knowledge_integrate_notion.schema import schemas
 from tests.conftest import (
+    Credential,
+    ExternalAccount,
     Link,
     MarkdownPage,
     NotionConnection,
@@ -598,3 +600,41 @@ def test_a_token_that_names_no_workspace_is_refused_not_matched(bridge, api):
         "reconnect Notion or attach an internal integration's API token."
     )
     assert bridge.subscription_state["workspace_id"] == WORKSPACE and not bridge.discovery_ready
+
+
+def test_an_oauth_connection_keeps_the_workspace_its_grant_was_authorized_for(api):
+    """A connection made before discovery kept a workspace is checked against its account's token answer."""
+    with system_context(reason="test.notion.oauth.workspace"):
+        connection = discovered(make_integration(
+            "notion-grant", model=NotionConnection, kind=CredentialKind.OAUTH, material={"access_token": "x"},
+        ))
+        account = ExternalAccount.objects.link(
+            connection.credential.oauth_client, "bot-1", owner=connection.owner,
+            identity_claims={"bot_id": "bot-1", "workspace_id": WORKSPACE},
+        )
+        connection.attach_connection(Credential.objects.upsert_for_user(
+            connection.owner, connection.credential.oauth_client, CredentialKind.OAUTH, {"access_token": "x"},
+            external_account=account,
+        ))
+        type(connection)._base_manager.filter(pk=connection.pk).update(subscription_state={})
+        connection.refresh_from_db()
+        token = Credential.objects.create_local_credential(
+            connection.owner, kind=CredentialKind.STATIC_TOKEN, name="Another workspace", material={"api_key": "other"},
+        )
+        api.me["other"] = bot_user(str(UUID(int=7002)))
+        connection.attach_connection(token)
+        assert connection.account_id == account.pk and connection.discovery_pending
+        outcome = connection.run_discovery(
+            credential_pk=connection.credential_id, generation=connection.discovery_generation,
+        )
+        connection.refresh_from_db()
+    assert outcome == {"ok": False, "reason": "discovery-failed"}
+    assert connection.last_error == "This connection belongs to another Notion workspace; create a separate connection."
+
+
+def test_an_apply_without_a_workspace_is_the_no_workspace_refusal(bridge):
+    bridge.await_discovery()
+    with pytest.raises(IntegrationError, match="did not say which workspace"):
+        bridge.finish_discovery(
+            credential_pk=bridge.credential_id, generation=bridge.discovery_generation, discovery=ConnectionDiscovery(),
+        )
