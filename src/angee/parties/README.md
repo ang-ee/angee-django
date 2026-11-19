@@ -24,6 +24,17 @@ builds its own records: a card's `UID` is its key and its href rides in the
 link's metadata, and wire properties outside the projection stay in RecordLink
 history and survive conditional writes.
 
+On a pull-only stream the local side of each comparison is what the source last
+applied, and the source's own projection becomes the applied base, as on the
+address-book stream: a person's edit is a statement that outranks the source,
+never a conflict, and an unchanged re-read applies nothing. A tombstone in a
+page, or a record the absence sweep confirms gone, withdraws the link's
+statements and keeps the party; a record that returns applies again. A payload
+may name the records a merge at the source replaced (`observe(..., replaces=...)`):
+the survivor lands on a replaced record's person and their tombstones follow it
+in the page, so their statements move to its link. A two-way stream compares the
+person's own projection and keeps a vanished contact's statements.
+
 [PartyManager.ingest_contact](managers.py) asserts directory facts; Address and
 Relationship keep their own identities and statements. Missing members withdraw
 only that source. Canonical scopes retain unasserted rows and exclude trash and
