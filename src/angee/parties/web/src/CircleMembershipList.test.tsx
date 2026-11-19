@@ -6,7 +6,10 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   listProps: null as Record<string, unknown> | null,
-  add: vi.fn(),
+  // The authored mutation resolves its data, as the dialog's `mutation` contract requires.
+  add: vi.fn(async () => ({
+    insert_circle_members_one: { id: "membership-2" },
+  })),
 }));
 
 vi.mock("@angee/ui", async (importOriginal) => {

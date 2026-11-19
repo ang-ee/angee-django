@@ -197,8 +197,11 @@ def test_a_rows_current_version_changes_with_every_tracked_write_and_none_exists
 
     with system_context(reason="tests.history.current_version"):
         row = OwnedRow.objects.create(title="created")
+        # A version is opaque: its text joins one id per carrier table, and which tables carry
+        # ``OwnedRow`` depends on the MTI children this process has registered.
         created = version(OwnedRow, row.pk)
-        assert created == str(OwnedRow.history.filter(id=row.pk).latest("history_id").history_id)
+        assert created is not None
+        assert version(OwnedRow, row.pk) == created
         row.title = "saved"
         row.save()
         saved = version(OwnedRow, row.pk)

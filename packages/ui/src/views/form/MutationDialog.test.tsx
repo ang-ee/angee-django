@@ -13,6 +13,7 @@ import {
   MutationDialog,
   emptyValueForField,
   mutationDialogValueCodecs,
+  submitMutationDialog,
 } from "./MutationDialog";
 import { deserializeFormSpec } from "./form-spec";
 import type { FormSubmitResult } from "./validation-errors";
@@ -386,7 +387,7 @@ describe("MutationDialog", () => {
     }, defaultWidgets);
     render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
       <MutationDialog open onOpenChange={vi.fn()} title="Slots" fields={[slots!]}
-        submitLabel="Save" parseValues={parseRawValues} onSubmit={vi.fn()} />
+        submitLabel="Save" parseValues={parseRawValues} onSubmit={vi.fn().mockResolvedValue(ok)} />
     </AppRuntimeProvider>);
 
     fireEvent.click(await screen.findByRole("button", { name: "Add item" }));
@@ -411,7 +412,7 @@ describe("MutationDialog", () => {
           ]}
           submitLabel="Connect"
           parseValues={parseRawValues}
-          onSubmit={vi.fn()}
+          onSubmit={vi.fn().mockResolvedValue(ok)}
         />
       </AppRuntimeProvider>,
     );
@@ -482,7 +483,7 @@ describe("MutationDialog", () => {
             ]}
             submitLabel="Assign"
             parseValues={parseRawValues}
-            onSubmit={vi.fn()}
+            onSubmit={vi.fn().mockResolvedValue(ok)}
           />
         </AppRuntimeProvider>
       </Provider>,
@@ -681,4 +682,13 @@ test("a mutation's data acknowledges the dialog; missing data fails with the dia
   await waitFor(() => expect((screen.getByRole("button", { name: "Subscribe" }) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(screen.getByRole("button", { name: "Subscribe" }));
   await waitFor(() => expect(onSubmitted).toHaveBeenCalledExactlyOnceWith("src_1", {}));
+});
+
+test("a submission settles its promise whatever its call does, a synchronous throw included", async () => {
+  const refusal = new Error("Refused before any request.");
+  const mutation = vi.fn((): Promise<{ id: string } | undefined> => { throw refusal; });
+  await expect(submitMutationDialog({ mutation }, {}, "Could not save.")).rejects.toBe(refusal);
+  const onSubmit = vi.fn((): FormSubmitResult<string> => { throw refusal; });
+  await expect(submitMutationDialog({ onSubmit }, {}, "Could not save.")).rejects.toBe(refusal);
+  expect(mutation).toHaveBeenCalledExactlyOnceWith({}, { errorNotification: false });
 });

@@ -234,8 +234,10 @@ live in code docstrings.
   teardown compose it.
 - A published calendar's poll projects only the events changed since their push.
   - **Provenance:** `ModelHistory.current_version(model)` is the outer row's latest
-    history version id. It is exact and committed with the write, and `NULL` before
-    the row's first version or while capture is off.
+    history version id, joined with the latest id of each tracked MTI descendant's
+    table that carries its columns; it is opaque, compared only for equality. It is
+    exact and committed with the write, and `NULL` before the row's first version or
+    while capture is off.
   - **Local versions:** `LocalChange.local_version` (and `RecordChange`'s) carries the
     version a push adapter read with its projection. The push records it beside the
     base it writes: `RecordLink.local_version`, a new column the link's history
