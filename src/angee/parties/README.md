@@ -45,8 +45,12 @@ winner and derived counters outside Party history.
 [PartyManager.ingest_organization](managers.py) lands a `ParsedOrganization`
 from a directory stream the same way: it binds the link, mints an Organization
 for an unbound link (matching an existing one is not decided yet), and states the
-identity, the whole legal identity (legal name and domain together), handles and
-addresses; `organization_projection` is its comparison shape. Both verbs land
+identity, the whole legal identity (legal name and domain together, or withdrawn
+when the source carries neither), handles and addresses;
+`organization_projection` is its comparison shape, over the stored form
+`prepare_contact` gives organizations as it gives contacts. Neither verb rebinds
+a bound link: binding lends the party to the directory's contact readers, so a
+passed target must be of the verb's kind and the link's own. Both verbs land
 addresses through `AddressManager.land_addresses`. Employment has one verb,
 [RelationshipManager.land_employment](managers.py): an employer is a tracked
 Organization or a free-text name, a link may name several, and the link's edges
@@ -97,12 +101,20 @@ card, so no read grant attaches anything.
 Sharing a directory shares its contacts: `contact_reader`, granted on the
 directory row through its share surface, and the directory's owner read the
 people and organizations its live links name and the handles, addresses and
-relationships those links state (`read_contacts` in [permissions.zed](permissions.zed)).
-A handle reaches the directories asserting it through the reverse name its
-statement member declares (`party_statements`). A tombstoned or unbound link, or a
-withdrawn claim, lends nothing; a handle only another source asserted keeps its
-own gates; private fields keep `read_private`; and the grant reads nothing of the
-directory, its integration, streams, links or credential.
+relationships those links state (`contact_read` in [permissions.zed](permissions.zed)).
+Each statement arm walks from the row to the statements naming it by the
+statement model's name (`addressstatement`, `relationshipstatement`, and
+`partystatement`, which the handle member declares as its reverse name). A
+tombstoned or unbound link, or a withdrawn or superseded claim, lends nothing; a
+handle only another source asserted keeps its own gates; private fields keep
+`read_private`; and the grant reads nothing of the directory, its integration,
+streams, links or credential. Beyond the party's identity, a contact read
+currently also reveals: the tags on the party and on its readable handles
+(`tags/tag_assignment` reads through the record; whether a contact read should
+show them is open with the architect); the person in people pickers when they
+have an account (`auth/user#colleague`); the title, notes and dates of an
+employment edge the directory states; and every source's statements on a
+readable handle (the party's `statements` field).
 
 Source admission follows RecordLinks and seeded Rule/Seed role membership.
 Sources gain no private reads. Imports supply their

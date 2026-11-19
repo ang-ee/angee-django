@@ -1100,7 +1100,11 @@ which scopes rows to the subjects the actor may read. A statement read never
 widens what the subject reader may see: related rows (the member, the asserting
 principal) resolve through their own read gates at the serving seam, no group or
 filter axis reads a related row's columns, and serving surfaces own gated-field
-redaction. Writes use the asserting source's native REBAC write scope on the
+redaction. A subject's own definition may still read through statements: a
+directory's contact readers read the handles, addresses and employment edges its
+live links currently assert, and nothing another source asserts
+([parties permissions](../../src/angee/parties/permissions.zed), `stating_directory`).
+Writes use the asserting source's native REBAC write scope on the
 subject. Merge collisions remain retained as superseded rows outside the current
 per-aspect key. `Statement.sort_key(aspect)` is the one trust ordering — preferred
 rank, the aspect's source precedence (`Aspect.priority`), confidence, the row

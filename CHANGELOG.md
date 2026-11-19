@@ -10,6 +10,54 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Sharing a directory shares its contacts. `parties/directory` has a stored,
+  grantable `contact_reader` relation (shared through the record-access surface
+  under the directory's `write`) and a `contact_read` permission: its grantees and
+  the integration's owner read the people and organizations the directory's live
+  links name, and the handles, addresses and employment edges those links
+  currently assert, never another source's, never `read_private` or a `read__*`
+  gate, and nothing of the directory, its integration, streams, links or
+  credential. A tombstoned or unbound link, or a withdrawn or superseded claim,
+  lends nothing. Schema revisions 21 to 24: a database synced at an intermediate
+  revision, where the derived permissions were named `read_contacts` (and the
+  party's `contact_reader` at 21), retires those names through provision's
+  `--skip-checks sync --prune-stale --yes`.
+
+- A statement member declared as a new foreign key keeps the `related_name` it
+  declares (`StatementRecords.copy_fields`); one that declares none stays hidden
+  as before. The parties handle member declares `%(class)s`, so `Handle` reaches
+  its party statements as `partystatement`, the same spelling Django gives the
+  statement subjects' reverses. A host generates one state-only `AlterField` on
+  `partystatement.handle` with `makemigrations parties`; Django issues no SQL.
+
+- The directory backend seam is neutral of CardDAV. `ParsedContact` loses `uid`,
+  `etag`, `raw_vcard`, `href` and `department` (a backend keeping wire facts
+  subclasses it, as CardDAV's `ParsedCard` does); `ParsedAddressbook.href` is
+  `key`. A backend returns payloads keyed by external key (`observe`,
+  `extract_contacts`, `read_contacts`, `contact_keys`, which seeks past `after`)
+  and the base builds and applies the records (`record_changes`). Its
+  `direction` is pull-only unless it declares otherwise; a pull-only stream
+  compares what its source last applied, withdraws a confirmed-absent contact's
+  statements and lets a payload name the keys a source merge replaced.
+  `DirectoryBackend.probe()` is folded into `test_connection()`, which
+  `Directory.test_connection` forwards to with `admit_credential`; the
+  `remote_delete` stream option, validated and never read, is removed. CardDAV
+  links need no migration and no re-download.
+
+- Parties land organizations and employment from a source.
+  `PartyManager.ingest_organization(parsed, *, stream, link, created_by_id,
+  target=None)` lands a `ParsedOrganization` (comparison shape:
+  `organization_projection`), states its legal identity whole or withdraws it
+  when the source carries neither field, and like `ingest_contact` refuses a
+  target of another kind or one that would rebind a bound link.
+  `RelationshipManager.land_employment(person, employers, *, created_by_id,
+  asserted_by, link, evidence=(), kinds=None)` replaces the free-text-only
+  `land_employment(person, *, organization, title, ...)`: an `Employment` names a
+  tracked Organization or a free-text name, a link may name several, an employer
+  named twice lands once, and the link's edges it no longer names lose its
+  statement. A connections import that renames or drops an employer now renames
+  or withdraws the link's own edge instead of keeping the old one asserted.
+
 - Creating a `parties.Address` or `parties.Relationship` takes write on its party
   (`create = party->write + admin->member`, evaluated on the unsaved row; a
   relationship's party is its anchor). It was `authenticated`, so anyone who could

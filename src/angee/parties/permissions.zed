@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 23
+// @rebac_schema_revision: 24
 
 // Parties, folders and circles are grant roots: each is owned through its
 // transferable `owner` column (OwnerMixin), which an insert defaults to the row's
@@ -46,8 +46,8 @@ definition parties/party {
 
     permission create = authenticated
     // Whoever reads the contacts of a directory linking this party reads its identity.
-    permission read_contacts = linking_directory->read_contacts
-    permission read_granted = owner + editor + reader + identity_reader + read_contacts + statement_source + admin->member
+    permission contact_read = linking_directory->contact_read
+    permission read_granted = owner + editor + reader + identity_reader + contact_read + statement_source + admin->member
     permission read = read_granted
     // What a party lends the record tasks about it: its direct holders only, so
     // task access never recurses through a thread the party follows (rebac.E016).
@@ -80,7 +80,7 @@ definition parties/person {
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read_granted = owner + editor + reader + party->identity_reader + party->read_contacts + statement_source + admin->member
+    permission read_granted = owner + editor + reader + party->identity_reader + party->contact_read + statement_source + admin->member
     permission read = read_granted
     permission read_private = owner + editor + reader + admin->member
     // Field gates are per resource definition, including inherited columns.
@@ -106,7 +106,7 @@ definition parties/organization {
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read_granted = owner + editor + reader + party->identity_reader + party->read_contacts + statement_source + admin->member
+    permission read_granted = owner + editor + reader + party->identity_reader + party->contact_read + statement_source + admin->member
     permission read = read_granted
     permission read_private = owner + editor + reader + admin->member
     permission read__notes = read_private
@@ -124,13 +124,13 @@ definition parties/handle {
     // Person assertions retain their typed members' own read admission.
     relation directory: integrate/integration // rebac:field=party__record_links__stream__integration
     // A directory whose live link (bound, not tombstoned) asserts this handle in a current claim.
-    relation stating_directory: parties/directory // rebac:field={"path":"party_statements__link__stream__integration__directory","filters":{"party_statements__status":"asserted","party_statements__superseded__isnull":true,"party_statements__link__target_object_id__isnull":false,"party_statements__link__tombstoned_at__isnull":true}}
+    relation stating_directory: parties/directory // rebac:field={"path":"partystatement__link__stream__integration__directory","filters":{"partystatement__status":"asserted","partystatement__superseded__isnull":true,"partystatement__link__target_object_id__isnull":false,"partystatement__link__tombstoned_at__isnull":true}}
     relation statement_role: provenance/role // rebac:const=parties_statement_source
     permission statement_source = directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read_granted = creator + editor + reader + statement_source + stating_directory->read_contacts + admin->member
+    permission read_granted = creator + editor + reader + statement_source + stating_directory->contact_read + admin->member
     permission read = read_granted
     permission write  = creator + editor + admin->member
     permission delete = creator + admin->member
@@ -149,7 +149,7 @@ definition parties/address {
     relation admin: angee/role // rebac:const=admin
 
     permission create = party->write + admin->member
-    permission read_granted = creator + editor + reader + statement_source + stating_directory->read_contacts + admin->member
+    permission read_granted = creator + editor + reader + statement_source + stating_directory->contact_read + admin->member
     permission read = read_granted
     permission write = creator + editor + statement_source + admin->member
     permission delete = creator + admin->member
@@ -234,7 +234,7 @@ definition parties/relationship {
     relation admin: angee/role // rebac:const=admin
 
     permission create = party->write + admin->member
-    permission read_granted = creator + editor + reader + statement_source + stating_directory->read_contacts + admin->member
+    permission read_granted = creator + editor + reader + statement_source + stating_directory->contact_read + admin->member
     permission read = read_granted
     permission write = creator + editor + statement_source + admin->member
     permission delete = creator + admin->member
@@ -244,7 +244,7 @@ definition parties/relationship {
 // contacts-sync bridge), so its access derives from the parent integration the
 // way integrate_vcs/vcs_bridge does; platform admins reach all.
 //
-// `read_contacts` shares the contacts: it reads the parties the directory's
+// `contact_read` shares the contacts: it reads the parties the directory's
 // live links name and the handles, addresses and relationships those links
 // state, never their private fields, and grants nothing of the directory, its
 // integration, streams, links or credential. Its holders are the stored
@@ -260,6 +260,6 @@ definition parties/directory {
     permission read   = integration->read + admin->member
     permission write  = integration->write + admin->member
     permission delete = integration->write + admin->member
-    permission read_contacts = contact_reader + integration->owner
+    permission contact_read = contact_reader + integration->owner
     permission write__owner = integration->transfer
 }

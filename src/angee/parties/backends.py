@@ -151,21 +151,32 @@ Addresses compare as a list, so a second copy of one address is a difference.
 """
 
 
+def contact_points_projection(value: ParsedContact | ParsedOrganization) -> dict[str, Any]:
+    """Return the comparison shape of a contact's or an organization's emails, phones and addresses.
+
+    Emails and phones compare as sets (:data:`SET_FIELDS`) and addresses as a
+    list in canonical order, so collection ordering is immaterial.
+    """
+
+    result: dict[str, Any] = {name: [list(item) for item in sorted(set(getattr(value, name)))] for name in SET_FIELDS}
+    result["addresses"] = sorted((asdict(address) for address in value.addresses), key=canonical_json_sha256)
+    return result
+
+
 def contact_projection(contact: ParsedContact) -> dict[str, Any]:
     """Return the same JSON comparison shape for a remote card and a local person.
 
-    Collection ordering is immaterial. Photos compare their content addresses.
-    A fetched contact arrives in its stored form (``prepare_contact``), so a
-    country a source spells out compares equal to the stored code.
+    Collection ordering is immaterial (:func:`contact_points_projection`). Photos
+    compare their content addresses. A fetched contact arrives in its stored form
+    (``prepare_contact``), so a country a source spells out compares equal to the
+    stored code.
     """
 
     result = {name: getattr(contact, name) for name in CONTACT_FIELDS}
     for name in ("birthday", "anniversary"):
         value = result[name]
         result[name] = value.isoformat() if value is not None else None
-    for name in SET_FIELDS:
-        result[name] = [list(item) for item in sorted(set(result[name]))]
-    result["addresses"] = sorted((asdict(address) for address in contact.addresses), key=canonical_json_sha256)
+    result.update(contact_points_projection(contact))
     photo = contact.photo
     result["photo"] = None
     if photo is not None and (photo.content_hash or photo.data):
@@ -209,18 +220,16 @@ class ParsedOrganization:
 def organization_projection(organization: ParsedOrganization) -> dict[str, Any]:
     """Return the JSON comparison shape of a source organization, as :func:`contact_projection` does a contact's.
 
-    Its contact points and addresses compare exactly as a contact's do, so that
-    projection orders them.
+    Its contact points and addresses compare exactly as a contact's do
+    (:func:`contact_points_projection`). A fetched organization arrives in its
+    stored form, as a contact does (``prepare_contact``).
     """
 
-    points = contact_projection(
-        ParsedContact(emails=organization.emails, phones=organization.phones, addresses=organization.addresses)
-    )
     return {
         "display_name": organization.display_name,
         "legal_name": organization.legal_name,
         "domain": organization.domain,
-        **{name: points[name] for name in (*SET_FIELDS, "addresses")},
+        **contact_points_projection(organization),
     }
 
 

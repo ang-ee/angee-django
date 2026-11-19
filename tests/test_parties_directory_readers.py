@@ -1,11 +1,11 @@
 """A directory's contact readers read the contacts it links, and nothing else.
 
-``parties/directory#read_contacts`` (the ``contact_reader`` grantees and the
+``parties/directory#contact_read`` (the ``contact_reader`` grantees and the
 integration's owner) lends identity read on the parties the directory's live
 links name, and read on the handles, addresses and relationships those links
 state in a current claim. Private fields, writes, handles only another source
 asserted and everything of the directory itself (its integration, streams, links
-and credential) stay with their own gates.
+and credential) stay with their own gates, and no reader attaches rows to a party.
 """
 
 from __future__ import annotations
@@ -109,8 +109,11 @@ def contacts(db: None) -> Iterator[SimpleNamespace]:
             unlinked = Person.objects.create(display_name="Grace Unlinked", created_by=owner, **PERSON_PRIVATE)
             stream = current_stream(directory, "contacts", kind=StreamKind.RECORD_REPLICA)
             person_link = RecordLink.objects.observe(stream, "ada", target=person)
-            RecordLink.objects.observe(stream, "example-ltd", target=organization)
+            organization_link = RecordLink.objects.observe(stream, "example-ltd", target=organization)
             source = stream.integration
+            # Each link states its party's identity, as directory ingest does.
+            for party, link in ((person, person_link), (organization, organization_link)):
+                _state(Party.objects.get(pk=party.pk), "identity", source=source, link=link)
 
             address = Address.objects.create(
                 party_id=person.pk, street="1 Example Street", city="Springfield", country="US", created_by=owner
@@ -341,6 +344,121 @@ def test_a_withdrawn_claim_stops_lending_its_row_while_the_link_lends_the_person
         c.person_party.statements.withdraw_unsupported(c.source, [], aspect="handle", link=c.person_link)
     assert not _allowed(c.stated_handle, c.reader) and not _scoped(c.stated_handle, c.reader)
     assert _allowed(c.person, c.reader) and _allowed(c.edge, c.reader)
+
+
+PERSON_PAGE = """query PersonPage($id: String!) {
+  people_by_pk(id: $id) {
+    id display_name notes
+    handles { id }
+    addresses { id street }
+    relationships { id title notes }
+    inbound_relationships { id }
+    statements { id source_kind handle { id } }
+  }
+}"""
+
+
+def test_a_contact_reader_reads_the_person_page_nested(contacts: SimpleNamespace, graphql: Any) -> None:
+    """The person record with its handles, addresses, relationships and statements, as the People page reads it.
+
+    A contact reader sees what the directory states and every source's statement
+    on a handle it reads (the owner's confirmation beside the directory's claim);
+    the handle only the owner asserted, and its statement, stay out.
+    """
+
+    c = contacts
+    with system_context(reason="tests.directory_readers.confirm"):
+        c.person_party.with_actor(c.owner).confirm_statement(aspect="handle", handle=c.stated_handle, values={})
+    for actor in (c.reader, c.member):
+        person = result_data(execute_schema(graphql, PERSON_PAGE, {"id": c.person.sqid}, user=actor))["people_by_pk"]
+        assert (person["id"], person["display_name"], person["notes"]) == (c.person.sqid, "Ada Example", None)
+        assert person["handles"] == [{"id": c.stated_handle.sqid}]
+        assert person["addresses"] == [{"id": c.address.sqid, "street": "1 Example Street"}]
+        assert person["relationships"] == [{"id": c.edge.sqid, "title": "Engineer", "notes": ""}]
+        assert person["inbound_relationships"] == []
+        assert sorted((row["source_kind"], row["handle"]["id"]) for row in person["statements"]) == [
+            ("DIRECTORY", c.stated_handle.sqid),
+            ("PERSON", c.stated_handle.sqid),
+        ]
+    owner = result_data(execute_schema(graphql, PERSON_PAGE, {"id": c.person.sqid}, user=c.owner))["people_by_pk"]
+    assert {row["id"] for row in owner["handles"]} == {c.stated_handle.sqid, c.own_handle.sqid}
+    assert len(owner["statements"]) == 3
+
+
+def _duplicate(c: SimpleNamespace) -> tuple[Any, Any, Any]:
+    """A second person the same directory links, owned like the shared one: its Person, Party and link."""
+
+    with system_context(reason="tests.directory_readers.duplicate"):
+        duplicate = Person.objects.create(display_name="Ada E.", created_by=c.owner)
+        party = Party.objects.get(pk=duplicate.pk)
+        link = RecordLink.objects.observe(c.stream, "ada-duplicate", target=party)
+        _state(party, "identity", source=c.source, link=link)
+    return duplicate, party, link
+
+
+def _merge_into_person(c: SimpleNamespace, duplicate: Any) -> None:
+    with actor_context(c.owner):
+        Party.objects.get(pk=c.person.pk).with_actor(c.owner).merge(records=[duplicate.public_id])
+
+
+def test_a_merged_contact_reads_through_its_survivor(contacts: SimpleNamespace) -> None:
+    """A duplicate merged into the shared person takes its link and rows along; the retired row lends nothing."""
+
+    c = contacts
+    duplicate, duplicate_party, link = _duplicate(c)
+    with system_context(reason="tests.directory_readers.duplicate_address"):
+        moved = Address.objects.create(party_id=duplicate.pk, street="3 Duplicate Lane", created_by=c.owner)
+        _state(moved, "address", source=c.source, link=link)
+    assert all(_allowed(row, c.reader) for row in (duplicate, duplicate_party, moved))
+    _merge_into_person(c, duplicate)
+    with system_context(reason="tests.directory_readers.merged"):
+        assert Party._base_manager.get(pk=duplicate.pk).merged_into_id == c.person.pk
+        assert RecordLink.objects.get(pk=link.pk).target_object_id == str(c.person.pk)
+        assert Address._base_manager.get(pk=moved.pk).party_id == c.person.pk
+    for actor in (c.reader, c.member):
+        for row in (c.person, c.person_party, moved):
+            assert _allowed(row, actor) and _scoped(row, actor), (type(row).__name__, actor.username)
+        for row in (duplicate, duplicate_party):
+            assert not _allowed(row, actor) and not _scoped(row, actor), (type(row).__name__, actor.username)
+    assert _allowed(duplicate_party, c.owner)
+
+
+def test_a_trashed_contact_keeps_its_readers(contacts: SimpleNamespace) -> None:
+    """Trash is no revocation: the directory's contact readers read a trashed person as its owner does."""
+
+    c = contacts
+    with actor_context(c.owner):
+        Person.objects.with_actor(c.owner).get(pk=c.person.pk).trash(reason="Moved away")
+    with system_context(reason="tests.directory_readers.trashed"):
+        assert Person._base_manager.get(pk=c.person.pk).is_trashed
+    for actor in (c.owner, c.reader, c.member):
+        for row in (c.person, c.person_party, c.address, c.stated_handle):
+            assert _allowed(row, actor) and _scoped(row, actor), (type(row).__name__, actor.username)
+    for action in ("read_private", "write", "delete"):
+        assert not _allowed(c.person, c.reader, action), action
+
+
+def test_a_superseded_claim_lends_nothing(contacts: SimpleNamespace) -> None:
+    """A merge collision supersedes one of two equal claims; a live link keeps lending only the current one."""
+
+    c = contacts
+    duplicate, duplicate_party, link = _duplicate(c)
+    with system_context(reason="tests.directory_readers.colliding_claim"):
+        Party.objects.assert_handle(duplicate_party, c.stated_handle, asserted_by=c.source, link=link)
+    _merge_into_person(c, duplicate)
+    with system_context(reason="tests.directory_readers.claims"):
+        claims = Party.statements.model._base_manager.filter(
+            subject_id=c.person.pk, aspect="handle", handle=c.stated_handle, asserted_by=str(to_subject_ref(c.source))
+        )
+        current, superseded = claims.get(superseded__isnull=True), claims.get(superseded__isnull=False)
+        assert {current.link_id, superseded.link_id} == {c.person_link.pk, link.pk}
+        assert superseded.status == "asserted"
+        # The current claim's link goes; the superseded claim's link still names the person.
+        RecordLink.objects.tombstone(RecordLink.objects.get(pk=current.link_id))
+        assert RecordLink.objects.get(pk=superseded.link_id).tombstoned_at is None
+    for actor in (c.reader, c.member):
+        assert not _allowed(c.stated_handle, actor) and not _scoped(c.stated_handle, actor), actor.username
+    assert _allowed(c.stated_handle, c.owner)
 
 
 def test_a_transferred_directory_lends_its_contacts_to_the_new_owner(contacts: SimpleNamespace) -> None:
