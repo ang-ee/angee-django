@@ -67,9 +67,25 @@ own `apply_record` nor another caller binds past it. Otherwise the contact mints
 its own person; a two-way directory never adopts. The handle an adoption found
 the person by is the evidence of the directory's identity statement on them,
 restated on every later record, and the contact's spelling of that address lands
-on the same handle row. Each person the decision passes over (a candidate
-a limit refused, or another person a replaced record was linked to) is proposed
-as the landed person's same person by parties' `directory_match` rule
+on the same handle row.
+
+What a pull-only contact may state about an address depends on whom the lookup
+finds by it (`PartyManager._contested_emails`): an address it answers with a
+person other than the contact's own, who does not hold it too, is someone else's,
+so the contact states it as a claim for review (below the confidence at which a
+handle statement applies) and leaves the handle's display fields alone; an
+address nobody holds, or the contact's own person holds, is stated in full. A
+refused or colliding contact therefore never moves an address, and what is
+attributed to it, away from its holder. A two-way directory (CardDAV) still
+states every address in full: its card projects only applied handle statements,
+so a claim would drop the address from the card and write that back to the
+server, and what a two-way card publishes about a person other sources state is
+open with the architect.
+
+Each person the contact's addresses name instead (a candidate an adoption limit
+refused, or a person a collision leaves holding the address) and each other
+person a replaced record was linked to is proposed as the landed person's same
+person by parties' `directory_match` rule
 (`PartyManager.propose_directory_match`), citing the contact's link and the
 handle or the replaced link, and joins the same-as review. A pair kept separate
 is not proposed again; merging the two, or the contact later adopting the

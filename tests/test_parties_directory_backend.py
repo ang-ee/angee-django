@@ -285,6 +285,22 @@ def _handle_claims(party_id: Any, value: str) -> list[tuple[Any, str]]:
     return sorted(claims.values_list("link_id", "status"), key=lambda claim: (claim[0] is None, claim))
 
 
+def _held_by(address: str) -> Any:
+    """The party the address's one handle resolves to, ``None`` for nobody."""
+
+    (handle,) = Handle.objects.filter(platform="email", normalized_value=address)
+    return handle.party_id
+
+
+def _claim_confidences(party_id: Any, address: str) -> list[float]:
+    """The confidence of each current claim a directory asserts of the address on the party."""
+
+    claims = Party.statements.filter(
+        subject_id=party_id, handle__normalized_value=address, source_kind="directory", status="asserted"
+    ).current()
+    return list(claims.values_list("confidence", flat=True))
+
+
 def test_a_merge_at_the_source_lands_on_the_replaced_records_person_and_withdraws_what_only_it_stated(
     pull: Pull,
 ) -> None:
@@ -698,23 +714,30 @@ def test_a_contact_mints_its_own_person_when_an_adoption_limit_refuses_the_one_i
 ) -> None:
     """Each limit alone refuses the adoption: the contact mints, and the existing person gains no statement of it.
 
-    The two are proposed as one person, once, citing the contact's link and the
-    handle the email found the person by (an account's address alone has none).
-    A second record of the contact lands on its own person and proposes nothing.
+    The address stays with whoever held it: the minted person only claims it, for
+    review, below the confidence at which a handle statement applies. The two
+    are proposed as one person, once, citing the contact's link and the handle
+    the email found the person by (an account's address alone has none). A second
+    record of the contact lands on its own person and proposes nothing new.
     """
 
     person = refusal(pull)
     found_by = Handle.objects.filter(platform="email", normalized_value="ada@example.com").first()
+    holder = found_by.party_id if found_by is not None else None
 
     assert pull.sync().count == 2
 
     ada = pull.link("ada")
     assert ada.target_object_id not in (None, str(person.pk))
     assert not Party.statements.filter(subject_id=person.pk, asserted_by=str(ada.asserted_by)).exists()
+    assert _held_by("ada@example.com") == holder
+    assert _claim_confidences(ada.target_object_id, "ada@example.com") == [0.4]
     proposed = [(frozenset({ada.target_object_id, str(person.pk)}), "asserted", _refs(ada, *filter(None, [found_by])))]
     assert _proposals() == proposed
     pull.source.put("ada", replace(_ADA, notes="Edited at the source."))
     assert pull.sync().count == 1
+    assert _held_by("ada@example.com") == holder
+    assert _claim_confidences(ada.target_object_id, "ada@example.com") == [0.4]
     assert _proposals() == proposed
 
 
@@ -777,15 +800,23 @@ def test_adopting_a_person_once_refused_withdraws_the_proposal_its_refusal_made(
 
 
 def test_a_two_way_directory_never_adopts(two_way: Pull) -> None:
+    """A two-way directory mints and states the address in full, as CardDAV always has (its card publishes it)."""
+
     person, _handle = _existing(two_way.directory.owner)
 
     assert two_way.sync().count == 2
 
-    assert two_way.link("ada").target_object_id not in (None, str(person.pk))
+    ada = two_way.link("ada")
+    assert ada.target_object_id not in (None, str(person.pk))
+    assert _claim_confidences(ada.target_object_id, "ada@example.com") == [1.0]
 
 
 def test_two_contacts_that_would_adopt_one_person_adopt_it_once(pull: Pull) -> None:
-    """The second contact of one directory finds the person already linked, so it mints its own, proposed as them."""
+    """The second contact of one directory finds the person already linked, so it mints its own, proposed as them.
+
+    The collision leaves the address with the adopted person: the second contact
+    only claims it.
+    """
 
     person, handle = _existing(pull.directory.owner)
     pull.source.put("ada-copy", replace(_ADA, display_name="Ada L."))
@@ -795,7 +826,55 @@ def test_two_contacts_that_would_adopt_one_person_adopt_it_once(pull: Pull) -> N
     ada, copy = pull.link("ada"), pull.link("ada-copy")
     assert ada.target_object_id == str(person.pk)
     assert copy.target_object_id not in (None, str(person.pk))
+    assert _held_by("ada@example.com") == person.pk
+    assert _claim_confidences(copy.target_object_id, "ada@example.com") == [0.4]
     assert _proposals() == [(frozenset({copy.target_object_id, str(person.pk)}), "asserted", _refs(copy, handle))]
+
+
+def test_two_contacts_with_one_address_nobody_held_leave_it_with_the_first(pull: Pull) -> None:
+    """The first contact mints its person, who then holds the address; the second mints its own, who only claims it."""
+
+    pull.source.put("ada-copy", replace(_ADA, display_name="Ada L."))
+
+    assert pull.sync().count == 3
+
+    ada, copy = pull.link("ada"), pull.link("ada-copy")
+    assert ada.target_object_id != copy.target_object_id
+    handle = Handle.objects.get(platform="email", normalized_value="ada@example.com")
+    assert _held_by("ada@example.com") == int(ada.target_object_id)
+    assert _claim_confidences(ada.target_object_id, "ada@example.com") == [1.0]
+    assert _claim_confidences(copy.target_object_id, "ada@example.com") == [0.4]
+    assert _proposals() == [
+        (frozenset({ada.target_object_id, copy.target_object_id}), "asserted", _refs(copy, handle))
+    ]
+    pull.source.put("ada-copy", replace(_ADA, display_name="Ada L.", notes="Edited at the source."))
+    assert pull.sync().count == 1
+    assert _held_by("ada@example.com") == int(ada.target_object_id)
+    assert _claim_confidences(copy.target_object_id, "ada@example.com") == [0.4]
+
+
+def test_a_contact_refused_the_one_person_claimed_for_its_address_keeps_only_claiming_it(pull: Pull) -> None:
+    """Nobody holds the address; a refused claimant leaves the contact's own claim a claim, record after record.
+
+    The contact's claim makes two claimants, which the lookup answers with
+    nobody; that never turns the claim into the contact's own address.
+    """
+
+    claimant = Person.objects.create(display_name="Ada (claimed)", created_by=_user("someone-else"))
+    handle = Handle.objects.upsert(platform="email", value="ada@example.com", created_by_id=claimant.created_by_id)
+    Party.objects.assert_handle(claimant, handle, asserted_by=Party.objects.rule_source("display_name"), confidence=0.4)
+
+    pull.sync()
+
+    ada = pull.link("ada")
+    assert ada.target_object_id not in (None, str(claimant.pk))
+    assert _held_by("ada@example.com") is None
+    assert _claim_confidences(ada.target_object_id, "ada@example.com") == [0.4]
+    assert _proposals() == [(frozenset({ada.target_object_id, str(claimant.pk)}), "asserted", _refs(ada, handle))]
+    pull.source.put("ada", replace(_ADA, notes="Edited at the source."))
+    assert pull.sync().count == 1
+    assert _held_by("ada@example.com") is None
+    assert _claim_confidences(ada.target_object_id, "ada@example.com") == [0.4]
 
 
 def test_a_directory_forwards_its_connection_test_and_credential_rule(
