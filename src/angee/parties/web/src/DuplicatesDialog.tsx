@@ -37,7 +37,11 @@ export interface DuplicatesDialogProps {
   sets: readonly DuplicateSetInput[];
   /** The Review page's certain pairs: each set is re-checked as still certain when merged. */
   certain?: boolean;
-  /** Lines about what the selection left out (records with no one to merge with, groups without a value). */
+  /**
+   * Lines about the sets around these ones: how the next batch is reached (the
+   * Review page's certain pairs, a selection over the batch cap) and what a list
+   * selection left out (records with no one to merge with, groups without a value).
+   */
   notes?: readonly string[];
   onClose: (merged: boolean) => void;
 }
@@ -94,7 +98,7 @@ export function DuplicatesDialog({ sets: opened, certain = false, notes = [], on
           </Dialog.Header>
           <Dialog.Body className="space-y-4">
             <Alert tone="info">{t("duplicates.valueRule")} {t("duplicates.undo")}</Alert>
-            {notes.map((note) => <Alert key={note} tone="warning">{note}</Alert>)}
+            {notes.map((note) => <Alert key={note} tone="info">{note}</Alert>)}
             {preview.error ? <ErrorBanner description={t("duplicates.error")} /> : null}
             {mergeState.error ? <ErrorBanner description={t("duplicates.mergeError")} /> : null}
             {preview.isFetching && previews.length === 0 ? <LoadingPanel loadingLabel={t("duplicates.loading")} /> : null}

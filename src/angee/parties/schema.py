@@ -407,15 +407,27 @@ class PartyRelationshipType(AngeeNode):
 class SameAsPairType:
     """Two actor-visible parties sharing one deterministic normalized handle."""
 
+    id: strawberry.ID
+    """The pair's public id: the next page of the review list continues after it (``after``)."""
     left: PartyType
     right: PartyType
     normalized_value: str
 
 
 @strawberry.type
+class SameAsPairCountsType:
+    """How many pairs the reader may review, and how many of those are certain."""
+
+    pairs: int
+    certain: int
+
+
+@strawberry.type
 class CertainSameAsPairType:
     """A same-person pair one confirm would merge now: the two, the address linking them, and the older survivor."""
 
+    id: strawberry.ID
+    """The pair's public id: the next batch continues after it (``after``)."""
     left: PartyType
     right: PartyType
     normalized_value: str
@@ -510,22 +522,31 @@ class PartiesReviewQuery:
     """Bounded read surfaces for party search and human review queues."""
 
     @strawberry.field
-    def same_as_pairs(self, limit: int = 50) -> list[SameAsPairType]:
-        """Return resolved identity statements awaiting a survivor choice."""
+    def same_as_pairs(self, limit: int = 50, after: strawberry.ID | None = None) -> list[SameAsPairType]:
+        """Return the pairs awaiting a survivor choice, in review order: at most ``limit`` after the pair ``after``."""
 
         return cast(
             "list[SameAsPairType]",
-            Party.objects.all().same_as_pairs(limit=limit),
+            Party.objects.all().same_as_pairs(limit=limit, after=after),
         )
 
     @strawberry.field
-    def certain_same_as_pairs(self, info: strawberry.Info, limit: int = 50) -> list[CertainSameAsPairType]:
-        """Return the certain same-person pairs awaiting the signed-in person's review, at most 50."""
+    def certain_same_as_pairs(
+        self, info: strawberry.Info, limit: int = 50, after: strawberry.ID | None = None,
+    ) -> list[CertainSameAsPairType]:
+        """Return the certain pairs awaiting the signed-in person's review after the pair ``after``, at most 50."""
 
         return cast(
             "list[CertainSameAsPairType]",
-            Party.objects.certain_same_as_pairs(actor=session_user(info), limit=limit),
+            Party.objects.certain_same_as_pairs(actor=session_user(info), limit=limit, after=after),
         )
+
+    @strawberry.field
+    def same_as_pair_counts(self, info: strawberry.Info) -> SameAsPairCountsType:
+        """Return how many pairs the signed-in person may review, and how many of those are certain."""
+
+        counts = Party.objects.same_as_review_counts(actor=session_user(info))
+        return SameAsPairCountsType(pairs=counts.pairs, certain=counts.certain)
 
     @strawberry.field
     def duplicate_set_previews(

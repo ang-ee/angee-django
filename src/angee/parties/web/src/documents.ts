@@ -94,7 +94,7 @@ export const RemoveCircleMember = graphql(`
 `);
 
 export const PartiesOverview = graphql(`
-  query PartiesOverview($sameAsLimit: Int = 100) {
+  query PartiesOverview {
     contacts: people_aggregate {
       aggregate {
         count
@@ -119,13 +119,8 @@ export const PartiesOverview = graphql(`
         count
       }
     }
-    same_as_pairs(limit: $sameAsLimit) {
-      left {
-        id
-      }
-      right {
-        id
-      }
+    same_as_pair_counts {
+      pairs
     }
   }
 `);
@@ -218,8 +213,9 @@ export const PartyMergeComparison = graphql(`
 `);
 
 export const SameAsPairs = graphql(`
-  query SameAsPairs($limit: Int = 50) {
-    same_as_pairs(limit: $limit) {
+  query SameAsPairs($limit: Int = 50, $after: ID) {
+    same_as_pairs(limit: $limit, after: $after) {
+      id
       normalized_value
       left {
         id
@@ -236,8 +232,9 @@ export const SameAsPairs = graphql(`
 `);
 
 export const CertainSameAsPairs = graphql(`
-  query CertainSameAsPairs($limit: Int = 50) {
-    certain_same_as_pairs(limit: $limit) {
+  query CertainSameAsPairs($limit: Int = 50, $after: ID) {
+    certain_same_as_pairs(limit: $limit, after: $after) {
+      id
       normalized_value
       left { id display_name }
       right { id display_name }
@@ -286,6 +283,10 @@ export const PartyReviewCounts = graphql(`
       aggregate {
         count
       }
+    }
+    same_as_pair_counts {
+      pairs
+      certain
     }
   }
 `);

@@ -12,7 +12,6 @@ export const enPartiesMessages: Record<string, string> = {
   "overview.metric.unresolvedHandles": "Unresolved handles",
   "overview.metric.reviewQueue": "Review queue",
   "overview.metric.sameAs": "Possible duplicates",
-  "overview.metric.sameAsCapped": "Showing the bounded review candidate count",
   "overview.error": "Could not load the relationship overview.",
   "person.eyebrow": "Person",
   "organization.eyebrow": "Organization",
@@ -204,7 +203,10 @@ export const enPartiesMessages: Record<string, string> = {
   "relationship.field.startedAt": "Started",
   "relationship.field.endedAt": "Ended",
   // The batch merge: the Review page's certain pairs, a list selection's sets, and their one dialog.
-  "review.sameAs.mergeCertain": "Merge certain pairs ({count})",
+  "review.sameAs.mergeCertain": "Merge certain pairs ({count} of {total})",
+  "review.sameAs.pagerUnit": "pairs",
+  "duplicates.nextBatch":
+    "These are {count} of the {total} certain pairs. When this dialog closes, Merge certain pairs offers the next ones, until the last.",
   "review.sameAs.certainHeading": "{left} and {right}, both at {address}",
   "merge.selection.action": "Merge…",
   "merge.selection.unplaceable":
