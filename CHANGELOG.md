@@ -10,6 +10,24 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.web`: an addon's web package declares **standalone pages**, static HTML
+  entries of the web build that load none of the app, in `web/package.json`:
+  `"angee": {"pages": {"<id>": {"entry": "./src/standalone/form.html", "paths":
+  ["/forms/w/*"], "accept": "text/html"}}}`. `WebRuntime` validates the
+  declaration beside `angee.assets` (a dotted lower-case id unique across
+  packages, an existing entry file inside the package, absolute path prefixes
+  ending in `/*` that overlap no other page's) and projects it twice: on the
+  package's entry in `runtime/web/manifest.json`, with the one `Accept` rule as
+  `pageAccept`, and as Caddy routes in `runtime/web/pages.caddy`, published with
+  the other `runtime/web` outputs and holding only its sentinel when no page is
+  declared. Page `<id>` is the build output's `<id>.html`. A page answers `GET`
+  and `HEAD` on its paths only when `text/html` is the first media type of the
+  request's `Accept` header, so every other request reaches Django, and carries
+  one fixed content security policy (no inline script, never framed). The stack
+  templates' static ingress declares its site root once and imports the snippet
+  ahead of its Django routes. **Upgrade:** re-render a stack together with the
+  framework it runs: the ingress imports `runtime/web/pages.caddy`, which an
+  earlier composer does not emit, and Caddy refuses to start on a missing import.
 - `@angee/ui`: `FormView` (and so `Form` and every registered form) takes an
   optional `renderUnavailable(id, unavailable)`: what a saved record's form
   shows when its id reads no record, given the default "Record unavailable"

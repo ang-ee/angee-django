@@ -1,10 +1,11 @@
 """Web runtime manifest projected from the composed addon graph.
 
 The optional web addon's build projector. It is deliberately offline and pure: it reads
-native ``web/package.json`` documents for enabled apps and renders two files under ``runtime/web/`` —
-``manifest.json`` (the package graph, each package's addon ancestry, codegen
-and named asset declarations, and the deployment's ``ANGEE_UI`` layer) and
-``tailwind.sources.css`` (the Tailwind ``@source`` include). It holds **no**
+native ``web/package.json`` documents for enabled apps and renders three files under ``runtime/web/`` —
+``manifest.json`` (the package graph, each package's addon ancestry, codegen,
+named asset and standalone page declarations, and the deployment's ``ANGEE_UI``
+layer), ``tailwind.sources.css`` (the Tailwind ``@source`` include) and
+``pages.caddy`` (the ingress routes of the standalone pages). It holds **no**
 GraphQL-schema knowledge: which schemas exist, whether each is live, and the
 shape of their operation documents are owned by the SDL on disk and the
 ``@angee/app`` shared generator. Vite dev/build awaits it; ``angee-web-codegen``
@@ -25,6 +26,7 @@ from typing import TYPE_CHECKING, Any, cast
 from django.apps import AppConfig
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from django.utils.csp import CSP, build_policy
 from django_compose.components import installed_components
 from django_compose.serving import GENERATED_SENTINEL
 
@@ -39,6 +41,50 @@ WEB_PACKAGE_RE = re.compile(r"^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$"
 DEFAULT_WEB_ROOT = "../../web"
 UI_LAYER_KEYS = frozenset({"menus", "containers", "shell"})
 """Manifest keys the deployment's ``ANGEE_UI`` setting may declare; ``@angee/app`` validates their values."""
+
+PAGE_ID_RE = re.compile(r"^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$")
+"""A standalone page id: dotted lower-case segments. Page ``<id>`` is built to ``<id>.html`` at the web build root."""
+
+PAGE_PATH_RE = re.compile(r"^/(?:[a-z0-9][a-z0-9._~-]*/)+\*$")
+"""A path a standalone page answers: an absolute lower-case prefix of whole segments ending in ``/*``."""
+
+PAGE_ACCEPT = "text/html"
+"""The media type a standalone page declares as ``accept``; this version admits no other."""
+
+PAGE_ACCEPT_PATTERN = r"^[\t\x20]*[Tt][Ee][Xx][Tt]/[Hh][Tt][Mm][Ll][\t\x20]*(?:;[^,]*)?(?:,|$)"
+"""What a request's ``Accept`` header must match before a ``text/html`` standalone page answers it.
+
+It matches only when ``text/html`` is the FIRST media type listed, in any case and
+with any parameters. A browser navigation lists it first; ``fetch``, ``curl`` and
+API clients send ``*/*`` or ``application/json`` and must reach Django on the same
+path, so neither a wildcard nor a later ``text/html`` selects a page. The ingress
+snippet and the Vite dev server apply this one string, published as the manifest's
+top-level ``pageAccept`` (each admitted ``accept`` media type to its pattern); it
+therefore uses only syntax Go RE2, JavaScript and Python read alike without flags,
+which is why each letter spells out both cases.
+"""
+
+PAGE_CSP: dict[str, list[str]] = {
+    "default-src": [CSP.SELF],
+    "script-src": [CSP.SELF],
+    "object-src": [CSP.NONE],
+    "base-uri": [CSP.NONE],
+    "frame-ancestors": [CSP.NONE],
+    "connect-src": [CSP.SELF],
+    "img-src": [CSP.SELF, "data:"],
+    "font-src": [CSP.SELF],
+    "style-src": [CSP.SELF, CSP.UNSAFE_INLINE],
+    "form-action": [CSP.NONE],
+}
+"""The content security policy the ingress sends with every standalone page.
+
+A standalone page renders markup written by staff on the application's origin, so
+it must not be able to run inline script, and it is never framed. The ingress sends
+it as a response header because a ``<meta>`` policy cannot set ``frame-ancestors``.
+``style-src`` admits inline styles, the one loosened directive, because the
+rendering library sets them. The policy is the same for every page: none declares
+its own.
+"""
 
 
 def addon_ancestors(
@@ -78,6 +124,8 @@ class WebRuntime:
         packages_seen: dict[str, str] = {}
         schemas_seen: dict[str, str] = {}
         assets_seen: dict[str, str] = {}
+        pages_seen: dict[str, str] = {}
+        page_paths_seen: dict[str, str] = {}
         providers = installed_components("angee.addons").providers
         for addon in addons:
             if addon.name not in providers:
@@ -113,6 +161,25 @@ class WebRuntime:
                 assets_seen[name] = addon.name
             if assets:
                 entry["assets"] = assets
+            pages = self._page_entries(addon, web.get("pages", {}))
+            for name, page in pages.items():
+                if name in pages_seen:
+                    raise ImproperlyConfigured(
+                        f"Duplicate web/package.json angee.pages id {name!r}: {pages_seen[name]} and {addon.name}"
+                    )
+                pages_seen[name] = addon.name
+                owner = f"{name!r} in {addon.name}"
+                for path in page["paths"]:
+                    for seen, seen_owner in page_paths_seen.items():
+                        # Both end in "/*", so one prefix containing the other claims the same requests.
+                        if path.startswith(seen.removesuffix("*")) or seen.startswith(path.removesuffix("*")):
+                            raise ImproperlyConfigured(
+                                f"Overlapping web/package.json angee.pages paths {seen!r} ({seen_owner}) "
+                                f"and {path!r} ({owner})"
+                            )
+                    page_paths_seen[path] = owner
+            if pages:
+                entry["pages"] = pages
             if "codegen" in web:
                 codegen = self._codegen_entry(addon, web["codegen"], package)
                 schema = codegen["schema"]
@@ -131,6 +198,7 @@ class WebRuntime:
             "corePackages": core_packages,
             "addonPackages": addon_packages,
             "codegen": codegen_entries,
+            "pageAccept": {PAGE_ACCEPT: PAGE_ACCEPT_PATTERN},
             "documentRoots": [
                 {"kind": "package", "package": entry["package"], "path": f"node_modules/{entry['package']}/src"}
                 for entry in (*core_packages, *addon_packages)
@@ -145,6 +213,7 @@ class WebRuntime:
 
         return {
             Path("web/manifest.json"): self.manifest_json(),
+            Path("web/pages.caddy"): self.pages_caddy(),
             Path("web/tailwind.sources.css"): self.tailwind_sources_css(),
         }
 
@@ -175,6 +244,53 @@ class WebRuntime:
             ]
         )
 
+    def pages_caddy(self) -> str:
+        """Return the Caddy routes a site block imports ahead of its Django and app routes.
+
+        Each standalone page answers ``GET`` and ``HEAD`` on its paths when the
+        request's ``Accept`` header matches the manifest's ``pageAccept`` pattern,
+        with the web build's ``/<id>.html`` under the importing site's ``root``;
+        every other request falls through to the site's own routes. The page
+        carries ``PAGE_CSP`` on those paths and at the built file's own URL, which
+        the site's file server also answers. Without pages only the sentinel
+        remains, so the import always resolves.
+        """
+
+        pages = {
+            name: page for entry in self.manifest["addonPackages"] for name, page in entry.get("pages", {}).items()
+        }
+        lines = [f"# {GENERATED_SENTINEL}"]
+        if pages:
+            lines += [
+                "#",
+                "# Standalone pages: static entries of the web build, served ahead of the app and of Django.",
+                "# A page answers only when text/html is the FIRST media type of the Accept header. A browser",
+                "# navigation lists it first; fetch, curl and API clients send */* or application/json and must",
+                "# reach Django on the same path, so neither a wildcard nor a later text/html selects a page.",
+                "# Only GET and HEAD read a file, and the answer varies by Accept for every cache.",
+                "# A page renders staff-written markup on the application's origin, so its content security",
+                "# policy runs no inline script and forbids framing, wherever the built file is requested.",
+            ]
+        policy = f'{CSP.HEADER_ENFORCE} "{build_policy(PAGE_CSP)}"'
+        for name in sorted(pages):
+            matcher = f"@page_{name.replace('.', '_')}"
+            lines += [
+                "",
+                f"{matcher} {{",
+                "\tmethod GET HEAD",
+                f"\tpath {' '.join(sorted(pages[name]['paths']))}",
+                f"\theader_regexp Accept `{self.manifest['pageAccept'][pages[name]['accept']]}`",
+                "}",
+                f"handle {matcher} {{",
+                "\theader +Vary Accept",
+                f"\theader {policy}",
+                f"\trewrite * /{name}.html",
+                "\tfile_server",
+                "}",
+                f"header /{name}.html {policy}",
+            ]
+        return "\n".join(lines) + "\n"
+
     @staticmethod
     def _ui_layer(ui: object) -> dict[str, Any]:
         """Admit the deployment's UI layer; ``@angee/app`` resolves and validates its values."""
@@ -191,7 +307,7 @@ class WebRuntime:
 
     @staticmethod
     def _package_document(addon: AppConfig) -> Mapping[str, Any] | None:
-        """Read the native npm owner of fragment identity, assets and codegen intent once."""
+        """Read the native npm owner of fragment identity, assets, pages and codegen intent once."""
 
         package_json = Path(addon.path) / "web" / "package.json"
         if not package_json.is_file():
@@ -205,7 +321,22 @@ class WebRuntime:
         return document
 
     @staticmethod
-    def _asset_entries(addon: AppConfig, raw: object) -> dict[str, str]:
+    def _package_path(where: str, value: object) -> str:
+        """Admit one package-relative POSIX path: the rule named assets and page entries share."""
+
+        # npm paths are POSIX; the Windows anchor still catches drive and UNC forms.
+        if (
+            not isinstance(value, str) or value != value.strip() or "\\" in value or PureWindowsPath(value).anchor
+            or not (parts := PurePosixPath(value).parts) or ".." in parts
+        ):
+            raise ImproperlyConfigured(
+                f"{where} must be a relative POSIX path to a file, without surrounding whitespace, "
+                "backslashes or '..' segments"
+            )
+        return value
+
+    @classmethod
+    def _asset_entries(cls, addon: AppConfig, raw: object) -> dict[str, str]:
         """Admit named package-relative POSIX paths; the web generator checks the selected files."""
 
         where = f"{addon.name} web/package.json angee.assets"
@@ -214,14 +345,45 @@ class WebRuntime:
         for name, value in sorted(raw.items()):
             if not name or name != name.strip():
                 raise ImproperlyConfigured(f"{where} name {name!r} must be non-empty without surrounding whitespace")
-            parts = PurePosixPath(value).parts if isinstance(value, str) else ()
-            # npm paths are POSIX; the Windows anchor still catches drive and UNC forms.
-            if not parts or ".." in parts or value != value.strip() or "\\" in value or PureWindowsPath(value).anchor:
-                raise ImproperlyConfigured(
-                    f"{where}[{name!r}] must be a relative POSIX path to a file, without surrounding whitespace, "
-                    "backslashes or '..' segments"
-                )
+            cls._package_path(f"{where}[{name!r}]", value)
         return dict(raw)
+
+    @classmethod
+    def _page_entries(cls, addon: AppConfig, raw: object) -> dict[str, dict[str, Any]]:
+        """Admit standalone pages: static entries of the web build that load none of the app.
+
+        A page declares exactly its ``entry`` (an existing file of the package), the
+        ``paths`` it answers and the ``accept`` media type whose requests select it.
+        Only the declaration is projected: the entry's bytes are the web build's input.
+        """
+
+        where = f"{addon.name} web/package.json angee.pages"
+        if not isinstance(raw, Mapping):
+            raise ImproperlyConfigured(f"{where} must be an object")
+        package_root = (Path(addon.path) / "web").resolve()
+        pages: dict[str, dict[str, Any]] = {}
+        for name, page in sorted(raw.items()):
+            if not PAGE_ID_RE.fullmatch(name):
+                raise ImproperlyConfigured(f"{where} id {name!r} must be a dotted lower-case name such as 'site.form'")
+            here = f"{where}[{name!r}]"
+            if not isinstance(page, Mapping) or page.keys() != {"entry", "paths", "accept"}:
+                raise ImproperlyConfigured(f"{here} must declare exactly 'entry', 'paths' and 'accept'")
+            entry = cls._package_path(f"{here}.entry", page["entry"])
+            file = (package_root / entry).resolve()
+            if not file.is_file() or not file.is_relative_to(package_root):
+                raise ImproperlyConfigured(f"{here}.entry must name an existing file inside the package: {entry}")
+            paths = page["paths"]
+            if not isinstance(paths, list) or not paths or not all(
+                isinstance(path, str) and PAGE_PATH_RE.fullmatch(path) for path in paths
+            ):
+                raise ImproperlyConfigured(
+                    f"{here}.paths must be a non-empty list of absolute lower-case prefixes ending in '/*', "
+                    "such as '/forms/w/*'"
+                )
+            if page["accept"] != PAGE_ACCEPT:
+                raise ImproperlyConfigured(f"{here}.accept must be {PAGE_ACCEPT!r}")
+            pages[name] = {"entry": entry, "paths": list(paths), "accept": PAGE_ACCEPT}
+        return pages
 
     @staticmethod
     def _codegen_entry(addon: AppConfig, raw: object, package: str) -> dict[str, Any]:

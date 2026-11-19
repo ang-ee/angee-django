@@ -23,6 +23,10 @@
 {% endif %}
         :80 {
           encode zstd gzip
+          root * /srv/project/{{ web_path }}/dist
+
+          # Standalone pages the composer projects from addon declarations answer before Django and the app.
+          import /srv/project/runtime/web/pages.caddy
 
           @django path /graphql/* /acp/* /auth/csrf /auth/csrf/ /forms/* /storage/upload /storage/upload/* /storage/download /storage/download/* /admin/* /static/* /media/* /mcp /mcp/*
           handle @django {
@@ -44,7 +48,6 @@
           }{% endif %}
 
           handle {
-            root * /srv/project/{{ web_path }}/dist
             try_files {path} /index.html
             file_server
           }

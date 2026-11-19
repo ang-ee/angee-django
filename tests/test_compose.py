@@ -21,6 +21,7 @@ from django_compose.declarations import model_declaration
 from django_compose.model_composition import ModelComposition
 from django_compose.models import Composable
 from django_compose.rendering import render_models
+from django_compose.serving import GENERATED_SENTINEL
 from graphql import concat_ast, specified_rules, validate
 
 from angee.base.build import PermissionIntegration, composed_grants
@@ -433,6 +434,34 @@ def test_if_stale_tracks_asset_declarations_but_not_image_bytes(tmp_path: Path) 
     manifest = json.loads((host.root / "runtime/web/manifest.json").read_text())
     entry = next(entry for entry in manifest["addonPackages"] if entry["app"] == "site_probe")
     assert entry["assets"] == {"site.image": "./replacement.png"}
+    assert "Composition is current." in host.compose("--check")
+
+
+def test_compose_publishes_the_page_ingress_snippet_and_follows_page_declarations(tmp_path: Path) -> None:
+    """``runtime/web/pages.caddy`` is a published artifact: importable without pages, recomposed with one."""
+
+    host = _TemplateHost(tmp_path / "host", "site_probe")
+    addon = host.root / "site_probe"
+    addon.mkdir()
+    (addon / "__init__.py").touch()
+    write_addon_distribution(addon, "site_probe", depends_on=("angee.web",))
+    (addon / "web/src").mkdir(parents=True)
+    (addon / "web/src/form.html").write_text("<!doctype html>")
+    package: dict[str, Any] = {"name": "@example/site"}
+    (addon / "web/package.json").write_text(json.dumps(package))
+    host.write_settings()
+    assert "Composition generated." in host.compose()
+    snippet = host.root / "runtime/web/pages.caddy"
+    assert snippet.read_text() == f"# {GENERATED_SENTINEL}\n"
+    package["angee"] = {
+        "pages": {"site.form": {"entry": "./src/form.html", "paths": ["/forms/w/*"], "accept": "text/html"}},
+    }
+    (addon / "web/package.json").write_text(json.dumps(package))
+    assert "Composition generated." in host.compose("--if-stale")
+    assert "rewrite * /site.form.html" in snippet.read_text()
+    manifest = json.loads((host.root / "runtime/web/manifest.json").read_text())
+    entry = next(entry for entry in manifest["addonPackages"] if entry["app"] == "site_probe")
+    assert entry["pages"] == package["angee"]["pages"]
     assert "Composition is current." in host.compose("--check")
 
 
