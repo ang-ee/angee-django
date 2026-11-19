@@ -1615,10 +1615,13 @@ class Directory(Bridge, inherits="integrate.Integration"):
 
     An ``integrate.Integration`` child (so it draws its credential / owner / status
     from the connection substrate) and a ``Bridge`` (so the scheduler and the eager
-    ``syncIntegration`` mutation drive it). ``backend_class`` selects the protocol —
-    ``carddav`` (contributed by ``parties_integrate_carddav``) — and ``config``
-    carries the source URL. The inherited ``Bridge.sync()`` drives the backend
-    streams; the parties managers own the contact projection and ingest path.
+    ``syncIntegration`` mutation drive it). ``backend_class`` selects the protocol
+    (``carddav`` from ``parties_integrate_carddav``), and ``config`` carries what
+    that backend needs to reach its source (CardDAV's server URL). The backend tests
+    the connection (:meth:`test_connection`), admits the credential it uses
+    (:meth:`admit_credential`) and declares which way the contacts sync
+    (``DirectoryBackend.direction``). The inherited ``Bridge.sync()`` drives the
+    backend streams; the parties managers own the contact projection and ingest path.
     """
 
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.CONNECT
@@ -1651,3 +1654,18 @@ class Directory(Bridge, inherits="integrate.Integration"):
 
         backend_class = self.get_backend_class_impl()
         return backend_class(self)
+
+    def test_connection(self) -> str:
+        """Exercise the selected backend's connection (the Integration test contract)."""
+
+        return self.backend.test_connection()
+
+    def admit_credential(self, credential: Any) -> None:
+        """Admit only a credential this directory's backend uses (``DirectoryBackend.admit_credential``).
+
+        Integrate asks on every attachment, so neither a connect, the console's
+        credential patch nor a reconnect points a directory at a credential its
+        backend would send elsewhere.
+        """
+
+        self.backend.admit_credential(credential)

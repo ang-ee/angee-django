@@ -50,6 +50,7 @@ from angee.integrate.states import (
 from angee.integrate.streams import (
     BridgeSyncError,
     CursorInvalid,
+    PushPreview,
     RemoteRejected,
     advance_stream,
     begin_stream_cycle,
@@ -74,6 +75,7 @@ from angee.parties_integrate_carddav.backend import (
     _DAV_RESPONSE_CAP,
     CardDavDirectoryBackend,
     CardDavError,
+    ParsedCard,
     _parse_vcard,
     _xml,
 )
@@ -1089,11 +1091,8 @@ def test_keeping_the_local_side_keeps_a_remote_edit_the_hash_cannot_see(replica:
     assert [line.value for line in card.contents["x-ablabel"]] == ["Signal"]
 
 
-@pytest.mark.parametrize("policy", ["retain", "propagate"])
-def test_removed_member_tombstones_link_and_withdraws_directory_statements(replica: Replica, policy: str) -> None:
+def test_removed_member_tombstones_link_and_withdraws_directory_statements(replica: Replica) -> None:
     person, link = replica.baseline()
-    replica.stream.config = {**replica.stream.config, "remote_delete": policy}
-    replica.stream.save(update_fields=["config"])
     replica.server.remove(_HREF)
     result = replica.pull()
     link.refresh_from_db()
@@ -1488,12 +1487,11 @@ def test_nameless_card_stays_nameless_across_a_local_edit(replica: Replica) -> N
 
 
 def test_contact_projection_is_deterministic_and_declares_exact_bridge_fields() -> None:
-    first = ParsedContact(
+    first = ParsedCard(
         uid="one",
         href="https://dav.example/first.vcf",
         etag='"v1"',
         display_name="Ada",
-        department="Unmapped department",
         emails=(("z@example.test", "work", False), ("a@example.test", "home", True)),
         addresses=(ParsedAddress(street="Second"), ParsedAddress(street="First")),
         birthday=date(1815, 12, 10),
@@ -1506,7 +1504,6 @@ def test_contact_projection_is_deterministic_and_declares_exact_bridge_fields() 
         uid="other",
         href="https://dav.example/other.vcf",
         etag='"v2"',
-        department="Another department",
         raw_vcard="different bytes",
         emails=tuple(reversed(first.emails)),
         addresses=tuple(reversed(first.addresses)),
@@ -1828,7 +1825,7 @@ def test_discovery_falls_back_after_oversized_principal_response(
         return original_request(request)
 
     monkeypatch.setattr(replica.server, "handle_request", handler)
-    assert [book.href for book in replica.backend.discover()] == [_BOOK]
+    assert [book.key for book in replica.backend.discover()] == [_BOOK]
     assert requested_urls[:2] == [_BASE, f"{_BASE}.well-known/carddav"]
 
 
@@ -2574,6 +2571,116 @@ def test_replaying_an_unchanged_directory_creates_or_changes_nothing(replica: Re
     assert {model: list(model._base_manager.order_by("pk").values()) for model in rows} == before
     assert (RecordLink.history.count(), Folder.history.count()) == history
     assert not [request for request in replica.server.requests if "addressbook-multiget" in request[3]]
+
+
+_LEGACY_CARD = (
+    "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:ada\r\nFN:Ada Lovelace\r\nN:Lovelace;Ada;Augusta;;\r\n"
+    "NICKNAME:Countess\r\nEMAIL;TYPE=HOME:ada@example.com\r\nEMAIL;TYPE=WORK,PREF:ada@work.example.com\r\n"
+    "TEL;TYPE=CELL:+15550100\r\nADR;TYPE=HOME:;;12 Analytical St;London;;EC1;GB\r\n"
+    "ORG:Analytical Engines;Research\r\nTITLE:Mathematician\r\nROLE:Programmer\r\nBDAY:1815-12-10\r\n"
+    "NOTE:First programmer.\r\nX-FAVOURITE-COLOUR:green\r\nEND:VCARD\r\n"
+)
+_LEGACY_PROJECTION = {
+    "additional_name": "Augusta",
+    "addresses": [
+        {
+            "city": "London",
+            "country": "GB",
+            "extended": "",
+            "label": "home",
+            "po_box": "",
+            "postal_code": "EC1",
+            "region": "",
+            "street": "12 Analytical St",
+        }
+    ],
+    "anniversary": None,
+    "birthday": "1815-12-10",
+    "display_name": "Ada Lovelace",
+    "emails": [["ada@example.com", "home", False], ["ada@work.example.com", "work", True]],
+    "family_name": "Lovelace",
+    "given_name": "Ada",
+    "name_prefix": "",
+    "name_suffix": "",
+    "nickname": "Countess",
+    "notes": "First programmer.",
+    "organization": "Analytical Engines",
+    "phones": [["+15550100", "cell", False]],
+    "photo": None,
+    "role": "Programmer",
+    "title": "Mathematician",
+}
+_LEGACY_CONTACT_PAYLOAD = {
+    "href": _HREF,
+    "raw_vcard": _LEGACY_CARD.replace("\r\n", "\n").strip(),
+    "contact": _LEGACY_PROJECTION,
+}
+_LEGACY_CONTACT_HASH = "39b7e76c2d6b9d22410265162e841e43b33b0c84d537ed6188a3177d5285ff29"
+_LEGACY_BOOK_PAYLOAD = {"href": _BOOK, "name": "Contacts"}
+_LEGACY_BOOK_HASH = "b1f3416ed72b12d139eb574718ae20a8e572209c877e60c371c82f1fe0369138"
+
+
+def test_links_the_href_base_wrote_classify_unchanged_and_push_nothing(replica: Replica) -> None:
+    """A deployment's CardDAV links survive the directory seam with no migration and no re-download.
+
+    The literals are what the base stored before CardDAV's identity and record
+    building moved into its backend: the contact payload ``{"href", "raw_vcard",
+    "contact"}``, a hash over the projection, the UID and href as metadata, and an
+    address-book payload that named its href. The contact keeps every byte, the
+    projection keeps its keys, the stream keeps mapping version 1 with no
+    dependency digest, and the book is re-observed once under its new payload.
+    """
+
+    replica.server.store(_HREF, _LEGACY_CARD)
+    person, link = replica.baseline()
+    etag = replica.server.cards[_HREF][1]
+    book = RecordLink.objects.get(stream=replica.addressbooks, external_key=_BOOK)
+    assert (link.source_payload, link.source_hash, link.metadata) == (
+        _LEGACY_CONTACT_PAYLOAD, _LEGACY_CONTACT_HASH, {"href": _HREF, "uid": "ada"}
+    )
+    # Restore every link and stream exactly as the earlier base left them.
+    with system_context(reason="test legacy CardDAV evidence"):
+        RecordLink.objects.promote(
+            link,
+            source_payload=_LEGACY_CONTACT_PAYLOAD,
+            source_hash=_LEGACY_CONTACT_HASH,
+            mapped_payload=_LEGACY_PROJECTION,
+            remote_version=etag,
+        )
+        RecordLink.objects.observe(replica.stream, "ada", metadata={"href": _HREF, "uid": "ada"})
+        RecordLink.objects.promote(
+            book,
+            source_payload=_LEGACY_BOOK_PAYLOAD,
+            source_hash=_LEGACY_BOOK_HASH,
+            mapped_payload={"name": "Contacts"},
+        )
+        SyncStream._base_manager.filter(pk=replica.stream.pk).update(
+            config={"local_delete": "conflict", "remote_delete": "retain"}
+        )
+    applications = (contact_applications().count(), applied_history().filter(id=book.pk).count())
+    statements = list(Party.statements.model._base_manager.order_by("pk").values())
+    generation = replica.stream.generation
+    replica.server.requests.clear()
+
+    # The next sync pulls nothing new, then the daily sweep re-reads the card through the new mapper.
+    assert sync_bridge(replica.directory) == 0
+    link.refresh_from_db()
+    book.refresh_from_db()
+    replica.stream.refresh_from_db()
+    assert (link.source_payload, link.source_hash, link.remote_version, link.metadata) == (
+        _LEGACY_CONTACT_PAYLOAD, _LEGACY_CONTACT_HASH, etag, {"href": _HREF, "uid": "ada"}
+    )
+    assert link.applied_base.mapped_payload == _LEGACY_PROJECTION
+    assert set(contact_projection(Party.objects.project_contact(person))) == set(_LEGACY_PROJECTION) == _DECLARED_FIELDS
+    assert (link.applied_base.mapping_version, link.applied_base.dependency_digest) == (1, "")
+    assert (replica.stream.mapping_version, replica.stream.generation) == (1, generation)
+    assert (contact_applications().count(), applied_history().filter(id=book.pk).count()) == applications
+    assert list(Party.statements.model._base_manager.order_by("pk").values()) == statements
+    assert book.source_payload == {"key": _BOOK, "name": "Contacts"}
+    assert preview_push(replica.stream, replica.backend) == PushPreview()
+    methods = [(method, "addressbook-multiget" in body) for method, _url, _headers, body in replica.server.requests]
+    assert ("REPORT", True) in methods  # The sweep read the card again and found it unchanged.
+    assert not {"PUT", "DELETE"} & {method for method, _multiget in methods}
 
 
 def test_a_new_address_book_becomes_a_folder_and_syncs_its_contacts_in_the_same_cycle(replica: Replica) -> None:

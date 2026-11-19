@@ -136,7 +136,6 @@ def test_photo_download_is_capped_and_uses_the_collection_origin(settings: Any) 
             return httpx2.Response(200, content=b"photo")
 
     contact = ParsedContact(
-        uid="one",
         display_name="One",
         photo=ParsedPhoto(uri="https://dav.example/books/photo.jpg", mime="image/jpeg"),
     )
@@ -152,12 +151,12 @@ def test_connect_probe_failure_writes_no_rows(
 
     probe_atomic_states: list[bool] = []
 
-    def reject_probe(backend: CardDavDirectoryBackend) -> None:
+    def reject_probe(backend: CardDavDirectoryBackend) -> str:
         del backend
         probe_atomic_states.append(connection.in_atomic_block)
         raise CardDavError("CardDAV probe rejected")
 
-    monkeypatch.setattr(CardDavDirectoryBackend, "probe", reject_probe)
+    monkeypatch.setattr(CardDavDirectoryBackend, "test_connection", reject_probe)
     admin = parties_graphql._platform_admin("carddav-probe-failure-admin")
 
     result = _connect_carddav(admin)
@@ -179,9 +178,10 @@ def test_connect_probe_success_commits_every_owned_row_atomically(
     probe_atomic_states: list[bool] = []
     write_atomic_states: list[bool] = []
 
-    def accept_probe(backend: CardDavDirectoryBackend) -> None:
+    def accept_probe(backend: CardDavDirectoryBackend) -> str:
         del backend
         probe_atomic_states.append(connection.in_atomic_block)
+        return "Connected."
 
     claim_control = Handle.objects.claim_control
 
@@ -189,7 +189,7 @@ def test_connect_probe_success_commits_every_owned_row_atomically(
         write_atomic_states.append(connection.in_atomic_block)
         return claim_control(user, **kwargs)
 
-    monkeypatch.setattr(CardDavDirectoryBackend, "probe", accept_probe)
+    monkeypatch.setattr(CardDavDirectoryBackend, "test_connection", accept_probe)
     monkeypatch.setattr(Handle.objects, "claim_control", atomic_claim_control)
     admin = parties_graphql._platform_admin("carddav-probe-success-admin")
 
@@ -279,7 +279,6 @@ def test_parse_full_vcard_maps_every_field() -> None:
     assert contact.nickname == "Countess"
     assert contact.notes == "First programmer."
     assert contact.organization == "Analytical Engines"
-    assert contact.department == "Research"
     assert contact.title == "Mathematician"
     assert contact.role == "Programmer"
     assert contact.birthday == date(1815, 12, 10)

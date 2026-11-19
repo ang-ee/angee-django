@@ -41,6 +41,8 @@ from angee.spaces.testing import models as spaces_models  # noqa: F401 -- regist
 class Directory(AbstractDirectory, Integration):
     """Concrete contacts directory (Integration child) used by messaging tests."""
 
+    rebac_grantable = AbstractDirectory.rebac_grantable
+
     class Meta(AbstractDirectory.Meta):
         """Django model options for the canonical test directory."""
 

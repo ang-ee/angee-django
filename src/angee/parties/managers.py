@@ -3,8 +3,8 @@
 A directory backend parses a source into neutral ``ParsedContact`` and
 ``ParsedOrganization`` rows; these managers turn one into a ``Party`` (a
 ``Person`` or an ``Organization``) and its ``Handle`` / ``PartyStatement`` /
-``Address`` / ``Relationship`` rows. A contact is keyed by its source UID within
-its observed RecordLink identity, handles dedupe on
+``Address`` / ``Relationship`` rows. A contact is keyed by the external key of
+its observed RecordLink, handles dedupe on
 ``(platform, value)``, and ``handle_count`` plus the resolved ``Handle.party`` are
 maintained here in the same transaction — so every directory source shares one
 write path (the map lives on the models, not in each backend) and a re-sync
@@ -2046,16 +2046,14 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     ) -> Any:
         """Assert one link's contact facts; preserve other sources and person preferences.
 
-        The link owns stable source identity, transport version and lossless bytes.
-        ``stream`` is the link's contacts stream as the page holds it, so its
-        container (the address book, whose folder belongs to the same directory)
-        and integration resolve once per page. Addresses land through
+        The link owns the contact's source identity (its external key) and what the
+        source sent. ``stream`` is the link's contacts stream as the page holds it,
+        so its container (the address book, whose folder belongs to the same
+        directory) and integration resolve once per page. Addresses land through
         :meth:`AddressManager.land_addresses` and the employer through
         :meth:`RelationshipManager.land_employment`; removed members withdraw only
         this source's statements instead of deleting rows.
         """
-        if not parsed.uid:
-            return None
         container = stream.container if stream.container_id is not None else None
         folder = container.target if container is not None else None
         folders = apps.get_model("parties", "Folder")
@@ -2065,8 +2063,6 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             or folder.directory_id != stream.integration_id
         ):
             raise ValidationError("Contact ingestion requires a link of its directory's address-book stream.")
-        if link.external_key != parsed.uid:
-            raise ValidationError("The contact does not match the observed link identity.")
         parsed = self.prepare_contact(parsed)
         people = apps.get_model("parties", "Person").objects
         source = stream.integration

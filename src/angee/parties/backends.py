@@ -1,30 +1,30 @@
 """Directory replica mapping; integrate owns the loop and parties owns the fields.
 
-Transport backends discover collections and extract neutral contacts. The
-``addressbooks`` stream mirrors each discovered collection as a folder, and each
-address book's link is the container of its ``contacts`` stream. Both sides
-compare the same deterministic projection; all inbound writes compose the parties
-ingest owners. The manual backend declares no streams.
+A source backend discovers its address books and reads each one's contacts as
+neutral payloads keyed by external key. The ``addressbooks`` stream mirrors each
+discovered book as a folder, and each book's link is the container of its
+``contacts`` stream, which syncs the way the backend declares
+(:attr:`DirectoryBackend.direction`). The base turns payloads into records and
+applies them; both sides compare one deterministic projection, and every inbound
+write composes the parties ingest owners. The manual backend declares no streams.
 """
 
 from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, ClassVar, cast
 
 from django.apps import apps
 from django.contrib.contenttypes.prefetch import GenericPrefetch
-from django.db.models import CharField, prefetch_related_objects
-from django.db.models.fields.json import KeyTextTransform
-from django.db.models.functions import Coalesce
+from django.db.models import prefetch_related_objects
 
 from angee.base.serialization import canonical_json_sha256
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClientMixin
-from angee.integrate.impl import AdapterContractError, BridgeImpl
+from angee.integrate.impl import BridgeImpl
 from angee.integrate.states import LinkStatus, StreamDefinition, StreamDirection, StreamKind, StreamPhase
 from angee.integrate.streams import ApplyResult, LocalChange, RecordChange, SemanticError, StreamPage
 
@@ -68,9 +68,13 @@ class AvatarReport:
 
 @dataclass(frozen=True)
 class ParsedAddressbook:
-    """Collection identity and display name; progress belongs to SyncStream."""
+    """An address book's stable key in its source and its display name; progress belongs to SyncStream.
 
-    href: str
+    ``key`` is the book's record key in the ``addressbooks`` stream and the
+    partition of its contacts stream.
+    """
+
+    key: str
     name: str = "Contacts"
 
 
@@ -92,17 +96,14 @@ class ParsedAddress:
 class ParsedContact:
     """One contact parsed from a directory source, neutral of the wire format.
 
-    ``uid`` is the source's stable id (a vCard ``UID``); it is the per-folder
-    idempotency key, so it must be stable across syncs. ``etag`` is the
-    per-resource version (for change detection) and ``raw_vcard`` is kept for
-    lossless round-trip. Emails/phones are ``(value, label, is_preferred)`` triples.
-    ``organization``/``department``/``title``/``role`` carry the employment (the map
-    folds ``organization``/``title``/``role`` onto an ``employee`` ``Relationship``);
-    ``birthday``/``anniversary`` are resolved dates; ``photo`` is the avatar.
+    Its source identity is its link's external key, never a field here; a backend
+    that keeps wire facts beside a contact subclasses it. Emails/phones are
+    ``(value, label, is_preferred)`` triples. ``organization``/``title``/``role``
+    carry the employment (the map folds them onto an ``employee``
+    ``Relationship``); ``birthday``/``anniversary`` are resolved dates; ``photo``
+    is the avatar.
     """
 
-    uid: str = ""
-    etag: str = ""
     display_name: str = ""
     name_prefix: str = ""
     given_name: str = ""
@@ -112,7 +113,6 @@ class ParsedContact:
     nickname: str = ""
     notes: str = ""
     organization: str = ""
-    department: str = ""
     title: str = ""
     role: str = ""
     birthday: date | None = None
@@ -121,8 +121,6 @@ class ParsedContact:
     phones: tuple[tuple[str, str, bool], ...] = ()
     addresses: tuple[ParsedAddress, ...] = ()
     photo: ParsedPhoto | None = None
-    raw_vcard: str = ""
-    href: str = ""
 
 
 CONTACT_FIELDS = (
@@ -144,7 +142,7 @@ CONTACT_FIELDS = (
     "addresses",
     "photo",
 )
-"""The exact bidirectional mapping; UID, transport facts and unmapped ORG units stay outside it."""
+"""The exact mapping both sync sides compare; a source's identity and wire facts stay outside it."""
 
 SET_FIELDS = ("emails", "phones")
 """Collections the projection compares as sets: a repeated value is no difference.
@@ -229,9 +227,15 @@ def organization_projection(organization: ParsedOrganization) -> dict[str, Any]:
 class DirectoryBackend(BridgeImpl, HttpClientMixin):
     """An address-book stream, and one contacts replica per address book mapped through Party.ingest_contact.
 
-    A source backend implements ``discover`` for the address books and
-    ``extract_contacts``/``read_contacts`` for one book's contacts; this base
-    routes the ``addressbooks`` stream itself.
+    A source backend implements :meth:`discover` for its address books and, for
+    one book's contacts, :meth:`extract_contacts` (a page it builds with
+    :meth:`record_changes`), :meth:`read_contacts` (payloads by key) and
+    :meth:`contact_keys` (the keys it serves, for integrate's absence sweep); it
+    makes each payload with :meth:`observe`. This base routes the
+    ``addressbooks`` stream itself, builds every record and applies it. A backend
+    that maps a wire identity of its own onto the keys builds its records itself,
+    binds them through :meth:`_local_states`, and reads keys through its own
+    :meth:`read_keys`.
     """
 
     registry_setting = "ANGEE_DIRECTORY_BACKEND_CLASSES"
@@ -240,15 +244,36 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
     label = "Directory"
     icon = "address-book"
 
-    def probe(self) -> None:
-        """Validate the source connection before a directory persists (no-op by default).
+    direction: ClassVar[StreamDirection] = StreamDirection.PULL
+    """Which way this backend's contacts sync.
 
-        A source backend overrides this to fail fast on a bad URL or rejected
-        credentials, so the connect mutation never saves a directory that can never
-        sync. It must raise on a bad connection and return ``None`` on success.
+    ``PULL`` (the default) reads its source; ``BIDIRECTIONAL`` also writes local
+    edits back through integrate's ``write_back``.
+    """
+
+    supports_identity_reads: ClassVar[bool] = True
+    """Both streams re-read identities (:meth:`read_keys`), so a retried or swept record reads its source."""
+
+    def test_connection(self) -> str:
+        """Prove this backend reaches its source; return the operator message.
+
+        ``Directory.test_connection`` forwards here, and a connect flow calls it on
+        an unsaved directory before saving one that could never sync. A source
+        backend overrides it with a real handshake; the default proves only the
+        directory's credential (``Integration.probe_credential``). Failures raise
+        ``IntegrationError`` with the operator-safe reason.
         """
 
-        return None
+        return self.bridge.probe_credential()
+
+    def admit_credential(self, credential: Any) -> None:
+        """Refuse a credential this backend cannot use, raising ``ValidationError`` on ``credential``.
+
+        ``Directory.admit_credential`` asks on every attachment. The base admits
+        any credential.
+        """
+
+        del credential
 
     def discover(self) -> list[ParsedAddressbook]:
         """Return every address-book collection the source exposes."""
@@ -272,29 +297,18 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         return StreamDefinition(ADDRESSBOOKS, kind=StreamKind.RECORD_REPLICA, holds_containers=True)
 
     def contacts_stream(self, addressbook: Any) -> StreamDefinition:
-        """Declare the contacts stream an address-book link holds, writing nothing.
+        """Declare the contacts stream an address-book link holds, in :attr:`direction`, writing nothing.
 
-        The partition is the address book's href, the link's external key. The
-        stream's deletion policy seeds from the directory's per-collection config.
+        The partition is the address book's key, the link's external key.
+        Integrate's absence sweep reads it daily (:meth:`contact_keys`).
         """
 
-        policy = {
-            "local_delete": "conflict",
-            "remote_delete": "retain",
-            **self.bridge.config.get("streams", {}).get(CONTACTS, {}).get(addressbook.external_key, {}),
-        }
-        if policy["local_delete"] not in {"conflict", "propagate"} or policy["remote_delete"] not in {
-            "retain",
-            "propagate",
-        }:
-            raise ValueError("Unknown Directory deletion policy.")
         return StreamDefinition(
             CONTACTS,
             partition=addressbook.external_key,
             kind=StreamKind.RECORD_REPLICA,
-            direction=StreamDirection.BIDIRECTIONAL,
+            direction=self.direction,
             reconcile_interval=timedelta(days=1),
-            config=policy,
             container=addressbook,
         )
 
@@ -313,7 +327,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         exhausted = len(changes) <= page_bound
         absent = ()
         if exhausted and books:
-            listed = {book.href for book in books}
+            listed = {book.key for book in books}
             absent = tuple(
                 stream.links.observing().exclude(external_key__in=listed).order_by("pk").values_list(
                     "external_key", flat=True
@@ -322,24 +336,96 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         return StreamPage(changes[:page_bound], {}, exhausted=exhausted, absent=absent)
 
     def read_keys(self, stream: Any, keys: Sequence[str]) -> Iterable[RecordChange]:
-        """Read address books from the listing, or one book's contacts through the source."""
+        """Re-read the requested identities, each once, a missing one as a tombstone (integrate's identity reads).
 
-        if stream.key != ADDRESSBOOKS:
-            return self.read_contacts(stream, keys)
-        books = self.discover()
-        if not books:
-            raise IntegrationError("The address-book listing came back empty; retrying later.", transient=True)
-        return self._addressbook_changes(stream, books, keys=keys)
+        Address books read from the listing; contacts through :meth:`read_contacts`.
+        """
+
+        if stream.key == ADDRESSBOOKS:
+            books = self.discover()
+            if not books:
+                raise IntegrationError("The address-book listing came back empty; retrying later.", transient=True)
+            return self._addressbook_changes(stream, books, keys=keys)
+        payloads = self.read_contacts(stream, keys)
+        return self.record_changes(stream, {key: payloads.get(key) for key in keys})
+
+    def enumerate_keys(self, stream: Any, *, after: str | None = None) -> Iterable[str]:
+        """Return the contact keys the source serves now, seeking past ``after`` (integrate's absence sweep).
+
+        The backend's :meth:`contact_keys` owns the order and the seek; nothing
+        here lists or sorts the inventory. The address-book stream never sweeps:
+        its listing reports its own absences (:meth:`extract`).
+        """
+
+        return self.contact_keys(stream, after=after)
 
     def extract_contacts(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
-        """Fetch one bounded page of an address book's contacts outside transactions."""
+        """Fetch one bounded page of an address book's contacts outside transactions (:meth:`record_changes`)."""
 
         raise NotImplementedError("DirectoryBackend subclasses must implement extract_contacts().")
 
-    def read_contacts(self, stream: Any, keys: Sequence[str]) -> Iterable[RecordChange]:
-        """Read each requested contact identity of one address book, including tombstones."""
+    def read_contacts(self, stream: Any, keys: Sequence[str]) -> Mapping[str, Mapping[str, Any] | None]:
+        """Read the current payload of each requested contact key, ``None`` for one the source lacks.
 
-        raise AdapterContractError("This directory backend does not support identity reads.")
+        Each payload is one :meth:`observe` made, or ``{"error": <code>}`` for a
+        record the backend cannot map.
+        """
+
+        raise NotImplementedError("DirectoryBackend subclasses must implement read_contacts().")
+
+    def contact_keys(self, stream: Any, *, after: str | None) -> Iterable[str]:
+        """Yield every contact key the address book ``stream.partition`` serves now, in a stable order after ``after``.
+
+        Seek past ``after`` at the source rather than listing and sorting every key
+        (``BridgeImpl.enumerate_keys``).
+        """
+
+        raise NotImplementedError("DirectoryBackend subclasses must implement contact_keys().")
+
+    def observe(self, contact: ParsedContact) -> dict[str, Any]:
+        """Return the retained source payload of one contact, in the form parties stores.
+
+        The contact takes its stored form first (photo stored, addresses as
+        stored: ``PartyManager.prepare_contact``), so an unchanged source compares
+        unchanged. Call it while extracting, outside any transaction.
+        """
+
+        return {"contact": contact_projection(self._prepare_contact(contact))}
+
+    def record_changes(self, stream: Any, payloads: Mapping[str, Mapping[str, Any] | None]) -> list[RecordChange]:
+        """Turn payloads keyed by external key into records bound to their linked people and projections.
+
+        ``None`` is a record the source removed (a tombstone). A payload carrying
+        ``error`` is one the backend could not map; the driver quarantines it under
+        its key. Any other payload is one :meth:`observe` made: its ``contact``
+        projection is the remote side, and the source hash covers the whole payload.
+        """
+
+        links = stream.links.filter(external_key__in=list(payloads))
+        states = self._local_states(stream, payloads, links=links)
+        records = []
+        for key, payload in payloads.items():
+            target, projection = states[key]
+            if payload is None:
+                records.append(RecordChange(key, {}, "", tombstone=True, target=target, projection=projection))
+            elif "error" in payload:
+                records.append(
+                    RecordChange(
+                        key, dict(payload), canonical_json_sha256(payload), failure=SemanticError(payload["error"])
+                    )
+                )
+            else:
+                records.append(
+                    RecordChange(
+                        key,
+                        dict(payload),
+                        canonical_json_sha256(payload),
+                        mapped_payload=payload["contact"],
+                        target=target,
+                        projection=projection,
+                    )
+                )
+        return records
 
     def _addressbook_changes(
         self, stream: Any, books: Iterable[ParsedAddressbook], *, keys: Sequence[str] | None = None
@@ -355,12 +441,12 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
 
         rows = stream.links.with_sync_evidence(source_payload=True).order_by("pk")
         links = {link.external_key: link for link in rows}
-        listed = {book.href: book for book in books}
+        listed = {book.key: book for book in books}
         baseline = stream.phase == StreamPhase.BASELINE
         changes = []
-        for href in sorted(listed) if keys is None else keys:
-            book, link = listed.get(href), links.get(href)
-            payload = {"href": href} if book is None else {"href": href, "name": book.name}
+        for key in sorted(listed) if keys is None else keys:
+            book, link = listed.get(key), links.get(key)
+            payload = {"key": key} if book is None else {"key": key, "name": book.name}
             if (
                 keys is None
                 and link is not None
@@ -373,10 +459,10 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             target = link.target if link is not None else None
             projection = link.applied_base.mapped_payload if link is not None and link.applied_base else None
             changes.append(
-                RecordChange(href, payload, "", tombstone=True, target=target, projection=projection)
+                RecordChange(key, payload, "", tombstone=True, target=target, projection=projection)
                 if book is None
                 else RecordChange(
-                    href,
+                    key,
                     payload,
                     canonical_json_sha256(payload),
                     mapped_payload={"name": book.name},
@@ -386,33 +472,23 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             )
         return changes
 
-    def _source_payload(self, link: Any) -> dict[str, Any]:
-        return dict(link.source_payload)
+    def _prepare_contact[C: ParsedContact](self, parsed: C) -> C:
+        """Store fetched media and take the stored form before the driver's page transaction begins.
 
-    def _prepare_contact(self, parsed: ParsedContact) -> ParsedContact:
-        """Store fetched media and take the stored form before the driver's page transaction begins."""
+        A backend's subclass of the contact comes back as itself (the manager
+        rewrites it with ``dataclasses.replace``), wire facts kept.
+        """
 
-        return apps.get_model("parties", "Party").objects.prepare_contact(parsed)
-
-    def _links(self, stream: Any) -> tuple[Any, ...]:
-        """Read the latest retained locators directly from their owning links."""
-
-        return tuple(
-            apps.get_model("integrate", "RecordLink")
-            .objects.filter(stream=stream)
-            .annotate(
-                source_href=Coalesce(
-                    KeyTextTransform("href", "metadata"),
-                    KeyTextTransform("href", "source_payload"),
-                    output_field=CharField(),
-                )
-            )
-            .order_by("pk")
-        )
+        return cast(C, apps.get_model("parties", "Party").objects.prepare_contact(parsed))
 
     def _local_states(
         self, stream: Any, keys: Iterable[str], *, links: Iterable[Any]
     ) -> dict[str, tuple[Any | None, dict[str, Any] | None]]:
+        """Return each key's linked person and local projection, read once for the batch from ``links``.
+
+        A key without a link, or whose person is trashed, has neither.
+        """
+
         keys = set(keys)
         if not keys:
             return {}
@@ -445,125 +521,20 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         links = apps.get_model("integrate", "RecordLink").objects.filter(stream=stream, external_key=external_key)
         return self._local_states(stream, (external_key,), links=links)[external_key]
 
-    def _record_changes(
-        self,
-        stream: Any,
-        contacts: Mapping[str, ParsedContact | RecordChange | None],
-        *,
-        requested_keys: Mapping[str, str] | None = None,
-    ) -> list[RecordChange]:
-        """Bind fetched contacts, preserving identities assigned before parsing.
-
-        Identity reads supply href-to-key bindings, including unlinked hrefs and
-        their tombstones. A parsed UID remains metadata on those identities.
-        """
-
-        if not contacts:
-            return []
-        links = self._links(stream)
-        by_href = {link.source_href: link for link in links if link.source_href}
-        occupied = {link.external_key: link.source_href for link in links}
-        identities = {link.metadata.get("uid", link.external_key): link.source_href for link in links}
-        records: dict[str, RecordChange] = {}
-        for href, parsed in sorted(contacts.items()):
-            prior = by_href.get(href)
-            if prior is None and isinstance(parsed, ParsedContact) and requested_keys is None:
-                owner = identities.get(parsed.uid)
-                if owner is not None and owner in contacts and contacts[owner] is None:
-                    prior = by_href.get(owner)
-            if parsed is None and prior is None and requested_keys is None:
-                continue
-            if requested_keys is not None:
-                key = requested_keys[href]
-            elif prior is not None:
-                key = prior.external_key
-            else:
-                key = parsed.uid if isinstance(parsed, ParsedContact) else href
-            if parsed is None and prior is not None and occupied.get(key) != href:
-                continue  # The same batch already relocated this UID.
-            metadata = {**(prior.metadata if prior is not None else {}), "href": href}
-            moved = False
-            if isinstance(parsed, ParsedContact):
-                owner = identities.get(parsed.uid)
-                duplicate = owner and owner != href and not (owner in contacts and contacts[owner] is None)
-                key_owner = occupied.get(key)
-                moved = (
-                    key_owner is not None
-                    and key_owner in contacts
-                    and contacts[key_owner] is None
-                    and (key == parsed.uid or (prior is not None and prior.metadata.get("uid") == parsed.uid))
-                )
-                if duplicate or (key_owner not in (None, href) and not moved):
-                    if requested_keys is None:
-                        key = prior.external_key if prior is not None else href
-                    parsed = RecordChange(
-                        key,
-                        {"href": href, "error": "duplicate_vcard_uid"},
-                        canonical_json_sha256({"href": href, "error": "duplicate_vcard_uid"}),
-                    )
-                else:
-                    metadata["uid"] = parsed.uid
-                    identities[parsed.uid] = href
-            if moved and isinstance(parsed, ParsedContact):
-                occupied[key] = href
-            key = self._claim_key(key, href, occupied=occupied)
-            if isinstance(parsed, RecordChange):
-                record = replace(
-                    parsed, external_key=key, metadata=metadata, failure=SemanticError(parsed.source_payload["error"])
-                )
-            elif parsed is None:
-                record = RecordChange(key, {"href": href}, "", tombstone=True, metadata=metadata)
-            else:
-                observed = contact_projection(parsed)
-                record = RecordChange(
-                    key,
-                    {"href": href, "raw_vcard": parsed.raw_vcard, "contact": observed},
-                    canonical_json_sha256(observed),
-                    mapped_payload=observed,
-                    remote_version=parsed.etag,
-                    metadata=metadata,
-                )
-            # A live UID observation supersedes its old locator's tombstone.
-            records[key] = record
-        states = self._local_states(stream, records, links=links)
-        return [
-            replace(
-                record,
-                target=states[record.external_key][0],
-                projection=states[record.external_key][1],
-            )
-            for record in records.values()
-        ]
-
-    def _claim_key(self, key: str, href: str, *, occupied: dict[str, str | None]) -> str:
-        """Reserve a locator without overwriting a UID that happens to equal it."""
-
-        while key in occupied and occupied[key] not in (None, href):
-            key = f"href:{key}"
-        occupied[key] = href
-        return key
-
-    def _href_for_key(self, key: str, *, bindings: Mapping[str, str | None]) -> str:
-        """Resolve retained locators or decode a not-yet-observed inventory key."""
-
-        if href := bindings.get(key):
-            return href
-        while key.startswith("href:"):
-            key = key.removeprefix("href:")
-        return key
-
     def apply_record(self, stream: Any, record: RecordChange) -> ApplyResult:
         """Revalidate under domain locks, then use the single folder or contact ingest verb.
 
         An address book states its folder's name, and its tombstone withdraws that
-        statement while the folder stays. The fixed contact projection has no
-        dependency digest. The driver stamps the observation's mapping version
-        independently of the apply result.
+        statement while the folder stays. A contact lands through
+        ``PartyManager.ingest_contact`` from its payload's ``contact`` projection,
+        and its tombstone withdraws the link's statements while the party stays.
+        The fixed contact projection has no dependency digest. The driver stamps
+        the observation's mapping version independently of the apply result.
         """
 
+        links = apps.get_model("integrate", "RecordLink").objects
+        link = links.get(stream=stream, external_key=record.external_key)
         if stream.key == ADDRESSBOOKS:
-            links = apps.get_model("integrate", "RecordLink").objects
-            link = links.get(stream=stream, external_key=record.external_key)
             if record.tombstone:
                 link.withdraw_statements()
                 return ApplyResult(mapped_payload=None)
@@ -571,41 +542,18 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             folder = apps.get_model("parties", "Folder").objects.ingest_addressbook(link, name=name)
             return ApplyResult(target=folder, mapped_payload={"name": name})
         parties = apps.get_model("parties", "Party").objects
-        if record.source_payload.get("error"):
-            raise SemanticError(record.source_payload["error"])
-        parsed = (
-            None
-            if record.tombstone
-            else replace(
-                contact_from_projection(record.source_payload["contact"]),
-                uid=record.external_key,
-                etag=record.remote_version,
-                raw_vcard=record.source_payload["raw_vcard"],
-            )
-        )
+        parsed = None if record.tombstone else contact_from_projection(record.source_payload["contact"])
         parties.lock_contact(record.target, parsed=parsed)
-        target, projection = self._local_state(stream, record.external_key)
-        if record.tombstone:
-            link = apps.get_model("integrate", "RecordLink").objects.get(
-                stream=stream, external_key=record.external_key
-            )
+        target, _projection = self._local_state(stream, record.external_key)
+        if parsed is None:
             link.withdraw_statements()
-            projection = contact_projection(parties.project_contact(target)) if target is not None else None
         else:
-            assert parsed is not None  # Only tombstones omit the parsed contact.
             target = parties.ingest_contact(
-                parsed,
-                stream=stream,
-                target=target,
-                created_by_id=self.bridge.owner_id,
-                link=apps.get_model("integrate", "RecordLink").objects.get(
-                    stream=stream, external_key=record.external_key
-                ),
+                parsed, stream=stream, target=target, created_by_id=self.bridge.owner_id, link=link
             )
-            projection = contact_projection(parties.project_contact(target))
         return ApplyResult(
             target=target,
-            mapped_payload=projection,
+            mapped_payload=contact_projection(parties.project_contact(target)) if target is not None else None,
         )
 
     def on_absent(self, stream: Any, links: Sequence[Any]) -> dict[Any, ApplyResult] | None:

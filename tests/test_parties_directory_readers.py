@@ -362,14 +362,11 @@ def test_a_transferred_directory_lends_its_contacts_to_the_new_owner(contacts: S
         assert not _allowed(row, successor) and _allowed(row, c.owner), type(row).__name__
 
 
-def test_the_share_surface_grants_contact_reader_under_the_directory_write(
-    contacts: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_the_share_surface_grants_contact_reader_under_the_directory_write(contacts: SimpleNamespace) -> None:
     """The directory declares ``contact_reader`` grantable; its writers share it, a contact reader cannot."""
 
     c = contacts
-    monkeypatch.setattr(Directory, "rebac_grantable", AbstractDirectory.rebac_grantable)
-    assert Directory.get_rebac_grantable() == {"contact_reader": "write"}
+    assert Directory.get_rebac_grantable() == AbstractDirectory.rebac_grantable == {"contact_reader": "write"}
     assert not Directory._check_rebac_grantable()
     grantee = get_user_model().objects.create_user(username="contacts-shared")
     with actor_context(c.owner):
