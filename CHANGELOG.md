@@ -10,6 +10,21 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: the confirm rule is keyed on the address, at the owner of the
+  effect. Every person's stance that wins a handle for a party (a confirmation,
+  taking control with `HandleManager.claim_control`, a confirmation a history
+  revert restores) is checked in the handle's resolution (`Party.apply_handle`),
+  where its author needs write on every other holder of the address as the page
+  lookup reads them (the new `PartyManager.holding_blocker(party, handle, *,
+  author)`): each live party any spelling of the address resolves to, an
+  organization included, each lapsed holder, and the person of the account whose
+  sign-in address it is. An account takes its own sign-in address whoever holds
+  it, and nobody may while the account has no person. A refusal raises
+  `PermissionDenied("This address cannot be given to this party.")` whoever the
+  holder, and the whole write rolls back. The `Party.confirm_statement` override,
+  which read only the exact handle row's live holder, is deleted; a merge's own
+  maintenance is admitted.
+
 - `angee.parties`: a lapsed holder is still the holder. A trashed person whose
   applied statement of an address is still current (the new
   `PartyManager.lapsed_holders(platform, values)`) keeps the address for what a

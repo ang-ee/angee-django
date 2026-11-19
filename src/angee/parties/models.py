@@ -39,7 +39,7 @@ from phonenumbers import (
     is_valid_number,
     parse,
 )
-from rebac import PermissionDenied, actor_context, system_context
+from rebac import PermissionDenied, SubjectRef, actor_context, system_context
 from rebac.mixins import RebacModelBase
 
 from angee.base.fields.implementation import ImplClassField
@@ -50,7 +50,7 @@ from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.hierarchy import HierarchyMixin
 from angee.base.models.identity import public_id_of
-from angee.base.models.merge import MergeableMixin
+from angee.base.models.merge import MergeableMixin, merge_maintenance
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.trash import TrashMixin
 from angee.base.permissions import actor_user_id, instance_actor, reader_queryset
@@ -71,6 +71,7 @@ from angee.parties.managers import (
     RelationshipManager,
 )
 from angee.parties.mixins import MembershipDecisionMixin, PartyAspectMixin, PartyStatementMixin
+from angee.provenance.context import current_changeset
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
 from angee.provenance.contrib.angee.managers import AngeeHistoryMergeableUnscopedManager
 from angee.provenance.statements import (
@@ -120,9 +121,42 @@ class Party(
     def handle_candidates(self, candidates: Sequence[Any]) -> Sequence[Any]:
         return [row for row in candidates if row.confidence >= self.REVIEW_CONFIDENCE]
 
-    def apply_handle(self, *, member: Mapping[str, Any], **kwargs: Any) -> None:
+    def apply_handle(self, *, member: Mapping[str, Any], statement: Any = None, **kwargs: Any) -> None:
+        """Resolve the handle; a person's stance written now that wins it here needs authority over its address.
+
+        Every route that writes a handle statement for a party ends here, in its
+        resolution: a confirmation (the review queue's accept, an identity
+        review's), taking control of an address (``HandleManager.claim_control``)
+        and a restored confirmation (a history revert). When the stance this
+        party's handle applies is a person's, written by the operation now
+        running, its author must be able to make this party the holder of the
+        address as it is held before the resolution
+        (``PartyManager.holding_blocker``); if the handle then resolves to this
+        party without that, the whole write is refused. The handle's rows are
+        already locked: every statement write locks its subject's handles first
+        (:meth:`lock_subject`). A merge's own maintenance moves stances, never
+        states them, and is admitted (``merge_maintenance``).
+        """
+
+        handles = apps.get_model("parties", "Handle")
+        refusal = None
+        written = current_changeset()
+        if (
+            statement is not None
+            and statement.source_kind == SourceKind.PERSON
+            and statement.snak == statement.StatementSnak.VALUE
+            and written is not None
+            and statement.changeset_id == written.pk
+            and not merge_maintenance()
+        ):
+            refusal = apps.get_model("parties", "Party").objects.holding_blocker(
+                self, handles._base_manager.get(pk=member["handle"]), author=SubjectRef.parse(statement.asserted_by)
+            )
         # The member carries the handle's key; resolution locks and reloads that row itself.
-        apps.get_model("parties", "Handle")(pk=member["handle"]).resolve()
+        handle = handles(pk=member["handle"])
+        handle.resolve()
+        if refusal is not None and handle.party_id == self.pk:
+            raise PermissionDenied(refusal)
 
     statements = StatementRecords(
         link="integrate.RecordLink",
@@ -502,32 +536,6 @@ class Party(
 
         memberships = prefetched(self, VISIBLE_CIRCLE_MEMBERS, hint)
         return list(dict.fromkeys(membership.circle.name for membership in memberships))
-
-    def confirm_statement(self, *, aspect: str, values: Mapping[str, Any], **members: Any) -> Any:
-        """Write the acting person's preferred statement; a handle another live party holds needs write on it too.
-
-        A confirmed handle statement outranks every source, so confirming one
-        (a claim's accept in the review queue, an identity review's confirm)
-        moves the handle, and what is attributed to it, off its live holder to
-        this party. Under the handle's identity locks, a holder other than this
-        party must be writable by the acting person, as this party is by the
-        statement write the confirmation itself takes.
-        """
-
-        if aspect == "handle" and (actor := instance_actor(self)) is not None:
-            handle = members["handle"]
-            handle_id = handle.pk if isinstance(handle, models.Model) else handle
-            parties = apps.get_model("parties", "Party")
-            with transaction.atomic():
-                handles, _locked = parties.objects.lock_identity_rows(party_ids=(self.pk,), handle_ids=(handle_id,))
-                holder_id = handles[handle_id].party_id if handle_id in handles else None
-                holder = None
-                if holder_id is not None and holder_id != self.pk:
-                    holder = parties._base_manager.filter(pk=holder_id, is_trashed=False).first()
-                if holder is not None and not holder.with_actor(actor).has_access("write"):
-                    raise PermissionDenied("Confirming this address needs write on the person who holds the address.")
-                return super().confirm_statement(aspect=aspect, values=values, **members)
-        return super().confirm_statement(aspect=aspect, values=values, **members)
 
     def apply_pair(self, *, aspect: str, other: Any, statement: Any | None) -> None:
         """Identity survivorship selects a pending decision; merge chooses the survivor."""

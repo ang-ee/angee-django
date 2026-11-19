@@ -536,7 +536,11 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         A claim is contested when another user already controls the row. The
         existing controller is never replaced; instead the competing user's
         identity link is recorded unconfirmed at ``0.3`` confidence and returned
-        for later review. The whole decision is atomic and row-locked.
+        for later review. The identity statement moves the address like a
+        confirmation does, so taking an address someone else holds needs
+        ``user``'s write on them, unless it is ``user``'s own sign-in address
+        (``PartyManager.holding_blocker``): a refusal raises ``PermissionDenied``
+        and writes nothing. The whole decision is atomic and row-locked.
         """
 
         evidence = tuple(evidence)
@@ -2090,6 +2094,45 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             for value, subject_id in rows.values_list("handle__normalized_value", "subject_id"):
                 lapsed[value].add(subject_id)
         return dict(lapsed)
+
+    def holding_blocker(self, party: Any, handle: Any, *, author: Any) -> str | None:
+        """Return why ``author``'s stance may not make ``party`` the holder of ``handle``'s address, else ``None``.
+
+        A person's stance that wins a handle (a confirmation, taking control, a
+        restored confirmation) gives ``party`` the address and what is
+        attributed to it. Its holders are read by the address, its platform and
+        normalized value in every spelling, as the page lookup reads them: each
+        live party a handle of it resolves to (through merge survivors, an
+        organization included), each lapsed holder (:meth:`lapsed_holders`), and,
+        for an email address, the person of the person account that signs in
+        with it (:meth:`lookup_emails`). An account's sign-in address is its
+        own: ``party`` may take it when it is that account's person, and nobody
+        may while the account has no person. Otherwise ``author`` needs
+        ``write`` on every holder but ``party``. The refusal is one message,
+        whoever holds the address, so it reveals no holder ``author`` cannot read.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        party_model = apps.get_model("parties", "Party")
+        refusal = "This address cannot be given to this party."
+        platform, value = handle.platform, handle.normalized_value
+        with system_context(reason="parties.holding_blocker"):
+            resolved = handle_model._base_manager.filter(platform=platform, normalized_value=value, party__isnull=False)
+            survivors = party_model.canonical_ids(set(resolved.values_list("party_id", flat=True)))
+            live = party_model._base_manager.filter(pk__in=set(survivors.values()), is_trashed=False)
+            holders = set(live.values_list("pk", flat=True))
+        holders |= self.lapsed_holders(platform, {value}).get(value, set())
+        if platform == handle_model.Platform.EMAIL:
+            lookup = self.lookup_emails([handle.value])
+            accounts = {row.person.pk for row in lookup.named(handle.value) if row.basis == EmailBasis.ACCOUNT}
+            if party.pk in accounts:
+                return None
+            if lookup.signs_in([handle.value]) and not accounts:
+                return refusal
+            holders |= accounts
+        holders.discard(party.pk)
+        rows = party_model._base_manager.filter(pk__in=holders) if holders else ()
+        return refusal if any(not row.with_actor(author).has_access("write") for row in rows) else None
 
     def _holders(self, handles: Sequence[Any]) -> dict[Any, tuple[Any, Any | None]]:
         """Return each handle's merge survivor and the live Person holding it, by handle pk, in bounded reads.
