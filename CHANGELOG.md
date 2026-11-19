@@ -39,7 +39,10 @@ live in code docstrings.
   - **Toolbar.** Explicit placement wins; `primary` implies the toolbar. On a
     saved record, the form's own band then fills to two buttons with its visible,
     unplaced, non-danger verbs in declaration order, counting verbs already on
-    that toolbar. Filled buttons stay secondary; the rest go to `⋮`.
+    that toolbar. Filled buttons stay secondary; the rest go to `⋮`, after the
+    verb buttons. `RecordActionBar` replaces `menuPlacement` with
+    `menuTrigger="icon" | "label"` (default `"label"`); both triggers follow the
+    buttons.
     A verb contributed through `#sections` stays in the menu unless it declares
     a placement. Create forms show Save / Create without record verbs.
   - **Delete.** `hasura_model_resource(delete=True)` generates

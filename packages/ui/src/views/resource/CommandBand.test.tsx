@@ -58,7 +58,7 @@ const LAYOUT_ROW_KEPT = "data-layout-band:not-has-[>div>:not([hidden]):not(:empt
 const nothing = <>
   <SaveDiscardActions isDirty={false} onDiscard={vi.fn()} onSave={vi.fn()} />
   <span className="contents" />
-  <RecordActionBar record={record} actions={[]} menuPlacement="leading" contributedActions={
+  <RecordActionBar record={record} actions={[]} menuTrigger="icon" contributedActions={
     <RecordActionBar record={record} actions={[{ id: "hidden", label: "Hidden", run: vi.fn(), visibleWhen: () => false }]} />
   } />
 </>;

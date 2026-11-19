@@ -37,7 +37,7 @@ export function OverviewPage(): ReactNode {
 
   return (
     <>
-      <CommandBand verbs={<RecordActionBar record={(stack ?? {}) as Row} actions={restart} menuPlacement="leading" />} />
+      <CommandBand verbs={<RecordActionBar record={(stack ?? {}) as Row} actions={restart} menuTrigger="icon" />} />
       <div className="flex min-h-0 flex-1 flex-col bg-canvas">
         <RecordHeader density="compact" title={t("section.operator.overview.title")} meta={stack?.name} />
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-3">

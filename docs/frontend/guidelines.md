@@ -972,8 +972,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **Record verbs compose the shared action owner.** On a saved record, the form's
   own command band fills to two buttons with its visible, unplaced, non-danger
   verbs in declaration order, counting verbs already placed on that toolbar;
-  the rest go to the overflow menu. These filled buttons stay secondary. Mark
-  `primary` the subject model's lifecycle transition that its statusbar explains
+  the rest go to the icon-only `⋮` overflow menu after those buttons. These filled
+  buttons stay secondary. Mark `primary` the subject model's lifecycle transition that its statusbar explains
   (post, confirm, cancel); secondary lifecycle verbs and model-owned utilities
   (pay, reverse, send, PDF, merge, download) can fill the remaining places.
   Declare `placement="menu"` for a utility that should always stay in overflow.

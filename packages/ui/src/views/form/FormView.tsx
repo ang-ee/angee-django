@@ -376,7 +376,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
               ) : undefined
             }
             blocked={actionsBlocked}
-            menuPlacement="leading"
+            menuTrigger="icon"
             fillBand
           />
         ) : null}

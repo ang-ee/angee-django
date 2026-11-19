@@ -33,6 +33,27 @@ const { Provider, clearClients } = createUiTestProviders({
 });
 
 describe("RecordActionBar", () => {
+  test.each([2, 0])("the icon-only Actions trigger follows %i band verbs in DOM and tab order", (count) => {
+    const verbs = [
+      { id: "add-email", label: "Add email", run: vi.fn() },
+      { id: "add-phone", label: "Add phone", run: vi.fn() },
+    ].slice(0, count);
+    renderActionBar(<RecordActionBar record={record} menuTrigger="icon" fillBand actions={[
+      ...verbs,
+      { id: "copy", label: "Copy link", placement: "menu", run: vi.fn() },
+    ]} />);
+
+    const trigger = screen.getByRole("button", { name: "Actions" });
+    const buttons = screen.getAllByRole("button");
+    expect(buttons).toEqual([
+      ...verbs.map(({ label }) => screen.getByRole("button", { name: label })),
+      trigger,
+    ]);
+    expect(trigger.textContent).toBe("");
+    expect(trigger.getAttribute("aria-label")).toBe("Actions");
+    for (const button of buttons) expect(button.tabIndex).toBe(0);
+  });
+
   test("primary alone puts a verb on the toolbar with primary emphasis", () => {
     renderActionBar(<RecordActionBar record={record} actions={[
       { id: "review", label: "Review", primary: true, run: vi.fn() },
@@ -246,7 +267,7 @@ describe("RecordActionBar", () => {
   });
   test("a contributed verb that renders nothing leaves no Actions menu", () => {
     // As a record with no startable workflow: the contribution decides at render time and offers nothing.
-    renderActionBar(<RecordActionBar record={record} actions={[]} menuPlacement="leading" contributedActions={
+    renderActionBar(<RecordActionBar record={record} actions={[]} menuTrigger="icon" contributedActions={
       <RecordActionBar record={record} actions={[{ id: "hidden", label: "Hidden", run: vi.fn(), visibleWhen: () => false }]} />
     } />);
     expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();

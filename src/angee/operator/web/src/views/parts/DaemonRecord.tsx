@@ -34,7 +34,7 @@ export function DaemonRecord<TSubject extends object>({
       loading={loading}
       loadingLabel={loadingLabel}
       empty={record ? false : notFound}
-      band={record ? { verbs: <RecordActionBar record={record as Row} actions={verbDescriptors(verbs)} menuPlacement="leading" /> } : undefined}
+      band={record ? { verbs: <RecordActionBar record={record as Row} actions={verbDescriptors(verbs)} menuTrigger="icon" /> } : undefined}
       density="compact"
       crumbs={eyebrow}
       title={title ?? ""}

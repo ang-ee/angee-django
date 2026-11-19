@@ -53,7 +53,7 @@ export function RecordActionBar({
   deleteAction,
   contributedActions,
   blocked: blockedByForm = false,
-  menuPlacement = "trailing",
+  menuTrigger = "label",
   fillBand = false,
 }: {
   record: Row | null;
@@ -67,8 +67,8 @@ export function RecordActionBar({
   contributedActions?: React.ReactNode;
   /** A dirty or pending form must be saved before acting on its persisted record. */
   blocked?: boolean;
-  /** Where the Actions menu sits: an icon-only `⋮` before the verbs (the command band), or a labeled menu after them. */
-  menuPlacement?: "leading" | "trailing";
+  /** How the Actions menu trigger looks: an accessible icon-only `⋮` or a labeled menu (default). Both follow the verb buttons. */
+  menuTrigger?: "icon" | "label";
   /** On a saved record, fill the band to two buttons with its own visible, unplaced, non-danger verbs in declaration order, counting verbs already on the toolbar. Filled buttons stay secondary. Off by default; ignored inside an Actions menu. */
   fillBand?: boolean;
 }): React.ReactElement | null {
@@ -233,7 +233,7 @@ export function RecordActionBar({
   </>;
   const actionMenu = menuActions.length > 0 || genericMenuActions.length > 0 || visibleDeleteAction !== undefined || contributedActions != null || formAction?.fromMenu ? (
     <ActionMenu blocked={blocked} loading={pendingId !== null}
-      {...(menuPlacement === "leading" ? { label: null, "aria-label": t("list.actions"), size: "iconSm" as const } : {})}>
+      {...(menuTrigger === "icon" ? { label: null, "aria-label": t("list.actions"), size: "iconSm" as const } : {})}>
       {menuContents}
       {formAction?.fromMenu ? formDialog : null}
     </ActionMenu>
@@ -244,7 +244,6 @@ export function RecordActionBar({
         {menuContents}
         {formDialog}
       </> : <>
-        {menuPlacement === "leading" ? actionMenu : null}
         {toolbarActions.map((action) => { const reason = disabledReason(action); return (
           // A band verb's disabled reason is its tooltip: the verb stays focusable while
           // disabled so keyboard users reach the reason too.
@@ -258,7 +257,7 @@ export function RecordActionBar({
             </Button>
           </Tooltip>
         ); })}
-        {menuPlacement === "trailing" ? actionMenu : null}
+        {actionMenu}
         {formAction && !formAction.fromMenu ? formDialog : null}
       </>}
     </>
