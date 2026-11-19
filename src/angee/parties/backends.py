@@ -698,28 +698,32 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         In parties' one identity order (``PartyManager.lock_identity_rows``),
         handles first, then parties: every spelling of the page's contact
         addresses (``PartyManager.contact_handle_ids``), every handle stated on a
-        party the page's links name or on a party those addresses' statements
-        name, then those parties. A record's own contact locks then find their
-        rows held, so the page never locks a handle after a person, the reverse
-        of mail ingestion's order. Only then are the page's addresses looked up
-        once (``PartyManager.lookup_emails``: who each names, and which a person
-        account signs in with), kept for :meth:`_contact_target` and the ingest.
-        Two address books of one directory syncing at once therefore serialize on
-        a person both could adopt, and every adoption limit reads rows loaded
-        under these locks. A two-way stream adopts nobody and an address-book
-        page names no person: they lock nothing here.
+        party the page's links name (its tombstones' included), on a party those
+        addresses' statements name, or on the person of an account one of them
+        signs in with (``PartyManager.account_people``, whom a record may
+        propose), then those parties. A record's own contact locks then find
+        their rows held, so the page never locks a handle after a person, the
+        reverse of mail ingestion's and a merge's order. Only then are the
+        page's addresses looked up once (``PartyManager.lookup_emails``: who each
+        names, and which a person account signs in with), kept for
+        :meth:`_contact_target` and the ingest. Two address books of one
+        directory syncing at once therefore serialize on a person both could
+        adopt, and every adoption limit reads rows loaded under these locks; an
+        account adopting a person (``PartyManager.for_user(adopt=...)``) locks
+        the person's party row too, so it waits for the page. A two-way stream
+        adopts nobody and an address-book page names no person: they lock
+        nothing here.
         """
 
         self._page_lookup = None
         if stream.key != CONTACTS or stream.direction != StreamDirection.PULL:
             return
-        records = [
-            record
-            for record in page.records
-            if not record.tombstone and record.failure is None and "contact" in record.source_payload
-        ]
+        landing = [record for record in page.records if record.failure is None]
+        records = [record for record in landing if not record.tombstone and "contact" in record.source_payload]
         contacts = [contact_from_projection(record.source_payload["contact"]) for record in records]
-        keys = {key for record in records for key in (record.external_key, *record.source_payload.get("replaces", ()))}
+        emails = [value for contact in contacts for value, _label, _preferred in contact.emails]
+        keys = {record.external_key for record in landing}
+        keys |= {key for record in records for key in record.source_payload.get("replaces", ())}
         bound = set(
             stream.links.filter(external_key__in=keys, target_object_id__isnull=False).values_list(
                 "target_object_id", flat=True
@@ -732,12 +736,11 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         named = {
             *parties._base_manager.filter(pk__in=bound).values_list("pk", flat=True),
             *statements.filter(handle_id__in=handles).values_list("subject_id", flat=True),
+            *(person.pk for person in parties.objects.account_people(emails).values()),
         }
         handles |= set(statements.filter(subject_id__in=named).values_list("handle_id", flat=True))
         parties.objects.lock_identity_rows(party_ids=named, handle_ids=handles)
-        self._page_lookup = parties.objects.lookup_emails(
-            value for contact in contacts for value, _label, _preferred in contact.emails
-        )
+        self._page_lookup = parties.objects.lookup_emails(emails)
 
     def _contact_target(
         self, stream: Any, link: Any, replaced: Sequence[Any], parsed: ParsedContact
@@ -809,7 +812,9 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         :meth:`mappings` the payload carries a projection of states it on the
         landed person through the link (:meth:`DirectoryMapping.apply_record`),
         in the same savepoint. A tombstone
-        withdraws the link's statements while the party stays. A two-way stream's
+        withdraws the link's statements while the party stays
+        (``PartyManager.withdraw_contact``), and a later record of the page reads
+        the addresses it stated again. A two-way stream's
         applied base is the person's projection; a
         pull-only stream's is the source's own (none for a tombstone), the side its
         comparison reads (:meth:`local_states`). The fixed contact projection has
@@ -830,7 +835,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         if record.tombstone:
             target = parties.contact_people([link])[link.pk]
             parties.lock_contact(target)
-            link.withdraw_statements()
+            parties.withdraw_contact(link, lookup=self._page_lookup)
         else:
             parsed = contact_from_projection(record.source_payload["contact"])
             order = record.source_payload.get("replaces", ())

@@ -95,13 +95,19 @@ a bound, observing link of the contact's own stream keeps or hands over its
 person (`PartyManager.holding_links`); a two-way stream's own link keeps it
 through a tombstone, since such a stream adopts nobody. A page locks, in one call
 and in the identity order, every spelling of its contacts' addresses and every
-handle stated on a party its links or those addresses name, then those parties,
+handle stated on a party its links (its tombstones' included) or those addresses
+name, or on the person of an account one of them signs in with
+(`PartyManager.account_people`), then those parties,
 and only then reads who its addresses name, once
 (`PartyManager.lookup_emails`: `people_for_emails`, and which addresses a person
 account signs in with, `UserManager.sign_in_addresses`), so no record locks a
-handle after a person (`DirectoryBackend.prepare_page`). The ingest and the target
-decision read that lookup; an address a record lands is read again by the next
-record that asks for it. Adoption is an access change, so the binding owner
+handle after a person (`DirectoryBackend.prepare_page`). A merge of parties locks
+every participant's handles, then the participants, in one call
+(`Party.lock_merge_records`), and an account adopting a person locks the person's
+party row with it, so both wait for a page. The ingest and the target
+decision read that lookup; an address a record lands or withdraws (its own link
+leaving a person, or a tombstone: `PartyManager.withdraw_contact`) is read again
+by the next record that asks for it. Adoption is an access change, so the binding owner
 admits it: `PartyManager.adoption_blocker` refuses unless the stream is pull-only,
 the person, loaded under the locks, is live and no account's own, no address the
 contact carries is a person account's sign-in address in any spelling, whether
