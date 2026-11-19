@@ -46,6 +46,15 @@ live in code docstrings.
   `resolve_stale_owners`). A transfer moves no grant: a person grants a later
   owner. Upgrade: `rebac sync`; provision runs the repair.
 
+- `angee.messaging`, `angee.workflows_integrate`: a send and a workflow step ask
+  about discovery again once they hold their lock. Both asked before taking
+  `delivery_lock()` or `sync_lock()`, so a secret re-entered while they waited
+  for it sent one reply, or ran one step's IO, on the new secret. Under the lock
+  they now ask the row as stored (`Integration.require_stored_discovery_ready`,
+  one read of the readiness columns, which the stream driver's pre-write check
+  uses too): a send defers as for a pending discovery, and a step waits as for
+  contention.
+
 - `angee.integrate`: the discovery checks cost no more than they need. A push
   asked about discovery for each candidate before its pinned, held, unchanged and
   released skips, each time reading the whole integration row; it now asks once
