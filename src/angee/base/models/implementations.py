@@ -264,7 +264,8 @@ class ImplDefaultsMixin(models.Model):
         """Seed this row from the implementation defaults on create.
 
         Seeds only fields the caller did not supply. A string foreign-key default
-        resolves against the related model's ``slug``; mutable defaults are
+        resolves against the related model's ``slug``, a seeded row: a missing one
+        raises ``ImproperlyConfigured`` with the load guidance. Mutable defaults are
         deep-copied so rows never alias the class-level dict.
         """
 
@@ -283,9 +284,11 @@ class ImplDefaultsMixin(models.Model):
                 with system_context(reason="base.impl.materialize_fk"):
                     target = targets.first()
                 if target is None:
-                    raise ValueError(
+                    # A slug default names a seeded row: the catalogue the resource loader seeds.
+                    raise ImproperlyConfigured(
                         f"{type(self).__name__}.{field.name} impl default references "
-                        f"{targets.model._meta.label} slug {value!r}, but no row exists."
+                        f"{targets.model._meta.label} slug {value!r}, but no row exists. Run "
+                        "`manage.py resources load` before creating it."
                     )
                 setattr(self, field.name, target)
             else:

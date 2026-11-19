@@ -57,7 +57,7 @@ from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.schema import UserType
-from angee.integrate.schema import BridgeTypeMixin
+from angee.integrate.schema import BridgeTypeMixin, ConnectWithAccount
 from angee.parties.schema import HandleType, PartyType
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
@@ -85,6 +85,14 @@ class CalendarSourceType(BridgeTypeMixin, AngeeNode):
 
     poll_interval: auto
     permissions = permissions_field(("write", "delete"))
+
+
+@strawberry.type
+class CalendarSourceBackendType(ConnectWithAccount):
+    """What connecting a source of one calendar backend asks for: the session user's accounts it reads with."""
+
+    key: str
+    label: str
 
 
 @strawberry_django.type(Calendar)
@@ -305,7 +313,7 @@ _ATTENDEE_RESOURCE = hasura_model_resource(
 
 @strawberry.type
 class CalendarQuery:
-    """The occurrences a calendar shows, expanded server-side."""
+    """The occurrences a calendar shows, expanded server-side, and what connecting a source asks for."""
 
     @strawberry.field(graphql_type=list[EventOccurrenceType])
     def event_occurrences(
@@ -321,6 +329,20 @@ class CalendarQuery:
         """
 
         return CalendarEvent.objects.with_actor(session_user(info)).occurrences(window_start, window_end)
+
+    @strawberry.field
+    def calendar_source_backend(self, info: strawberry.Info, backend_class: str) -> CalendarSourceBackendType:
+        """Describe connecting a source of one backend for the signed-in user, before any source exists.
+
+        The accounts are the user's own that the backend reads with
+        (``Integration.connectable_credentials``); a source addon's connect verb
+        takes one of them.
+        """
+
+        user = session_user(info)
+        source = CalendarSource.objects.build(backend_class=backend_class)
+        impl = source.get_backend_class_impl()
+        return CalendarSourceBackendType.of(source, user, key=impl.key, label=str(impl.label))
 
 
 @strawberry.type
@@ -395,7 +417,7 @@ attach_delete_preview_metadata(
 
 @strawberry.type
 class CalendarSourceActionMutation:
-    """A connected calendar's owner verbs: sync it now, and unsubscribe."""
+    """A connected calendar's owner verbs: sync it now, publish a calendar through it, and unsubscribe."""
 
     @strawberry.mutation
     @action_guard("Sync failed.")
@@ -407,13 +429,32 @@ class CalendarSourceActionMutation:
         return ActionResult(ok=True, message="Sync queued." if queued else "A sync is already running.", id=source.sqid)
 
     @strawberry.mutation
+    @action_guard("Publishing failed.")
+    def publish_calendar(
+        self, info: strawberry.Info, id: PublicID, calendar_id: PublicID, remote_id: str
+    ) -> ActionResult:
+        """Publish a calendar through a publishing source to the remote calendar ``remote_id``.
+
+        The actor manages both: ``write`` on the source and ``delete`` on the
+        calendar (its owner, holder or a platform admin), since its events then
+        leave for the remote calendar. ``CalendarSource.publish`` refuses the rest.
+        """
+
+        source = authorized_action_target(info, CalendarSource, id, "write")
+        calendar = authorized_action_target(info, Calendar, calendar_id, "delete")
+        source.publish(calendar, remote_id)
+        return ActionResult(ok=True, message="Calendar published; its events are being pushed.", id=calendar.sqid)
+
+    @strawberry.mutation
     @action_guard("Unsubscribe failed.")
     def unsubscribe_calendar_source(self, info: strawberry.Info, id: PublicID) -> ActionResult:
-        """End the subscription after the ``delete`` preflight: disconnect it now and queue its purge."""
+        """End the subscription after the ``delete`` preflight: disconnect it now and queue its purge.
+
+        The message says what the purge does (``CalendarSource.unsubscribe``).
+        """
 
         source = authorized_action_target(info, CalendarSource, id, "delete")
-        source.unsubscribe()
-        return ActionResult(ok=True, message="Unsubscribed; its events are being removed.", id=source.sqid)
+        return ActionResult(ok=True, message=source.unsubscribe(), id=source.sqid)
 
 
 _SOURCE_RESOURCE = hasura_model_resource(
@@ -462,6 +503,7 @@ schemas = {
             EventAttendeeType,
             EventOccurrenceType,
             CalendarSourceType,
+            CalendarSourceBackendType,
             *[type_ for resource in _RESOURCES for type_ in resource.types],
         ],
         "input_extensions": tags_input_extensions(_EVENT_RESOURCE),

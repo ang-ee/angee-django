@@ -129,27 +129,31 @@ master's moved instances.
 A `CalendarSource` is a connected calendar account or a subscribed feed: an
 `integrate.Integration` child, selected by `backend_class` from
 `ANGEE_CALENDAR_SOURCE_BACKEND_CLASSES`. It syncs through integrate's pull
-streams:
+streams (a publishing source pushes instead, see **Publishing** below):
 
 - **`calendars`:** one record per remote calendar. Its `RecordLink` names the
   mirrored calendar (on the owner's person, `source` naming the source), and the
   source states that calendar's name, colour and zone. A person's own rename
   outranks the source's by statement precedence, so it survives a remote rename.
-- **`events`:** one stream per remote calendar, partitioned by its key. Remote
-  event ids live only in its `RecordLink` rows: a master's key is its UID, an
-  instance's its UID and `RECURRENCE-ID`. A removed master or single event is
-  cancelled; a removed instance is deleted, which restores the master's occurrence.
+- **`events`:** one stream per remote calendar, held by the calendar's
+  `calendars` link as its container (`SyncStream.container`) and partitioned by
+  its key. Remote event ids live only in its `RecordLink` rows: a master's key is
+  its UID, an instance's its UID and `RECURRENCE-ID`. A removed master or single
+  event is cancelled; a removed instance is deleted, which restores the master's
+  occurrence.
 
 Both streams use integrate's absence sweep, at most once per poll interval. A
 record the source stops serving is unavailable after one sweep and tombstoned
 after the stream's absence threshold (two sweeps); a tombstoned calendar
-withdraws the identity its source stated. A source's event takes the event
+withdraws the identity its source stated, and its events stream retires, which
+withdraws its events as removed ones. A source's event takes the event
 owner's stored form: an untitled event is "(No title)", and at most 500
 attendees are kept, the organizer first. An attendee lands on a handle by the
 address the source gave, and a source never renames a handle that already exists.
 
-A source's calendar is mirrored before its events land: a sync that finds it
-missing retries on the next cycle.
+A source's calendar is mirrored before its events land: integrate drains the
+`calendars` stream before the events streams its links hold, and declares a new
+calendar's events stream in the same sync.
 
 - **Replicas.** A backend declares whether it takes writes. A local calendar
   always takes edits; a source's calendar only when its backend writes
@@ -177,9 +181,45 @@ missing retries on the next cycle.
   is the source's one remote calendar, polled hourly with a conditional GET; each
   event keeps its own `DTSTART` zone. Each fetched feed is a full snapshot; its
   module docstring lists the properties it maps.
+- **Google.** `calendar_integrate_google` syncs every calendar of one of the
+  user's connected Google accounts (the deployment's `google` OAuth client, with
+  `calendar.readonly` granted); each further account is a source of its own. Each
+  calendar's events sync with Google's sync tokens, and an expired token reads the
+  calendar again in full. The calendars are read-only. Its module docstring lists
+  the fields it maps.
+- **Publishing.** A backend whose `direction` is `PUSH` (a
+  `PublishingCalendarBackend`) publishes local calendars out; `direction` alone
+  decides whether a source's calendars take local edits. `CalendarSource.publish(calendar, remote_id)` (the `publish_calendar`
+  mutation: `write` on the source, `delete` on the calendar) binds an existing local
+  calendar to a remote calendar: the source's `calendars` link keyed by the remote
+  id targets the calendar, and the calendar's `source` names the source. The
+  calendar stays writable, and its events push through the events stream that link
+  holds; nothing is read back, so a remote edit surfaces as a held conflict the
+  next time Angee writes that event. Keeping Google's side of that conflict
+  accepts its version (an event Google cancelled included), and the next local
+  edit writes over it. Deleting an event deletes it remotely, and deleting an
+  override restores its instance; keeping Google's side of a delete that
+  conflicts leaves Google's event in place, and Angee no longer manages it. A
+  published calendar itself is refused deletion, from any delete that reaches
+  it, until it is unpublished. A
+  calendar another source mirrors or publishes is refused, and so is a remote
+  calendar another source publishes to. `ANGEE_CALENDAR_PUBLISH_TARGETS` (`None`:
+  any; else a list, matched whole) lists the remote calendars a deployment
+  publishes to: every remote call of a push passes `PublishingCalendarBackend.admit_push`,
+  so a test profile is refused before any call, once per push. Unsubscribing a
+  publishing source unbinds (`PublishingCalendarBackend.release`): its streams
+  move to a new generation, its calendars are local again with every event kept,
+  and its key is detached, not retired. The publishing source states nothing
+  about a calendar it publishes: only a pulling source holds `statement_source`.
+  `calendar_integrate_google`'s `google_publishing` backend publishes to any
+  Google calendar shared with its service-account key, Workspace resource
+  calendars among them.
 
 The sources page lists them with their sync status. Source addons add their
-subscribe or connect verb to its `calendar.sources#toolbar` container.
+subscribe or connect verb to its `calendar.sources#toolbar` container. A verb that
+connects one of the user's accounts asks `calendar_source_backend(backend_class)`
+which of their accounts the backend reads with, and composes integrate's
+connect-with-account action (Google's does).
 
 ## Access
 
