@@ -132,8 +132,9 @@ class Party(
 
         Every route that writes a handle statement for a party ends here, in its
         resolution: a confirmation (the review queue's accept, an identity
-        review's), taking control of an address (``HandleManager.claim_control``)
-        and a restored confirmation (a history revert). When the stance this
+        review's), taking control of an address (``HandleManager.claim_control``,
+        which states a claim for review instead where this would refuse) and a
+        restored confirmation (a history revert). When the stance this
         party's handle applies is a person's, written by the operation now
         running, its author must be able to make this party the holder of the
         address as it is held before the resolution

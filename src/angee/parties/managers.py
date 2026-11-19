@@ -537,20 +537,48 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         A claim is contested when another user already controls the row. The
         existing controller is never replaced; instead the competing user's
         identity link is recorded unconfirmed at ``0.3`` confidence and returned
-        for later review. The identity statement moves the address like a
-        confirmation does, so taking an address someone else holds needs
-        ``user``'s write on them, unless it is ``user``'s own sign-in address
-        (``PartyManager.holding_blocker``): a refusal raises ``PermissionDenied``
-        and writes nothing. The whole decision is atomic and row-locked.
+        for later review. The identity statement would move the address like a
+        confirmation does, so where someone holds the address whom the
+        statement's author may not take it from (``PartyManager.holding_blocker``:
+        an account's own sign-in address is always its own), the identity link is
+        stated as a claim for review at ``Party.CLAIM_CONFIDENCE``, as a contact
+        states an address someone else holds, and control stays as it is. Neither
+        contested path refuses or touches the handle's display fields: signing in
+        and connecting never settle who holds an address. The whole decision is
+        atomic and row-locked.
         """
 
         evidence = tuple(evidence)
+        author = asserted_by or user
         person_model = apps.get_model("parties", "Person")
         link_owner = apps.get_model("parties", "Party").objects
         with (
             system_context(reason="parties.handle.claim_control"),
             transaction.atomic(),
         ):
+            handle = self.upsert(platform=platform, value=value, created_by_id=user.pk)
+            handles, _parties = link_owner.lock_identity_rows(
+                party_ids=(),
+                handle_ids=(handle.pk,),
+            )
+            handle = handles[handle.pk]
+            person = person_model.objects.for_user(user)
+            controlled = handle.controller_id is not None and handle.controller_id != user.pk
+            held = (
+                not controlled
+                and handle.party_id != person.pk
+                and StatementSourceMixin.source_kind_for(to_subject_ref(author)) == SourceKind.PERSON
+                and link_owner.holding_blocker(person, handle, author=author) is not None
+            )
+            if controlled or held:
+                link_owner.assert_handle(
+                    person,
+                    handle,
+                    confidence=0.3 if controlled else link_owner.model.CLAIM_CONFIDENCE,
+                    asserted_by=author,
+                    evidence=evidence,
+                )
+                return handle
             handle = self.upsert(
                 platform=platform,
                 value=value,
@@ -558,21 +586,6 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                 display_name=display_name,
                 metadata=metadata or {},
             )
-            handles, _parties = link_owner.lock_identity_rows(
-                party_ids=(),
-                handle_ids=(handle.pk,),
-            )
-            handle = handles[handle.pk]
-            person = person_model.objects.for_user(user)
-            if handle.controller_id is not None and handle.controller_id != user.pk:
-                link_owner.assert_handle(
-                    person,
-                    handle,
-                    confidence=0.3,
-                    asserted_by=asserted_by or user,
-                    evidence=evidence,
-                )
-                return handle
             if handle.controller_id is None:
                 handle.controller = user
                 handle.save(update_fields=["controller", "updated_at"])
@@ -580,7 +593,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                 person,
                 handle,
                 confidence=1.0,
-                asserted_by=asserted_by or user,
+                asserted_by=author,
                 evidence=evidence,
             )
         return handle
@@ -3254,7 +3267,9 @@ class DirectoryManager[DirectoryT: Directory](IntegrationManager[DirectoryT]):
         so no connection or reconnect ever reuses one, connects the directory
         with it (``Integration.attach_connection``, which enters connection
         discovery) and claims the address the account signs in as as the owner's
-        own handle (``DirectoryBackend.account_address``). Once that commits, the
+        own handle (``DirectoryBackend.account_address``); held by someone the
+        owner may not take it from, it is only claimed for review, and the
+        connection stands. Once that commits, the
         first sync is requested if the directory is ready for work; a backend
         whose discovery is pending gets its first sync from the discovery's
         completion. A failure to queue it is logged, and the directory stays
