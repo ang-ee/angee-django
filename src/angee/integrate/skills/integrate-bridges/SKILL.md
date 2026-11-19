@@ -105,8 +105,11 @@ source addon contributes one adapter class, its registry key and its tests. Refe
    container and retires the child of one that stops observing. `extract` returns one page and the cursor that
    covers it; the driver commits both. If the source is a mutable replica → return `RecordChange` rows and implement
    `enumerate_keys`, `read_keys` (set `supports_identity_reads = True`) and, for two-way, `local_changes` +
-   `write_back` (`src/angee/integrate/impl.py`). If the capability base already applies →
-   inherit `apply_record`; otherwise apply through the domain's idempotent ingest verb and return
+   `write_back` (`src/angee/integrate/impl.py`). If the capability base already builds and applies records
+   (`DirectoryBackend` in `src/angee/parties/backends.py`, `CalendarBackend` in `src/angee/calendar/backends.py`) →
+   implement its capability-named hooks (a directory's `extract_contacts`, `read_contacts` and `contact_keys`),
+   make payloads with its `observe` and pages with its `record_changes`, declare its `direction`, and inherit
+   `read_keys`, `enumerate_keys` and `apply_record`; otherwise apply through the domain's idempotent ingest verb and return
    `ApplyResult(target=...)` (`ChannelBackend.apply_record` in `src/angee/messaging/backends.py`). **Owner rule:**
    [Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts): the cursor commits with the records it
    covers, the driver alone promotes links, adapters never persist cursors or credentials.

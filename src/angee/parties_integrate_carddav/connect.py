@@ -1,4 +1,4 @@
-"""Connect one probed CardDAV account through Parties and Integrate owners."""
+"""Connect one CardDAV account, tested before it is saved, through Parties and Integrate owners."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from rebac import system_context
 
 
 def connect_directory(user: Any, *, name: str, server_url: str, username: str, password: str) -> Any:
-    """Probe unsaved credentials before atomically retaining the connected account."""
+    """Test the unsaved account's connection before atomically retaining it (``Directory.test_connection``)."""
 
     Directory = apps.get_model("parties", "Directory")
     Handle = apps.get_model("parties", "Handle")
@@ -28,16 +28,16 @@ def connect_directory(user: Any, *, name: str, server_url: str, username: str, p
     }
 
     # Complete validation and network discovery before opening the database
-    # transaction. Both rows are intentionally unsaved probe inputs.
-    probe_credential = credential_model.objects.prepare_local_credential(
+    # transaction. Both rows are intentionally unsaved inputs of the test.
+    unsaved_credential = credential_model.objects.prepare_local_credential(
         user,
         kind="basic_auth",
         name=credential_name,
         material=credential_material,
     )
-    Directory(credential=probe_credential, **directory_values).backend.probe()
+    Directory(credential=unsaved_credential, **directory_values).test_connection()
 
-    # Persist every owned row in one write-only transaction after the probe.
+    # Persist every owned row in one write-only transaction after the test.
     with system_context(reason="parties.graphql.connect_carddav"), transaction.atomic():
         credential = credential_model.objects.create_local_credential(
             user,

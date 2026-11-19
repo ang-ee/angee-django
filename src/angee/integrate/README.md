@@ -144,7 +144,8 @@ changes silently discard open failures or domain rows.
 See the [Integration and worker contracts](../../../docs/backend/guidelines.md#integration-and-worker-contracts)
 for invariants, the owners above for exact contracts, and
 [`preview_push`](streams.py) for read-only push inspection. The
-[Directory addon](../parties/README.md) composes this protocol for CardDAV.
+[Directory addon](../parties/README.md) composes this protocol for its directory
+backends, CardDAV among them, each syncing in the direction its backend declares.
 
 RecordLink declares `merge_policy = MOVE`: merging a target moves its links to
 the survivor. Both remote cards receive the survivor's projection, subject to

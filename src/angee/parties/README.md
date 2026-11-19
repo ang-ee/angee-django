@@ -3,7 +3,7 @@
 A Directory composes the [record-sync driver](../integrate/README.md). Its
 `addressbooks` stream mirrors each discovered address book as a Folder: the
 book's RecordLink targets the folder and is the container of that book's
-`contacts` stream, whose partition is the book's href. The directory states the
+`contacts` stream, whose partition is the book's key. The directory states the
 folder's name through that link ([FolderManager.ingest_addressbook](managers.py)),
 so a person's rename outranks a remote one. A book missing from the listing
 pauses its contacts; once its absence is confirmed it retires its contacts
@@ -13,9 +13,16 @@ from local state only. RecordLink owns
 external identity and wire payloads. Party rows remain independent of any one
 directory.
 
-The [CardDAV backend](../parties_integrate_carddav/backend.py) compares the shared
-[contact projection](backends.py); wire properties outside that projection stay
-in RecordLink history and survive conditional writes.
+A [directory backend](backends.py) reads a book's contacts as payloads keyed by
+external key (`DirectoryBackend.observe`, `read_contacts`, `contact_keys`); the
+base turns them into records, compares the shared contact projection on both
+sides and applies each through the ingest owners. The backend's `direction`
+decides which way contacts sync, pull-only unless it declares otherwise.
+`Directory` forwards its connection test and credential admission to the backend.
+The [CardDAV backend](../parties_integrate_carddav/backend.py) syncs two-way and
+builds its own records: a card's `UID` is its key and its href rides in the
+link's metadata, and wire properties outside the projection stay in RecordLink
+history and survive conditional writes.
 
 [PartyManager.ingest_contact](managers.py) asserts directory facts; Address and
 Relationship keep their own identities and statements. Missing members withdraw

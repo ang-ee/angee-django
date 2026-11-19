@@ -1326,7 +1326,6 @@ def test_ingest_contact_upserts_carddav_employment_in_place(db: None) -> None:
             other_party_kind="organization",
         )
         parsed = ParsedContact(
-            uid="contact-1",
             display_name="Ada Lovelace",
             organization="Analytical Engines",
             title="Mathematician",
@@ -1359,7 +1358,6 @@ def test_ingest_contact_upserts_carddav_employment_in_place(db: None) -> None:
         )
 
         changed = ParsedContact(
-            uid="contact-1",
             display_name="Ada Lovelace",
             organization="Analytical Engines",
             title="Principal Mathematician",
@@ -1381,7 +1379,7 @@ def test_ingest_contact_upserts_carddav_employment_in_place(db: None) -> None:
         foreign_type = foreign_link.target_content_type_id
         with pytest.raises(ValidationError, match="Party"):
             Party.objects.ingest_contact(
-                replace(parsed, uid="foreign-contact", display_name="Wrong identity"),
+                replace(parsed, display_name="Wrong identity"),
                 stream=stream, created_by_id=owner.pk, link=foreign_link,
             )
         with pytest.raises(ValidationError, match="Party"):
@@ -1422,7 +1420,7 @@ def test_a_card_pass_keeps_its_addresses_local_facts(db: None) -> None:
         stream = _contacts_stream(directory, owner)
         link = RecordLink.objects.observe(stream, "contact-4")
         RelationshipKind._base_manager.create(slug="employee", name="Employee", other_party_kind="organization")
-        card = ParsedContact(uid="contact-4", display_name="Ada Lovelace", addresses=(home, work, work))
+        card = ParsedContact(display_name="Ada Lovelace", addresses=(home, work, work))
         person = Party.objects.ingest_contact(card, stream=stream, created_by_id=owner.pk, link=link)
         assert Address._base_manager.filter(party=person, label="work").count() == 2
         located = Address._base_manager.get(party=person, label="home")
@@ -1461,7 +1459,7 @@ def test_ingest_contact_requires_employee_relationship_kind(db: None) -> None:
         )
         stream = _contacts_stream(directory, owner)
         link = RecordLink.objects.observe(stream, "contact-2")
-        parsed = ParsedContact(uid="contact-2", display_name="Grace", organization="Navy")
+        parsed = ParsedContact(display_name="Grace", organization="Navy")
 
         with pytest.raises(ValidationError, match="employee.*RelationshipKind"):
             Party.objects.ingest_contact(parsed, stream=stream, created_by_id=owner.pk, link=link)
