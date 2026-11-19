@@ -147,6 +147,16 @@ def test_src_workspace_slot_mode_cuts_the_code_slots_and_never_the_work_state() 
     assert "slot_mode" not in str(manifest["_angee"]["sources"]["work-state"])
 
 
+def test_src_workspace_cuts_one_more_slot_per_marked_stack_source() -> None:
+    """A stack source marked `slot: true` gets a slot of its own name, cut like the code slots."""
+
+    manifest = yaml.safe_load(SRC_COPIER.read_text(encoding="utf-8"))
+    code_slot = manifest["_angee"]["sources"]["angee"]
+    assert manifest["_angee"]["source_slot"] == {"mode": code_slot["mode"], "branch": code_slot["branch"]}
+    # Slot, source and subpath are the source's name, and the base is its default_ref.
+    assert not {"source", "subpath", "ref"} & set(manifest["_angee"]["source_slot"])
+
+
 def test_src_workspace_agents_reads_slots_from_disk_and_ws_create_from_the_stack() -> None:
     """AGENTS.md renders verbatim: no wording follows an input.
 

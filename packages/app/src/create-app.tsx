@@ -145,6 +145,7 @@ import { explainComposition, type CompositionExplanation } from "./explain";
 import { developmentMode } from "@angee/ui/lib/development-mode";
 import { inheritedRouteFact, resolveRoutePaths } from "./route-paths";
 import { mountRoutes } from "./mounts";
+import { validateLoginHero } from "./auth/LoginPage";
 import {
   compareCodePoint,
   authRouteError,
@@ -191,8 +192,6 @@ export interface CreateAppInput {
   location?: { search?: string; hostname?: string };
   /** Native router history; workshops and embedded hosts can isolate navigation. */
   history?: AnyRouter["history"];
-  /** Auth-owned sign-in destination. Defaults to `/login`. */
-  loginPath?: string;
   /** Build-owned defaults used until an authenticated user overrides them. */
   appearance?: HostAppearanceDefaults;
 }
@@ -314,7 +313,9 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const routesByName = new Map(routes.map((route) => [route.name, route]));
   const routeDescriptors = routes.map(({ name, path }) => ({ name, path }));
   const routeHref = createRouteHref(routeDescriptors);
-  const loginPath = input.loginPath ?? DEFAULT_LOGIN_PATH;
+  // The `auth.login` route's declaration is the one spelling of the sign-in URL;
+  // an app composing no sign-in route keeps the runtime default.
+  const loginPath = routesByName.has("auth.login") ? routeHref("auth.login") : DEFAULT_LOGIN_PATH;
   const menus = resolveMenuRouteTargets(
     composed.menus as readonly ChromeMenuItem[],
     routeHref,
@@ -405,6 +406,8 @@ export function createApp(input: CreateAppInput): AngeeApp {
       }
     }
   }
+  // The login page's one hero (`auth.login#hero`): content `LoginPage` renders.
+  for (const hero of composed.containers.children["auth.login#hero"] ?? []) validateLoginHero(hero.content, hero.id);
   for (const preset of Object.values(composed.resourceViews)) {
     const models = modelsFor(preset.resource).map(({ model }) => model);
     let failure: unknown;

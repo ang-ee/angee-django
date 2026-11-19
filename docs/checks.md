@@ -367,6 +367,7 @@ Management checks use `--no-sync` so invoking one cannot install or rebuild firs
 |---|---|---|
 | Install for development | `uv sync --locked` | Installs native editable distributions on a stopped/new host; does not compose |
 | Compose models and artifacts | `uv run --no-sync python manage.py compose` | Fresh build-mode process through the native launcher; no database provisioning |
+| Compose only when stale | `uv run --no-sync python manage.py compose --if-stale` | The stack's compose job; skips when the receipt matches the snapshot digest and owned-file bytes, without re-rendering, so it sees only [declared integration inputs](composer.md#runtime-build-and-import) |
 | Install for production | `uv sync --locked --no-editable` | New/stopped host; installs distributions, does not compose |
 | Build distribution wheels | `uv build --wheel --all-packages` | Native workspace builds; composition is a separate job |
 | Provision database state | `uv run --no-sync python manage.py provision` | Compiler-owned native history checks, migrations, hooks and readiness record |
@@ -607,6 +608,14 @@ Both maps came from local macOS arm64 runs of these commands (SQLite with
 `-n 6`) on a loaded host, the PostgreSQL one against `pgvector/pgvector:pg17`
 (PostgreSQL 17.10) with `max_locks_per_transaction = 256`. Use them for relative
 balance and check actual CI wall times against the 60-minute limit.
+
+The [staging smoke](../.github/workflows/staging-smoke.yml) deploys a staging host on
+the runner's Docker the way a host does: `angee init -t staging` and `angee up` with
+the latest released CLI, with this commit's templates and framework slot and the
+messaging bridges as a public repository. It then waits for Django behind the SPA
+and signs the administrator in. It runs on pull requests that change the stack,
+project or workspace templates, the Django base image (which it then builds instead
+of pulling) or the root JS manifests, and on demand.
 
 Separate workflows enforce private-path exclusion and other repository policies.
 The [release workflow](../.github/workflows/release.yml) runs on pushes to `main`: it

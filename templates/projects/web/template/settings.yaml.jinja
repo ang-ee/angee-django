@@ -113,6 +113,9 @@ INSTALLED_APPS:
   - angee.operator
   # Consumer addons land here as they are built.
   # - {{ addon_namespace }}.example
+{% for root in roots|split:"," %}{% if root %}
+  - {{ root|cut:" " }}
+{% endif %}{% endfor %}
 {% if addons_profile == "full" %}
   - angee.messaging_integrate_whatsapp
   - angee.messaging_integrate_telegram

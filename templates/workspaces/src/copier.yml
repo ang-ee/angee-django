@@ -87,6 +87,13 @@ _angee:
       source: "${inputs.work_state_source}"
       subpath: .work
       optional: true
+  # One more slot per stack source marked `slot: true` (a repository given to
+  # `angee init --repository` or `--extra-source`): slot, source and subpath are
+  # the source's name, and the slot starts from the source's default_ref. A
+  # marked source that a slot above already binds keeps that one slot.
+  source_slot:
+    mode: "${inputs.slot_mode}"
+    branch: "${inputs.branch_prefix}/${name | slug}"
 
 agent_name:
   type: str
