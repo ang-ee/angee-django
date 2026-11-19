@@ -432,6 +432,7 @@ _FILE_RESOURCE = hasura_model_resource(
         "mime_type__mime_type",
     ],
     insert=False,
+    delete=False,
     updatable=["filename", "title", "folder", "metadata"],
     # A file reads as its title or filename; that computed label is not filterable,
     # so lists and file pickers search the two columns behind it. The filename

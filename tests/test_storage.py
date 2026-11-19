@@ -771,16 +771,31 @@ def test_a_record_upload_follows_its_task_while_an_inherited_file_stays_its_owne
     assert reach(personal) == (True,) * 6, "an inherited file stays its owner's"
 
 
-def test_storage_resource_metadata_exposes_delete_previews() -> None:
-    """Storage's custom delete verbs are advertised to refine/resource actions."""
+@pytest.mark.parametrize("schema_name", ["public", "console"])
+def test_storage_delete_surface_excludes_files(schema_name: str) -> None:
+    """Files use the shared trash verbs; folders retain both delete roots."""
 
-    schema = addon_schema(storage_schema.schemas, "public")
+    schema = addon_schema(storage_schema.schemas, schema_name)
     resources = {item.model_label: item for item in schema.angee_resources}
+    fields = schema._schema.mutation_type.fields
 
-    assert resources["storage.File"].roots.delete_preview_name == "files_delete"
-    assert resources["storage.Folder"].roots.delete_preview_name == "folders_delete"
-    assert resources["storage.File"].type_names.delete_payload == "DeletePreview"
-    assert resources["storage.Folder"].type_names.delete_payload == "DeletePreview"
+    assert "files_delete" not in fields
+    assert "delete_files_by_pk" not in fields
+    file = resources["storage.File"]
+    assert file.roots.delete_name is None
+    assert file.roots.delete_preview_name is None
+    assert file.type_names.delete_payload is None
+    assert "delete" not in file.capabilities
+    assert "deletePreview" not in file.capabilities
+
+    assert "folders_delete" in fields
+    assert "delete_folders_by_pk" in fields
+    folder = resources["storage.Folder"]
+    assert folder.roots.delete_name == "delete_folders_by_pk"
+    assert folder.roots.delete_preview_name == "folders_delete"
+    assert folder.type_names.delete_payload == "DeletePreview"
+    assert "delete" in folder.capabilities
+    assert "deletePreview" in folder.capabilities
 
 
 def test_storage_console_schema_exposes_file_and_folder_changes() -> None:
@@ -792,44 +807,89 @@ def test_storage_console_schema_exposes_file_and_folder_changes() -> None:
     assert "folderChanged" in sdl
 
 
-@pytest.mark.parametrize("resource", ["file", "folder"])
 @pytest.mark.parametrize("confirm", [False, True])
-def test_storage_delete_preview_requires_delete_permission(drive: Any, resource: str, confirm: bool) -> None:
-    """A storage reader cannot preview or confirm another owner's deletion."""
+def test_folder_delete_preview_requires_delete_permission(drive: Any, confirm: bool) -> None:
+    """A storage reader cannot preview or confirm another owner's folder deletion."""
 
     reader = get_user_model().objects.create_user(username="storage-delete-reader")
     with actor_context(drive.alice):
-        target = (
-            File.objects.draft(filename="retained.txt", drive_id=str(drive.sqid))
-            if resource == "file"
-            else Folder.objects.create_in_drive(drive_id=str(drive.sqid), name="Retained folder")
-        )
+        target = Folder.objects.create_in_drive(drive_id=str(drive.sqid), name="Retained folder")
     with system_context(reason="test.storage.delete_permission"):
         write_relationships([
             RelationshipTuple(resource=to_object_ref(drive), relation="viewer", subject=to_subject_ref(reader)),
         ])
     with actor_context(reader):
-        readable = type(target).objects.get(pk=target.pk)
+        readable = Folder.objects.get(pk=target.pk)
         assert readable.has_access("read")
         assert not readable.has_access("delete")
     result = execute_schema(
         addon_schema(storage_schema.schemas, "public"),
-        f"""mutation Delete($id: ID!, $confirm: Boolean!) {{
-          {resource}s_delete(id: $id, confirm: $confirm) {{ total_deleted_count blocked {{ label count }} }}
-        }}""",
+        """mutation Delete($id: ID!, $confirm: Boolean!) {
+          folders_delete(id: $id, confirm: $confirm) { total_deleted_count blocked { label count } }
+        }""",
         {"id": str(target.sqid), "confirm": confirm},
         user=reader,
     )
     assert result.errors is not None
     assert result.errors[0].extensions == {"code": "PERMISSION_DENIED"}
     assert result.data is None
-    assert type(target).objects.as_user(drive.alice).filter(pk=target.pk).exists()
+    assert Folder.objects.as_user(drive.alice).filter(pk=target.pk).exists()
+
+
+@pytest.mark.parametrize("confirm", [False, True])
+def test_folder_delete_preview_preserves_confirmation(drive: Any, confirm: bool) -> None:
+    """An owner previews a folder's deletion and removes it only when confirmed."""
+
+    with actor_context(drive.alice):
+        folder = Folder.objects.create_in_drive(drive_id=str(drive.sqid), name="Removable folder")
+    outcome = result_data(execute_schema(
+        addon_schema(storage_schema.schemas, "public"),
+        """mutation Delete($id: ID!, $confirm: Boolean!) {
+          folders_delete(id: $id, confirm: $confirm) { has_blockers total_deleted_count }
+        }""",
+        {"id": str(folder.sqid), "confirm": confirm},
+        user=drive.alice,
+    ))["folders_delete"]
+    assert outcome == {"has_blockers": False, "total_deleted_count": 1}
+    assert Folder.objects.as_user(drive.alice).filter(pk=folder.pk).exists() is not confirm
+
+
+@pytest.mark.parametrize("verb", ["trash_record", "restore_record"])
+def test_file_trash_verbs_require_delete_permission(drive: Any, verb: str) -> None:
+    """A file reader cannot trash or restore it through the shared verbs."""
+
+    reader = get_user_model().objects.create_user(username="storage-trash-reader")
+    row = _proxy_upload(drive, PNG_BYTES)
+    with system_context(reason="test.storage.trash_permission"):
+        write_relationships([
+            RelationshipTuple(resource=to_object_ref(drive), relation="viewer", subject=to_subject_ref(reader)),
+        ])
+    with actor_context(reader):
+        readable = File.objects.get(pk=row.pk)
+        assert readable.has_access("read")
+        assert not readable.has_access("delete")
+    trashed = verb == "restore_record"
+    if trashed:
+        with actor_context(drive.alice):
+            row.trash()
+    outcome = result_data(execute_schema(
+        addon_schema(storage_schema.schemas, "public", records.schemas),
+        f"""mutation ChangeTrash($id: ID!) {{
+          {verb}(target_type: "storage/file", target_id: $id, confirm: true) {{ ok }}
+        }}""",
+        {"id": str(row.sqid)},
+        user=reader,
+    ))[verb]
+    assert outcome == {"ok": False}
+    row.refresh_from_db()
+    assert row.is_trashed is trashed
+    assert (Path(drive.backend.storage.location) / row.storage_path).read_bytes() == PNG_BYTES
 
 
 def test_storage_graphql_custom_mutations_accept_public_ids(drive: Any) -> None:
     """Custom storage mutations resolve raw sqids at the GraphQL boundary."""
 
-    schema = addon_schema(storage_schema.schemas, "public")
+    schema = addon_schema(storage_schema.schemas, "public", records.schemas)
     with actor_context(drive.alice):
         row = File.objects.draft(
             filename="graphql.png",
@@ -870,26 +930,26 @@ def test_storage_graphql_custom_mutations_accept_public_ids(drive: Any) -> None:
 
     row.refresh_from_db()
     storage_path = row.storage_path
-    deleted = result_data(
+    trashed = result_data(
         execute_schema(
             schema,
             """
-            mutation Delete($id: ID!) {
-              files_delete(id: $id, confirm: true) { has_blockers }
+            mutation Trash($id: ID!) {
+              trash_record(target_type: "storage/file", target_id: $id, confirm: true) { ok message }
             }
             """,
             {"id": str(row.sqid)},
             user=drive.alice,
         )
-    )["files_delete"]
-    assert deleted == {"has_blockers": False}
+    )["trash_record"]
+    assert trashed == {"ok": True, "message": "Moved to the trash."}
     row.refresh_from_db()
     assert row.is_trashed
-    assert (Path(drive.backend.storage.location) / storage_path).exists()
+    assert (Path(drive.backend.storage.location) / storage_path).read_bytes() == PNG_BYTES
 
     restored = result_data(
         execute_schema(
-            addon_schema(storage_schema.schemas, "public", records.schemas),
+            schema,
             """
             mutation Restore($id: ID!) {
               restore_record(target_type: "storage/file", target_id: $id, confirm: true) { ok message }
@@ -902,6 +962,7 @@ def test_storage_graphql_custom_mutations_accept_public_ids(drive: Any) -> None:
     assert restored == {"ok": True, "message": "Restored from the trash."}
     row.refresh_from_db()
     assert not row.is_trashed
+    assert (Path(drive.backend.storage.location) / storage_path).read_bytes() == PNG_BYTES
 
 
 @pytest.mark.django_db(transaction=True)

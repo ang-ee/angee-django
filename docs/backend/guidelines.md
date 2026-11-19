@@ -1710,6 +1710,8 @@ open fresh evaluator scopes for authorization and change-feed reads.
   target queryset; model refusals remain `delete_blocker()`. An explicitly
   gated authored preview on a `delete=False` resource uses the same root
   spelling and `attach_delete_preview_metadata`.
+  A resource whose removal is the trash declares `delete=False` and uses the
+  shared trash verbs; see [storage files](../../src/angee/storage/README.md).
 - **Permission answers reuse the authorization owner.** Declare a type's
   `permissions` through [`permissions_field(names)`](../../src/angee/graphql/capabilities.py);
   it reports only the declared Zed permissions held by the current actor,
