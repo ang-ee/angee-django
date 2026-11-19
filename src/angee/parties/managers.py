@@ -29,7 +29,7 @@ from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.prefetch import GenericPrefetch
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import IntegrityError, models, transaction
 from django.db.models import (
     Case,
@@ -52,10 +52,12 @@ from phonenumbers import PhoneNumberMatcher
 from rebac import (
     PermissionDenied,
     actor_context,
+    check_new,
     current_actor,
     system_context,
 )
 from rebac.actors import is_sudo, to_subject_ref
+from rebac.resources import model_resource_type
 
 from angee.base.hooks import resolve_hooks
 from angee.base.lineage import concrete_child
@@ -691,9 +693,9 @@ class EmailHolder(NamedTuple):
 
     email: str
     """The address as the caller gave it."""
-    person: Any
+    person: Person
     basis: EmailBasis
-    handle: Any | None
+    handle: Handle | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1856,9 +1858,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
         The person who holds the handle, by the holding rule :meth:`people_for_emails`
         answers with (:meth:`_holders`: through merge survivors, never an
-        organization or a trashed person); otherwise the party an earlier run of the
-        same import linked it to, since a claim awaiting review, or one the person
-        dismissed, resolves nothing; a re-import therefore never mints a second person.
+        organization or a trashed person); otherwise the untrashed person an earlier
+        run of the same import linked it to, since a claim awaiting review, or one
+        the person dismissed, resolves nothing; a re-import therefore never mints a
+        second person, and one whose earlier person is trashed mints a new one.
         An existing name is never overwritten: it may be user-curated, and export
         text must not clobber curation on every re-run.
         """
@@ -1869,7 +1872,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             return held[1]
         party_id = (
             apps.get_model("parties", "PartyStatement")
-            ._base_manager.filter(handle=handle, aspect="handle", asserted_by=str(to_subject_ref(asserted_by)))
+            ._base_manager.filter(
+                handle=handle,
+                aspect="handle",
+                asserted_by=str(to_subject_ref(asserted_by)),
+                subject__is_trashed=False,
+            )
             .order_by("pk")
             .values_list("subject_id", flat=True)
             .first()
@@ -1889,9 +1897,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         ``emails`` come in the caller's preference order, and so does the answer: per
         address, at most one person on each basis, in this order (:class:`EmailBasis`):
 
-        1. ``ACCOUNT``: the user account with that address is its user's Person
-           (``UserManager.person_for_email``'s rule: an address two accounts share
-           names nobody);
+        1. ``ACCOUNT``: the user account with that address is its user's existing
+           Person (``UserManager.person_for_email``'s rule: an address two
+           accounts share names nobody); an account without a Person names
+           nobody, and a caller that needs one asks ``for_user`` itself;
         2. ``HELD``: the first email handle of the address that a live Person
            holds names them, through merge survivors;
         3. ``CLAIM``: whenever no live Person holds the address, the one live
@@ -1908,8 +1917,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         organization and a merged-away row are nobody's answer. One person may come
         under several bases, and an address two people share (a family's) names
         them both: each caller applies its own policy, and only a ``HELD`` holder
-        holds the address. Any batch reads in a bounded number of queries. This is
-        a system identity lookup: the caller gates what it reveals.
+        holds the address. Any batch reads in a bounded number of queries, and the
+        lookup writes nothing. This is a system identity lookup: the caller gates
+        what it reveals.
         """
 
         handle_model = apps.get_model("parties", "Handle")
@@ -1926,15 +1936,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             for user in users.people().filter(email__in=set(addresses.values())):
                 accounts[user.email].append(user)
             owners = {address: found[0] for address, found in accounts.items() if len(found) == 1}
-            own = {
-                person.user_id: person
-                for person in person_model._base_manager.filter(user_id__in=[user.pk for user in owners.values()])
-            }
-            for user in owners.values():
-                if user.pk not in own:
-                    own[user.pk] = self.for_user(user)
             account_people = {
-                pk: person for pk, person in own.items() if not person.is_trashed and person.merged_into_id is None
+                person.user_id: person
+                for person in live.filter(user_id__in=[user.pk for user in owners.values()])
             }
             known = list(
                 handle_model._base_manager.filter(
@@ -2840,19 +2844,31 @@ class DirectoryManager[DirectoryT: Directory](IntegrationManager[DirectoryT]):
     ) -> DirectoryT:
         """Connect ``owner``'s account at a contact source, tested before anything is saved, and queue its first sync.
 
-        The credential (``credential_kind`` and its secret ``material``) and a
-        directory of ``backend_class`` with its non-secret ``config`` are built
-        unsaved first; the backend admits the credential and tests the connection
-        (``DirectoryBackend.test_connection``) outside any transaction, and its
-        refusal is a ``ValidationError`` carrying the backend's own operator
+        ``owner`` must hold ``create`` on a directory (``parties/directory``),
+        checked first. The credential (``credential_kind`` and its secret
+        ``material``) and a directory of ``backend_class`` with its non-secret
+        ``config`` are built unsaved; a backend whose seeded vendor row is not
+        loaded yet is an operator refusal that says to load resources. Each
+        directory gets a credential of its own, named after the backend and
+        ``display_name``: a name already serving another integration of the
+        owner's is refused. The backend admits the credential and tests the
+        connection (``DirectoryBackend.test_connection``) outside any transaction,
+        and its refusal is a ``ValidationError`` carrying the backend's own operator
         message, so a directory that could never sync is never saved. Then one
         transaction, as system work, creates the credential and the directory (its
-        vendor is the backend's seeded one, ``IntegrationManager.build``), claims
-        the address the account signs in as as the owner's own handle
-        (``DirectoryBackend.account_address``) and requests the first sync. A
-        vendor's connect mutation calls this; it has no GraphQL of its own.
+        vendor is the backend's seeded one, ``IntegrationManager.build``) and
+        claims the address the account signs in as as the owner's own handle
+        (``DirectoryBackend.account_address``). The first sync is requested once
+        that commits; a failure to queue it is logged, and the directory stays
+        connected for its next scheduled sync. A vendor's connect mutation calls
+        this; it has no GraphQL of its own.
         """
 
+        resource_type = model_resource_type(self.model)
+        if resource_type is None or not check_new(
+            subject=to_subject_ref(owner), action="create", resource_type=resource_type
+        ).allowed:
+            raise PermissionDenied("This account may not connect a directory.")
         credentials = apps.get_model("integrate", "Credential").objects
         fields = {
             "backend_class": backend_class,
@@ -2862,8 +2878,16 @@ class DirectoryManager[DirectoryT: Directory](IntegrationManager[DirectoryT]):
             "lifecycle": IntegrationLifecycle.CONNECTED,
             "created_by_id": owner.pk,
         }
-        candidate = self.build(**fields)
+        try:
+            candidate = self.build(**fields)
+        except ImproperlyConfigured as error:
+            # The backend's vendor is a seeded row (its master resource), absent until resources load.
+            raise ValidationError(
+                "This directory's vendor is not loaded on this server: run `manage.py resources load`, "
+                "then connect again."
+            ) from error
         name = f"{candidate.get_backend_class_impl().label} — {display_name}"
+        self._refuse_taken_credential_name(owner, name)
         unsaved = credentials.prepare_local_credential(owner, kind=credential_kind, name=name, material=material)
         candidate.attach_connection(unsaved)
         try:
@@ -2872,6 +2896,8 @@ class DirectoryManager[DirectoryT: Directory](IntegrationManager[DirectoryT]):
             raise ValidationError(error.public_message) from error
         with system_context(reason="parties.directory.connect"), transaction.atomic():
             credential = credentials.create_local_credential(owner, kind=credential_kind, name=name, material=material)
+            # The upsert locks the credential row, so a concurrent connect of the same name waits and is refused here.
+            self._refuse_taken_credential_name(owner, name)
             directory = self.build(**fields)
             directory.attach_connection(credential)
             directory.save()
@@ -2885,5 +2911,22 @@ class DirectoryManager[DirectoryT: Directory](IntegrationManager[DirectoryT]):
                     evidence=[directory],
                     display_name=display_name,
                 )
+        try:
             directory.request_sync()
+        except Exception:  # noqa: BLE001 -- the committed directory stays connected; its next scheduled sync runs.
+            logger.warning("The first sync of directory %s could not be queued.", directory.pk, exc_info=True)
         return directory
+
+    @staticmethod
+    def _refuse_taken_credential_name(owner: Any, name: str) -> None:
+        """Refuse ``name`` when ``owner``'s provider-less credential of that name already serves an integration."""
+
+        with system_context(reason="parties.directory.connect"):
+            taken = (
+                apps.get_model("integrate", "Integration")
+                ._base_manager.filter(credential__user_id=owner.pk, credential__name=name)
+                .filter(credential__oauth_client__isnull=True)
+                .exists()
+            )
+        if taken:
+            raise ValidationError("An account is already connected under that name; choose another name.")
