@@ -522,10 +522,14 @@ function angeeSitePlugin(): Plugin & { update(head: WebCodegenResult["head"]): v
       const value = process.env.ANGEE_PUBLIC_ORIGIN;
       if (!value) return;
       // Django's public_origin and its check angee.E051 keep the rest of the rule (https outside DEBUG, wildcards).
-      const parsed = URL.canParse(value) ? new URL(value) : undefined;
-      if (!parsed || !["http:", "https:"].includes(parsed.protocol) || parsed.origin !== value.replace(/\/$/, "")) {
-        throw new Error(`ANGEE_PUBLIC_ORIGIN must be a bare http(s) origin such as https://example.com, not ${JSON.stringify(value)}.`);
+      // Errors never echo the value, which can carry credentials.
+      if (!URL.canParse(value)) throw new Error("ANGEE_PUBLIC_ORIGIN is not a URL; it must be a bare http(s) origin such as https://example.com.");
+      const parsed = new URL(value);
+      const web = ["http:", "https:"].includes(parsed.protocol);
+      if (!web || parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash) {
+        throw new Error(`ANGEE_PUBLIC_ORIGIN must be a bare http(s) origin such as ${web ? parsed.origin : "https://example.com"}, with no user info, path, query or fragment.`);
       }
+      // The platform's normalized form: lower-case scheme and host, punycode, no default port.
       origin = parsed.origin;
     },
     configResolved(config) {
@@ -555,7 +559,7 @@ function angeeSitePlugin(): Plugin & { update(head: WebCodegenResult["head"]): v
           const asset = Object.values(context.bundle ?? {}).find((entry) =>
             entry.type === "asset" && entry.originalFileNames.includes(originalFileName(file)));
           if (!asset) throw new Error(`Missing emitted site asset: ${originalFileName(file)}`);
-          return `${base}${asset.fileName}`;
+          return `${base}${encodeURI(asset.fileName)}`;
         };
         const tags: HtmlTagDescriptor[] = [{
           tag: "title", children: head.title.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
@@ -634,7 +638,8 @@ function preloadSchemaMetadata(): Plugin {
               rel: "preload",
               as: "fetch",
               crossorigin: "anonymous",
-              href: `${base}${asset.fileName}`,
+              // Emitted names keep spaces and non-ASCII; Vite encodes its own HTML asset URLs.
+              href: `${base}${encodeURI(asset.fileName)}`,
             },
             injectTo: "head" as const,
           }));
