@@ -10,6 +10,14 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.messaging`: outbound delivery waits for connection discovery.
+  `run_message_delivery` published through a channel whose integration was
+  discovering again, so a queued reply on a feed that requires discovery went out
+  with a grant discovery had not confirmed. The delivery now asks the transport
+  channel's integration (`Integration.require_discovery_ready`) before it sends:
+  a pending discovery defers it as lock contention does, spending no attempt, and
+  a failed discovery fails it with the discovery's own message.
+
 - `angee.integrate`: the discovery check on stream commits covers what rests on
   remote facts, and says why it refuses. Pinning, unpinning, dismissing a failure
   and reopening a conflict whose follow-through was refused change local state

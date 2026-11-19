@@ -62,11 +62,15 @@ def test_queued_delivery_waits_for_commit_and_persists_status(
     )
     channels = Mock()
     channels.sudo.return_value = channels
-    channels.get.return_value = SimpleNamespace(backend=SimpleNamespace(
-        deliver=lambda message: DeliveryOutcome(accepted=True),
-        delivery_lock=lambda: nullcontext(True),
-        close=lambda: None,
-    ))
+    channels.get.return_value = SimpleNamespace(
+        # Delivery admission asks the channel's integration whether its discovery is ready.
+        require_discovery_ready=lambda: None,
+        backend=SimpleNamespace(
+            deliver=lambda message: DeliveryOutcome(accepted=True),
+            delivery_lock=lambda: nullcontext(True),
+            close=lambda: None,
+        ),
+    )
     get_model = delivery.apps.get_model
 
     def delivery_model(app_label: str, model_name: str | None = None) -> Any:

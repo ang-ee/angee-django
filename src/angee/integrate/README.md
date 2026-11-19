@@ -382,6 +382,10 @@ wait, with the discovery message as a note and no attempt spent, and a failed
 one fails it with that message. One limit is left there: a step already in its IO
 when discovery turns pending meets the refusal inside it, spends that one attempt
 (as a transport failure caused by the refusal), and the next attempt waits.
+Outbound delivery asks the transport channel's integration the same way
+(`angee.messaging.delivery.run_message_delivery`): a pending discovery defers the
+send as lock contention does, spending no attempt, and a failed one fails it with
+the discovery's message.
 Discovery's own apply writes no stream. While a run holds the sync lock discovery
 cannot settle, so readiness stands for the generation the run was admitted under.
 Three limits still hold: a multi-partition workflow step runs without the sync
