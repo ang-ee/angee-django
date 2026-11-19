@@ -49,6 +49,35 @@ def test_connection_replay_keeps_one_person_and_its_source_relationships(db, mon
         assert Handle.objects.get(platform="facebook", value="friend42").party_id == first.pk
 
 
+def test_a_reimport_renames_or_drops_the_employer_on_the_links_own_edge(db, monkeypatch):
+    """A free-text employer is a value of the link's own edge, for the connections import as for a directory."""
+
+    del db
+    monkeypatch.setattr(ManualChannelBackend, "source_kind", SourceKind.IMPORT)
+    with system_context(reason="parties.connection.employer"):
+        user = get_user_model().objects.create_user(username="connection-employer-importer")
+        channel = make_integration("connection-employer", model=Channel, backend_class="manual")
+        for slug in ("acquaintance", "employee"):
+            RelationshipKind.objects.get_or_create(slug=slug, defaults={"name": slug.title()})
+        stream = current_stream(channel, "connections", kind=StreamKind.RECORD_REPLICA)
+        link = RecordLink.objects.observe(stream, "friend:7")
+        handle = ParsedHandle(platform="facebook", value="friend7", external_id="7", display_name="Friend")
+
+        def land(organization):
+            parsed = ParsedConnection(handle=handle, organization=organization, title="Researcher")
+            (person,) = Party.objects.ingest_connections(
+                [(parsed, link)], created_by_id=user.pk, asserted_by=channel.integration_ptr,
+            )
+            edges = Relationship.objects.filter(party_id=person.pk, kind__slug="employee")
+            claims = dict(Relationship.statements.model.objects.filter(link=link).values_list("subject_id", "status"))
+            return [(edge.pk, edge.other_name, claims.get(edge.pk)) for edge in edges.order_by("pk")]
+
+        ((edge, name, status),) = land("Example employer")
+        assert (name, status) == ("Example employer", "asserted")
+        assert land("Renamed employer") == [(edge, "Renamed employer", "asserted")]
+        assert land("") == [(edge, "Renamed employer", "withdrawn")]
+
+
 def test_a_connection_handle_is_identified_by_an_identifier_or_its_typed_confidence():
     """A name alone never identifies an account; an adapter's confidence overrides the inference."""
 

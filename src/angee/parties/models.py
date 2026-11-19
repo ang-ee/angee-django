@@ -138,11 +138,11 @@ class Party(
                 precedence=cast(tuple[SourceKind, ...], (SourceKind.PERSON, SourceKind.DIRECTORY)),
             ),
             "handle": Aspect(
-                # The reverse name lets a handle reach the directories asserting it (parties/handle).
+                # The reverse name lets a handle reach the directories asserting it (parties/handle). It is
+                # the statement model's own name (``partystatement``), as Django names a subject's reverse,
+                # so every statement arm of the parties schema spells its path the same way.
                 member={
-                    "handle": models.ForeignKey(
-                        "parties.Handle", on_delete=models.PROTECT, related_name="party_statements"
-                    )
+                    "handle": models.ForeignKey("parties.Handle", on_delete=models.PROTECT, related_name="%(class)s")
                 },
                 precedence=cast(
                     tuple[SourceKind, ...],
@@ -944,7 +944,7 @@ class AddressManager[AddressT: Address](StatementSubjectManager[AddressT]):
 
     def land_addresses(
         self, party: Any, addresses: Iterable[Any], *, asserted_by: Any, link: Any, created_by_id: Any
-    ) -> list[AddressT]:
+    ) -> None:
         """State the addresses ``link`` names for ``party``; withdraw the link's others.
 
         Each parsed address takes its stored form (:meth:`as_stored`) and matches a
@@ -975,7 +975,6 @@ class AddressManager[AddressT: Address](StatementSubjectManager[AddressT]):
         statements = self.model.statements
         removed = statements.filter(link=link).exclude(subject_id__in=[row.pk for row in landed])
         statements.withdraw(asserted_by, list(removed.values_list("subject_id", flat=True)), link=link)
-        return landed
 
     def lock_party(self, party_id: Any) -> None:
         """Serialize address writes for one party, including its first address."""

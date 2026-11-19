@@ -66,11 +66,17 @@ def source(db: None) -> SimpleNamespace:
         )
 
 
-def _ingest(source: SimpleNamespace, link: Any, parsed: ParsedOrganization) -> Any:
+def _ingest(source: SimpleNamespace, link: Any, parsed: ParsedOrganization, *, target: Any = None) -> Any:
     with system_context(reason="tests.organizations.ingest"):
         return Party.objects.ingest_organization(
-            parsed, stream=source.organizations, link=link, created_by_id=source.owner.pk
+            parsed, stream=source.organizations, link=link, created_by_id=source.owner.pk, target=target
         )
+
+
+def _legal(organization: Any) -> tuple[str, str]:
+    with system_context(reason="tests.organizations.legal"):
+        row = Organization._base_manager.get(pk=organization.pk)
+        return row.legal_name, row.domain
 
 
 def _stated(link: Any) -> dict[str, list[tuple[Any, Any, str]]]:
@@ -199,6 +205,93 @@ def test_the_organization_projection_ignores_collection_order() -> None:
     }
 
 
+def test_a_source_carrying_no_legal_identity_leaves_it_to_the_sources_that_do(source: SimpleNamespace) -> None:
+    """Neither legal name nor domain withdraws this link's legal identity; either states it whole again."""
+
+    unknown = replace(EXAMPLE, legal_name="", domain="")
+    with system_context(reason="tests.organizations.link"):
+        link = RecordLink.objects.observe(source.organizations, "company-legal")
+    organization = _ingest(source, link, EXAMPLE)
+    with system_context(reason="tests.organizations.register"):
+        register = make_integration("legal-register", model=Directory)
+        register_stream = current_stream(register, "organizations", kind=StreamKind.RECORD_REPLICA)
+        register_link = RecordLink.objects.observe(
+            register_stream, "register-1", target=Party._base_manager.get(pk=organization.pk)
+        )
+        # A lower-ranked source: the same kind, at a lower confidence.
+        Organization._base_manager.get(pk=organization.pk).statements.set(
+            aspect="legal_identity",
+            values={"legal_name": "Example Registered Limited", "domain": "example.org"},
+            asserted_by=register.integration_ptr,
+            link=register_link,
+            confidence=0.5,
+        )
+    assert _legal(organization) == ("Example Limited", "example.com")
+
+    _ingest(source, link, unknown)
+    assert _legal(organization) == ("Example Registered Limited", "example.org")
+    with system_context(reason="tests.organizations.read"):
+        statement = Organization.statements.model._base_manager.get(subject_id=organization.pk, link=link)
+        assert statement.status == "withdrawn"
+
+    # Carrying either field states the whole aspect again, and it outranks the register.
+    _ingest(source, link, replace(unknown, domain="example.net"))
+    assert _legal(organization) == ("", "example.net")
+
+
+def test_a_passed_target_is_an_organization_and_never_rebinds_a_link(source: SimpleNamespace) -> None:
+    """Binding lends the party to the directory's contact readers, so ingestion never moves a link."""
+
+    with system_context(reason="tests.organizations.links"):
+        person = Person.objects.create(display_name="Ada Example", created_by=source.owner)
+        person_link = RecordLink.objects.observe(
+            source.organizations, "company-person", target=Party._base_manager.get(pk=person.pk)
+        )
+        bound = RecordLink.objects.observe(source.organizations, "company-bound")
+        unbound = RecordLink.objects.observe(source.organizations, "company-unbound")
+    landed = _ingest(source, bound, EXAMPLE)
+    with system_context(reason="tests.organizations.other"):
+        other = Organization.objects.create(display_name="Other Ltd", created_by=source.owner)
+    for link, target, message in (
+        (person_link, None, "kind Organization"),
+        (unbound, person, "kind Organization"),
+        (bound, other, "never rebinds"),
+    ):
+        with pytest.raises(ValidationError, match=message):
+            _ingest(source, link, EXAMPLE, target=target)
+    with system_context(reason="tests.organizations.read"):
+        assert RecordLink.objects.get(pk=bound.pk).target_object_id == str(landed.pk)
+        assert RecordLink.objects.get(pk=person_link.pk).target_object_id == str(person.pk)
+        assert not Organization.statements.model._base_manager.filter(link__in=[person_link, unbound]).exists()
+    # The link's own target is accepted, and an unbound link binds the organization passed.
+    assert _ingest(source, bound, EXAMPLE, target=landed).pk == landed.pk
+    assert _ingest(source, unbound, EXAMPLE, target=other).pk == other.pk
+    with system_context(reason="tests.organizations.read"):
+        assert RecordLink.objects.get(pk=unbound.pk).target_object_id == str(other.pk)
+
+
+def test_an_organization_named_only_legally_names_its_handles_so(source: SimpleNamespace) -> None:
+    """A record with a legal name and no display name names the party and its handles by the legal name."""
+
+    with system_context(reason="tests.organizations.link"):
+        link = RecordLink.objects.observe(source.organizations, "company-legal-only")
+    organization = _ingest(source, link, replace(EXAMPLE, display_name=""))
+    with system_context(reason="tests.organizations.read"):
+        assert organization.display_name == "Example Limited"
+        names = set(Handle._base_manager.filter(party_id=organization.pk).values_list("display_name", flat=True))
+        assert names == {"Example Limited"}
+
+
+def test_the_organization_projection_compares_the_stored_form() -> None:
+    """An organization takes the stored form a contact does, so a spelled-out country equals its code."""
+
+    coded = replace(EXAMPLE, addresses=(replace(EXAMPLE.addresses[0], country="US"),))
+    assert organization_projection(EXAMPLE) != organization_projection(coded)
+    prepare = Party.objects.prepare_contact
+    assert organization_projection(prepare(EXAMPLE)) == organization_projection(prepare(coded))
+    assert prepare(EXAMPLE).addresses[0].country == "US"
+
+
 @pytest.fixture
 def employment(source: SimpleNamespace) -> SimpleNamespace:
     """A person a people link names, and two organizations the directory landed."""
@@ -213,14 +306,14 @@ def employment(source: SimpleNamespace) -> SimpleNamespace:
     return SimpleNamespace(source=source, person=person, link=person_link, first=first, second=second)
 
 
-def _land(employment: SimpleNamespace, *employers: Employment) -> None:
+def _land(employment: SimpleNamespace, *employers: Employment, link: Any = None) -> None:
     with system_context(reason="tests.organizations.land_employment"):
         Relationship.objects.land_employment(
             employment.person,
             employers,
             created_by_id=employment.source.owner.pk,
             asserted_by=employment.source.integration,
-            link=employment.link,
+            link=link or employment.link,
         )
 
 
@@ -317,15 +410,60 @@ def test_employment_needs_the_employee_kind_only_to_state_an_employer(employment
 
     e = employment
     with system_context(reason="tests.organizations.no_kind"):
+        RelationshipKind._base_manager.filter(slug="employee").delete()
         arguments: dict[str, Any] = {
             "created_by_id": e.source.owner.pk,
             "asserted_by": e.source.integration,
             "link": e.link,
-            "kinds": {"employee": None},
         }
         Relationship.objects.land_employment(e.person, [], **arguments)
         with pytest.raises(ValidationError, match="employee.*RelationshipKind"):
             Relationship.objects.land_employment(e.person, [Employment("Example Works")], **arguments)
         with pytest.raises(ValidationError, match="non-empty name"):
-            Relationship.objects.land_employment(e.person, [Employment("")], **{**arguments, "kinds": None})
+            Relationship.objects.land_employment(e.person, [Employment("")], **arguments)
     assert _edges(e) == {}
+
+
+def test_an_employer_named_twice_lands_once_as_its_first_naming(employment: SimpleNamespace) -> None:
+    """A repeated organization or name is one employer: one edge each, stated as first named."""
+
+    e = employment
+    _land(
+        e,
+        Employment(e.first, "Engineer"),
+        Employment(e.first, "Advisor"),
+        Employment("Example Works", "Lead"),
+        Employment("Example Works", "Other"),
+    )
+    assert sorted(_edges(e).values(), key=str) == sorted(
+        [(e.first.pk, "", "Engineer", "asserted"), (None, "Example Works", "Lead", "asserted")], key=str
+    )
+
+
+def test_two_links_naming_one_organization_share_its_edge_and_claim(employment: SimpleNamespace) -> None:
+    """One edge per pair, one claim per source and edge: the link that stated it last holds it.
+
+    A link that no longer holds the claim drops nothing when it stops naming the
+    employer. The known limit is the converse: the holding link's drop withdraws
+    the claim while the other link still names the organization.
+    """
+
+    e = employment
+    with system_context(reason="tests.organizations.second_link"):
+        again = RecordLink.objects.observe(e.source.people, "ada-again", target=Party._base_manager.get(pk=e.person.pk))
+    _land(e, Employment(e.first, "Engineer"))
+    _land(e, Employment(e.first, "Engineer"), link=again)
+
+    def claims() -> list[tuple[Any, Any, str]]:
+        with system_context(reason="tests.organizations.claims"):
+            return list(
+                Relationship.statements.current()
+                .filter(subject__party_id=e.person.pk)
+                .values_list("subject__other_party_id", "link_id", "status")
+            )
+
+    with system_context(reason="tests.organizations.edges"):
+        assert Relationship._base_manager.filter(party_id=e.person.pk).count() == 1
+    assert claims() == [(e.first.pk, again.pk, "asserted")]
+    _land(e)
+    assert claims() == [(e.first.pk, again.pk, "asserted")]

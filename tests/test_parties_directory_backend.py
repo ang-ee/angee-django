@@ -20,7 +20,7 @@ from rebac import system_context
 from angee.integrate.states import LinkStatus, StreamDirection
 from angee.integrate.streams import PushPreview, StreamPage, advance_stream, preview_push, reconcile_stream
 from angee.integrate.testing.models import RecordLink, SyncStream
-from angee.messaging.testing.models import Directory, Party, Person, RelationshipKind
+from angee.messaging.testing.models import Directory, Organization, Party, Person, RelationshipKind
 from angee.parties.backends import DirectoryBackend, ManualDirectoryBackend, ParsedAddressbook, ParsedContact
 from tests.conftest import make_integration
 from tests.stream_adapters import applied_history
@@ -273,6 +273,23 @@ def test_a_merge_at_the_source_lands_on_the_replaced_records_person_and_moves_it
     assert not _asserted(party_id, ada).exists()
     assert _asserted(party_id, survivor).exists()
     assert not RecordLink.objects.filter(stream=pull.stream, external_key="never-linked").exists()
+
+
+def test_contact_ingest_never_rebinds_a_link(pull: Pull) -> None:
+    """A passed target must be a Person and the link's own: binding lends the party to the directory's readers."""
+
+    pull.sync()
+    ada, grace = (Party.objects.contact_person(pull.link(key)) for key in ("ada", "grace"))
+    company = Organization.objects.create(display_name="Example Ltd")
+    for target, message in ((grace, "never rebinds"), (company, "kind Person")):
+        with pytest.raises(ValidationError, match=message):
+            Party.objects.ingest_contact(
+                _ADA, stream=pull.stream, link=pull.link("ada"), created_by_id=pull.directory.owner_id, target=target
+            )
+    assert Party.objects.contact_person(pull.link("ada")).pk == ada.pk
+    assert Party.objects.ingest_contact(
+        _ADA, stream=pull.stream, link=pull.link("ada"), created_by_id=pull.directory.owner_id, target=ada
+    ).pk == ada.pk
 
 
 def test_a_directory_forwards_its_connection_test_and_credential_admission(
