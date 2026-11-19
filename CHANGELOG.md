@@ -22,7 +22,10 @@ live in code docstrings.
   instead of each page.
   - **Passwords and credentials.** Change password uses the login throttle and
     retains the requesting session. Administrators Set password through a
-    revision-checked account verb that refuses protected accounts. **Contract change:**
+    revision-checked account verb using the protected-update `administer` right:
+    another person's protected account (including staff and superusers) is admitted;
+    self and service accounts remain refused, as do protected targets of Issue
+    password and Reset password. **Contract change:**
     raw `users` updates no longer accept `password`; use `set_user_password`.
     Creation keeps its password input. Typed creation, set and change share
     Django validation. Non-OAuth credentials expose name editing and an
@@ -52,7 +55,10 @@ live in code docstrings.
     `notes_delete`, `delete_external_account` → `external_accounts_delete`,
     `delete_credential` → `credentials_delete`); a consumer's authored preview on
     a `delete=True` resource collides with the generated one and is deleted; a
-    custom delete moves into its write backend's `delete_preview`.
+    custom delete moves into its write backend's `delete_preview`. Preview and
+    confirmation report live record links holding the target or a cascaded row
+    through the same edge-owned rule as deletion; confirmation deletes nothing
+    while a blocking link remains.
   - **Not delete surfaces.** The `integrations` inventory and the storage
     `files` resource are `delete=False`: deleting a channel's inventory row
     skipped its purge, and a file's delete was already the move to trash.

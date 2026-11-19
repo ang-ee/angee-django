@@ -21,7 +21,7 @@ from rebac.resources import model_resource_type
 from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
 from angee.base.models import refs as record_refs
-from angee.base.models.refs import RecordRefMixin, delete_record_refs, record_edges_by_target
+from angee.base.models.refs import RecordRefMixin, delete_record_refs, record_edges_by_target, record_refs_for_delete
 from angee.base.refs import RecordRef, ancestor_object_refs, generic_pointer_model, generic_pointer_target
 from angee.knowledge import schema as knowledge_schema
 from angee.projects.testing.models import Link, Task
@@ -389,11 +389,17 @@ def test_a_blocking_teardown_edge_refuses_on_its_live_rows_first_and_its_teardow
         kept = RecordRefTargetEdge.objects.create(target=held)
         RecordRefTargetEdge.objects.create(target=held)
         live.append(kept.pk)
+        with pytest.raises(ProtectedError) as forecast:
+            record_refs_for_delete(held, using="default")
+        assert set(forecast.value.protected_objects) == {kept}
+        assert torn == []
         with pytest.raises(ProtectedError, match=f"{RecordRefTargetEdge._meta.label} rows still refer to ") as refused:
             held.delete()
         assert (set(refused.value.protected_objects), torn) == ({kept}, [])
 
         live.clear()
+        assert any(edge is RecordRefTargetEdge for edge, rows in record_refs_for_delete(held, using="default"))
+        assert torn == []
         held.delete()
         unnamed = RecordRefTypedTarget.objects.create(name="unnamed")
         unnamed.delete()

@@ -459,8 +459,10 @@ def record_ref_cleanup_edges_for_target(
     return tuple(sorted(edges, key=lambda edge: edge._meta.label))
 
 
-def delete_record_refs(instance: models.Model, using: str, **kwargs: Any) -> None:
-    """Refuse a collected target its edges' live rows hold, then apply each edge's teardown or policy.
+def record_refs_for_delete(
+    instance: models.Model, using: str,
+) -> list[tuple[type[RecordRefMixin], models.QuerySet[Any]]]:
+    """Read a target's controlled edges, refusing any live rows that hold it.
 
     Every edge controlling the target, named by its retained reverse relations
     or declaring its type in the edge's schema, is judged once per collected
@@ -468,16 +470,19 @@ def delete_record_refs(instance: models.Model, using: str, **kwargs: Any) -> Non
     target first: one its ``live_reference_filter`` selects refuses the deletion
     with ``ProtectedError``, the rule creation undo applies
     (``has_live_references``), and none at all leaves the edge nothing to do.
-    The edge's ``teardown_for_target`` then runs instead of its
-    ``on_target_delete`` policy; a teardown never blocks.
+    This admission is read-only: deletion previews and :func:`delete_record_refs`
+    compose it before any teardown or deletion policy runs.
     """
 
-    del kwargs
     cleanup_edges = record_ref_cleanup_edges_for_target(type(instance))
     target = canonical_model(type(instance))
     declared = record_edges_by_target().get(target, ()) if target is not None else ()
+    edges = (*cleanup_edges, *(edge for edge in declared if edge not in cleanup_edges))
+    if not edges:
+        return []
     content_type, object_id = generic_pointer_target(instance)
-    for edge in (*cleanup_edges, *(edge for edge in declared if edge not in cleanup_edges)):
+    references = []
+    for edge in edges:
         pointer = edge.record_ref_field()
         rows = edge._base_manager.using(using).filter(
             **{pointer.ct_field: content_type, pointer.fk_field: object_id}
@@ -491,6 +496,20 @@ def delete_record_refs(instance: models.Model, using: str, **kwargs: Any) -> Non
                 raise ProtectedError(f"{edge._meta.label} rows still refer to {instance}.", held)
             if not naming:
                 continue
+        references.append((edge, rows))
+    return references
+
+
+def delete_record_refs(instance: models.Model, using: str, **kwargs: Any) -> None:
+    """Admit the collected target, then apply its edges' teardowns or deletion policies.
+
+    :func:`record_refs_for_delete` owns the refusal shared with previews. Each
+    edge's ``teardown_for_target`` replaces its ``on_target_delete`` policy;
+    a teardown never blocks.
+    """
+
+    del kwargs
+    for edge, rows in record_refs_for_delete(instance, using):
         if edge.teardown_for_target is not None:
             edge.teardown_for_target(instance)
             continue
@@ -502,4 +521,5 @@ def delete_record_refs(instance: models.Model, using: str, **kwargs: Any) -> Non
             if policy is models.CASCADE:
                 rows.delete()
             elif policy is models.SET_NULL:
+                pointer = edge.record_ref_field()
                 rows.update(**{pointer.ct_field: None, pointer.fk_field: None})

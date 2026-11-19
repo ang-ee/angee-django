@@ -66,8 +66,9 @@ Changing verbs take the revision the client read (the issue verbs excepted),
 check their own Zed permission on `auth/user`
 (`set_active`, `rename`, `issue_password`, `reset_password`,
 `issue_sign_in_link`, `set_password`; admin by default)
-and refuses protected accounts: the actor's own, staff, superusers and effective
-members of `iam/protected:main#member`. Issue and reset return the username with
+and refuse protected accounts: the actor's own, staff, superusers and effective
+members of `iam/protected:main#member`, except Set password's administrative
+admission described below. Issue and reset return the username with
 a one-time secret, shown only in the shared `useSecretReveal` prompt with a copy
 control; nothing reaches a record or query cache. Controls read the row's
 `account_actions` projection, which batches the verbs' own conditions.
@@ -121,10 +122,15 @@ The user record's **Set password** action submits a chosen password through
 `set_user_password(id, password, expected_revision)`, returning `ActionResult`.
 `User.set_account_password` checks `set_password`, the shared account blockers
 and the required observed revision before validation or hashing. Zed owns the
-permission's `admin->member & write & write__password` intersection; IAM seals
-it so fragments cannot bypass those gates (`angee.iam.E003`). Like its sibling
-verbs, it refuses the actor's own account, elevated role members, staff,
-superusers and non-person accounts.
+permission's `administer & write & write__password` intersection; IAM seals
+it so fragments cannot bypass those gates (`angee.iam.E003`). `administer` is the
+same platform-admin right required for protected-account updates: it admits
+another person's account, including elevated role members, staff and superusers.
+The actor's own account still requires Change password with the current password,
+which keeps the requesting session; service and other non-person accounts remain
+refused. Issue password, Reset password and the other account verbs retain their
+protected-account refusals. A successful set invalidates the target's existing
+session hashes and retires outstanding sign-in links.
 **Contract change:** the raw `users` update input no longer accepts `password`.
 Set a password with `set_user_password`; creation still accepts `password`.
 Metadata updates and password changes are separate operations.

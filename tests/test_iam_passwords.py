@@ -6,14 +6,19 @@ from django.contrib.auth import HASH_SESSION_KEY, get_user, get_user_model, logi
 from django.contrib.auth.hashers import PBKDF2PasswordHasher, get_hasher
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.auth.password_validation import MinimumLengthValidator, get_default_password_validators
+from django.core.exceptions import ValidationError
+from django.db import transaction
+from django.utils import timezone
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 
 from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
 from angee.graphql.view_as import ViewAs
 from angee.iam.auth import ONE_ATTEMPT_MESSAGE
 from angee.iam.autoconfig import SETTINGS as IAM_SETTINGS
+from angee.iam.models import SignInLinkSpent
 from tests.conftest import create_platform_admin
-from tests.test_iam_account_actions import _manager
+from tests.iam_models import SignInLink
+from tests.test_iam_account_actions import _actions, _manager
 from tests.test_iam_graphql import _schema
 
 User = get_user_model()
@@ -23,7 +28,7 @@ CHANGE = """mutation($current: String!, $new: String!) {
   change_password(current_password: $current, new_password: $new) { ok message validation_errors }
 }"""
 SET = """mutation($id: ID!, $password: String!, $revision: Int!) {
-  set_user_password(id: $id, password: $password, expected_revision: $revision) { ok code validation_errors }
+  set_user_password(id: $id, password: $password, expected_revision: $revision) { ok message code validation_errors }
 }"""
 CREATE = """mutation($object: users_insert_input!) {
   insert_users_one(object: $object) { id username }
@@ -154,44 +159,89 @@ def test_change_password_requires_sign_in_and_a_usable_password(password_user):
     assert not User._base_manager.get(pk=passwordless.pk).has_usable_password()
 
 
-def test_set_password_admits_only_unprotected_people(password_user, caplog, password_checks):
+def test_set_password_admits_other_people_including_protected_accounts(password_user, caplog, password_checks):
     hasher, validator = password_checks
     admin = create_platform_admin("set-password-admin", password=CURRENT)
     manager = _manager("set-password-manager")
-    refused_targets = (
-        admin, manager, create_platform_admin("peer-admin", password=CURRENT),
+    peer = create_platform_admin("peer-admin", password=CURRENT)
+    allowed_targets = (
+        password_user, manager, peer,
         User.objects.create_user("staff-password", password=CURRENT, is_staff=True),
         User.objects.create_user("super-password", password=CURRENT, is_superuser=True),
-        User.objects.create_user("service-password", kind="service"),
+        User.objects.create_user("inactive-password", password=CURRENT, is_active=False),
     )
+    service = User.objects.create_user("service-password", kind="service")
     schema = _schema("console")
 
     def variables(target, revision):
         return {"id": target.public_id, "revision": revision, "password": NEW}
 
-    before = User._base_manager.get(pk=password_user.pk)
-    assert "set_password" in password_user.account_actions_for(to_subject_ref(admin))
-    result = result_data(execute_schema(
-        schema, SET, variables(password_user, before.account_revision), user=admin,
-    ))
-    assert result["set_user_password"]["ok"]
-    assert User._base_manager.get(pk=password_user.pk).check_password(NEW)
-    assert User._base_manager.get(pk=password_user.pk).account_revision == before.account_revision + 1
-    stale = execute_schema(schema, SET, variables(password_user, before.account_revision), user=admin)
-    assert stale.errors and stale.errors[0].extensions["code"] == "STALE_REVISION"
+    offered = _actions(schema, admin)
+    for target in allowed_targets:
+        before = User._base_manager.get(pk=target.pk)
+        assert "set_password" in offered[target.username]
+        result = result_data(execute_schema(schema, SET, variables(target, before.account_revision), user=admin))
+        assert result["set_user_password"]["ok"]
+        stored = User._base_manager.get(pk=target.pk)
+        assert stored.check_password(NEW)
+        assert stored.account_revision == before.account_revision + 1
+        stale = execute_schema(schema, SET, variables(target, before.account_revision), user=admin)
+        assert stale.errors and stale.errors[0].extensions["code"] == "STALE_REVISION"
+        assert NEW not in str(result) + str(stale) + caplog.text
 
-    assert validator.calls == 1 and hasher.encode_calls > 0
+    assert validator.calls == len(allowed_targets) and hasher.encode_calls > 0
     calls = hasher.encode_calls, hasher.verify_calls, validator.calls
-    for actor, target in [(admin, target) for target in refused_targets] + [(manager, password_user),
-                                                                         (password_user, password_user)]:
-        assert "set_password" not in target.account_actions_for(to_subject_ref(actor))
+    assert peer.with_actor(manager).has_access("write")
+    assert not peer.with_actor(manager).has_access("administer")
+    for actor, target in ((admin, admin), (admin, service), (manager, peer), (manager, password_user),
+                          (password_user, password_user)):
+        assert "set_password" not in _actions(schema, actor)[target.username]
         before = User._base_manager.get(pk=target.pk)
         refused = result_data(execute_schema(schema, SET, variables(target, before.account_revision), user=actor))
         assert refused["set_user_password"]["ok"] is False
+        if actor == target == admin:
+            message = refused["set_user_password"]["message"]
+            assert "Change password" in message and "current password" in message and "keeps this session" in message
         assert User._base_manager.get(pk=target.pk).password == before.password
         assert User._base_manager.get(pk=target.pk).account_revision == before.account_revision
+        assert NEW not in str(refused) + caplog.text
     assert (hasher.encode_calls, hasher.verify_calls, validator.calls) == calls
-    assert NEW not in str(result) + caplog.text
+
+
+def test_set_password_keeps_actorless_protected_account_refusal(password_user):
+    target = create_platform_admin("system-protected-password", password=CURRENT)
+    with system_context(reason="test.password.actorless"), pytest.raises(ValidationError, match="protected"):
+        target.sudo(reason="test.password.actorless").set_account_password(
+            NEW, expected_revision=target.account_revision,
+        )
+    assert User._base_manager.get(pk=target.pk).check_password(CURRENT)
+
+
+def test_set_password_ends_target_sessions_and_retires_sign_in_links(password_user, caplog):
+    admin = create_platform_admin("session-password-admin", password=CURRENT)
+    requests = [graphql_request(user, session=True) for user in (admin, password_user, password_user)]
+    with system_context(reason="test.password.sessions"):
+        for request in requests:
+            login(request, request.user, backend="angee.iam.auth.ModelBackend")
+            request.session.save()
+        with transaction.atomic():
+            locked = User.objects.lock_if_supported().get(pk=password_user.pk)
+            link, token = SignInLink.objects.issue(locked, actor=to_subject_ref(admin))
+            link.sent_at = timezone.now()
+            link.save(update_fields=["sent_at"])
+            assert link.account_hash == SignInLink.account_digest(locked)
+    result = result_data(execute_schema(_schema("console"), SET, {
+        "id": password_user.public_id, "password": NEW, "revision": locked.account_revision,
+    }, request=requests[0]))
+    assert result["set_user_password"]["ok"]
+    with system_context(reason="test.password.sessions.read"):
+        assert get_user(requests[0]).pk == admin.pk
+        assert all(not get_user(request).is_authenticated for request in requests[1:])
+        stored = User._base_manager.get(pk=password_user.pk)
+        assert link.account_hash != SignInLink.account_digest(stored)
+        with pytest.raises(SignInLinkSpent):
+            SignInLink.objects.redeem(token)
+    assert all(secret not in str(result) + caplog.text for secret in (NEW, token))
 
 
 @pytest.mark.parametrize("protected", [False, True])

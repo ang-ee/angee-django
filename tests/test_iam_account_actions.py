@@ -157,8 +157,8 @@ def test_update_refuses_a_stale_expected_revision(iam_admin):
     assert _stored(target).first_name == "First"
 
 
-def test_every_account_verb_refuses_protected_accounts(db):
-    """An administrator's account verbs refuse self, staff, superusers, admins and elevated roles alike."""
+def test_account_verbs_other_than_set_password_refuse_protected_accounts(db):
+    """The Set password ruling leaves every sibling verb's protection unchanged."""
 
     admin = create_platform_admin("verb-admin", password=None)
     targets = (
@@ -176,7 +176,6 @@ def test_every_account_verb_refuses_protected_accounts(db):
             lambda user: user.rename(first_name="A", last_name="B", confirmed=True, expected_revision=revision),
             lambda user: user.reset_password(confirmed=True, expected_revision=revision),
             lambda user: user.issue_password(),
-            lambda user: user.set_account_password("chosen-password", expected_revision=revision),
         )
         for call in calls:
             with actor_context(admin), pytest.raises(ValidationError, match="protected"):
@@ -187,7 +186,17 @@ def test_every_account_verb_refuses_protected_accounts(db):
         )
         assert target.protected_against(admin)
     actions = _actions(_schema("console"), admin)
-    assert all(actions[target.username] == [] for target in targets)
+    assert actions[admin.username] == []
+    assert all(actions[target.username] == ["set_password"] for target in targets[1:])
+    schema = _schema("console")
+    for target in targets:
+        for document, variables in (
+            (ISSUE, {"id": target.public_id}),
+            (RESET, {"id": target.public_id, "confirmed": True, "revision": _stored(target).account_revision}),
+        ):
+            refused = execute_schema(schema, document, variables, user=admin)
+            assert refused.errors and "protected" in refused.errors[0].message
+            assert not _stored(target).has_usable_password()
 
 
 def test_set_user_active_round_trip_controls_sign_in(iam_admin):
@@ -303,8 +312,9 @@ def test_account_actions_project_each_verbs_permission_and_eligibility(db):
     assert seen_by_admin["with-password"] == ["set_active", "rename", "reset_password", "set_password"]
     assert seen_by_admin["without-password"] == ["set_active", "rename", "issue_password", "set_password"]
     assert seen_by_admin["inactive-person"] == ["set_active", "rename", "set_password"]
-    for protected in ("projection-admin", "projection-manager", "staff-person"):
-        assert seen_by_admin[protected] == []
+    assert seen_by_admin["projection-admin"] == []
+    for protected in ("projection-manager", "staff-person"):
+        assert seen_by_admin[protected] == ["set_password"]
     assert seen_by_admin["service-account"] == []
     seen_by_manager = _actions(schema, manager)
     assert seen_by_manager["with-password"] == ["set_active", "rename", "reset_password"]

@@ -18,6 +18,7 @@ from rebac import PermissionDenied, RebacMixin, SubjectRef, actor_context, syste
 
 import angee.graphql.deletion as deletion_module
 from angee.base.models.base import AngeeModel
+from angee.base.models.refs import delete_record_refs
 from angee.base.signals import starts_delete
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource
 from angee.graphql.deletion import (
@@ -27,9 +28,14 @@ from angee.graphql.deletion import (
     delete_by_public_id,
 )
 from angee.graphql.ids import RECORD_NOT_FOUND_MESSAGE
+from angee.graphql.node import AngeeNode
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.iam import signals as iam_signals
-from tests.conftest import addon_schema
+from angee.integrate.states import StreamDirection, StreamKind
+from angee.integrate.testing.models import RecordLink
+from angee.messaging.testing.models import Channel
+from angee.projects.testing.models import Milestone, Project
+from tests.conftest import addon_schema, create_platform_admin, current_stream, make_integration
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.tables import model_tables
 
@@ -40,6 +46,128 @@ class DeleteGroupType:
 
     id: strawberry.ID
     name: strawberry.auto
+
+
+@strawberry_django.type(Project)
+class DeleteProjectType(AngeeNode):
+    """An existing typed record whose milestones exercise real cascades."""
+
+    title: strawberry.auto
+
+
+LINKED_DELETE = """mutation($id: ID!, $confirm: Boolean!) {
+  linked_projects_delete(id: $id, confirm: $confirm) {
+    has_blockers blocked { label count } refusals
+  }
+}"""
+
+
+@pytest.fixture
+def linked_deletion(db):
+    """Generate a real resource root alongside the existing record-link fixtures."""
+
+    admin = create_platform_admin("linked-delete-admin", password=None)
+    with system_context(reason="tests.deletion.links"):
+        bridge = make_integration("linked-delete", model=Channel)
+        stream = current_stream(bridge, "projects", kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.PULL)
+    resource = hasura_model_resource(
+        DeleteProjectType, model=Project, name="linked_projects",
+        filterable=["title"], sortable=["title"], aggregatable=["title"], insert=False, update=False,
+    )
+    schema = addon_schema({"public": {
+        "query": [resource.query], "mutation": [resource.mutation], "types": resource.types,
+    }}, "public")
+    return schema, admin, stream
+
+
+@pytest.mark.parametrize("cascaded", (False, True))
+def test_generated_delete_reports_live_record_links_and_deletes_after_release(linked_deletion, cascaded):
+    """Preview and confirm judge both the root and a held cascade through the edge owner."""
+
+    schema, admin, stream = linked_deletion
+    with system_context(reason="tests.deletion.linked_target"):
+        project = Project.objects.create(title="Held project")
+        milestone = Milestone.objects.create(project=project, name="Held milestone")
+        target = milestone if cascaded else project
+        link = RecordLink.objects.observe(stream, "held-target", target=target)
+    variables = {"id": project.public_id, "confirm": False}
+    preview = result_data(execute_schema(schema, LINKED_DELETE, variables, user=admin))["linked_projects_delete"]
+    assert preview["has_blockers"]
+    assert preview["blocked"] == [{"label": str(RecordLink._meta.verbose_name_plural), "count": 1}]
+    confirmed = result_data(execute_schema(schema, LINKED_DELETE, {**variables, "confirm": True}, user=admin))
+    assert confirmed["linked_projects_delete"] == preview
+    assert Project._base_manager.filter(pk=project.pk).exists()
+    assert Milestone._base_manager.filter(pk=milestone.pk).exists()
+    assert RecordLink._base_manager.get(pk=link.pk).target_object_id == str(target.pk)
+
+    RecordLink.objects.observe(stream, link.external_key, target=None)
+    released = result_data(execute_schema(schema, LINKED_DELETE, {**variables, "confirm": True}, user=admin))
+    assert not released["linked_projects_delete"]["has_blockers"]
+    assert not Project._base_manager.filter(pk=project.pk).exists()
+    assert not Milestone._base_manager.filter(pk=milestone.pk).exists()
+
+
+def test_generated_delete_sequence_keeps_held_id_and_deletes_released_id(linked_deletion):
+    """The selection runner can continue independently after a per-row refusal."""
+
+    schema, admin, stream = linked_deletion
+    with system_context(reason="tests.deletion.linked_selection"):
+        held = Project.objects.create(title="Held")
+        released = Project.objects.create(title="Released")
+        RecordLink.objects.observe(stream, "held", target=held)
+        RecordLink.objects.observe(stream, "released", target=released)
+        RecordLink.objects.observe(stream, "released", target=None)
+    for target, blocked in ((held, True), (released, False)):
+        for confirm in (False, True):
+            preview = result_data(execute_schema(
+                schema, LINKED_DELETE, {"id": target.public_id, "confirm": confirm}, user=admin,
+            ))["linked_projects_delete"]
+            assert preview["has_blockers"] is blocked
+    assert Project._base_manager.filter(pk=held.pk).exists()
+    assert not Project._base_manager.filter(pk=released.pk).exists()
+
+
+def test_generated_delete_preview_never_releases_push_links(linked_deletion):
+    """A non-blocking edge is admitted by its live filter, but teardown waits for confirm."""
+
+    schema, admin, pull = linked_deletion
+    with system_context(reason="tests.deletion.push_link"):
+        stream = current_stream(pull.integration.concrete_capability(), "pushed-projects",
+                                kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.PUSH)
+        project = Project.objects.create(title="Published project")
+        link = RecordLink.objects.observe(stream, "pushed", target=project)
+    variables = {"id": project.public_id, "confirm": False}
+    preview = result_data(execute_schema(schema, LINKED_DELETE, variables, user=admin))["linked_projects_delete"]
+    assert not preview["has_blockers"]
+    assert RecordLink._base_manager.get(pk=link.pk).target_object_id == str(project.pk)
+    confirmed = result_data(execute_schema(schema, LINKED_DELETE, {**variables, "confirm": True}, user=admin))
+    assert not confirmed["linked_projects_delete"]["has_blockers"]
+    assert not Project._base_manager.filter(pk=project.pk).exists()
+    assert RecordLink._base_manager.get(pk=link.pk).target_object_id is None
+
+
+def test_generated_delete_returns_a_late_reference_refusal_after_rollback(linked_deletion):
+    """A receiver-time refusal remains readable even if its link rolls back with the delete."""
+
+    schema, admin, stream = linked_deletion
+    with system_context(reason="tests.deletion.late_reference"):
+        project = Project.objects.create(title="Late hold")
+
+    def hold_during_delete(sender, instance, using, **kwargs):
+        RecordLink.objects.observe(stream, "late", target=instance)
+        delete_record_refs(instance, using)
+
+    pre_delete.connect(hold_during_delete, sender=Project)
+    try:
+        preview = result_data(execute_schema(
+            schema, LINKED_DELETE, {"id": project.public_id, "confirm": True}, user=admin,
+        ))["linked_projects_delete"]
+    finally:
+        pre_delete.disconnect(hold_during_delete, sender=Project)
+    assert preview["has_blockers"]
+    assert preview["blocked"] == [{"label": str(RecordLink._meta.verbose_name_plural), "count": 1}]
+    assert Project._base_manager.filter(pk=project.pk).exists()
+    assert not RecordLink._base_manager.filter(stream=stream, external_key="late").exists()
 
 
 @pytest.mark.parametrize("delete", (False, True))

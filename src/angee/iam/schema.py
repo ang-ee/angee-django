@@ -1045,7 +1045,7 @@ class IAMUserAccountMutation:
     def set_user_password(
         self, info: strawberry.Info, id: PublicID, password: str, expected_revision: int,
     ) -> ActionResult:
-        """Set an unprotected person's password without disclosing it."""
+        """Set another person's password through the account's administration gates without disclosing it."""
 
         user = authorized_permission_target(info, User, id, str(UserAccountAction.SET_PASSWORD))
         user.set_account_password(password, expected_revision=expected_revision)

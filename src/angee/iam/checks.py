@@ -16,6 +16,6 @@ account; each addon grants its display need through its own record's read.
 check_view_as_admin_only = partial(check_sealed_permissions, "iam", ACCOUNT_PREVIEW, "angee.iam.E001")
 
 SET_PASSWORD = {"auth/user": ("set_password",)}
-"""The administrator/write/field-write intersection; fragments cannot bypass its gates."""
+"""The administer/write/field-write intersection; fragments cannot bypass its gates."""
 
 check_set_password_permissions = partial(check_sealed_permissions, "iam", SET_PASSWORD, "angee.iam.E003")

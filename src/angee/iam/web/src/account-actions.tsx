@@ -20,7 +20,7 @@ import { useIamT } from "./i18n";
 
 const USER_MODEL = "iam.User";
 
-/** Account verbs the server projects per user row, all refusing protected accounts. */
+/** Account verbs the server projects per user row through their own admission rules. */
 export type UserAccountAction = "set_active" | "rename" | "reset_password" | "issue_password" | "issue_sign_in_link" | "set_password";
 
 /** Fields every account verb reads from the open user record. */
