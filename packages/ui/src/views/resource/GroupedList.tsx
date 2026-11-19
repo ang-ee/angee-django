@@ -34,7 +34,8 @@ import {
 } from "../../ui/table";
 import { textRoleVariants } from "../../ui/text";
 import { depthIndent } from "../../ui/tree";
-import type { ResourceViewContextValue } from "./resource-view-context";
+import { useSelectionPlaces, type ResourceViewContextValue, type SelectionPlaces } from "./resource-view-context";
+import { placedRecords } from "./resource-view-grouped-model";
 import type { ListViewNavigationScope, ResourceListSnapshot } from "./resource-view-surface";
 import {
   ALIGN_CLASS,
@@ -168,36 +169,38 @@ export function GroupedListBody<TRow extends Row>({
       <Glyph name={anyExpanded ? "chevron-down" : "chevron-right"} className="size-3.5" />
     </button>
   ) : null;
-  // Loaded record ids per group (nested groups included) and for the whole list.
-  const { groupRowIds, loadedRowIds } = React.useMemo(() => {
-    const byGroup = new Map<string, string[]>();
-    const all: string[] = [];
-    const open: { depth: number; key: string }[] = [];
+  // The loaded records of each group (nested groups included), read from their own
+  // group paths, and of the whole list.
+  const { groupRecords, loadedRecords } = React.useMemo(() => {
+    const byGroup = new Map<string, GroupedRecordItem<TRow>[]>();
+    const all: GroupedRecordItem<TRow>[] = [];
     for (const item of listItems) {
-      if (item.kind === "groupHeader") {
-        while (open.length > 0 && open.at(-1)!.depth >= item.depth) open.pop();
-        open.push({ depth: item.depth, key: item.bucketKey });
-        byGroup.set(item.bucketKey, []);
-      } else if (item.kind === "record") {
-        all.push(item.row.id);
-        for (const group of open) byGroup.get(group.key)!.push(item.row.id);
+      if (item.kind !== "record") continue;
+      all.push(item);
+      for (const { bucketKey } of item.place.path) {
+        const records = byGroup.get(bucketKey);
+        if (records) records.push(item);
+        else byGroup.set(bucketKey, [item]);
       }
     }
-    return { groupRowIds: byGroup, loadedRowIds: all };
+    return { groupRecords: byGroup, loadedRecords: all };
   }, [listItems]);
   const rowSelection = resourceView.state.rowSelection;
-  const { setRowSelection } = resourceView;
-  const selectIds = React.useCallback((ids: readonly string[], selected: boolean) => {
+  const { setRowSelection, toggleSelectedId } = useSelectionPlaces();
+  // Ticking captures where each record is shown in these records, again for one
+  // already selected; one shown under several group paths captures none.
+  const selectRecords = React.useCallback((records: readonly GroupedRecordItem<TRow>[], selected: boolean) => {
+    const placed = placedRecords(records);
     setRowSelection((current) => {
       const next = { ...current };
-      for (const id of ids) {
-        if (selected) next[id] = true;
-        else delete next[id];
+      for (const { row } of records) {
+        if (selected) next[row.id] = true;
+        else delete next[row.id];
       }
       return next;
-    }, (id) => table.getCoreRowModel().rowsById[id]?.original);
+    }, (id) => table.getCoreRowModel().rowsById[id]?.original, (id) => placed.get(id) ?? undefined);
   }, [setRowSelection, table]);
-  const selectedCount = loadedRowIds.filter((id) => rowSelection[id]).length;
+  const selectedCount = loadedRecords.filter(({ row }) => rowSelection[row.id]).length;
 
   return (
     <>
@@ -222,10 +225,10 @@ export function GroupedListBody<TRow extends Row>({
                     grouped
                     chevron={expandAll}
                     label={t("list.selectAllLoaded")}
-                    checked={loadedRowIds.length > 0 && selectedCount === loadedRowIds.length}
-                    indeterminate={selectedCount > 0 && selectedCount < loadedRowIds.length}
-                    disabled={loadedRowIds.length === 0}
-                    onCheckedChange={(checked) => selectIds(loadedRowIds, checked)}
+                    checked={loadedRecords.length > 0 && selectedCount === loadedRecords.length}
+                    indeterminate={selectedCount > 0 && selectedCount < loadedRecords.length}
+                    disabled={loadedRecords.length === 0}
+                    onCheckedChange={(checked) => selectRecords(loadedRecords, checked)}
                   />
                 ) : (
                   <TableHead sticky className="w-8 p-0">
@@ -297,9 +300,10 @@ export function GroupedListBody<TRow extends Row>({
                       draggableRow={draggableRow}
                       onRecordOpen={handleRecordOpen}
                       onToggleGroup={toggleGroup}
-                      groupRowIds={groupRowIds}
+                      groupRecords={groupRecords}
                       rowSelection={rowSelection}
-                      onSelectIds={selectIds}
+                      toggleSelectedId={toggleSelectedId}
+                      onSelectRecords={selectRecords}
                       onPageChange={setScopePage}
                       onPageSizeChange={setScopePageSize}
                       loadingLabel={t("list.loading")}
@@ -361,9 +365,10 @@ interface GroupedItemRowProps<TRow extends Row> {
   draggableRow?: (row: TRow) => DndPayload | null;
   onRecordOpen: (nav: GroupedRecordNav) => void;
   onToggleGroup: (key: string) => void;
-  groupRowIds: ReadonlyMap<string, readonly string[]>;
+  groupRecords: ReadonlyMap<string, readonly GroupedRecordItem<TRow>[]>;
   rowSelection: Readonly<Record<string, boolean>>;
-  onSelectIds: (ids: readonly string[], selected: boolean) => void;
+  toggleSelectedId: SelectionPlaces["toggleSelectedId"];
+  onSelectRecords: (records: readonly GroupedRecordItem<TRow>[], selected: boolean) => void;
   onPageChange: (key: string, page: number) => void;
   onPageSizeChange: (key: string, pageSize: number) => void;
   loadingLabel: React.ReactNode;
@@ -386,9 +391,10 @@ function GroupedItemRow<TRow extends Row>({
   draggableRow,
   onRecordOpen,
   onToggleGroup,
-  groupRowIds,
+  groupRecords,
   rowSelection,
-  onSelectIds,
+  toggleSelectedId,
+  onSelectRecords,
   onPageChange,
   onPageSizeChange,
   loadingLabel,
@@ -396,19 +402,19 @@ function GroupedItemRow<TRow extends Row>({
 }: GroupedItemRowProps<TRow>): React.ReactElement {
   switch (item.kind) {
     case "groupHeader": {
-      const ids = groupRowIds.get(item.bucketKey) ?? [];
-      const selectedCount = ids.filter((id) => rowSelection[id]).length;
+      const records = groupRecords.get(item.bucketKey) ?? [];
+      const selectedCount = records.filter(({ row }) => rowSelection[row.id]).length;
       return (
         <GroupedHeaderRow
           renderGroupLabel={renderGroupLabel}
           item={item}
           selection={selectable ? {
             label: t("list.selectGroup", { label: item.label }),
-            checked: ids.length > 0 && selectedCount === ids.length,
-            indeterminate: selectedCount > 0 && selectedCount < ids.length,
+            checked: records.length > 0 && selectedCount === records.length,
+            indeterminate: selectedCount > 0 && selectedCount < records.length,
             // Only loaded rows can be selected; a collapsed group has none yet.
-            disabled: ids.length === 0,
-            onCheckedChange: (checked: boolean) => onSelectIds(ids, checked),
+            disabled: records.length === 0,
+            onCheckedChange: (checked: boolean) => onSelectRecords(records, checked),
           } : undefined}
           visibleColumns={visibleColumns}
           measuresByColumn={measuresByColumn}
@@ -423,20 +429,16 @@ function GroupedItemRow<TRow extends Row>({
     }
     case "record":
       return (
-        <RecordRow
-          row={item.row}
-          selected={Boolean(resourceView.state.rowSelection[item.row.id])}
-          onToggleSelected={resourceView.toggleSelectedId}
+        <GroupedRecordRow
+          item={item}
+          resourceView={resourceView}
+          toggleSelectedId={toggleSelectedId}
           selectable={selectable}
-          // The grouped colgroup/header reserve a leading chevron column on every
-          // row, so a record row must keep it even when selection is off — else its
-          // cells slide left into the 32px column under `table-fixed`.
-          reserveLeadingColumn
           interactive={interactive}
-          rowHref={rowHref ? (row) => rowHref(row, item.nav) : undefined}
+          rowHref={rowHref}
           onRowClick={onRowClick}
           draggableRow={draggableRow}
-          onRecordOpen={() => onRecordOpen(item.nav)}
+          onRecordOpen={onRecordOpen}
           renderRowActions={renderRowActions}
         />
       );
@@ -452,6 +454,48 @@ function GroupedItemRow<TRow extends Row>({
     case "status":
       return <GroupedStatusRow item={item} colSpan={colSpan} />;
   }
+}
+
+type GroupedRecordItem<TRow extends Row> = Extract<GroupedListItem<TRow>, { kind: "record" }>;
+
+/** A record row whose callbacks stay stable across selection toggles, so the memoised row skips them. */
+function GroupedRecordRow<TRow extends Row>({
+  item,
+  resourceView,
+  toggleSelectedId,
+  selectable,
+  interactive,
+  rowHref,
+  onRowClick,
+  draggableRow,
+  onRecordOpen,
+  renderRowActions,
+}: Pick<GroupedItemRowProps<TRow>, "resourceView" | "toggleSelectedId" | "selectable" | "interactive" | "rowHref" | "onRowClick"
+  | "draggableRow" | "onRecordOpen" | "renderRowActions"> & { item: GroupedRecordItem<TRow> }): React.ReactElement {
+  const { nav, place } = item;
+  // The row's selection captures where it is shown.
+  const toggleSelected = React.useCallback((id: string, selected?: boolean, row?: TRow) =>
+    toggleSelectedId(id, selected, row, place), [toggleSelectedId, place]);
+  const href = React.useMemo(() => rowHref ? (row: TRow) => rowHref(row, nav) : undefined, [rowHref, nav]);
+  const open = React.useCallback(() => onRecordOpen(nav), [onRecordOpen, nav]);
+  return (
+    <RecordRow
+      row={item.row}
+      selected={Boolean(resourceView.state.rowSelection[item.row.id])}
+      onToggleSelected={toggleSelected}
+      selectable={selectable}
+      // The grouped colgroup/header reserve a leading chevron column on every
+      // row, so a record row must keep it even when selection is off — else its
+      // cells slide left into the 32px column under `table-fixed`.
+      reserveLeadingColumn
+      interactive={interactive}
+      rowHref={href}
+      onRowClick={onRowClick}
+      draggableRow={draggableRow}
+      onRecordOpen={open}
+      renderRowActions={renderRowActions}
+    />
+  );
 }
 
 interface GroupedHeaderRowProps<TRow extends Row> {

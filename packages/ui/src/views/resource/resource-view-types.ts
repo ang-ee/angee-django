@@ -148,6 +148,63 @@ export interface CardActionContext {
   refresh: () => void;
 }
 
+/** One group of the list's grouping as its header shows it. */
+export interface SelectedGroupLevel {
+  /** The axis as the resource declares it: `display_name`. */
+  field: string;
+  /**
+   * The group's identity as text (`String` of it): a text column's stored value, a
+   * relation's id, a date bucket's start, a number's or a boolean's text (`"3"`,
+   * `"true"`), a JSON value's serialization; null when the rows have no value (the
+   * blank text group is "").
+   */
+  key: string | null;
+  /** What the group header shows, the list's own wording for an empty group included. */
+  label: string;
+}
+
+/**
+ * What a list surface hands `bulkActions`: the public collection with the split
+ * stated. Every surface builds this type, so one that groups cannot leave the split
+ * out and read as "not grouped"; the public member stays optional so a caller that
+ * builds a collection by hand (a consumer's test) need not name it.
+ */
+export type PlacedBulkCollection<TRow> = {
+  filter: QueryFilter;
+  selectedRows: readonly TRow[];
+  selectedGroups: readonly SelectedGroup[] | null | undefined;
+};
+
+/** The selected rows of one innermost group (`bulkActions` → `selectedGroups`). */
+export interface SelectedGroup extends SelectedGroupLevel {
+  /** The enclosing groups, outermost first; [] at the root. */
+  parents: readonly SelectedGroupLevel[];
+  /** The group's selected rows in selection-map (object key) order: selection order,
+   * except that integer-like ids come first, ascending. */
+  ids: readonly string[];
+}
+
+/**
+ * The groups the server-grouped surface shows a record under: one level per grouping
+ * level, outermost first, with the group's ordinal among its level's groups, its
+ * header's bucket key and the key of the level page that lists it
+ * (`GroupedRenderShown.pages`). Internal to the list; `SelectedGroup` is the public split.
+ */
+export type SelectionGroupPath = readonly {
+  group: ResourceViewGroup;
+  key: string | null;
+  label: string;
+  position: number;
+  bucketKey: string;
+  page: string;
+}[];
+
+/** Where the server-grouped surface shows a record: its groups and the key of its group's row page. Internal. */
+export interface SelectionPlace {
+  path: SelectionGroupPath;
+  page: string;
+}
+
 /**
  * What a card renderer knows about the card it draws, discriminated by the
  * surface: narrow on `kind` before reading a board-only fact.
@@ -366,19 +423,46 @@ export interface ListViewProps<TRow extends Row = Row> {
   /** Domain actions, called only when selectable and something is selected.
    * The third argument describes the surface's query: an empty filter ({}) means
    * the whole collection; the server does not check selection membership against
-   * this descriptive filter. selectedRows contains snapshots captured when
+   * this descriptive filter. It is the list's filter: under a repeated grouping it
+   * still describes every filtered record, not only the repeated groups' records.
+   * selectedRows contains snapshots captured when
    * selected, in selection-map (object key) order, surviving page unloads and
    * surface remounts. Ids selected without a row are omitted; retained snapshots
    * are not refreshed until deselection/reselection. Actions needing fresh rows
    * must validate them, for example by revision. Surfaces sharing a selection
    * scope share its snapshots: a row selected through a sibling surface carries
    * that surface's fields, so actions must check the fields they need.
+   * selectedGroups is the selection split by the grouping the list renders, in
+   * three states; never an empty array, since without a selection the bulk actions
+   * do not render. Absent or undefined: the list is not grouped (a gallery never
+   * groups); a list surface always states it (`PlacedBulkCollection`), a collection
+   * built by hand may leave it out.
+   * null: it is grouped but at least one selected id cannot be placed, so no split
+   * is offered, never a partial one: the id was selected while the list was flat or
+   * grouped otherwise, or by a select-all that holds ids without rows; it shows now
+   * under another group than the one it was selected in, or under more than one; a
+   * page that listed it, or listed one of its groups, shows again without it or is
+   * still loading; or the surface never places rows (a client-grouped list, a lane
+   * board, whose every selected card yields null, and `RowsListView`; pane lists do
+   * not select). Otherwise one entry per innermost group holding a selected row,
+   * every selected id in exactly one entry: a row the list shows in the group it
+   * shows in, any other row in the group it was selected in (a collapsed group,
+   * another page of its group or another page of groups cannot tell otherwise).
+   * Entries follow the groups' display order, each group at its current position
+   * where a loaded page lists it, else at the position captured with the
+   * selection; ties keep selection-map order. It is a hint, never proof: like
+   * filter the server does not check it, and a verb acting on it validates the
+   * records' current state there.
    * Rendered content precedes the generic metadata-driven Archive, Trash/Restore
    * and Delete actions. A source list receives only these page-owned actions. */
   bulkActions?: (
     selectedIds: ReadonlySet<string>,
     clear: () => void,
-    collection: { filter: QueryFilter; selectedRows: readonly TRow[] },
+    collection: {
+      filter: QueryFilter;
+      selectedRows: readonly TRow[];
+      selectedGroups?: readonly SelectedGroup[] | null;
+    },
   ) => ReactNode;
   /** Optional action content rendered in each board card footer. */
   cardActions?: (row: TRow, context: CardActionContext) => ReactNode;

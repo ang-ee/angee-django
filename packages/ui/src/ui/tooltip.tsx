@@ -11,6 +11,7 @@ import type {
 } from "@base-ui/react/tooltip";
 
 import { cn } from "../lib/cn";
+import { shownContent } from "../lib/shown-content";
 import { tv, type VariantProps } from "../lib/variants";
 
 /**
@@ -162,12 +163,15 @@ export const Tooltip = function Tooltip({
   disabled,
   ...props
 }: TooltipProps) {
-  if (label === null || label === undefined || label === "") {
+  const shown = shownContent(label);
+  // A caller that passes `disabled` keeps the trigger's element tree (and its
+  // focus) while the tooltip turns on and off; otherwise no label, no tooltip.
+  if (shown === null && disabled === undefined) {
     return children;
   }
 
   return (
-    <TooltipRoot disabled={disabled} {...props}>
+    <TooltipRoot disabled={disabled || shown === null} {...props}>
       <TooltipTrigger
         closeDelay={closeDelay}
         delay={delay}

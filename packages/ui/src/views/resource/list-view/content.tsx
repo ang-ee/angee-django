@@ -7,14 +7,14 @@ import { titleCase } from "../../../lib/titleCase";
 import { BoardView } from "../BoardView";
 import { GalleryView, useGalleryRows } from "../../GalleryView";
 import { GroupedBoardBody } from "../board/grouped";
-import { type ResourceViewContextValue } from "../resource-view-context";
+import { useSelectionPlaces, type ResourceViewContextValue } from "../resource-view-context";
 import { type ResourceViewFilter, type ResourceViewGroup, type ResourceViewKind } from "../resource-view-model";
 import { DeletePreviewDialog } from "../../tree/DeletePreviewDialog";
 import { type GroupedResourceViewSurface, type ResourceViewSurface } from "../resource-view-surface";
 import { GroupedListBody } from "../GroupedList";
 import { FlatListBody, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures, type FlatListBodyProps, type GroupMeasure } from "../resource-view-list-body";
 import { ResourceListFrame } from "../ResourceListFrame";
-import { listChromeState, type BoardCardSpec, type CardActionContext, type ListEmptyContent, type ListViewProps } from "../resource-view-types";
+import { listChromeState, type BoardCardSpec, type CardActionContext, type ListEmptyContent, type ListViewProps, type PlacedBulkCollection } from "../resource-view-types";
 import { DeclaredBoardCardBody, DefaultBoardCardBody } from "../board/cards";
 import { columnsWithMetadataDefaults } from "../model-metadata-defaults";
 import { createLabelForResource } from "../resource-view-utils";
@@ -34,6 +34,8 @@ import { PAGE_SIZE_OPTIONS } from "../page-size";
 import { EMPTY_SELECTED_IDS } from "../resource-view-codecs";
 import { ResourceViewUtilities } from "../resource-view-utilities";
 import { PaneListBody } from "./pane-list-body";
+import { selectedGroupsOf } from "../resource-view-grouped-model";
+import { useValueStable } from "../../../lib/use-value-stable";
 interface ListViewContentProps<TRow extends Row> {
   source?: ListViewProps<TRow>["source"];
   textFilterField?: string | null;
@@ -56,6 +58,8 @@ interface ListViewContentProps<TRow extends Row> {
   boardGroupingPinned: boolean;
   clientRowModel: boolean;
   serverGroupedMode: boolean;
+  /** The list's group read applies `GroupSpec.repeated` (`ValidatedListViewBody`). */
+  appliesRepeated: boolean;
   declaredFacets: ReturnType<typeof useRelationFacets>;
   scalarFacets: ReturnType<typeof useScalarFacets>;
   explicitGroupOptions: ListViewProps<TRow>["groupOptions"];
@@ -107,6 +111,7 @@ export function ListViewContent<TRow extends Row = Row>({
   boardGroupingPinned,
   clientRowModel,
   serverGroupedMode,
+  appliesRepeated,
   declaredFacets,
   scalarFacets,
   explicitGroupOptions,
@@ -145,6 +150,7 @@ export function ListViewContent<TRow extends Row = Row>({
     search: searchDeclaration,
     inferOptions: !source,
     serverGrouping: !clientRowModel,
+    appliesRepeated,
     columns: resolvedColumns,
     rows: surface.rows,
     modelMetadata,
@@ -161,8 +167,10 @@ export function ListViewContent<TRow extends Row = Row>({
   const interactive = Boolean(onRowClick || rowHref);
   const resolvedChrome = listChromeState(presentation, chrome, { ...surface.list, queryDirty: resourceView.queryDirty });
   const selectedIds = selectable ? surface.selectedIds : EMPTY_SELECTED_IDS;
-  // A card's checkbox toggles its row in the shared selection, keeping the row as its snapshot.
+  // A card's checkbox toggles its row in the shared selection, keeping the row as its
+  // snapshot; a grouped board's card also captures where its record shows.
   const toggleCardSelected = selectable ? resourceView.toggleSelectedId : undefined;
+  const placement = useSelectionPlaces();
   const deselectSucceeded = React.useCallback((ids: readonly string[]) => {
     resourceView.setRowSelection((selection) => {
       const remaining = { ...selection };
@@ -262,12 +270,23 @@ export function ListViewContent<TRow extends Row = Row>({
     pagerMaxPageSize: clientRowModel ? undefined : MAX_PAGE_SIZE,
   };
 
-  const domainBulkActions = selectable && selectedIds.size > 0
+  // The split exists only for a page's bulk actions over a selection. Only the
+  // server-grouped surface (list or board) places its loaded rows in groups.
+  const splitsSelection = Boolean(bulkActions) && selectable && selectedIds.size > 0;
+  const groupedItems = surface.kind === "grouped" ? surface.groupedItems : null;
+  const shown = surface.kind === "grouped" ? surface.shown : null;
+  // Value-stable, so a bulk action's memo or effect re-runs only when the split changes.
+  const selectedGroups = useValueStable(React.useMemo(() => splitsSelection
+    ? selectedGroupsOf(selectedIds, effectiveGroupStack,
+      groupedItems && shown ? { places: placement.places, items: groupedItems, shown } : null)
+    : undefined, [splitsSelection, selectedIds, placement.places, effectiveGroupStack, groupedItems, shown]));
+  const domainBulkActions = splitsSelection
     ? bulkActions?.(selectedIds, resourceView.clearSelectedIds, {
       filter: surface.mergedFilter,
       // Scope snapshots are shared Rows; narrow to the declared row type (see bulkActions).
       selectedRows: resourceView.selectedRows as readonly TRow[],
-    }) : null;
+      selectedGroups,
+    } satisfies PlacedBulkCollection<TRow>) : null;
   const genericSelection = !source && modelMetadata ? {
     modelMetadata,
     selectedRows: resourceView.selectedRows,
@@ -365,7 +384,7 @@ export function ListViewContent<TRow extends Row = Row>({
           renderCard={resolvedRenderCard}
           cardFrame={cardFrame ?? "inset"}
           selectedIds={selectedIds}
-          onToggleSelected={toggleCardSelected}
+          onToggleSelected={selectable ? placement.toggleSelectedId : undefined}
           fetching={surface.list.fetching}
           error={surface.list.error}
           emptyContent={emptyContent}

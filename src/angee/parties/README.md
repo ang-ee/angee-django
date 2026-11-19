@@ -455,8 +455,39 @@ statements move to the survivor as their sources' own and the provenance ranking
 decides what shows; a field the survivor leaves empty takes a merged record's
 value as a plain value no one states (`Party.merge_values`). The dialog shows, for
 each set that merges, the fields its records disagree on and the value that will
-show, leaving out a field the person's `read__<field>` gate hides on any record; a
+show, leaving out a field the person's `read__<field>` gate hides on any record.
+Each set that may merge has its own Include toggle, off until the person ticks it
+when the set carries a warning (its records state two different values of a field,
+or one no longer matches its group; a field one record states and the others leave
+empty is a fill the merge gives the survivor, no warning) or has changed from the state the person saw or ticked it in (a refreshed
+preview, a refused set that became mergeable), and the merge sends only the
+included sets, each with the digest of what
+the dialog showed of it: a set whose shown names, addresses or sources changed
+since is refused under the lock and asks the person to look again; a
 person who wants to choose merges that pair on the compare page instead. A merge,
 batch or not, reverts from its changeset. A person's `anniversary` is a merge
 choice like their birthday; a party's `avatar` is not one yet. Merging a person
 with an organization is refused by every merge.
+
+The `people`, `organizations` and `parties` resources read canonical parties
+(`PartyQuerySet.canonical()`: outside the trash, not retracted by every source,
+and not merged away into a survivor the reader sees), as handles, addresses and
+relationships do. A merged-away or trashed party is no list row, group,
+repeated-values group, count, search result or picker candidate, and the People
+workbench's count is the list's. Their by-id roots read the same rows; a party
+id resolves through `party_record(id)`, which answers a merged-away id with its
+survivor, and the record redirect (`/parties/records/<id>`, where references to a
+party link), the Party form and the person's and organization's own pages follow
+it: a page whose read misses passes the id to the record form's
+`renderUnavailable`, and `PartyRecordRedirect` opens the survivor's page when
+`party_record` names another party, so an old direct link to a merged-away
+person opens their survivor for someone who reads both, and shows "Record
+unavailable" to anyone else.
+
+Two limits follow from that read:
+
+- A party that was trashed but never merged leaves the lists, and nobody can
+  find it in the interface to restore it until the framework has a trash
+  surface. The shared `restore_record` verb still restores it by its id.
+- A party that every one of its sources has withdrawn leaves the lists too,
+  as it already left the People workbench's count and search.

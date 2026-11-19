@@ -9,7 +9,7 @@ import { PersonForm } from "./PersonForm";
 
 const MODEL = "parties.Party";
 
-/** Resolve the polymorphic Party parent to its one canonical concrete form. */
+/** Resolve the polymorphic Party parent to its one canonical concrete form, a merged-away id to its survivor's. */
 export function PartyForm(props: RegisteredFormProps): React.ReactElement {
   const t = usePartiesT();
   const id = props.id ?? "";
@@ -18,15 +18,15 @@ export function PartyForm(props: RegisteredFormProps): React.ReactElement {
     { id },
     { models: [MODEL], enabled: Boolean(id) },
   );
-  const party = query.data?.parties_by_pk;
+  const party = query.data?.party_record;
   // Only block on the first load; keep the resolved concrete form mounted across
   // background refetches so in-flight edits, the active tab, and scroll survive.
   if (query.isFetching && !party) return <LoadingPanel loadingLabel={t("partyRedirect.loading")} />;
   if (party?.concrete_kind === "ORGANIZATION") {
-    return <OrganizationForm {...props} resource="parties.Organization" />;
+    return <OrganizationForm {...props} id={party.id} resource="parties.Organization" />;
   }
   if (party?.concrete_kind === "PERSON") {
-    return <PersonForm {...props} resource="parties.Person" />;
+    return <PersonForm {...props} id={party.id} resource="parties.Person" />;
   }
   return <EmptyState icon="parties" title={t("partyRedirect.unavailable")} />;
 }

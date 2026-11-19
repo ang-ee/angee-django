@@ -302,7 +302,12 @@ class Party(
         (``StatementPairManager.merge``), which locks the partner's Handles; taken
         then, after party rows, they would invert the Handle, Party order, so the
         partners join this pass, read again under its lock in case a pair committed
-        meanwhile.
+        meanwhile. One top-up closes the set: once the merge's parties are locked
+        no new pair of theirs can start. What it takes late (a partner whose pair,
+        or a Handle a party gained, committed while the first pass waited) is
+        locked after these parties' rows; a deadlock there rolls the merge back,
+        which the batch merge reports as that set's ``stopped``. That is the known
+        limit of one pass.
         """
 
         ids = {row.pk for row in records}

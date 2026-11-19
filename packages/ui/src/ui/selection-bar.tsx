@@ -73,6 +73,8 @@ export type SelectionBarActionProps = Omit<
   };
 
 /**
+ * A selection verb. Its `disabledReason` is the standard one (`Button`): the
+ * verb's tooltip and accessible description, focusable while disabled.
  * @owner SelectionBar
  */
 export const SelectionBarAction = React.forwardRef<

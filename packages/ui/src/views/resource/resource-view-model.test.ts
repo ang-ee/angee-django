@@ -218,6 +218,20 @@ describe("resource-view model", () => {
     expect(resourceViewSearchToState({ group: "reviewer.displayName~reviewer~reviewerId" }).queryError?.message).toMatch(/group/);
   });
 
+  test("a level's repeated values ride its URL group spelling and refuse spellings it cannot read", () => {
+    const groupStack = [{ field: "display_name", repeated: true as const }, { field: "created_at", granularity: "month", repeated: true as const }];
+    const search = resourceViewStateToSearch(createResourceViewState({ groupStack }));
+    expect(search).toMatchObject({ group: "display_name:repeated", then: "created_at:month:repeated" });
+    expect(resourceViewSearchToState(search).groupStack).toEqual(groupStack);
+    // Turning it off is the plain level, a change from a repeated default.
+    expect(resourceViewStateToSearch(createResourceViewState({ groupStack: [{ field: "display_name" }] }),
+      { groupStack: [groupStack[0]!] }).group).toBe("display_name");
+    for (const group of ["display_name:repeated:month", "display_name:month:day:repeated", "display_name::repeated"]) {
+      expect(resourceViewSearchToState({ group }).queryError?.message).toMatch(/group/);
+    }
+    expect(resourceViewSearchToState({ group: "display_name", then: "display_name:repeated" }).queryError?.message).toMatch(/duplicate/);
+  });
+
   test("resets page and clears selection when query scope changes", () => {
     const { result } = viewHook({ page: 4, pageSize: 20, selectedIds: ["note-1"] });
     act(() => result.current.setSorting([{ id: "title", desc: false }]));

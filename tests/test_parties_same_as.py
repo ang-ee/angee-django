@@ -401,21 +401,94 @@ def test_the_review_list_fills_its_page_with_pairs_the_reader_can_read(db: None)
     assert [{pair.left.pk, pair.right.pk} for pair in page] == readable
 
 
-def test_the_review_list_scans_a_bounded_number_of_pages(db: None) -> None:
-    """A reader who sees many pairs but none of their evidence costs at most four pages, not a scan of every pair."""
+def _review_pairs(reader: Any, count: int, *, hidden: int = 0, other: Any = None) -> list[frozenset[Any]]:
+    """``count`` pairs ``reader`` may review, in creation order, with ``hidden`` more interleaved whose cited
+    address only ``other`` reads; return the reviewable ones."""
+
+    reviewable = []
+    concealed = {index * (count + hidden) // hidden for index in range(hidden)} if hidden else set()
+    for index in range(count + hidden):
+        handle = _address(other if index in concealed else reader, f"pair{index}@example.com")
+        pair = frozenset({_holder(reader, handle).pk, _claimant(reader, handle).pk})
+        if index not in concealed:
+            reviewable.append(pair)
+    assert _reconcile() == count + hidden
+    return reviewable
+
+
+def _walk(reader: Any, *, size: int, after: str | None = None) -> list[list[frozenset[Any]]]:
+    """Every page of ``reader``'s review list from ``after``, each page continuing after the last pair seen."""
+
+    pages = []
+    while page := Party.objects.with_actor(reader).same_as_pairs(limit=size, after=after):
+        pages.append([frozenset({pair.left.pk, pair.right.pk}) for pair in page])
+        after = page[-1].id
+    return pages
+
+
+@pytest.mark.parametrize(
+    "hidden", [pytest.param(0, id="reads-every-cited-handle"), pytest.param(12, id="cannot-read-some")],
+)
+def test_every_review_pair_is_reachable_in_pages_with_none_skipped_or_repeated(db: None, hidden: int) -> None:
+    """120 pairs in pages of 50: three pages, each pair once; a pair whose cited address the reader cannot read
+    is never listed and never ends a page early."""
 
     del db
-    reader, other = create_user("same-as-review-pages"), create_user("same-as-review-pages-other")
-    for index in range(4):
-        handle = _address(other, f"hidden-{index}@example.com")
+    reader, other = create_user("same-as-pages-reader"), create_user("same-as-pages-other")
+    reviewable = _review_pairs(reader, 120, hidden=hidden, other=other)
+
+    pages = _walk(reader, size=50)
+
+    assert [len(page) for page in pages] == [50, 50, 20]
+    seen = [pair for page in pages for pair in page]
+    assert len(set(seen)) == len(seen) == 120
+    assert set(seen) == set(reviewable)
+
+
+def test_a_pair_that_leaves_while_a_person_pages_moves_no_other_pair(db: None) -> None:
+    """The next page continues after the last pair seen, so pairs kept apart before or after it skip nothing."""
+
+    del db
+    reader = create_user("same-as-pages-leave")
+    _review_pairs(reader, 30)
+    first = Party.objects.with_actor(reader).same_as_pairs(limit=10)
+    remaining = Party.objects.with_actor(reader).same_as_pairs(limit=101)
+    # Two pairs on the page already seen and two on the next one leave the list.
+    for pair in [*first[:2], *remaining[10:12]]:
+        _kept_separate(reader, pair.left, pair.right)
+
+    pages = _walk(reader, size=10, after=first[-1].id)
+
+    after_first = [frozenset({pair.left.pk, pair.right.pk}) for pair in remaining[10:]]
+    seen = [pair for page in pages for pair in page]
+    assert seen == after_first[2:]
+
+
+def test_the_review_list_costs_the_same_however_many_pairs_the_reader_cannot_read(db: None) -> None:
+    """Pairs whose cited addresses the reader cannot read are filtered in one batch, not page by page: one
+    or nine of them ahead of the reader's own pair cost the same, and the reader's pair is on the first page."""
+
+    del db
+    other = create_user("same-as-review-cost-other")
+
+    def cost(hidden: int) -> tuple[int, int]:
+        reader = create_user(f"same-as-review-cost-{hidden}")
+        for index in range(hidden):
+            handle = _address(other, f"hidden{hidden}-{index}@example.com")
+            _holder(reader, handle)
+            _claimant(reader, handle)
+        _reconcile()
+        handle = _address(reader, f"own{hidden}@example.com")
         _holder(reader, handle)
         _claimant(reader, handle)
-    handle = _address(reader)
-    _holder(reader, handle)
-    _claimant(reader, handle)
-    assert _reconcile() == 5
+        _reconcile()
+        with CaptureQueriesContext(connection) as queries:
+            page = Party.objects.with_actor(reader).same_as_pairs(limit=1)
+        return len(queries.captured_queries), len(page)
 
-    assert Party.objects.with_actor(reader).same_as_pairs(limit=1) == []
+    one = cost(1)
+
+    assert cost(9) == one == (one[0], 1)
 
 
 def test_a_link_a_person_dismissed_pairs_nobody(db: None) -> None:

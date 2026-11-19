@@ -407,15 +407,27 @@ class PartyRelationshipType(AngeeNode):
 class SameAsPairType:
     """Two actor-visible parties sharing one deterministic normalized handle."""
 
+    id: strawberry.ID
+    """The pair's public id: the next page of the review list continues after it (``after``)."""
     left: PartyType
     right: PartyType
     normalized_value: str
 
 
 @strawberry.type
+class SameAsPairCountsType:
+    """How many pairs the reader may review, and how many of those are certain."""
+
+    pairs: int
+    certain: int
+
+
+@strawberry.type
 class CertainSameAsPairType:
     """A same-person pair one confirm would merge now: the two, the address linking them, and the older survivor."""
 
+    id: strawberry.ID
+    """The pair's public id: the next batch continues after it (``after``)."""
     left: PartyType
     right: PartyType
     normalized_value: str
@@ -423,8 +435,8 @@ class CertainSameAsPairType:
 
 
 @strawberry.type
-class FieldDisagreementType:
-    """A merge field the members of a set disagree on: each member's value, and the value the survivor will show."""
+class MergeFieldValuesType:
+    """A merge field whose values differ across a set's members: each member's value, and what the survivor shows."""
 
     field: str
     values: list[str | None]
@@ -444,7 +456,12 @@ class DuplicateSetPreviewType:
     survivor: PartyType | None
     outcome: DuplicateMergeOutcome | None
     reason: str
-    disagreements: list[FieldDisagreementType]
+    digest: str
+    """For a set that merges, the keyed digest of what the dialog shows of it: send it back to ``merge_duplicates``."""
+    disagreements: list[MergeFieldValuesType]
+    """Fields the members state at least two different values for: what a person must look at."""
+    fills: list[MergeFieldValuesType]
+    """Fields exactly one value is stated for, the rest empty: the merge gives the survivor that value."""
 
 
 @strawberry.type
@@ -472,13 +489,8 @@ def _prefetch_member_facts(members: list[Any], actor: Any) -> None:
     prefetch_related_objects(
         members,
         *(concrete_child_accessor(Party, child) for child in concrete_child_models(Party)),
-        Prefetch(
-            "partystatement_set",
-            queryset=Party.objects.handle_statements()
-            .for_reader(actor)
-            .prefetch_related(Prefetch("handle", queryset=Handle.objects.with_actor(actor))),
-            to_attr="_readable_handle_statements",
-        ),
+        # The preview read these already to digest them; Django skips a fetched ``to_attr``.
+        Party.objects.readable_statements_prefetch(actor),
         *Party.objects.display_avatar_prefetches(actor, avatars=files),
     )
 
@@ -510,22 +522,31 @@ class PartiesReviewQuery:
     """Bounded read surfaces for party search and human review queues."""
 
     @strawberry.field
-    def same_as_pairs(self, limit: int = 50) -> list[SameAsPairType]:
-        """Return resolved identity statements awaiting a survivor choice."""
+    def same_as_pairs(self, limit: int = 50, after: strawberry.ID | None = None) -> list[SameAsPairType]:
+        """Return the pairs awaiting a survivor choice, in review order: at most ``limit`` after the pair ``after``."""
 
         return cast(
             "list[SameAsPairType]",
-            Party.objects.all().same_as_pairs(limit=limit),
+            Party.objects.all().same_as_pairs(limit=limit, after=after),
         )
 
     @strawberry.field
-    def certain_same_as_pairs(self, info: strawberry.Info, limit: int = 50) -> list[CertainSameAsPairType]:
-        """Return the certain same-person pairs awaiting the signed-in person's review, at most 50."""
+    def certain_same_as_pairs(
+        self, info: strawberry.Info, limit: int = 50, after: strawberry.ID | None = None,
+    ) -> list[CertainSameAsPairType]:
+        """Return the certain pairs awaiting the signed-in person's review after the pair ``after``, at most 50."""
 
         return cast(
             "list[CertainSameAsPairType]",
-            Party.objects.certain_same_as_pairs(actor=session_user(info), limit=limit),
+            Party.objects.certain_same_as_pairs(actor=session_user(info), limit=limit, after=after),
         )
+
+    @strawberry.field
+    def same_as_pair_counts(self, info: strawberry.Info) -> SameAsPairCountsType:
+        """Return how many pairs the signed-in person may review, and how many of those are certain."""
+
+        counts = Party.objects.same_as_review_counts(actor=session_user(info))
+        return SameAsPairCountsType(pairs=counts.pairs, certain=counts.certain)
 
     @strawberry.field
     def duplicate_set_previews(
@@ -545,6 +566,23 @@ class PartiesReviewQuery:
         """Return actor-visible people whose display name contains ``query``."""
 
         return cast("list[PersonType]", Person.objects.search_display_name(query, limit=limit))
+
+    @strawberry.field
+    def party_record(self, id: str) -> PartyType | None:
+        """Return the live party a party id names now: itself, or the survivor its merge folded it into.
+
+        The record roots read canonical parties only, so a merged-away id resolves
+        here: the id's row is read in the actor's scope, its redirect is identity
+        (``canonical_ids``), and the survivor is read in the actor's canonical scope.
+        """
+
+        party = Party.objects.all().from_public_id(id)
+        if party is None:
+            return None
+        survivor = Party.canonical_ids((party.pk,)).get(party.pk)
+        if survivor is None:
+            return None
+        return cast("PartyType | None", Party.objects.canonical().filter(pk=survivor).first())
 
     @strawberry.field
     def people_workbench(
@@ -667,14 +705,19 @@ class PartiesIdentityMutation:
 
     @strawberry.mutation
     def merge_duplicates(
-        self, info: strawberry.Info, sets: list[list[strawberry.ID]], certain: bool = False,
+        self, info: strawberry.Info, sets: list[list[strawberry.ID]], digests: list[str], certain: bool = False,
     ) -> list[DuplicateSetOutcomeType]:
-        """Merge each confirmed set of records into its oldest member as the signed-in person; return every outcome."""
+        """Merge each confirmed set into its oldest member as the signed-in person; return every outcome.
+
+        ``digests`` are the sets' ``digest`` from ``duplicate_set_previews``, one per set: a set whose shown
+        facts changed since is refused, to be looked at again.
+        """
 
         return cast(
             "list[DuplicateSetOutcomeType]",
             Party.objects.merge_duplicates(
                 actor=session_user(info), sets=[[str(pk) for pk in ids] for ids in sets], certain=certain,
+                digests=digests,
             ),
         )
 
@@ -724,6 +767,8 @@ _PARTY_RESOURCE = hasura_model_resource(
     insert=False,
     updatable=["display_name", "notes", *_PARTY_EXTENSION_UPDATE_FIELDS],
     write_backend=AngeeHasuraWriteBackend(Party, public_id_fields=_PARTY_EXTENSION_PUBLIC_ID_FIELDS),
+    # Canonical parties only: a merged-away or trashed party is no row, count, group or candidate.
+    get_queryset=lambda info: Party.objects.canonical(),
 )
 _PERSON_RESOURCE = hasura_model_resource(
     PersonType,
@@ -754,6 +799,9 @@ _PERSON_RESOURCE = hasura_model_resource(
     groupable=list(
         dict.fromkeys(
             [
+                "display_name",
+                "given_name",
+                "family_name",
                 "created_at",
                 *declared_hasura_resource_fields(Person, "hasura_groupable_fields"),
             ]
@@ -794,7 +842,7 @@ _PERSON_RESOURCE = hasura_model_resource(
         Person,
         public_id_fields=_PERSON_EXTENSION_PUBLIC_ID_FIELDS,
     ),
-    get_queryset=lambda info: Person.objects.all().with_circle_names(),
+    get_queryset=lambda info: Person.objects.canonical().with_circle_names(),
 )
 _ORGANIZATION_RESOURCE = hasura_model_resource(
     OrganizationType,
@@ -825,6 +873,8 @@ _ORGANIZATION_RESOURCE = hasura_model_resource(
     groupable=list(
         dict.fromkeys(
             [
+                "display_name",
+                "legal_name",
                 "domain",
                 "created_at",
                 *declared_hasura_resource_fields(Organization, "hasura_groupable_fields"),
@@ -850,6 +900,7 @@ _ORGANIZATION_RESOURCE = hasura_model_resource(
         Organization,
         public_id_fields=_ORGANIZATION_EXTENSION_PUBLIC_ID_FIELDS,
     ),
+    get_queryset=lambda info: Organization.objects.canonical(),
 )
 _HANDLE_RESOURCE = hasura_model_resource(
     HandleType,
@@ -1122,7 +1173,7 @@ _PARTIES_SCHEMA_BUCKET = {
         SameAsStatementType,
         SameAsPairType,
         CertainSameAsPairType,
-        FieldDisagreementType,
+        MergeFieldValuesType,
         DuplicateSetPreviewType,
         DuplicateSetOutcomeType,
         PeopleWorkbenchScope,

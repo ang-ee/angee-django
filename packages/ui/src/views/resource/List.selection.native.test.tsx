@@ -16,6 +16,7 @@ import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } 
 import { RowsListView } from "./RowsListView";
 import { ganttResources, ganttLane, ganttLanes, ganttRecord, scheduledRecord } from "../../../tests/gantt-fixtures";
 import type { GanttViewProps } from "../gantt/GanttView";
+import type { ListViewProps } from "./resource-view-types";
 
 const drawing = vi.hoisted(() => ({ props: null as GanttViewProps | null }));
 vi.mock("../gantt/GanttView", () => ({ GanttView: (props: GanttViewProps) => {
@@ -44,6 +45,14 @@ function SelectionControls() {
     <button onClick={() => view.setFilter({})}>All notes</button>
   </>;
 }
+
+test("a bulk-action collection built by hand may leave the split out, and reads as not grouped", () => {
+  // What a consumer's test does: call a page's bulkActions with its own collection.
+  const bulkActions: NonNullable<ListViewProps<{ id: string }>["bulkActions"]> =
+    (_ids, _clear, collection) => collection.selectedGroups === undefined ? "not grouped" : "grouped";
+  expect(bulkActions(new Set(["one"]), () => {}, { filter: {}, selectedRows: [{ id: "one" }] })).toBe("not grouped");
+  expect(bulkActions(new Set(["one"]), () => {}, { filter: {}, selectedRows: [{ id: "one" }], selectedGroups: null })).toBe("grouped");
+});
 
 test("List resolves selection and bulk actions against the current view", async () => {
   const observeBulkCollection = vi.fn();

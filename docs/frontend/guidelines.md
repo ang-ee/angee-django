@@ -653,7 +653,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **A disabled reason is a tooltip.** A band verb that cannot run carries its
   `disabledReason` as a `Tooltip` and stays focusable while disabled; a menu item
   keeps the reason as its description row inside the menu (links stay usable). The
-  band never renders reason sentences. Owner stories:
+  band never renders reason sentences. A selection-bar verb follows the same rule
+  through `SelectionBarAction` `disabledReason`; both compose `Button`
+  `disabledReason`, the reason's tooltip and accessible description, which keeps
+  the button's element (and focus) as the reason comes and goes and drops the
+  `href` of a link it renders. An empty reason is no reason, in pane rows too. Owner stories:
   [record action bar](../../packages/storybook/src/stories/RecordActionBar.stories.tsx) (story id `views-recordactionbar--default`) and
   [tooltip](../../packages/storybook/src/stories/Tooltip.stories.tsx) (story id `primitives-tooltip--default`).
 - **The pane row's verb is a control beside the row**, not text inside its button
@@ -753,7 +757,12 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   including the view-as write guard; they introduce no server bulk verb.
   `BULK_ACTION_FANOUT_LIMIT` caps the separate requests at 25 rows per click;
   the server's `action_selection_limit` bounds a different, server-owned verb.
-  The shared runner is internal; pages add `bulkActions` to the list.
+  The shared runner is internal; pages add `bulkActions` to the list. Its
+  `selectedGroups`, the only read of the split, splits the selection by the
+  rendered grouping, or is `null` when any selected row cannot be placed or a page
+  it rests on shows again without it; it is a hint the server never trusts
+  (states and surfaces:
+  [`ListViewProps.bulkActions`](../../packages/ui/src/views/resource/resource-view-types.ts)).
   Outside embedded presentation, selection defaults on only for a lifecycle
   action, page `bulkActions`, or a grantable model's Share utility. A `source`
   list counts only page `bulkActions`. An explicit `selectable` always wins.
@@ -808,8 +817,17 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   memory. Either way a grouped list pages its **root groups**: the server surface
   by its root `_groups` read, the client row model by TanStack's top-level rows
   (`paginateExpandedRows: false`), so the pager counts groups and a page holds its
-  open groups' records; an ungrouped list pages records. A surface clamps its page
-  only once its read settles (`useSettledPageClamp`). A computed/non-model source is exposed **once** as a Hasura resource
+  open groups' records; an ungrouped list pages records. A level's `repeated`
+  ("Repeated values only") is a server group read option
+  (`ResourceQuery.toGroupRead`): HAVING keeps groups of more than one record
+  within its parent group and the read leaves out the records with no value, so
+  its counts and group pages are the repeated groups'; never filter groups in the
+  browser. A flat aggregate cannot apply that HAVING, so a repeated grouping shows
+  no footer totals. The switch is per level, offered where the level's axis at its
+  granularity can leave its empty group out. A view switch or a URL that leaves the
+  flag on a view grouping without that read (in the browser, an authored `source`,
+  a gantt or contributed kind) drops it and keeps the grouping; only an authored
+  default asking for it is refused. A surface clamps its page only once its read settles (`useSettledPageClamp`). A computed/non-model source is exposed **once** as a Hasura resource
   (`hasura_pydantic_resource`) for the uniform fetch + metadata + MCP surface.
   A small one processes client-side over the fetched set; a large one keeps the
   server row model and declares `groupable` columns for the same `_groups`
@@ -1156,7 +1174,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   contribute that registration through `defineAddon`'s `forms` dictionary.
   Its component composes `Form`, `Field` and `Group` and receives
   `RegisteredFormProps`; it owns any create/edit distinction through the record
-  `id`. Collection routes and relation-picker create/edit dialogs use that same
+  `id`. A saved record whose id reads no record shows the form's "Record
+  unavailable" state; a form that knows where such an id leads passes
+  `renderUnavailable(id, unavailable)` (parties opens a merged record's survivor)
+  and renders `unavailable` when it has nothing else. Collection routes and relation-picker create/edit dialogs use that same
   form, so a caller declares the resource instead of repeating its fields. Keep
   the registration in a form module, independent of the lazy collection page.
   Secondary panes and lifecycle actions travel with that form. A migration removes
