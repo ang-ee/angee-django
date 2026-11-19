@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, Self, TypedDict
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
-from django.db import IntegrityError, models, transaction
+from django.db import IntegrityError, OperationalError, models, transaction
 from django.db.models import (
     Case,
     Count,
@@ -836,6 +836,8 @@ class SameAsMergeOutcome(StrEnum):
     """The account is not an active person writing both parties (``merge_certain``), or the merge refused it."""
     REFUSED = "refused"
     """The merge's guards refused it (a party kept apart, merged meanwhile, held by an addon)."""
+    BUSY = "busy"
+    """The database stopped the merge for a concurrent write (a deadlock, a lock timeout); nothing merged, try again."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -2061,6 +2063,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         (:meth:`same_person_links`, the shared-sender providers consulted), and both
         bear a real name and the names agree but for case, accents and hyphens
         (``Party.comparable_name``); a pair someone kept apart awaits no review.
+        A merge the database stops (an ``OperationalError``: a deadlock, a lock or
+        statement timeout, a serialization failure) is reported as ``busy`` and the
+        pairs after it still run; any other database error propagates.
         Only an active person account merges, and only parties it writes (the
         party's ``merge_certain`` permission); a service or agent account merges
         nothing. Each certain pair merges into the older record through
@@ -2111,6 +2116,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                     outcome = SameAsMergeOutcome.NOT_PERMITTED
                 except ValidationError:
                     outcome = SameAsMergeOutcome.REFUSED
+                except OperationalError:
+                    # The merge's own transaction rolled back; the pairs after it still run.
+                    outcome = SameAsMergeOutcome.BUSY
                 else:
                     outcomes.append(
                         SameAsPairOutcome(

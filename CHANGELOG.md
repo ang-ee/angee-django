@@ -44,7 +44,13 @@ live in code docstrings.
   never merges, and a failure after the commit is logged for the job to heal. A
   pair now locks both parties in one identity pass, Handles before Parties
   (`StatementsMixin.lock_subjects`, which `Party` implements and its merges use);
-  locking one party after the other ran against the Handle, Party order. The job
+  locking one party after the other ran against the Handle, Party order. A party
+  merge also takes its same-person partners and every Handle its parties hold in
+  that pass (`Party.lock_merge_records`): the fold re-keys the merged party's
+  other pairs onto the survivor, which locked each partner's Handles after party
+  rows and could deadlock with a resolution of the partner's address (a defect
+  already on `main`). The bulk merge reports a merge the database stops (an
+  `OperationalError`: deadlock, lock or statement timeout) as `busy` and goes on. The job
   no longer withdraws a proposal stated after its run began, and restates a
   standing proposal whose cited handle was deleted or merged away with the handles
   that still link the two, so it never hides from the review list.

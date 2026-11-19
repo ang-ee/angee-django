@@ -9,7 +9,7 @@ import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.db import connection, transaction
+from django.db import OperationalError, connection, transaction
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
@@ -1000,3 +1000,30 @@ def test_only_an_active_person_merges_certain_pairs(db: None, kind: str, outcome
     assert _merge_certain(account) == [(outcome, {older.pk, newer.pk}, older.pk if outcome == "merged" else None)]
     with system_context(reason="same_as person-only readback"):
         assert (Party._base_manager.get(pk=newer.pk).merged_into_id == older.pk) is (outcome == "merged")
+
+
+def test_a_merge_the_database_stops_is_reported_and_the_next_pair_still_merges(db: None) -> None:
+    """A deadlock in one merge rolls that merge back and is its outcome; earlier and later merges stand."""
+
+    del db
+    owner = create_user("same-as-certain-busy")
+    first = _people(owner, "Zoë Example", "Zoe Example", value="zoe@example.com")
+    second = _people(owner, "Yan Example", "yan example", value="yan@example.com")
+    assert _reconcile() == 2
+    stopped: list[str] = []
+
+    def deadlock_once(execute: Any, sql: str, params: Any, many: bool, context: Any) -> Any:
+        if not stopped and sql.lstrip().upper().startswith("UPDATE") and '"merged_into_id"' in sql:
+            stopped.append(sql)
+            raise OperationalError("deadlock detected")
+        return execute(sql, params, many, context)
+
+    with connection.execute_wrapper(deadlock_once):
+        outcomes = _merge_certain(owner)
+
+    assert outcomes == [
+        ("busy", {first[0].pk, first[1].pk}, None),
+        ("merged", {second[0].pk, second[1].pk}, second[0].pk),
+    ]
+    with system_context(reason="same_as busy readback"):
+        assert Party._base_manager.get(pk=first[1].pk).merged_into_id is None
