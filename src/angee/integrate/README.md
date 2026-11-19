@@ -336,7 +336,12 @@ refusal's `headers` are a read-only copy of the answer's without the credential
 and cookie headers, and neither its `repr` nor any owner message shows a header
 value. A refusal keeps the failure that stopped its request: its `cause` tells a request
 `not_sent` ("could not be reached") from one `unreachable` after it may have
-been sent ("did not answer"). A request the
+been sent ("did not answer"). Not yet on the refusal: `download_bounded` (and
+`download_capped` over it) returns `None` alike for its size, deadline and
+redirect limits, and it and `stream` raise the raw transport error, so their
+callers (calendar feeds, media and attachment downloads, page analysis) word and
+classify a failed download themselves; moving them onto the refusal is the
+remaining work. A request the
 HTTP library will not build, a header value it cannot encode or will not send,
 is `not_sent` and permanent (`RequestNotBuiltError`), worded as a request that
 could not be sent as configured; it chains none of the library's text, which
