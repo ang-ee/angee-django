@@ -74,9 +74,15 @@ interface SelectionState {
   rows: Readonly<Record<string, Row>>;
   /** The place a grouped surface showed each row in when selected; absent for a row selected without one. */
   places: Readonly<Record<string, SelectionPlace>>;
+  /**
+   * "All matching": the key of the list read whose every record the person chose
+   * ("Select all N"), or null when the selection is its ticked ids. The ids stay
+   * the ticked ones; any write that changes them leaves the mode.
+   */
+  allMatching: string | null;
 }
 
-type SelectionRead = Pick<SelectionState, "rowSelection" | "rows" | "places">;
+type SelectionRead = Pick<SelectionState, "rowSelection" | "rows" | "places" | "allMatching">;
 interface SelectionOwner {
   read: (scope: string) => SelectionRead;
   update: (
@@ -86,13 +92,14 @@ interface SelectionOwner {
     placed?: (id: string) => SelectionPlace | undefined,
   ) => void;
   enter: (scope: string) => void;
+  selectAllMatching: (scope: string, read: string) => void;
 }
-const EMPTY_SELECTION: SelectionRead = { rowSelection: {}, rows: {}, places: {} };
+const EMPTY_SELECTION: SelectionRead = { rowSelection: {}, rows: {}, places: {}, allMatching: null };
 const SelectionOwnerContext = createContext<SelectionOwner | null>(null);
 /** The selection scope of the nearest inherited view; the owner's own collection is "". */
 const SelectionScopeContext = createContext("");
 
-/** The grouped list's own channel to its scope's selection (`useSelectionPlaces`). */
+/** The list surfaces' own channel to their scope's selection (`useSelectionPlaces`). */
 export interface SelectionPlaces {
   /** The place a grouped surface showed each selected row in when it was selected. */
   places: Readonly<Record<string, SelectionPlace>>;
@@ -104,6 +111,10 @@ export interface SelectionPlaces {
   ) => void;
   /** `toggleSelectedId`, also capturing where the row shows. */
   toggleSelectedId: (id: string, selected?: boolean, row?: Row, place?: SelectionPlace) => void;
+  /** The key of the read whose every record is selected ("Select all N"), or null. */
+  allMatching: string | null;
+  /** Select every record of the read with this key, keeping the ticked ids; nothing without a selection. */
+  selectAllMatching: (read: string) => void;
 }
 
 /** One scope's selection and its writes; the public value narrows the writes' types. */
@@ -119,7 +130,10 @@ function useScopedSelection(scope: string, owner: SelectionOwner) {
     place === undefined ? undefined : (selectedId) => selectedId === id ? place : undefined),
     [setRowSelection],
   );
-  return { ...read, setRowSelection, toggleSelectedId };
+  const selectAllMatching = useCallback<SelectionPlaces["selectAllMatching"]>(
+    (matching) => owner.selectAllMatching(scope, matching), [owner.selectAllMatching, scope],
+  );
+  return { ...read, setRowSelection, toggleSelectedId, selectAllMatching };
 }
 
 /** One public selection projection for the owning collection and inherited scopes. */
@@ -137,18 +151,20 @@ function useSelectionValue(scope: string, owner: SelectionOwner) {
 }
 
 /**
- * The grouped list's channel to the selection of the scope it renders in: the places
- * captured with the snapshots, and the writes that capture them. It is not part of
- * the package's API: a page reads the split only through `bulkActions` →
- * `selectedGroups`, which the list computes and checks against what it shows.
+ * The list's channel to the selection of the scope it renders in: the places captured
+ * with the snapshots, the writes that capture them, and the "all matching" mode. It is
+ * not part of the package's API: a page reads the split only through `bulkActions` →
+ * `selectedGroups`, which the list computes and checks against what it shows, and the
+ * mode through `bulkActions` → `all`.
  * @owner ResourceViewProvider
  */
 export function useSelectionPlaces(): SelectionPlaces {
   const owner = useContext(SelectionOwnerContext);
   const scope = useContext(SelectionScopeContext);
   if (!owner) throw new Error("A grouped list requires a resource view.");
-  const { places, setRowSelection, toggleSelectedId } = useScopedSelection(scope, owner);
-  return useMemo(() => ({ places, setRowSelection, toggleSelectedId }), [places, setRowSelection, toggleSelectedId]);
+  const { places, setRowSelection, toggleSelectedId, allMatching, selectAllMatching } = useScopedSelection(scope, owner);
+  return useMemo(() => ({ places, setRowSelection, toggleSelectedId, allMatching, selectAllMatching }),
+    [places, setRowSelection, toggleSelectedId, allMatching, selectAllMatching]);
 }
 
 /**
@@ -611,7 +627,7 @@ function useResourceViewContextValue({
 
   const collection = stableSerialize([groupQuery, groupOrder]);
   const [selection, setSelection] = useState<SelectionState>(() => ({
-    collection, scope: "", rowSelection: createResourceViewState(initialState).rowSelection, rows: {}, places: {},
+    collection, scope: "", rowSelection: createResourceViewState(initialState).rowSelection, rows: {}, places: {}, allMatching: null,
   }));
   const activeSelection = selection.collection === collection ? selection : {
     collection, scope: "", ...EMPTY_SELECTION,
@@ -643,13 +659,18 @@ function useResourceViewContextValue({
         const place = placed?.(id) ?? (kept ? base.places[id] : undefined);
         if (place !== undefined) places[id] = place;
       }
-      return { ...current, scope, rowSelection, rows, places };
+      // A tick, an untick or a clear returns to the ticked ids.
+      return { ...current, scope, rowSelection, rows, places, allMatching: null };
     });
   }, []);
   const enter = useCallback<SelectionOwner["enter"]>((scope) => {
     setSelection((current) => current.scope === scope ? current : { ...current, scope, ...EMPTY_SELECTION });
   }, []);
-  const selectionOwner = useMemo(() => ({ read, update, enter }), [read, update, enter]);
+  const selectAllMatching = useCallback<SelectionOwner["selectAllMatching"]>((scope, matching) => {
+    setSelection((current) => current.scope !== scope || current.allMatching === matching
+      || idsFromRowSelectionState(current.rowSelection).size === 0 ? current : { ...current, allMatching: matching });
+  }, []);
+  const selectionOwner = useMemo(() => ({ read, update, enter, selectAllMatching }), [read, update, enter, selectAllMatching]);
   const { rowSelection, value: { selectedRows, setRowSelection, toggleSelectedId, clearSelectedIds } } = useSelectionValue("", selectionOwner);
   const viewState = useMemo(() => ({ ...state, rowSelection }), [state, rowSelection]);
   const setPaginationByScope = useCallback<OnChangeFn<GroupPagination>>(

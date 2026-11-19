@@ -15,6 +15,7 @@ import { useUiT } from "../../i18n";
 import {
   ListLoadingFooter,
   ListSelectionBar,
+  type ListSelectionMatching,
 } from "./resource-view-list-body";
 import type { ListChrome, ResourceCollectionPresentation } from "./resource-view-types";
 
@@ -23,8 +24,10 @@ export interface ResourceListFrameSelection {
   onClear: () => void;
   onDelete?: () => void;
   deletePending?: boolean;
+  deleteDisabledReason?: React.ReactNode;
   pending?: boolean;
   actions?: React.ReactNode;
+  matching?: ListSelectionMatching;
 }
 
 export interface ResourceListFrameProps {
@@ -136,8 +139,10 @@ export function ResourceListFrame({
             onClear={selection.onClear}
             onDelete={selection.onDelete}
             deletePending={selection.deletePending}
+            deleteDisabledReason={selection.deleteDisabledReason}
             pending={selection.pending}
             actions={selection.actions}
+            matching={selection.matching}
           />
         ) : null}
         {error ? (

@@ -295,7 +295,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   holds selection: entering another inherited scope or selecting at the owner
   clears the previous scope. Collection changes clear them before children
   render; returning to an inherited base-filter scope after entering another
-  never revives its old selection. Resource metadata supplies the selection bar's
+  never revives its old selection. The opt-in "all matching" mode lives there too
+  (`selectAllMatching`): once every loaded row is ticked and the view holds more,
+  "Select all N" makes the selection everything the list's own read matches,
+  without inventing an id; paging keeps it, and a tick, an untick, Clear or a
+  collection change returns to the ticked ids. Resource metadata supplies the selection bar's
   generic Archive/Unarchive, Move to trash/Restore and Delete actions. Bulk is a
   bounded client fan-out over each single-record verb: successful rows leave the
   selection, refused, failed, unobserved and overflow rows stay, and one refresh
@@ -763,7 +767,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   it rests on shows again without it; it is a hint the server never trusts
   (states and surfaces:
   [`ListViewProps.bulkActions`](../../packages/ui/src/views/resource/resource-view-types.ts)).
-  Outside embedded presentation, selection defaults on only for a lifecycle
+  In the "all matching" mode its `all` hands a page verb the list's own read to
+  act on on the server, beside `grouping`, the levels the list renders; a verb
+  that cannot honour it does not act on the ticked rows either, and the generic
+  verbs, which act on each ticked row, are disabled with their reason (the same
+  contract). Outside embedded presentation, selection defaults on only for a lifecycle
   action, page `bulkActions`, or a grantable model's Share utility. A `source`
   list counts only page `bulkActions`. An explicit `selectable` always wins.
 - Editable lines are the data view in edit mode; compose `RowsListView` and its column, visibility, action, reorder and footer seams, never form-local tables.

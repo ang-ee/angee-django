@@ -1,5 +1,5 @@
 import * as React from "react";
-import { MAX_PAGE_SIZE, useAngeeAggregate } from "@angee/refine";
+import { MAX_PAGE_SIZE, stableSerialize, useAngeeAggregate } from "@angee/refine";
 import { ResourceQuery, modelLabelSegment, rowPublicId, canDeleteRecord, useModelMetadata } from "@angee/metadata";
 import type { ModelFieldMetadata, Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
@@ -44,6 +44,8 @@ interface ListViewContentProps<TRow extends Row> {
   tableLayout: ListViewProps<TRow>["tableLayout"];
   headerVisibility: ListViewProps<TRow>["headerVisibility"];
   selectable: boolean;
+  /** `ListViewProps.selectAllMatching`. */
+  selectAllMatching: boolean;
   renderGroupLabel?: ListViewProps<TRow>["renderGroupLabel"];
   renderPaneRow?: ListViewProps<TRow>["renderPaneRow"];
   pane?: ListViewProps<TRow>["pane"];
@@ -97,6 +99,7 @@ export function ListViewContent<TRow extends Row = Row>({
   tableLayout = "auto",
   headerVisibility = "visible",
   selectable,
+  selectAllMatching,
   renderGroupLabel,
   renderPaneRow,
   pane,
@@ -280,13 +283,35 @@ export function ListViewContent<TRow extends Row = Row>({
     ? selectedGroupsOf(selectedIds, effectiveGroupStack,
       groupedItems && shown ? { places: placement.places, items: groupedItems, shown } : null)
     : undefined, [splitsSelection, selectedIds, placement.places, effectiveGroupStack, groupedItems, shown]));
-  const domainBulkActions = renderBulkActions(bulkActions, selectedIds, resourceView,
-    { filter: surface.mergedFilter, selectedGroups });
+  // "Select all N" (opt-in) selects what the surface's own read behind its pager
+  // matches, for page actions to act on; the mode holds that read's key, so another
+  // read (another view kind) never inherits it.
+  const total = surface.list.total;
+  const matching = selectAllMatching && selectable && bulkActions && !boardGroupingPinned && surface.matching
+    && total !== undefined ? { ...surface.matching, total, unit: surface.list.pageUnit } : undefined;
+  const matchingKey = matching ? stableSerialize(matching.read) : null;
+  const all = useValueStable(matching && matchingKey === placement.allMatching
+    ? { total: matching.total, unit: matching.unit, read: matching.read } : undefined);
+  const offersAll = Boolean(matching?.more && !all && matching.loaded.length > 0
+    && matching.loaded.every((id) => selectedIds.has(id)));
+  const barMatching = matching && matchingKey !== null && (all || offersAll) ? {
+    count: matching.total, unit: matching.unit, selected: Boolean(all),
+    ...(offersAll ? { onSelectAll: () => placement.selectAllMatching(matchingKey) } : {}),
+  } : undefined;
+  // The generic verbs act on each ticked row, never on all of them.
+  const tickedOnly = all ? t(all.unit === "groups" ? "list.tickedOnlyNotAllGroups" : "list.tickedOnlyNotAllRecords",
+    { count: all.total }) : undefined;
+  const domainBulkActions = renderBulkActions(bulkActions, selectedIds, resourceView, {
+    filter: surface.mergedFilter, selectedGroups,
+    ...(all ? { all } : {}),
+    ...(surface.kind === "grouped" ? { grouping: effectiveGroupStack } : {}),
+  });
   const genericSelection = !source && modelMetadata ? {
     modelMetadata,
     selectedRows: resourceView.selectedRows,
     unprocessedCount: [...selectedIds].filter((id) => !selectedRowsById.has(id)).length,
     bulk,
+    disabledReason: tickedOnly,
   } : null;
 
   return (
@@ -304,7 +329,9 @@ export function ListViewContent<TRow extends Row = Row>({
             ? bulkDelete.deleteInitiate
             : undefined,
         deletePending: bulkDelete.isPending,
+        deleteDisabledReason: tickedOnly,
         pending: bulk.pending,
+        matching: barMatching,
         actions: <>
           {domainBulkActions}
           {genericSelection ? <>

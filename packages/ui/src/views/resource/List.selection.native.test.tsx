@@ -46,12 +46,17 @@ function SelectionControls() {
   </>;
 }
 
-test("a bulk-action collection built by hand may leave the split out, and reads as not grouped", () => {
+test("a bulk-action collection built by hand may leave the split, all and the grouping out, and reads as ticked ungrouped rows", () => {
   // What a consumer's test does: call a page's bulkActions with its own collection.
-  const bulkActions: NonNullable<ListViewProps<{ id: string }>["bulkActions"]> =
-    (_ids, _clear, collection) => collection.selectedGroups === undefined ? "not grouped" : "grouped";
-  expect(bulkActions(new Set(["one"]), () => {}, { filter: {}, selectedRows: [{ id: "one" }] })).toBe("not grouped");
-  expect(bulkActions(new Set(["one"]), () => {}, { filter: {}, selectedRows: [{ id: "one" }], selectedGroups: null })).toBe("grouped");
+  const bulkActions: NonNullable<ListViewProps<{ id: string }>["bulkActions"]> = (_ids, _clear, collection) =>
+    [collection.selectedGroups === undefined ? "not grouped" : "grouped", collection.all ? `all ${collection.all.total}` : "ticked",
+      collection.grouping?.length ? "grouping" : "flat"].join(", ");
+  expect(bulkActions(new Set(["one"]), () => {}, { filter: {}, selectedRows: [{ id: "one" }] })).toBe("not grouped, ticked, flat");
+  expect(bulkActions(new Set(["one"]), () => {}, { filter: {}, selectedRows: [{ id: "one" }], selectedGroups: null })).toBe("grouped, ticked, flat");
+  expect(bulkActions(new Set(["one"]), () => {}, {
+    filter: {}, selectedRows: [{ id: "one" }], selectedGroups: null, grouping: [{ field: "title", repeated: true }],
+    all: { total: 3, unit: "groups", read: { where: {}, groupBy: [{ field: "title" }], having: { count_gt: 1 } } },
+  })).toBe("grouped, all 3, grouping");
 });
 
 test("List resolves selection and bulk actions against the current view", async () => {

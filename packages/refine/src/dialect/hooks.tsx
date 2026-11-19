@@ -119,6 +119,9 @@ export interface AngeeListBatchEntry {
   total: number | undefined;
   fetching: boolean;
   error: Error | null;
+  /** Timestamp of the most recent successful native query read; null until the
+   * page first settles. A hand-built entry may leave it out, which reads as unsettled. */
+  updatedAt?: number | null;
 }
 
 interface GroupByRequestBatchEntry {
@@ -382,7 +385,7 @@ export function useAngeeGroupByBatch(
 
 // Native structural sharing keeps equivalent query results stable between renders.
 function combineListQueries(queries: UseQueryResult<GetListResponse<BaseRecord>>[]) {
-  return queries.map(({ data, error, isFetching, refetch }) => ({ data, error, isFetching, refetch }));
+  return queries.map(({ data, dataUpdatedAt, error, isFetching, refetch }) => ({ data, dataUpdatedAt, error, isFetching, refetch }));
 }
 
 /**
@@ -467,6 +470,7 @@ export function useAngeeListBatch(
               total: data?.total,
               fetching: query?.isFetching ?? false,
               error: errorFromHttp(query?.error),
+              updatedAt: query?.dataUpdatedAt || null,
             },
           ] as const;
         }),

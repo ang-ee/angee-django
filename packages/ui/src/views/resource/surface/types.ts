@@ -10,7 +10,7 @@ import { type ResourceListOrder, type ResourceViewFilter, type ResourceViewGroup
 import { type GroupedListItem, type GroupMeasure, type RowGroup, type VisibleFieldOption } from "../resource-view-list-body";
 import type { ColumnDescriptor } from "../../page";
 import { type ResolvedBoardLaneSource } from "../resource-view-board-lanes";
-import type { BoardCardPlacement, BoardOrder } from "../resource-view-types";
+import type { AllMatching, BoardCardPlacement, BoardOrder } from "../resource-view-types";
 import type { CollectionSource } from "../collection-source";
 import type { GroupedRenderShown } from "../resource-view-grouped-model";
 export type RowRecord = BaseRecord & Row;
@@ -145,6 +145,19 @@ interface ResourceViewSurfaceBase<TRow extends Row = Row> {
   requestedFields: readonly string[];
   mergedFilter: QueryFilter;
   sortOrder: ResourceListOrder | undefined;
+  /**
+   * What `list.total` counts, for "Select all N": the read as this surface's own
+   * request sent it (`bulkActions` → `all.read`), the ids of the loaded records, and
+   * whether the read matches records beyond them. Present once that total has
+   * settled, on a surface that pages its native server read (not a `source`).
+   */
+  matching?: SurfaceMatching;
+}
+
+export interface SurfaceMatching {
+  read: AllMatching["read"];
+  loaded: readonly string[];
+  more: boolean;
 }
 
 export interface ResourceViewSurface<TRow extends Row = Row>

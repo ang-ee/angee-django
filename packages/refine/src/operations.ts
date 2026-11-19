@@ -357,9 +357,16 @@ export function actionRequest(
   };
 }
 
+/** One `group_by` entry of a groups read as the request sends it: the axis's server input, and a date part's granularity. */
+export interface GroupBySpecVariable {
+  field: string;
+  granularity?: string;
+}
+
+/** The variables `groupByRequest` sends for one groups read. */
 export function groupByVariables(
   options: GroupByRequestOptions,
-): Record<string, unknown> {
+): Record<string, unknown> & Pick<GroupByRequestOptions, "where" | "having"> & { group_by: GroupBySpecVariable[] } {
   return {
     group_by: options.dimensions.map(groupBySpecVariable),
     ...(options.where !== undefined ? { where: options.where } : {}),
@@ -578,7 +585,7 @@ function groupBucket(group: Record<string, unknown>): AggregateBucket {
 
 function groupBySpecVariable(
   dimension: GroupDimension,
-): Record<string, string> {
+): GroupBySpecVariable {
   return {
     field: dimension.input,
     ...(dimension.granularity ? { granularity: dimension.granularity } : {}),

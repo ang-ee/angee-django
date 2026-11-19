@@ -5,6 +5,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   MAX_PAGE_SIZE,
   clampPageSize,
+  groupByVariables,
   groupRowsDocument,
   stableSerialize,
   useAngeeAggregate,
@@ -31,7 +32,7 @@ import { useCollectionQueryBatch } from "../collection-source";
 import { useResourceViewTableChrome } from "./presentation";
 import { listResultFromPageState, useResourceRowsSnapshot, useResourceViewQueryFacts, useResourceViewTableState, useSettledPageClamp } from "./table-state";
 import { EMPTY_ARRAY, EMPTY_EXPANDED_KEYS, EMPTY_LEAF_RESULTS } from "./types";
-import type { GroupedResourceViewSurface, ResourceListResult, UseResourceViewSurfaceProps } from "./types";
+import type { GroupedResourceViewSurface, ResourceListResult, SurfaceMatching, UseResourceViewSurfaceProps } from "./types";
 /**
  * The server-grouped collection surface: the owner of a folded group view's render
  * model. It emits a single measured `listItems` stream (per-level `_groups`
@@ -337,6 +338,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
                 total: result.data?.total,
                 fetching: result.fetching,
                 error: result.error,
+                updatedAt: result.updatedAt,
                 refetch: result.refetch,
               },
             ]),
@@ -515,6 +517,18 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     onListStateChange,
   });
   const selectedIds = React.useMemo(() => idsFromRowSelectionState(resourceView.state.rowSelection), [resourceView.state.rowSelection]);
+  // The pager counts the outermost level's groups: `all.read` is that read's variables as its request sends them.
+  const rootQuery = scopeModel.rootQuery;
+  const matching = React.useMemo<SurfaceMatching | undefined>(() => {
+    if (source || !rootQuery || !rootResult || rootResult.error || rootResult.updatedAt === null) return undefined;
+    const { where, group_by: groupBy, having } = groupByVariables(rootQuery);
+    if (!where) return undefined;
+    const loaded = [...new Set(groupedItems.flatMap((item) => item.kind === "record" ? [item.row.id] : []))];
+    // Every record the read holds is loaded only when this page lists all its groups and their records.
+    const held = rootPage === 1 && rootResult.totalCount <= rootResult.buckets.length
+      ? rootResult.buckets.reduce((count, bucket) => count + bucket.count, 0) : Infinity;
+    return { read: { where, groupBy, ...(having ? { having } : {}) }, loaded, more: held > loaded.length };
+  }, [source, rootQuery, rootResult, groupedItems, rootPage]);
   return {
     kind: "grouped",
     list,
@@ -523,6 +537,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     requestedFields,
     mergedFilter,
     sortOrder,
+    ...(matching ? { matching } : {}),
     footerAggregate: footerTotal ? grandTotal.aggregate : null,
     measures: queryMeasures,
     setScopePage,

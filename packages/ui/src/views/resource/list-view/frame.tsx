@@ -232,6 +232,7 @@ function ListViewBody<TRow extends Row = Row>({
   tableLayout,
   headerVisibility,
   selectable: declaredSelectable,
+  selectAllMatching = false,
   renderGroupLabel,
   renderPaneRow,
   pane,
@@ -459,6 +460,7 @@ function ListViewBody<TRow extends Row = Row>({
       tableLayout={tableLayout}
       headerVisibility={headerVisibility}
       selectable={renderPaneRow ? false : selectable}
+      selectAllMatching={selectAllMatching}
       renderGroupLabel={renderGroupLabel}
       renderPaneRow={renderPaneRow}
       pane={pane}

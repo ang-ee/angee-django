@@ -7,7 +7,7 @@ import { useBoardLaneState } from "../resource-view-board-lanes";
 import { modelRowId } from "../resource-view-codecs";
 import { useResourceViewPresentationSurfaceFromTable } from "./presentation";
 import { listResultFromTable, useResourceRowsSnapshot, useResourceViewQueryFacts, useResourceViewTableState, useSettledPageClamp } from "./table-state";
-import type { ResourceViewSurface, UseResourceViewSurfaceProps } from "./types";
+import type { ResourceViewSurface, SurfaceMatching, UseResourceViewSurfaceProps } from "./types";
 import { useCollectionQueryBatch } from "../collection-source";
 import { EMPTY_ARRAY } from "./types";
 export function useResourceViewSurface<TRow extends Row = Row>({
@@ -188,6 +188,11 @@ export function useResourceViewSurface<TRow extends Row = Row>({
     groupStack,
     boardLaneState,
   });
+  // The rows read counts its records; its `where` is what `all.read` hands on.
+  const where = source ? undefined : listQuery.where;
+  const matching = React.useMemo<SurfaceMatching | undefined>(() => where && total !== undefined
+    ? { read: { where }, loaded: presentation.pageIds, more: total > presentation.pageIds.length }
+    : undefined, [where, total, presentation.pageIds]);
 
   return {
     kind: "flat",
@@ -197,6 +202,7 @@ export function useResourceViewSurface<TRow extends Row = Row>({
     requestedFields,
     mergedFilter,
     sortOrder,
+    ...(matching ? { matching } : {}),
     ...presentation,
   };
 }

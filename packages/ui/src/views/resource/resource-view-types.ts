@@ -35,7 +35,7 @@ import type { DndPayload } from "../../lib/dnd";
 import type { RowActionDeclaration } from "./RowActions";
 import type { CrudFilter, CrudSort } from "@refinedev/core";
 import type { CollectionSource } from "./collection-source";
-import type { AggregateBucket } from "@angee/refine";
+import type { AggregateBucket, GroupBySpecVariable } from "@angee/refine";
 
 export type { ListSearchDeclaration, SearchShortcut } from "./search/shortcuts";
 export { validateSearchShortcut } from "./search/shortcuts";
@@ -165,6 +165,9 @@ export interface SelectedGroupLevel {
 
 /** The collection a page's `bulkActions` receives, its third argument. */
 type BulkCollection<TRow extends Row> = Parameters<NonNullable<ListViewProps<TRow>["bulkActions"]>>[2];
+
+/** "Select all N" as a page's `bulkActions` receives it (`collection.all`). Internal. */
+export type AllMatching = NonNullable<BulkCollection<Row>["all"]>;
 
 /**
  * What a list surface hands `bulkActions`: the public collection with the split
@@ -361,6 +364,15 @@ export interface ListViewProps<TRow extends Row = Row> {
    * collection changes clear it. Only one scope holds selection: entering another
    * inherited scope or selecting at the owner clears the previous scope. */
   selectable?: boolean;
+  /** Offer "Select all N" in the selection bar once every loaded row is ticked and
+   * the view holds more (N records, or N groups when grouped): choosing it selects
+   * everything the view matches, which the page's `bulkActions` receives as `all`.
+   * Only a selectable list with page `bulkActions` over its own server read offers
+   * it: not a `source` list, a client row model or a lane board. While it is on, the
+   * generic Archive, Trash/Restore and Delete, which act on each ticked row, are
+   * disabled and say why. A tick, an untick, Clear, or a change of filter, grouping
+   * or sort returns to the ticked ids; paging keeps it. */
+  selectAllMatching?: boolean;
   /** Authored server projection using the same native collection surface. */
   source?: CollectionSource<TRow>;
   /** Allowed render kinds; defaults to the resource's available kinds. */
@@ -482,6 +494,43 @@ export interface ListViewProps<TRow extends Row = Row> {
       filter: QueryFilter;
       selectedRows: readonly TRow[];
       selectedGroups?: readonly SelectedGroup[] | null;
+      /**
+       * Present when the person chose "Select all N" (`selectAllMatching`): the
+       * selection is everything the list's view matches, not the ticked ids. A verb
+       * that honours it acts on `read` on the server; a verb that cannot must not act
+       * on the ticked ids either, and says why. `selectedIds`, `selectedRows` and
+       * `selectedGroups` still describe only the loaded ticked rows, never an
+       * unloaded one; a verb that honours `all` ignores them. Descriptive, like
+       * `filter`: the server validates what it is given.
+       */
+      all?: {
+        /** What the bar says is selected: exact, as the list's pager counts it. */
+        total: number;
+        /**
+         * `groups` when the list is grouped, else `records`. A grouped list's pager
+         * counts its outermost level's groups, the exact number its groups read
+         * matches after its `where` and `having` (`totalCount`); under nested
+         * grouping `total`, `unit` and `read` describe that outermost level, and
+         * `grouping` names the levels inside it.
+         */
+        unit: "records" | "groups";
+        /**
+         * The read the list itself issued for what `total` counts, to forward as it
+         * is, never re-derived by a page: a flat list's `where`, as its rows read sends
+         * it (`ResourceQuery.toWhere` of the list's filter); a grouped list's
+         * outermost groups read, as `ResourceQuery.toGroupRead` made it for the list's
+         * request: its `where` (a repeated level's records with a value included), its
+         * `group_by` and, for a repeated level, its `having`.
+         */
+        read: {
+          where: Record<string, unknown>;
+          groupBy?: GroupBySpecVariable[];
+          having?: Record<string, unknown>;
+        };
+      };
+      /** The grouping the list renders, outermost first, whenever it groups on the
+       * server, `all` or not; absent or empty when it is flat. */
+      grouping?: readonly ResourceViewGroup[];
     },
   ) => ReactNode;
   /** Optional action content rendered in each board card footer. */

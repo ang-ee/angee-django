@@ -71,6 +71,8 @@ export interface GroupedRenderModel<TRow extends Row> {
   carriedLeaves: ReadonlyMap<string, AngeeListBatchEntry>;
   items: GroupedListItem<TRow>[];
   rootResult: GroupedQueryResult | undefined;
+  /** The outermost level's groups read, as `groupScopes` requests it: the groups the pager counts. */
+  rootQuery: GroupByRequestOptions | undefined;
   shown: GroupedRenderShown;
 }
 
@@ -136,6 +138,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
   const pages = new Map<string, Set<string> | null>();
   const positions = new Map<string, number>();
   let rootResult: GroupedQueryResult | undefined;
+  let rootQuery: GroupByRequestOptions | undefined;
   const resourceQuery =
     params.query ?? (modelMetadata ? ResourceQuery.from(modelMetadata) : null);
   // The one owner of a group's first-page size: the groups read carries that page.
@@ -164,6 +167,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
         error: bucket.rows === undefined
           ? new Error("The groups read carried no first page for this group.")
           : null,
+        updatedAt: groups.updatedAt,
         refetch: groups.refetch,
       });
     } else {
@@ -178,9 +182,8 @@ export function buildGroupedRenderModel<TRow extends Row>(
     const leaf = carriedLeaves.get(bucketKey) ?? leafResults.get(bucketKey);
     const rows = rowModelsByScopeKey.get(bucketKey) ?? EMPTY_ARRAY;
     const place: SelectionPlace = { path: groupPath, page: stableSerialize([bucketKey, currentPage, leafPageSize]) };
-    // A record page has a total once its own read has settled (a batch read never shows
-    // another page's data while it loads); a carried page's comes with its groups'.
-    pages.set(place.page, leaf && !leaf.error && leaf.total !== undefined ? new Set(rows.map((row) => row.id)) : null);
+    // A record page lists its rows once its own read has settled; a carried page settles with its groups.
+    pages.set(place.page, leaf && !leaf.error && (leaf.updatedAt ?? null) !== null ? new Set(rows.map((row) => row.id)) : null);
     const nav: GroupedRecordNav = {
       filter: cumulativeFilter,
       order: leafOrder,
@@ -274,7 +277,10 @@ export function buildGroupedRenderModel<TRow extends Row>(
       ...(isLeafLevel ? { leafPageSize: declaredLeafPageSize } : {}),
     });
     const result = groupByResults.get(levelScopeKey);
-    if (depth === 0) rootResult = result;
+    if (depth === 0) {
+      rootResult = result;
+      rootQuery = query;
+    }
     const levelPage = stableSerialize([levelScopeKey, storedPage, levelPageSize]);
     const listed = result && !result.error && result.updatedAt !== null ? new Set<string>() : null;
     pages.set(levelPage, listed);
@@ -378,7 +384,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
   };
 
   walkLevel(0, baseFilter, []);
-  return { groupScopes, leafScopes, leafKeys, carriedLeaves, items, rootResult, shown: { pages, positions } };
+  return { groupScopes, leafScopes, leafKeys, carriedLeaves, items, rootResult, rootQuery, shown: { pages, positions } };
 }
 
 function bucketLabel(

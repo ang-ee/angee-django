@@ -24,6 +24,8 @@ export interface BulkSelectionProps {
   /** Selected ids with no observed row cannot be admitted to a flag action. */
   unprocessedCount: number;
   bulk: BulkActionRunner;
+  /** Why the verbs cannot run for this selection (all records the list matches, not its ticked rows). */
+  disabledReason?: string;
 }
 
 export interface BulkActionRefusal {

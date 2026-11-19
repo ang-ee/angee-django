@@ -16,7 +16,7 @@ import { RESOURCE_CONTAINERS } from "./resource-view-kinds";
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "./resource-view-context";
 import { useGroupedResourceViewSurface, type GroupedResourceViewSurface } from "./resource-view-surface";
 import { ListHeaderCell } from "./resource-view-list-body";
-import { ListView } from "./ListView";
+import { ListView, type ListViewProps } from "./ListView";
 import { ToastProvider } from "../../feedback";
 
 const contract = ResourceQuery.forRows({ fields: {
@@ -322,17 +322,21 @@ function taskServer(rows: readonly Row[], stale?: { id: string; group: string })
   };
 }
 
+type BulkCollection = Parameters<NonNullable<ListViewProps["bulkActions"]>>[2];
+
 /** A rendered grouped Task list whose page's bulk actions record the selectedGroups they receive. */
 function selectedGroupsFixture(initialState: Record<string, unknown>, {
-  stale, columns = [{ field: "title", header: "Title" }], rows = tasks,
+  stale, columns = [{ field: "title", header: "Title" }], rows = tasks, selectAllMatching,
 }: {
   /** A stale page: the server also lists this row in another group. */
   stale?: { id: string; group: string };
   columns?: readonly { field: string; header: string; aggregate?: "count" }[];
   rows?: readonly Row[];
+  selectAllMatching?: boolean;
 } = {}) {
   const { records, custom, getList, documents, hold } = taskServer(rows, stale);
   const seen: unknown[] = [];
+  const collections: BulkCollection[] = [];
   let view!: ResourceViewContextValue;
   let rerender!: () => void;
   function Probe() { view = useResourceView(); return null; }
@@ -342,8 +346,8 @@ function selectedGroupsFixture(initialState: Record<string, unknown>, {
     return (
       <ResourceViewProvider resource={taskResource.modelLabel} scope="local" initialState={initialState}>
         <Probe />
-        <ListView resource={taskResource.modelLabel} columns={columns} scope="inherit"
-          bulkActions={(_ids, _clear, collection) => { seen.push(collection.selectedGroups); return null; }} />
+        <ListView resource={taskResource.modelLabel} columns={columns} scope="inherit" selectAllMatching={selectAllMatching}
+          bulkActions={(_ids, _clear, collection) => { seen.push(collection.selectedGroups); collections.push(collection); return null; }} />
       </ResourceViewProvider>
     );
   }
@@ -363,9 +367,11 @@ function selectedGroupsFixture(initialState: Record<string, unknown>, {
   /** Change a record on the server without telling the list. */
   const edit = (id: string, patch: Partial<Row>) => { Object.assign(records.find((row) => row.id === id)!, patch); };
   return {
-    select, custom, seen, edit,
+    select, custom, getList, seen, edit,
     get view() { return view; },
     get selectedGroups() { return seen.at(-1); },
+    /** The collection the page's bulk actions last received. */
+    get collection() { return collections.at(-1); },
     /** The list's read of its root groups is in flight (the frame's `aria-busy`). */
     get fetching() { return document.querySelector("[data-resource-presentation]")?.getAttribute("aria-busy") === "true"; },
     rerender: () => act(() => rerender()),
@@ -661,6 +667,125 @@ test("selectedGroups keeps its identity across re-renders while the selection is
   f.rerender();
   await waitFor(() => expect(f.seen.length).toBeGreaterThan(calls));
   expect(f.selectedGroups).toBe(split);
+});
+
+/** The variables of the list's own outermost groups read, as the server last received them. */
+function rootGroupsRead(custom: ReturnType<typeof taskServer>["custom"], field: string) {
+  return custom.mock.calls.map(([request]) => request.meta?.gqlVariables as {
+    group_by?: { field: string }[]; where?: Record<string, unknown>; having?: Record<string, unknown>;
+  }).filter((variables) => variables.group_by?.[0]?.field === field).at(-1)!;
+}
+
+const sixTasks = [...tasks, { id: "t6", title: "Task 6", status: "closed", owner: "Bo", kind: "Other" }];
+const SELECT_ALL = /^Select (all|the) /;
+
+test("an opted-in flat list offers its every record once each loaded row is ticked, handing on its own read", async () => {
+  // Ada's four tasks, two a page.
+  const f = selectedGroupsFixture({ pageSize: 2, filter: { owner: { exact: "Ada" } } }, { selectAllMatching: true });
+  await f.select("Task 1");
+  await waitFor(() => expect(f.view.state.rowSelection).toEqual({ t1: true }));
+  expect(screen.queryByRole("button", { name: SELECT_ALL })).toBeNull();
+  expect(f.collection).not.toHaveProperty("all");
+  expect(f.collection).not.toHaveProperty("grouping");
+  await f.select("Task 3");
+  fireEvent.click(await screen.findByRole("button", { name: "Select all 4 records" }));
+  expect(await screen.findByText("All 4 records selected")).toBeTruthy();
+  const sent = (f.getList.mock.calls.at(-1)![0].meta?.gqlVariables as { where: Record<string, unknown> }).where;
+  expect(JSON.stringify(sent)).toContain("Ada");
+  expect(f.collection?.all).toEqual({ total: 4, unit: "records", read: { where: sent } });
+  // No id of an unloaded row is invented.
+  expect(f.view.state.rowSelection).toEqual({ t1: true, t3: true });
+  expect(f.collection?.selectedRows.map((row) => row.id)).toEqual(["t1", "t3"]);
+});
+
+test("an opted-in repeated grouping offers its every group, handing on its own groups read and the grouping", async () => {
+  // Two repeated groups, one a page: "active" here, "closed" on the next.
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status", repeated: true }], pageSize: 1 },
+    { rows: sixTasks, selectAllMatching: true });
+  await screen.findByText("Task 2");
+  fireEvent.click(screen.getByRole("checkbox", { name: "Select all loaded rows" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Select all 2 groups" }));
+  expect(await screen.findByText("All 2 groups selected")).toBeTruthy();
+  const sent = rootGroupsRead(f.custom, "status");
+  expect(sent.having).toEqual({ count_gt: 1 });
+  expect(f.collection?.all).toEqual({ total: 2, unit: "groups",
+    read: { where: sent.where, groupBy: sent.group_by, having: sent.having } });
+  expect(f.collection?.grouping).toEqual([{ field: "status", repeated: true }]);
+  expect(f.collection?.selectedGroups).toEqual([status("active", "active", ["t1", "t2"])]);
+});
+
+test("a grouping that has not opted in, or whose page holds every record, offers no select-all; it states its grouping", async () => {
+  const plain = selectedGroupsFixture({ groupStack: [{ field: "status", repeated: true }], pageSize: 1 }, { rows: sixTasks });
+  await screen.findByText("Task 2");
+  fireEvent.click(screen.getByRole("checkbox", { name: "Select all loaded rows" }));
+  await waitFor(() => expect(plain.collection?.grouping).toEqual([{ field: "status", repeated: true }]));
+  expect(screen.queryByRole("button", { name: SELECT_ALL })).toBeNull();
+  expect(plain.collection).not.toHaveProperty("all");
+  cleanup();
+  // Only "active" repeats, and both its records are loaded.
+  const whole = selectedGroupsFixture({ groupStack: [{ field: "status", repeated: true }] }, { selectAllMatching: true });
+  await screen.findByText("Task 2");
+  fireEvent.click(screen.getByRole("checkbox", { name: "Select all loaded rows" }));
+  await waitFor(() => expect(whole.view.state.rowSelection).toEqual({ t1: true, t2: true }));
+  expect(screen.getByText("2 selected")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: SELECT_ALL })).toBeNull();
+});
+
+test("paging keeps every group selected; a tick, Clear, the filter, the sort or a level's repeated values return to the ticked ids", async () => {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status", repeated: true }], pageSize: 1 },
+    { rows: sixTasks, selectAllMatching: true });
+  const selectAll = async () => {
+    await screen.findByText("Task 2");
+    if (!f.view.state.rowSelection.t1 || !f.view.state.rowSelection.t2) {
+      fireEvent.click(screen.getByRole("checkbox", { name: "Select all loaded rows" }));
+    }
+    fireEvent.click(await screen.findByRole("button", { name: "Select all 2 groups" }));
+    await waitFor(() => expect(f.collection?.all?.total).toBe(2));
+  };
+  await selectAll();
+  act(() => f.view.setPage(2));
+  expect(await screen.findByText("Task 6")).toBeTruthy();
+  await waitFor(() => expect(screen.getByText("All 2 groups selected")).toBeTruthy());
+  expect(f.collection?.all?.total).toBe(2);
+  act(() => f.view.setPage(1));
+  await f.select("Task 1");
+  await waitFor(() => expect(f.collection?.selectedRows.map((row) => row.id)).toEqual(["t2"]));
+  expect(f.collection).not.toHaveProperty("all");
+  expect(screen.getByText("1 selected")).toBeTruthy();
+  await f.select("Task 1");
+  await selectAll();
+  fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+  expect(f.view.state.rowSelection).toEqual({});
+  expect(screen.queryByText("All 2 groups selected")).toBeNull();
+  for (const change of [
+    () => f.view.setFilter({ title: { ne: "Task 5" } }),
+    () => f.view.setSorting([{ id: "title", desc: true }]),
+    () => f.view.setGroupStack([{ field: "status" }]),
+  ]) {
+    await selectAll();
+    act(change);
+    expect(f.view.state.rowSelection).toEqual({});
+    expect(screen.queryByText("All 2 groups selected")).toBeNull();
+  }
+});
+
+test("the mode belongs to the read it was chosen over: a view reading otherwise hands on its ticked ids", async () => {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status", repeated: true }], pageSize: 1 },
+    { rows: sixTasks, selectAllMatching: true });
+  await screen.findByText("Task 2");
+  fireEvent.click(screen.getByRole("checkbox", { name: "Select all loaded rows" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Select all 2 groups" }));
+  await waitFor(() => expect(f.collection?.all?.unit).toBe("groups"));
+  // The gallery pages every record of the filter, not the repeated groups the person chose.
+  act(() => f.view.setView("gallery"));
+  // Its own read has settled: six records, one a page.
+  expect(await screen.findByRole("button", { name: "Records 1-1 / 6" })).toBeTruthy();
+  await waitFor(() => expect(f.collection).not.toHaveProperty("grouping"));
+  expect(f.collection).not.toHaveProperty("all");
+  expect(screen.queryByText("All 2 groups selected")).toBeNull();
+  expect(f.view.state.rowSelection).toEqual({ t1: true, t2: true });
+  act(() => f.view.setView("list"));
+  expect(await screen.findByText("All 2 groups selected")).toBeTruthy();
 });
 
 test("a repeated grouping lists no footer total, which a flat aggregate cannot narrow to its groups", async () => {
