@@ -1196,7 +1196,9 @@ def test_external_account_update_delete_are_admin_only(
 
     assert _execute(console_schema, delete_account, {"id": account_id}, user=plain).errors is not None
 
-    deleted = _data(_execute(console_schema, delete_account, {"id": account_id}, user=admin))["external_accounts_delete"]
+    deleted = _data(
+        _execute(console_schema, delete_account, {"id": account_id}, user=admin)
+    )["external_accounts_delete"]
     assert deleted["has_blockers"] is False
     assert deleted["total_deleted_count"] >= 1
     with system_context(reason="test.iam.external_account.after_delete"):
@@ -1263,7 +1265,9 @@ def test_credential_crud_create_delete_are_admin_only(
 
     assert _execute(console_schema, credentials_delete, {"id": credential_id}, user=plain).errors is not None
 
-    deleted = _data(_execute(console_schema, credentials_delete, {"id": credential_id}, user=admin))["credentials_delete"]
+    deleted = _data(
+        _execute(console_schema, credentials_delete, {"id": credential_id}, user=admin)
+    )["credentials_delete"]
     assert deleted["has_blockers"] is False
     assert deleted["total_deleted_count"] >= 1
     assert revoked == []

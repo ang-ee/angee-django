@@ -410,7 +410,9 @@ def test_agent_delete_preview_hides_other_users_transcripts_and_confirms(db: Non
             status="completed",
         )
     console = _schema()
-    preview = _data(execute_schema(console, _DELETE_AGENT_PREVIEW, {"id": str(agent.sqid)}, user=owner))["agents_delete"]
+    preview = _data(
+        execute_schema(console, _DELETE_AGENT_PREVIEW, {"id": str(agent.sqid)}, user=owner)
+    )["agents_delete"]
     assert preview["has_blockers"] is False
     assert preview["blocked"] == []
     assert preview["refusals"] == []

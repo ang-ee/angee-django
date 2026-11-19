@@ -396,7 +396,10 @@ mutation ($id: ID!, $confirm: Boolean! = false) {
 def test_calendars_and_events_declare_the_delete_preview_that_offers_delete() -> None:
     resources = {resource.model_label: resource for resource in _console().angee_resources}
 
-    for label, root in (("calendar.Calendar", "calendars_delete"), ("calendar.CalendarEvent", "calendar_events_delete")):
+    for label, root in (
+        ("calendar.Calendar", "calendars_delete"),
+        ("calendar.CalendarEvent", "calendar_events_delete"),
+    ):
         assert "deletePreview" in resources[label].capabilities
         assert resources[label].as_wire(schema_name="console")["roots"]["deletePreview"] == root
 

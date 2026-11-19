@@ -47,15 +47,17 @@ def test_resource_delete_flag_controls_both_roots_and_preview_metadata(delete: b
     resource = hasura_model_resource(
         DeleteGroupType, model=Group, name="delete_groups",
         filterable=["id", "name"], sortable=["name"], aggregatable=["id"],
-        insert=False, update=False, delete=delete, public_id_field="id",
+        insert=False, update=True, delete=delete, public_id_field="id",
     )
     schema = addon_schema({"public": {
         "query": [resource.query], "mutation": [resource.mutation], "types": resource.types,
     }}, "public")
     fields = schema._schema.mutation_type.fields if schema._schema.mutation_type else {}
+    assert "update_delete_groups_by_pk" in fields
     assert ("delete_groups_delete" in fields) is delete
     assert ("delete_delete_groups_by_pk" in fields) is delete
     metadata = schema.angee_resources[0]
+    assert metadata.roots.delete_name == ("delete_delete_groups_by_pk" if delete else None)
     assert metadata.roots.delete_preview_name == ("delete_groups_delete" if delete else None)
     assert metadata.type_names.delete_payload == ("DeletePreview" if delete else None)
     assert ("deletePreview" in metadata.capabilities) is delete

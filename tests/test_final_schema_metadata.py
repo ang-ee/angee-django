@@ -5,8 +5,30 @@ from angee.graphql.actions import ActionResult
 from angee.graphql.data.contracts import DataMutationArgument, DataResourceRoots, DataResourceTypeNames
 from angee.graphql.data.final_schema import final_schema_references
 from angee.graphql.data.metadata import _finalize_data_resource
-from angee.graphql.data.resource_fields import final_input_policy_fields
+from angee.graphql.data.resource_fields import final_input_policy_fields, final_resource_fields
 from angee.graphql.schema import AngeeSchema
+from angee.messaging.testing.models import Organization, Party, Person
+
+
+def test_multi_table_child_does_not_advertise_its_parents_trash_capability() -> None:
+    """Only the model storing the trash flag exposes its resource capability."""
+
+    schema = build_schema("type ResourceNode { is_trashed: Boolean! } type Query { record: ResourceNode }")
+    fields = {
+        model: {
+            field.name: field
+            for field in final_resource_fields(
+                schema, "ResourceNode", model,
+                aggregate_fields=(), create_fields=(), update_fields=(), required_create_fields=(),
+            )
+        }
+        for model in (Party, Person, Organization)
+    }
+
+    assert fields[Party]["is_trashed"].trashable is True
+    for child in (Person, Organization):
+        assert child._meta.get_field("is_trashed").model is Party
+        assert fields[child]["is_trashed"].trashable is False
 
 
 def test_input_policy_preserves_wire_aliases_and_complete_relation_paths() -> None:

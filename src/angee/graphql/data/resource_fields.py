@@ -195,7 +195,7 @@ def is_archive_field(field: models.Field[Any, Any] | ForeignObjectRel | None) ->
 def is_trash_field(
     field: models.Field[Any, Any] | ForeignObjectRel | None,
     *,
-    model: type[models.Model],
+    model: type[models.Model] | None,
 ) -> bool:
     """Recognize trash only on the resource model that stores the flag.
 
@@ -203,7 +203,7 @@ def is_trash_field(
     requires the resource model rather than the field's declaring model.
     """
 
-    if not isinstance(field, models.Field) or field.name != TRASH_FLAG_FIELD:
+    if model is None or not isinstance(field, models.Field) or field.name != TRASH_FLAG_FIELD:
         return False
     return issubclass(model, TrashMixin) and model.stores_trash()
 
