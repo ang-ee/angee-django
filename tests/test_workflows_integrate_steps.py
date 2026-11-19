@@ -433,6 +433,28 @@ def test_a_step_waits_for_pending_discovery_without_an_attempt_and_resumes_once_
     assert run.output["counts"]["cycle_items"] == 2
 
 
+def test_a_step_waiting_on_a_due_discovery_backs_off_and_notes_once_per_attempt(cycle, monkeypatch):
+    bridge = _rediscovering(cycle, monkeypatch)
+    run = cycle.start(StreamStage, {"key": "records", "page_bound": 1}, subject=bridge)
+    message = "Connection discovery must finish before syncing."
+    delays = []
+    # The discovery's retry time has passed: its worker holds the attempt, and the step checks back.
+    for _ in range(3):
+        if delays:
+            wake(run)
+        started = timezone.now()
+        assert runner.execute(step_row(run).pk)
+        delays.append(step_row(run).wake_at - started)
+    assert delays[1] > timedelta(seconds=1.5) and delays[2] > timedelta(seconds=3)
+    assert [note["message"] for note in step_row(run).notes] == [message]
+    with system_context(reason="test discovery starts another attempt"):
+        type(bridge).objects.filter(pk=bridge.pk).update(discovery_attempts=bridge.discovery_attempts + 1)
+    wake(run)
+    assert runner.execute(step_row(run).pk)
+    assert [note["message"] for note in step_row(run).notes] == [message, message]
+    assert step_row(run).retries == 0 and cycle.extracted == []
+
+
 def test_a_step_fails_with_the_discovery_message_once_discovery_failed(cycle, monkeypatch):
     bridge = _rediscovering(cycle, monkeypatch)
     with system_context(reason="test rediscovery refused the re-entered secret"):

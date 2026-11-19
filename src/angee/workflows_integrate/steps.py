@@ -265,7 +265,9 @@ def bridge_io(ctx: StepContext, bridge: Bridge) -> Iterator[BridgeImpl | Wait]:
     Readiness is checked before any IO or lock (discovery takes the bridge lock to
     run): a bridge awaiting connection discovery, as a re-entered secret leaves it,
     waits the same way, until discovery's next attempt is due, and notes the
-    discovery message; one whose discovery failed fails with that message.
+    discovery message once per discovery attempt. While that attempt is already
+    due (its worker has it) the step checks back after a wait that doubles from
+    one second. One whose discovery failed fails with that message.
     """
     try:
         bridge.require_discovery_ready()
@@ -273,8 +275,14 @@ def bridge_io(ctx: StepContext, bridge: Bridge) -> Iterator[BridgeImpl | Wait]:
         if not bridge.discovery_pending:
             raise
         assert bridge.discovery_retry_at is not None  # discovery_pending reads the persisted deadline.
-        ctx.note(refusal.public_message, tone="warning")
-        yield ctx.wait(until=max(ctx.now + timedelta(seconds=1), bridge.discovery_retry_at), state=ctx.state)
+        attempt = [bridge.discovery_generation, bridge.discovery_attempts]
+        waited = ctx.state.get("discovery_wait")
+        waits = waited["waits"] + 1 if waited is not None and waited["attempt"] == attempt else 0
+        if not waits:
+            ctx.note(refusal.public_message, tone="warning")
+        # Doubling from one second, at most about seventeen minutes.
+        until = max(ctx.now + timedelta(seconds=2 ** min(waits, 10)), bridge.discovery_retry_at)
+        yield ctx.wait(until=until, state={**ctx.state, "discovery_wait": {"attempt": attempt, "waits": waits}})
         return
     try:
         with closing(bridge.capability_impl) as adapter:

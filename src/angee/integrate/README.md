@@ -235,9 +235,11 @@ otherwise as entered, since not every one becomes a header (a calendar feed
 subscription keeps its feed address as one). Where it becomes a bearer header,
 a token with a space, a control character or anything outside printable ASCII is
 refused with a permanent `IntegrationError` asking for it to be re-entered, which
-never quotes it; connect and attach meet that when they test the connection. An
-inactive static token produces no headers: it fails closed through
-`Credential.require_active`, as a minted scoped token does.
+never quotes it; a connection test that sends a request meets it. The kind's own
+probe (`Integration.probe_credential`) checks the token without building a
+header, so a feed address tests usable. An inactive static token produces no
+headers: it fails closed through `Credential.require_active`, as a minted scoped
+token does, with a permanent `IntegrationError` asking for the token again.
 A `jwt_bearer` credential holds a provider signing key (a pasted key file, such as a
 Google service-account key) and mints one access token per scope set through the
 JWT bearer grant (RFC 7523); consumers call `Credential.auth_headers(scopes=...)`.

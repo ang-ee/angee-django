@@ -10,6 +10,17 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.integrate`, `angee.workflows_integrate`: static-token and workflow loose
+  ends. Testing a connection whose static token is not a header (an ICS feed
+  address with a space or a non-ASCII character) failed with "Credential is not
+  usable", because the default probe built a header; the static-token probe now
+  checks the token is active and readable without one. An inactive static token
+  raised a plain `ValueError` on the header path, which a sync reported as an
+  unexpected failure; it raises a permanent `IntegrationError` asking for the
+  token again. A workflow step waiting for a discovery whose retry time had
+  passed woke every second and noted the same message each time; it backs off,
+  doubling from one second, and notes once per discovery attempt.
+
 - `angee.integrate`: the lock order is completed. Deleting an integration locked
   the parent row with its child in one statement, the reverse of
   `Integration.lock_capability`; `Integration.lock_for_delete` now takes the

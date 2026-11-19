@@ -225,6 +225,19 @@ def test_a_secret_that_is_never_a_header_is_kept_as_entered(path: str, secret: s
         credential = _static_token(owner, path, f"  {secret}\n")
         credential.refresh_from_db()
     assert credential.reveal() == {"api_key": secret}
+    # Testing the connection proves the secret without building a header from it.
+    credential.handler.probe(credential)
+
+
+@pytest.mark.parametrize(
+    "secret", ["https://feeds.example.test/my team.ics", "https://feeds.example.test/kalender/\u00f6ffentlich.ics"],
+)
+def test_a_connection_whose_static_token_is_never_a_header_tests_usable(secret: str) -> None:
+    with system_context(reason="test a feed address kept as a static token"):
+        integration = make_integration(f"feed-address-{len(secret)}")
+        integration.credential.replace_material({"api_key": secret})
+        integration.refresh_from_db()
+        assert integration.probe_credential() == "Credential is usable."
 
 
 @pytest.mark.parametrize("token", ["tok en", "tok\u200ben", "tok\x00en", "t\u00f6ken"])
@@ -253,5 +266,9 @@ def test_an_inactive_static_token_produces_no_headers(status: str) -> None:
         credential.status = status
         credential.save(update_fields=["status", "updated_at"])
         credential.refresh_from_db()
-    with pytest.raises(ValueError, match="not active"):
+    with pytest.raises(IntegrationError) as refused:
         credential.auth_headers()
+    # A sync reports the operator's next step, not an unexpected failure.
+    assert (refused.value.public_message, refused.value.transient) == (
+        "This credential is no longer active; re-enter the token to use it again.", False,
+    )
