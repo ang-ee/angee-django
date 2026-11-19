@@ -195,19 +195,17 @@ def is_archive_field(field: models.Field[Any, Any] | ForeignObjectRel | None) ->
 def is_trash_field(
     field: models.Field[Any, Any] | ForeignObjectRel | None,
     *,
-    model: type[models.Model] | None = None,
+    model: type[models.Model],
 ) -> bool:
     """Recognize trash only on the resource model that stores the flag.
 
-    Django returns the parent's field for a multi-table child. Resource
-    projections therefore pass their model; standalone field classification
-    defaults to the field's declaring model.
+    Django returns the parent's field for a multi-table child, so classification
+    requires the resource model rather than the field's declaring model.
     """
 
     if not isinstance(field, models.Field) or field.name != TRASH_FLAG_FIELD:
         return False
-    target = model if model is not None else field.model
-    return issubclass(target, TrashMixin) and target.stores_trash()
+    return issubclass(model, TrashMixin) and model.stores_trash()
 
 
 #: Backend-owned display-field precedence, shared by record representation and

@@ -61,6 +61,40 @@ def test_resource_delete_flag_controls_both_roots_and_preview_metadata(delete: b
     assert ("deletePreview" in metadata.capabilities) is delete
 
 
+@pytest.mark.parametrize("mutation_schemas", (("public",), ("public", "console")))
+def test_generated_preview_follows_delete_root_in_named_schemas(mutation_schemas: tuple[str, ...]) -> None:
+    """A public resource exposes both delete roots only in its mutation buckets."""
+
+    resource = hasura_model_resource(
+        DeleteGroupType, model=Group, name="named_groups",
+        filterable=["id", "name"], sortable=["name"], aggregatable=["id"],
+        insert=False, update=False, public_id_field="id",
+    )
+    buckets = {
+        name: {
+            "query": [resource.query],
+            "mutation": [resource.mutation] if name in mutation_schemas else [],
+            "types": resource.types,
+        }
+        for name in ("public", "console")
+    }
+    for name in buckets:
+        schema = addon_schema(buckets, name)
+        fields = schema._schema.mutation_type.fields if schema._schema.mutation_type else {}
+        exposed = name in mutation_schemas
+        assert ("delete_named_groups_by_pk" in fields) is exposed
+        assert ("named_groups_delete" in fields) is exposed
+        metadata = schema.angee_resources[0]
+        assert metadata.roots.delete_name == ("delete_named_groups_by_pk" if exposed else None)
+        assert metadata.roots.delete_preview_name == ("named_groups_delete" if exposed else None)
+        assert ("delete" in metadata.capabilities) is exposed
+        assert ("deletePreview" in metadata.capabilities) is exposed
+        wire = metadata.as_wire(schema_name=name)
+        assert wire["schemaName"] == name
+        assert wire["roots"]["delete"] == metadata.roots.delete_name
+        assert wire["roots"]["deletePreview"] == metadata.roots.delete_preview_name
+
+
 @pytest.mark.parametrize("backend_kind", ("missing", "override", "inherited_override"))
 def test_resource_rejects_backends_without_a_matching_delete_preview(backend_kind: str) -> None:
     """A custom delete may never silently inherit the unrelated default preview."""

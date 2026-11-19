@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable, Hashable, Iterable, Mapping, Se
 from dataclasses import dataclass
 from datetime import datetime
 from functools import cache, partial, reduce
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import strawberry
 import strawberry_django
@@ -197,6 +197,12 @@ class _MutationResultExtension(FieldExtension):
     ) -> Any:
         row = await next_(source, info, **kwargs)
         return await sync_to_async(self.refetch)(row, info)
+
+
+class _DeletePreviewBackend(WriteBackend, Protocol):
+    """Angee's preview extension to the native authorized-write contract."""
+
+    def delete_preview(self, info: strawberry.Info, pk: str, *, confirm: bool) -> DeletePreview: ...
 
 
 class AngeeHasuraWriteBackend:
@@ -2174,13 +2180,12 @@ def _attach_delete_preview(
 
     # This is the Angee extension of the native WriteBackend contract. Validate
     # the effective methods through the MRO, including inherited custom deletes.
-    delete_preview = getattr(write_backend, "delete_preview", None)
     fix = (
         f"{model._meta.label} declares delete=True with {type(write_backend).__name__}; "
         "implement delete_preview(info, pk, *, confirm) on the write backend and "
         "make delete compose it, or declare delete=False."
     )
-    if not callable(delete_preview):
+    if not callable(getattr(write_backend, "delete_preview", None)):
         raise ImproperlyConfigured(fix)
     for backend_class in type(write_backend).__mro__:
         if "delete_preview" in vars(backend_class):
@@ -2188,10 +2193,11 @@ def _attach_delete_preview(
         if "delete" in vars(backend_class):
             raise ImproperlyConfigured(f"{fix} Its delete override has no matching delete_preview.")
 
+    delete_preview = cast(_DeletePreviewBackend, write_backend).delete_preview
     delete_root = f"{resource.name}_delete"
 
     def resolve_delete(self: Any, info: strawberry.Info, id: PublicID, confirm: bool | None = False) -> DeletePreview:
-        return cast(DeletePreview, delete_preview(info, str(id), confirm=confirm is True))
+        return delete_preview(info, str(id), confirm=confirm is True)
 
     holder = strawberry.type(
         type(

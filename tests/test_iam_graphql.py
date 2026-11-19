@@ -1170,6 +1170,21 @@ def test_external_account_update_delete_are_admin_only(
     with system_context(reason="test.iam.external_account.owner_before_delete"):
         assert ExternalAccount.objects.get(pk=account.pk).owner_id == admin.pk
 
+    preview = _data(_execute(
+        console_schema,
+        """mutation PreviewExternalAccount($id: ID!) {
+          external_accounts_delete(id: $id, confirm: null) {
+            has_blockers total_deleted_count
+          }
+        }""",
+        {"id": account_id},
+        user=admin,
+    ))["external_accounts_delete"]
+    assert preview["has_blockers"] is False
+    assert preview["total_deleted_count"] >= 1
+    with system_context(reason="test.iam.external_account.after_preview"):
+        assert ExternalAccount.objects.filter(pk=account.pk).exists()
+
     delete_account = """
         mutation DeleteExternalAccount($id: ID!) {
           external_accounts_delete(id: $id, confirm: true) {

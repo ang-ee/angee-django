@@ -1730,6 +1730,8 @@ class _ChannelWriteBackend(AngeeHasuraWriteBackend):
             raise ImproperlyConfigured("The channel write backend requires a channel queryset.")
         with transaction.atomic():
             channel = require_instance_for_id(Channel, str(pk), queryset=queryset.of_concrete_type())
+            if not channel.has_access("delete"):
+                raise PermissionDenied("You are not allowed to delete this record.")
             preview = DeletePreview.from_counts(
                 channel, Channel.objects.inventory(channel), blockers=channel.purge_blockers(),
             )

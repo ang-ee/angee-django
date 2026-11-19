@@ -472,16 +472,12 @@ class ChannelManager[ChannelT: Channel](_ChannelManagerBase[ChannelT]):
         the teardown back. Purging first means the channel delete's collector never has to
         ``SET_NULL`` the rows it just removed. A ``ProtectedError``/``RestrictedError`` from
         a consumer addon that ``PROTECT``\\s a reverse FK to ``integrate.Integration``
-        propagates (the transaction rolls back); the authored preview mutation catches it
-        and surfaces a blocked preview rather than a raw 500. The deleted instance keeps its
-        pk so the Hasura delete shape can return it.
+        propagates (the transaction rolls back); ``_ChannelWriteBackend.delete_preview``
+        catches it and surfaces a blocked preview rather than a raw 500. The deleted
+        instance keeps its pk so the Hasura delete shape can return it.
         """
 
-        # Defense-in-depth: the channel's read/write/delete scopes are today all the same
-        # owner+admin arm, so a caller that resolved the channel to write it already passes
-        # `delete`; this preflight denies at resolve regardless. A divergent-zed preflight
-        # test (delete narrower than write) is only meaningful once the deferred thread/
-        # message `delete` arm (see teardown FOLLOW-UP) splits the scopes.
+        # The manager rechecks delete authority, including callers outside GraphQL.
         if channel.declared_concrete_model() is not self.model:
             raise ValueError("A channel child must be deleted through its own capability.")
         if not channel.has_access("delete"):

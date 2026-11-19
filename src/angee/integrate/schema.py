@@ -940,14 +940,14 @@ class IntegrateExternalAccountMutation:
         return cast(ExternalAccountType, account)
 
     @strawberry.mutation(name="external_accounts_delete", permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def external_accounts_delete(self, id: PublicID, confirm: bool = False) -> DeletePreview:
+    def external_accounts_delete(self, id: PublicID, confirm: bool | None = False) -> DeletePreview:
         """Delete the account; its ownership is a column and leaves with the row."""
 
         return delete_by_public_id(
             ExternalAccount,
             str(id),
             reason="integrate.graphql.external_account.delete",
-            confirm=confirm,
+            confirm=confirm is True,
             queryset=ExternalAccount.objects.for_write(),
         )
 
@@ -1011,7 +1011,7 @@ class IntegrateCredentialMutation:
         return cast(CredentialType, credential)
 
     @strawberry.mutation(name="credentials_delete", permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def credentials_delete(self, id: PublicID, confirm: bool = False) -> DeletePreview:
+    def credentials_delete(self, id: PublicID, confirm: bool | None = False) -> DeletePreview:
         """Delete the credential, then best-effort revoke remotely after commit."""
 
         with transaction.atomic():
@@ -1019,7 +1019,7 @@ class IntegrateCredentialMutation:
                 Credential,
                 str(id),
                 reason="integrate.graphql.credential.delete",
-                confirm=confirm,
+                confirm=confirm is True,
                 # The preview flow deletes the row itself; it runs the retire verb's preparation first.
                 before_delete=Credential.objects.prepare_disconnect,
                 queryset=Credential.objects.for_write(),
@@ -1752,6 +1752,8 @@ _INTEGRATION_RESOURCE = hasura_model_resource(
     # The account binding follows the credential (``Integration.attach_connection``).
     updatable=["vendor", "credential"],
     insert=False,
+    # The inventory must not bypass a concrete kind's deletion policy.
+    delete=False,
     field_id_decode={
         "vendor": public_pk_decoder(Vendor),
         "credential": public_pk_decoder(Credential),

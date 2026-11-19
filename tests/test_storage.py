@@ -244,8 +244,8 @@ def test_archive_and_trash_columns_are_classified_in_resource_metadata() -> None
 
     assert is_archive_field(Drive._meta.get_field("is_archived")) is True
     assert is_archive_field(File._meta.get_field("is_trashed")) is False
-    assert is_trash_field(File._meta.get_field("is_trashed")) is True
-    assert is_trash_field(Drive._meta.get_field("is_archived")) is False
+    assert is_trash_field(File._meta.get_field("is_trashed"), model=File) is True
+    assert is_trash_field(Drive._meta.get_field("is_archived"), model=Drive) is False
 
 
 @isolate_apps()

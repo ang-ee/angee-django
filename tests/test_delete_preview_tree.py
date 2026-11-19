@@ -127,6 +127,22 @@ def test_generated_delete_dry_run_returns_tree_and_confirm_deletes() -> None:
         assert default_preview.errors is None
         assert Note.objects.filter(pk=note.pk).exists()
 
+        null_preview = execute_schema(
+            schema,
+            """
+            mutation DeleteNote($id: ID!) {
+              notes_delete(id: $id, confirm: null) {
+                total_deleted_count has_blockers
+              }
+            }
+            """,
+            {"id": str(note.pk)},
+        )
+        assert null_preview.errors is None
+        assert null_preview.data["notes_delete"] == {"total_deleted_count": 53, "has_blockers": False}
+        assert Note.objects.filter(pk=note.pk).exists()
+        assert NoteChild.objects.filter(note_id=note.pk).count() == 52
+
         confirmed = execute_schema(
             schema,
             """
