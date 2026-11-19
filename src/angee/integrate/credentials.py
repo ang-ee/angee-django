@@ -65,6 +65,17 @@ class CredentialKindHandler:
 
         return self.material_fields or (self.material_field,)
 
+    def secret_material_fields(self) -> tuple[str, ...]:
+        """Return the stored material keys that hold this kind's own secret.
+
+        ``Credential.update_material`` refuses them: the secret is re-entered
+        through ``Credential.replace_material``, so the integrations it serves
+        discover again. By default the input fields are stored as given; a kind
+        whose :meth:`clean` reads a document names what the document becomes.
+        """
+
+        return self.input_material_fields()
+
     def validate(self, material: dict[str, Any]) -> None:
         """Require the kind's secret material before it is stored."""
 
@@ -161,6 +172,11 @@ class OAuthCredentialHandler(CredentialKindHandler):
     kind = "oauth"
     material_field = "access_token"
 
+    def secret_material_fields(self) -> tuple[str, ...]:
+        """Return every token a grant stores: the access token, and the refresh and identity tokens beside it."""
+
+        return ("access_token", "refresh_token", "id_token")
+
     def auth_headers(self, credential: Any, *, scopes: Collection[str] = ()) -> dict[str, str]:
         """Return OAuth bearer authorization headers; the grant already fixed the token's scopes."""
 
@@ -224,11 +240,59 @@ class StaticTokenCredentialHandler(CredentialKindHandler):
 
         del material
 
+    def clean(self, material: Mapping[str, Any]) -> dict[str, Any]:
+        """Store the token without the whitespace a paste brings around it, and otherwise as entered.
+
+        Not every static token becomes a header (a calendar feed subscription keeps
+        its feed address as one), so what a header cannot carry is refused where the
+        header is built (:meth:`auth_headers`), not here.
+        """
+
+        cleaned = super().clean(material)
+        if isinstance(token := cleaned.get(self.material_field), str):
+            cleaned[self.material_field] = token.strip()
+        return cleaned
+
     def auth_headers(self, credential: Any, *, scopes: Collection[str] = ()) -> dict[str, str]:
-        """Return static-token bearer authorization headers; a static token has no scopes to choose."""
+        """Return static-token bearer authorization headers; a static token has no scopes to choose.
+
+        An inactive credential (revoked, expired) fails closed, as a minted token does
+        (``Credential.require_active``), with a permanent ``IntegrationError`` asking for
+        the token again. A stored token with a space, a control character or anything
+        outside printable ASCII cannot be sent in a header: it is refused
+        permanently, asking for it to be re-entered, and never quoted.
+        """
 
         del scopes
-        return {"Authorization": f"Bearer {self.secret_value(credential)}"}
+        self._require_active(credential)
+        token = self.secret_value(credential)
+        if any(not "!" <= character <= "~" for character in token):
+            raise IntegrationError(
+                "The stored token contains a character that cannot be sent in a request header; re-enter the token."
+            )
+        return {"Authorization": f"Bearer {token}"}
+
+    def probe(self, credential: Any) -> None:
+        """Prove the token is active and readable, without building a header from it.
+
+        Not every static token becomes a header (a calendar feed subscription keeps
+        its feed address as one), so a connection test does not refuse what only a
+        header cannot carry; :meth:`auth_headers` refuses that where one is built.
+        """
+
+        self._require_active(credential)
+        self.secret_value(credential)
+
+    @staticmethod
+    def _require_active(credential: Any) -> None:
+        """Refuse an inactive credential (``Credential.require_active``) in operator wording."""
+
+        try:
+            credential.require_active()
+        except ValueError as error:
+            raise IntegrationError(
+                "This credential is no longer active; re-enter the token to use it again."
+            ) from error
 
 
 class SshKeyCredentialHandler(CredentialKindHandler):
@@ -376,6 +440,11 @@ class JwtBearerCredentialHandler(CredentialKindHandler):
         if not https:
             raise ValidationError({"key_file": f"The key file's {endpoint} must be an https URL with a host."})
         return {**signing, "scope_placement": "claim" if google else "parameter"}
+
+    def secret_material_fields(self) -> tuple[str, ...]:
+        """Return what the key file becomes (:meth:`clean`): the signing identity and its scope placement."""
+
+        return (*self.signing_fields, "scope_placement")
 
     def upsert_fields(self, material: dict[str, Any]) -> dict[str, Any]:
         """Clear the mint outcome: a re-entered key file has not been refused yet."""

@@ -14,6 +14,7 @@ projection.
 from __future__ import annotations
 
 import importlib
+import logging
 from typing import Any
 
 import httpx2
@@ -30,12 +31,16 @@ from openai import DefaultHttpxClient, OpenAI
 from rebac import actor_context, system_context
 
 from angee.base.models.identity import public_id_for
+from angee.graphql.actions import ActionResult, action_guard
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema
 from angee.graphql.testing.documents import result_data as _data
 from angee.integrate.credentials import CredentialKind
+from angee.integrate.errors import IntegrationError
 from angee.integrate.events import EventKind
-from angee.integrate.states import StreamKind, SyncFailure, SyncFailureKind, SyncFailureStatus
+from angee.integrate.oauth.errors import ACCOUNT_SWITCH_REFUSED, OAuthFlowError
+from angee.integrate.schema import integration_action_guard
+from angee.integrate.states import StreamDirection, StreamKind, SyncFailure, SyncFailureKind, SyncFailureStatus
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.integrate.webhooks import WebhookDeliveryError
 from angee.messaging.testing.models import Channel
@@ -56,6 +61,7 @@ from tests.conftest import (
     make_integration,
 )
 from tests.conftest import create_platform_admin as _platform_admin
+from tests.integrate_fixtures import ConnectionBridge
 from tests.stream_adapters import failure_state
 from tests.test_agents import InferenceModel, InferenceProvider
 
@@ -2255,3 +2261,71 @@ def test_credential_creation_reports_field_errors_and_accepts_corrected_retry(
         credential = Credential.objects.get(user=admin)
         assert str(credential.sqid) == created["id"]
         assert credential.reveal() == {"private_key": valid["private_key"]}
+
+
+_PENDING_REFUSAL = "Connection discovery must finish before syncing."
+
+
+@pytest.mark.parametrize(
+    ("action", "kind", "keep", "expected"),
+    [
+        # Dismissing a failure changes local state only, so discovery does not hold it back.
+        ("resolveSyncFailure", SyncFailureKind.SEMANTIC, None, {"ok": True, "message": "Failure resolved."}),
+        ("retrySyncFailure", SyncFailureKind.SEMANTIC, None, {"ok": False, "message": _PENDING_REFUSAL}),
+        ("resolveSyncFailure", SyncFailureKind.CONFLICT, "REMOTE", {"ok": False, "message": _PENDING_REFUSAL}),
+    ],
+    ids=["resolve", "retry", "conflict"],
+)
+@pytest.mark.django_db(transaction=True)  # Conflict resolution reads the remote outside a transaction.
+def test_an_integration_refusal_reaches_the_operator_in_band(
+    action: str, kind: SyncFailureKind, keep: str | None, expected: dict[str, Any],
+) -> None:
+    admin = _platform_admin(f"in-band-{action}-{kind}")
+    bridge = make_integration(f"in-band-{action.lower()}-{kind}", model=ConnectionBridge)
+    with system_context(reason="test an operator action while discovery is pending"):
+        assert bridge.finish_discovery(credential_pk=bridge.credential_id, generation=bridge.discovery_generation)
+        stream = current_stream(
+            bridge, "contacts", kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.BIDIRECTIONAL,
+        )
+        link = RecordLink.objects.observe(stream, "one")
+        failure = link.record_failure(kind=kind, code="refused")
+        # A secret re-entered since: discovery is pending again.
+        bridge.await_discovery()
+    arguments = "stream: $stream, link: $link, slot: $slot" + (", keep: $keep" if keep else "")
+    variables = "$stream: ID!, $link: ID, $slot: Int" + (", $keep: ConflictKeep" if keep else "")
+    query = f"mutation Act({variables}) {{ {action}({arguments}) {{ ok message }} }}"
+    values = {"stream": failure.stream_id, "link": failure.link_id, "slot": failure.slot}
+    result = _data(execute_schema(_schema(), query, {**values, **({"keep": keep} if keep else {})}, user=admin))
+    assert result[action] == expected
+    with system_context(reason="test a refused action changed nothing"):
+        assert bool(RecordLink.objects.get(pk=link.pk).failures(open_only=True)) == (not expected["ok"])
+
+
+def test_integrates_actions_show_an_integration_refusal_and_log_a_permanent_one(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    @integration_action_guard("Could not act.")
+    def act(error: Exception) -> ActionResult:
+        raise error
+
+    switch = OAuthFlowError(ACCOUNT_SWITCH_REFUSED, 409)
+    with caplog.at_level(logging.WARNING, logger="angee.integrate.schema"):
+        assert act(IntegrationError("Try later.", transient=True)) == ActionResult(ok=False, message="Try later.")
+        assert act(IntegrationError("The resource is unavailable.")) == ActionResult(
+            ok=False, message="The resource is unavailable.",
+        )
+        assert act(switch) == ActionResult(ok=False, message=switch.public_message, code=ACCOUNT_SWITCH_REFUSED)
+    # A permanent refusal needs the operator, so it is logged; a transient one is retried.
+    assert [(record.levelname, record.getMessage()) for record in caplog.records] == [
+        ("WARNING", "GraphQL action act refused: The resource is unavailable."),
+        ("WARNING", f"GraphQL action act refused: {switch.public_message}"),
+    ]
+
+
+def test_the_shared_action_guard_leaves_an_integration_error_to_its_caller() -> None:
+    @action_guard("Could not act.")
+    def act() -> ActionResult:
+        raise IntegrationError("The resource is unavailable.")
+
+    with pytest.raises(IntegrationError):
+        act()

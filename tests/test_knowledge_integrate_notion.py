@@ -17,6 +17,7 @@ from rebac import actor_context, system_context
 
 from angee.graphql.testing.documents import execute_schema
 from angee.integrate.credentials import CredentialKind
+from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import JSON_MAX_BYTES
 from angee.integrate.oauth.client import OAuthClientProtocol
@@ -117,10 +118,20 @@ def api():
         yield provider
 
 
+def discovered(connection):
+    """Settle the discovery a new connection awaits, as the worker's fenced apply does after its probe."""
+    assert connection.finish_discovery(
+        credential_pk=connection.credential_id, generation=connection.discovery_generation,
+        discovery=ConnectionDiscovery(),
+    )
+    return connection
+
+
 @pytest.fixture
 def bridge(db):
     with system_context(reason="test.notion.sync"):
-        yield make_integration("notion-test", model=NotionConnection)
+        # The stream driver refuses a page while discovery is pending, as admission does.
+        yield discovered(make_integration("notion-test", model=NotionConnection))
 
 
 def targets(bridge):
@@ -549,9 +560,9 @@ def test_notion_oauth_exchange_uses_basic_auth_and_token_response_identity(token
 def test_connect_resolves_the_vendor_registration_and_oauth_credentials_sync(api):
     """Connect uses the `notion` registration; its OAuth grant reaches Notion as the same bearer token."""
     with system_context(reason="test.notion.oauth.connect"):
-        connection = make_integration(
+        connection = discovered(make_integration(
             "notion", model=NotionConnection, kind=CredentialKind.OAUTH, material={"access_token": "x"},
-        )
+        ))
         assert connection.connection_oauth_slug() == "notion"
         assert connection.is_oauth_connectable()
         key = api.add(node(1, "Shared page"), "Body")

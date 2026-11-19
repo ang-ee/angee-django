@@ -236,7 +236,11 @@ def test_material_and_client_changes_immediately_change_refreshability():
         credential.expires_at = timezone.now() - timedelta(minutes=1)
         credential.save(update_fields=["expires_at"])
         assert credential.is_reconnect_required
-        credential.update_material(refresh_token="fake-refresh")
+        # A consent that grants a refresh token, its access token already expired.
+        credential = Credential.objects.upsert_for_user(
+            credential.user, credential.oauth_client, "oauth",
+            {"access_token": "fake", "refresh_token": "fake-refresh", "expires_in": -60},
+        )
         assert credential.refreshable and not credential.is_reconnect_required
         credential.oauth_client.supports_refresh = False
         credential.oauth_client.save(update_fields=["supports_refresh"])
@@ -244,8 +248,8 @@ def test_material_and_client_changes_immediately_change_refreshability():
         assert not credential.refreshable and credential.is_reconnect_required
         credential.oauth_client.supports_refresh = True
         credential.oauth_client.save(update_fields=["supports_refresh"])
-        credential.update_material(refresh_token=None)
-        assert not credential.refreshable and credential.is_reconnect_required
+        credential.refresh_from_db()
+        assert credential.refreshable and not credential.is_reconnect_required
 
 
 @pytest.mark.django_db(transaction=True)

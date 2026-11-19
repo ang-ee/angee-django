@@ -60,6 +60,185 @@ live in code docstrings.
   OAuth's included, ask for an unencoded answer, and `is_transient_status`
   reads only 500–599 as server errors.
 
+- `angee.integrate`, `angee.workflows_integrate`: static-token and workflow loose
+  ends. Testing a connection whose static token is not a header (an ICS feed
+  address with a space or a non-ASCII character) failed with "Credential is not
+  usable", because the default probe built a header; the static-token probe now
+  checks the token is active and readable without one. An inactive static token
+  raised a plain `ValueError` on the header path, which a sync reported as an
+  unexpected failure; it raises a permanent `IntegrationError` asking for the
+  token again. A workflow step waiting for a discovery whose retry time had
+  passed woke every second and noted the same message each time; it backs off,
+  doubling from one second, and notes once per discovery attempt.
+
+- `angee.integrate`: the lock order is completed. Deleting an integration locked
+  the parent row with its child in one statement, the reverse of
+  `Integration.lock_capability`; `Integration.lock_for_delete` now takes the
+  capability lock first, on every delete path. An account's disconnect took the
+  integrations, the credential and the user before the account an OAuth connect
+  locks first; `CredentialManager.disconnect_account` now locks the account row
+  first. The README's lock order names the external account (first) and the
+  credential's user (after the credential). The savepoint retry in
+  `CredentialManager.lock_with_served_integrations` treats an integration deleted
+  between its read and its lock as a changed set, and gives up after three changed
+  sets with a transient `IntegrationError`. An unchanged re-entry of a
+  `jwt_bearer` key compares what was entered, not the cached scoped tokens the
+  re-entry drops, so it no longer sends the integrations it serves to discover
+  again. The PostgreSQL tests of the two inversions run only on PostgreSQL.
+
+- `angee.integrate`: derived credentials. `CredentialManager.store_derived` now
+  overwrites a credential of the derived name that nothing holds, so a row left
+  from an integration deleted before derived credentials left with it no longer
+  fails every later discovery of that name; it still refuses one something else
+  holds. `CredentialManager.unattached` derives what holds a credential from the
+  model's own reverse relations (each foreign key under its live policy), so an
+  agent's inference credential or an MCP server's is no longer deleted, and
+  silently nulled, when the integration that derived it leaves. The delete
+  cleanup reads the integration's links from its locked row (a `pre_delete`
+  receiver takes the delete lock, as every delete path then does), covers an
+  integration whose source grant was lost (`Integration.derived_credential_id`),
+  and locks the credential before deciding (`delete_unattached_derived`).
+
+- `angee.messaging`: outbound delivery waits for connection discovery.
+  `run_message_delivery` published through a channel whose integration was
+  discovering again, so a queued reply on a feed that requires discovery went out
+  with a grant discovery had not confirmed. The delivery now asks the transport
+  channel's integration (`Integration.require_discovery_ready`) before it sends:
+  a pending discovery defers it as lock contention does, spending no attempt, and
+  a failed discovery fails it with the discovery's own message.
+
+- `angee.integrate`: the discovery check on stream commits covers what rests on
+  remote facts, and says why it refuses. Pinning, unpinning, dismissing a failure
+  and reopening a conflict whose follow-through was refused change local state
+  only; they were refused until discovery succeeded, and the reopen left the
+  conflict closed with neither side applied. They now commit through
+  `SyncStreamManager.exempt_from_discovery()`, the one named way past
+  `lock_current`'s check. So does the reflection of a write already sent (and a
+  remote's refusal of it): a write that landed while a secret was re-entered is
+  recorded, so the next run neither repeats it nor conflicts with it. A two-way
+  page now asks before each write-back, not once. A discovery that failed
+  refuses permanently with its own operator message instead of a transient "must
+  finish", so a workflow sync step fails with it. The check before a remote write
+  is one read. Retrying a failure still waits for discovery. Known limit: an
+  adapter that reads its credential again between the check and the send can send
+  that one write with the new secret.
+
+- `angee.integrate`: a re-entered secret is discovered again.
+  `Credential.replace_material` kept every attached integration running on the
+  facts its connection discovery found with the old secret, so a key of another
+  remote account was read with the old account's cursor, links and identifiers.
+  Now each integration the credential serves (attached, or derived from it) whose
+  capability requires connection discovery awaits it again in the same
+  transaction, locked before the credential as an attachment is
+  (`CredentialManager.lock_with_served_integrations`), and sync waits for it. An
+  `apply_discovery` that refuses another account lands as failed discovery with
+  its operator message. Refreshed and minted tokens and transient material
+  (`Credential.update_material`) keep discovery. `Bridge.subscription_state` is
+  documented as holding the connection facts discovery learned, beside
+  live-session state.
+
+- `angee.integrate`: a secret re-entered in place or by name, or an account-less
+  credential adopted by its first account, is discovered again.
+  `CredentialManager.create_local_credential` with a name the user's credential
+  already has (the console's create, connect flows that key their credential by
+  name) replaced its material, and even its kind, without the integrations using
+  it discovering again. That update and `Credential.replace_material` now share
+  one owner, `CredentialManager.reenter_secret`. It refuses a credential an
+  integration attaches as derived material; when the kind or material changed,
+  every integration the credential serves admits it again
+  (`Integration.admit_credential`; a refusal rolls the re-entry back) and those
+  whose capability requires discovery await it again; an unchanged re-entry
+  changes nothing. Adopting an account-less OAuth credential sends the
+  integrations attaching it to discover again. Discovery stores the material it
+  derived through `CredentialManager.store_derived` instead, which sends no
+  integration to discover again, so two that derive a credential of one name do
+  not loop, and refuses to overwrite a hand-made credential of that name.
+  `Credential.update_material` refuses the fields the kind stores as its own
+  secret (`CredentialKindHandler.secret_material_fields`: `api_key`, `password`,
+  …, every token an OAuth grant stores, and for `jwt_bearer` the signing fields
+  its key file becomes) and points to `replace_material`; both judge by the kind
+  of the row as locked, so a concurrent kind change cannot let a stale instance
+  clear the real secret. A token refresh, a minted scoped token, transient material
+  and the reconnect of an account already bound keep discovery. The integrate
+  README states the lock order once: `CredentialManager.lock_with_served_integrations`
+  takes the integrations a credential serves before it on every path (re-entry,
+  reconnect, adoption, `Credential.lock_for_delete` for its deletion and
+  disconnect), and takes every lock again when what the credential serves
+  changed between its two reads.
+
+- `angee.integrate`: an owner can transfer their own integration.
+  `Integration.transfer_ownership` released the previous owner's connection on
+  an instance still pinned to that owner, who lost write with the row, and a
+  pinned actor outranks the system context, so an owner's transfer of an
+  integration running on their own credential was refused. The release now runs
+  on the locked capability row (`Integration.lock_capability`). The transfer
+  also locked the parent row before the concrete one, the reverse of bridge
+  work; `Integration.lock_for_record_access` now takes the capability lock
+  first, for a transfer and a record grant alike.
+
+- `angee.integrate`: a static token is clean, and dead when revoked. A token was
+  stored exactly as typed, so a pasted trailing space or an invisible character
+  made a header value no request could carry, failing every request. The
+  `static_token` handler now strips surrounding whitespace on creation and
+  re-entry and otherwise stores the value as entered, since some static tokens
+  are never a header (a calendar feed subscription keeps its feed address as
+  one). Where it builds the bearer header, a token with a space, a control
+  character or a character outside printable ASCII is refused with a permanent
+  `IntegrationError` saying the stored token cannot be sent and must be
+  re-entered, without quoting it. A revoked or expired static-token credential no
+  longer produces authorization headers: it fails closed through
+  `Credential.require_active`, as the scoped-token path does.
+
+- `angee.integrate`: an integration's refusal reaches the operator as its
+  message on integrate's own console actions. Retrying a sync failure, choosing a
+  side of a conflict, retrying discovery or resuming an integration let an
+  `IntegrationError` propagate, so the console showed a raw "An unexpected error
+  occurred." Those actions are now guarded by
+  `angee.integrate.schema.integration_action_guard`, `action_guard` with the
+  integration error expected: it answers in band with the error's public message,
+  keeps an `OAuthFlowError`'s code, and logs a permanent refusal at warning
+  level. The shared guard, `ActionResult.from_error` and `angee.base.exceptions`
+  are unchanged, so no other addon's guarded action changes behaviour.
+
+- `angee.integrate`: a derived credential leaves with its integration. Deleting
+  an integration left the credential its discovery derived, which
+  `CredentialManager.store_derived` then refused to overwrite, so the next
+  integration deriving the same name failed discovery until an operator removed
+  it. A `post_delete` receiver (bound through `angee.base.signals.connect_for_models`
+  from `IntegrateConfig.ready`) now removes it in the delete's transaction, after
+  the integration row, unless another integration still uses it. The refusal
+  stays for a hand-made row or one left from before, and names the credential
+  to remove or rename.
+
+- `angee.workflows_integrate`: a sync step waits for a pending connection
+  discovery instead of failing. The discovery refusal reached `bridge_io`'s
+  catch-all as a retryable "Stream transport failed.", so a step was failed
+  within seconds of a re-entered secret, with the wrong message, before
+  discovery could finish; a single-sync bridge's attempts also held the lock
+  discovery needs. `bridge_io` now asks the bridge before any IO or lock: a
+  pending discovery parks the step in a time wait until discovery's next attempt
+  is due, without spending an attempt or beginning an effect, and notes the
+  discovery message; a failed discovery fails the step with that message. Known
+  limit: a step already in its IO when discovery turns pending spends that one
+  attempt before the next one waits.
+
+- `angee.integrate`: a sync run already in flight sends and commits nothing once
+  a secret is re-entered or a credential attached. Admission was fenced, but a
+  run admitted before the change read the fresh credential and went on with the
+  facts discovered from the old one. Every commit to a stream or its links passes
+  `SyncStreamManager.lock_current` (a page, a push's reflection, a sweep, an
+  absence, a retained failure, a conflict decision), which now asks the stream's
+  integration `Integration.require_discovery_ready()`; the driver asks again on
+  the stored row before each remote write (a two-way page's write-back, each push
+  candidate, `RecordLink.resolve_conflict`) and each reset (`reset_stream`, which
+  `begin_stream_cycle` now resets through). A pending discovery refuses with a
+  transient `IntegrationError`; earlier pages and their cursor stay, and the next
+  run waits for discovery. An operator's resolve or retry of a retained failure
+  and a calendar publish wait for discovery too. Known limits: a multi-partition
+  workflow step runs without the sync lock, so a discovery that succeeds between a
+  page's extraction and its commit lets that page commit; an attach on a
+  capability that requires no discovery does not stop a run.
+
 - The UX guard accepts manifest `vocabulary` field tones by structure while rejecting local tone maps and switches.
 
 - Integrate compares synchronized JSON as JSON values (`json_equal` in

@@ -13,8 +13,10 @@ class IntegrateConfig(AppConfig):
     name = "angee.integrate"
 
     def ready(self) -> None:
-        """Register the credential permission check after app population."""
+        """Register the credential permission check and connect integrate's model receivers after app population."""
 
+        from angee.integrate import signals
         from angee.integrate.checks import check_replace_secret_permissions
 
         checks.register(check_replace_secret_permissions, checks.Tags.security)
+        signals.connect()

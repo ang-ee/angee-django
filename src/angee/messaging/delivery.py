@@ -49,7 +49,14 @@ def queue_message_delivery(message: Any) -> bool:
 
 
 def run_message_delivery(model_label: str, pk: Any, external_id: str) -> dict[str, Any]:
-    """Publish under the message lock and the transport's declared delivery lock."""
+    """Publish under the message lock and the transport's declared delivery lock.
+
+    The transport channel's integration admits the send first
+    (``Integration.require_discovery_ready``): while its connection discovery is
+    pending the delivery is deferred as lock contention is, spending no attempt,
+    and a discovery that failed fails it with the discovery's own message. A
+    channel that rediscovers may hold a grant its discovery has not confirmed.
+    """
 
     model = apps.get_model(model_label)
     lock_key = record_lock_key(model_label, pk, "deliver")
@@ -70,7 +77,8 @@ def run_message_delivery(model_label: str, pk: Any, external_id: str) -> dict[st
         reconciling = message.delivery_needs_reconciliation
         try:
             try:
-                backend = message.transport_channel(reason="messaging.delivery.channel").backend
+                channel = message.transport_channel(reason="messaging.delivery.channel")
+                backend = channel.backend
             except Exception as error:
                 # Backend construction precedes any possible provider effect.
                 refusal = (
@@ -81,9 +89,21 @@ def run_message_delivery(model_label: str, pk: Any, external_id: str) -> dict[st
                     pk, token=external_id, claim=message.delivery_claim, error=refusal,
                 )
                 return {"ok": False, "delivered": False, "status": result}
+            try:
+                channel.require_discovery_ready()
+            except IntegrationError as unready:
+                if not unready.transient:
+                    result = model.objects.record_delivery(
+                        pk, token=external_id, claim=message.delivery_claim, error=unready,
+                    )
+                    return {"ok": False, "delivered": False, "status": result}
+                admitted = False
+            else:
+                admitted = True
             with ExitStack() as contexts:
                 try:
-                    locked = contexts.enter_context(backend.delivery_lock())
+                    # A pending discovery holds the send back as a held delivery lock does.
+                    locked = admitted and contexts.enter_context(backend.delivery_lock())
                 except Exception as error:
                     logger.warning("Delivery lock unavailable (%s).", type(error).__name__)
                     locked = False
