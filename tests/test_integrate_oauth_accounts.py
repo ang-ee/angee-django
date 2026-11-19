@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
@@ -35,6 +36,7 @@ from tests.conftest import (
     make_integration,
 )
 from tests.integrate_fixtures import ConnectionAdapter, ConnectionBridge
+from tests.lock_waits import submit, wait_for_lock
 
 pytestmark = pytest.mark.django_db
 
@@ -544,3 +546,28 @@ def test_legacy_adoption_racing_an_attach_binds_without_deadlock_on_postgresql(m
     assert bridge.account_id == adopted.external_account_id
     # An attach that read the credential before adoption committed stays unbound until its next connect.
     assert other.credential_id == legacy.pk and other.account_id in (None, adopted.external_account_id)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_an_account_disconnect_waits_for_the_account_before_locking_its_credential_on_postgresql(monkeypatch) -> None:
+    if connection.vendor != "postgresql":
+        pytest.skip("PostgreSQL row locks")
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: None)
+    bridge, client = _bridge("disconnect-order")
+    connected = _connect(client, bridge.owner, "account-one")
+
+    def disconnect() -> bool:
+        with system_context(reason="test independent account disconnect"):
+            return Credential.objects.disconnect_account(bridge.owner, str(connected.account.sqid))
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with system_context(reason="test a connect holds the account"), transaction.atomic():
+            # An OAuth connect locks the account first (``ExternalAccountManager.link``).
+            ExternalAccount.objects.select_for_update().get(pk=connected.account.pk)
+            contender, pid = submit(pool, disconnect)
+            wait_for_lock(pid, contender)
+            # The connect then takes the credential: the disconnect holds none of it yet.
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL lock_timeout = '3s'")
+            Credential.objects.lock_with_served_integrations(connected.credential.pk)
+        assert contender.result(timeout=10) is True

@@ -10,6 +10,21 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.integrate`: the lock order is completed. Deleting an integration locked
+  the parent row with its child in one statement, the reverse of
+  `Integration.lock_capability`; `Integration.lock_for_delete` now takes the
+  capability lock first, on every delete path. An account's disconnect took the
+  integrations, the credential and the user before the account an OAuth connect
+  locks first; `CredentialManager.disconnect_account` now locks the account row
+  first. The README's lock order names the external account (first) and the
+  credential's user (after the credential). The savepoint retry in
+  `CredentialManager.lock_with_served_integrations` treats an integration deleted
+  between its read and its lock as a changed set, and gives up after three changed
+  sets with a transient `IntegrationError`. An unchanged re-entry of a
+  `jwt_bearer` key compares what was entered, not the cached scoped tokens the
+  re-entry drops, so it no longer sends the integrations it serves to discover
+  again. The PostgreSQL tests of the two inversions run only on PostgreSQL.
+
 - `angee.integrate`: derived credentials. `CredentialManager.store_derived` now
   overwrites a credential of the derived name that nothing holds, so a row left
   from an integration deleted before derived credentials left with it no longer

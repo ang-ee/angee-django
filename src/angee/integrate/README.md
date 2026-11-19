@@ -302,18 +302,24 @@ its input fields, every token an OAuth grant stores, or what a `jwt_bearer` key 
 becomes). It and `replace_material`'s validation read the kind of the row as locked,
 never a stale instance's. No-op discovery settles synchronously.
 
-Lock order. Integrate's owners take row locks in one order: an integration's
-capability rows (`Integration.lock_capability`: the concrete row, then its
-multi-table ancestors), several integrations in primary-key order, before the
-credential they use and before the integration's streams; a stream's current
-epoch before its record links. `CredentialManager.lock_with_served_integrations`
+Lock order. Integrate's owners take row locks in one order: the external account
+first (an OAuth connect links it, `ExternalAccountManager.link`, and an account's
+disconnect, `CredentialManager.disconnect_account`, locks it before anything
+else); then an integration's capability rows (`Integration.lock_capability`: the
+concrete row, then its multi-table ancestors), several integrations in
+primary-key order, before the credential they use and before the integration's
+streams; then the credential; then the credential's user, which a sign-in
+method's disconnect check locks (`Credential.check_disconnect`); a stream's
+current epoch before its record links. `CredentialManager.lock_with_served_integrations`
 is the one place that takes a credential with the integrations it serves, for a
 re-entry, a reconnect, an adoption and a credential's deletion or disconnect
 (`Credential.lock_for_delete`); when what the credential serves changed between
-its two reads it releases every lock to a savepoint and takes them again in that
-order. A grant or an ownership transfer of an integration takes its capability
-rows the same way (`Integration.lock_for_record_access`). A page's stream lock
-reads its integration without locking it.
+its two reads, or an integration it read was deleted before its lock, it
+releases every lock to a savepoint and takes them again in that order, and after
+three changed sets it gives up with a transient `IntegrationError`. A grant, an
+ownership transfer and a delete of an integration take its capability rows the
+same way (`Integration.lock_for_record_access`, `Integration.lock_for_delete`).
+A page's stream lock reads its integration without locking it.
 The worker runs
 `IntegrationImpl.discover_connection(credential) -> ConnectionDiscovery` outside
 transactions under the sync advisory lock. The result contains adapter-owned

@@ -37,7 +37,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
-from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.db import connection, models, transaction
 from django.db.models import (
     BooleanField,
@@ -180,6 +180,8 @@ _WEBHOOK_FAILURE_MESSAGE = "Webhook delivery failed."
 _DISCOVERY_RETRY_EXHAUSTED_MESSAGE = "Connection discovery exhausted its retries; retry discovery to continue."
 _DISCOVERY_REQUIRED_MESSAGE = "Connection discovery must finish before syncing."
 _DISCOVERY_FAILED_MESSAGE = "Connection discovery did not succeed; retry discovery to continue."
+# Times the served integrations and their credential are locked again before the set must settle.
+_SERVED_LOCK_ATTEMPTS = 3
 
 
 class AccountStatus(models.TextChoices):
@@ -1067,13 +1069,19 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
 
         :meth:`retire` owns vetoes, derived releases, after-commit remote
         revocation and the delete; the account's native owner release runs between
-        them. An absent user/account link is false. The credential locks as its
-        deletion does (:meth:`Credential.lock_for_delete`).
+        them. An absent user/account link is false. The account row locks first,
+        as an OAuth connect takes it (``ExternalAccountManager.link``), then the
+        credential as its deletion does (:meth:`Credential.lock_for_delete`).
         """
 
         with system_context(reason="integrate.credential.disconnect"), transaction.atomic():
             found = self.filter(user=user, external_account__sqid=external_account_sqid).first()
-            credential = None if found is None else found.lock_for_delete()
+            if found is None:
+                return False
+            apps.get_model("integrate", "ExternalAccount").objects.filter(
+                sqid=external_account_sqid,
+            ).lock_if_supported().first()
+            credential = found.lock_for_delete()
             if credential is None:
                 return False
             account = credential.external_account
@@ -1222,23 +1230,30 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         (``Integration.lock_capability``), in primary-key order, then the
         credential. Once the credential is locked no attachment can commit (its
         foreign-key check needs the row), so the integrations it serves are read
-        again: when that read differs (one attached meanwhile, or let go), every
-        lock is released to a savepoint and taken again in the same order, so
-        none is taken after the credential and none that no longer serves it is
-        returned. Runs inside the caller's transaction.
+        again: when that read differs (one attached meanwhile, or let go), or one
+        was deleted between the first read and its lock, every lock is released
+        to a savepoint and taken again in the same order, so none is taken after
+        the credential and none that no longer serves it is returned. After
+        ``_SERVED_LOCK_ATTEMPTS`` changed sets it gives up with a transient
+        ``IntegrationError``. Runs inside the caller's transaction.
         """
 
         if not connection.in_atomic_block:
             raise RuntimeError("Locking a credential and the integrations it serves requires the caller's transaction.")
-        while True:
+        for _attempt in range(_SERVED_LOCK_ATTEMPTS):
             served = list(self.served_integrations(credential_pk))
-            savepoint = transaction.savepoint()
-            integrations = [integration.lock_capability() for integration in served]
+            savepoint = transaction.savepoint_create()
+            try:
+                integrations = [integration.lock_capability() for integration in served]
+            except ObjectDoesNotExist:
+                transaction.savepoint_rollback(savepoint)
+                continue
             credential = self.lock_if_supported().get(pk=credential_pk)
             if list(self.served_integrations(credential_pk).values_list("pk", flat=True)) == [row.pk for row in served]:
                 transaction.savepoint_commit(savepoint)
                 return credential, integrations
             transaction.savepoint_rollback(savepoint)
+        raise IntegrationError("The integrations using this credential kept changing; try again.", transient=True)
 
     @contextmanager
     def reenter_secret(self, credential_pk: int) -> Iterator[Any]:
@@ -1255,16 +1270,22 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         whose capability requires connection discovery awaits it again
         (:meth:`Integration.await_discovery`): a new secret may read another
         remote account than the one discovery found. An unchanged re-entry
-        changes nothing.
+        changes nothing: what was entered is compared, not the tokens minted
+        from it, which every re-entry drops.
         """
+
+        def entered(row: Any) -> tuple[str, dict[str, Any]]:
+            material = row.reveal()
+            material.pop(_SCOPED_TOKENS, None)
+            return row.kind, material
 
         credential, integrations = self.lock_with_served_integrations(credential_pk)
         if self.derived_attachments(credential_pk).exists():
             raise ValidationError("Connection discovery derived this credential; re-enter its source credential.")
-        before = (credential.kind, credential.reveal())
+        before = entered(credential)
         yield credential
         credential.refresh_from_db()
-        if (credential.kind, credential.reveal()) == before:
+        if entered(credential) == before:
             return
         for integration in integrations:
             integration.admit_credential(credential)
@@ -2919,6 +2940,21 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         with system_context(reason="integrate.integration.lock_for_record_access"):
             self.lock_capability()
         return super().lock_for_record_access()
+
+    def lock_for_delete(self, *, queryset: models.QuerySet[models.Model] | None = None) -> Self | None:
+        """Lock as bridge work does (:meth:`lock_capability`), then reload this row for its delete; ``None`` when gone.
+
+        The base delete lock takes the row with its ancestors in one statement;
+        the capability lock first keeps a delete in integrate's lock order on
+        every delete path (``integrate.signals.lock_integration_for_delete``).
+        """
+
+        with system_context(reason="integrate.integration.lock_for_delete"):
+            try:
+                self.lock_capability()
+            except ObjectDoesNotExist:
+                return None
+        return super().lock_for_delete(queryset=queryset)
 
     def sync_lock_key(self) -> LockKey:
         """Return the advisory task lock held by this capability's sync, live session and discovery work."""

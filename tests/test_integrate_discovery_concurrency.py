@@ -194,3 +194,21 @@ def test_a_credential_delete_waits_for_the_integration_deriving_from_it_without_
                 cursor.execute("SET LOCAL lock_timeout = '3s'")
             Credential.objects.lock_if_supported().get(pk=source.pk)
         assert contender.result(timeout=10) == source.pk
+
+
+def test_an_integration_delete_waits_for_the_concrete_row_without_holding_the_parent(bridge):
+    def lock_for_delete():
+        with system_context(reason="test independent integration delete"), transaction.atomic():
+            return Integration.objects.get(pk=bridge.pk).lock_for_delete().pk
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with system_context(reason="test child-only worker lock"), transaction.atomic():
+            # Hold only the concrete table, as bridge work takes it first (``lock_capability``).
+            ConnectionBridge.objects.select_for_update(of=("self",)).get(pk=bridge.pk)
+            contender, pid = submit(pool, lock_for_delete)
+            wait_for_lock(pid, contender)
+            # The delete waits on the concrete row without holding the parent: fail in finite time otherwise.
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL lock_timeout = '3s'")
+            Integration.objects.lock_if_supported().get(pk=bridge.pk)
+        assert contender.result(timeout=10) == bridge.pk

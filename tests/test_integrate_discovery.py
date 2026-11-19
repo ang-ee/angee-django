@@ -1040,6 +1040,85 @@ def test_a_re_entry_takes_its_locks_again_in_order_when_what_the_credential_serv
     assert sibling.discovery_generation == generations[sibling.pk] + (change == "arrived")
 
 
+def test_an_integration_gone_between_the_read_and_its_lock_is_a_changed_set(bridge, sent_tasks, monkeypatch):
+    with system_context(reason="test an integration a credential served deleted under a re-entry"):
+        assert settle(bridge)["ok"]
+        source = bridge.credential
+        sibling = ConnectionBridge.objects.create(
+            vendor=bridge.vendor, owner=bridge.owner, credential=source, lifecycle="paused",
+        )
+        stale = list(Credential.objects.served_integrations(source.pk))
+        sibling.delete()
+        generation = bridge.discovery_generation
+    served, reads = CredentialManager.served_integrations, []
+
+    def first_read_is_stale(manager, credential_pk):
+        reads.append(credential_pk)
+        return stale if len(reads) == 1 else served(manager, credential_pk)
+
+    monkeypatch.setattr(CredentialManager, "served_integrations", first_read_is_stale)
+    with system_context(reason="test re-entry under a vanished integration"):
+        source.replace_material({"api_key": "re-entered"})
+        bridge.refresh_from_db()
+    assert bridge.discovery_generation == generation + 1 and len(reads) > 2
+
+
+def test_locking_what_a_credential_serves_gives_up_transiently_when_it_keeps_changing(bridge, monkeypatch):
+    with system_context(reason="test a served set that never settles"):
+        assert settle(bridge)["ok"]
+        source = bridge.credential
+        sibling = ConnectionBridge.objects.create(
+            vendor=bridge.vendor, owner=bridge.owner, credential=source, lifecycle="paused",
+        )
+    served, reads = CredentialManager.served_integrations, []
+
+    def always_changed(manager, credential_pk):
+        # Each attempt's first read misses the sibling its second read finds.
+        reads.append(credential_pk)
+        if len(reads) > 50:
+            raise AssertionError("The lock retry is unbounded.")
+        rows = served(manager, credential_pk)
+        return rows.exclude(pk=sibling.pk) if len(reads) % 2 else rows
+
+    monkeypatch.setattr(CredentialManager, "served_integrations", always_changed)
+    with system_context(reason="test a re-entry that cannot settle its locks"), transaction.atomic():
+        with pytest.raises(IntegrationError) as refused:
+            Credential.objects.lock_with_served_integrations(source.pk)
+    assert refused.value.transient and len(reads) < 50
+
+
+def test_an_integration_delete_takes_its_capability_lock_first(bridge, monkeypatch):
+    events = []
+    lock = Integration.lock_capability
+
+    def recorded(row):
+        events.append("capability")
+        return lock(row)
+
+    monkeypatch.setattr(Integration, "lock_capability", recorded)
+    with system_context(reason="test an integration delete lock order"), transaction.atomic():
+        assert Integration.objects.get(pk=bridge.pk).lock_for_delete() is not None
+    assert events == ["capability"]
+
+
+def test_re_entering_the_same_key_file_keeps_discovery(bridge, sent_tasks):
+    key_file = neutral_key_file()
+    with system_context(reason="test an unchanged key file re-entered"):
+        credential = Credential.objects.create_local_credential(
+            bridge.owner, kind="jwt_bearer", name="Service key", material={"key_file": key_file},
+        )
+        bridge.attach_credential(credential)
+        assert settle(bridge)["ok"]
+        # A token minted from the key is cached beside it, and dropped by the re-entry.
+        credential.update_material(scoped_tokens={"read": {"access_token": "minted", "renew_at": 0}})
+        generation = bridge.discovery_generation
+        sent_tasks.clear()
+        credential.replace_material({"key_file": key_file})
+        bridge.refresh_from_db()
+    assert "scoped_tokens" not in credential.reveal()
+    assert bridge.discovery_generation == generation and bridge.discovery_ready and sent_tasks == []
+
+
 def test_the_integrations_a_credential_serves_are_read_whole_and_a_re_entry_needs_a_transaction(bridge):
     stranger = create_user("served-stranger")
     with actor_context(stranger):
