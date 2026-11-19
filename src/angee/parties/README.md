@@ -134,7 +134,11 @@ and so is an address a person account signs in with, whether or not the account
 has a person, so the contact states it as a claim for review (below the confidence at which a
 handle statement applies) and leaves the handle's display fields alone; an
 address nobody holds, or the contact's own person holds, is stated in full. A
-claim stays a claim until the contact's person holds the address through another
+lapsed holder is still the holder: a trashed person whose applied statement of
+the address is current (`PartyManager.lapsed_holders`) gets it back on restore,
+so the contact only claims it, and a claim names nobody to adopt by it. The
+lookup carries them beside `people_for_emails`' answers, which stay as they are.
+A claim stays a claim until the contact's person holds the address through another
 statement or a person confirms the claim: a holder that lapses (trashed, or its
 statement withdrawn) and returns finds its address still its own. Confirming a
 claim moves the address, so it needs write on its live holder as well as on the

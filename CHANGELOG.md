@@ -10,6 +10,18 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: a lapsed holder is still the holder. A trashed person whose
+  applied statement of an address is still current (the new
+  `PartyManager.lapsed_holders(platform, values)`) keeps the address for what a
+  pull-only contact may state: the contact only claims it, and a claim names
+  nobody to adopt by it, so trashing the holder before the contact first states
+  the address, while the source dropped it, or while another source only claims
+  it no longer hands the address to the directory's person for good once the
+  holder is restored. `EmailLookup.lapsed` carries them;
+  `PartyManager.people_for_emails` answers exactly as before. A contact link
+  leaving a person reads the addresses it withdrew again before the contact's
+  are judged.
+
 - `angee.parties`: every adoption limit is checked on rows read under the page's
   locks, for every way a link reaches a person. Only a bound, observing link of
   the contact's own stream keeps its person or hands a replaced record's over
