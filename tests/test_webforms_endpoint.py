@@ -181,3 +181,23 @@ def test_a_body_past_the_bound_is_refused(form: Any) -> None:
 
     assert (response.status_code, json.loads(response.content)["error"]) == (413, "body_too_large")
     assert kept(form) == []
+
+
+def test_each_bound_of_the_endpoint_is_declared_by_exactly_one_addon() -> None:
+    """The interim, and how it ends.
+
+    While messaging has a public form path of its own it declares these settings,
+    and the view carries the same values only for a host without messaging. The
+    commit that removes messaging's path moves the declarations to this addon and
+    deletes the view's copy: the addon must not read another addon's settings on
+    a main. This fails if either half is done without the other.
+    """
+
+    from angee.messaging import autoconfig as messaging
+    from angee.webforms import autoconfig as webforms
+
+    moved = [name in webforms.SETTINGS for name in views._BOUNDS] if hasattr(views, "_BOUNDS") else []
+    for name in getattr(views, "_BOUNDS", ()):
+        assert (name in messaging.SETTINGS) != (name in webforms.SETTINGS), name
+    assert not any(moved), "the addon declares its bounds now: delete the view's interim copy"
+
