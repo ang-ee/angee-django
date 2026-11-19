@@ -8,6 +8,7 @@ exercised on the ICS calendar the subscription mirrors, against a local calendar
 
 from __future__ import annotations
 
+import email.utils
 import hashlib
 import logging
 from collections.abc import Iterator
@@ -464,6 +465,26 @@ def test_the_first_sync_reports_an_unreadable_feed(status: int, body: str, messa
             _poll(source)
 
     assert message in str(refused.value)
+
+
+@pytest.mark.parametrize(("status", "dated", "transient", "message"), [
+    pytest.param(503, True, True, "The calendar feed is temporarily unavailable (HTTP 503).", id="outage-waits"),
+    pytest.param(429, True, True, "The calendar feed is rate limiting requests (HTTP 429).", id="rate-limit-waits"),
+    pytest.param(404, False, False, "The calendar feed refused the request (HTTP 404).", id="refusal-is-permanent"),
+])
+def test_a_refused_feed_states_its_status_and_waits_for_a_retry_after_date(
+    status: int, dated: bool, transient: bool, message: str,
+) -> None:
+    later = email.utils.format_datetime(timezone.now() + timedelta(minutes=5), usegmt=True)
+    with mock_transport(lambda request: httpx2.Response(status, headers={"Retry-After": later} if dated else {})):
+        source = subscribe_calendar(create_user("refused-subscriber"), name="Refused", url=FEED_URL)
+        with pytest.raises(BridgeSyncError) as refused:
+            _poll(source)
+
+    assert message in str(refused.value)
+    assert refused.value.transient is transient
+    wait = refused.value.retry_after
+    assert (wait is not None and timedelta(minutes=4) < wait <= timedelta(minutes=5)) if dated else wait is None
 
 
 def test_the_subscriber_quota_and_rate_bound_new_subscriptions(settings: Any) -> None:

@@ -329,6 +329,31 @@ stages and retained workflow runs intact. `discovery_ready` / `ready_for_work()`
 are the shared admission rule; generation zero preserves existing integrations
 until their next attachment or Resume. There is no separate polling repair scan.
 
+A vendor's JSON request is `HttpClient.request_model` ([outbound HTTP](http.py)):
+one pinned, size-capped request whose answer is validated into a Pydantic model;
+a capped request asks for an unencoded answer. Whatever brings it no usable
+answer is one `HttpRefusal`, classified once: a transport failure, a 429 or a
+5xx is transient and waits for the answer's `Retry-After`; any other status, and
+a success that is over the cap, cannot be decoded or does not validate, are
+permanent, because the same request brings the same answer. The status decides
+before the body does: a refused answer whose body is over the cap or cannot be
+decoded keeps its status, with no body, and is never read past the cap. A
+whole-resource poll reads a permanent answer again on its next run, a pager
+shrinks its page, and one record's oversized or unreadable answer is that
+record's refusal, quarantined while the page of results continues. The vendor's
+`error=` factory turns the refusal into its `IntegrationError` with
+`HttpRefusal.as_error(error, service, *, public_message=None, retry_after=None)`,
+whose default message names the service and nothing the answer said. The vendor
+states its own cases through that hand-off: its words as `public_message`, and
+a wait its error body names as `retry_after`, used instead of the answer's
+`Retry-After`. It builds the error of a status it adds as transient by hand. A
+refusal keeps the failure that stopped its request: its `cause` tells a request
+`not_sent` from one `unreachable` after it may have been sent. A request the
+HTTP library will not build, a header value it cannot encode or will not send,
+is `not_sent` and permanent (`RequestNotBuiltError`), worded as a request that
+could not be sent as configured; it chains none of the library's text, which
+quotes the value, a credential perhaps.
+
 `IntegrationError(public_message, transient=…, retry_after=…)` owns the optional
 positive provider horizon. `RequestNotSentError` declares that connect, DNS or
 TLS handshake failed before HTTP request bytes were written and is safe to retry.

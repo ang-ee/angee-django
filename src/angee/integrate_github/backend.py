@@ -15,12 +15,15 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 from django.http import HttpRequest
 from pydantic import BaseModel, ConfigDict, Field
 
+from angee.integrate.errors import IntegrationError
+from angee.integrate.http import JSON_MAX_BYTES, HttpRefusal
 from angee.integrate_vcs.backend import RepoDescriptor, TreeEntry, VCSBackend
 
 if TYPE_CHECKING:
@@ -36,14 +39,17 @@ SEARCH_LIMIT = 20
 """Repository search results returned for a typeahead query."""
 
 
-class GitHubApiError(Exception):
-    """Raised when the GitHub REST API returns a non-success, non-404 status."""
+class GitHubApiError(IntegrationError):
+    """A GitHub refusal whose message the backend composed from facts, never from GitHub's answer."""
 
-    def __init__(self, message: str, *, status: int) -> None:
-        """Record the HTTP status for the failed request."""
 
-        super().__init__(message)
-        self.status = status
+def _error_for(path: str) -> Callable[[HttpRefusal], Exception]:
+    """Return the error a refusal about ``path`` becomes: a 404 is ``FileNotFoundError``, else a GitHubApiError."""
+
+    def error(refusal: HttpRefusal) -> Exception:
+        return FileNotFoundError(path) if refusal.status == 404 else refusal.as_error(GitHubApiError, "GitHub")
+
+    return error
 
 
 class GitHubBackend(VCSBackend):
@@ -88,7 +94,7 @@ class GitHubBackend(VCSBackend):
             descriptors.extend(self._descriptor(item) for item in items)
             if len(items) < PER_PAGE:
                 return descriptors
-        raise GitHubApiError("Repository listing exceeded its page limit; inventory is incomplete.", status=0)
+        raise GitHubApiError("Repository listing exceeded its page limit; inventory is incomplete.")
 
     def ls_tree(self, repository: Any, *, ref: str, path: str, recursive: bool = False) -> list[TreeEntry]:
         """List the tree under ``path`` at ``ref`` via the git-trees API."""
@@ -98,8 +104,7 @@ class GitHubBackend(VCSBackend):
         payload = self._get(f"/repos/{repository.name}/git/trees/{quote(tree_oid)}{suffix}") or {}
         if payload.get("truncated"):
             raise GitHubApiError(
-                f"git tree for {repository.name}@{ref} is truncated; enumeration would silently drop entries",
-                status=0,
+                f"git tree for {repository.name}@{ref} is truncated; enumeration would silently drop entries"
             )
         prefix = path.strip("/")
         entries: list[TreeEntry] = []
@@ -118,24 +123,23 @@ class GitHubBackend(VCSBackend):
         if isinstance(payload, list):
             raise IsADirectoryError(path)
         if payload.get("size", 0) > self.max_file_bytes:
-            raise GitHubApiError("GitHub file exceeds its byte limit", status=0)
+            raise GitHubApiError("GitHub file exceeds its byte limit")
         if payload.get("encoding", "base64") == "base64":
             content = base64.b64decode(str(payload.get("content", "")))
             if len(content) > self.max_file_bytes:
-                raise GitHubApiError("GitHub file exceeds its byte limit", status=0)
+                raise GitHubApiError("GitHub file exceeds its byte limit")
             return content
         if payload.get("encoding") != "none":
-            raise GitHubApiError("GitHub returned an unsupported file encoding", status=0)
+            raise GitHubApiError("GitHub returned an unsupported file encoding")
         headers = {**self._headers(), "Accept": "application/vnd.github.raw+json"}
+        error = _error_for(path)
         response = self.http.request(
             "GET", f"{self.api_base}{endpoint}", headers=headers,
             allow_private=self.api_base != DEFAULT_API_BASE.rstrip("/"),
-            same_origin_redirects=3, max_bytes=self.max_file_bytes, timeout=HTTP_TIMEOUT_SECONDS,
+            same_origin_redirects=3, max_bytes=self.max_file_bytes, timeout=HTTP_TIMEOUT_SECONDS, error=error,
         )
-        if response.status_code == 404:
-            raise FileNotFoundError(path)
         if not response.is_success:
-            raise GitHubApiError(f"GitHub raw file returned HTTP {response.status_code}", status=response.status_code)
+            raise error(HttpRefusal.of(response))
         return response.content
 
     def rev_parse(self, repository: Any, ref: str) -> str:
@@ -180,11 +184,11 @@ class GitHubBackend(VCSBackend):
         }
         credential = self.bridge.load_connection_credential()
         if credential is None:
-            raise GitHubApiError("GitHub requests require an attached credential", status=0)
+            raise GitHubApiError("GitHub requests require an attached credential")
         headers.update(credential.auth_headers())
         return headers
 
-    def _get(self, path: str, *, max_bytes: int | None = None) -> Any:
+    def _get(self, path: str, *, max_bytes: int = JSON_MAX_BYTES) -> Any:
         """GET one REST path and return parsed JSON; raise ``FileNotFoundError`` on 404.
 
         A configured (non-default) ``github_api_base`` is a self-hosted GitHub
@@ -192,25 +196,11 @@ class GitHubBackend(VCSBackend):
         permitted only then — public ``api.github.com`` stays public-only.
         """
 
-        allow_private = self.api_base != DEFAULT_API_BASE.rstrip("/")
-        if max_bytes is None:
-            response = self.http.get(
-                f"{self.api_base}{path}", headers=self._headers(),
-                allow_private=allow_private, timeout=HTTP_TIMEOUT_SECONDS,
-            )
-        else:
-            response = self.http.request(
-                "GET", f"{self.api_base}{path}", headers=self._headers(),
-                allow_private=allow_private, max_bytes=max_bytes, timeout=HTTP_TIMEOUT_SECONDS,
-            )
-        if response.status_code == 404:
-            raise FileNotFoundError(path)
-        if not response.is_success:
-            raise GitHubApiError(
-                f"GitHub API GET {path} returned HTTP {response.status_code}",
-                status=response.status_code,
-            )
-        return response.json()
+        return self.http.request_model(
+            "GET", f"{self.api_base}{path}", headers=self._headers(),
+            allow_private=self.api_base != DEFAULT_API_BASE.rstrip("/"),
+            max_bytes=max_bytes, timeout=HTTP_TIMEOUT_SECONDS, error=_error_for(path),
+        )
 
     @staticmethod
     def _descriptor(item: dict[str, Any]) -> RepoDescriptor:

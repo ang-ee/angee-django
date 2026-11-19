@@ -40,6 +40,7 @@ from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.httpx_client import AssertionClient, OAuth2Client
 from authlib.oauth2.rfc6749.parameters import prepare_grant_uri
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from jwt import PyJWKClient
 from jwt.exceptions import PyJWKClientConnectionError, PyJWKClientError, PyJWTError
 
@@ -90,14 +91,23 @@ _ID_TOKEN_LEEWAY_SECONDS = 60
 """Clock skew tolerated on an ID token's ``iat`` and ``exp``."""
 
 
-def oauth_get_json(url: str, *, headers: dict[str, str] | None = None) -> Any:
-    """GET OAuth JSON with honest headers and support for configured private identity providers.
+def oauth_get_json(url: str, *, code: str, headers: dict[str, str] | None = None) -> Any:
+    """GET OAuth JSON with honest headers, from a configured identity provider on a private network too.
 
-    The shared HTTP client owns transport and decoding. Discovery and userinfo
-    retain their distinct failure policies at their callers.
+    The shared typed request owns transport, the byte cap and decoding. A
+    refusal is ``OAuthFlowError(code)``: a transient 503 when integrate's
+    ``HttpRefusal`` says a later attempt can outlive it, else a 400, as is a URL
+    or address the outbound policy refuses. Userinfo and the JWKS read keep
+    their own outcomes at their callers.
     """
 
-    return HttpClient().get_json(url, headers={**OUTBOUND_HEADERS, **(headers or {})}, allow_private=True)
+    try:
+        return HttpClient().request_model(
+            "GET", url, headers={**OUTBOUND_HEADERS, **(headers or {})}, allow_private=True,
+            error=lambda refusal: OAuthFlowError(code, 503 if refusal.transient else 400),
+        )
+    except ValidationError as exc:
+        raise OAuthFlowError(code, 400) from exc
 
 
 class OAuthClientProtocol:
@@ -283,7 +293,7 @@ class OAuthClientProtocol:
             if not userinfo_endpoint:
                 return {}
             claims = oauth_get_json(
-                with_query(userinfo_endpoint, params or {}),
+                with_query(userinfo_endpoint, params or {}), code=PROVIDER_UNAVAILABLE,
                 headers={"Authorization": f"Bearer {access_token}"},
             )
             return claims if isinstance(claims, dict) else {}
@@ -531,7 +541,7 @@ class _PinnedPyJWKClient(PyJWKClient):
         """
 
         try:
-            return oauth_get_json(self.uri)
+            return oauth_get_json(self.uri, code=PROVIDER_UNAVAILABLE)
         except Exception as exc:
             raise PyJWKClientConnectionError("Failed to fetch the JWKS document.") from exc
 

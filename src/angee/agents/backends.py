@@ -32,7 +32,7 @@ from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.settings import ModelSettings
 
 from angee.base.implementations import ImplBase
-from angee.integrate.errors import IntegrationError
+from angee.integrate.errors import IntegrationError, is_transient_status
 from angee.integrate.impl import OAuthConnectIntent
 
 if TYPE_CHECKING:
@@ -145,7 +145,7 @@ class InferenceBackend(OAuthConnectIntent, ImplBase):
         if isinstance(error, (TransientInferenceError, *self.TRANSIENT_MODEL_ERRORS)):
             return True
         if isinstance(error, ModelHTTPError):
-            return error.status_code == 429 or 500 <= error.status_code < 600
+            return is_transient_status(error.status_code)
         cause = error.__cause__ if isinstance(error, ModelAPIError) else error
         return isinstance(
             cause, (TimeoutError, ConnectionError, TimeoutException, NetworkError, *self.transient_error_types())

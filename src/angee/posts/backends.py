@@ -35,7 +35,7 @@ from rebac import system_context
 
 from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.errors import IntegrationError, RequestNotSentError
-from angee.integrate.http import HttpClientMixin, ResponseTooLargeError
+from angee.integrate.http import HttpClientMixin, HttpRefusal, ResponseTooLargeError
 from angee.integrate.http import retry_after as http_retry_after
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.net import AddressNotAllowedError
@@ -277,7 +277,9 @@ class FeedBackend(BridgeImpl, HttpClientMixin):
         Pass native HttpClient.request keyword arguments. RequestNotSentError is
         re-raised unchanged. Transport/OSError, oversized responses, 5xx, a success
         whose body is not a JSON object, and is_transient(response, data) are
-        uncertain for POST and native transient IntegrationError for GET. The
+        uncertain for POST. For GET, an oversized answer and a success whose body is
+        not a JSON object are integrate's permanent ``HttpRefusal`` (the same read
+        brings the same answer); the rest are native transient IntegrationError. The
         transient predicate runs before refusal even on 5xx. A 4xx whose body is not
         a JSON object answered the request: both predicates run with empty data, and
         it is never uncertain.
@@ -307,6 +309,8 @@ class FeedBackend(BridgeImpl, HttpClientMixin):
         except (OSError, httpx2.TransportError, ResponseTooLargeError) as error:
             if method == "POST":
                 raise DeliveryUncertain("The feed reply acknowledgement was lost.") from error
+            if isinstance(error, ResponseTooLargeError):
+                raise HttpRefusal(failure=error).as_error(IntegrationError, "The feed") from error
             raise IntegrationError("The feed could not be read.", transient=True) from error
         try:
             data = response.json()
@@ -316,6 +320,8 @@ class FeedBackend(BridgeImpl, HttpClientMixin):
             if not 400 <= response.status_code < 500:
                 if method == "POST":
                     raise DeliveryUncertain("The feed reply acknowledgement was unreadable.") from error
+                if response.is_success:
+                    raise HttpRefusal(failure=error).as_error(IntegrationError, "The feed") from error
                 raise IntegrationError(
                     "The feed response was unreadable.",
                     retry_after=(retry_delay or self.retry_after)(response),

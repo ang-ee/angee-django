@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from angee.integrate.errors import IntegrationError
+from angee.integrate.errors import IntegrationError, is_transient_status
 
 if TYPE_CHECKING:
     from angee.integrate.oauth.state import StateRecord
@@ -68,7 +68,7 @@ class OAuthFlowError(IntegrationError):
         self.code = code
         self.http_status = http_status
         self.body = body
-        super().__init__(message or code, transient=http_status >= 500 or http_status == 429)
+        super().__init__(message or code, transient=is_transient_status(http_status))
 
     @property
     def public_message(self) -> str:

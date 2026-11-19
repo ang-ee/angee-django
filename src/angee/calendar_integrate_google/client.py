@@ -19,7 +19,7 @@ patch or delete whose ``If-Match`` ETag is stale is :class:`PreconditionFailed`
 (``412``); writes send no invitations (``sendUpdates=none``). Google's refusal of one
 event (``400``, or a ``403`` whose reason names the event) is :class:`EventRefused`.
 Every other refusal is a :class:`GoogleCalendarError`, as the transport names it
-(``GoogleApi.refusal``): the account's or the calendar's, never one event's.
+(``GoogleApi.account_error``): the account's or the calendar's, never one event's.
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote, urlencode
 
+from angee.integrate.http import HttpRefusal
 from angee.integrate_google.api import GoogleApi, GoogleApiError, error_reason
 from angee.scheduling.zones import get_zone_info
 
@@ -49,15 +50,14 @@ _PROBE = {"maxResults": "1", "fields": "kind"}
 _STAMPED_PAGE = 10
 """How many stamped events one lookup reads: a stamp names one event, so more is already a conflict."""
 
-_EVENT_REFUSALS = frozenset(
-    {
-        "forbiddenForNonOrganizer",
-        "forbiddenForServiceAccounts",
-        "cannotChangeOrganizer",
-        "cannotChangeOrganizerOfInstance",
-    }
-)
-"""The ``403`` reasons that refuse one event (its organizer, its attendees), not the calendar or the account."""
+_EVENT_REASONS = {
+    "forbiddenForNonOrganizer": "Only this event's organizer may make this change in Google Calendar.",
+    "forbiddenForServiceAccounts": "Google Calendar does not let this service account invite the event's attendees.",
+    "cannotChangeOrganizer": "Google Calendar does not allow changing this event's organizer.",
+    "cannotChangeOrganizerOfInstance": "Google Calendar does not allow changing the organizer of one occurrence.",
+}
+"""The ``403`` reasons that refuse one event (its organizer, its attendees), not the calendar or the account,
+each in this addon's words; any other event refusal names only its status."""
 
 
 class GoogleCalendarError(GoogleApiError):
@@ -87,10 +87,10 @@ class EventRefused(GoogleCalendarError):
     """
 
     def __init__(self, status: int, reason: str) -> None:
-        """Keep the HTTP status and Google's reason, both safe to show an operator."""
+        """Word Google's ``reason`` in this addon's phrase (:data:`_EVENT_REASONS`) and keep the HTTP status."""
 
-        super().__init__(f"Google Calendar refused this event (HTTP {status}{f', {reason}' if reason else ''}).")
-        self.status, self.reason = status, reason
+        super().__init__(_EVENT_REASONS.get(reason, f"Google Calendar refused this event (HTTP {status})."))
+        self.status = status
 
 
 class GoogleCalendarClient:
@@ -138,7 +138,7 @@ class GoogleCalendarClient:
         response = self.api.send("GET", _url(f"calendars/{_segment(calendar_id)}/events", params))
         if response.status_code == 410:
             raise SyncTokenExpired()
-        if response.status_code == 400 and page_token and error_reason(response.content) == "invalid":
+        if response.status_code == 400 and page_token and error_reason(HttpRefusal.of(response).body) == "invalid":
             raise PageTokenInvalid()
         self._raise_for_status(response)
         return self.api.json(response)
@@ -251,7 +251,7 @@ class GoogleCalendarClient:
         (:meth:`require_calendar`); otherwise the calendar's refusal is raised.
         """
 
-        if response.status_code == 404 and self.api.refusal(response) is None:
+        if response.status_code == 404 and self.api.account_error(HttpRefusal.of(response)) is None:
             self.require_calendar(calendar_id)
             return True
         return response.status_code == 410
@@ -261,8 +261,9 @@ class GoogleCalendarClient:
 
         if response.is_success:
             return
-        status, reason = response.status_code, error_reason(response.content)
-        if self.api.refusal(response) is None and (status == 400 or (status == 403 and reason in _EVENT_REFUSALS)):
+        refusal = HttpRefusal.of(response)
+        status, reason = response.status_code, error_reason(refusal.body)
+        if self.api.account_error(refusal) is None and (status == 400 or (status == 403 and reason in _EVENT_REASONS)):
             raise EventRefused(status, reason)
         self._raise_for_status(response)
 
@@ -271,7 +272,7 @@ class GoogleCalendarClient:
 
         if response.is_success:
             return
-        if response.status_code == 404 and self.api.refusal(response) is None:
+        if response.status_code == 404 and self.api.account_error(HttpRefusal.of(response)) is None:
             raise GoogleCalendarError("Google Calendar no longer serves this calendar to the account.")
         self.api.raise_for_status(response)
 

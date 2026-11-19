@@ -17,7 +17,8 @@ from rebac import actor_context, system_context
 
 from angee.graphql.testing.documents import execute_schema
 from angee.integrate.credentials import CredentialKind
-from angee.integrate.http import HttpClient
+from angee.integrate.errors import IntegrationError
+from angee.integrate.http import JSON_MAX_BYTES
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.states import SyncFailureKind
 from angee.integrate.streams import advance_stream, open_stream, sync_bridge
@@ -70,15 +71,18 @@ class NotionAPI:
             self.search.append(value["id"])
         return value["id"]
 
-    def request(self, method, url, **kwargs):
+    def __call__(self, request):
         assert not connection.in_atomic_block, "Provider calls must precede the apply transaction"
-        assert kwargs["headers"]["Authorization"] == "Bearer x"
-        path = url.removeprefix("https://api.notion.com/v1/")
-        self.requests.append((method, path))
+        assert request.headers["Authorization"] == "Bearer x"
+        path = str(request.url).removeprefix("https://api.notion.com/v1/")
+        self.requests.append((request.method, path))
         if path in self.refusals:
-            return self.refusals[path]
+            refusal = self.refusals[path]
+            if isinstance(refusal, Exception):
+                raise refusal
+            return refusal
         if path == "search" or path.endswith("/query"):
-            payload = json.loads(kwargs["body"])
+            payload = json.loads(request.content)
             keys = self.search if path == "search" else self.sources[path.split("/")[1]]
             start, size = int(payload.get("start_cursor", 0)), payload["page_size"]
             end = start + size
@@ -106,10 +110,11 @@ class NotionAPI:
 
 
 @pytest.fixture
-def api(monkeypatch):
+def api():
+    """Answer Notion's requests at integrate's network seam, so the shared request and its refusals run."""
     provider = NotionAPI()
-    monkeypatch.setattr(HttpClient, "request", lambda self, *args, **kwargs: provider.request(*args, **kwargs))
-    return provider
+    with mock_transport(provider):
+        yield provider
 
 
 @pytest.fixture
@@ -300,13 +305,17 @@ def test_rate_limit_preserves_cursor_and_honors_retry_after(bridge, api):
     assert sync_bridge(bridge) == 1
 
 
-def test_rate_limit_after_progress_commits_completed_pages(bridge, api):
+@pytest.mark.parametrize("refusal", [
+    pytest.param(httpx2.Response(429, headers={"Retry-After": "1"}), id="rate-limit"),
+    pytest.param(httpx2.ReadTimeout("slow"), id="transport-failure-is-notions-transient-refusal"),
+])
+def test_a_transient_refusal_after_progress_commits_completed_pages(bridge, api, refusal):
     first = api.add(node(1, "First"), "Imported once")
     second = api.add(node(2, "Second"), "After retry")
     backend = NotionBackend(bridge)
     definition = tuple(backend.streams())[0]
     stream = open_stream(bridge, definition.key, definition.partition, backend, definition=definition)
-    api.refusals[f"pages/{second}/markdown"] = httpx2.Response(429, headers={"Retry-After": "1"})
+    api.refusals[f"pages/{second}/markdown"] = refusal
     assert advance_stream(stream, backend).count == 1
     stream.refresh_from_db()
     assert len(stream.cursor["pending"]) == 1
@@ -316,6 +325,49 @@ def test_rate_limit_after_progress_commits_completed_pages(bridge, api):
     assert sync_bridge(bridge) == 1
     assert api.requests.count(("GET", f"pages/{first}/markdown")) == 1
     assert len(targets(bridge)) == 2
+
+
+@pytest.mark.parametrize(("answer", "transient", "message"), [
+    pytest.param(httpx2.Response(503), True, "Notion is temporarily unavailable (HTTP 503).", id="outage"),
+    pytest.param(httpx2.Response(429), True, "Notion is rate limiting requests (HTTP 429).", id="rate-limit"),
+    pytest.param(httpx2.Response(409), False, "Notion refused the request (HTTP 409).", id="other-status"),
+    pytest.param(httpx2.ReadTimeout("slow"), True, "Notion could not be reached.", id="transport-failure"),
+    pytest.param(
+        httpx2.Response(200, text="not json"), False, "Notion returned an unreadable response.", id="unreadable",
+    ),
+    pytest.param(
+        httpx2.Response(200, content=b" " * (JSON_MAX_BYTES + 1)), False, "Notion returned an oversized response.",
+        id="oversized-listing-is-permanent",
+    ),
+])
+def test_a_refused_listing_fails_the_page_in_notions_own_words(bridge, api, answer, transient, message):
+    """The listing is the stream's own request: its refusal is Notion's error, classified by integrate's rule."""
+    api.add(node(1, "Page"), "Body")
+    api.refusals["search"] = answer
+    backend = NotionBackend(bridge)
+    definition = tuple(backend.streams())[0]
+    stream = open_stream(bridge, definition.key, definition.partition, backend, definition=definition)
+    with pytest.raises(IntegrationError) as refused:
+        advance_stream(stream, backend)
+    assert (refused.value.transient, str(refused.value)) == (transient, message)
+
+
+@pytest.mark.parametrize(("answer", "code"), [
+    pytest.param(httpx2.Response(200, content=b" " * (JSON_MAX_BYTES + 1)), "notion_page_oversized", id="oversized"),
+    pytest.param(httpx2.Response(200, text="not json"), "notion_page_unreadable", id="unreadable"),
+])
+def test_a_page_whose_content_cannot_be_read_is_that_pages_refusal_and_its_neighbours_continue(
+    bridge, api, answer, code,
+):
+    """One record's oversized or unreadable answer is quarantined as its own refusal; the stream still completes."""
+    key = api.add(node(1, "Huge"), "Body")
+    api.add(node(2, "Healthy"), "Arrives")
+    api.refusals[f"pages/{key}/markdown"] = answer
+    sync_bridge(bridge)
+    assert Page.objects.filter(vault=bridge.vault, title="Healthy").exists()
+    stream = bridge.sync_streams.get()
+    assert stream.cursor == {}
+    assert stream.links.get(external_key=key).failures(open_only=True)[0].code == code
 
 
 @pytest.mark.parametrize("status", [403, 404])
