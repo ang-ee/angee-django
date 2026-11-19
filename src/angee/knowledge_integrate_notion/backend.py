@@ -26,12 +26,19 @@ from angee.knowledge.models import Page
 from angee.knowledge_integrate_notion.markdown import NotionMarkdownConverter
 
 
+class NotionBot(BaseModel):
+    """A bot user's details; a token's own bot names the workspace it belongs to."""
+
+    workspace_id: str = ""
+
+
 class NotionUser(BaseModel):
     """The public identity returned by Notion's GET /v1/users/me."""
 
     object: Literal["user"]
     id: UUID
     name: str | None = None
+    bot: NotionBot | None = None
 
 
 class NotionText(BaseModel):
@@ -227,9 +234,22 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
         return self._request(NotionUser, "users/me", credential=credential)
 
     def discover_connection(self, credential: Any) -> ConnectionDiscovery:
-        """Let Integration own credential validation, retries and completion state."""
-        self.probe(credential)
-        return ConnectionDiscovery()
+        """Read the workspace the token belongs to; Integration owns validation, retries and completion."""
+        bot = self.probe(credential).bot
+        if bot is None or not bot.workspace_id:
+            raise IntegrationError(
+                "Notion did not say which workspace this token belongs to; "
+                "reconnect Notion or attach an internal integration's API token."
+            )
+        return ConnectionDiscovery(data={"workspace_id": bot.workspace_id})
+
+    def apply_discovery(self, discovery: ConnectionDiscovery) -> None:
+        """Keep the workspace the connection first discovered; a token of another is refused."""
+        workspace, kept = discovery.data["workspace_id"], self.bridge.subscription_state.get("workspace_id")
+        if kept and kept != workspace:
+            raise IntegrationError("This connection belongs to another Notion workspace; create a separate connection.")
+        if not kept:
+            self.bridge.merge_subscription_state(workspace_id=workspace)
 
     def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
         """Keep one identity namespace even when pages move between data sources."""

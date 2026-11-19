@@ -54,6 +54,22 @@ def node(number, title, *, parent=None, source=False):
     return result
 
 
+WORKSPACE = str(UUID(int=7001))
+"""The workspace the fixture's token ``x`` belongs to."""
+
+
+def bot_user(workspace):
+    """GET /v1/users/me: the token's bot user, whose ``bot`` names its workspace."""
+    return {
+        "object": "user", "id": str(UUID(int=7000)), "name": "Example integration", "type": "bot",
+        "bot": {
+            "owner": {"type": "workspace", "workspace": True},
+            "workspace_id": workspace, "workspace_name": "Example workspace",
+            "workspace_limits": {"max_file_upload_size_in_bytes": 5_368_709_120},
+        },
+    }
+
+
 class NotionAPI:
     """A paginated provider fixture; the real transport boundary and driver stay in use."""
 
@@ -64,6 +80,8 @@ class NotionAPI:
         self.sources = {}
         self.requests = []
         self.refusals = {}
+        # The bot user each token reads at users/me; content reads use the fixture's token ``x``.
+        self.me = {"x": bot_user(WORKSPACE)}
 
     def add(self, value, body="", *, searchable=True):
         self.nodes[value["id"]] = value
@@ -74,9 +92,12 @@ class NotionAPI:
 
     def __call__(self, request):
         assert not connection.in_atomic_block, "Provider calls must precede the apply transaction"
-        assert request.headers["Authorization"] == "Bearer x"
+        token = request.headers["Authorization"].removeprefix("Bearer ")
         path = str(request.url).removeprefix("https://api.notion.com/v1/")
         self.requests.append((request.method, path))
+        if path == "users/me":
+            return httpx2.Response(200, json=self.me[token])
+        assert token == "x"
         if path in self.refusals:
             refusal = self.refusals[path]
             if isinstance(refusal, Exception):
@@ -122,9 +143,28 @@ def discovered(connection):
     """Settle the discovery a new connection awaits, as the worker's fenced apply does after its probe."""
     assert connection.finish_discovery(
         credential_pk=connection.credential_id, generation=connection.discovery_generation,
-        discovery=ConnectionDiscovery(),
+        discovery=ConnectionDiscovery(data={"workspace_id": WORKSPACE}),
     )
     return connection
+
+
+def rediscover(connection, api, token, workspace):
+    """Re-enter the connection's token as one of ``workspace`` and run the worker's discovery."""
+    api.me[token] = bot_user(workspace) if workspace else {**bot_user(WORKSPACE), "bot": {}}
+    connection.credential.replace_material({"api_key": token})
+    connection.refresh_from_db()
+    assert connection.discovery_pending
+    outcome = connection.run_discovery(
+        credential_pk=connection.credential_id, generation=connection.discovery_generation,
+    )
+    connection.refresh_from_db()
+    return outcome
+
+
+def replica(connection):
+    """The connection's stream positions and record links, as a refused rediscovery must leave them."""
+    stream = connection.sync_streams.get()
+    return stream.cursor, sorted(stream.links.values_list("pk", "external_key", "source_hash", "target_object_id"))
 
 
 @pytest.fixture
@@ -568,3 +608,44 @@ def test_connect_resolves_the_vendor_registration_and_oauth_credentials_sync(api
         key = api.add(node(1, "Shared page"), "Body")
         assert sync_bridge(connection) == 1
         assert targets(connection)[key].markdown.body == "Body"
+
+
+def test_discovery_reads_the_workspace_its_token_belongs_to(bridge, api):
+    discovery = NotionBackend(bridge).discover_connection(bridge.credential)
+    assert discovery.data == {"workspace_id": WORKSPACE} and discovery.credential is None
+    assert api.requests == [("GET", "users/me")]
+    assert bridge.subscription_state["workspace_id"] == WORKSPACE
+
+
+@pytest.mark.parametrize("workspace", [WORKSPACE, str(UUID(int=7002))])
+def test_a_reentered_token_must_belong_to_the_connection_workspace(bridge, api, workspace):
+    api.add(node(1, "Shared page"), "Body")
+    assert sync_bridge(bridge) == 1
+    before = replica(bridge)
+    outcome = rediscover(bridge, api, "re-entered", workspace)
+    assert replica(bridge) == before
+    assert bridge.subscription_state["workspace_id"] == WORKSPACE
+    if workspace == WORKSPACE:
+        assert outcome == {"ok": True, "reason": "applied"} and bridge.discovery_ready
+        return
+    assert outcome == {"ok": False, "reason": "discovery-failed"} and not bridge.discovery_ready
+    assert bridge.last_error == "This connection belongs to another Notion workspace; create a separate connection."
+    with pytest.raises(IntegrationError, match="discovery must finish"):
+        bridge.request_sync()
+
+
+def test_a_connection_discovered_before_it_kept_a_workspace_records_one(bridge, api):
+    type(bridge)._base_manager.filter(pk=bridge.pk).update(subscription_state={})
+    bridge.refresh_from_db()
+    other = str(UUID(int=7002))
+    assert rediscover(bridge, api, "re-entered", other) == {"ok": True, "reason": "applied"}
+    assert bridge.subscription_state["workspace_id"] == other and bridge.discovery_ready
+
+
+def test_a_token_that_names_no_workspace_is_refused_not_matched(bridge, api):
+    assert rediscover(bridge, api, "re-entered", None) == {"ok": False, "reason": "discovery-failed"}
+    assert bridge.last_error == (
+        "Notion did not say which workspace this token belongs to; "
+        "reconnect Notion or attach an internal integration's API token."
+    )
+    assert bridge.subscription_state["workspace_id"] == WORKSPACE and not bridge.discovery_ready

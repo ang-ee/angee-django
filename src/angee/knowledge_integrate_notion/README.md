@@ -21,9 +21,15 @@ it in the credential picker instead. Credentials are encrypted and managed by
 Use the inherited **Resume** and **Test connection** actions on a saved
 connection. Credential attachment and Resume validate the token through Notion's
 [`GET /v1/users/me`](https://developers.notion.com/reference/get-self) endpoint
-using the integration owner's discovery lifecycle and HTTP transport. Give an
-internal Notion connection read-content capability and access to the pages that
-will be imported.
+using the integration owner's discovery lifecycle and HTTP transport. That
+answer is the token's bot user, which names its workspace (`bot.workspace_id`).
+The connection keeps the workspace its first discovery read: a token or grant of
+another workspace fails discovery with "This connection belongs to another
+Notion workspace; create a separate connection.", and its imported pages, cursor
+and links stay as they were. An answer that names no workspace is refused. A
+connection discovered before it kept a workspace records the one its next
+discovery reads. Give an internal Notion connection read-content capability and
+access to the pages that will be imported.
 
 Use **Sync now** to import the pages shared with that token into the connection's
 private Knowledge vault. Connected, discovered bridges also use Integrate's
