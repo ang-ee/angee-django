@@ -123,14 +123,22 @@ class DisplayAvatarPrefetches(NamedTuple):
     """Each party's ranked handles with an avatar the actor can read, avatar loaded."""
 
 
-def keyed_facts_digest(namespace: str, facts: Any) -> str:
+IDENTITY_BASIS_DIGEST = "angee.parties.identity_basis"
+"""The purpose of an identity review's digest (:attr:`IdentityBasis.facts_hash`); fixed: issued digests rely on it."""
+DUPLICATE_SET_DIGEST = "angee.parties.duplicate_set"
+"""The purpose of a batch merge set's digest (:attr:`DuplicateSetPreview.digest`)."""
+
+
+def keyed_facts_digest(purpose: str, facts: Any) -> str:
     """A keyed digest of facts a reader was shown, to compare later under a lock.
 
-    Keyed by the site's secret per ``namespace``, so a client holding a digest
+    ``purpose`` is Django's ``salted_hmac`` key salt: each purpose derives its
+    own key from the site secret, so a digest issued for one purpose never
+    stands for another over the same facts, and a client holding a digest
     cannot confirm a guess of what it covers.
     """
 
-    return salted_hmac(namespace, canonical_json(facts), algorithm="sha256").hexdigest()
+    return salted_hmac(purpose, canonical_json(facts), algorithm="sha256").hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,7 +158,7 @@ class IdentityBasis:
     def facts_hash(self) -> str:
         """Keyed digest of the complete basis; it cannot confirm guesses of hidden rows."""
 
-        return keyed_facts_digest("angee.parties.identity_basis", self.complete)
+        return keyed_facts_digest(IDENTITY_BASIS_DIGEST, self.complete)
 
 
 class CircleQuerySet[CircleT: Circle](HierarchyQuerySet[CircleT], AngeeHistoryQuerySet[CircleT]):
@@ -2548,7 +2556,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 *([handle.public_id, str(handle.platform), handle.value] if handle is not None else []),
             ]
 
-        return keyed_facts_digest("angee.parties.duplicate_set", {
+        return keyed_facts_digest(DUPLICATE_SET_DIGEST, {
             "members": [
                 {
                     "id": row.public_id,

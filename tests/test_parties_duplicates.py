@@ -642,3 +642,52 @@ def test_an_unchanged_set_merges_with_the_digest_of_its_preview(db: None) -> Non
     assert preview.digest and preview.digest == again.digest
     assert str(outcome.outcome) == "merged"
     assert _merged_into(pair[1]) == [pair[0].pk]
+
+
+PINNED_KEY = "angee-parties-pinned-digest-key"
+PINNED_BASIS = {
+    "name": "Ada Example",
+    "address": [{"street": "1 Example Road", "locality": "Exampleton", "country": "GB"}],
+    "handles": [{"id": "hdl_1", "platform": "email", "value": "ada@example.com", "status": "asserted"}],
+}
+# IdentityBasis.facts_hash of PINNED_BASIS under PINNED_KEY, computed by running the IdentityBasis class of the
+# commit before the digest function was shared (5247a71d): a review issued before it still matches after it.
+PINNED_IDENTITY_DIGEST = "f440c984d5c797c47ddad240250e7a665b422f0ebc6918971fb208dee470b192"
+
+
+@override_settings(SECRET_KEY=PINNED_KEY)
+def test_an_identity_digest_issued_before_the_shared_digest_function_still_matches() -> None:
+    from angee.parties.managers import IdentityBasis
+
+    assert IdentityBasis(party=None, current={}, complete=PINNED_BASIS).facts_hash == PINNED_IDENTITY_DIGEST
+
+
+@override_settings(SECRET_KEY=PINNED_KEY)
+def test_an_identity_digest_and_a_duplicate_set_digest_never_stand_for_each_other(db: None) -> None:
+    """Each purpose keys its own digest: over the same facts they differ, and each is refused where the other is due."""
+
+    del db
+    from angee.parties.managers import DUPLICATE_SET_DIGEST, IDENTITY_BASIS_DIGEST, keyed_facts_digest
+
+    assert keyed_facts_digest(IDENTITY_BASIS_DIGEST, PINNED_BASIS) == PINNED_IDENTITY_DIGEST
+    assert keyed_facts_digest(DUPLICATE_SET_DIGEST, PINNED_BASIS) != PINNED_IDENTITY_DIGEST
+    owner = create_user("duplicates-digest-purposes")
+    pair = _people(owner, "Zoe Example", "Zoe Example", value="purpose@example.com")
+    ids = [[person.public_id for person in pair]]
+    (preview,) = Party.objects.preview_duplicates(actor=owner, sets=ids)
+    identity = Party.objects.identity_basis(pair[0].public_id, actor=owner)
+    keep = {"name_action": "keep", "address_action": "keep", "handle_action": "keep"}
+
+    with actor_context(owner):
+        replayed, _results = pair[0].with_actor(owner).apply_identity(
+            expected_facts_hash=preview.digest, proposed={"name": "Zoe Example"}, choices=keep,
+        )
+    (outcome,) = Party.objects.merge_duplicates(actor=owner, sets=ids, digests=[identity.facts_hash])
+    with actor_context(owner):
+        matched, _results = pair[0].with_actor(owner).apply_identity(
+            expected_facts_hash=identity.facts_hash, proposed={"name": "Zoe Example"}, choices=keep,
+        )
+
+    assert replayed == "conflict"
+    assert (str(outcome.outcome), outcome.reason) == ("refused", Party.objects.CHANGED_REASON)
+    assert matched != "conflict"
