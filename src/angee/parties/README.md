@@ -73,17 +73,23 @@ its savepoint, each mapping states its values on the landed person, minted or
 adopted, through the contact's link, so withdrawing the link withdraws them.
 Each mapping is one part of the contacts stream's mapping: adding, removing,
 exchanging or re-versioning one replays every contact once. A mapping declares
-the person statement groups it states (`aspects`); on every pull-only record the
-base withdraws what the link states in a person group that neither the ingest
-(`PartyManager.contact_aspects`) nor a registered mapping states, so a mapping
-removed from the registry has its statements withdrawn on its replay, and nothing
-else on the link. A mapping that cannot read or state one record's value raises
-`ValueError` (or `TypeError`): that record alone is refused (`mapping_refused`,
-naming the mapping, never the value), the rest of its page lands, and the record
-applies once its source changes. Without a mapping a backend asks for, keeps and
-compares exactly what it did before. A mapping of a backend that writes back, of
-no registered backend, or declaring no group or a group the person has not, fails
-the system check.
+the person statement groups it states (`aspects`), never one the ingest states
+(`Person.contact_aspects()`, read from parties' own declarations); on every
+pull-only record the base first withdraws what the link states in a person group
+that neither the ingest nor a registered mapping states, so a mapping removed
+from the registry has its statements withdrawn on its replay, and nothing else on
+the link; a mapping that then states such a group fails the page. A mapping that
+cannot read or state one record's value raises `ValueError`: that record alone
+is refused (`mapping_refused`, naming the mapping, never the value, and logged
+with the mapping's and the record's key), and the rest of its page lands. The
+stream's rescan retries the record on its backoff (a minute, doubling, at most a
+day; an operator's retry makes it due at once), so a mapping fixed in code applies
+it without a source change, and a changed source applies it on its next page. Any
+other error a mapping raises is a bug: it fails the page with its traceback.
+Without a mapping a backend asks for, keeps and compares exactly what it did
+before. A mapping of a backend that writes back, of no registered backend, or
+declaring no group, a group the person has not or a group the ingest states,
+fails the system check.
 
 One function decides a contact's target (`DirectoryBackend._contact_target`),
 once, under the page's and the contact's locks: the person its own link keeps,

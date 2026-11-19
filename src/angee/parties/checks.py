@@ -19,9 +19,11 @@ def check_directory_mappings(app_configs: Any = None, **kwargs: Any) -> list[che
     The registry's own check comes first: every entry resolves to a
     :class:`DirectoryMapping` that claims the key it is registered under, so no
     key maps twice. Then a mapping naming no registered backend
-    (``parties.E001``) or a backend that writes back (``parties.E002``), or one
+    (``parties.E001``) or a backend that writes back (``parties.E002``), one
     declaring no statement group or a group the person model has not
-    (``parties.E003``), fails at startup rather than at its first sync.
+    (``parties.E003``), or one declaring a group the contact ingest states
+    (``parties.E004``: ``Person.contact_aspects``, whose statement the mapping
+    would overwrite), fails at startup rather than at its first sync.
     """
 
     del app_configs, kwargs
@@ -30,6 +32,7 @@ def check_directory_mappings(app_configs: Any = None, **kwargs: Any) -> list[che
         return errors
     person = apps.get_model("parties", "Person")
     groups = {aspect for model in person.statement_models() for aspect in model.statement_aspects}
+    ingested = person.contact_aspects()
     for mapping in resolve_all_impl_classes(DirectoryMapping):
         if not mapping.aspects or set(mapping.aspects) - groups:
             errors.append(
@@ -38,6 +41,15 @@ def check_directory_mappings(app_configs: Any = None, **kwargs: Any) -> list[che
                     f"it declares {list(mapping.aspects)!r}, and the person has {sorted(groups)!r}.",
                     obj=mapping,
                     id="parties.E003",
+                )
+            )
+        if overlap := sorted(set(mapping.aspects) & ingested):
+            errors.append(
+                checks.Error(
+                    f"Directory mapping {mapping.key!r} declares {overlap!r}, groups the contact ingest states; a "
+                    "mapping states its donor's own groups.",
+                    obj=mapping,
+                    id="parties.E004",
                 )
             )
         try:
