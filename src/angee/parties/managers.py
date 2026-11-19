@@ -915,35 +915,67 @@ class SameAsPair:
     handles: tuple[Any, ...]
 
 
-class SameAsMergeOutcome(StrEnum):
-    """What :meth:`PartyManager.merge_certain_same_as_pairs` did with one pair awaiting review."""
-
-    MERGED = "merged"
-    NOT_PEOPLE = "not_people"
-    """Either party is not a person."""
-    ACCOUNT_PERSON = "account_person"
-    """Either party is a user account's own person."""
-    SHARED_ADDRESS = "shared_address"
-    """No address the pair cites links exactly these two parties."""
-    NAMES_DIFFER = "names_differ"
-    """A name is missing or is a cited address, or the names differ beyond case, accents and hyphens."""
-    NOT_PERMITTED = "not_permitted"
-    """The account is not an active person writing both parties (``merge_certain``), or the merge refused it."""
-    REFUSED = "refused"
-    """The merge's guards refused it (a party kept apart, merged meanwhile, held by an addon)."""
-    BUSY = "busy"
-    """The database stopped the merge for a concurrent write (a deadlock, a lock timeout); nothing merged, try again."""
-
-
 @dataclass(frozen=True, slots=True)
-class SameAsPairOutcome:
-    """One pair the bulk merge read, and what it did: merged into ``survivor``, or left, and why."""
+class CertainSameAsPair:
+    """A pair awaiting review that one confirm would merge now (:meth:`PartyManager.certain_same_as_pairs`)."""
 
     left: Any
     right: Any
     normalized_value: str
-    outcome: SameAsMergeOutcome
+    survivor: Any
+    """The older record, which the merge keeps."""
+
+
+class DuplicateMergeOutcome(StrEnum):
+    """What :meth:`PartyManager.merge_duplicates` did with one confirmed set of records."""
+
+    MERGED = "merged"
+    REFUSED = "refused"
+    """A guard or the merge refused the set as confirmed; ``reason`` says why and nothing merged."""
+    NOT_CERTAIN = "not_certain"
+    """A set confirmed as a certain pair is no longer one; nothing merged."""
+    STOPPED = "stopped"
+    """The database stopped the merge for a concurrent write (a deadlock, a lock timeout); nothing merged."""
+
+
+@dataclass(frozen=True, slots=True)
+class FieldDisagreement:
+    """A merge field the members of a set disagree on, and what the merged record will show."""
+
+    field: str
+    values: tuple[str | None, ...]
+    """Each member's value as text, in the set's member order."""
+    shown: str | None
+    """The value the survivor shows after the merge: the provenance ranking's winner among every member's statement
+    of the field, or, when no member states it, the survivor's value, else the first member's that has one."""
+
+
+@dataclass(frozen=True, slots=True)
+class DuplicateSetPreview:
+    """One set of records a person says are one, as :meth:`PartyManager.merge_duplicates` would merge it now."""
+
+    members: tuple[Any, ...]
+    """The readable members, oldest first: the first survives and the others fold into it in key order."""
+    outcome: DuplicateMergeOutcome | None
+    """``None`` when the set merges as listed; else why it would not."""
+    reason: str = ""
+    disagreements: tuple[FieldDisagreement, ...] = ()
+    """The merge fields the members disagree on (a field ``actor`` may not read on every member is left out)."""
+
+    @property
+    def survivor(self) -> Any:
+        return self.members[0] if self.members and self.outcome is None else None
+
+
+@dataclass(frozen=True, slots=True)
+class DuplicateSetOutcome:
+    """What one confirmed set came to: merged into ``survivor``, or left, and why."""
+
+    members: tuple[str, ...]
+    """The member ids as the person confirmed them."""
+    outcome: DuplicateMergeOutcome
     survivor: Any = None
+    reason: str = ""
 
 
 class SamePersonLink(NamedTuple):
@@ -958,6 +990,36 @@ class SamePersonLink(NamedTuple):
     states on a record's behalf (any source's claim, a holder found on its row),
     name no single source: each such link is a source of its own.
     """
+
+
+def _age(party: Any) -> tuple[Any, Any]:
+    """A party's place in a merge: the oldest record survives, then key order."""
+
+    return party.created_at, party.pk
+
+
+_LOCK_CONFLICT_SQLSTATES = frozenset({"40P01", "55P03"})
+"""PostgreSQL's deadlock_detected and lock_not_available: a concurrent write held a row this transaction needed."""
+
+_LOCK_CONFLICT_SQLITE_CODES = frozenset({5, 6})
+"""SQLite's SQLITE_BUSY and SQLITE_LOCKED primary result codes: its lock timeout (it has no deadlock)."""
+
+
+def _lock_conflict(error: Exception) -> bool:
+    """Whether the driver error behind a Django ``OperationalError`` is a lock conflict worth retrying."""
+
+    cause = error.__cause__
+    if getattr(cause, "sqlstate", None) in _LOCK_CONFLICT_SQLSTATES:
+        return True
+    code = getattr(cause, "sqlite_errorcode", None)
+    return isinstance(code, int) and code & 0xFF in _LOCK_CONFLICT_SQLITE_CODES
+
+
+def _refusal(error: Exception) -> str:
+    """The person-facing message of a refused merge."""
+
+    messages = getattr(error, "messages", None)
+    return "; ".join(str(message) for message in messages) if messages else str(error)
 
 
 class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQuerySet[PartyT]):
@@ -1097,12 +1159,13 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         person = person_model._base_manager.select_related("user").filter(pk=party_id).first()
         return person.user if person is not None and person.user_id is not None else None
 
-    def same_as_pairs(self, *, limit: int = 50) -> list[SameAsPair]:
+    def same_as_pairs(self, *, limit: int = 50, parties: Collection[Any] | None = None) -> list[SameAsPair]:
         """Read up to ``limit`` resolved value pairs through both endpoints and each evidence row.
 
         A pair whose evidence the reader cannot read in full is dropped before the
         page fills, so a page holds every readable pair up to its limit; the read
-        walks the ordered pairs one page at a time until it does.
+        walks the ordered pairs one page at a time until it does. ``parties``
+        narrows the read to pairs whose both endpoints are among those keys.
         """
 
         limit = max(0, min(int(limit), 101))
@@ -1124,6 +1187,9 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
             )
             .untrashed()
             .filter(Exists(statements.filter(subject_id=OuterRef("pk"))))
+            .filter(
+                Q() if parties is None else Q(left_id__in=list(parties), right_id__in=list(parties))
+            )
             .prefetch_related(
                 Prefetch("partysameaspairstatement_set", queryset=statements, to_attr="_resolved_statements"),
                 *(Prefetch(side, queryset=endpoints) for side in ("left", "right")),
@@ -2214,84 +2280,311 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             into.merge(records=[source.public_id])
             return "already_merged" if already_merged else "merged"
 
-    def merge_certain_same_as_pairs(self, *, actor: Any, limit: int = 50) -> list[SameAsPairOutcome]:
-        """Merge, as ``actor``'s own merges, each certain pair awaiting ``actor``'s review; return every outcome.
+    BATCH_SETS: ClassVar[int] = 50
+    """The most sets of records one batch merge takes."""
 
-        It reads at most ``limit`` pairs ``actor`` may review
-        (:meth:`PartyQuerySet.same_as_pairs`), so one call is bounded. A pair is
-        certain when both are people and neither is an account's own person,
-        exactly these two parties are linked to an address the pair cites
-        (:meth:`same_person_links`, the shared-sender providers consulted), and both
-        bear a real name, none of the pair's cited addresses (``Party.names_an_address``),
-        and the names agree but for case, accents and hyphens
-        (``Party.comparable_name``); a pair someone kept apart awaits no review.
-        A merge the database stops (an ``OperationalError``: a deadlock, a lock or
-        statement timeout, a serialization failure) is reported as ``busy`` and the
-        pairs after it still run; any other database error propagates.
-        Only an active person account merges, and only parties it writes (the
-        party's ``merge_certain`` permission); a service or agent account merges
-        nothing. Each certain pair merges into the older record through
-        ``Party.merge`` as ``actor``, so the merge's own permission and guards decide. It loses no
-        value: a merge field the survivor leaves empty takes the newer record's
-        value (``Party.merge_values``), the survivor's stands where both have one,
-        and each kept value is recorded as ``actor``'s choice, as choosing those
-        sides on the Merge page does. Nothing merges without ``actor``.
+    SET_MEMBERS: ClassVar[int] = 10
+    """The most records one set of a batch merge holds."""
+
+    BATCH_CONFIRMED_FIELDS: ClassVar[tuple[str, ...]] = ()
+    """The merge fields a batch merge records as the person's choice: none.
+
+    Each record's statements move to the survivor as their sources' own and the
+    provenance ranking decides what shows; an empty survivor field takes a merged
+    record's value as a plain value no one states. ``("display_name",)`` would pin
+    the survivor's name, which the dialog shows.
+    """
+
+    def certain_same_as_pairs(self, *, actor: Any, limit: int = 50) -> list[CertainSameAsPair]:
+        """The certain pairs awaiting ``actor``'s review that ``actor`` may merge in a batch, at most ``limit``.
+
+        It reads the first pairs of ``actor``'s review list
+        (:meth:`PartyQuerySet.same_as_pairs`) and keeps the certain ones
+        (:meth:`certain_pairs`), at most :attr:`BATCH_SETS`: the Review page's
+        source for a batch merge, whose sets :meth:`merge_duplicates` re-checks.
         """
 
-        pairs = self.with_actor(actor).same_as_pairs(limit=limit)
-        if not pairs:
+        limit = max(0, min(int(limit), self.BATCH_SETS))
+        if not limit:
             return []
-        people, _organizations = self.party_kinds(party.pk for pair in pairs for party in (pair.left, pair.right))
-        with system_context(reason="parties.merge_certain_same_as_pairs"):
+        review = apps.get_model("parties", "Party")._default_manager.with_actor(actor).same_as_pairs(limit=101)
+        return self.certain_pairs(review, actor=actor)[:limit]
+
+    def certain_pairs(self, review: Sequence[SameAsPair], *, actor: Any) -> list[CertainSameAsPair]:
+        """The certain pairs among these review pairs, each with its survivor: the one definition of certain.
+
+        A pair is certain when both are people and neither is an account's own
+        person, ``actor`` may merge both in a batch (``batch_merge``: an active
+        person account that writes them), both bear a real name that is none of the
+        pair's cited addresses (``Party.names_an_address``) and equals the other's
+        but for case, accents and hyphens (``Party.comparable_name``), and exactly
+        these two parties are linked to an address the pair cites
+        (:meth:`same_person_links`, the shared-sender providers consulted, read only
+        when a pair passes the rest). The older record survives.
+        """
+
+        if not review:
+            return []
+        ids = {party.pk for pair in review for party in (pair.left, pair.right)}
+        people, _organizations = self.party_kinds(ids)
+        permitted = self.batch_mergeable(actor, ids)
+
+        def mergeable(party: Any, handles: Sequence[Any]) -> bool:
+            return (
+                party.pk in permitted
+                and party.pk in people
+                and people[party.pk] is None
+                and bool(party.has_real_name)
+                and not party.names_an_address(handles)
+            )
+
+        candidates = [
+            pair
+            for pair in review
+            if mergeable(pair.left, pair.handles)
+            and mergeable(pair.right, pair.handles)
+            and pair.left.comparable_name == pair.right.comparable_name
+        ]
+        if not candidates:
+            return []
+        with system_context(reason="parties.certain_pairs"):
             links = self.same_person_links(
-                addresses={(handle.platform, handle.normalized_value) for pair in pairs for handle in pair.handles},
+                addresses={(row.platform, row.normalized_value) for pair in candidates for row in pair.handles},
                 shared=self.shared_sender_ids(),
             )
         linked = {address: {link.party for link in address_links} for address, address_links in links.items()}
-        permitted = set(
-            self.with_actor(actor).with_action("merge_certain").filter(pk__in=list(people)).values_list("pk", flat=True)
-        )
+        return [
+            CertainSameAsPair(pair.left, pair.right, pair.normalized_value, min((pair.left, pair.right), key=_age))
+            for pair in candidates
+            if any(
+                linked.get((row.platform, row.normalized_value)) == {pair.left.pk, pair.right.pk}
+                for row in pair.handles
+            )
+        ]
+
+    def batch_mergeable(self, actor: Any, ids: Iterable[Any]) -> set[Any]:
+        """The parties among ``ids`` that ``actor`` may merge in a batch: an active person who writes them.
+
+        The party's ``batch_merge`` permission (``write & person->active_member``),
+        so a service or agent account may merge none.
+        """
+
+        # Read on the party, the owner of the permission, whichever model's manager the caller used.
+        parties = apps.get_model("parties", "Party")._default_manager
+        rows = parties.with_actor(actor).with_action("batch_merge").filter(pk__in=sorted(set(ids)))
+        return set(rows.values_list("pk", flat=True))
+
+    def preview_duplicates(
+        self, *, actor: Any, sets: Sequence[Sequence[str]], certain: bool = False,
+    ) -> list[DuplicateSetPreview]:
+        """Each set of records ``actor`` confirms are one, as :meth:`merge_duplicates` would merge it now.
+
+        Read in a fixed number of queries whatever the number of sets and members.
+        A set merges when it holds two to :attr:`SET_MEMBERS` records, every one
+        readable, live (neither trashed nor merged away) and of one kind (all
+        people or all organizations); none is an account's own person, which a
+        person merges by hand on the compare page; ``actor`` may merge every one in
+        a batch (:meth:`batch_mergeable`); and no two of them were kept apart by a
+        person. With ``certain`` each set must also be a certain pair
+        (:meth:`certain_pairs`). The oldest member survives and the others fold
+        into it in key order. More than :attr:`BATCH_SETS` sets refuse the batch.
+        """
+
+        confirmed = self._confirmed_sets(sets)
+        return self._judge_sets(actor, confirmed, certain=certain)
+
+    def merge_duplicates(
+        self, *, actor: Any, sets: Sequence[Sequence[str]], certain: bool = False,
+    ) -> list[DuplicateSetOutcome]:
+        """Merge each confirmed set of records into its oldest member as ``actor``'s merge; return every outcome.
+
+        A set merges exactly as confirmed. In its own transaction, its members,
+        their same-person partners and every Handle any of them holds or names are
+        locked in one pass (``Party.lock_merge_records``), the set is judged again
+        under those locks (:meth:`preview_duplicates`), and a member that changed
+        since the person looked (merged elsewhere, trashed, kept apart from another)
+        refuses the set rather than shrinking it. Then the others fold into the
+        oldest in key order through ``Party.merge``, whose own permission and guards
+        decide, under the person's confirmation of each pair. Values: each record's
+        statements move as their sources' own and the provenance ranking decides
+        what shows; an empty survivor field takes a merged record's value as a plain
+        value the sources may still replace; no value is recorded as the person's
+        choice (:attr:`BATCH_CONFIRMED_FIELDS`). A refusal is reported with its reason, and a merge a lock
+        conflict stops (a deadlock, a lock that was not granted in time) as
+        ``stopped``; each set stands alone and the next one still runs. Only a
+        lock conflict is a set's outcome (:func:`_lock_conflict`); any other
+        database error, a lost connection included, stops the call. More than
+        :attr:`BATCH_SETS` sets refuse the batch.
+        """
+
+        party_model = apps.get_model("parties", "Party")
         outcomes = []
-        for pair in pairs:
-            ids = {pair.left.pk, pair.right.pk}
-            if not ids <= set(people):
-                outcome = SameAsMergeOutcome.NOT_PEOPLE
-            elif any(people[pk] is not None for pk in ids):
-                outcome = SameAsMergeOutcome.ACCOUNT_PERSON
-            elif all(linked.get((handle.platform, handle.normalized_value)) != ids for handle in pair.handles):
-                outcome = SameAsMergeOutcome.SHARED_ADDRESS
-            elif not (
-                all(
-                    party.has_real_name and not party.names_an_address(pair.handles)
-                    for party in (pair.left, pair.right)
+        for ids in self._confirmed_sets(sets):
+            try:
+                with transaction.atomic():
+                    rows = instances_from_public_ids(party_model, ids, queryset=party_model._base_manager.all())
+                    if rows:
+                        party_model.lock_merge_records(sorted(rows.values(), key=lambda row: row.pk))
+                    (preview,) = self._judge_sets(actor, [ids], certain=certain)
+                    if preview.outcome is not None:
+                        outcomes.append(DuplicateSetOutcome(ids, preview.outcome, reason=preview.reason))
+                        continue
+                    survivor, *merged = preview.members
+                    kept = survivor.with_actor(actor).merge(
+                        records=[row.public_id for row in merged],
+                        fill_empty=True,
+                        confirmed_fields=self.BATCH_CONFIRMED_FIELDS,
+                    )
+            except (PermissionDenied, ValidationError) as error:
+                outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.REFUSED, reason=_refusal(error)))
+            except OperationalError as error:
+                if not _lock_conflict(error):
+                    raise
+                outcomes.append(
+                    DuplicateSetOutcome(
+                        ids, DuplicateMergeOutcome.STOPPED,
+                        reason="The database stopped this merge for a concurrent change; nothing merged, try again.",
+                    )
                 )
-                and pair.left.comparable_name == pair.right.comparable_name
-            ):
-                outcome = SameAsMergeOutcome.NAMES_DIFFER
-            elif not ids <= permitted:
-                outcome = SameAsMergeOutcome.NOT_PERMITTED
             else:
-                survivor, merged = sorted((pair.left, pair.right), key=lambda party: (party.created_at, party.pk))
-                try:
-                    survivor = survivor.with_actor(actor).merge(
-                        records=[merged.public_id], field_overrides=survivor.merge_values([merged]),
-                    )
-                except PermissionDenied:
-                    outcome = SameAsMergeOutcome.NOT_PERMITTED
-                except ValidationError:
-                    outcome = SameAsMergeOutcome.REFUSED
-                except OperationalError:
-                    # The merge's own transaction rolled back; the pairs after it still run.
-                    outcome = SameAsMergeOutcome.BUSY
-                else:
-                    outcomes.append(
-                        SameAsPairOutcome(
-                            pair.left, pair.right, pair.normalized_value, SameAsMergeOutcome.MERGED, survivor,
-                        )
-                    )
-                    continue
-            outcomes.append(SameAsPairOutcome(pair.left, pair.right, pair.normalized_value, outcome))
+                outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.MERGED, survivor=kept))
         return outcomes
+
+    def _confirmed_sets(self, sets: Sequence[Sequence[str]]) -> list[tuple[str, ...]]:
+        confirmed = [tuple(dict.fromkeys(str(pk) for pk in ids)) for ids in sets]
+        if len(confirmed) > self.BATCH_SETS:
+            raise ValidationError({"sets": f"Merge at most {self.BATCH_SETS} sets of records in one batch."})
+        return confirmed
+
+    def _judge_sets(
+        self, actor: Any, confirmed: Sequence[tuple[str, ...]], *, certain: bool,
+    ) -> list[DuplicateSetPreview]:
+        """Judge every confirmed set against the live records in one batch of reads (:meth:`preview_duplicates`)."""
+
+        party_model = apps.get_model("parties", "Party")
+        readable = party_model._default_manager.with_actor(actor)
+        found = instances_from_public_ids(party_model, {pk for ids in confirmed for pk in ids}, queryset=readable)
+        pks = sorted({row.pk for row in found.values()})
+        people, organizations = self.party_kinds(pks)
+        permitted = self.batch_mergeable(actor, pks)
+        stance = party_model.same_as.model.statements.model
+        # The same keep-apart decision ``StatementPairManager.kept_separate`` reads, for every pair of the sets at once.
+        kept_apart = set(
+            stance._base_manager.filter(
+                superseded__isnull=True,
+                subject__left_id__in=pks,
+                subject__right_id__in=pks,
+                aspect=party_model.same_as.model.pair_name,
+                applied=True,
+                snak=stance.StatementSnak.NO_VALUE,
+            ).values_list("subject__left_id", "subject__right_id")
+        )
+        review = readable.same_as_pairs(limit=101, parties=pks) if certain and pks else []
+        sure = {(pair.left.pk, pair.right.pk) for pair in self.certain_pairs(review, actor=actor)}
+        previews = []
+        for ids in confirmed:
+            members = sorted((found[pk] for pk in ids if pk in found), key=_age)
+            keys = [row.pk for row in members]
+            if not 2 <= len(ids) <= self.SET_MEMBERS:
+                reason = f"Choose two to {self.SET_MEMBERS} records to merge as one."
+            elif len(members) != len(ids):
+                reason = "A record is gone or you may not read it."
+            elif any(row.is_trashed or row.merged_into_id is not None for row in members):
+                reason = "A record is trashed or already merged into another."
+            elif not (set(keys) <= people.keys() or set(keys) <= organizations):
+                reason = "Only people, or only organizations, merge together."
+            elif any(people.get(pk) is not None for pk in keys):
+                reason = "An account's own person is merged by hand, on the compare page."
+            elif not set(keys) <= permitted:
+                reason = "Only an active person who may change every one of these records merges them in a batch."
+            elif any((left, right) in kept_apart for left, right in combinations(sorted(keys), 2)):
+                reason = "A person kept two of these records apart."
+            else:
+                reason = ""
+            if reason:
+                previews.append(DuplicateSetPreview(tuple(members), DuplicateMergeOutcome.REFUSED, reason))
+            elif certain and (len(keys) != 2 or (min(keys), max(keys)) not in sure):
+                previews.append(
+                    DuplicateSetPreview(tuple(members), DuplicateMergeOutcome.NOT_CERTAIN, "No longer a certain pair.")
+                )
+            else:
+                previews.append(DuplicateSetPreview(tuple(members), None))
+        shown = self._disagreements(actor, [preview.members for preview in previews], people)
+        return [
+            replace(preview, disagreements=shown[index]) for index, preview in enumerate(previews)
+        ]
+
+    @staticmethod
+    def _disagreements(
+        actor: Any, sets: Sequence[Sequence[Any]], people: Mapping[Any, Any],
+    ) -> list[tuple[FieldDisagreement, ...]]:
+        """For each set, the merge fields its members disagree on and what the survivor will show, in four reads."""
+
+        party_model = apps.get_model("parties", "Party")
+        person_model = apps.get_model("parties", "Person")
+        pks = sorted({row.pk for members in sets for row in members})
+        if not pks:
+            return [() for _members in sets]
+        persons = person_model._base_manager.in_bulk([pk for pk in pks if pk in people])
+        private = set(
+            party_model._default_manager.with_actor(actor).with_action("read_private")
+            .filter(pk__in=pks).values_list("pk", flat=True)
+        )
+        gated = {"notes", "first_met_note"}
+        owners: dict[str, tuple[Any, str]] = {}
+        stated: defaultdict[tuple[str, Any], list[Any]] = defaultdict(list)
+        for statements in (party_model.statements, person_model.statements):
+            aspects = {
+                aspect: declaration
+                for aspect, declaration in statements.model.statement_aspects.items()
+                if declaration.fields and not declaration.members
+            }
+            for aspect, declaration in aspects.items():
+                for name in declaration.fields:
+                    owners[name] = (statements.model, aspect)
+            rows = (
+                statements.model._base_manager.filter(subject_id__in=pks, aspect__in=list(aspects))
+                .filter(superseded__isnull=True, status=statements.model.StatementStatus.ASSERTED, applied=True)
+                .filter(snak=statements.model.StatementSnak.VALUE)
+                .select_related("subject", "link")
+            )
+            for row in rows:
+                stated[row.aspect, row.subject_id].append(row)
+
+        def text(value: Any) -> str | None:
+            if value in (None, ""):
+                return None
+            return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+        personal = set(party_model.merge_scalar_fields_of("person")) - set(party_model.merge_scalar_fields_of(None))
+
+        def value_of(row: Any, name: str) -> Any:
+            return getattr(persons.get(row.pk, row) if name in personal else row, name, None)
+
+        result: list[tuple[FieldDisagreement, ...]] = []
+        for members in sets:
+            if len(members) < 2:
+                result.append(())
+                continue
+            kind = "person" if all(row.pk in people for row in members) else None
+            fields = party_model.merge_scalar_fields_of(kind)
+            disagreements = []
+            for name in fields:
+                if name in gated and not all(row.pk in private for row in members):
+                    continue
+                values = tuple(text(value_of(row, name)) for row in members)
+                if len(set(values)) < 2:
+                    continue
+                _model, aspect = owners.get(name, (None, ""))
+                candidates = [statement for row in members for statement in stated.get((aspect, row.pk), ())]
+                if candidates:
+                    winner = min(candidates, key=lambda statement: statement.sort_key())
+                    shown = text(winner.stated_value(name))
+                else:
+                    shown = next((value for value in values if value is not None), None)
+                disagreements.append(FieldDisagreement(name, values, shown))
+            result.append(tuple(disagreements))
+        return result
 
     def for_user(self, user: Any, *, adopt: Any = None) -> Any:
         """Return the :class:`Person` linked to ``user``, get-or-created on the ``user`` O2O.
