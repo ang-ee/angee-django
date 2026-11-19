@@ -370,3 +370,16 @@ def test_a_contact_admin_trashes_and_restores_a_persons_page_but_never_the_peopl
             Vault.objects.with_actor(admin).get(pk=w.vault.pk).require_access("delete")
     with system_context(reason="tests.parties_roles.vault_readback"):
         assert Vault.objects.for_resource(Vault.PEOPLE).pk == w.vault.pk
+
+
+def test_a_trashed_people_vault_lends_a_contact_admin_none_of_its_pages(world: SimpleNamespace) -> None:
+    """Page removal through the role honours the vault's own trash; the vault's removers keep its pages."""
+
+    w = world
+    admin = w.holders["contact_admin"]
+    assert _allowed(w.note, admin, "delete")
+    with system_context(reason="tests.parties_roles.vault_trash"):
+        Vault.objects.get(pk=w.vault.pk).trash(reason="Moving the people vault.")
+    for action in ("read", "write", "delete"):
+        assert not _allowed(w.note, admin, action), action
+        assert _allowed(w.note, w.admin, action), action

@@ -141,7 +141,7 @@ named for the parties role it holds: a contact reader reads it
 (`contact_reader`), a contact manager writes it (`contact_manager`), a contact
 admin also removes its pages (`contact_admin`,
 through `knowledge/vault#page_delete`, which also keeps a trashed page readable
-to restore it) but never the vault, whose removal would refuse every importer
+to restore it, and lends nothing while the vault itself is trashed) but never the vault, whose removal would refuse every importer
 its `for_resource` (pending the architect's ruling; `delete` in place of
 `page_delete` in the extension lets a contact admin remove the vault); share and
 transfer stay with its owner and platform admins. A deployment may grant more
