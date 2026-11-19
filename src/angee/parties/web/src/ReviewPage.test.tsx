@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RouterProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
-import { AppRuntimeProvider, ToastProvider, createRouteHref } from "@angee/ui";
+import { AppRuntimeProvider, ToastProvider, createRouteHref, formatNumber } from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -90,4 +90,18 @@ describe("the Review page's possible duplicates", () => {
     fireEvent.click(screen.getByRole("button", { name: enPartiesMessages["duplicates.cancel"]! }));
     await waitFor(() => expect(readsOf(CertainSameAsPairs)).toContainEqual({ limit: 50, after: "pair-50" }));
   });
+
+  test("past the server's cap the totals read as a lower bound", async () => {
+    reads.data.set(PartyReviewCounts, () => ({
+      party_statements_aggregate: { aggregate: { count: 3 } },
+      same_as_pair_counts: { pairs: 1000, certain: 180, capped: true },
+    }));
+    renderReview();
+    const bound = (value: number) => enPartiesMessages["review.cappedCount"]!.replace("{count}", formatNumber(value));
+    const label = enPartiesMessages["review.sameAs.mergeCertain"]!.replace("{count}", "50").replace("{total}", bound(180));
+
+    expect(await screen.findByRole("button", { name: label })).toBeTruthy();
+    expect(screen.getByText(bound(1000))).toBeTruthy();
+  });
 });
+

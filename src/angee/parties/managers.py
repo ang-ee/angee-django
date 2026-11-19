@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import defaultdict
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from enum import StrEnum
@@ -237,6 +237,8 @@ class SameAsReviewCounts(NamedTuple):
 
     pairs: int
     certain: int
+    capped: bool = False
+    """The count stopped at its cap: more pairs than ``pairs``, and possibly more certain ones."""
 
 
 class HolderRepair(NamedTuple):
@@ -1224,61 +1226,61 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         person = person_model._base_manager.select_related("user").filter(pk=party_id).first()
         return person.user if person is not None and person.user_id is not None else None
 
+    REVIEW_WINDOW: ClassVar[int] = 20
+    """The fewest pairs one window of the review walk judges (:meth:`review_walk`)."""
+
     def same_as_pairs(
         self, *, limit: int | None = 50, parties: Collection[Any] | None = None, after: str | None = None,
     ) -> list[SameAsPair]:
         """The resolved value pairs the reader may review, in key order: at most ``limit`` after ``after``.
 
         A pair is the reader's to review when they read both endpoints and every
-        handle its evidence cites. Which pairs those are is decided for every pair
-        at once, in a fixed number of queries whatever their number, and only the
-        page's pairs are then read in full. The order is the pair rows' own key, so
+        handle its evidence cites. The pairs are walked window by window after the
+        cursor (:meth:`review_walk`) until the page is full or they end, and only
+        the page's pairs are read in full. The order is the pair rows' own key, so
         ``after`` (a pair's ``id``, the last of the previous page) continues past it
         however many pairs left the list meanwhile, a merged or kept-apart pair
         included: no page skips or repeats a pair. A caller's page is at most 101;
-        ``limit=None`` reads every pair, for the owners that judge them all.
-        ``parties`` narrows the read to pairs whose both endpoints are among those keys.
+        ``limit=None`` reads every pair. ``parties`` narrows the read to pairs whose
+        both endpoints are among those keys.
         """
 
         if limit is not None:
             limit = max(0, min(int(limit), 101))
             if not limit:
                 return []
+        page: list[tuple[Any, tuple[Any, ...]]] = []
+        for window, _examined in self.review_walk(parties=parties, after=after, size=2 * (limit or 0)):
+            page.extend(window)
+            if limit is not None and len(page) >= limit:
+                break
+        return self.review_pairs(page if limit is None else page[:limit])
+
+    def review_walk(
+        self, *, parties: Collection[Any] | None = None, after: str | None = None, size: int = 0,
+    ) -> Iterator[tuple[list[tuple[Any, tuple[Any, ...]]], int]]:
+        """Walk the reader's review pairs after ``after`` in key order, one window at a time.
+
+        Each step yields the window's pairs the reader may review, each with the
+        handles its evidence cites, and how many pairs the window judged. The
+        reader's read of both endpoints and the cursor (``pk > after``) are SQL, so
+        a window holds only pairs whose parties the reader reads; a window of at
+        least ``size`` pairs (and :attr:`REVIEW_WINDOW`) then reads their first
+        applied statements and every handle those cite, through the reader, and
+        leaves out a pair citing a handle the reader may not read. The walk is not
+        capped: a caller stops when it has what it needs, so every pair stays
+        reachable. Its cost is a few reads per window, flat for a reader who reads
+        the cited handles. The residual worst case: a reader who reads both
+        endpoints of a long run of pairs but not their cited handles walks that run.
+        """
+
+        actor, unscoped = self.effective_actor(strict=True)
         pair_model = self.model.same_as.model
         start = None
         if after is not None:
             start = cast(SqidField, pair_model._meta.get_field("sqid")).public_id_to_value(after)
             if start is None:
                 raise ValidationError({"after": "No such pair."})
-        reviewable = [entry for entry in self._reviewable_pairs(parties) if start is None or entry[0] > start]
-        page = reviewable if limit is None else reviewable[:limit]
-        if not page:
-            return []
-        actor, unscoped = self.effective_actor(strict=True)
-        endpoints = self.canonical() if unscoped else self.canonical().with_display_avatars(actor)
-        rows = pair_model._base_manager.prefetch_related(
-            *(Prefetch(side, queryset=endpoints) for side in ("left", "right")),
-        ).in_bulk([pk for pk, _cited in page])
-        return [
-            SameAsPair(
-                rows[pk].left, rows[pk].right, cited[0].normalized_value if cited else "", cited,
-                id=pair_model.public_id_from_pk(pk),
-            )
-            for pk, cited in page
-            if pk in rows
-        ]
-
-    def _reviewable_pairs(self, parties: Collection[Any] | None) -> list[tuple[Any, tuple[Any, ...]]]:
-        """Every pair the reader may review, in key order, with the handles its evidence cites (:meth:`same_as_pairs`).
-
-        Three reads whatever the number of pairs: the first applied statement of each
-        pair whose endpoints the reader reads, and every handle those statements
-        cite, through the reader. A pair citing a handle the reader may not read is
-        left out.
-        """
-
-        actor, unscoped = self.effective_actor(strict=True)
-        pair_model = self.model.same_as.model
         visible = self.canonical().scoped_for_aggregate().values("pk")
         statements = pair_model.statements.applied()
         statements = statements.sudo(reason="parties.same_as_pairs") if unscoped else statements.with_actor(actor)
@@ -1286,30 +1288,62 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
             pair_model._base_manager.filter(left_id__in=Subquery(visible), right_id__in=Subquery(visible))
             .untrashed()
             .filter(Q() if parties is None else Q(left_id__in=list(parties), right_id__in=list(parties)))
+            .filter(Exists(statements.filter(subject_id=OuterRef("pk"))))
+            .order_by("pk")
         )
-        cited: dict[Any, list[EvidenceReference]] = {}
-        for subject_id, evidence in (
-            statements.filter(subject_id__in=Subquery(pairs.values("pk")))
-            .order_by("subject_id", "pk")
-            .values_list("subject_id", "evidence")
-        ):
-            cited.setdefault(subject_id, [
-                ref for value in evidence
-                if (ref := EvidenceReference.model_validate(value)).model.lower() == "parties.handle"
-            ])
         handle_model = apps.get_model("parties", "Handle")
         handles = (
             handle_model.objects.sudo(reason="parties.same_as_pairs")
             if unscoped
             else handle_model.objects.with_actor(actor)
         )
-        readable = instances_from_public_ids(
-            handle_model, {ref.id for refs in cited.values() for ref in refs}, queryset=handles,
-        )
+        size = max(size, self.REVIEW_WINDOW)
+        while True:
+            window = list(
+                (pairs if start is None else pairs.filter(pk__gt=start)).values_list("pk", flat=True)[:size]
+            )
+            if not window:
+                return
+            start = window[-1]
+            cited: dict[Any, list[EvidenceReference]] = {}
+            for subject_id, evidence in (
+                statements.filter(subject_id__in=window)
+                .order_by("subject_id", "pk")
+                .values_list("subject_id", "evidence")
+            ):
+                cited.setdefault(subject_id, [
+                    ref for value in evidence
+                    if (ref := EvidenceReference.model_validate(value)).model.lower() == "parties.handle"
+                ])
+            readable = instances_from_public_ids(
+                handle_model, {ref.id for refs in cited.values() for ref in refs}, queryset=handles,
+            )
+            yield [
+                (pk, tuple(readable[ref.id] for ref in cited[pk]))
+                for pk in window
+                if pk in cited and all(ref.id in readable for ref in cited[pk])
+            ], len(window)
+            if len(window) < size:
+                return
+
+    def review_pairs(self, entries: Sequence[tuple[Any, tuple[Any, ...]]]) -> list[SameAsPair]:
+        """Read these walked pairs (:meth:`review_walk`) in full, endpoints included, in their order."""
+
+        if not entries:
+            return []
+        actor, unscoped = self.effective_actor(strict=True)
+        pair_model = self.model.same_as.model
+        endpoints = self.canonical() if unscoped else self.canonical().with_display_avatars(actor)
+        rows = pair_model._base_manager.prefetch_related(
+            *(Prefetch(side, queryset=endpoints) for side in ("left", "right")),
+        ).in_bulk([pk for pk, _cited in entries])
         return [
-            (pk, tuple(readable[ref.id] for ref in refs))
-            for pk, refs in sorted(cited.items(), key=lambda item: item[0])
-            if all(ref.id in readable for ref in refs)
+            SameAsPair(
+                rows[pk].left, rows[pk].right, cited[0].normalized_value if cited else "", cited,
+                id=pair_model.public_id_from_pk(pk),
+            )
+            for pk, cited in entries
+            if pk in rows
         ]
 
 
@@ -2411,26 +2445,48 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         """The certain pairs awaiting ``actor``'s review that ``actor`` may merge in a batch, at most ``limit``.
 
         The batch is the first certain pairs (:meth:`certain_pairs`) of ``actor``'s
-        review list (:meth:`PartyQuerySet.same_as_pairs`) after ``after`` (the last
-        pair of the previous batch), in its order, at most :attr:`BATCH_SETS`: the
-        Review page's source for a batch merge, whose sets :meth:`merge_duplicates`
-        re-checks. The next batch continues past the last one, so a pair a batch
-        left unmerged is offered again only once the list starts over.
+        review list after ``after`` (the last pair of the previous batch), in its
+        order, at most :attr:`BATCH_SETS`: the Review page's source for a batch
+        merge, whose sets :meth:`merge_duplicates` re-checks. The review walk
+        (:meth:`PartyQuerySet.review_walk`) goes on window by window until the batch
+        is full or the pairs end, so the next batch continues past the last one and
+        every certain pair is reached.
         """
 
         limit = max(0, min(int(limit), self.BATCH_SETS))
         if not limit:
             return []
-        review = apps.get_model("parties", "Party")._default_manager.with_actor(actor).same_as_pairs(
-            limit=None, after=after,
-        )
-        return self.certain_pairs(review, actor=actor)[:limit]
+        readable = apps.get_model("parties", "Party")._default_manager.with_actor(actor)
+        batch: list[CertainSameAsPair] = []
+        for window, _examined in readable.review_walk(after=after, size=2 * limit):
+            batch.extend(self.certain_pairs(readable.review_pairs(window), actor=actor))
+            if len(batch) >= limit:
+                break
+        return batch[:limit]
 
-    def same_as_review_counts(self, *, actor: Any) -> SameAsReviewCounts:
-        """How many pairs ``actor`` may review and how many of those are certain, in a fixed number of reads."""
+    REVIEW_COUNT_CAP: ClassVar[int] = 1000
+    """The most pairs the Review page's totals count exactly (:meth:`same_as_review_counts`)."""
 
-        review = apps.get_model("parties", "Party")._default_manager.with_actor(actor).same_as_pairs(limit=None)
-        return SameAsReviewCounts(len(review), len(self.certain_pairs(review, actor=actor)))
+    def same_as_review_counts(self, *, actor: Any, cap: int | None = None) -> SameAsReviewCounts:
+        """How many pairs ``actor`` may review and how many of those are certain, counted up to a cap.
+
+        One review walk in the same scope as the rows counts the reviewable pairs
+        until it holds more than ``cap`` (:attr:`REVIEW_COUNT_CAP`) or they end, and
+        the certain pairs among the first ``cap`` of them. ``capped`` says the walk
+        stopped at the cap: then there are more than ``cap`` pairs, and the certain
+        count covers the first ``cap`` only, so more may be certain.
+        """
+
+        cap = self.REVIEW_COUNT_CAP if cap is None else max(0, int(cap))
+        readable = apps.get_model("parties", "Party")._default_manager.with_actor(actor)
+        counted: list[tuple[Any, tuple[Any, ...]]] = []
+        for window, _examined in readable.review_walk(size=500):
+            counted.extend(window)
+            if len(counted) > cap:
+                break
+        capped = len(counted) > cap
+        certain = self.certain_pairs(readable.review_pairs(counted[:cap]), actor=actor)
+        return SameAsReviewCounts(min(len(counted), cap), len(certain), capped)
 
     def certain_pairs(self, review: Sequence[SameAsPair], *, actor: Any) -> list[CertainSameAsPair]:
         """The certain pairs among these review pairs, each with its survivor: the one definition of certain.

@@ -912,9 +912,17 @@ live in code docstrings.
   pairs after the pair `after` names, in the pair rows' key order, each with
   its `id`, so a page continues after the last pair seen and a pair merged or
   kept apart meanwhile moves no other one. Which pairs a reader may review
-  (both endpoints and every cited handle readable) is decided for every pair at
-  once in a fixed number of queries, and only the page is read in full; a pair
-  the reader cannot read never ends a page early. `certain_same_as_pairs(limit,
+  (both endpoints and every cited handle readable) is decided by a walk
+  (`PartyQuerySet.review_walk`): the endpoints' visibility and the cursor are
+  SQL, then each window of pairs reads their statements and cited handles, and
+  the walk goes on until the page or the certain batch is full or the pairs
+  end, with no cap, so every pair stays reachable; a reader who reads the cited
+  handles reads one window whatever the number of pairs, and a reader who
+  reads both endpoints of a long run of pairs but not their cited handles
+  walks that run. The totals are exact in the rows' scope up to 1,000
+  (`same_as_pair_counts { pairs certain capped }`); past that the page reads
+  "1,000+", and the certain count covers the first 1,000 pairs and reads
+  "<n>+". `certain_same_as_pairs(limit,
   after)` gives the certain pairs a batch at a time the same way, and
   `same_as_pair_counts { pairs certain }` (`PartyManager.same_as_review_counts`)
   says how many of each the reader may review. The Review page shows both totals

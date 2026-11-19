@@ -205,6 +205,7 @@ export const enPartiesMessages: Record<string, string> = {
   // The batch merge: the Review page's certain pairs, a list selection's sets, and their one dialog.
   "review.sameAs.mergeCertain": "Merge certain pairs ({count} of {total})",
   "review.sameAs.pagerUnit": "pairs",
+  "review.cappedCount": "{count}+",
   "duplicates.nextBatch":
     "These are {count} of the {total} certain pairs. When this dialog closes, Merge certain pairs offers the next ones, until the last; a pair left out here comes back after the last batch.",
   "review.sameAs.certainHeading": "{left} and {right}, both at {address}",

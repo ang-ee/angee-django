@@ -420,6 +420,8 @@ class SameAsPairCountsType:
 
     pairs: int
     certain: int
+    capped: bool
+    """The count stopped at its cap: there are more pairs than ``pairs``, and possibly more certain ones."""
 
 
 @strawberry.type
@@ -546,7 +548,7 @@ class PartiesReviewQuery:
         """Return how many pairs the signed-in person may review, and how many of those are certain."""
 
         counts = Party.objects.same_as_review_counts(actor=session_user(info))
-        return SameAsPairCountsType(pairs=counts.pairs, certain=counts.certain)
+        return SameAsPairCountsType(pairs=counts.pairs, certain=counts.certain, capped=counts.capped)
 
     @strawberry.field
     def duplicate_set_previews(

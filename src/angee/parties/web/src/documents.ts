@@ -121,6 +121,7 @@ export const PartiesOverview = graphql(`
     }
     same_as_pair_counts {
       pairs
+      capped
     }
   }
 `);
@@ -289,6 +290,7 @@ export const PartyReviewCounts = graphql(`
     same_as_pair_counts {
       pairs
       certain
+      capped
     }
   }
 `);

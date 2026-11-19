@@ -782,3 +782,31 @@ def test_the_digest_changes_when_a_fill_appears_or_changes(db: None) -> None:
     changed = nickname("Zed")
 
     assert len({plain, appeared, changed}) == 3
+
+
+def test_the_review_counts_stop_at_their_cap_and_say_so(db: None) -> None:
+    """Exact in the rows' scope up to the cap, and say so past it; a reader who may not merge has no certain pair."""
+
+    del db
+    from angee.graphql.testing.documents import execute_schema, result_data
+    from tests.test_parties_graphql import _schema
+
+    owner, viewer = create_user("duplicates-counts-cap"), create_user("duplicates-counts-cap-viewer")
+    parties = []
+    for index in range(4):
+        parties.extend(_people(owner, f"Zoe Example {index}", f"Zoe Example {index}", value=f"cap{index}@example.com"))
+    _reconcile()
+    with actor_context(owner):
+        for party in Party.objects.filter(pk__in=[party.pk for party in parties]):
+            party.grant_record_access("identity_reader", viewer)
+
+    capped = Party.objects.same_as_review_counts(actor=owner, cap=3)
+    exact = Party.objects.same_as_review_counts(actor=owner)
+    document = "query { same_as_pair_counts { pairs certain capped } }"
+    schema = result_data(execute_schema(_schema("console"), document, user=owner))["same_as_pair_counts"]
+
+    assert tuple(capped) == (3, 3, True)
+    assert tuple(exact) == (4, 4, False)
+    assert schema == {"pairs": 4, "certain": 4, "capped": False}
+    assert Party.objects.same_as_review_counts(actor=viewer).certain == 0
+
