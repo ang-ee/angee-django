@@ -169,9 +169,10 @@ class HttpRefusal:
     """Why one request brought no usable answer: the facts a caller composes its error from, never their text.
 
     A refused answer has its non-success ``status``, its ``Retry-After`` and its
-    parsed JSON ``body`` (:meth:`of`). Any other refusal keeps the ``failure``
-    that stopped the request, which the caller's factory sees before the owner
-    chains it.
+    parsed JSON ``body`` (:meth:`of`); the status decides, so a body over the
+    cap or one httpx2 cannot decode is simply absent. Any other refusal keeps
+    the ``failure`` that stopped the request, which the caller's factory sees
+    before the owner chains it.
     """
 
     status: int | None = None
@@ -198,8 +199,8 @@ class HttpRefusal:
     def cause(self) -> Literal["status", "not_sent", "unreachable", "oversized", "unreadable"]:
         """What stopped the request: a ``"status"``, or a failure. ``"not_sent"`` left no request bytes, so
         even a write may be sent again; ``"unreachable"``, any other transport failure, may have taken effect;
-        ``"oversized"`` is over the byte cap; ``"unreadable"`` is a body httpx2 cannot decode, or a success
-        answer that does not validate.
+        ``"oversized"`` is a success answer over the byte cap; ``"unreadable"`` is a success answer whose body
+        httpx2 cannot decode or does not validate.
         """
 
         if self.status is not None:
@@ -240,11 +241,18 @@ class HttpRefusal:
             return f"{service} is temporarily unavailable (HTTP {self.status})."
         return f"{service} refused the request (HTTP {self.status})."
 
-    def as_error[E: IntegrationError](self, error: type[E], service: str, *, public_message: str | None = None) -> E:
-        """Return ``error`` for ``service`` built from these facts; ``public_message`` words a vendor's own case."""
+    def as_error[E: IntegrationError](
+        self, error: type[E], service: str, *, public_message: str | None = None, retry_after: timedelta | None = None,
+    ) -> E:
+        """Return ``error`` for ``service`` built from these facts.
+
+        ``public_message`` words a vendor's own case. ``retry_after`` is the vendor's own wait (one its error body
+        names), used when given, the answer's ``Retry-After`` otherwise; the refusal keeps stating only the answer.
+        """
 
         return error(
-            public_message or self.public_message(service), transient=self.transient, retry_after=self.retry_after
+            public_message or self.public_message(service), transient=self.transient,
+            retry_after=self.retry_after if retry_after is None else retry_after,
         )
 
 
@@ -576,16 +584,20 @@ class HttpClient:
         retaining the method, body and headers. A changed origin raises
         ``RedirectOriginError`` before sending credentials. It is exclusive with native ``follow_redirects``;
         a missing location or exhausted hop bound returns the redirect response.
-        ``max_bytes`` caps each decoded response body, including redirect hops,
-        raising ``ResponseTooLargeError`` on overflow. A capped request asks for
+        ``max_bytes`` caps each decoded response body, redirect hops included:
+        reading stops at the cap, and a success over it raises
+        ``ResponseTooLargeError``. A capped request asks for
         an unencoded answer (``Accept-Encoding: identity``). If a server still
         encodes its response, httpx2 may decode a whole network chunk before the
         cap is checked: the cap bounds accepted decoded content, not peak decoder
         memory.
-        With ``error``, a transport failure, an oversized answer and a body httpx2
-        cannot decode raise what ``error`` returns for their :class:`HttpRefusal`
-        instead, chained to the failure the refusal keeps; the response is
-        returned whatever its status.
+        A non-success status is the answer even when its body is over the cap
+        or httpx2 cannot decode it: the response, or a redirect hop that is
+        still followed, keeps its status with an empty body.
+        With ``error``, a transport failure and a success over the cap or
+        whose body httpx2 cannot decode raise what ``error`` returns for their
+        :class:`HttpRefusal` instead, chained to the failure the refusal keeps;
+        the response is returned whatever its status.
         ``HttpRefusal.cause`` tells a request not sent from one that may already
         have taken effect.
         """
@@ -598,17 +610,26 @@ class HttpClient:
         response_seen = False
 
         def read_response(response: httpx2.Response) -> None:
-            """Enforce the cap before httpx2 buffers a response or follows its redirect."""
+            """Read each answer within the cap before httpx2 buffers it or follows its redirect.
+
+            Only a success is oversized or undecodable: any other status outranks such a body, which is read no
+            further and left empty.
+            """
 
             nonlocal response_seen
             response_seen = True
-            if max_bytes is not None:
-                content = _read_capped(response, max_bytes=max_bytes)
+            try:
+                content = response.read() if max_bytes is None else _read_capped(response, max_bytes=max_bytes)
                 if content is None:
                     raise ResponseTooLargeError("HTTP response exceeds the byte limit.")
-                # httpx2's read() has no cap or public body-cache setter. Store
-                # the decoded cache it owns, preserving the native response.
-                response._content = content
+            except (httpx2.DecodingError, ResponseTooLargeError):
+                if response.is_success:
+                    raise
+                response.close()
+                content = b""
+            # httpx2's read() has no cap or public body-cache setter. Store
+            # the decoded cache it owns, preserving the native response.
+            response._content = content
 
         try:
             with httpx2.Client(
@@ -670,8 +691,8 @@ class HttpClient:
 
         ``json`` is the body; ``Accept: application/json`` is sent unless
         ``headers`` names another. Every :class:`HttpRefusal` (a transport failure,
-        an answer over ``max_bytes``, a non-success status, one that cannot be
-        decoded or does not validate) raises what ``error`` returns for it: the caller's
+        a non-success status whatever its body, a success over ``max_bytes``, one
+        that cannot be decoded or does not validate) raises what ``error`` returns for it: the caller's
         ``IntegrationError`` (:meth:`HttpRefusal.as_error`), or a domain signal it
         owns (a ``FileNotFoundError`` for a 404). The URL gate's and address
         policy's ``ValidationError`` propagate.
