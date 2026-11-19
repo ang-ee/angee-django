@@ -41,6 +41,7 @@ import {
   type ResourceTableHeaderVisibility,
   type ResourceTableLayout,
   type ListViewProps,
+  type PlacedBulkCollection,
 } from "./resource-view-types";
 import { useResourceSearch } from "./search/use-resource-search";
 import { useSearchCatalog } from "./search/catalog";
@@ -280,7 +281,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
                   selectedRows: resourceView.selectedRows as readonly TRow[],
                   // Rows grouped in the browser are never placed: a grouped list reports null.
                   selectedGroups: selectedGroupsOf(selectedIds, effectiveGroupStack, null),
-                })
+                } satisfies PlacedBulkCollection<TRow>)
                 : undefined,
             }
           : undefined

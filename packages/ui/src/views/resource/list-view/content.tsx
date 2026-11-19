@@ -14,7 +14,7 @@ import { type GroupedResourceViewSurface, type ResourceViewSurface } from "../re
 import { GroupedListBody } from "../GroupedList";
 import { FlatListBody, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures, type FlatListBodyProps, type GroupMeasure } from "../resource-view-list-body";
 import { ResourceListFrame } from "../ResourceListFrame";
-import { listChromeState, type BoardCardSpec, type CardActionContext, type ListEmptyContent, type ListViewProps } from "../resource-view-types";
+import { listChromeState, type BoardCardSpec, type CardActionContext, type ListEmptyContent, type ListViewProps, type PlacedBulkCollection } from "../resource-view-types";
 import { DeclaredBoardCardBody, DefaultBoardCardBody } from "../board/cards";
 import { columnsWithMetadataDefaults } from "../model-metadata-defaults";
 import { createLabelForResource } from "../resource-view-utils";
@@ -286,7 +286,7 @@ export function ListViewContent<TRow extends Row = Row>({
       // Scope snapshots are shared Rows; narrow to the declared row type (see bulkActions).
       selectedRows: resourceView.selectedRows as readonly TRow[],
       selectedGroups,
-    }) : null;
+    } satisfies PlacedBulkCollection<TRow>) : null;
   const genericSelection = !source && modelMetadata ? {
     modelMetadata,
     selectedRows: resourceView.selectedRows,

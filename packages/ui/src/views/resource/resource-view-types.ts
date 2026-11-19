@@ -163,6 +163,18 @@ export interface SelectedGroupLevel {
   label: string;
 }
 
+/**
+ * What a list surface hands `bulkActions`: the public collection with the split
+ * stated. Every surface builds this type, so one that groups cannot leave the split
+ * out and read as "not grouped"; the public member stays optional so a caller that
+ * builds a collection by hand (a consumer's test) need not name it.
+ */
+export type PlacedBulkCollection<TRow> = {
+  filter: QueryFilter;
+  selectedRows: readonly TRow[];
+  selectedGroups: readonly SelectedGroup[] | null | undefined;
+};
+
 /** The selected rows of one innermost group (`bulkActions` → `selectedGroups`). */
 export interface SelectedGroup extends SelectedGroupLevel {
   /** The enclosing groups, outermost first; [] at the root. */
@@ -422,7 +434,9 @@ export interface ListViewProps<TRow extends Row = Row> {
    * that surface's fields, so actions must check the fields they need.
    * selectedGroups is the selection split by the grouping the list renders, in
    * three states; never an empty array, since without a selection the bulk actions
-   * do not render. Undefined: the list is not grouped (a gallery never groups).
+   * do not render. Absent or undefined: the list is not grouped (a gallery never
+   * groups); a list surface always states it (`PlacedBulkCollection`), a collection
+   * built by hand may leave it out.
    * null: it is grouped but at least one selected id cannot be placed, so no split
    * is offered, never a partial one: the id was selected while the list was flat or
    * grouped otherwise, or by a select-all that holds ids without rows; it shows now
@@ -447,7 +461,7 @@ export interface ListViewProps<TRow extends Row = Row> {
     collection: {
       filter: QueryFilter;
       selectedRows: readonly TRow[];
-      selectedGroups: readonly SelectedGroup[] | null | undefined;
+      selectedGroups?: readonly SelectedGroup[] | null;
     },
   ) => ReactNode;
   /** Optional action content rendered in each board card footer. */
