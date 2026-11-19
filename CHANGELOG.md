@@ -17,9 +17,16 @@ live in code docstrings.
   repeated-values groups and the pickers, and the People list's pager agrees
   with the workbench's "All people" count. The new `party_record(id)` root
   resolves a party id, a merged-away one included, to the live party it names
-  now; the record redirect and the Party form read it, so an old link to a
-  merged-away record opens its survivor. Fixes the merged record appearing
-  beside its survivor (and the batch merge refusing that group).
+  now; the record redirect (`/parties/records/<id>`, where references to a
+  party link) and the Party form read it, so such a link to a merged-away
+  record opens its survivor. Fixes the merged record appearing beside its
+  survivor (and the batch merge refusing that group). Limits: a party that was
+  trashed but never merged leaves the lists and cannot be found in the
+  interface to restore until the framework has a trash surface (the shared
+  `restore_record` verb still restores it by its id); a party that every one
+  of its sources has withdrawn leaves the lists too; and a direct link to a
+  merged-away person's or organization's own page shows "Record unavailable"
+  rather than the survivor.
 - `angee.parties`: a list's Merge reads the list's grouping
   (`collection.selectedGroups`). One ticked record opens "Merge into…" and two
   open the compare page, whatever the grouping. Three or more on an ungrouped

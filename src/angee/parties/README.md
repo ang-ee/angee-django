@@ -475,7 +475,17 @@ relationships do. A merged-away or trashed party is no list row, group,
 repeated-values group, count, search result or picker candidate, and the People
 workbench's count is the list's. Their by-id roots read the same rows; a party
 id resolves through `party_record(id)`, which answers a merged-away id with its
-survivor, and the record redirect and the Party form follow it. A trashed party
-leaves the lists as every canonical read leaves it: finding and restoring it
-waits for the framework's trash surface (the shared `restore_record` verb takes
-its id).
+survivor, and the record redirect (`/parties/records/<id>`, where references to a
+party link) and the Party form follow it.
+
+Three limits follow from that read:
+
+- A party that was trashed but never merged leaves the lists, and nobody can
+  find it in the interface to restore it until the framework has a trash
+  surface. The shared `restore_record` verb still restores it by its id.
+- A party that every one of its sources has withdrawn leaves the lists too,
+  as it already left the People workbench's count and search.
+- A direct link to a merged-away person's or organization's own page
+  (`/parties/people/<id>`, `/parties/organizations/<id>`) shows "Record
+  unavailable" rather than the survivor: the shared record form has no place
+  yet where a page may say what a missing record opens instead.

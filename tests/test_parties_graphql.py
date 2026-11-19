@@ -624,6 +624,45 @@ def test_a_merged_away_party_is_no_row_group_count_or_candidate_and_its_id_names
     assert result["addresses"] == [{"id": address.sqid, "party": {"id": survivor.sqid}}]
 
 
+@pytest.mark.parametrize(
+    ("reads", "resolves"),
+    [
+        pytest.param(("merged",), False, id="a-reader-of-the-merged-record-only"),
+        pytest.param(("survivor",), False, id="a-reader-of-the-survivor-only"),
+        pytest.param((), False, id="a-stranger"),
+        pytest.param(("merged", "survivor"), True, id="a-reader-of-both"),
+    ],
+)
+def test_party_record_names_a_survivor_only_to_who_reads_both_records(
+    db: None, reads: tuple[str, ...], resolves: bool
+) -> None:
+    """``party_record`` reads the id's row and the survivor each in the actor's own scope: a redirect reveals a
+    survivor to nobody who could not read the record the id names, and nothing of a survivor they cannot read."""
+
+    owner = User.objects.create_user(username="party-record-owner")
+    viewer = User.objects.create_user(username="party-record-viewer")
+    with system_context(reason="test.parties.party_record.seed"):
+        survivor = Person.objects.create(display_name="Ada Lovelace", created_by_id=owner.pk)
+        merged = Person.objects.create(display_name="Ada Lovelace", created_by_id=owner.pk)
+        for name in reads:
+            row = {"merged": merged, "survivor": survivor}[name]
+            _grant_reader(messaging_models.Party._base_manager.get(pk=row.pk), viewer)
+    with actor_context(owner):
+        messaging_models.Party.objects.get(pk=survivor.pk).merge(records=[merged.public_id])
+
+    result = _data(
+        execute_schema(
+            _schema("public"),
+            "query($id: String!) { party_record(id: $id) { id concrete_kind } }",
+            variables={"id": merged.sqid},
+            user=viewer,
+        )
+    )
+
+    expected = {"id": survivor.sqid, "concrete_kind": "PERSON"} if resolves else None
+    assert result["party_record"] == expected
+
+
 def test_circle_console_insert_establishes_private_creator_access(
     db: None,
 ) -> None:
