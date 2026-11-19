@@ -61,6 +61,7 @@ from rebac import (
     system_context,
 )
 from rebac.actors import is_sudo, to_subject_ref
+from rebac.field_visibility import redacted_fields
 from rebac.resources import model_resource_type
 
 from angee.base.hooks import resolve_hooks
@@ -983,7 +984,8 @@ class DuplicateSetPreview:
     """``None`` when the set merges as listed; else why it would not."""
     reason: str = ""
     disagreements: tuple[FieldDisagreement, ...] = ()
-    """The merge fields the members disagree on (a field ``actor`` may not read on every member is left out)."""
+    """The merge fields the members disagree on, only for a set that merges; a field the actor's
+    ``read__<field>`` gate hides on any member is left out."""
 
     @property
     def survivor(self) -> Any:
@@ -2551,7 +2553,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 )
             else:
                 previews.append(DuplicateSetPreview(tuple(members), None))
-        shown = self._disagreements(actor, [preview.members for preview in previews], people)
+        # Only a set the actor may merge discloses its members' values.
+        shown = self._disagreements(
+            actor, [preview.members if preview.outcome is None else () for preview in previews], people,
+        )
         return [
             replace(preview, disagreements=shown[index]) for index, preview in enumerate(previews)
         ]
@@ -2560,19 +2565,21 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     def _disagreements(
         actor: Any, sets: Sequence[Sequence[Any]], people: Mapping[Any, Any],
     ) -> list[tuple[FieldDisagreement, ...]]:
-        """For each set, the merge fields its members disagree on and what the survivor will show, in four reads."""
+        """For each set, the merge fields its members disagree on and what the survivor will show, in fixed reads.
+
+        ``sets`` hold members read through ``actor`` and the person rows are read
+        through it too, so each field's own ``read__<field>`` gate has hidden what
+        the actor may not read, as on the record read, for the whole batch at
+        once. A field hidden on any member of a set is not compared there: the
+        actor sees neither its values nor whether they differ.
+        """
 
         party_model = apps.get_model("parties", "Party")
         person_model = apps.get_model("parties", "Person")
         pks = sorted({row.pk for members in sets for row in members})
         if not pks:
             return [() for _members in sets]
-        persons = person_model._base_manager.in_bulk([pk for pk in pks if pk in people])
-        private = set(
-            party_model._default_manager.with_actor(actor).with_action("read_private")
-            .filter(pk__in=pks).values_list("pk", flat=True)
-        )
-        gated = {"notes", "first_met_note"}
+        persons = person_model._default_manager.with_actor(actor).in_bulk([pk for pk in pks if pk in people])
         owners: dict[str, tuple[Any, str]] = {}
         stated: defaultdict[tuple[str, Any], list[Any]] = defaultdict(list)
         for statements in (party_model.statements, person_model.statements):
@@ -2600,8 +2607,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
         personal = set(party_model.merge_scalar_fields_of("person")) - set(party_model.merge_scalar_fields_of(None))
 
-        def value_of(row: Any, name: str) -> Any:
-            return getattr(persons.get(row.pk, row) if name in personal else row, name, None)
+        def source_of(row: Any, name: str) -> Any:
+            return persons.get(row.pk, row) if name in personal else row
 
         result: list[tuple[FieldDisagreement, ...]] = []
         for members in sets:
@@ -2612,9 +2619,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             fields = party_model.merge_scalar_fields_of(kind)
             disagreements = []
             for name in fields:
-                if name in gated and not all(row.pk in private for row in members):
+                sources = [source_of(row, name) for row in members]
+                if any(name in redacted_fields(source) for source in sources):
                     continue
-                values = tuple(text(value_of(row, name)) for row in members)
+                values = tuple(text(getattr(source, name, None)) for source in sources)
                 if len(set(values)) < 2:
                     continue
                 _model, aspect = owners.get(name, (None, ""))

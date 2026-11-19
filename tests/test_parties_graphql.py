@@ -797,32 +797,32 @@ _DIALOG = """query DuplicateSetPreviews($sets: [[ID!]!]!) {
 
 
 def test_the_dialog_read_costs_the_same_for_one_set_as_for_many_through_the_schema(db: None) -> None:
-    """The members reach the schema outside the optimizer: their kind and their statements' handles are batched."""
+    """The whole dialog document costs as much for one pair as for fifty pairs or fifty sets of ten.
+
+    The members reach the schema outside the optimizer: their kind and their
+    statements' handles are batched, and every field gate is asked for the batch.
+    """
 
     del db
+    from tests.test_parties_duplicates import _people
+
     owner = User.objects.create_user(username="dialog-read-owner")
-    sets = []
-    with system_context(reason="test.parties.dialog_read"):
-        for index in range(4):
-            handle = Handle._base_manager.create(platform="email", value=f"zoe{index}@example.com", created_by=owner)
-            older = Person._base_manager.create(display_name=f"Zoë Example {index}", created_by=owner)
-            messaging_models.Party.objects.assert_handle(older, handle, asserted_by=owner)
-            newer = Person._base_manager.create(display_name=f"Zoe Example {index}", created_by=owner)
-            messaging_models.Party.objects.propose_claimed_handle_as_system(
-                newer, handle, evidence=handle, reason="tests.claim",
-            )
-            sets.append([older.sqid, newer.sqid])
+    sets = [_people(owner, *(f"Zoe Example {index}" for _ in range(10)), value=f"zoe{index}@example.com")
+            for index in range(50)]
     console = _schema("console")
 
-    def read(count: int) -> tuple[int, Any]:
+    def read(chosen: list[list[Any]]) -> tuple[int, Any]:
         with CaptureQueriesContext(connection) as queries:
-            data = _data(execute_schema(console, _DIALOG, {"sets": sets[:count]}, user=owner))
+            data = _data(execute_schema(console, _DIALOG, {"sets": [[p.sqid for p in members] for members in chosen]},
+                                        user=owner))
         return len(queries.captured_queries), data["duplicate_set_previews"]
 
-    one, _previews = read(1)
-    four, previews = read(4)
+    one, _previews = read([sets[0][:2]])
+    pairs, previews = read([members[:2] for members in sets])
+    tens, ten_previews = read(sets)
 
-    assert one == four
+    assert one == pairs == tens
+    assert [row["outcome"] for row in previews + ten_previews] == [None] * 100
     first = previews[0]
     assert [member["concrete_kind"] for member in first["members"]] == ["PERSON", "PERSON"]
     assert [{row["handle"]["value"] for row in member["statements"]} for member in first["members"]] == [
