@@ -41,6 +41,7 @@ from angee.integrate.states import (
     StreamPhase,
     StreamState,
     SyncFailureKind,
+    exempt_from_discovery,
 )
 from angee.integrate.sync import (
     current_progress_bridge,
@@ -632,7 +633,7 @@ def _apply_page(
     # before the first one, after the extraction, confirmed what the page read.
     with (
         changeset(fresh=True, activity="pull", origin=stream),
-        type(stream).objects.exempt_from_discovery() if written else nullcontext(),
+        exempt_from_discovery() if written else nullcontext(),
         transaction.atomic(),
     ):
         current_changeset(record=True)
@@ -905,14 +906,14 @@ def push_stream(
                 result = adapter.write_back(link, candidate.projection, expected_version=link.remote_version)
             except RemoteRejected as error:
                 # The remote answered the write it was sent: its refusal is recorded whatever discovery says.
-                with type(stream).objects.exempt_from_discovery():
+                with exempt_from_discovery():
                     failures.append(_quarantine(stream, record, error, link=link).pk)
                 continue
             # The write landed: it is reflected whatever discovery says, so the next push neither repeats nor
             # conflicts with it. The next candidate asks again before it is sent.
             with (
                 changeset(fresh=True, activity="push", origin=stream),
-                type(stream).objects.exempt_from_discovery(),
+                exempt_from_discovery(),
                 transaction.atomic(),
             ):
                 current_changeset(record=True)

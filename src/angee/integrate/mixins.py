@@ -14,7 +14,7 @@ from django.utils import timezone
 from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.querysets import AngeeQuerySet
 from angee.integrate.errors import doubling_backoff
-from angee.integrate.states import SyncFailure, SyncFailureKind, SyncFailureStatus
+from angee.integrate.states import SyncFailure, SyncFailureKind, SyncFailureStatus, exempt_from_discovery
 from angee.provenance.statements import StatementsMixin
 
 if TYPE_CHECKING:
@@ -158,8 +158,7 @@ class SyncStateMixin(models.Model):
 
     def resolve_failure(self, slot: int | None, *, conflict: bool = False) -> SyncFailure:
         """Close one retained failure: local state, so it commits while discovery is pending."""
-        stream = self.failure_stream
-        with type(stream).objects.exempt_from_discovery():
+        with exempt_from_discovery():
             return self._transition_failure(slot, retry=False, conflict=conflict)
 
     def retry_failure(self, slot: int | None) -> SyncFailure:

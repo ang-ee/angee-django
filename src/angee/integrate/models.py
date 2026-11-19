@@ -22,7 +22,6 @@ import logging
 import secrets
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager
-from contextvars import ContextVar
 from copy import copy, deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -136,6 +135,8 @@ from angee.integrate.states import (
     SyncFailure,
     SyncFailureKind,
     SyncFailureStatus,
+    discovery_exempt,
+    exempt_from_discovery,
 )
 from angee.integrate.streams import (
     PushPreview,
@@ -5108,30 +5109,8 @@ class SyncStreamQuerySet[SyncStreamT: SyncStream](AngeeHistoryQuerySet[SyncStrea
 _SyncStreamManagerBase = AngeeHistoryManager.from_queryset(SyncStreamQuerySet)
 
 
-_discovery_exempt: ContextVar[bool] = ContextVar("angee_integrate_discovery_exempt", default=False)
-"""Whether stream commits here are exempt from discovery (:meth:`SyncStreamManager.exempt_from_discovery`)."""
-
-
 class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStreamT]):
     """Serialize stream discovery and epoch changes on the integration row."""
-
-    @contextmanager
-    def exempt_from_discovery(self) -> Iterator[None]:
-        """Let the stream commits inside commit while the stream's integration is not discovery-ready.
-
-        The one way past :meth:`lock_current`'s discovery check, for a commit that
-        rests on no remote fact discovery confirms: local state (a pin, a
-        dismissed failure, a conflict reopened after its follow-through was
-        refused) and the reflection of a write already sent, whose remote effect
-        has landed, so leaving it unrecorded would write it again or conflict.
-        Each caller names it where it commits; everything else stays fenced.
-        """
-
-        token = _discovery_exempt.set(True)
-        try:
-            yield
-        finally:
-            _discovery_exempt.reset(token)
 
     def lock_current(self, stream: Any, *, fenced_to: Any = None) -> Any:
         """Fence one page against epoch changes inside the caller's transaction.
@@ -5142,7 +5121,7 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         reflection, a sweep, an absence, a conflict decision, a retained
         failure), so here too it stops while the stream's integration is not
         discovery-ready (:meth:`Integration.require_discovery_ready`), unless
-        the caller declared its commit exempt (:meth:`exempt_from_discovery`).
+        the caller declared its commit exempt (:func:`~angee.integrate.states.exempt_from_discovery`).
         The integration is read with the stream in one statement, never locked:
         epoch changes lock it before the stream.
         """
@@ -5160,7 +5139,7 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 raise RuntimeError("The extracted page belongs to a superseded stream generation.")
             if fenced_to is not None and not json_equal(locked.operation_fence, fenced_to.operation_fence):
                 raise RuntimeError("Stream state changed during external work; retry the operation.")
-            if not _discovery_exempt.get():
+            if not discovery_exempt():
                 locked.integration.require_discovery_ready()
             return locked
 
@@ -6569,7 +6548,7 @@ class RecordLink(
                     fresh = type(link).objects.get(pk=link.pk)
                     if not type(link).objects.filter(pk__in=(link.pk, owner.pk)).open_failures():
                         # Reopening restores local state only: a refusal from discovery does not stop it.
-                        with type(stream).objects.exempt_from_discovery():
+                        with exempt_from_discovery():
                             fresh.record_failure(
                                 kind=row.kind,
                                 code=row.code,
@@ -6597,8 +6576,7 @@ class RecordLink(
         self._set_pinned(False)
 
     def _set_pinned(self, pinned: bool) -> None:
-        stream = self.failure_stream
-        with type(stream).objects.exempt_from_discovery(), transaction.atomic():
+        with exempt_from_discovery(), transaction.atomic():
             locked = self._lock_sync_state()
             locked.pinned = pinned
             locked.save(update_fields=["pinned", "updated_at"])

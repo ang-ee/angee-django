@@ -6,6 +6,9 @@ cycling back through model discovery.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timedelta
@@ -23,6 +26,34 @@ if TYPE_CHECKING:
 
 UNSET = object()
 """Omitted record binding; ``None`` explicitly clears the target."""
+
+_discovery_exempt: ContextVar[bool] = ContextVar("angee_integrate_discovery_exempt", default=False)
+
+
+@contextmanager
+def exempt_from_discovery() -> Iterator[None]:
+    """Let the stream commits inside commit while the stream's integration is not discovery-ready.
+
+    The one way past ``SyncStreamManager.lock_current``'s discovery check, for a
+    commit that rests on no remote fact discovery confirms: local state (a pin, a
+    dismissed failure, a conflict reopened after its follow-through was refused)
+    and the reflection of a write already sent, whose remote effect has landed, so
+    leaving it unrecorded would write it again or conflict. Each caller names it
+    where it commits; everything else stays fenced. It is a context of the running
+    code, so a caller needs no stream row to declare it.
+    """
+
+    token = _discovery_exempt.set(True)
+    try:
+        yield
+    finally:
+        _discovery_exempt.reset(token)
+
+
+def discovery_exempt() -> bool:
+    """Whether the stream commits running here were declared exempt (:func:`exempt_from_discovery`)."""
+
+    return _discovery_exempt.get()
 
 EXTERNAL_KEY_LENGTH = 512
 """The longest remote identity: a ``RecordLink.external_key``, and so a ``SyncStream.partition``.

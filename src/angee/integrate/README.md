@@ -383,7 +383,7 @@ re-entered or a credential attached since admission leaves discovery pending, so
 the run sends nothing more and commits nothing it read (a transient
 `IntegrationError`); earlier pages and their cursor stay, and the next run waits
 for discovery. A commit that rests on no remote fact goes through
-`SyncStreamManager.exempt_from_discovery()`, the one way past that check, named
+`angee.integrate.states.exempt_from_discovery()`, the one way past that check, named
 where it commits: pinning and unpinning a record, dismissing a failure, and
 reopening a conflict whose follow-through was refused. So does the reflection of a
 write already sent, and the remote's refusal of one: its effect has landed, so a

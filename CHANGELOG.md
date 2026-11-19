@@ -10,6 +10,16 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.integrate`: the discovery checks cost no more than they need. A push
+  asked about discovery for each candidate before its pinned, held, unchanged and
+  released skips, each time reading the whole integration row; it now asks once
+  per write, after the skips, reading only the columns
+  `Integration.require_discovery_ready` uses (`Integration.discovery_readiness_fields`).
+  The exemption from the stream lock's discovery check is a module-level context,
+  `angee.integrate.states.exempt_from_discovery()`, instead of a stream manager
+  method that ignored its manager, so pinning a record and dismissing a failure
+  no longer read the stream row only to reach it.
+
 - `angee.integrate`: re-entering exactly what is stored changes nothing, even
   beside a transient answer. `CredentialManager.reenter_secret` compared the
   whole decrypted material, so the identical secret re-entered while a pairing
@@ -104,7 +114,7 @@ live in code docstrings.
   and reopening a conflict whose follow-through was refused change local state
   only; they were refused until discovery succeeded, and the reopen left the
   conflict closed with neither side applied. They now commit through
-  `SyncStreamManager.exempt_from_discovery()`, the one named way past
+  `angee.integrate.states.exempt_from_discovery()`, the one named way past
   `lock_current`'s check. So does the reflection of a write already sent (and a
   remote's refusal of it): a write that landed while a secret was re-entered is
   recorded, so the next run neither repeats it nor conflicts with it. A two-way
