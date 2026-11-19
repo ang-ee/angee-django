@@ -15,7 +15,7 @@ vi.mock("@angee/refine", async (importOriginal) => ({
   useAuthoredMutation: () => [mocks.merge, { fetching: false, error: null, reset: () => undefined }],
 }));
 
-import { DuplicatesDialog } from "./DuplicatesDialog";
+import { DuplicatesDialog, type DuplicateSetInput } from "./DuplicatesDialog";
 import { enPartiesMessages } from "./i18n";
 import parties from "./index";
 
@@ -38,7 +38,7 @@ function member(id: string, display_name: string, address: string, created_at: s
   const handle = { id: `${id}-handle`, platform: "EMAIL", value: address };
   return {
     id, display_name, concrete_kind: "PERSON", created_at, first_met_note: "",
-    handles: [handle], statements: [{ id: `${id}-statement`, source_kind: "MAILBOX", handle }],
+    statements: [{ id: `${id}-statement`, source_kind: "MAILBOX", handle }],
   };
 }
 
@@ -65,17 +65,16 @@ const PREVIEWS = [
   },
 ];
 
+const SETS: readonly DuplicateSetInput[] = [{ members: ["augusta", "ada"], heading: "Lovelace" }, { members: ["grace", "amazing-grace"] }];
+
 /** The dialog over the review queue of the app opened with `?app=console`, links routed as the host routes them. */
-function renderDialog(onClose = vi.fn()) {
+function renderDialog(onClose = vi.fn(), sets = SETS) {
   function Host(): React.ReactElement {
     const router = useRouter();
     const navigate = React.useMemo(() => routerNavigator(router), [router]);
     return (
       <InAppLinkProvider navigate={navigate}>
-        <DuplicatesDialog
-          sets={[{ members: ["augusta", "ada"], heading: "Lovelace" }, { members: ["grace", "amazing-grace"] }]}
-          onClose={onClose}
-        />
+        <DuplicatesDialog sets={sets} onClose={onClose} />
         <Outlet />
       </InAppLinkProvider>
     );
@@ -130,5 +129,27 @@ describe("the batch merge dialog", () => {
 
     await waitFor(() => expect(router.state.location.pathname).toBe(routeHref("parties.merge", { left: "ada", right: "augusta" })));
     expect(router.state.location.search).toEqual({ app: "console" });
+  });
+
+  test("a member renamed since the list grouped it shows its current name and that it no longer matches", async () => {
+    mocks.previews = [{
+      outcome: null,
+      reason: "",
+      survivor: { id: "ada" },
+      members: [
+        member("ada", "Ada Lovelace", "ada@example.test", "2020-01-01T00:00:00Z"),
+        member("ada-2", "Augusta King", "ada@example.test", "2021-01-01T00:00:00Z"),
+      ],
+      disagreements: [{ field: "display_name", values: ["Ada Lovelace", "Augusta King"], shown: "Ada Lovelace" }],
+    }];
+
+    renderDialog(vi.fn(), [{
+      members: ["ada", "ada-2"],
+      heading: "Ada Lovelace",
+      grouping: [{ field: "display_name", key: "Ada Lovelace" }],
+    }]);
+
+    expect((await screen.findAllByText("Augusta King")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(message("duplicates.moved"))).toHaveLength(1);
   });
 });

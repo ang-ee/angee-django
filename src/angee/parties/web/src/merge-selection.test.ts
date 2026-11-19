@@ -31,7 +31,11 @@ describe("a parties list's selection as duplicate sets", () => {
 
     expect(split).toEqual({
       kind: "grouped",
-      sets: [{ members: ["ada", "grace"], heading: "Example Ltd › Ada Lovelace" }],
+      sets: [{
+        members: ["ada", "grace"],
+        heading: "Example Ltd › Ada Lovelace",
+        grouping: [{ field: "organization", key: "Example Ltd" }, { field: "display_name", key: "Ada Lovelace" }],
+      }],
       unpaired: 1,
       blank: 1,
     });

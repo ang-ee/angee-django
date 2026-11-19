@@ -40,17 +40,27 @@ const mountedRouteHref = aliasRouteHref(
 );
 
 /** The selection bar's Merge for `ids` on the mounted people list, which a scope search narrows. */
-function renderMountedSelection(ids: readonly string[], search = "peopleScope=UNASSIGNED") {
+function renderMountedSelection(ids: readonly string[], search = "peopleScope=UNASSIGNED", collection?: object) {
   // The app's root keeps `?app=` across links and redirects, as `createApp` declares it.
   const root = createRootRoute({ search: { middlewares: [retainSearchParams(["app"])] } });
   const router = createRouter({
     routeTree: root.addChildren([
-      createRoute({ getParentRoute: () => root, path: MOUNTED_PEOPLE, component: () => <MergeSelectionAction ids={new Set(ids)} /> }),
+      createRoute({
+        getParentRoute: () => root,
+        path: MOUNTED_PEOPLE,
+        component: () => <MergeSelectionAction ids={new Set(ids)} collection={collection} />,
+      }),
       createRoute({ getParentRoute: () => root, path: MERGE_PATH, component: () => <div>Comparison</div> }),
     ]),
     history: createMemoryHistory({ initialEntries: [`${MOUNTED_PEOPLE}?${search}`] }),
   });
-  render(<Provider><AppRuntimeProvider runtime={{ routeHref: mountedRouteHref }}><RouterProvider router={router} /></AppRuntimeProvider></Provider>);
+  render(
+    <Provider>
+      <AppRuntimeProvider runtime={{ routeHref: mountedRouteHref }}>
+        <ToastProvider><RouterProvider router={router} /></ToastProvider>
+      </AppRuntimeProvider>
+    </Provider>,
+  );
   return router;
 }
 
@@ -96,10 +106,32 @@ describe("Merge in a parties list's selection bar", () => {
     expect(screen.queryByText("Comparison")).toBeNull();
   });
 
+  test("one selected opens Merge into, where the person chooses the other record", async () => {
+    const router = renderMountedSelection(["ada"]);
+
+    fireEvent.click(await screen.findByRole("button", { name: MERGE }));
+
+    expect(await screen.findByText(enPartiesMessages["person.action.mergeOther"]!)).toBeTruthy();
+    expect(router.state.location.pathname).toBe(MOUNTED_PEOPLE);
+  });
+
   test.each([
-    { count: 1, ids: ["ada"], reason: enPartiesMessages["merge.selection.tooFew"]! },
-  ])("with $count selected, Merge stays in the bar, disabled, and says why", async ({ ids, reason }) => {
-    const router = renderMountedSelection(ids);
+    {
+      state: "three a grouping cannot place",
+      ids: ["ada", "grace", "joan"],
+      collection: { selectedGroups: null },
+      reason: enPartiesMessages["merge.selection.unplaceable"]!,
+    },
+    {
+      state: "three in groups of one",
+      ids: ["ada", "grace", "joan"],
+      collection: {
+        selectedGroups: ["ada", "grace", "joan"].map((id) => ({ field: "display_name", key: id, label: id, parents: [], ids: [id] })),
+      },
+      reason: enPartiesMessages["merge.selection.noGroups"]!,
+    },
+  ])("with $state, Merge stays in the bar, disabled, and says why", async ({ ids, collection, reason }) => {
+    const router = renderMountedSelection(ids, "peopleScope=UNASSIGNED", collection);
     const merge = await screen.findByRole("button", { name: MERGE });
 
     expect(merge.getAttribute("aria-disabled")).toBe("true");

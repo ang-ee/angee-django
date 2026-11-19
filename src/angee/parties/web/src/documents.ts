@@ -259,7 +259,6 @@ export const DuplicateSetPreviews = graphql(`
         concrete_kind
         created_at
         first_met_note
-        handles { id platform value }
         statements { id source_kind handle { id platform value } }
       }
       disagreements { field values shown }

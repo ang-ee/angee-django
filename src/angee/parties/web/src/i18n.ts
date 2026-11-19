@@ -201,9 +201,8 @@ export const enPartiesMessages: Record<string, string> = {
   "review.sameAs.mergeCertain": "Merge certain pairs ({count})",
   "review.sameAs.certainHeading": "{left} and {right}, both at {address}",
   "merge.selection.action": "Merge…",
-  "merge.selection.tooFew": "Select a second record to compare with this one.",
   "merge.selection.unplaceable":
-    "Some selected records are outside the groups shown, so their groups are unknown. Select records within the groups shown.",
+    "This view cannot tell which group each selected record is in. Merge three or more from a grouped list, or clear the grouping.",
   "merge.selection.noGroups": "No group holds two or more selected records.",
   "duplicates.title": "Merge duplicates",
   "duplicates.description": "Each set becomes one record: the oldest survives and the others fold into it.",
@@ -212,6 +211,7 @@ export const enPartiesMessages: Record<string, string> = {
   "duplicates.undo": "A merge can be reverted from the timeline.",
   "duplicates.survivorRule": "The oldest record survives.",
   "duplicates.survives": "Survives",
+  "duplicates.moved": "No longer matches the others in this group",
   "duplicates.member": "Record",
   "duplicates.created": "Created",
   "duplicates.firstMet": "First met",

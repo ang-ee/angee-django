@@ -1,8 +1,7 @@
 import * as React from "react";
-import { useNavigate } from "@tanstack/react-router";
 import {
-  Action, Field, Form, Group, ListView, registerForm, containerContents, useContainer, useRouteHref,
-  type ActionDescriptor, type ListColumn, type RecordPanelContext, type RecordTabDescriptor, type RegisteredFormProps, type StringIdRow,
+  Action, Field, Form, Group, ListView, registerForm, containerContents, useContainer,
+  type ListColumn, type RecordPanelContext, type RecordTabDescriptor, type RegisteredFormProps, type StringIdRow,
 } from "@angee/ui";
 
 import { PersonCirclesList } from "./CircleMembershipList";
@@ -10,6 +9,7 @@ import { IdentityTab } from "./IdentityTab";
 import { PartyAddresses } from "./PartyAddresses";
 import { PersonRelationshipsTab } from "./PersonRelationships";
 import { usePartiesT } from "./i18n";
+import { useMergeIntoAction } from "./merge-into";
 import { usePartyContactActions } from "./party-contact-actions";
 
 const MODEL = "parties.Person";
@@ -78,43 +78,14 @@ export function personFields(t: ReturnType<typeof usePartiesT>, extraFields: Rea
  */
 export function PersonForm({ resource: _resource, recordTabs, ...props }: RegisteredFormProps): React.ReactElement {
   const t = usePartiesT();
-  const navigate = useNavigate();
-  const routeHref = useRouteHref();
   const extraFields = containerContents(useContainer("parties.person#fields"));
   const contactActions = usePartyContactActions();
+  const mergeInto = useMergeIntoAction();
   const tabs = React.useMemo(() => personTabs(t), [t]);
-  const mergeSubmit = React.useCallback<NonNullable<ActionDescriptor["submit"]>>(
-    async (values, context) => {
-      const recordId = typeof context.record?.id === "string" ? context.record.id : "";
-      const otherId = typeof values.otherParty === "string" ? values.otherParty : "";
-      if (!recordId || !otherId || recordId === otherId) {
-        return {
-          ok: false,
-          message: t("person.action.mergeRequired"),
-          validationErrors: { otherParty: [t("person.action.mergeRequired")] },
-        };
-      }
-      await navigate({ to: routeHref("parties.merge", { left: recordId, right: otherId }) });
-      return { ok: true, message: "" };
-    },
-    [navigate, routeHref, t],
-  );
   return <Form {...props} resource={MODEL} eyebrow={t("person.eyebrow")} recordTabs={recordTabs ?? tabs}>
     {personFields(t, extraFields)}
     {contactActions}
-    <Action
-      id="merge-into"
-      label={t("person.action.merge")}
-      args={[{
-        name: "otherParty",
-        argKind: "relation",
-        resource: "parties.Party",
-        label: t("person.action.mergeOther"),
-        description: t("person.action.mergeOther.description"),
-      }]}
-      visibleWhen={() => true}
-      submit={mergeSubmit}
-    />
+    <Action {...mergeInto} />
   </Form>;
 }
 
