@@ -29,6 +29,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX
+from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.validators import UnicodeUsernameValidator
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
@@ -206,13 +207,14 @@ class UserKind(models.TextChoices):
 
 
 class UserAccountAction(models.TextChoices):
-    """Account verbs run on another person's account, each named by its Zed permission."""
+    """Account verbs, each named by its Zed permission and sharing protected-account blockers."""
 
     SET_ACTIVE = "set_active", "Set active"
     RENAME = "rename", "Rename"
     RESET_PASSWORD = "reset_password", "Reset password"
     ISSUE_PASSWORD = "issue_password", "Issue password"
     ISSUE_SIGN_IN_LINK = "issue_sign_in_link", "Issue sign-in link"
+    SET_PASSWORD = "set_password", "Set password"
 
 
 class AccountExists(DomainError):
@@ -533,7 +535,10 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
                 is_superuser=False,
                 is_active=True,
             )
-            user.set_password(password)
+            if actor is not None and password is not None:
+                user._set_validated_password(password)
+            else:
+                user.set_password(password)
             try:
                 with transaction.atomic():
                     with system_context(reason="iam.person.validate"):
@@ -1044,11 +1049,69 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
             self.first_name, self.last_name = user.first_name, user.last_name
             self.account_revision = user.account_revision
 
+    @sensitive_variables("current_password", "new_password")
+    def change_password(self, request: Any, *, current_password: str, new_password: str) -> None:
+        """Change the actor's password after the request's one throttled authentication attempt.
+
+        Authentication precedes the row lock. The locked hash must still match
+        the authenticated one, so concurrent password changes cannot be overwritten.
+        The session caller refreshes its auth hash after this succeeds.
+        """
+
+        # Django's backend module resolves AUTH_USER_MODEL at import time.
+        from angee.iam.auth import authenticate_once
+
+        actor, _bypass = self.effective_actor(strict=True)
+        if actor is None or to_subject_ref(actor) != to_subject_ref(self):
+            raise PermissionDenied("You can change only your own password.")
+        if not self.has_usable_password():
+            raise ValidationError({"current_password": "This account has no password; use its sign-in method."})
+        with system_context(reason="iam.password.authenticate"):
+            authenticated = authenticate_once(request, username=self.username, password=current_password)
+        if authenticated is None or to_subject_ref(authenticated) != actor:
+            raise ValidationError({"current_password": "The current password could not be verified."})
+        with transaction.atomic(), system_context(reason="iam.password.change"):
+            user = type(self).objects.lock_if_supported().get(pk=self.pk)
+            if not constant_time_compare(user.password, authenticated.password):
+                raise ValidationError({"current_password": "The password changed; try again."})
+            if current_password == new_password:
+                raise ValidationError({"new_password": "Choose a password different from the current password."})
+            user._set_validated_password(new_password, field="new_password")
+            user.save(update_fields=["password", "updated_at"])
+            self.password, self.account_revision = user.password, user.account_revision
+
+    @sensitive_variables("password")
+    def _set_validated_password(self, password: str, *, field: str = "password") -> None:
+        """Validate and hash an actor-typed password after its caller's admission; do not save."""
+
+        try:
+            if not password:
+                raise ValidationError("A password is required.")
+            # This source class composes into django-stubs' configured runtime user.
+            validate_password(password, cast(Any, self))
+        except ValidationError as error:
+            raise ValidationError({field: error.messages}) from None
+        self.set_password(password)
+
+    @sensitive_variables("password")
+    def set_account_password(self, password: str, *, expected_revision: int) -> None:
+        """Set a typed password for an unprotected person through the revision-checked account verb."""
+
+        with transaction.atomic():
+            user = self._lock_for_account_action(
+                str(UserAccountAction.SET_PASSWORD), expected_revision=expected_revision,
+            )
+            user._set_validated_password(password)
+            user.sudo(reason="iam.password.set").save(
+                update_fields=["password", "updated_at"], expected_revision=expected_revision,
+            )
+            self.password, self.account_revision = user.password, user.account_revision
+
+    @transaction.atomic
     def update_account(
         self,
         changes: Mapping[str, Any],
         *,
-        password: str | None = None,
         expected_revision: int | None = None,
     ) -> None:
         """Apply an administrative patch through the instance actor's ``write`` and field gates.
@@ -1056,10 +1119,12 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         Only changed fields are saved, so each ``write__<field>`` gate guards a
         real change. A protected account accepts the patch only from an actor
         holding ``administer`` on it: a consumer's ``write`` grant never edits
-        an elevated account, the actor's own included.
+        an elevated account, the actor's own included. Passwords change only
+        through ``set_account_password`` or self-service ``change_password``.
         """
 
         actor, _bypass = self.effective_actor(strict=True)
+        self.require_access("write")
         if expected_revision is not None:
             self.require_revision(expected_revision)
         if actor is not None and self.protected_against(actor) and not self.has_access("administer"):
@@ -1067,9 +1132,6 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         update_fields = {field for field, value in changes.items() if getattr(self, field) != value}
         for field in update_fields:
             setattr(self, field, changes[field])
-        if password:
-            self.set_password(password)
-            update_fields.add("password")
         self.full_clean()
         if update_fields:
             self.save(update_fields=[*sorted(update_fields), "updated_at"], expected_revision=expected_revision)

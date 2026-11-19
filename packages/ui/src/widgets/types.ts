@@ -146,6 +146,8 @@ export interface FieldPresentation {
   label?: ReactNode;
   options?: readonly WidgetOption[];
   placeholder?: string;
+  /** Native autocomplete intent, including current-password and new-password for secret inputs. */
+  autoComplete?: string;
   /**
    * For a money widget: the path to the FK owning the row's currency — a sibling
    * field (`"currency"`) or a one-hop related path (`"order.currency"`).

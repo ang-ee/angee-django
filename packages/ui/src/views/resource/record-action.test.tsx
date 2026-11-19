@@ -7,9 +7,11 @@ import type { ActionContext } from "../page";
 import {
   recordActionId,
   useActionResultMutation,
+  useActionOutcomeMutation,
   useRecordAction,
   useRecordActionMutation,
   useRecordChromeActionMutation,
+  useRecordChromeActionOutcome,
 } from "./record-action";
 
 const dataMocks = vi.hoisted(() => ({
@@ -78,6 +80,13 @@ describe("record action helpers", () => {
     expect(recordActionId(actionContext("row-1"))).toBe("row-1");
     expect(recordActionId(actionContext(""))).toBeUndefined();
     expect(recordActionId(actionContext(undefined))).toBeUndefined();
+  });
+
+  test("action forms forward transient input and own their error feedback", () => {
+    renderHook(() => useActionOutcomeMutation("replace_secret", { transient: true, errorNotification: false }));
+    expect(dataMocks.useActionMutation).toHaveBeenCalledWith("replace_secret", expect.objectContaining({
+      transient: true, errorNotification: false,
+    }));
   });
 
   test("runs by record id, refreshes, and returns the action message", async () => {
@@ -301,6 +310,13 @@ describe("useRecordChromeActionMutation", () => {
       recordId: "chn_1",
       record: { lifecycle: "CONNECTED" },
     };
+  });
+
+  test("record chrome forwards transient input and form-owned error feedback", () => {
+    renderHook(() => useRecordChromeActionOutcome("replace_secret", { transient: true, errorNotification: false }));
+    expect(dataMocks.useActionMutation).toHaveBeenCalledWith("replace_secret", expect.objectContaining({
+      transient: true, errorNotification: false, dataProviderName: "console",
+    }));
   });
 
   test("invalidates the record's own model and its canonical MTI parent", async () => {

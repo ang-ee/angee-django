@@ -145,6 +145,7 @@ function FieldDescriptorControlInstance({
     label: field.label,
     options: field.options,
     placeholder: field.placeholder,
+    autoComplete: field.autoComplete,
     ...(controlProps ? { controlProps: {
         ...controlProps,
         ...(field.minimum !== undefined ? { min: field.minimum } : {}),

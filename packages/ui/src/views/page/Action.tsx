@@ -83,6 +83,7 @@ interface ActionArgBase extends Pick<
   | "kind"
   | "options"
   | "placeholder"
+  | "autoComplete"
   | "description"
   | "currencyField"
   | "statusDisplay"

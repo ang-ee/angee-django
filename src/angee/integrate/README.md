@@ -194,6 +194,37 @@ clears that, and the signing key is never its generic secret.
 material; it is never stored as a copy of client policy. Ordinary access-token
 expiry with a refresh grant does not ask for new consent.
 
+The credential form edits **name** for non-OAuth kinds through
+the existing `update_credentials_by_pk` resource. `Credential.editable_fields`
+projects that ownership and `validate_details` enforces it on writes: OAuth
+exchanges retain control of their name. Expiry is read-only; it reports provider
+metadata and does not promise an expiry-at-use gate. The existing credential `write` and
+field gates still apply; this resource admits the credential's user or a
+platform administrator, subject to its guarded related reads.
+
+**Replace secret** is a confirmed, danger-styled record-menu action for platform
+administrators. `replace_credential_secret` takes the handler's write-only
+`CredentialMaterialInput` and delegates to `Credential.replace_secret` and
+`replace_material`. The handler selects the token, Basic-auth pair, application
+keys, SSH key or JWT key file and requires all replacement fields to be nonempty.
+Only static-token creation allows an empty placeholder. OAuth must use its
+connection flow instead. Zed owns the complete `replace_secret` permission
+(`admin->member & write`), sealed against bypassing fragment arms (`integrate.E001`).
+The mutation, model and `replacement_fields` projection all use that permission;
+the mutation has no additional administrator permission class.
+Owners without that permission can rename a
+manual credential but are neither offered nor allowed to replace its secret.
+Creation and replacement share field presentation: PEM and JSON use textareas,
+public identifiers use text, and single-line secrets use masked inputs. Secret
+inputs declare `autoComplete="new-password"` and transient mutation handling;
+responses contain no secret.
+
+Replacement keeps the credential id, owner and integration attachments. The
+locked replacement uses the handler's `carry_forward` to decide what survives,
+discards stale material and cached scoped tokens, and applies handler-derived metadata.
+Attached integrations read the new material on their next credential load; this
+does not revoke a remote key or restart an already authenticated connection.
+
 Connection discovery locates the external resource; a REBAC binding grants a
 relationship. Integration owns the `discovery_*` handshake, and the task is
 named `integrate.discover_connection`. Every credential attach

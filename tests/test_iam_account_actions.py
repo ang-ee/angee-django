@@ -176,6 +176,7 @@ def test_every_account_verb_refuses_protected_accounts(db):
             lambda user: user.rename(first_name="A", last_name="B", confirmed=True, expected_revision=revision),
             lambda user: user.reset_password(confirmed=True, expected_revision=revision),
             lambda user: user.issue_password(),
+            lambda user: user.set_account_password("chosen-password", expected_revision=revision),
         )
         for call in calls:
             with actor_context(admin), pytest.raises(ValidationError, match="protected"):
@@ -299,11 +300,12 @@ def test_account_actions_project_each_verbs_permission_and_eligibility(db):
     schema = _schema("console")
 
     seen_by_admin = _actions(schema, admin)
-    assert seen_by_admin["with-password"] == ["set_active", "rename", "reset_password"]
-    assert seen_by_admin["without-password"] == ["set_active", "rename", "issue_password"]
-    assert seen_by_admin["inactive-person"] == ["set_active", "rename"]
-    for protected in ("projection-admin", "projection-manager", "staff-person", "service-account"):
+    assert seen_by_admin["with-password"] == ["set_active", "rename", "reset_password", "set_password"]
+    assert seen_by_admin["without-password"] == ["set_active", "rename", "issue_password", "set_password"]
+    assert seen_by_admin["inactive-person"] == ["set_active", "rename", "set_password"]
+    for protected in ("projection-admin", "projection-manager", "staff-person"):
         assert seen_by_admin[protected] == []
+    assert seen_by_admin["service-account"] == []
     seen_by_manager = _actions(schema, manager)
     assert seen_by_manager["with-password"] == ["set_active", "rename", "reset_password"]
     assert seen_by_manager["projection-admin"] == []
