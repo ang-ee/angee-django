@@ -12,8 +12,8 @@ import vobject
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core import checks
-from django.core.exceptions import ValidationError
-from django.db import connection
+from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.db import connection, transaction
 from rebac import PermissionDenied, system_context
 
 from angee.graphql.testing.documents import execute_schema
@@ -191,24 +191,75 @@ def test_a_caller_who_may_not_create_a_directory_is_refused_before_the_connectio
         assert not Credential._base_manager.exists() and not Directory._base_manager.exists()
 
 
-def test_a_second_connection_of_one_name_is_refused_and_the_first_keeps_its_own_credential(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Each directory gets a credential of its own: a name already serving another integration is refused."""
+def test_each_connection_of_one_name_gets_a_credential_of_its_own(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A credential's name carries its directory's id, so a second connection, or a reconnect, never reuses one."""
 
     _load_vendor()
     monkeypatch.setattr(CardDavDirectoryBackend, "test_connection", lambda backend: "Connected.")
     admin = parties_graphql._platform_admin("carddav-twice-admin")
     first = _connect(admin)
 
-    with pytest.raises(ValidationError, match="already connected under that name"):
-        _connect(admin, material={"username": "grace@example.com", "password": "another-password"})
+    second = _connect(admin, material={"username": "grace@example.com", "password": "another-password"})
 
     with system_context(reason="test.parties.carddav.twice.verify"):
-        assert list(Directory._base_manager.values_list("pk", flat=True)) == [first.pk]
-        credential = Credential._base_manager.get()
+        assert second.credential_id != first.credential_id
+        names = dict(Credential._base_manager.values_list("pk", "name"))
+        assert names == {
+            first.credential_id: f"CardDAV — Ada Contacts ({first.sqid})",
+            second.credential_id: f"CardDAV — Ada Contacts ({second.sqid})",
+        }
+        credential = Credential._base_manager.get(pk=first.credential_id)
         assert credential.reveal() == {"username": "ada@example.com", "password": "carddav-password"}
-    assert _connect(admin, display_name="Grace Contacts").credential_id != first.credential_id
+
+
+def test_connecting_inside_a_callers_transaction_is_refused_before_the_connection_test(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The connection test reaches the network, so it never runs inside a transaction a caller holds open."""
+
+    _load_vendor()
+    monkeypatch.setattr(CardDavDirectoryBackend, "test_connection", lambda backend: pytest.fail("tested"))
+    admin = parties_graphql._platform_admin("carddav-atomic-admin")
+    with transaction.atomic(), pytest.raises(RuntimeError, match="outside any transaction"):
+        _connect(admin)
+    with system_context(reason="test.parties.carddav.atomic.verify"):
+        assert not Credential._base_manager.exists() and not Directory._base_manager.exists()
+
+
+def test_a_configuration_error_other_than_an_unloaded_vendor_reaches_the_caller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only a missing vendor row reads as "load resources"; any other configuration error stays itself."""
+
+    _load_vendor()
+
+    def broken(directory: Any, *args: Any, **kwargs: Any) -> Any:
+        raise ImproperlyConfigured("A broken default.")
+
+    monkeypatch.setattr(Directory, "prepare_impl_defaults", broken)
+    admin = parties_graphql._platform_admin("carddav-broken-admin")
+    with pytest.raises(ImproperlyConfigured, match="A broken default"):
+        _connect(admin)
+
+
+def test_a_backend_that_requires_discovery_leaves_the_first_sync_to_it(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Discovery schedules the first sync once it finishes; connect requests none it would refuse."""
+
+    _load_vendor()
+    monkeypatch.setattr(CardDavDirectoryBackend, "test_connection", lambda backend: "Connected.")
+    monkeypatch.setattr(CardDavDirectoryBackend, "requires_connection_discovery", True)
+    admin = parties_graphql._platform_admin("carddav-discovery-admin")
+
+    with caplog.at_level(logging.WARNING, logger="angee.parties.managers"):
+        directory = _connect(admin)
+
+    assert "first sync" not in caplog.text
+    with system_context(reason="test.parties.carddav.discovery.verify"):
+        row = Directory._base_manager.get(pk=directory.pk)
+        assert row.discovery_pending and not row.discovery_ready
+        assert row.sync_stage != Directory.SyncStage.QUEUED
 
 
 def test_a_first_sync_that_cannot_be_queued_is_logged_and_the_connected_directory_stays(
@@ -327,7 +378,7 @@ def test_a_passed_connection_test_commits_every_owned_row_atomically(
         link = Party.statements.handles().get()
 
         assert credential.user_id == admin.pk
-        assert credential.name == "CardDAV — Ada Contacts"
+        assert credential.name == f"CardDAV — Ada Contacts ({directory.sqid})"
         assert credential.reveal() == {
             "username": "ada@example.com",
             "password": "carddav-password",

@@ -2859,25 +2859,38 @@ def test_a_directory_tests_its_connection_by_discovery_and_reports_the_servers_r
     assert refused.value.public_message == "CardDAV PROPFIND returned HTTP 401."
 
 
-def test_a_per_book_contacts_setting_is_refused_when_written_and_an_unknown_one_ignored_when_read(
+def test_a_known_setting_is_validated_when_written_and_an_unknown_one_ignored_on_save_and_when_read(
     replica: Replica,
 ) -> None:
-    """Saving the directory refuses a per-book key other than ``local_delete``; a book's stream reads that key alone.
+    """Any save of the directory validates the keys it knows and drops the rest; a book's stream reads its keys alone.
 
-    A setting stored before the write was validated never fails the sync: the
-    stream ignores what is not a known policy key.
+    A directory stored before the write was validated, or carrying a key a later
+    version added, still saves, and never fails the sync.
     """
 
     book = RecordLink.objects.get(stream=replica.addressbooks, external_key=_BOOK)
-    replica.directory.config["streams"] = {"contacts": {_BOOK: {"local_delete": "propagate"}}}
+    server_url = replica.directory.config["server_url"]
+    replica.directory.config.update(
+        unknown=1, streams={"contacts": {_BOOK: {"local_delete": "propagate", "remote_delete": "retain"}}, "events": {}}
+    )
     with system_context(reason="test CardDAV per-book setting"):
         replica.directory.save()
+        assert Directory._base_manager.get(pk=replica.directory.pk).config == {
+            "server_url": server_url,
+            "streams": {"contacts": {_BOOK: {"local_delete": "propagate"}}},
+        }
     assert replica.backend.contacts_stream(book).config == {"local_delete": "propagate"}
 
-    replica.directory.config["streams"]["contacts"][_BOOK]["remote_delete"] = "retain"
+    replica.directory.config["streams"]["contacts"][_BOOK]["local_delete"] = "explode"
     with system_context(reason="test CardDAV per-book setting"), pytest.raises(ValidationError):
         replica.directory.save()
-    assert replica.backend.contacts_stream(book).config == {"local_delete": "propagate"}
+
+    with system_context(reason="test CardDAV per-book setting"):
+        Directory._base_manager.filter(pk=replica.directory.pk).update(
+            config={"server_url": server_url, "streams": {"contacts": {_BOOK: {"remote_delete": "retain"}}}}
+        )
+        replica.directory.refresh_from_db()
+    assert replica.backend.contacts_stream(book).config == {"local_delete": "conflict"}
 
 
 def test_an_empty_listing_confirms_no_address_book_absence(replica: Replica) -> None:

@@ -20,7 +20,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
 from django.utils import timezone
-from rebac import PermissionDenied, RelationshipTuple, system_context, to_object_ref, write_relationships
+from rebac import PermissionDenied, RelationshipTuple, SubjectRef, system_context, to_object_ref, write_relationships
 from rebac.actors import to_subject_ref
 from rebac.roles import grant as grant_role
 
@@ -38,6 +38,7 @@ from angee.parties.backends import (
 )
 from angee.provenance.evidence import EvidenceReference
 from tests.conftest import File, current_stream, make_integration
+from tests.iam_models import Group
 from tests.lock_waits import submit, wait_for_lock
 from tests.stream_adapters import applied_history
 from tests.test_storage import PNG_BYTES, drive, image_drive  # noqa: F401 -- the image drive avatars land on
@@ -1350,6 +1351,79 @@ def test_a_directorys_contact_reader_reads_no_handle_its_contact_only_claims(pul
 
     assert Party.objects.with_actor(reader).filter(pk=pull.link("ada").target_object_id).exists()
     assert readable == {grace.pk}
+
+
+def _granted_editor(pull: Pull, *, group: bool) -> Any:
+    """A person another user owns, whose party names the directory's owner an editor, directly or through a group."""
+
+    person = _existing(_user("someone-else"))[0]
+    subject = to_subject_ref(pull.directory.owner)
+    with system_context(reason="tests.directory_adopt.editor"):
+        if group:
+            editors = Group.objects.create(name="Contact editors")
+            editors.add_member(str(subject))
+            subject = SubjectRef.of("auth/group", str(editors.pk), "member")
+        party = to_object_ref(Party._base_manager.get(pk=person.pk))
+        write_relationships([RelationshipTuple(party, "editor", subject)])
+    return person
+
+
+@pytest.mark.parametrize("group", [False, True])
+def test_an_editor_of_the_persons_party_adopts_them(pull: Pull, group: bool) -> None:
+    """Editors are granted on the party; ``adopt`` follows them there, a user's grant and a group's alike."""
+
+    person = _granted_editor(pull, group=group)
+
+    pull.sync()
+
+    assert pull.link("ada").target_object_id == str(person.pk)
+
+
+@pytest.mark.parametrize("to_owner", [True, False])
+def test_adoption_follows_an_ownership_transfer(pull: Pull, to_owner: bool) -> None:
+    """The person's owner adopts them: a transfer to the directory's owner admits them, one away refuses."""
+
+    previous, current = (_user("someone-else"), pull.directory.owner) if to_owner else (pull.directory.owner, None)
+    current = current or _user("someone-new")
+    person = _existing(previous)[0]
+    Party.objects.get(pk=person.pk).with_actor(previous).transfer_ownership(current)
+
+    pull.sync()
+
+    assert (pull.link("ada").target_object_id == str(person.pk)) is to_owner
+
+
+def test_a_record_leaving_a_trashed_person_withdraws_what_it_stated_there_even_beside_a_sibling(pull: Pull) -> None:
+    """Another observing link of the source names the trashed person: the link's statements are withdrawn, not moved."""
+
+    pull.sync()
+    link = pull.link("ada")
+    trashed = Party._base_manager.get(pk=link.target_object_id)
+    RecordLink.objects.observe(pull.stream, "ada-elsewhere", target=trashed)
+    Person._base_manager.get(pk=trashed.pk).trash(reason="Removed by its holder")
+    pull.source.put("ada", replace(_ADA, notes="Still at the source."))
+
+    assert pull.sync().count == 1
+
+    source = str(link.asserting_source())
+    for model in (Party, Person):
+        stated = model.statements.filter(subject_id=trashed.pk, asserted_by=source, status="asserted").current()
+        assert not stated.exists(), model
+
+
+def test_a_returning_contact_cites_no_handle_a_withdrawn_adoption_found_them_by(pull: Pull) -> None:
+    """Its record comes back with another address: the identity it states again cites only current evidence."""
+
+    person, handle = _existing(pull.directory.owner)
+    pull.sync()
+    assert _identity_evidence(person.pk) == _refs(handle)
+    _tombstone(pull, "ada")
+    pull.source.put("ada", replace(_ADA, emails=(("ada@new.example", "home", True),)))
+
+    assert pull.sync().count == 1
+
+    assert pull.link("ada").target_object_id == str(person.pk)
+    assert _identity_evidence(person.pk) == []
 
 
 def test_a_directory_forwards_its_connection_test_and_credential_rule(

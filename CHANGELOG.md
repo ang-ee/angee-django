@@ -35,6 +35,28 @@ live in code docstrings.
   `UserManager.sign_in_addresses(emails)` answers which given addresses a person
   account signs in with, by the key `person_for_email` reads, in one query.
 
+- `angee.parties`: smaller findings of the second adoption review.
+  `Directory.objects.connect` refuses to run inside a caller's transaction
+  (`RuntimeError`: its connection test is remote); only a missing vendor row reads
+  as "load resources", and any other `ImproperlyConfigured` stays itself; each
+  directory's credential is named `<backend label> — <display name> (<directory
+  id>)`, unique by construction, so a second connection or a reconnect of one name
+  gets its own credential, and the refusal of a taken name is gone (it counted
+  disconnected and trashed integrations too). The directory is created
+  disconnected and then connected with its credential, entering connection
+  discovery, and the first sync is requested only when the directory is ready for
+  work: a backend that requires discovery gets its first sync when discovery
+  completes, where connect used to log a refused request with a traceback. CardDAV's
+  configuration ignores unknown keys on every save and at read and validates the
+  keys it knows, where any full save of a directory carrying an unknown key was
+  refused. `parties/person#adopt` follows editors where they are granted, on the
+  party (`owner + editor + party->editor`): the person-level arm alone was empty
+  in practice. Schema revision 27: `rebac sync` after compose. A contact link
+  leaving a trashed person withdraws what it stated there even while another link
+  of its source names that person (`RecordLink.withdraw_statements` would move it
+  to that link), and the handle an adoption found the person by is read only from
+  the source's current asserted identity statement.
+
 - `angee.parties`: organizations take no existing target yet.
   `PartyManager.ingest_organization` takes the record's locks (the passed
   organization and every spelling of its handles) before it decides, and refuses
@@ -150,8 +172,9 @@ live in code docstrings.
   credentials and names its server by host name and port in its connection
   message. Its configuration is a typed config model (`CardDavConfig`:
   `server_url`, and per address book a `ContactsPolicy` whose only key is
-  `local_delete`), so saving a directory refuses an unknown key; a book's stream
-  reads only what the policy knows, so a stored setting the write never validated
+  `local_delete`), so every save of a directory validates the keys it knows and
+  drops the others; a book's stream reads only what the policy knows, so a stored
+  setting the write never validated
   no longer fails the sync (it did since the seam change). The directory's config
   form shows the server URL and the book policies through the JSON control.
 
@@ -185,8 +208,9 @@ live in code docstrings.
   `PartyManager.adoption_blocker` admits; otherwise it mints its own. A two-way
   directory, CardDAV included, never adopts. The rule sits on the binding owner:
   `ingest_contact` refuses a person new to its link that no replaced link names
-  unless the rule admits them, so a vendor overriding `apply_record`, or any other
-  caller, binds nobody past it. It admits a person only when the stream is
+  unless the rule admits them, so no caller of the ingest verbs binds past it
+  (integrate's own link writers do not ask it: a vendor overriding `apply_record`
+  and returning a target is trusted code). It admits a person only when the stream is
   pull-only, the person is no account's own, the address that found them is no
   account's sign-in address, the directory's owner holds the new `adopt`
   permission on `parties/person` (owner or editor, no platform-admin arm: every
@@ -233,17 +257,16 @@ live in code docstrings.
   re-import mints a new one.
 
 - `Directory.objects.connect` checks that its owner may create a directory
-  before anything else. Each connected directory gets a credential of its own: a
-  credential name (`<backend label> — <display name>`) already serving another
-  integration of the owner's is refused, where a second connection of one display
-  name used to update the first one's credential. A backend whose vendor row is
+  before anything else. Each connected directory gets a credential of its own,
+  where a second connection of one display name used to update the first one's
+  credential. A backend whose vendor row is
   not loaded is a `ValidationError` that says to run `manage.py resources load`
   (it was an `ImproperlyConfigured`). The first sync is requested after the
   transaction commits, and a failure to queue it is logged instead of raised.
 
 - A contact whose person was trashed lands on a new person, and its link now
-  withdraws what it stated on the trashed person before it binds the new one
-  (`RecordLink.withdraw_statements`), with the `directory_match` proposals pairing
+  withdraws what it stated on the trashed person before it binds the new one, with
+  the `directory_match` proposals pairing
   the trashed person with the new person or with whom the contact's addresses
   name. Before, those statements stayed asserted on the trashed person, and so
   did the pair a refused adoption had proposed for it. The binding owner
