@@ -89,6 +89,10 @@ canonical Party. Its Person or Organization row reads that grant through its
 `party` link, while private fields, related subject records, handles and banking
 keep their own gates. The existing `reader` relation includes private Party reads; use it only
 when that wider access is intended. Both use the native record-access owner.
+Adding an address or relationship to a party takes write on that party
+(`create` on `parties/address` and `parties/relationship` in [permissions.zed](permissions.zed)):
+the row changes the party's projection, which a two-way directory writes to its
+card, so no read grant attaches anything.
 
 Sharing a directory shares its contacts: `contact_reader`, granted on the
 directory row through its share surface, and the directory's owner read the

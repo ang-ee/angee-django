@@ -378,3 +378,58 @@ def test_the_share_surface_grants_contact_reader_under_the_directory_write(conta
         Directory.objects.sudo(reason="tests.directory_readers.load").get(pk=c.directory.pk).with_actor(
             c.reader
         ).grant_record_access("contact_reader", c.outsider)
+
+
+ATTACH_ADDRESS = """mutation Attach($party: ID!) {
+  insert_addresses_one(object: {party: $party, street: "2 Attached Road"}) { id }
+}"""
+ATTACH_EDGE = """mutation Relate($party: ID!, $kind: ID!) {
+  insert_party_relationships_one(object: {party: $party, kind: $kind, other_name: "Attached Works"}) { id }
+}"""
+
+
+def test_reading_a_contact_attaches_nothing_to_it(contacts: SimpleNamespace, graphql: Any) -> None:
+    """An address or relationship takes write on its party: none of the party's readers can add one.
+
+    A contact reader, an identity reader and a per-row reader each read the shared
+    person and are refused both inserts; its owner and an editor attach both.
+    """
+
+    c = contacts
+    users = get_user_model()
+    identity_reader = users.objects.create_user(username="contacts-identity-reader")
+    row_reader = users.objects.create_user(username="contacts-row-reader")
+    editor = users.objects.create_user(username="contacts-editor")
+    with system_context(reason="tests.directory_readers.party_grants"):
+        _grant(c.person_party, "identity_reader", identity_reader)
+        _grant(c.person_party, "reader", row_reader)
+        _grant(c.person_party, "editor", editor)
+    variables = {"party": c.person.sqid, "kind": c.edge.kind.sqid}
+
+    def attach(actor: Any) -> list[str]:
+        """Each insert's outcome: the new row's id, or the refusal it raised."""
+
+        outcomes = []
+        roots = ((ATTACH_ADDRESS, "insert_addresses_one"), (ATTACH_EDGE, "insert_party_relationships_one"))
+        for document, root in roots:
+            result = execute_schema(graphql, document, variables, user=actor)
+            row = (result.data or {}).get(root)
+            outcomes.append(row["id"] if row else " ".join(str(error) for error in result.errors or ()))
+        return outcomes
+
+    def attached() -> tuple[int, int]:
+        with system_context(reason="tests.directory_readers.attached"):
+            return (
+                Address._base_manager.filter(party_id=c.person.pk, street="2 Attached Road").count(),
+                Relationship._base_manager.filter(party_id=c.person.pk, other_name="Attached Works").count(),
+            )
+
+    for actor in (c.reader, c.member, identity_reader, row_reader):
+        assert _allowed(c.person_party, actor) and not _allowed(c.person_party, actor, "write"), actor.username
+        for outcome in attach(actor):
+            assert "cannot create" in outcome, (actor.username, outcome)
+    assert attached() == (0, 0)
+    for count, actor in enumerate((c.owner, editor), start=1):
+        address, edge = attach(actor)
+        assert address.startswith("adr_") and edge.startswith("rel_"), (actor.username, address, edge)
+        assert attached() == (count, count)
