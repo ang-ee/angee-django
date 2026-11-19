@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 39
+// @rebac_schema_revision: 40
 
 // Parties, folders and circles are grant roots: each is owned through its
 // transferable `owner` column (OwnerMixin), which an insert defaults to the row's
@@ -116,11 +116,12 @@ definition parties/party {
     permission read__first_met_note = read_private
     permission read__handle_count = read_private
     permission write = owner + editor + statement_source + role_manage + admin->member
-    // Merging records in a batch (certain same-person pairs, a selection) is a person's
-    // decision: an active person account that writes the party, never a service or agent account.
-    permission batch_merge = write & person->active_member
     // What merging this party away into another needs: its write, but through the roles only `role_merge_away`.
     permission merge_away = owner + editor + statement_source + role_merge_away + admin->member
+    // Merging records in a batch (certain same-person pairs, a selection) is a person's decision: an
+    // active person account that may merge the party away (any member may be merged into the oldest),
+    // never a service or agent account.
+    permission batch_merge = merge_away & person->active_member
     // Granting a per-record read (`Party.rebac_grantable`): its write, but through the roles only `role_share`.
     permission share = owner + editor + statement_source + role_share + admin->member
     permission delete = owner + role_delete + admin->member

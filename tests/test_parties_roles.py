@@ -155,6 +155,8 @@ MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
         "merge_away": (*ADMINS, "editor"),
         # Granting a per-record read outlives the granter's role: through the roles, the contact admin's.
         "share": (*ADMINS, "editor"),
+        # A batch merge is an active person's who may merge the party away (merge_away).
+        "batch_merge": (*ADMINS, "editor"),
         "delete": ADMINS,
         "transfer": ADMINS,
     },
@@ -217,6 +219,7 @@ MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
         "write": ("owner", "platform"),
         "merge_away": ("owner", "platform"),
         "share": ("owner", "platform"),
+        "batch_merge": ("owner", "platform"),
         "delete": ("owner", "platform"),
         "transfer": ("owner", "platform"),
     },
@@ -389,3 +392,20 @@ def test_a_trashed_people_vault_lends_a_contact_admin_none_of_its_pages(world: S
     for action in ("read", "write", "delete"):
         assert not _allowed(w.note, admin, action), action
         assert _allowed(w.note, w.admin, action), action
+
+
+def test_a_contact_manager_is_offered_no_batch_and_a_contact_admin_who_is_a_person_is(world: SimpleNamespace) -> None:
+    """The batch gate is merge_away (and an active person): a manager is offered nothing it would be refused."""
+
+    w = world
+    manager, admin = w.holders["contact_manager"], w.holders["contact_admin"]
+    with system_context(reason="tests.parties_roles.batch_seed"):
+        older = Person.objects.create(display_name="Ada Example", created_by=w.owner)
+        newer = Person.objects.create(display_name="Ada Example", created_by=w.owner)
+    pair = [older.public_id, newer.public_id]
+    assert Party.objects.batch_mergeable(manager, [older.pk, newer.pk]) == set()
+    refused = Party.objects.merge_duplicates(actor=manager, sets=[pair])
+    assert [str(row.outcome) for row in refused] == ["refused"]
+    assert Party.objects.batch_mergeable(admin, [older.pk, newer.pk]) == {older.pk, newer.pk}
+    merged = Party.objects.merge_duplicates(actor=admin, sets=[pair])
+    assert [(str(row.outcome), row.survivor.pk) for row in merged] == [("merged", older.pk)]

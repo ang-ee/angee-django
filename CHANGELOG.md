@@ -27,12 +27,14 @@ live in code docstrings.
   `role_delete` (a contact manager trashes a party, person or organization,
   which is `delete`: no), and, pending
   the architect's ruling, `role_write_as_subject`, `role_merge_away`,
-  `role_share` and `role_withheld`. Revision 38 on its branch.
+  `role_share` and `role_withheld`. The batch merge's gate becomes
+  `batch_merge = merge_away & person->active_member`, so a contact manager, who
+  merges no party away, is offered no set. Revision 40.
   `angee.knowledge`: the people vault takes the roles by install grant rows on
   `knowledge/vault` relations named for them (`contact_reader`,
   `contact_manager`, `contact_admin`); a contact admin removes the vault's
   pages through the new `knowledge/vault#page_delete`, never the vault (pending
-  ruling). Knowledge revision 11, extends revision 7. Nobody holds a role until
+  ruling). Knowledge revision 11, extends revision 8. Nobody holds a role until
   a deployment grants it. Upgrade: `rebac sync`; load the install tier.
 - `angee.parties`: the batch dialog lists every group a list's "Select all N"
   matched by key, not by offset. It forwards the list's own groups read as the

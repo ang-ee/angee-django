@@ -591,8 +591,12 @@ dialog says what to do. A grouped list gives a set per group. Under the list's
 "Select all N" (`selectAllMatching`), a list grouped by one text merge field
 gives every group its read matches, each a set, listed page by page through the
 list resource's own groups read (at most 1,000 a confirm). The dialog lists the
-sets before anything merges. Only an active person account that writes every record may (the party's
-`batch_merge` permission, `write & person->active_member`); a service or agent
+sets before anything merges. Only an active person account that may merge every record away may (the party's
+`batch_merge` permission, `merge_away & person->active_member`: a set's oldest
+survives, so each member may be the one merged; a contact manager, who writes but
+merges nothing away, is offered no set, and a set where exactly one record lacks
+`merge_away` is not offered though it could merge with that record surviving, on
+the compare page); a service or agent
 account merges nothing, and no agent tool offers it. A set never holds an account's
 own person (merged by hand, on the compare page), records of two kinds, a trashed
 or merged record, or two records a person kept apart; each is refused for that set

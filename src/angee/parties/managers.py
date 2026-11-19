@@ -2900,7 +2900,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
         A pair is certain when both are people and neither is an account's own
         person, ``actor`` may merge both in a batch (``batch_merge``: an active
-        person account that writes them), both bear a real name that is none of the
+        person account that may merge each away), both bear a real name that is none of the
         pair's cited addresses (``Party.names_an_address``) and equals the other's
         but for case, accents and hyphens (``Party.comparable_name``), and exactly
         these two parties are linked to an address the pair cites
@@ -2950,10 +2950,11 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         ]
 
     def batch_mergeable(self, actor: Any, ids: Iterable[Any]) -> set[Any]:
-        """The parties among ``ids`` that ``actor`` may merge in a batch: an active person who writes them.
+        """The parties among ``ids`` that ``actor`` may merge in a batch: an active person who may merge them away.
 
-        The party's ``batch_merge`` permission (``write & person->active_member``),
-        so a service or agent account may merge none.
+        The party's ``batch_merge`` permission (``merge_away & person->active_member``),
+        so a service or agent account may merge none, and a contact manager, who
+        writes every party but merges none away, is offered none.
         """
 
         # Read on the party, the owner of the permission, whichever model's manager the caller used.
