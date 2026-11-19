@@ -44,8 +44,6 @@ LIST_PAGE_LIMIT = 100
 """The most records one list page returns."""
 SEARCH_PAGE_LIMIT = 200
 """The most records one search page returns."""
-SEARCH_RESULT_LIMIT = 10_000
-"""The most results one search query pages through; HubSpot refuses a page past it."""
 BATCH_READ_LIMIT = 100
 """The most ids one batch read takes."""
 
@@ -53,6 +51,7 @@ EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 """HubSpot's timestamps count milliseconds from here."""
 
 _MODIFIED_PROPERTY = {"contacts": "lastmodifieddate"}
+_RECORD_ID = "hs_object_id"
 _NOT_FOUND = "OBJECT_NOT_FOUND"
 _RESPONSE_MAX_BYTES = 8 * 1024 * 1024
 _REQUEST_TIMEOUT_SECONDS = 30
@@ -175,7 +174,8 @@ class HubSpotPage(_HubSpotModel):
     """One page of a list walk or a search.
 
     A list page's following position is the id of the record it starts at; a
-    search page's is an offset into the query's results.
+    search page's is an offset into the query's results, which this client reads
+    only as a sign that more results follow.
     """
 
     results: tuple[HubSpotObject, ...] = ()
@@ -283,27 +283,30 @@ class HubSpotClient:
             position = page.next_after
 
     def search_modified(
-        self, object_type: str, *, since: datetime, after: str, limit: int, properties: Sequence[str]
+        self, object_type: str, *, since: datetime, limit: int, properties: Sequence[str]
     ) -> HubSpotPage:
-        """Return one page of ``object_type``'s records modified at or after ``since``, oldest change first.
+        """Return the first ``limit`` records of ``object_type`` modified strictly after ``since``, oldest change first.
 
-        ``after`` is the offset into the query's results. The type's modified time
-        is always read back, so each record states the time it was found by.
-        HubSpot's search lags its writes and never returns archived records.
+        HubSpot does not state how it orders records that share one modified time.
         """
 
         modified = _MODIFIED_PROPERTY[object_type]
-        changed_since = {"propertyName": modified, "operator": "GTE", "value": str(_epoch_ms(since))}
-        payload: dict[str, Any] = {
-            "filterGroups": [{"filters": [changed_since]}],
-            "sorts": [{"propertyName": modified, "direction": "ASCENDING"}],
-            "properties": _requested(object_type, properties),
-            "limit": limit,
-        }
+        changed = {"propertyName": modified, "operator": "GT", "value": str(_epoch_ms(since))}
+        return self._search(object_type, [changed], sort=modified, limit=limit, properties=properties)
+
+    def search_modified_at(
+        self, object_type: str, *, moment: datetime, after: str, limit: int, properties: Sequence[str]
+    ) -> HubSpotPage:
+        """Return the first ``limit`` records of ``object_type`` modified at exactly ``moment``, in id order.
+
+        Only records with an id above ``after`` are returned, every one when it is ``""``.
+        """
+
+        modified = _MODIFIED_PROPERTY[object_type]
+        filters = [{"propertyName": modified, "operator": "EQ", "value": str(_epoch_ms(moment))}]
         if after:
-            payload["after"] = after
-        path = f"/crm/objects/{API_VERSION}/{object_type}/search"
-        return self._request(HubSpotPage, "POST", path, payload=payload, scopes=(get_read_scope(object_type),))
+            filters.append({"propertyName": _RECORD_ID, "operator": "GT", "value": after})
+        return self._search(object_type, filters, sort=_RECORD_ID, limit=limit, properties=properties)
 
     def batch_read(self, object_type: str, ids: Sequence[str], properties: Sequence[str]) -> HubSpotBatchRead:
         """Read ``ids`` in batches of :data:`BATCH_READ_LIMIT`.
@@ -332,6 +335,26 @@ class HubSpotClient:
             found.extend(answer.results)
         answered = {record.id for record in found}
         return HubSpotBatchRead(found=tuple(found), missing=tuple(key for key in requested if key not in answered))
+
+    def _search(
+        self, object_type: str, filters: list[dict[str, str]], *, sort: str, limit: int, properties: Sequence[str]
+    ) -> HubSpotPage:
+        """Return the first page of the records every one of ``filters`` holds for, ascending on ``sort``.
+
+        HubSpot takes one sort rule and requires every filter of a group to hold.
+        The type's modified time is always read back, so each record states the
+        time it was found by. HubSpot's search lags its writes and never returns
+        archived records.
+        """
+
+        payload = {
+            "filterGroups": [{"filters": filters}],
+            "sorts": [{"propertyName": sort, "direction": "ASCENDING"}],
+            "properties": _requested(object_type, properties),
+            "limit": limit,
+        }
+        path = f"/crm/objects/{API_VERSION}/{object_type}/search"
+        return self._request(HubSpotPage, "POST", path, payload=payload, scopes=(get_read_scope(object_type),))
 
     def _request[T: BaseModel](
         self,

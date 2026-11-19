@@ -198,25 +198,54 @@ def test_account_details_state_the_portal(hubspot_server: HubSpotServer, client:
     assert hubspot_server.requests[0].url.path == "/account-info/2026-09/details"
 
 
-def test_a_search_asks_for_changes_since_a_time_ascending_on_the_contacts_modified_property(
+def test_a_search_asks_for_changes_strictly_after_a_time_ascending_on_the_contacts_modified_property(
     hubspot_server: HubSpotServer, client: HubSpotClient
 ) -> None:
     contact(hubspot_server, 1)
+    contact(hubspot_server, 10)
     late = contact(hubspot_server, 30)
     since = MODIFIED + timedelta(minutes=10)
 
-    page = client.search_modified("contacts", since=since, after="", limit=10, properties=("email",))
+    page = client.search_modified("contacts", since=since, limit=10, properties=("email",))
 
     assert [record.id for record in page.results] == [late]
     assert page.results[0].modified_at("contacts") == MODIFIED + timedelta(minutes=30)
     assert request_fields(hubspot_server.requests[0]) == {
         "filterGroups": [
-            {"filters": [{"propertyName": "lastmodifieddate", "operator": "GTE", "value": epoch_ms(since)}]}
+            {"filters": [{"propertyName": "lastmodifieddate", "operator": "GT", "value": epoch_ms(since)}]}
         ],
         "sorts": [{"propertyName": "lastmodifieddate", "direction": "ASCENDING"}],
         "properties": ["email", "lastmodifieddate"],
         "limit": 10,
     }
+
+
+def test_a_search_at_one_modified_time_reads_its_records_above_an_id_in_id_order(
+    hubspot_server: HubSpotServer, client: HubSpotClient
+) -> None:
+    moment = MODIFIED + timedelta(minutes=5)
+    contact(hubspot_server, 4)
+    block = [hubspot_server.add("contacts", modified=moment) for _ in range(3)]
+    contact(hubspot_server, 6)
+
+    first = client.search_modified_at("contacts", moment=moment, after="", limit=2, properties=())
+    rest = client.search_modified_at("contacts", moment=moment, after=block[1], limit=2, properties=())
+
+    assert ([record.id for record in first.results], bool(first.next_after)) == (block[:2], True)
+    assert ([record.id for record in rest.results], rest.next_after) == (block[2:], "")
+    at_moment = {"propertyName": "lastmodifieddate", "operator": "EQ", "value": epoch_ms(moment)}
+    by_id = [{"propertyName": "hs_object_id", "direction": "ASCENDING"}]
+    assert [request_fields(request) for request in hubspot_server.requests] == [
+        {"filterGroups": [{"filters": [at_moment]}], "sorts": by_id, "properties": ["lastmodifieddate"], "limit": 2},
+        {
+            "filterGroups": [
+                {"filters": [at_moment, {"propertyName": "hs_object_id", "operator": "GT", "value": block[1]}]}
+            ],
+            "sorts": by_id,
+            "properties": ["lastmodifieddate"],
+            "limit": 2,
+        },
+    ]
 
 
 UNAVAILABLE = "HubSpot is temporarily unavailable."

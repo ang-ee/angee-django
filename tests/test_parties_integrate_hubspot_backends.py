@@ -11,16 +11,10 @@ from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
 from angee.integrate.states import StreamPhase
-from angee.integrate.streams import CursorInvalid
 from angee.integrate.testing.http import request_fields
 from angee.parties.backends import ParsedAddress, ParsedContact
 from angee.parties_integrate_hubspot.backends import OVERLAP, HubSpotCursor, contact_from_properties
-from angee.parties_integrate_hubspot.client import (
-    EPOCH,
-    SEARCH_RESULT_LIMIT,
-    HubSpotClient,
-    HubSpotPage,
-)
+from angee.parties_integrate_hubspot.client import EPOCH, HubSpotClient, HubSpotPage
 from angee.parties_integrate_hubspot.testing.server import TOKEN, HubSpotServer, serve
 from angee.parties_integrate_hubspot.testing.server import hubspot_server as hubspot_server
 
@@ -41,40 +35,54 @@ def run_pass(
     *,
     now: datetime,
     limit: int = 2,
-    ceiling: int = SEARCH_RESULT_LIMIT,
     between: Callable[[list[str]], None] | None = None,
+    drains: dict[datetime, list[str]] | None = None,
 ) -> tuple[HubSpotCursor, list[str]]:
     """Drive one pass page by page, as the backend's extract will; return the closed cursor and every id read.
 
     The cursor goes through its stored JSON between pages, as the driver persists it.
-    ``between`` runs before each following page with the ids read so far.
+    ``between`` runs before each following page with the ids read so far; ``drains``
+    collects the ids each drain read, by the modified time of its block.
     """
 
     cursor = cursor.begin(phase, now=now)
     read: list[str] = []
     page: HubSpotPage
     while cursor.is_open:
-        if cursor.since is not None:
-            page = client.search_modified(
-                "contacts", since=cursor.since, after=cursor.after, limit=limit, properties=()
+        if cursor.block is not None:
+            page = client.search_modified_at(
+                "contacts", moment=cursor.block, after=cursor.after, limit=limit, properties=()
             )
+            if drains is not None:
+                drains.setdefault(cursor.block, []).extend(record.id for record in page.results)
+        elif cursor.since is not None:
+            page = client.search_modified("contacts", since=cursor.since, limit=limit, properties=())
         else:
             page = client.list_page("contacts", after=cursor.after, limit=limit, properties=())
         read += [record.id for record in page.results]
-        cursor = cursor.advance(page, object_type="contacts", limit=limit, ceiling=ceiling)
+        cursor = cursor.advance(page, object_type="contacts")
         cursor = HubSpotCursor.model_validate(cursor.model_dump(mode="json"))
         if between is not None and cursor.is_open:
             between(read)
     return cursor, read
 
 
-def searches(server: HubSpotServer) -> list[tuple[datetime, str | None]]:
-    """Return the lower bound and offset of every search the account answered, in order."""
+def searches(server: HubSpotServer) -> list[tuple[str, datetime, str]]:
+    """Return every search the account answered, in order.
+
+    Each is its modified-time operator and time, and the record id it reads above
+    (``""`` for none).
+    """
 
     asked = [request_fields(request) for request in server.requests if request.url.path.endswith("/search")]
+    stated = [{item["propertyName"]: item for item in fields["filterGroups"][0]["filters"]} for fields in asked]
     return [
-        (EPOCH + timedelta(milliseconds=int(fields["filterGroups"][0]["filters"][0]["value"])), fields.get("after"))
-        for fields in asked
+        (
+            filters["lastmodifieddate"]["operator"],
+            EPOCH + timedelta(milliseconds=int(filters["lastmodifieddate"]["value"])),
+            filters.get("hs_object_id", {}).get("value", ""),
+        )
+        for filters in stated
     ]
 
 
@@ -129,7 +137,7 @@ def test_a_delta_searches_from_the_watermark_minus_the_overlap(
 
     assert (opened.since, opened.started, opened.after) == (T0 - timedelta(minutes=1) - OVERLAP, later, "")
     assert read == [recent, changed]
-    assert searches(hubspot_server) == [(T0 - timedelta(minutes=1) - OVERLAP, None)]
+    assert searches(hubspot_server) == [("GT", T0 - timedelta(minutes=1) - OVERLAP, "")]
     assert delta == HubSpotCursor(watermark=T0 + timedelta(minutes=10))
 
 
@@ -151,55 +159,39 @@ def test_a_record_inside_the_overlap_appears_in_both_windows_and_a_lagging_one_i
     assert list(dict.fromkeys(second_read)) == [lagging, seen, newer]
 
 
-def test_a_delta_searches_again_from_each_pages_latest_modified_time(
+def test_a_delta_searches_again_after_the_last_time_each_page_read_in_full(
     hubspot_server: HubSpotServer, client: HubSpotClient
 ) -> None:
-    hubspot_server.search_ceiling = 4
     ids = [hubspot_server.add("contacts", modified=T0 + timedelta(minutes=minute)) for minute in range(1, 8)]
 
-    closed, read = run_pass(client, HubSpotCursor(watermark=T0), DELTA, now=T0 + timedelta(hours=1), ceiling=4)
+    closed, read = run_pass(client, HubSpotCursor(watermark=T0), DELTA, now=T0 + timedelta(hours=1))
 
     assert list(dict.fromkeys(read)) == ids
-    assert searches(hubspot_server) == [(T0 - OVERLAP, None)] + [
-        (T0 + timedelta(minutes=minute), None) for minute in range(2, 7)
+    assert searches(hubspot_server) == [("GT", T0 - OVERLAP, "")] + [
+        ("GT", T0 + timedelta(minutes=minute), "") for minute in range(1, 6)
     ]
     assert closed == HubSpotCursor(watermark=T0 + timedelta(minutes=7))
 
 
-def test_a_block_of_one_modified_time_pages_by_offset_and_the_search_moves_on_past_it(
+def test_a_block_of_one_modified_time_is_drained_by_id_from_its_lowest_and_the_search_moves_on_past_it(
     hubspot_server: HubSpotServer, client: HubSpotClient
 ) -> None:
     moment = T0 + timedelta(minutes=1)
     block = [hubspot_server.add("contacts", modified=moment) for _ in range(3)]
     beyond = [hubspot_server.add("contacts", modified=moment + timedelta(minutes=minute)) for minute in (1, 2)]
+    drains: dict[datetime, list[str]] = {}
 
-    closed, read = run_pass(client, HubSpotCursor(watermark=T0), DELTA, now=T0 + timedelta(hours=1))
+    closed, read = run_pass(client, HubSpotCursor(watermark=T0), DELTA, now=T0 + timedelta(hours=1), drains=drains)
 
-    assert list(dict.fromkeys(read)) == [*block, *beyond]
+    assert read == [block[2], block[1], *block, *beyond]
+    assert drains == {moment: block}
     assert searches(hubspot_server) == [
-        (T0 - OVERLAP, None),
-        (moment, None),
-        (moment, "2"),
-        (moment + timedelta(minutes=1), None),
+        ("GT", T0 - OVERLAP, ""),
+        ("EQ", moment, ""),
+        ("EQ", moment, block[1]),
+        ("GT", moment, ""),
     ]
     assert closed == HubSpotCursor(watermark=moment + timedelta(minutes=2))
-
-
-def test_a_block_of_one_modified_time_at_the_ceiling_asks_for_a_new_baseline_seeded_with_the_watermark(
-    hubspot_server: HubSpotServer, client: HubSpotClient
-) -> None:
-    hubspot_server.search_ceiling = 4
-    moment = T0 + timedelta(minutes=1)
-    ids = [hubspot_server.add("contacts", modified=moment) for _ in range(6)]
-
-    with pytest.raises(CursorInvalid) as invalid:
-        run_pass(client, HubSpotCursor(watermark=T0), DELTA, now=T0 + timedelta(hours=1), ceiling=4)
-    seed = HubSpotCursor.model_validate(invalid.value.cursor)
-    _, read = run_pass(client, seed, BASELINE, now=T0 + timedelta(hours=2))
-
-    assert searches(hubspot_server) == [(T0 - OVERLAP, None), (moment, None), (moment, "2")]
-    assert seed == HubSpotCursor(watermark=moment)
-    assert read == ids
 
 
 def test_begin_continues_an_open_pass_of_the_stream_phase_and_reopens_for_another() -> None:
@@ -210,43 +202,48 @@ def test_begin_continues_an_open_pass_of_the_stream_phase_and_reopens_for_anothe
     assert walking.begin(DELTA, now=later) == HubSpotCursor(since=EPOCH, started=later)
     assert HubSpotCursor(watermark=T0).begin(DELTA, now=later).since == T0 - OVERLAP
     with pytest.raises(ValueError):
-        HubSpotCursor().advance(HubSpotPage(), object_type="contacts", limit=2)
+        HubSpotCursor().advance(HubSpotPage(), object_type="contacts")
 
 
 def test_a_record_whose_modified_time_cannot_be_read_moves_nothing_and_fails_nothing() -> None:
     walking = HubSpotCursor().begin(BASELINE, now=T0)
     searching = HubSpotCursor(watermark=T0).begin(DELTA, now=T0 + timedelta(hours=1))
+    draining = searching.model_copy(update={"block": T0, "after": "100"})
 
-    walked = walking.advance(page_of("soon", "2026-11-02T11:00:00Z", after="103"), object_type="contacts", limit=2)
-    searched = searching.advance(page_of("soon", "9" * 30, after="2"), object_type="contacts", limit=2)
+    walked = walking.advance(page_of("soon", "2026-11-02T11:00:00Z", after="103"), object_type="contacts")
+    searched = searching.advance(page_of("soon", "9" * 30, after="2"), object_type="contacts")
+    drained = draining.advance(page_of("soon", "soon", after="2"), object_type="contacts")
 
     assert walked == walking.model_copy(update={"after": "103", "watermark": T0 - timedelta(hours=1)})
-    assert searched == searching.model_copy(update={"after": "2"})
+    assert searched == searching
+    assert drained == draining.model_copy(update={"after": "102"})
 
 
-@settings(deadline=None, max_examples=60)
+@settings(deadline=None, max_examples=80)
 @given(
-    existing=st.lists(st.integers(min_value=-600, max_value=0), unique=True, max_size=8),
+    existing=st.lists(st.integers(min_value=-600, max_value=0), max_size=6),
     changes=st.lists(
-        st.tuples(st.none() | st.integers(min_value=0, max_value=7), st.integers(min_value=1, max_value=59)),
-        unique_by=lambda change: change[1],
-        max_size=8,
+        st.tuples(st.none() | st.integers(min_value=0, max_value=5), st.integers(min_value=1, max_value=4)),
+        max_size=10,
     ),
     edits=st.lists(
-        st.tuples(st.integers(min_value=0, max_value=8), st.integers(min_value=0, max_value=20)), max_size=3
+        st.tuples(st.integers(min_value=0, max_value=10), st.integers(min_value=0, max_value=30)), max_size=4
     ),
-    limit=st.integers(min_value=2, max_value=4),
+    limit=st.integers(min_value=2, max_value=3),
 )
-@example(existing=[0], changes=[(None, 10), (None, 20), (None, 30), (None, 40)], edits=[(0, 0)], limit=2)
+@example(existing=[0], changes=[(None, 10)] * 5, edits=[(1, 1)], limit=2)
+@example(existing=[0], changes=[(None, 10)] * 5, edits=[(2, 0), (3, 4)], limit=2)
 def test_a_delta_reads_every_change_since_the_baseline_while_read_records_change_under_it(
     existing: list[int], changes: list[tuple[int | None, int]], edits: list[tuple[int, int]], limit: int
 ) -> None:
     """Records change between the baseline and the delta, and records the delta already read change during it.
 
     ``changes`` edit a baseline record (by index) or add one, minutes after the baseline;
-    ``edits`` change an already-read record after a numbered delta page, as HubSpot stamps
-    an edit: after the pass began. Every modified time is distinct; a block of records
-    sharing one time is paged by offset, which the block tests pin.
+    a few minutes for many changes make blocks of one modified time larger than a page.
+    ``edits`` change already-read records between two delta requests, inside the block
+    being read or before it, stamped as HubSpot stamps an edit: after the pass began, one
+    time for every edit made between the same two requests. Every record changed since
+    the baseline is read by the time the delta ends, and no drain reads a record twice.
     """
 
     later = T0 + timedelta(hours=1)
@@ -265,16 +262,20 @@ def test_a_delta_reads_every_change_since_the_baseline_while_read_records_change
         pages, clock = count(), count(1)
 
         def edit_read_records(read: list[str]) -> None:
-            page = next(pages)
-            for key in (read[pick % len(read)] for after_page, pick in edits if after_page == page):
-                server.update("contacts", key, {"jobtitle": "Edited"}, modified=later + timedelta(seconds=next(clock)))
+            page, moment = next(pages), later + timedelta(seconds=next(clock))
+            for key in {read[pick % len(read)] for after_page, pick in edits if after_page == page}:
+                server.update("contacts", key, {"jobtitle": "Edited"}, modified=moment)
                 changed.add(key)
 
-        delta, delta_read = run_pass(client, baseline, DELTA, now=later, limit=limit, between=edit_read_records)
+        drains: dict[datetime, list[str]] = {}
+        delta, delta_read = run_pass(
+            client, baseline, DELTA, now=later, limit=limit, between=edit_read_records, drains=drains
+        )
 
     assert baseline_read == ids
     assert baseline.watermark is None or baseline.watermark <= T0
     assert changed <= set(delta_read)
+    assert all(len(drained) == len(set(drained)) for drained in drains.values())
     assert delta.watermark is None or delta.watermark <= later
 
 

@@ -9,6 +9,7 @@ client's own choice, comes from the client.
 from __future__ import annotations
 
 import json
+import operator
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -33,9 +34,10 @@ VENDOR_TEXT = "Vendor text that must not reach an operator."
 _HOST = "https://api.hubapi.com"
 _MODIFIED_PROPERTY = {"contacts": "lastmodifieddate"}
 _READ_SCOPE = {"contacts": "crm.objects.contacts.read"}
+_RECORD_ID = "hs_object_id"
+_SEARCH_OPERATORS = {"EQ": operator.eq, "GT": operator.gt}
 _LIST_PAGE_MAX = 100
 _SEARCH_PAGE_MAX = 200
-_SEARCH_RESULT_MAX = 10_000
 _BATCH_READ_MAX = 100
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
@@ -68,10 +70,13 @@ class HubSpotServer:
     ``add``, ``update``, ``archive`` and ``merge`` change them as HubSpot would,
     stamping the type's modified property. The account answers token
     introspection, account details, list pages (by id, ``archived`` lists the
-    soft-deleted), modified-time searches (ascending, offset paging, refused at
-    ``search_ceiling``) and batch reads (207 with an error per category). It
-    refuses a wrong bearer with 401 and a missing read scope with 403
-    ``MISSING_SCOPES``.
+    soft-deleted), searches and batch reads (207 with an error per category). A
+    search takes ``EQ`` and ``GT`` filters on the modified time (epoch
+    milliseconds) or the record id, requires every filter of its one group, and
+    sorts ascending on one of them; HubSpot states no order for records with one
+    sort value, so the account puts the higher id first. It answers a query's
+    first page only and refuses an offset or any other shape. It refuses a wrong
+    bearer with 401 and a missing read scope with 403 ``MISSING_SCOPES``.
 
     Server-side behaviour is scripted rather than patched: ``queue`` answers the
     next requests before any routing (an exception models an unreachable host),
@@ -82,15 +87,12 @@ class HubSpotServer:
     recorded in ``requests``.
     """
 
-    def __init__(
-        self, *, scopes: Iterable[str] = (_READ_SCOPE["contacts"],), search_ceiling: int = _SEARCH_RESULT_MAX
-    ) -> None:
+    def __init__(self, *, scopes: Iterable[str] = (_READ_SCOPE["contacts"],)) -> None:
         """Serve an empty account; nothing is recorded until a client sends a request."""
 
         self.token = TOKEN
         self.hub_id = HUB_ID
         self.scopes = set(scopes)
-        self.search_ceiling = search_ceiling
         self.records: dict[str, dict[str, dict[str, Any]]] = {object_type: {} for object_type in _MODIFIED_PROPERTY}
         self.merged: dict[str, dict[str, str]] = {object_type: {} for object_type in _MODIFIED_PROPERTY}
         self.resolves_merged = True
@@ -268,32 +270,44 @@ class HubSpotServer:
         return httpx2.Response(200, json=body)
 
     def _search(self, object_type: str, body: Mapping[str, Any]) -> httpx2.Response:
-        modified_property = _MODIFIED_PROPERTY[object_type]
-        filters = [item for group in body.get("filterGroups", ()) for item in group.get("filters", ())]
-        limit, offset = int(body.get("limit", 10)), int(body.get("after") or 0)
+        searchable = (_MODIFIED_PROPERTY[object_type], _RECORD_ID)
+        groups, sorts, limit = body.get("filterGroups", ()), body.get("sorts", ()), int(body.get("limit", 10))
+        filters = groups[0].get("filters", ()) if len(groups) == 1 else ()
         if (
             limit > _SEARCH_PAGE_MAX
-            or offset >= self.search_ceiling
-            or len(filters) != 1
-            or filters[0].get("propertyName") != modified_property
-            or filters[0].get("operator") != "GTE"
-            or body.get("sorts") != [{"propertyName": modified_property, "direction": "ASCENDING"}]
+            or "after" in body
+            or len(groups) != 1
+            or [sort.get("direction") for sort in sorts] != ["ASCENDING"]
+            or sorts[0].get("propertyName") not in searchable
+            or any(
+                item.get("propertyName") not in searchable or item.get("operator") not in _SEARCH_OPERATORS
+                for item in filters
+            )
         ):
             return error_response(400, category="VALIDATION_ERROR")
-        since = _EPOCH + timedelta(milliseconds=int(filters[0]["value"]))
+
+        def value(key: str, name: str) -> int:
+            return int(key) if name == _RECORD_ID else _epoch_ms(self.records[object_type][key]["modified"])
+
         matches = sorted(
-            (record["modified"], int(key), key)
-            for key, record in self._live(object_type).items()
-            if key not in self.unindexed and record["modified"] >= since
+            (
+                key
+                for key in self._live(object_type)
+                if key not in self.unindexed
+                and all(
+                    _SEARCH_OPERATORS[item["operator"]](value(key, item["propertyName"]), int(item["value"]))
+                    for item in filters
+                )
+            ),
+            key=lambda key: (value(key, sorts[0]["propertyName"]), -int(key)),
         )
-        window = matches[offset : min(offset + limit, self.search_ceiling)]
         names = body.get("properties", ())
         result: dict[str, Any] = {
             "total": len(matches),
-            "results": [self._resource(object_type, key, names) for *_, key in window],
+            "results": [self._resource(object_type, key, names) for key in matches[:limit]],
         }
-        if offset + limit < len(matches):
-            result["paging"] = {"next": {"after": str(offset + limit)}}
+        if len(matches) > limit:
+            result["paging"] = {"next": {"after": str(limit)}}
         return httpx2.Response(200, json=result)
 
     def _batch_read(self, object_type: str, body: Mapping[str, Any]) -> httpx2.Response:
@@ -343,3 +357,7 @@ def hubspot_server() -> Iterator[HubSpotServer]:
 
 def _iso(moment: datetime) -> str:
     return moment.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _epoch_ms(moment: datetime) -> int:
+    return (moment - _EPOCH) // timedelta(milliseconds=1)
