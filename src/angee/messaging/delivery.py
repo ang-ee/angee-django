@@ -105,7 +105,7 @@ def run_message_delivery(model_label: str, pk: Any, external_id: str) -> dict[st
                     try:
                         # Asked again under the lock on the channel as stored now: a secret
                         # re-entered while the send waited for the lock holds it back.
-                        type(channel).require_stored_discovery_ready(channel.pk)
+                        channel.require_stored_discovery_ready()
                     except IntegrationError as refusal:
                         unready, locked = refusal, False
                 if unready is not None and not unready.transient:
