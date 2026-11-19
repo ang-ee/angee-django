@@ -290,7 +290,9 @@ re-entry changes nothing. An account-less OAuth credential adopted by the first
 account its user connects sends the integrations attaching it to discover again
 too; reconnecting an account already bound does not. `update_material` refuses the
 fields the kind stores as its own secret (`CredentialKindHandler.secret_material_fields`:
-its input fields, or what a `jwt_bearer` key file becomes). No-op discovery settles synchronously.
+its input fields, every token an OAuth grant stores, or what a `jwt_bearer` key file
+becomes). It and `replace_material`'s validation read the kind of the row as locked,
+never a stale instance's. No-op discovery settles synchronously.
 
 Lock order. Integrate's owners take row locks in one order: an integration's
 capability rows (`Integration.lock_capability`: the concrete row, then its

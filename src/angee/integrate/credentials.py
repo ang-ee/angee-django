@@ -172,6 +172,11 @@ class OAuthCredentialHandler(CredentialKindHandler):
     kind = "oauth"
     material_field = "access_token"
 
+    def secret_material_fields(self) -> tuple[str, ...]:
+        """Return every token a grant stores: the access token, and the refresh and identity tokens beside it."""
+
+        return ("access_token", "refresh_token", "id_token")
+
     def auth_headers(self, credential: Any, *, scopes: Collection[str] = ()) -> dict[str, str]:
         """Return OAuth bearer authorization headers; the grant already fixed the token's scopes."""
 

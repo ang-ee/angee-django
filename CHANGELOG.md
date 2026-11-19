@@ -42,8 +42,10 @@ live in code docstrings.
   not loop, and refuses to overwrite a hand-made credential of that name.
   `Credential.update_material` refuses the fields the kind stores as its own
   secret (`CredentialKindHandler.secret_material_fields`: `api_key`, `password`,
-  …, and for `jwt_bearer` the signing fields its key file becomes) and points to
-  `replace_material`. A token refresh, a minted scoped token, transient material
+  …, every token an OAuth grant stores, and for `jwt_bearer` the signing fields
+  its key file becomes) and points to `replace_material`; both judge by the kind
+  of the row as locked, so a concurrent kind change cannot let a stale instance
+  clear the real secret. A token refresh, a minted scoped token, transient material
   and the reconnect of an account already bound keep discovery. The integrate
   README states the lock order once: `CredentialManager.lock_with_served_integrations`
   takes the integrations a credential serves before it on every path (re-entry,

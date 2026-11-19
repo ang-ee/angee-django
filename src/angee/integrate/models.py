@@ -1734,22 +1734,32 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         session consumes) is not the kind's secret, so the integrations this
         credential serves keep their discovery. The fields the kind stores as its
         own secret (:meth:`CredentialKindHandler.secret_material_fields`) are
-        refused: the secret is re-entered through :meth:`replace_material`, which
-        sends them to discover again.
+        refused, judged by the kind of the locked row it merges into: the secret
+        is re-entered through :meth:`replace_material`, which sends them to
+        discover again.
         """
 
-        if secret := sorted(changes.keys() & set(self.handler.secret_material_fields())):
-            raise ValueError(f"Re-enter {', '.join(secret)} through replace_material(), not update_material().")
-        self._merge_material(changes)
+        def transient(handler: CredentialKindHandler) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+            if secret := sorted(changes.keys() & set(handler.secret_material_fields())):
+                raise ValueError(f"Re-enter {', '.join(secret)} through replace_material(), not update_material().")
+            return changes, {}
 
-    def _merge_material(self, changes: Mapping[str, Any], fields: Mapping[str, Any] | None = None) -> None:
-        """Merge ``changes`` into the material and set ``fields`` on the row in one locked save."""
+        self._merge_material(transient)
 
-        assigned = dict(fields or {})
-        updated = ["material", *assigned, "updated_at"]
+    def _merge_material(
+        self, merge: Callable[[CredentialKindHandler], tuple[Mapping[str, Any], Mapping[str, Any]]],
+    ) -> None:
+        """Merge what ``merge`` makes of the locked row's kind handler, in one locked save.
+
+        ``merge`` returns the material changes (``None`` deletes a key) and the
+        row fields to set beside them. It reads the handler of the row as locked,
+        never this instance's, whose kind a concurrent writer may have changed.
+        """
+
         with system_context(reason="integrate.credential.material"):
             with transaction.atomic():
                 row: Credential = type(self).objects.lock_if_supported().get(pk=self.pk)
+                changes, fields = merge(row.handler)
                 material = dict(row.reveal())
                 for key, value in changes.items():
                     if value is None:
@@ -1758,10 +1768,11 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
                         material[key] = value
                 # EncryptedField's descriptor is not modeled by django-stubs.
                 row.material = self.encode_material(material)
-                for name, value in assigned.items():
+                for name, value in fields.items():
                     setattr(row, name, value)
+                updated = ["material", *fields, "updated_at"]
                 row.save(update_fields=updated)
-            self.refresh_from_db(fields=updated)
+            self.refresh_from_db(fields=[*updated, "kind"])
 
     @sensitive_variables("material", "replacement")
     def replace_material(self, material: Mapping[str, Any]) -> None:
@@ -1772,25 +1783,25 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         as at creation, then replaces under the row lock with the fields the handler
         derives from it (:meth:`CredentialKindHandler.upsert_fields`) in the same
         save — the row, its kind, and its owner stay as they are, so every
-        integration attached to it keeps its attachment. Only material the
-        handler explicitly carries forward survives replacement. In the same
-        transaction the integrations it serves discover again
+        integration attached to it keeps its attachment. The handler is the
+        locked row's, so a kind changed meanwhile validates the input. Only
+        material the handler explicitly carries forward survives replacement. In
+        the same transaction the integrations it serves discover again
         (:meth:`CredentialManager.reenter_secret`).
         """
 
-        handler = self.handler
-        handler.validate_replacement(material)
-        replacement = handler.clean(material)
-        assigned = handler.upsert_fields(replacement)
-        updated = ["material", *assigned, "updated_at"]
         with system_context(reason="integrate.credential.replace"), transaction.atomic():
             with type(self).objects.reenter_secret(self.pk) as row:
+                handler = row.handler
+                handler.validate_replacement(material)
+                replacement = handler.clean(material)
+                assigned = handler.upsert_fields(replacement)
                 row.material = self.encode_material(handler.carry_forward(replacement, row.reveal()))
                 for name, value in assigned.items():
                     setattr(row, name, value)
+                updated = ["material", *assigned, "updated_at"]
                 row.save(update_fields=updated)
-            self.refresh_from_db(fields=updated)
-
+            self.refresh_from_db(fields=[*updated, "kind"])
     def auth_headers(self, *, scopes: Collection[str] = ()) -> dict[str, str]:
         """Return authorization headers through the kind handler.
 

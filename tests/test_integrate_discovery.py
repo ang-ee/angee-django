@@ -489,6 +489,46 @@ def test_update_material_merges_transient_keys_and_refuses_the_kinds_secret(kind
     assert credential.reveal() == {**material, "recovery_key": "transient-answer"}
 
 
+@pytest.mark.parametrize(
+    ("kind", "material"),
+    [
+        ("oauth", {"access_token": "granted", "refresh_token": "refresh", "id_token": "identity"}),
+        ("app_keys", {"app_id": "app", "app_secret": "secret"}),
+        ("ssh_key", {"private_key": "key"}),
+    ],
+)
+def test_update_material_refuses_every_secret_the_kind_stores(kind, material):
+    with system_context(reason="test transient material beside every stored secret"):
+        credential = make_integration(f"stored-secrets-{kind}", kind=kind, material=material).credential
+        credential.update_material(recovery_key="transient-answer")
+        for secret in material:
+            for value in ("swapped", None):
+                with pytest.raises(ValueError, match="replace_material"):
+                    credential.update_material(**{secret: value})
+        credential.refresh_from_db()
+    assert credential.reveal() == {**material, "recovery_key": "transient-answer"}
+
+
+def test_the_kinds_secret_is_judged_on_the_locked_row_after_a_concurrent_kind_change():
+    owner = create_user("changed-kind")
+    with system_context(reason="test a kind changed under a stale instance"):
+        Credential.objects.create_local_credential(
+            owner, kind="static_token", name="Changed kind", material={"api_key": "first"},
+        )
+        stale = Credential.objects.get(user=owner, name="Changed kind")
+        # Another writer re-enters the credential by name as a username and password.
+        current = Credential.objects.create_local_credential(
+            owner, kind="basic_auth", name="Changed kind",
+            material={"username": "ada@example.com", "password": "current"},
+        )
+        with pytest.raises(ValueError, match="replace_material"):
+            stale.update_material(password=None)
+        with pytest.raises(ValidationError):
+            stale.replace_material({"api_key": "stale"})
+        current.refresh_from_db()
+    assert (current.kind, current.reveal()) == ("basic_auth", {"username": "ada@example.com", "password": "current"})
+
+
 def test_derived_material_applies_after_fencing_and_retains_the_source_for_reconnect(bridge):
     with system_context(reason="test derived connection"):
         source = bridge.credential
