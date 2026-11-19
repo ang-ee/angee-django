@@ -180,6 +180,7 @@ _WEBHOOK_FAILURE_MESSAGE = "Webhook delivery failed."
 _DISCOVERY_RETRY_EXHAUSTED_MESSAGE = "Connection discovery exhausted its retries; retry discovery to continue."
 _DISCOVERY_REQUIRED_MESSAGE = "Connection discovery must finish before syncing."
 _DISCOVERY_FAILED_MESSAGE = "Connection discovery did not succeed; retry discovery to continue."
+_DISCOVERY_ON_RECONNECT_MESSAGE = "Connection discovery runs when this integration is connected again."
 # Times the served integrations and their credential are locked again before the set must settle.
 _SERVED_LOCK_ATTEMPTS = 3
 
@@ -3502,7 +3503,9 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         A secret re-entered or a credential attached since a run was admitted
         leaves discovery pending, so what the run read is on facts discovery has
         not confirmed. A pending discovery refuses transiently: the next run
-        waits for it. A discovery that finished without success refuses
+        waits for it. So does a disconnected integration's: its discovery runs
+        when it is connected again (``connect`` awaits it), which is not a
+        failure. A discovery that finished without success refuses
         permanently with its own operator message (``last_error``), since only
         an operator clears it. Every stream commit resting on remote facts asks
         it under the stream lock (:meth:`SyncStreamManager.lock_current`), the
@@ -3516,6 +3519,8 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             return
         if self.discovery_pending:
             raise IntegrationError(_DISCOVERY_REQUIRED_MESSAGE, transient=True)
+        if self.lifecycle == IntegrationLifecycle.DISCONNECTED:
+            raise IntegrationError(_DISCOVERY_ON_RECONNECT_MESSAGE, transient=True)
         raise IntegrationError(self.last_error or _DISCOVERY_FAILED_MESSAGE)
 
     def prepare_connection_discovery(self) -> None:
