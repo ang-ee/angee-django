@@ -203,7 +203,10 @@ contacts do). Every read asks HubSpot for the mapping's properties, and, when it
 names `contacts`, one association read per page asks for each record's
 associated contacts; a record HubSpot names as having none has none, and one it
 neither answers nor names fails the read, to be tried again. A directory with no
-object mapping reads only contacts.
+object mapping reads only contacts. The object streams begin once the directory
+has read its contacts in full: on a fresh account the first sync lands the
+contacts and the next reads the objects, so a record waits for its contact only
+when HubSpot gained that contact since, or does not hold it.
 
 A mapping may project what it keeps. While extracting, `project(record)` receives
 the record with its properties as HubSpot sent them and returns the JSON values

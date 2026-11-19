@@ -24,10 +24,17 @@ from django.db import transaction
 from django.utils import timezone
 from rebac import to_subject_ref
 
-from angee.integrate.states import LinkStatus, StreamPhase, SyncFailureKind
-from angee.integrate.streams import begin_stream_cycle, open_stream
+from angee.integrate.states import (
+    LinkStatus,
+    MappingContribution,
+    StreamDefinition,
+    StreamKind,
+    StreamPhase,
+    SyncFailureKind,
+)
+from angee.integrate.streams import BridgeSyncError, begin_stream_cycle, open_stream
 from angee.integrate.testing.integration import Integration
-from angee.integrate.testing.models import RecordLink
+from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.testing.models import Directory, Person
 from angee.parties.backends import MAPPING_REFUSED
 from angee.parties_integrate_hubspot.backends import (
@@ -39,6 +46,8 @@ from angee.parties_integrate_hubspot.backends import (
 )
 from angee.parties_integrate_hubspot.checks import check_object_mappings
 from angee.parties_integrate_hubspot.client import parse_number, parse_string
+from angee.parties_integrate_hubspot.testing.server import error_response
+from tests.test_parties_integrate_hubspot_mapping import NumberMapping
 from tests.test_parties_integrate_hubspot_sync import ADA, GRACE, HubSpot, ago, failures
 from tests.test_parties_integrate_hubspot_sync import hubspot as hubspot  # noqa: F401 -- the scripted directory
 
@@ -211,8 +220,14 @@ def _register(settings: Any, *mappings: type[HubSpotObjectMapping]) -> None:
 
 
 def _objects(hubspot: HubSpot, mapping: type[HubSpotObjectMapping]) -> HubSpot:
-    """The directory's harness on ``mapping``'s stream, opened against the backend's declaration now."""
+    """The directory's harness on ``mapping``'s stream, opened against the backend's declaration now.
 
+    A directory declares its object streams once it has read its contacts in full, so the contacts
+    baseline completes first, with whatever contacts the account holds, when it has not yet.
+    """
+
+    if not hubspot.stream.has_completed_baseline():
+        hubspot.drain()
     return replace(hubspot, stream=open_stream(hubspot.directory, OBJECTS, mapping.key, hubspot.backend))
 
 
@@ -362,23 +377,23 @@ def test_a_deleted_record_reaches_the_gone_hook_on_the_second_sweep_and_what_it_
     assert deals.link(kept).status == LinkStatus.CURRENT
 
 
-def test_a_record_whose_contact_has_not_landed_waits_and_lands_once_it_has(hubspot: HubSpot, settings: Any) -> None:
-    """Nothing orders the contacts stream before others: the first sync drains the deals first.
+def test_a_record_whose_contact_was_created_since_the_contacts_pass_waits_and_lands_once_it_has(
+    hubspot: HubSpot, settings: Any
+) -> None:
+    """A contact HubSpot gained a moment ago has not landed yet: the deal waits on the missing-dependency refusal.
 
-    The deal waits on the driver's missing-dependency refusal, kept under its id and read again on
-    the stream's backoff; the rescan lands it once its contact has.
+    It is kept under its id and read again on the stream's backoff; the rescan lands it once its contact has.
     """
 
     _register(settings, DealMapping)
     hubspot.server.scopes.add(DEALS_READ)
-    ada = hubspot.server.add("contacts", ADA, modified=ago(days=2))
-    deal = hubspot.server.add("deals", {"dealname": "green"}, modified=ago(days=1))
-    hubspot.server.associate("deals", deal, "contacts", ada)
-    assert hubspot.discover()["ok"]
-
-    hubspot.directory.run_sync(now=timezone.now())
-
     deals = _objects(hubspot, DealMapping)
+    ada = hubspot.server.add("contacts", ADA, modified=timezone.now())
+    deal = hubspot.server.add("deals", {"dealname": "green"}, modified=timezone.now())
+    hubspot.server.associate("deals", deal, "contacts", ada)
+
+    assert [page.count for page in deals.drain()] == [0]
+
     link = deals.link(deal)
     (waiting,) = link.failures()
     assert (waiting.kind, waiting.code, waiting.details["contact"], link.status) == (
@@ -388,8 +403,8 @@ def test_a_record_whose_contact_has_not_landed_waits_and_lands_once_it_has(hubsp
         LinkStatus.FAILED,
     )
     assert waiting.retry_at is not None and waiting.retry_at > timezone.now()
-    assert _colour(hubspot, ada) == ""
 
+    hubspot.drain()
     # Before its backoff passes, the stream's rescan leaves it waiting.
     begin_stream_cycle(deals.stream, hubspot.backend)
     assert deals.link(deal).status == LinkStatus.FAILED
@@ -406,10 +421,10 @@ def test_a_waiting_record_hubspot_deletes_reaches_the_gone_hook_on_its_retry(hub
 
     _register(settings, DealMapping)
     hubspot.server.scopes.add(DEALS_READ)
-    ada = hubspot.server.add("contacts", ADA, modified=ago(days=2))
-    deal = hubspot.server.add("deals", {"dealname": "green"}, modified=ago(days=1))
-    hubspot.server.associate("deals", deal, "contacts", ada)
     deals = _objects(hubspot, DealMapping)
+    ada = hubspot.server.add("contacts", ADA, modified=timezone.now())
+    deal = hubspot.server.add("deals", {"dealname": "green"}, modified=timezone.now())
+    hubspot.server.associate("deals", deal, "contacts", ada)
     assert [page.count for page in deals.drain()] == [0]
     (waiting,) = deals.link(deal).failures()
 
@@ -455,6 +470,7 @@ def test_every_read_asks_for_exactly_the_mapped_properties_and_the_associations_
     kind = mapping.object_type
     first, second, third = (hubspot.server.add(kind, {names[0]: "text"}, modified=MOMENT) for _ in range(3))
     objects = _objects(hubspot, mapping)
+    hubspot.server.requests.clear()
 
     objects.drain(page_bound=2)
     # The delta's overlap finds all three at one modified time: two fill a page, so the block drains by id.
@@ -514,8 +530,8 @@ def test_a_record_its_mapping_cannot_read_or_hubspot_states_unreadably_is_refuse
         {"id": odd, "properties": {**stated[odd], "amount": 3}},
         {"id": twelve, "properties": stated[twelve]},
     ]
-    hubspot.server.queue(httpx2.Response(200, json={"results": listed}))
     amounts = _objects(hubspot, AmountMapping)
+    hubspot.server.queue(httpx2.Response(200, json={"results": listed}))
 
     assert [page.count for page in amounts.drain()] == [1]
 
@@ -622,15 +638,17 @@ def test_a_projection_that_cannot_read_a_value_refuses_that_record_alone_and_kee
 
 
 def _text_note(hubspot: HubSpot, settings: Any, *, landed: bool = True) -> tuple[HubSpot, str, str]:
-    """Ada's contact (landed unless ``landed`` is false) and a note on her whose body is :data:`SECRET`."""
+    """Ada's contact, landed, or created since the contacts pass when ``landed`` is false, and a note on her."""
 
     _register(settings, TextNoteMapping)
-    ada = hubspot.server.add("contacts", ADA, modified=ago(days=2))
     if landed:
-        hubspot.drain()
-    note = hubspot.server.add("notes", {"hs_note_body": SECRET}, modified=ago(days=1))
+        ada = hubspot.server.add("contacts", ADA, modified=ago(days=2))
+    notes = _objects(hubspot, TextNoteMapping)
+    if not landed:
+        ada = hubspot.server.add("contacts", ADA, modified=timezone.now())
+    note = hubspot.server.add("notes", {"hs_note_body": SECRET}, modified=timezone.now())
     hubspot.server.associate("notes", note, "contacts", ada)
-    return _objects(hubspot, TextNoteMapping), ada, note
+    return notes, ada, note
 
 
 def test_a_mapping_that_keeps_a_digest_writes_from_the_full_text_and_no_link_row_or_log_keeps_it(
@@ -723,6 +741,128 @@ def test_a_record_applied_without_what_hubspot_sent_has_only_its_values_and_read
     assert (unread.value.kind, unread.value.code) == (SyncFailureKind.MISSING_DEPENDENCY, "properties_not_read")
     assert [(record.id, record.has_properties) for record, _source in RECEIVED] == [(note, False), (other, False)]
     assert dict(RECEIVED[1][0].values) == {"body": _digest("B")}
+
+
+def _object_requests(hubspot: HubSpot) -> list[str]:
+    """The paths of every request the scripted account saw that was not about contacts alone."""
+
+    return [
+        request.url.path
+        for request in hubspot.server.requests
+        if not request.url.path.startswith("/crm/objects/2026-09/contacts")
+        and "/account-info/" not in request.url.path
+    ]
+
+
+def _fresh_account(hubspot: HubSpot, settings: Any) -> tuple[list[str], list[str], str]:
+    """A contact mapping and a notes mapping registered, and an account of contacts, their notes and an orphan note.
+
+    The orphan's associated contact does not exist at the source.
+    """
+
+    settings.ANGEE_DIRECTORY_MAPPING_CLASSES = {NumberMapping.key: f"{NumberMapping.__module__}.NumberMapping"}
+    _register(settings, TextNoteMapping)
+    hubspot.reopen()
+    contacts = [
+        hubspot.server.add(
+            "contacts", {"email": f"person{number}@example.com", "lucky_number": str(number)}, modified=ago(days=3)
+        )
+        for number in range(3)
+    ]
+    notes = []
+    for number, contact in enumerate(contacts):
+        notes.append(hubspot.server.add("notes", {"hs_note_body": f"Note {number}"}, modified=ago(days=2)))
+        hubspot.server.associate("notes", notes[-1], "contacts", contact)
+    orphan = hubspot.server.add("notes", {"hs_note_body": "Nobody's note"}, modified=ago(days=1))
+    hubspot.server.associate("notes", orphan, "contacts", "999")
+    assert hubspot.discover()["ok"]
+    hubspot.server.requests.clear()
+    return contacts, notes, orphan
+
+
+def _object_links(hubspot: HubSpot) -> dict[str, Any]:
+    return {link.external_key: link for link in RecordLink.objects.filter(stream__key=OBJECTS)}
+
+
+def test_on_a_fresh_account_the_first_run_lands_the_contacts_and_the_next_every_note_without_waiting(
+    hubspot: HubSpot, settings: Any
+) -> None:
+    """The object streams begin once the directory has read its contacts in full; only a note on a contact the
+    source does not hold waits, by the missing-dependency refusal."""
+
+    contacts, notes, orphan = _fresh_account(hubspot, settings)
+
+    hubspot.directory.run_sync(now=timezone.now())
+
+    assert _object_requests(hubspot) == []
+    assert not SyncStream.objects.filter(integration_id=hubspot.directory.pk, key=OBJECTS).exists()
+    assert [_colour(hubspot, contact) for contact in contacts] == ["", "", ""]
+
+    hubspot.directory.run_sync(now=timezone.now())
+
+    links = _object_links(hubspot)
+    assert {key: links[key].status for key in notes} == dict.fromkeys(notes, LinkStatus.CURRENT)
+    assert [_colour(hubspot, contact) for contact in contacts] == ["Note 0", "Note 1", "Note 2"]
+    (waiting,) = links[orphan].failures()
+    assert (waiting.kind, waiting.code, waiting.details["contact"]) == (
+        SyncFailureKind.MISSING_DEPENDENCY,
+        "contact_not_landed",
+        "999",
+    )
+    assert [key for key, link in links.items() if link.failures(open_only=True)] == [orphan]
+
+
+def test_no_object_stream_reads_hubspot_until_the_directory_has_read_its_contacts_in_full(
+    hubspot: HubSpot, settings: Any
+) -> None:
+    """A first run whose contacts read fails, then a run that reads them: neither sends one request for notes."""
+
+    contacts, notes, _orphan = _fresh_account(hubspot, settings)
+    hubspot.server.queue(error_response(503))
+
+    with pytest.raises(BridgeSyncError):
+        hubspot.directory.run_sync(now=timezone.now())
+    assert [stream.key for stream in hubspot.backend.streams()] == ["addressbooks", "contacts"]
+    hubspot.directory.run_sync(now=timezone.now())
+
+    assert _object_requests(hubspot) == []
+    assert hubspot.server.requests
+
+    hubspot.directory.run_sync(now=timezone.now())
+
+    links = _object_links(hubspot)
+    assert {key: links[key].status for key in notes} == dict.fromkeys(notes, LinkStatus.CURRENT)
+    assert [_colour(hubspot, contact) for contact in contacts] == ["Note 0", "Note 1", "Note 2"]
+
+
+def test_an_instance_whose_notes_failed_under_the_old_order_drains_them_once_its_contacts_have_landed(
+    hubspot: HubSpot, settings: Any
+) -> None:
+    """The upgrade path: a notes baseline that ran before any contact landed left every note waiting.
+
+    The declaration's order changes nothing for them: the stream's rescan reads them again when due, and its
+    sweep reads every record, so each lands with its full text.
+    """
+
+    contacts, notes, _orphan = _fresh_account(hubspot, settings)
+    definition = StreamDefinition(
+        OBJECTS,
+        partition=TextNoteMapping.key,
+        kind=StreamKind.RECORD_REPLICA,
+        reconcile_interval=timedelta(days=1),
+        mapping_contributions=(MappingContribution(TextNoteMapping.key, TextNoteMapping.version, sequence=0),),
+    )
+    stream = open_stream(hubspot.directory, OBJECTS, TextNoteMapping.key, hubspot.backend, definition=definition)
+    old = replace(hubspot, stream=stream)
+    assert [page.count for page in old.drain()] == [0]
+    assert {link.status for link in _object_links(hubspot).values()} == {LinkStatus.FAILED}
+
+    hubspot.drain()
+    old.sweep()
+
+    links = _object_links(hubspot)
+    assert {key: links[key].status for key in notes} == dict.fromkeys(notes, LinkStatus.CURRENT)
+    assert [_colour(hubspot, contact) for contact in contacts] == ["Note 0", "Note 1", "Note 2"]
 
 
 def test_object_mappings_pass_the_startup_check_and_a_key_is_registered_once(settings: Any) -> None:
