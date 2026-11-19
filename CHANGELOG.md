@@ -10,6 +10,27 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`, `angee.parties_integrate_carddav`, `angee.iam`: smaller
+  findings of the third adoption review. A directory's configuration is
+  validated strictly where a person edits it, `Directory.objects.connect`
+  (each vendor's connect mutation hands it its configuration): a setting the
+  backend's config model does not know is a `ValidationError` naming it, before
+  the connection test. A save that edits nothing keeps what is stored, so
+  CardDAV's configuration (`CardDavConfig`, `CardDavStreams`, `ContactsPolicy`)
+  keeps unknown keys at every level instead of dropping them on every save, and
+  its reader ignores them. `connect` resolves the backend once, before anything
+  else, and checks its vendor row before building, so an unknown backend is
+  refused as itself, never inside the handling of another error. An
+  organization link returning from a tombstone keeps its own organization
+  (`ingest_organization` refused it when handed it, and minted a second when
+  handed none). `UserManager.sign_in_addresses(emails, *, key=None)` also
+  compares by a caller's key, read among the person accounts at the given
+  addresses' domains in the same one query; parties passes the handle's
+  normalized key, so an account address spelled the provider's other way, which
+  neither the contact nor any handle uses, still counts. `Party.CLAIM_CONFIDENCE`
+  names the confidence of a claim for review (0.4), and a test holds the
+  schema's `stating_directory` threshold to `Party.REVIEW_CONFIDENCE`.
+
 - `angee.parties`: the directory mapping seam's loose ends. A mapping refuses a
   record by raising `ValueError` only: a `TypeError` (or any other error) from
   `project` or `apply_record` is a bug and fails the page with its traceback,

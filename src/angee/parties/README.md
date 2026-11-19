@@ -40,8 +40,13 @@ The [CardDAV backend](../parties_integrate_carddav/backend.py) syncs two-way and
 builds its own records: a card's `UID` is its key and its href rides in the
 link's metadata, and wire properties outside the projection stay in RecordLink
 history and survive conditional writes. Its configuration is a typed config
-model: every save of the directory validates the keys it knows and drops the
-others, and a book's stream reads only the policy keys it knows.
+model. It is validated strictly where a person edits it, `Directory.objects.connect`,
+the one verb each vendor's connect mutation hands its configuration to (the
+directory's resource and form never edit it): a setting the model does not know
+is refused there. A save that edits nothing keeps what is stored, unknown keys
+included at every level; a known setting written with an invalid value is
+refused. A reader ignores what it does not know: a book's stream reads only the
+policy keys it knows.
 
 On a pull-only stream the local side of each comparison is what the source last
 applied, and the source's own projection becomes the applied base, as on the
@@ -106,7 +111,8 @@ name, or on the person of an account one of them signs in with
 (`PartyManager.account_people`), then those parties,
 and only then reads who its addresses name, once
 (`PartyManager.lookup_emails`: `people_for_emails`, and which addresses a person
-account signs in with, `UserManager.sign_in_addresses`), so no record locks a
+account signs in with, `UserManager.sign_in_addresses`, compared by iam's key and
+by the handle's normalized one), so no record locks a
 handle after a person (`DirectoryBackend.prepare_page`). A merge of parties locks
 every participant's handles, then the participants, in one call
 (`Party.lock_merge_records`), and an account adopting a person locks the person's
@@ -195,7 +201,7 @@ whom the contact's addresses name, are withdrawn with it. A record returning fro
 a tombstone whose person is refused again lands on another person, and that
 person stays proposed as its same person. The ingest verbs
 decide nothing: they land on the target they are given (admitted as above) or
-mint one, and refuse to move a link off a live party.
+mint one, and refuse to move a link off a live party it holds.
 
 [PartyManager.ingest_contact](managers.py) asserts directory facts; Address and
 Relationship keep their own identities and statements. Missing members withdraw
@@ -225,9 +231,13 @@ existing organization new to its link, under the record's locks; it states the
 identity, the whole legal identity (legal name and domain together, or withdrawn
 when the source carries neither), handles and addresses;
 `organization_projection` is its comparison shape, over the stored form
-`prepare_contact` gives organizations as it gives contacts. Neither verb rebinds
-a link bound to a live party: binding lends the party to the directory's contact
-readers, so a target must be of the verb's kind and, for such a link, its own.
+`prepare_contact` gives organizations as it gives contacts. Neither verb moves a
+link off a live party it holds: binding lends the party to the directory's
+contact readers, so a target must be of the verb's kind and, for such a link,
+its own. A pull-only contact link returning from a tombstone holds nothing: its
+person is admitted again, and a refused one leaves it on another person. An
+organization link keeps its own organization through a tombstone, since no rule
+admits one again.
 Both verbs land
 addresses through `AddressManager.land_addresses`. Employment has one verb,
 [RelationshipManager.land_employment](managers.py): an employer is a tracked

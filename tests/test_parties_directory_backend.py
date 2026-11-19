@@ -9,10 +9,13 @@ three-way classifier.
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -32,6 +35,7 @@ from rebac import (
 from rebac.actors import to_subject_ref
 from rebac.roles import grant as grant_role
 
+from angee import parties as parties_package
 from angee.base.models.identity import public_id_of
 from angee.integrate.states import LinkStatus, StreamDirection, StreamKind
 from angee.integrate.streams import StreamPage, advance_stream, open_stream, reconcile_stream
@@ -1185,6 +1189,30 @@ def test_an_address_an_account_signs_in_with_in_another_spelling_adopts_nobody(p
     handle.refresh_from_db()
     assert handle.party_id == person.pk
     assert _claim_confidences(ada.target_object_id, "adalovelace@gmail.com") == [0.4]
+
+
+def test_an_address_an_account_signs_in_with_in_a_spelling_no_handle_holds_adopts_nobody(pull: Pull) -> None:
+    """The account spells it the provider's other way, which neither the contact nor any handle does: still the same."""
+
+    get_user_model().objects.create_user(username="ada-signin", email="ada.lovelace@gmail.com")
+    person, _handle = _existing(pull.directory.owner, email="adalovelace@gmail.com")
+    pull.source.put("ada", replace(_ADA, emails=(("adalovelace@gmail.com", "home", True),)))
+
+    pull.sync()
+
+    ada = pull.link("ada")
+    assert ada.target_object_id not in (None, str(person.pk))
+    assert _claim_confidences(ada.target_object_id, "adalovelace@gmail.com") == [Party.CLAIM_CONFIDENCE]
+
+
+def test_the_schema_reads_claims_at_the_models_review_confidence() -> None:
+    """The handle's stating-directory filter copies a number the model owns; they must stay one number."""
+
+    zed = (Path(parties_package.__file__).parent / "permissions.zed").read_text()
+    declaration = r"relation stating_directory: parties/directory // rebac:field=(\{.*partystatement.*\})"
+    (declared,) = re.findall(declaration, zed)
+    assert json.loads(declared)["filters"]["partystatement__confidence__gte"] == Party.REVIEW_CONFIDENCE
+    assert Party.CLAIM_CONFIDENCE < Party.REVIEW_CONFIDENCE
 
 
 def test_an_address_an_account_without_a_person_signs_in_with_stays_a_claim(pull: Pull) -> None:
