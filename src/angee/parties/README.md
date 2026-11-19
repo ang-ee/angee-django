@@ -67,7 +67,11 @@ own `apply_record` nor another caller binds past it. Otherwise the contact mints
 its own person; a two-way directory never adopts. The handle an adoption found
 the person by is the evidence of the directory's identity statement on them,
 restated on every later record, and the contact's spelling of that address lands
-on the same handle row.
+on the same handle row. Known gap, open with the architect: a source states whole
+aspects, so on an adopted person a field no statement holds (a value written as
+system work, or stated by a lower-ranked source) takes the source's value, an
+empty one included; a contact without notes, photo or birthday clears the
+person's.
 
 What a pull-only contact may state about an address depends on whom the lookup
 finds by it (`PartyManager._contested_emails`): an address it answers with a
