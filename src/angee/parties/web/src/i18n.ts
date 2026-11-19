@@ -134,6 +134,7 @@ export const enPartiesMessages: Record<string, string> = {
   "merge.field.name_suffix": "Name suffix",
   "merge.field.nickname": "Nickname",
   "merge.field.birthday": "Birthday",
+  "merge.field.anniversary": "Anniversary",
   "merge.preview.handles": "Handles across both records",
   "merge.preview.circles": "Circles across both records",
   "merge.preview.relationships": "Relationships across both records",

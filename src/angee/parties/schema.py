@@ -35,7 +35,7 @@ from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
 from angee.integrate.schema import BridgeTypeMixin
-from angee.parties.managers import DisplayAvatarPrefetches
+from angee.parties.managers import DisplayAvatarPrefetches, SameAsMergeOutcome
 from angee.parties.models import Circle as CircleModel
 from angee.parties.models import Party as PartyModel
 from angee.parties.models import RelationshipKind as RelationshipKindModel
@@ -55,6 +55,7 @@ CircleMember = apps.get_model("parties", "CircleMember")
 SameAsStatement = Party.same_as.model.statements.model
 RelationshipKind = apps.get_model("parties", "RelationshipKind")
 strawberry.enum(cast(Any, RelationshipKind.PartyKind))
+strawberry.enum(SameAsMergeOutcome)
 Relationship = apps.get_model("parties", "Relationship")
 
 _PARTY_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(Party, "hasura_updatable_fields")
@@ -408,6 +409,17 @@ class SameAsPairType:
     normalized_value: str
 
 
+@strawberry.type
+class SameAsPairOutcomeType:
+    """One same-person pair the bulk merge read: merged into ``survivor``, or left, and why."""
+
+    left: PartyType
+    right: PartyType
+    normalized_value: str
+    outcome: SameAsMergeOutcome
+    survivor: PartyType | None
+
+
 @strawberry.enum
 class PeopleWorkbenchScope(StrEnum):
     """The bounded smart-view vocabulary for the People workbench."""
@@ -566,6 +578,15 @@ class PartiesIdentityMutation:
         return cast(
             PartyType,
             survivor.merge(records=[source.public_id], field_overrides=field_overrides),
+        )
+
+    @strawberry.mutation
+    def merge_certain_same_as_pairs(self, info: strawberry.Info, limit: int = 50) -> list[SameAsPairOutcomeType]:
+        """Merge, as the signed-in person's own merges, each certain same-person pair awaiting their review."""
+
+        return cast(
+            "list[SameAsPairOutcomeType]",
+            Party.objects.merge_certain_same_as_pairs(actor=session_user(info), limit=limit),
         )
 
     @strawberry.mutation
@@ -1007,6 +1028,7 @@ _PARTIES_SCHEMA_BUCKET = {
         CircleMemberType,
         SameAsStatementType,
         SameAsPairType,
+        SameAsPairOutcomeType,
         PeopleWorkbenchScope,
         PeopleWorkbenchType,
         RelationshipKindType,

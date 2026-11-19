@@ -10,6 +10,88 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Parties: a person merges the certain same-person pairs awaiting their review in
+  one action, `Party.objects.merge_certain_same_as_pairs(actor=, limit=)`,
+  exposed as the `merge_certain_same_as_pairs(limit)` mutation and the agent
+  tool of the same name. A pair is certain when both are people, neither is an
+  account's own person, exactly the two are linked to an address it cites, and
+  their names are equal but for case, accents and hyphens
+  (`Party.comparable_name`). Each merges into the older record as the acting
+  person's own merge, through the merge's permission and guards, and loses no
+  value: a merge field the survivor leaves empty takes the newer record's value
+  (`Party.merge_values`), the survivor's stands where both have one, and each
+  kept value is recorded as that person's choice. It returns every pair it read
+  with its outcome (`SameAsMergeOutcome`: merged, or the reason it was left), at
+  most `limit` per call. Nothing merges without a person. A person's
+  `anniversary` is now a merge choice (the Merge page shows it); before, a merge
+  that confirmed a differing birthday pinned the survivor's anniversary.
+
+- Parties: `Party.objects.propose_same_person_as_system(left, right, *, evidence,
+  reason)` lets an importer propose that two parties are one person, citing the
+  handle rows that link them. It elevates, so it takes a named reason. It issues no
+  query and takes no lock in the caller's transaction: it registers the proposal
+  with `transaction.on_commit`, so a rolled-back caller proposes nothing, and runs
+  it after the commit in its own short transaction and changeset, returning
+  nothing. There it reads each cited handle as its merge survivor, requires it to
+  link one of the two and the two to be a same-person pair at a cited address, and
+  states the `parties.same_as` rule's normal pair statement, the one
+  `reconcile_same_as` states, keeps and withdraws. It writes nothing when the two
+  are one party, either is trashed or merged away, the pair already holds a
+  current assertion or a keep-separate decision, or the evidence does not hold; it
+  never merges, and a failure after the commit is logged for the job to heal. A
+  pair now locks both parties in one identity pass, Handles before Parties
+  (`StatementsMixin.lock_subjects`, which `Party` implements and its merges use);
+  locking one party after the other ran against the Handle, Party order. The job
+  no longer withdraws a proposal stated after its run began, and restates a
+  standing proposal whose cited handle was deleted or merged away with the handles
+  that still link the two, so it never hides from the review list.
+
+- Parties proposes a same-person pair for every two live parties of one kind
+  linked to one address (`PartyManager.reconcile_same_as`, over
+  `same_person_links`). A party is linked when it holds a handle of that
+  normalized value or when a source that states its own record names one for it
+  in a standing statement, a claim below review confidence included; before,
+  only two holders of two spellings were proposed, so one address claimed by a
+  second source's party was never proposed. The linking sources are an
+  allowlist: `PartyManager.LINKING_SOURCE_KINDS` (a person, a system of record,
+  a directory, an import) and `PartyManager.LINKING_RULES` (a source's claim, a
+  holder found on its row); any other rule or extraction, parties' suggesters
+  included, links nobody until it is named. Only a handle that names one account
+  links (`Handle.identifies_account`: an email address, a phone number, or a
+  platform id), so two friends an export records by one name are never one
+  person. A person is never paired with an organization, nor two accounts' own
+  persons with each other, and a contested control claim links nothing. An
+  address more than `PartyManager.SHARED_ADDRESS_LIMIT` (four) parties are linked
+  to, or one the shared-sender providers name, is shared and pairs nobody, and a
+  pair needs two sources between its parties, so one source's two records of one
+  address are not proposed. The job finds candidate addresses in SQL, reads only
+  their links, looks the rule up once, and withdraws exactly the rule's pairs no
+  link supports; the hourly task reads the shared-sender providers once for both
+  passes (`PartyManager.shared_sender_ids`, the new `shared=` argument of
+  `reconcile_suggestions` and `reconcile_same_as`). The review list
+  (`same_as_pairs`) drops a pair the reader cannot read before it fills a page.
+
+- Parties: a handle's holder is always the projection of a statement. A holder
+  written onto the row with no statement behind it lost its address the moment
+  anything resolved the handle, a claim below review confidence included.
+  `Handle.objects.upsert` now refuses `party`, `party_id` and
+  `party_link_confirmed`; a seeded handle row naming its holder is stated by the
+  new `parties.stored_holder` rule after its load
+  (`HandleManager.state_stored_holders`), and a seed that moves or clears a
+  holder withdraws what its earlier load stated for the old one; and the
+  `resolve_stale_owners` repair states every such holder before it re-resolves
+  stale ones, where it used to clear them. The rule is the last kind the handle
+  aspect ranks (below a person, a system of record, a directory and an import),
+  so the repair leaves a confirmed holder and one another party's applied
+  statement contests as they are, for a person, rather than clear the
+  confirmation or move the address; it states a trashed holder for itself and a
+  merged-away one for its survivor. It returns a `HolderRepair`, and the command
+  reports how many it stated, left confirmed, left contested and re-resolved
+  (`-v 2` lists the handles left). Every provision runs it
+  (`PartiesConfig.compose_provision`), after the install resources load the
+  rule; it is idempotent. Test fixtures that create a handle with `party=` still
+  write a bare holder.
+
 - `angee.integrate`: a stream's mapping can be composed from several declarers.
   `StreamDefinition.mapping_contributions` declares one
   `MappingContribution(key, version, sequence=...)` per part; integrate orders

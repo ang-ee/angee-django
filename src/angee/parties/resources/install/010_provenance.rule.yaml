@@ -12,3 +12,5 @@
   key: parties.source_sender
 - xref: same_as
   key: parties.same_as
+- xref: stored_holder
+  key: parties.stored_holder

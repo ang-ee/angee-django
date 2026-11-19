@@ -22,7 +22,8 @@ is a typed, directed party↔party edge whose vocabulary
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import unicodedata
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any, ClassVar, cast
 
@@ -82,6 +83,9 @@ from angee.provenance.statements import (
 )
 from angee.resources.mixins import ResourceLoadMixin
 from angee.tags.models import TaggedModel
+
+_HYPHENS_AS_SPACES = str.maketrans(dict.fromkeys("-\u2010\u2011", " "))
+"""Hyphens a name may carry, read as the space they separate words with (``Party.comparable_name``)."""
 
 
 class Party(
@@ -199,6 +203,7 @@ class Party(
         "name_suffix",
         "nickname",
         "birthday",
+        "anniversary",
     )
 
     class Meta:
@@ -229,12 +234,26 @@ class Party(
         owner.lock_identity_rows(party_ids=(self.pk,), handle_ids=handle_ids)
         return super().lock_subject(members)
 
-    def lock_for_merge(self) -> None:
-        """Lock this party's Handles before the shared merge owner locks Parties."""
+    @classmethod
+    def lock_subjects(cls, subjects: Sequence[Any]) -> None:
+        """Lock every one of these parties' Handles, then the parties and statements, in one identity pass.
+
+        Locking party after party would take a later party's Handles after an
+        earlier party's row, the reverse of the Handle, Party order resolution
+        and the identity verbs keep, so a pair (both endpoints) and a merge (every
+        record) lock here.
+        """
 
         owner = apps.get_model("parties", "Party").objects
-        handle_ids = owner.handle_statements().filter(subject_id=self.pk).values_list("handle_id", flat=True)
-        owner.lock_identity_rows(party_ids=(self.pk,), handle_ids=handle_ids)
+        ids = sorted({row.pk for row in subjects})
+        handle_ids = owner.handle_statements().filter(subject_id__in=ids).values_list("handle_id", flat=True)
+        owner.lock_identity_rows(party_ids=ids, handle_ids=handle_ids)
+
+    @classmethod
+    def lock_merge_records(cls, records: Sequence[Any]) -> None:
+        """Lock every merged party's Handles before the shared merge owner locks Parties (:meth:`lock_subjects`)."""
+
+        cls.lock_subjects(records)
 
     def __str__(self) -> str:
         """Return the party's display name for Django displays."""
@@ -258,6 +277,17 @@ class Party(
         if not name or name == self.PLACEHOLDER_NAME:
             return False
         return any(character.isalpha() for character in name)
+
+    @property
+    def comparable_name(self) -> str:
+        """``display_name`` as two names compare for being one person's: case, accents and hyphens aside.
+
+        "Zoë Example-Smith" and "zoe example smith" compare equal; whitespace collapses.
+        """
+
+        decomposed = unicodedata.normalize("NFKD", self.display_name or "")
+        letters = "".join(character for character in decomposed if not unicodedata.combining(character))
+        return " ".join(letters.translate(_HYPHENS_AS_SPACES).split()).casefold()
 
     @property
     def concrete_kind(self) -> RelationshipKind.PartyKind | None:
@@ -284,11 +314,28 @@ class Party(
 
     @property
     def merge_scalar_fields(self) -> tuple[str, ...]:
-        """Scalar merge choices this party's native subtype admits; a person adds its name parts and birthday."""
+        """Scalar merge choices this party's native subtype admits; a person adds its name parts and dates."""
 
         if self.concrete_kind == "person":
             return self._merge_scalar_fields + self._person_merge_scalar_fields
         return self._merge_scalar_fields
+
+    def merge_values(self, merged: Sequence[Any]) -> dict[str, Any]:
+        """The merge choices that keep every value: ``merged``'s value of each merge scalar this survivor leaves empty.
+
+        Where both records carry a value, the survivor's stands. Passed as
+        ``field_overrides``, each is kept and recorded as the merging person's choice
+        (:meth:`keep_merge_fields`). Read without writing.
+        """
+
+        survivor = most_derived_concrete(self)
+        values: dict[str, Any] = {}
+        for row in merged:
+            other = most_derived_concrete(row)
+            for name in sorted(set(self.merge_scalar_fields).intersection(row.merge_scalar_fields)):
+                if values.get(name, getattr(survivor, name)) in (None, "") and getattr(other, name) not in (None, ""):
+                    values[name] = getattr(other, name)
+        return values
 
     def keep_merge_fields(self, source: Party, field_overrides: Any) -> None:
         """Keep this survivor's merge scalars against ``source``: each chosen override, else its own value.
@@ -592,7 +639,9 @@ class Organization(Composable, metaclass=RebacModelBase, inherits="parties.Party
         rebac_resource_type = "parties/organization"
 
 
-class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataModel, concrete=True):
+class Handle(
+    ResourceLoadMixin, MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataModel, concrete=True,
+):
     """A reachable address or handle of a party on one platform.
 
     Keyed on ``(platform, value)`` and, when present, ``(platform, external_id)``
@@ -602,6 +651,18 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
     unknown sender is still a valid row. A handle carries tags of its own, apart
     from its party's (a consumer marks a company's accounts-payable address).
     """
+
+    @classmethod
+    def after_resource_load(cls, instances: Iterable[Any], *, tier: str, source: str) -> None:
+        """A seeded row's holder is stated, and one the seed moved or cleared loses its earlier statement.
+
+        ``HandleManager.state_stored_holders`` takes each loaded row's holder as the
+        seed's word, so resolution keeps it.
+        """
+
+        instances = tuple(instances)
+        cast(HandleManager, cls._default_manager).state_stored_holders(instances)
+        super().after_resource_load(instances, tier=tier, source=source)
 
     _angee_base = AngeeHistoryMergeableUnscopedManager()
 
@@ -667,6 +728,16 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
         on_delete=models.SET_NULL,
         related_name="handles",
     )
+    """The holder: the subject of the winning applied handle statement, written only by :meth:`resolve`.
+
+    A source states the link (``PartyManager.assert_handle``); ``HandleManager.upsert``
+    refuses a holder. A holder written onto the row with no statement behind it
+    (a resource row, an older write) is stated by the ``stored_holder`` rule
+    (``HandleManager.state_stored_holders``) after a resource load and by the
+    ``resolve_stale_owners`` repair that provisioning runs, except a confirmed one
+    or one another party's applied statement contests, which the repair leaves for
+    a person; until then a resolution of the handle clears it.
+    """
     party_link_confirmed = models.BooleanField(default=False, editable=False)
     """Whether the winning link materialised into ``party`` is human-confirmed."""
 
@@ -708,17 +779,37 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
 
         return self.value
 
+    ACCOUNT_PLATFORMS: ClassVar[tuple[str, ...]] = ("email", "phone")
+    """Platforms whose value is itself an account's address: an email address, a phone number."""
+
+    @classmethod
+    def identifies_account(cls, platform: str, external_id: str = "") -> bool:
+        """Whether a handle names one account: an email address, a phone number or a platform id.
+
+        A value on any other platform without a platform id is only a name (a
+        friend an export records by name), which many accounts share.
+        :meth:`identifies_account_filter` is the same rule over stored rows.
+        """
+
+        return bool(external_id) or platform in cls.ACCOUNT_PLATFORMS
+
+    @classmethod
+    def identifies_account_filter(cls, prefix: str = "") -> models.Q:
+        """The handle rows :meth:`identifies_account` admits, through the relation path ``prefix``."""
+
+        return models.Q(**{f"{prefix}platform__in": cls.ACCOUNT_PLATFORMS}) | ~models.Q(**{f"{prefix}external_id": ""})
+
     @classmethod
     def identified_connection(cls, parsed: ConnectionHandle) -> bool:
         """Whether a connection names its account by a real identifier, not by a display name only.
 
-        An email address, a phone number or a platform id identifies one account.
-        An adapter may override that inference with its typed confidence.
+        :meth:`identifies_account` decides, unless the adapter overrides that
+        inference with its typed confidence.
         """
 
         if parsed.confidence is not None:
             return parsed.confidence >= 1.0
-        return bool(parsed.external_id) or parsed.platform in {cls.Platform.EMAIL, cls.Platform.PHONE}
+        return cls.identifies_account(parsed.platform, parsed.external_id)
 
     @classmethod
     def normalize_value(cls, platform: str, value: str) -> str:

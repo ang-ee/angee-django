@@ -22,7 +22,20 @@ Relationship keep their own identities and statements. Missing members withdraw
 only that source. Canonical scopes retain unasserted rows and exclude trash and
 wholly withdrawn rows. [Handle sources](managers.py) compose `Party.statements`
 through the shared Handle, Party lock order; resolution owns the cross-party
-winner and derived counters outside Party history.
+winner and derived counters outside Party history. A handle's holder is that
+winner's subject, so sources state links and never write `party`. A holder a row
+carries with no statement behind it (a seeded row, an older write) is stated by
+the `parties.stored_holder` rule after its resource load and by the
+`resolve_stale_owners` repair, which every provision runs (`PartiesConfig.compose_provision`)
+and which is idempotent; until then the next resolution of that handle would clear
+it. The rule is the last kind the handle aspect ranks: a person's, a system of
+record's, a directory's or an import's statement outranks it, kinds the aspect does
+not list rank below it. So the repair moves no address and clears no
+confirmation: it leaves a confirmed holder (only a person or a seed states the
+preferred link that keeps the flag) and a holder another party's applied statement
+contests for a person, and reports both. A trashed holder is stated for itself,
+a merged-away one for its survivor. A seed that moves or clears a holder withdraws
+the statement its earlier load made for the old one.
 
 A card's `PHOTO` is stored as the person's avatar through storage's idempotent
 `File.objects.ingest_image` before the page transaction; a photo storage refuses
@@ -65,10 +78,57 @@ Source admission follows RecordLinks and seeded Rule/Seed role membership.
 Sources gain no private reads. Imports supply their
 Integration and observed links; parties binds targets in the application transaction.
 
-Identity matching writes normal RULE same_as statements on the ordered Party
-pair, skipping current assertions and dismissals before each run's cap without
-continuation state. A preferred no_value is the symmetric anti-link; preferred value
+Identity matching (`PartyManager.reconcile_same_as`) writes normal RULE same_as
+statements on the ordered Party pair for every two live parties of one kind linked
+to one address (`PartyManager.same_person_links`). A party is linked when it holds
+a handle of that normalized value, or when a source that states its own record (a
+person, a system of record, a directory, an import, a source's claim) names one for
+it in a standing statement, a claim below review confidence included, whatever
+its evidence names (the handle, or the source's record link); a claim re-stated
+with more evidence is the same link and changes no pair. Any other
+rule or extraction, parties' own suggesters among them (a shared name, a domain, a
+twin spelling, a signature), links nobody until it is named, so a shared name alone
+proposes no one. Only an address that names one account links: an email address, a
+phone number, or a handle with a platform id, never a name-only handle. A person is
+never paired with an organization, nor two accounts' own persons with each other,
+and an account's contested claim to an address another account controls links
+nothing. An address more than `PartyManager.SHARED_ADDRESS_LIMIT` parties are
+linked to (a switchboard, a family line) is shared and pairs nobody, as is one the
+shared-sender providers name. A pair needs two sources: two parties whose only
+links to the address one source states are that source's distinct records (two
+cards of one address book), so they are not proposed. A holding counts as the
+source of the statement that decides it; a source's claim and a holder found on its
+row name no single source, so each is a source of its own. The job finds the
+candidate addresses in SQL and reads only their links. Pairs follow from the
+model across owners too: two users' private contacts linked to one address are
+proposed to whoever can read both. The job
+skips current assertions and dismissals before each run's cap without
+continuation state, and withdraws its statements no link supports any more, but
+not one stated after its run began. An importer that lands its own party and claim
+proposes the same pair with
+`Party.objects.propose_same_person_as_system(left, right, evidence=handles, reason=...)`.
+It is best-effort enrichment of the importer's write: it only registers the
+proposal, which runs after the importer commits, in its own short transaction, so
+a rolled-back page proposes nothing and a page never waits on a pair's locks. It
+checks that each cited handle links one of the two and that they share a cited
+address, states the same rule's statement, names no caller and never merges; the
+job heals a proposal it missed. A pair locks both parties in one identity pass
+(`Party.lock_subjects`, the provenance pair-lock hook), Handles before Parties, as
+a merge does. A
+preferred no_value is the symmetric anti-link; preferred value
 awaits a person's survivor choice. `survivor.merge` owns the changeset and redirect;
 pointing owners union statements, retaining collisions as superseded. Where the
 records disagree on a merge field, the merging person confirms the value kept
 (the survivor's, or the chosen override), so no moved statement outranks it.
+
+Nothing merges unattended. A person merges the certain pairs awaiting their
+review in one action, `PartyManager.merge_certain_same_as_pairs` (the
+`merge_certain_same_as_pairs` mutation and agent tool), as their own merges: both
+people, neither an account's own person, exactly the two linked to an address the
+pair cites, and names equal but for case, accents and hyphens. The older record
+survives and loses no value: a merge field it leaves empty takes the newer record's
+value (`Party.merge_values`), its own stands where both have one, and each kept
+value is recorded as that person's choice. The merge's own permission and guards
+decide each pair, and the action returns every pair it read with its outcome, a
+bounded number per call. A person's `anniversary` is a merge choice like their
+birthday; a party's `avatar` is not one yet.
