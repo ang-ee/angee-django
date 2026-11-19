@@ -123,7 +123,9 @@ it, so returning to the same list replays every record once. A declaration with
 contributions leaves `mapping_version` at its default; any other version beside
 them is refused. The list is a deployment-wide fact: workers declaring different
 lists for one stream open a new baseline on every open. Streams written before
-the column hold the empty mapping and keep the plain rule.
+the column hold the empty mapping and keep the plain rule. The column's database
+default is that empty mapping, so a release before it, rolled back onto a
+migrated database, still creates stream generations; they read as never composed.
 
 A declared snapshot with no reconciliation interval closes after its baseline;
 explicit resync opens a new generation. Missing cadence alone never means read-once.

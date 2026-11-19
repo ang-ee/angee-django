@@ -10,6 +10,7 @@ from threading import Barrier, Lock
 from typing import Any, ClassVar
 
 import pytest
+from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import (
     DataError,
@@ -20,6 +21,7 @@ from django.db import (
     models,
     transaction,
 )
+from django.db.migrations.state import ProjectState
 from django.db.models.signals import pre_delete
 from django.utils import timezone
 from hypothesis import example, given, settings
@@ -1037,15 +1039,22 @@ def test_a_retained_list_that_no_longer_names_the_stream_version_replays_once(
 
 
 def test_a_stream_written_before_retained_contributions_keeps_its_generation(stream_bridge: Channel) -> None:
-    """A row the previous release wrote has no contribution column; ``AddField`` fills it with the column's default."""
+    """A row the previous release wrote has no contribution column; ``AddField`` fills it with the column's default.
+
+    ``AddField`` adds the column to the model of the migration state before it,
+    which has no such field, so the test adds it the same way.
+    """
 
     adapter = composed_adapter(stream_bridge, mapping_version=3)
     initial, landed = drain_records(stream_bridge, adapter)
     assert landed == 2
     column = SyncStream._meta.get_field("mapping_contributions")
+    state = ProjectState.from_apps(apps)
+    del state.models[SyncStream._meta.app_label, SyncStream._meta.model_name].fields[column.name]
+    previous = state.apps.get_model(SyncStream._meta.app_label, SyncStream._meta.model_name)
     with connection.schema_editor() as editor:
         editor.remove_field(SyncStream, column)
-        editor.add_field(SyncStream, column)
+        editor.add_field(previous, column)
 
     upgraded, landed = drain_records(stream_bridge, adapter)
     assert (upgraded.pk, upgraded.generation, upgraded.mapping_version, upgraded.cursor, landed) == (
@@ -1057,6 +1066,32 @@ def test_a_stream_written_before_retained_contributions_keeps_its_generation(str
     adapter.contributions, adapter.mapping_version = parts(("base", 1)), 1
     composed, landed = drain_records(stream_bridge, adapter)
     assert (composed.generation, composed.mapping_version, landed) == (initial.generation + 1, 4, 2)
+
+
+def test_a_release_before_the_retained_list_still_creates_stream_generations(stream_bridge: Channel) -> None:
+    """Its model has no such column, so its insert takes the database default: a stream that never composed."""
+
+    adapter = composed_adapter(stream_bridge, contributions=parts(("base", 1)))
+    composed, landed = drain_records(stream_bridge, adapter)
+    assert (composed.mapping_version, landed) == (1, 2)
+    quote = connection.ops.quote_name
+    columns = [
+        field.column for field in SyncStream._meta.concrete_fields if field.name not in {"id", "mapping_contributions"}
+    ]
+    values = ", ".join("generation + 1" if column == "generation" else quote(column) for column in columns)
+    table = quote(SyncStream._meta.db_table)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"INSERT INTO {table} ({', '.join(map(quote, columns))}) SELECT {values} FROM {table} WHERE id = %s",
+            [composed.pk],
+        )
+    successor = SyncStream.objects.order_by("-generation").first()
+    RecordLink.objects.filter(stream=composed).update(stream=successor)
+    assert successor.generation == composed.generation + 1
+    assert (successor.mapping_contributions, successor.retained_contributions) == ({}, ())
+
+    returned, landed = drain_records(stream_bridge, adapter)
+    assert (returned.generation, returned.mapping_version, landed) == (successor.generation + 1, 2, 2)
 
 
 @pytest.mark.parametrize("composed", [False, True])
