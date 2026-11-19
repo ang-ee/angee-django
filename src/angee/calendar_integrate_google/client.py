@@ -138,9 +138,7 @@ class GoogleCalendarClient:
         response = self.api.send("GET", _url(f"calendars/{_segment(calendar_id)}/events", params))
         if response.status_code == 410:
             raise SyncTokenExpired()
-        if response.status_code == 400 and page_token and error_reason(HttpRefusal.of(response).body) == "invalid":
-            raise PageTokenInvalid()
-        self._raise_for_status(response)
+        self._raise_for_status(response, page_token=page_token)
         return self.api.json(response)
 
     def require_calendar(self, calendar_id: str) -> None:
@@ -188,7 +186,7 @@ class GoogleCalendarClient:
 
         params = {"privateExtendedProperty": f"{name}={value}", "showDeleted": "true", "maxResults": str(_STAMPED_PAGE)}
         response = self.api.send("GET", _url(f"calendars/{_segment(calendar_id)}/events", params))
-        self._raise_for_event(response)
+        self._raise_for_status(response, event=True)
         return [dict(item) for item in self.api.json(response).get("items") or ()]
 
     def insert(self, calendar_id: str, body: Mapping[str, Any]) -> dict[str, Any]:
@@ -197,7 +195,7 @@ class GoogleCalendarClient:
         response = self.api.send("POST", _url(f"calendars/{_segment(calendar_id)}/events", _QUIET), body=dict(body))
         if response.status_code == 409:
             raise EventIdTaken()
-        self._raise_for_event(response)
+        self._raise_for_status(response, event=True)
         return self.api.json(response)
 
     def patch(self, calendar_id: str, event_id: str, body: Mapping[str, Any], *, etag: str) -> dict[str, Any] | None:
@@ -212,7 +210,7 @@ class GoogleCalendarClient:
             raise PreconditionFailed()
         if self._gone(calendar_id, response):
             return None
-        self._raise_for_event(response)
+        self._raise_for_status(response, event=True)
         return self.api.json(response)
 
     def delete(self, calendar_id: str, event_id: str, *, etag: str) -> None:
@@ -226,7 +224,7 @@ class GoogleCalendarClient:
         if response.status_code == 412:
             raise PreconditionFailed()
         if not self._gone(calendar_id, response):
-            self._raise_for_event(response)
+            self._raise_for_status(response, event=True)
 
     def _get(self, path: str, params: Mapping[str, str]) -> dict[str, Any]:
         """GET one Calendar JSON resource."""
@@ -241,40 +239,43 @@ class GoogleCalendarClient:
         response = self.api.send("GET", _url(f"calendars/{_segment(calendar_id)}/{path}", params))
         if self._gone(calendar_id, response):
             return None
-        self._raise_for_event(response)
+        self._raise_for_status(response, event=True)
         return self.api.json(response)
 
     def _gone(self, calendar_id: str, response: Any) -> bool:
         """Whether an answer about one event says Google no longer has it: ``410``, or ``404`` on a served calendar.
 
-        A ``404`` names the event only once the calendar is known to be served
-        (:meth:`require_calendar`); otherwise the calendar's refusal is raised.
+        A ``404`` never reaches the whole account (``GoogleApi.account_error``); it names the event only once the
+        calendar is known to be served (:meth:`require_calendar`), otherwise the calendar's refusal is raised.
         """
 
-        if response.status_code == 404 and self.api.account_error(HttpRefusal.of(response)) is None:
+        if response.status_code == 404:
             self.require_calendar(calendar_id)
             return True
         return response.status_code == 410
 
-    def _raise_for_event(self, response: Any) -> None:
-        """Raise one event's refusal (:class:`EventRefused`), else the account's or the calendar's."""
+    def _raise_for_status(self, response: Any, *, event: bool = False, page_token: str = "") -> None:
+        """Raise a Calendar refusal, which the Google transport builds once (``GoogleApi.raise_for_status``).
 
-        if response.is_success:
-            return
-        refusal = HttpRefusal.of(response)
-        status, reason = response.status_code, error_reason(refusal.body)
-        if self.api.account_error(refusal) is None and (status == 400 or (status == 403 and reason in _EVENT_REASONS)):
-            raise EventRefused(status, reason)
-        self._raise_for_status(response)
+        After the account-wide refusals: a continued listing's page token Google refused (``400``, reason
+        ``invalid``) is :class:`PageTokenInvalid`; a request about one ``event`` refused for that event (``400``,
+        or a ``403`` whose reason names it) is :class:`EventRefused`; a ``404`` is a calendar Google no longer
+        serves; anything else is the generic refusal.
+        """
 
-    def _raise_for_status(self, response: Any) -> None:
-        """Raise a Calendar refusal: the account-wide ones, else a calendar Google no longer serves, else generic."""
+        status = response.status_code
 
-        if response.is_success:
-            return
-        if response.status_code == 404 and self.api.account_error(HttpRefusal.of(response)) is None:
-            raise GoogleCalendarError("Google Calendar no longer serves this calendar to the account.")
-        self.api.raise_for_status(response)
+        def own(refusal: HttpRefusal) -> Exception | None:
+            reason = error_reason(refusal.body)
+            if page_token and status == 400 and reason == "invalid":
+                return PageTokenInvalid()
+            if event and (status == 400 or (status == 403 and reason in _EVENT_REASONS)):
+                return EventRefused(status, reason)
+            if status == 404:
+                return GoogleCalendarError("Google Calendar no longer serves this calendar to the account.")
+            return None
+
+        self.api.raise_for_status(response, own=own)
 
 
 def _url(path: str, params: Mapping[str, str]) -> str:

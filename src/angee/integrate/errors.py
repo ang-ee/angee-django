@@ -75,10 +75,13 @@ class IntegrationError(Exception):
 
 
 class RequestNotSentError(IntegrationError):
-    """Connect, DNS or TLS handshake failed before any HTTP request bytes were written.
+    """No HTTP request bytes were written: here, the connect, DNS or TLS handshake failed.
 
-    Delivery owners may retry this refusal as not sent. Write/read failures after
-    sending are deliberately outside this type because their outcome is uncertain.
+    Its ``transient`` says whether a later attempt can send it: this one can, a
+    :class:`RequestNotBuiltError` cannot. Delivery owners may retry a transient
+    one as not sent; read ``transient``, never the type, for that. Write/read
+    failures after sending are deliberately outside this type because their
+    outcome is uncertain.
     """
 
     transient = True

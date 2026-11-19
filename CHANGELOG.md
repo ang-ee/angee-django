@@ -818,7 +818,9 @@ live in code docstrings.
   library will not build, a header value it cannot encode or will not send, is
   `RequestNotBuiltError`: not sent, permanent, worded as a request that could
   not be sent as configured, and chained to none of the library's text, which
-  quotes the value. Notion, the Google
+  quotes the value; callers read a not-sent failure's `transient`, so OAuth
+  answers such a token request with a permanent 400 and leaves such a
+  revocation best-effort. Notion, the Google
   client (Drive and Calendar), ICS, GitHub and OAuth's JSON reads (discovery,
   userinfo, JWKS) moved onto it, and `HttpClient.get_json` is removed. GitHub's
   refusals are now `IntegrationError`s, a 429 or 5xx transient, and its rate
