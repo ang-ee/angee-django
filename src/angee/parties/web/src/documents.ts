@@ -245,8 +245,8 @@ export const CertainSameAsPairs = graphql(`
 `);
 
 export const DuplicateSetPreviews = graphql(`
-  query DuplicateSetPreviews($sets: [[ID!]!]!, $certain: Boolean = false) {
-    duplicate_set_previews(sets: $sets, certain: $certain) {
+  query DuplicateSetPreviews($sets: [[ID!]!]!, $certain: Boolean = false, $groupings: [[String!]!]) {
+    duplicate_set_previews(sets: $sets, certain: $certain, groupings: $groupings) {
       outcome
       reason
       digest
@@ -261,13 +261,14 @@ export const DuplicateSetPreviews = graphql(`
       }
       disagreements { field values shown }
       fills { field values shown }
+      grouping { field values shown }
     }
   }
 `);
 
 export const MergeDuplicates = graphql(`
-  mutation MergeDuplicates($sets: [[ID!]!]!, $digests: [String!]!, $certain: Boolean = false) {
-    merge_duplicates(sets: $sets, digests: $digests, certain: $certain) {
+  mutation MergeDuplicates($sets: [[ID!]!]!, $digests: [String!]!, $certain: Boolean = false, $groupings: [[String!]!]) {
+    merge_duplicates(sets: $sets, digests: $digests, certain: $certain, groupings: $groupings) {
       members
       outcome
       reason

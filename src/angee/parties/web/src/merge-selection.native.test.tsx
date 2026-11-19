@@ -132,7 +132,7 @@ describe("Merge in a parties list's selection bar", () => {
     fireEvent.click(await screen.findByRole("button", { name: MERGE }));
 
     expect(await screen.findByText(enPartiesMessages["duplicates.title"]!)).toBeTruthy();
-    expect(reads.variables).toContainEqual({ sets: [["ada", "grace", "joan"]], certain: false });
+    expect(reads.variables).toContainEqual({ sets: [["ada", "grace", "joan"]], certain: false, groupings: null });
     expect(screen.queryByText("Comparison")).toBeNull();
   });
 
@@ -145,8 +145,10 @@ describe("Merge in a parties list's selection bar", () => {
     fireEvent.click(await screen.findByRole("button", { name: MERGE }));
 
     expect(await screen.findByText(enPartiesMessages["duplicates.title"]!)).toBeTruthy();
-    expect(reads.variables).toContainEqual({ sets: [["ada", "grace"], ["joan", "mary"]], certain: false });
-    expect(reads.variables).not.toContainEqual({ sets: [["ada", "grace", "joan", "mary"]], certain: false });
+    expect(reads.variables).toContainEqual({
+      sets: [["ada", "grace"], ["joan", "mary"]], certain: false, groupings: [["display_name"], ["display_name"]],
+    });
+    expect(reads.variables).not.toContainEqual(expect.objectContaining({ sets: [["ada", "grace", "joan", "mary"]] }));
   });
 
   test("a group of one and a group without a value are left out, and the dialog says so", async () => {
@@ -161,7 +163,7 @@ describe("Merge in a parties list's selection bar", () => {
 
     expect(await screen.findByText("Left out, with no one else selected in their group: 1.")).toBeTruthy();
     expect(screen.getByText("Left out, in a group without a value: 2.")).toBeTruthy();
-    expect(reads.variables).toContainEqual({ sets: [["ada", "grace"]], certain: false });
+    expect(reads.variables).toContainEqual({ sets: [["ada", "grace"]], certain: false, groupings: [["display_name"]] });
   });
 
   test("more groups than one batch takes merge the first fifty, and the dialog says how to reach the rest", async () => {
@@ -173,7 +175,9 @@ describe("Merge in a parties list's selection bar", () => {
     expect(await screen.findByText(
       "This merges the first 50 of 60 groups. The selection clears after the merge: select the rest and choose Merge… again.",
     )).toBeTruthy();
-    expect(reads.variables).toContainEqual({ sets: groups.slice(0, 50).map((group) => [...group.ids]), certain: false });
+    expect(reads.variables).toContainEqual({
+      sets: groups.slice(0, 50).map((group) => [...group.ids]), certain: false, groupings: groups.slice(0, 50).map(() => ["display_name"]),
+    });
   });
 
   test("three ticked on a grouped list that cannot place them are not offered as a batch", async () => {

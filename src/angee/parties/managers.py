@@ -1025,6 +1025,10 @@ class DuplicateSetPreview:
     fills: tuple[MergeFieldValues, ...] = ()
     """The merge fields exactly one value is stated for, the rest empty, only for a set that merges:
     nothing to choose, the merge gives the survivor that value (``Party.merge_values``)."""
+    grouping: tuple[MergeFieldValues, ...] = ()
+    """For a set that merges, a row for each field the list grouped it by that is a text merge field,
+    whether or not its members differ, so a member that moved from its group shows even when all
+    moved alike; a relation, a date bucket or another field gets none."""
     digest: str = ""
     """For a set that merges, a keyed digest of everything the dialog shows of it, the fills
     included, which the merge compares under its lock (:meth:`PartyManager.merge_duplicates`)."""
@@ -2555,7 +2559,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         return set(rows.values_list("pk", flat=True))
 
     def preview_duplicates(
-        self, *, actor: Any, sets: Sequence[Sequence[str]], certain: bool = False,
+        self,
+        *,
+        actor: Any,
+        sets: Sequence[Sequence[str]],
+        certain: bool = False,
+        groupings: Sequence[Sequence[str]] | None = None,
     ) -> list[DuplicateSetPreview]:
         """Each set of records ``actor`` confirms are one, as :meth:`merge_duplicates` would merge it now.
 
@@ -2568,10 +2577,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         person. With ``certain`` each set must also be a certain pair
         (:meth:`certain_pairs`). The oldest member survives and the others fold
         into it in key order. More than :attr:`BATCH_SETS` sets refuse the batch.
+        ``groupings`` names, per set, the fields a list grouped it by (names only):
+        each that is a text merge field gets a row (:attr:`DuplicateSetPreview.grouping`).
         """
 
-        confirmed = self._confirmed_sets(sets)
-        return self._judge_sets(actor, confirmed, certain=certain)
+        confirmed = self._confirmed_sets(sets, groupings)
+        return self._judge_sets(actor, confirmed, certain=certain, groupings=groupings)
 
     def merge_duplicates(
         self,
@@ -2580,6 +2591,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         sets: Sequence[Sequence[str]],
         certain: bool = False,
         digests: Sequence[str] | None = None,
+        groupings: Sequence[Sequence[str]] | None = None,
     ) -> list[DuplicateSetOutcome]:
         """Merge each confirmed set of records into its oldest member as ``actor``'s merge; return every outcome.
 
@@ -2591,8 +2603,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         every Handle any of them holds or names are locked in one pass
         (``Party.lock_merge_records``), the set is judged again under those locks
         (:meth:`preview_duplicates`), and a set whose shown facts changed since the
-        preview (its ``digests`` entry, :attr:`DuplicateSetPreview.digest`, no
-        longer matches) is refused with :attr:`CHANGED_REASON`, as is a member that changed
+        preview (its ``digests`` entry, :attr:`DuplicateSetPreview.digest`, judged
+        with the same ``groupings``, no longer matches) is refused with
+        :attr:`CHANGED_REASON`, as is a member that changed
         since the person looked (merged elsewhere, trashed, kept apart from another)
         refuses the set rather than shrinking it. Then the others fold into the
         oldest in key order through ``Party.merge``, whose own permission and guards
@@ -2610,7 +2623,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         """
 
         party_model = apps.get_model("parties", "Party")
-        confirmed = self._confirmed_sets(sets)
+        confirmed = self._confirmed_sets(sets, groupings)
         if digests is not None and len(digests) != len(confirmed):
             raise ValidationError({"digests": "Send one digest for each set."})
         readable = self._readable_members(actor, confirmed)
@@ -2625,7 +2638,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                     rows = instances_from_public_ids(party_model, ids, queryset=party_model._base_manager.all())
                     if rows:
                         party_model.lock_merge_records(sorted(rows.values(), key=lambda row: row.pk))
-                    (preview,) = self._judge_sets(actor, [ids], certain=certain)
+                    (preview,) = self._judge_sets(
+                        actor, [ids], certain=certain, groupings=None if groupings is None else [groupings[index]],
+                    )
                     if preview.outcome is not None:
                         outcomes.append(DuplicateSetOutcome(ids, preview.outcome, reason=preview.reason))
                         continue
@@ -2683,14 +2698,23 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             return "Only an active person who may change every one of these records merges them in a batch."
         return ""
 
-    def _confirmed_sets(self, sets: Sequence[Sequence[str]]) -> list[tuple[str, ...]]:
+    def _confirmed_sets(
+        self, sets: Sequence[Sequence[str]], groupings: Sequence[Sequence[str]] | None = None,
+    ) -> list[tuple[str, ...]]:
         confirmed = [tuple(dict.fromkeys(str(pk) for pk in ids)) for ids in sets]
         if len(confirmed) > self.BATCH_SETS:
             raise ValidationError({"sets": f"Merge at most {self.BATCH_SETS} sets of records in one batch."})
+        if groupings is not None and len(groupings) != len(confirmed):
+            raise ValidationError({"groupings": "Name the grouping fields of each set, or of none."})
         return confirmed
 
     def _judge_sets(
-        self, actor: Any, confirmed: Sequence[tuple[str, ...]], *, certain: bool,
+        self,
+        actor: Any,
+        confirmed: Sequence[tuple[str, ...]],
+        *,
+        certain: bool,
+        groupings: Sequence[Sequence[str]] | None = None,
     ) -> list[DuplicateSetPreview]:
         """Judge every confirmed set against the live records in one batch of reads (:meth:`preview_duplicates`)."""
 
@@ -2741,10 +2765,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 previews.append(DuplicateSetPreview(tuple(members), None))
         # Only a set the actor may merge discloses its members' values.
         differing = self._differing_fields(
-            actor, [preview.members if preview.outcome is None else () for preview in previews], people,
+            actor, [preview.members if preview.outcome is None else () for preview in previews], people, groupings,
         )
         judged = [
-            replace(preview, disagreements=differing[index][0], fills=differing[index][1])
+            replace(preview, disagreements=differing[index][0], fills=differing[index][1], grouping=differing[index][2])
             for index, preview in enumerate(previews)
         ]
         return [
@@ -2769,7 +2793,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         It covers what the reader was shown and nothing else: each member's id,
         name, creation time, first-met note (as the reader's gates leave it) and
         the readable handle statements with their source and handle, the
-        survivor, and the disagreements and the fills with the values that will show.
+        survivor, and the disagreements, the fills and the grouping rows with the values that will show.
         """
 
         def statement(row: Any) -> list[Any]:
@@ -2793,17 +2817,23 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             "survivor": preview.members[0].public_id if preview.members else None,
             "disagreements": [[row.field, list(row.values), row.shown] for row in preview.disagreements],
             "fills": [[row.field, list(row.values), row.shown] for row in preview.fills],
+            "grouping": [[row.field, list(row.values), row.shown] for row in preview.grouping],
         })
 
     @staticmethod
     def _differing_fields(
-        actor: Any, sets: Sequence[Sequence[Any]], people: Mapping[Any, Any],
-    ) -> list[tuple[tuple[MergeFieldValues, ...], tuple[MergeFieldValues, ...]]]:
-        """For each set, its disagreements and its fills (:class:`DuplicateSetPreview`), in fixed reads.
+        actor: Any,
+        sets: Sequence[Sequence[Any]],
+        people: Mapping[Any, Any],
+        groupings: Sequence[Sequence[str]] | None = None,
+    ) -> list[tuple[tuple[MergeFieldValues, ...], tuple[MergeFieldValues, ...], tuple[MergeFieldValues, ...]]]:
+        """For each set, its disagreements, fills and grouping rows (:class:`DuplicateSetPreview`), in fixed reads.
 
         A merge field whose values differ is a disagreement when its members state
         at least two different values, else a fill: one value stated, the rest
-        empty. Each row carries every member's value and what the survivor will show.
+        empty. A field ``groupings`` names for the set that is a text merge field
+        gets a grouping row whether or not its values differ. Each row carries every
+        member's value and what the survivor will show.
 
         ``sets`` hold members read through ``actor`` and the person rows are read
         through it too, so each field's own ``read__<field>`` gate has hidden what
@@ -2816,7 +2846,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         person_model = apps.get_model("parties", "Person")
         pks = sorted({row.pk for members in sets for row in members})
         if not pks:
-            return [((), ()) for _members in sets]
+            return [((), (), ()) for _members in sets]
         persons = person_model._default_manager.with_actor(actor).in_bulk([pk for pk in pks if pk in people])
         owners: dict[str, tuple[Any, str]] = {}
         stated: defaultdict[tuple[str, Any], list[Any]] = defaultdict(list)
@@ -2848,21 +2878,29 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         def source_of(row: Any, name: str) -> Any:
             return persons.get(row.pk, row) if name in personal else row
 
-        result: list[tuple[tuple[MergeFieldValues, ...], tuple[MergeFieldValues, ...]]] = []
-        for members in sets:
+        def is_text(name: str) -> bool:
+            field = (person_model if name in personal else party_model)._meta.get_field(name)
+            return isinstance(field, models.CharField | models.TextField)
+
+        result: list[tuple[tuple[MergeFieldValues, ...], tuple[MergeFieldValues, ...], tuple[MergeFieldValues, ...]]]
+        result = []
+        for index, members in enumerate(sets):
             if len(members) < 2:
-                result.append(((), ()))
+                result.append(((), (), ()))
                 continue
             kind = "person" if all(row.pk in people for row in members) else None
             fields = party_model.merge_scalar_fields_of(kind)
+            grouped = set(groupings[index]) if groupings is not None else set()
             disagreements: list[MergeFieldValues] = []
             fills: list[MergeFieldValues] = []
+            grouping: list[MergeFieldValues] = []
             for name in fields:
                 sources = [source_of(row, name) for row in members]
                 if any(name in redacted_fields(source) for source in sources):
                     continue
                 values = tuple(text(getattr(source, name, None)) for source in sources)
-                if len(set(values)) < 2:
+                differ = len(set(values)) > 1
+                if not differ and not (name in grouped and is_text(name)):
                     continue
                 _model, aspect = owners.get(name, (None, ""))
                 candidates = [statement for row in members for statement in stated.get((aspect, row.pk), ())]
@@ -2871,9 +2909,13 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                     shown = text(winner.stated_value(name))
                 else:
                     shown = next((value for value in values if value is not None), None)
-                given = {value for value in values if value is not None}
-                (disagreements if len(given) > 1 else fills).append(MergeFieldValues(name, values, shown))
-            result.append((tuple(disagreements), tuple(fills)))
+                compared = MergeFieldValues(name, values, shown)
+                if name in grouped and is_text(name):
+                    grouping.append(compared)
+                if differ:
+                    given = {value for value in values if value is not None}
+                    (disagreements if len(given) > 1 else fills).append(compared)
+            result.append((tuple(disagreements), tuple(fills), tuple(grouping)))
         return result
 
     def for_user(self, user: Any, *, adopt: Any = None) -> Any:

@@ -63,9 +63,14 @@ export function DuplicatesDialog({ sets: opened, certain = false, notes = [], on
   const t = usePartiesT();
   // The dialog lists the sets it opened with; a caller's later reads never change what is confirmed.
   const [sets] = React.useState(opened);
+  // The fields each set was grouped by, names only, when the list grouped any: the preview returns their rows.
+  const groupings = React.useMemo(
+    () => (sets.some((set) => set.grouping?.length) ? sets.map((set) => (set.grouping ?? []).map((level) => level.field)) : null),
+    [sets],
+  );
   const variables = React.useMemo(
-    () => ({ sets: sets.map((set) => [...set.members]), certain }),
-    [certain, sets],
+    () => ({ sets: sets.map((set) => [...set.members]), certain, groupings }),
+    [certain, groupings, sets],
   );
   // After the merge the dialog keeps showing the sets as they were confirmed, each with its outcome.
   const [result, setResult] = React.useState<MergeResult | null>(null);
@@ -104,11 +109,13 @@ export function DuplicatesDialog({ sets: opened, certain = false, notes = [], on
 
   const submit = React.useCallback(async () => {
     const sent = sending;
-    // Each set's digest of what the person saw: a set that changed since is refused, to be looked at again.
+    // Each set's digest of what the person saw, judged with the same grouping fields: a set that changed since
+    // is refused, to be looked at again.
     const response = await merge({
       sets: sent.map((row) => row.members.map((member) => member.id)),
       digests: sent.map((row) => row.digest),
       certain,
+      groupings: groupings && sent.map((row) => groupings[live.indexOf(row)] ?? []),
     });
     const answered = response?.merge_duplicates;
     if (!answered) return;
@@ -119,7 +126,7 @@ export function DuplicatesDialog({ sets: opened, certain = false, notes = [], on
       if (outcome) outcomes.set(row, outcome);
     });
     setResult({ shown: live, outcomes });
-  }, [certain, live, merge, sending]);
+  }, [certain, groupings, live, merge, sending]);
 
   return (
     <Dialog.Root open onOpenChange={(open) => { if (!open && !mergeState.fetching) onClose(merged); }}>
@@ -325,15 +332,16 @@ function warned(preview: DuplicateSetPreview | undefined, grouping: DuplicateSet
 
 /**
  * The members whose current value of a field the list grouped the set by is no
- * longer the group's: the fresh read holds each member's value of every merge
- * field whose values differ (a disagreement, or a fill when one value is stated
- * and the rest empty), so a stale grouping shows at no extra read, a member whose
- * value was cleared included. When every member moved to the same new value
- * nothing differs, and nothing is marked.
+ * longer the group's. The fresh read returns a grouping row for each such field
+ * that is a text merge field, whatever the members hold, besides the rows of every
+ * merge field whose values differ, so a member that moved shows, one whose value
+ * was cleared and a set whose members all moved alike included. A relation or a
+ * date-bucket group has no row and is not marked; a field the reader may not read
+ * on any member has none either.
  */
 function movedMembers(preview: DuplicateSetPreview, grouping: DuplicateSetInput["grouping"]): ReadonlySet<string> {
   const moved = new Set<string>();
-  const differing = [...preview.disagreements, ...preview.fills];
+  const differing = [...preview.grouping, ...preview.disagreements, ...preview.fills];
   for (const level of grouping ?? []) {
     const row = level.key === null ? undefined : differing.find((item) => item.field === level.field);
     preview.members.forEach((member, index) => {

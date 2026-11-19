@@ -810,3 +810,36 @@ def test_the_review_counts_stop_at_their_cap_and_say_so(db: None) -> None:
     assert schema == {"pairs": 4, "certain": 4, "capped": False}
     assert Party.objects.same_as_review_counts(actor=viewer).certain == 0
 
+
+
+def test_a_grouping_text_field_has_a_row_whether_or_not_its_members_differ(db: None) -> None:
+    """The members' values of a field the list grouped by, for a text merge field only; never a value sent."""
+
+    del db
+    owner = create_user("duplicates-grouping-rows")
+    members = _set_with(owner, "family_name", "Clarke", "Clarke", tag="-grouped")
+    ids = [[member.public_id for member in members]]
+
+    (grouped,) = Party.objects.preview_duplicates(
+        actor=owner, sets=ids, groupings=[["family_name", "birthday", "domain", "circle"]],
+    )
+    (plain,) = Party.objects.preview_duplicates(actor=owner, sets=ids)
+
+    assert _fields(grouped.grouping) == {"family_name": ("Clarke", "Clarke")}
+    assert (grouped.disagreements, grouped.fills, plain.grouping) == ((), (), ())
+    assert grouped.digest != plain.digest
+
+
+def test_the_merge_judges_a_grouped_set_with_the_previews_groupings(db: None) -> None:
+    del db
+    owner = create_user("duplicates-grouping-merge")
+    members = _set_with(owner, "family_name", "Clarke", "Clarke", tag="-merged")
+    ids = [[member.public_id for member in members]]
+    groupings = [["family_name"]]
+    (preview,) = Party.objects.preview_duplicates(actor=owner, sets=ids, groupings=groupings)
+
+    with pytest.raises(ValidationError, match="grouping fields"):
+        Party.objects.merge_duplicates(actor=owner, sets=ids, digests=[preview.digest], groupings=[])
+    (outcome,) = Party.objects.merge_duplicates(actor=owner, sets=ids, digests=[preview.digest], groupings=groupings)
+
+    assert str(outcome.outcome) == "merged"

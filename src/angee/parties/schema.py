@@ -464,6 +464,8 @@ class DuplicateSetPreviewType:
     """Fields the members state at least two different values for: what a person must look at."""
     fills: list[MergeFieldValuesType]
     """Fields exactly one value is stated for, the rest empty: the merge gives the survivor that value."""
+    grouping: list[MergeFieldValuesType]
+    """For each field the set was grouped by that is a text merge field, its members' values, differing or not."""
 
 
 @strawberry.type
@@ -552,13 +554,20 @@ class PartiesReviewQuery:
 
     @strawberry.field
     def duplicate_set_previews(
-        self, info: strawberry.Info, sets: list[list[strawberry.ID]], certain: bool = False,
+        self,
+        info: strawberry.Info,
+        sets: list[list[strawberry.ID]],
+        certain: bool = False,
+        groupings: list[list[str]] | None = None,
     ) -> list[DuplicateSetPreviewType]:
-        """Return each set of records as the batch merge would merge it now, with what tells its members apart."""
+        """Return each set of records as the batch merge would merge it now, with what tells its members apart.
+
+        ``groupings`` names, per set, the fields a list grouped it by (names only, never values).
+        """
 
         actor = session_user(info)
         previews = Party.objects.preview_duplicates(
-            actor=actor, sets=[[str(pk) for pk in ids] for ids in sets], certain=certain,
+            actor=actor, sets=[[str(pk) for pk in ids] for ids in sets], certain=certain, groupings=groupings,
         )
         _prefetch_member_facts([member for preview in previews for member in preview.members], actor)
         return cast("list[DuplicateSetPreviewType]", previews)
@@ -707,19 +716,24 @@ class PartiesIdentityMutation:
 
     @strawberry.mutation
     def merge_duplicates(
-        self, info: strawberry.Info, sets: list[list[strawberry.ID]], digests: list[str], certain: bool = False,
+        self,
+        info: strawberry.Info,
+        sets: list[list[strawberry.ID]],
+        digests: list[str],
+        certain: bool = False,
+        groupings: list[list[str]] | None = None,
     ) -> list[DuplicateSetOutcomeType]:
         """Merge each confirmed set into its oldest member as the signed-in person; return every outcome.
 
-        ``digests`` are the sets' ``digest`` from ``duplicate_set_previews``, one per set: a set whose shown
-        facts changed since is refused, to be looked at again.
+        ``digests`` are the sets' ``digest`` from ``duplicate_set_previews``, one per set, judged with the
+        same ``groupings``: a set whose shown facts changed since is refused, to be looked at again.
         """
 
         return cast(
             "list[DuplicateSetOutcomeType]",
             Party.objects.merge_duplicates(
                 actor=session_user(info), sets=[[str(pk) for pk in ids] for ids in sets], certain=certain,
-                digests=digests,
+                digests=digests, groupings=groupings,
             ),
         )
 

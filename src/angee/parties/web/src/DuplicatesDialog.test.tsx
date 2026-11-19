@@ -8,10 +8,13 @@ import { AppRuntimeProvider, InAppLinkProvider, createRouteHref, routerNavigator
 import { createUiTestProviders } from "@angee/ui/testing";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ merge: vi.fn(), previews: [] as readonly unknown[] }));
+const mocks = vi.hoisted(() => ({ merge: vi.fn(), previews: [] as readonly unknown[], variables: [] as unknown[] }));
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
-  useAuthoredQuery: () => ({ data: { duplicate_set_previews: mocks.previews }, isFetching: false, error: null }),
+  useAuthoredQuery: (_document: unknown, variables: unknown) => {
+    mocks.variables.push(variables);
+    return { data: { duplicate_set_previews: mocks.previews }, isFetching: false, error: null };
+  },
   useAuthoredMutation: () => [mocks.merge, { fetching: false, error: null, reset: () => undefined }],
 }));
 
@@ -23,6 +26,7 @@ const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://parti
 beforeEach(() => {
   mocks.merge.mockReset();
   mocks.previews = PREVIEWS;
+  mocks.variables = [];
 });
 afterEach(() => {
   cleanup();
@@ -54,6 +58,7 @@ const PREVIEWS = [
     ],
     disagreements: [{ field: "given_name", values: ["Ada", "Augusta"], shown: "Ada" }],
     fills: [],
+    grouping: [],
   },
   {
     outcome: "REFUSED",
@@ -66,6 +71,7 @@ const PREVIEWS = [
     ],
     disagreements: [],
     fills: [],
+    grouping: [],
   },
   {
     outcome: null,
@@ -78,6 +84,7 @@ const PREVIEWS = [
     ],
     disagreements: [],
     fills: [],
+    grouping: [],
   },
 ];
 
@@ -139,7 +146,9 @@ describe("the batch merge dialog", () => {
     fireEvent.click(await screen.findByRole("button", { name: message("duplicates.confirm", { count: "1" }) }));
 
     expect(await screen.findByText(message("duplicates.outcome.merged", { name: "Joan Clarke" }))).toBeTruthy();
-    expect(mocks.merge).toHaveBeenCalledWith({ sets: [["joan", "joan-2"]], digests: ["digest-joan"], certain: false });
+    expect(mocks.merge).toHaveBeenCalledWith({
+      sets: [["joan", "joan-2"]], digests: ["digest-joan"], certain: false, groupings: null,
+    });
     expect(screen.getByText(message("duplicates.outcome.left"))).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: message("duplicates.done") }));
     expect(onClose).toHaveBeenCalledWith(true);
@@ -155,7 +164,7 @@ describe("the batch merge dialog", () => {
     fireEvent.click(screen.getByRole("button", { name: message("duplicates.confirm", { count: "1" }) }));
 
     await waitFor(() => expect(mocks.merge).toHaveBeenCalledWith({
-      sets: [["ada", "augusta"]], digests: ["digest-ada"], certain: false,
+      sets: [["ada", "augusta"]], digests: ["digest-ada"], certain: false, groupings: null,
     }));
   });
 
@@ -179,6 +188,7 @@ describe("the batch merge dialog", () => {
       ],
       disagreements: [{ field: "display_name", values: ["Ada Lovelace", "Augusta King"], shown: "Ada Lovelace" }],
       fills: [],
+      grouping: [],
     }];
 
     renderDialog(vi.fn(), [{
@@ -224,7 +234,7 @@ describe("the batch merge dialog", () => {
     fireEvent.click(screen.getByRole("button", { name: message("duplicates.confirm", { count: "1" }) }));
 
     await waitFor(() => expect(mocks.merge).toHaveBeenCalledWith({
-      sets: [["grace", "amazing-grace"]], digests: ["digest-grace"], certain: false,
+      sets: [["grace", "amazing-grace"]], digests: ["digest-grace"], certain: false, groupings: null,
     }));
   });
 
@@ -289,7 +299,7 @@ describe("the batch merge dialog", () => {
         ],
       },
       {
-        outcome: null, reason: "", digest: "digest-mary", survivor: { id: "mary" }, disagreements: [], fills: [],
+        outcome: null, reason: "", digest: "digest-mary", survivor: { id: "mary" }, disagreements: [], fills: [], grouping: [],
         members: [
           member("mary", "Mary Example", "mary@example.test", "2020-06-01T00:00:00Z"),
           member("mary-2", "Mary Example", "mary@example.test", "2020-07-01T00:00:00Z"),
@@ -302,6 +312,31 @@ describe("the batch merge dialog", () => {
     expect(await screen.findByText(message("duplicates.gains", { fields }))).toBeTruthy();
     expect(screen.getAllByText(/^The survivor also gains/)).toHaveLength(1);
     expect(screen.getAllByRole("checkbox").map((box) => box.getAttribute("aria-checked"))).toEqual(["true", "true"]);
+  });
+
+  test("in a grouped selection, members who all moved to the same new value are marked and the set starts unticked", async () => {
+    mocks.previews = [{
+      ...PREVIEWS[2]!,
+      grouping: [{ field: "family_name", values: ["Smith", "Smith"], shown: "Smith" }],
+    }];
+    renderDialog(vi.fn(), [{
+      members: ["joan", "joan-2"], heading: "Clarke", grouping: [{ field: "family_name", key: "Clarke" }],
+    }]);
+
+    const [set] = await screen.findAllByRole("checkbox");
+    expect(set!.getAttribute("aria-checked")).toBe("false");
+    expect(screen.getAllByText(message("duplicates.moved"))).toHaveLength(2);
+    expect(mocks.variables).toContainEqual({ sets: [["joan", "joan-2"]], certain: false, groupings: [["family_name"]] });
+  });
+
+  test("an ungrouped selection and Review's certain pairs send no grouping and carry no mark", async () => {
+    mocks.previews = [PREVIEWS[2]!];
+    renderDialog(vi.fn(), [{ members: ["joan", "joan-2"] }], true);
+
+    const [set] = await screen.findAllByRole("checkbox");
+    expect(set!.getAttribute("aria-checked")).toBe("true");
+    expect(screen.queryByText(message("duplicates.moved"))).toBeNull();
+    expect(mocks.variables).toContainEqual({ sets: [["joan", "joan-2"]], certain: true, groupings: null });
   });
 });
 

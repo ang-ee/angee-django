@@ -938,10 +938,13 @@ live in code docstrings.
   the rest empty, is a fill (`DuplicateSetPreview.fills`, the same
   `MergeFieldValues` rows), which the merge gives the survivor and which warns
   nobody; the dialog names a set's fills in one line, "The survivor also gains:
-  …", by their merge field labels. The group-match mark reads either list, so a member whose grouping
-  value was cleared since the selection still no longer matches its group; when
-  every member moved to the same new value nothing differs and nothing is
-  marked. Each set that may merge carries a `digest`
+  …", by their merge field labels. A grouped selection sends its grouping
+  field names (names only) to the preview and the merge, and the preview returns
+  a row for each that is a text merge field whatever the members hold
+  (`DuplicateSetPreview.grouping`, in the digest), so a member whose value moved
+  from the group's key no longer matches its group, a cleared value and a set
+  whose members all moved alike included; a relation or a date-bucket group has
+  no row and is not marked. Each set that may merge carries a `digest`
   (`DuplicateSetPreview.digest`, `keyed_facts_digest`, the keyed hashing
   `IdentityBasis.facts_hash` now shares) of what the dialog shows of it: each
   member's id, name, creation time and first-met note as the reader's gates
