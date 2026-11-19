@@ -1,11 +1,15 @@
 // @vitest-environment happy-dom
-import { act, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
+import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvider } from "@tanstack/react-router";
 import * as React from "react";
-import { beforeEach, expect, test, vi } from "vitest";
-import { ActionFormDialog, type ListViewProps } from "@angee/ui";
-import { RuntimeFixture, storySchema } from "@angee/storybook/testing";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { ActionFormDialog, ToastProvider, type ListViewProps } from "@angee/ui";
+import { createUiTestProviders } from "@angee/ui/testing";
 
 import { RecordNeedsPane } from "./RecordNeedsPane";
+
+const { Provider, clearClients } = createUiTestProviders();
+afterEach(() => { cleanup(); clearClients(); });
 
 const mutation = vi.hoisted(() => ({ convert: vi.fn(), options: vi.fn() }));
 vi.mock("@angee/ui", async () => ({
@@ -23,8 +27,9 @@ beforeEach(() => {
 });
 
 test("Convert to task appears only for writable unconverted needs and collects a queue for the selected row", async () => {
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   const { result } = renderHook(() => RecordNeedsPane({ targetModel: "projects.Project", targetField: "project", targetId: "prj_1" }), {
-    wrapper: ({ children }) => <RuntimeFixture schemas={storySchema({})}>{children}</RuntimeFixture>,
+    wrapper: ({ children }) => <Provider><RouterContextProvider router={router}><ToastProvider>{children}</ToastProvider></RouterContextProvider></Provider>,
   });
   const children = () => React.Children.toArray((result.current as React.ReactElement<{ children: React.ReactNode }>).props.children);
   const list = children()[0];

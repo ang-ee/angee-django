@@ -40,21 +40,21 @@ interface MaterialPresentation {
 
 // Presentation only: replacement eligibility and required fields come from the server.
 const MATERIAL_FIELDS: Readonly<Record<string, MaterialPresentation>> = {
-  api_key: { widget: "password", secret: true, label: "apiToken", placeholder: "apiTokenPlaceholder", createKind: "static_token" },
-  private_key: { widget: "textarea", secret: true, label: "privateKey", placeholder: "privateKeyPlaceholder", createKind: "ssh_key" },
-  key_file: { widget: "textarea", secret: true, label: "keyFile", placeholder: "keyFilePlaceholder", createKind: "jwt_bearer" },
-  username: { widget: "text", secret: false, label: "username" },
-  password: { widget: "password", secret: true, label: "password" },
-  app_id: { widget: "text", secret: false, label: "appId" },
-  app_secret: { widget: "password", secret: true, label: "appSecret" },
+  api_key: { widget: "password", secret: true, label: "credentials.create.apiToken", placeholder: "credentials.create.apiTokenPlaceholder", createKind: "static_token" },
+  private_key: { widget: "textarea", secret: true, label: "credentials.create.privateKey", placeholder: "credentials.create.privateKeyPlaceholder", createKind: "ssh_key" },
+  key_file: { widget: "textarea", secret: true, label: "credentials.create.keyFile", placeholder: "credentials.create.keyFilePlaceholder", createKind: "jwt_bearer" },
+  username: { widget: "text", secret: false, label: "credentials.create.username" },
+  password: { widget: "password", secret: true, label: "credentials.create.password" },
+  app_id: { widget: "text", secret: false, label: "credentials.create.appId" },
+  app_secret: { widget: "password", secret: true, label: "credentials.create.appSecret" },
 };
 
 function materialField(name: string, t: ReturnType<typeof useIntegrateT>): ActionScalarArg {
   const field = MATERIAL_FIELDS[name];
   if (!field) throw new Error("Unknown credential material field.");
   return {
-    name, kind: "string", widget: field.widget, label: t(`credentials.create.${field.label}`),
-    ...(field.placeholder ? { placeholder: t(`credentials.create.${field.placeholder}`) } : {}),
+    name, kind: "string", widget: field.widget, label: t(field.label),
+    ...(field.placeholder ? { placeholder: t(field.placeholder) } : {}),
     ...(field.secret ? { autoComplete: "new-password" } : {}),
   };
 }

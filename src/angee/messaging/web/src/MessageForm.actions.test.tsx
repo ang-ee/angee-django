@@ -1,11 +1,14 @@
 // @vitest-environment happy-dom
-import { render, renderHook, screen } from "@testing-library/react";
+import { cleanup, render, renderHook, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { beforeEach, expect, test, vi } from "vitest";
-import { RecordActionBar, parsePageActions, parsePageFields, type FormProps, type RegisteredFormProps } from "@angee/ui";
-import { RuntimeFixture, storySchema } from "@angee/storybook/testing";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { ModalsHost, RecordActionBar, ToastProvider, parsePageActions, parsePageFields, type FormProps, type RegisteredFormProps } from "@angee/ui";
+import { createUiTestProviders } from "@angee/ui/testing";
 
 import { messageForm } from "./MessageForm";
+
+const { Provider, clearClients } = createUiTestProviders();
+afterEach(() => { cleanup(); clearClients(); });
 
 const mutations = vi.hoisted(() => ({ retry: vi.fn(), acknowledge: vi.fn() }));
 vi.mock("@angee/ui", async () => ({
@@ -38,6 +41,10 @@ test.each([
   expect(action.visibleWhen?.({ id: "msg_1", revision: 7, status: "UNCERTAIN", permissions: ["send_held"] })).toBe(false);
   expect(action.visibleWhen?.({ id: "msg_1", revision: 7, delivery_actions: [] })).toBe(false);
   expect(action.visibleWhen?.({ id: "msg_1", delivery_actions: [verb] })).toBe(false);
+  render(<Provider><ModalsHost><ToastProvider>
+    <RecordActionBar fillBand record={{ id: "msg_1", revision: 7, delivery_actions: [verb] }} actions={[action]} />
+  </ToastProvider></ModalsHost></Provider>);
+  expect(screen.getByRole("button", { name: action.label as string })).toBeTruthy();
   const refresh = vi.fn();
   await action.run?.({ record: { id: "msg_1", revision: 7, delivery_actions: [verb] },
     values: {}, refresh, update: async () => null, prompt: async () => null });
@@ -49,10 +56,10 @@ test.each([
 
 test("delivery recovery controls are hidden when the server withholds admission", () => {
   const { result } = renderHook(() => (messageForm.Component as (props: RegisteredFormProps) => ReactElement<FormProps>)({ resource: "messaging.Message" }));
-  render(<RuntimeFixture schemas={storySchema({})}>
+  render(<Provider><ModalsHost><ToastProvider>
     <RecordActionBar fillBand record={{ id: "msg_1", revision: 7, status: "UNCERTAIN", delivery_actions: [], permissions: ["send_held"] }}
       actions={parsePageActions(result.current.props.children)} />
-  </RuntimeFixture>);
+  </ToastProvider></ModalsHost></Provider>);
   expect(screen.queryByRole("button", { name: "Retry delivery" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Mark as sent" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();

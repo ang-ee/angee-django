@@ -20,7 +20,7 @@ test("the routed run defaults to its filling graph beneath its sheet", async () 
   expect(screen.getByRole("tab", { name: "Graph" }).getAttribute("aria-selected")).toBe("true");
   expect(screen.getByTestId("run-graph-canvas").className).toContain("flex-1");
   // The run's own facts stay on the sheet above the graph.
-  expect(await screen.findByText("Operator")).toBeTruthy();
+  expect(await within(screen.getByRole("main")).findByText("Operator")).toBeTruthy();
 });
 
 test("node-scoped step evidence keeps the run filter and selects parent plus item rows", async () => {
@@ -69,7 +69,7 @@ async function openStep() {
 
 test("routed record uses the framework action buttons, facts and retained JSON", async () => {
   render(<RunStory />);
-  expect(await screen.findByText("Operator")).toBeTruthy();
+  expect(await within(await screen.findByRole("main")).findByText("Operator")).toBeTruthy();
   expect(await screen.findByText("Review notes")).toBeTruthy();
   expect(screen.getByRole("tab", { name: "Step runs" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: /Save|Delete|New/ })).toBeNull();
