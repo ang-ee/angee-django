@@ -980,20 +980,22 @@ def test_user_crud_create_update_delete_are_admin_only(
         assert user.check_password("first-secret")
     user_id = _user_public_id(user)
 
+    update_user = """
+        mutation UpdateUser($id: String!) {
+          update_users_by_pk(
+            pk_columns: {id: $id},
+            _set: {first_name: "Renamed", is_staff: false}
+          ) {
+            first_name
+            is_staff
+          }
+        }
+    """
+    assert _execute(console_schema, update_user, {"id": user_id}, user=plain).errors is not None
     changed = _data(
         _execute(
             console_schema,
-            """
-            mutation UpdateUser($id: String!) {
-              update_users_by_pk(
-                pk_columns: {id: $id},
-                _set: {first_name: "Renamed", is_staff: false}
-              ) {
-                first_name
-                is_staff
-              }
-            }
-            """,
+            update_user,
             {"id": user_id},
             user=admin,
         )
@@ -1027,23 +1029,31 @@ def test_user_crud_create_update_delete_are_admin_only(
         user.refresh_from_db()
         assert user.email == "console-user@example.com"
 
-    _data(
-        _execute(
-            console_schema,
-            """
-            mutation RehashUser($id: String!) {
-              update_users_by_pk(
-                pk_columns: {id: $id},
-                _set: {password: "second-secret"}
-              ) {
-                username
-              }
-            }
-            """,
-            {"id": user_id},
-            user=admin,
-        )
+    rejected = _execute(
+        console_schema,
+        update_user.replace('first_name: "Renamed", is_staff: false', 'password: "second-secret"'),
+        {"id": user_id},
+        user=admin,
     )
+    assert rejected.data is None
+    assert rejected.errors is not None
+    assert (
+        "Expected value of type 'users_set_input' not to include unknown field 'password'"
+        in rejected.errors[0].message
+    )
+    with system_context(reason="test.iam.user_crud.rejected_password"):
+        before = user.password, user.account_revision
+        user.refresh_from_db()
+        assert (user.password, user.account_revision) == before
+
+    set_password = """
+        mutation SetUserPassword($id: ID!, $password: String!, $revision: Int!) {
+          set_user_password(id: $id, password: $password, expected_revision: $revision) { ok }
+        }
+    """
+    variables = {"id": user_id, "password": "second-secret", "revision": user.account_revision}
+    assert not _data(_execute(console_schema, set_password, variables, user=plain))["set_user_password"]["ok"]
+    assert _data(_execute(console_schema, set_password, variables, user=admin))["set_user_password"]["ok"]
     with system_context(reason="test.iam.user_crud.update_password"):
         user.refresh_from_db()
         assert user.check_password("second-secret")

@@ -3,8 +3,9 @@
 import pytest
 from axes.models import AccessAttempt
 from django.contrib.auth import HASH_SESSION_KEY, get_user, get_user_model, login
-from django.contrib.auth.hashers import get_hasher
+from django.contrib.auth.hashers import PBKDF2PasswordHasher, get_hasher
 from django.contrib.auth.models import AnonymousUser
+from django.contrib.auth.password_validation import MinimumLengthValidator, get_default_password_validators
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 
 from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
@@ -30,6 +31,41 @@ CREATE = """mutation($object: users_insert_input!) {
 LOGIN = """mutation($name: String!, $password: String!) {
   login(username: $name, password: $password) { ok }
 }"""
+
+
+class CountingPasswordHasher(PBKDF2PasswordHasher):
+    """Observe Django's real hashing and verification through PASSWORD_HASHERS."""
+
+    def __init__(self):
+        self.encode_calls = 0
+        self.verify_calls = 0
+
+    def encode(self, password, salt, iterations=None):
+        self.encode_calls += 1
+        return super().encode(password, salt, iterations)
+
+    def verify(self, password, encoded):
+        self.verify_calls += 1
+        return super().verify(password, encoded)
+
+
+class CountingPasswordValidator(MinimumLengthValidator):
+    """Observe validation through AUTH_PASSWORD_VALIDATORS without changing its rule."""
+
+    def __init__(self, min_length=12):
+        super().__init__(min_length)
+        self.calls = 0
+
+    def validate(self, password, user=None):
+        self.calls += 1
+        return super().validate(password, user)
+
+
+@pytest.fixture
+def password_checks(password_user, settings):
+    settings.PASSWORD_HASHERS = [f"{__name__}.CountingPasswordHasher"]
+    settings.AUTH_PASSWORD_VALIDATORS = [{"NAME": f"{__name__}.CountingPasswordValidator"}]
+    return get_hasher(), get_default_password_validators()[0]
 
 
 @pytest.fixture
@@ -118,7 +154,8 @@ def test_change_password_requires_sign_in_and_a_usable_password(password_user):
     assert not User._base_manager.get(pk=passwordless.pk).has_usable_password()
 
 
-def test_set_password_admits_only_unprotected_people(password_user, caplog, monkeypatch):
+def test_set_password_admits_only_unprotected_people(password_user, caplog, password_checks):
+    hasher, validator = password_checks
     admin = create_platform_admin("set-password-admin", password=CURRENT)
     manager = _manager("set-password-manager")
     refused_targets = (
@@ -143,11 +180,8 @@ def test_set_password_admits_only_unprotected_people(password_user, caplog, monk
     stale = execute_schema(schema, SET, variables(password_user, before.account_revision), user=admin)
     assert stale.errors and stale.errors[0].extensions["code"] == "STALE_REVISION"
 
-    def unexpected(*args, **kwargs):
-        pytest.fail("Refused actors and targets must not validate or hash a password")
-
-    monkeypatch.setattr(User, "_set_validated_password", unexpected)
-    monkeypatch.setattr("django.contrib.auth.base_user.make_password", unexpected)
+    assert validator.calls == 1 and hasher.encode_calls > 0
+    calls = hasher.encode_calls, hasher.verify_calls, validator.calls
     for actor, target in [(admin, target) for target in refused_targets] + [(manager, password_user),
                                                                          (password_user, password_user)]:
         assert "set_password" not in target.account_actions_for(to_subject_ref(actor))
@@ -156,6 +190,7 @@ def test_set_password_admits_only_unprotected_people(password_user, caplog, monk
         assert refused["set_user_password"]["ok"] is False
         assert User._base_manager.get(pk=target.pk).password == before.password
         assert User._base_manager.get(pk=target.pk).account_revision == before.account_revision
+    assert (hasher.encode_calls, hasher.verify_calls, validator.calls) == calls
     assert NEW not in str(result) + caplog.text
 
 
@@ -199,7 +234,8 @@ def test_actor_typed_creation_set_and_change_share_validation(password_user, pas
     assert User._base_manager.get(pk=password_user.pk).check_password(CURRENT)
 
 
-def test_creation_validates_only_actor_typed_passwords(password_user, monkeypatch):
+def test_creation_validates_only_actor_typed_passwords(password_user, password_checks):
+    hasher, validator = password_checks
     admin = create_platform_admin("create-password-admin", password=None)
     schema = _schema("console")
     created = result_data(execute_schema(schema, CREATE, {
@@ -212,19 +248,21 @@ def test_creation_validates_only_actor_typed_passwords(password_user, monkeypatc
     ingress = User.objects.create_person_as_system("ingress", "ingress@example.com", reason="test.ingress")
     assert not ingress.has_usable_password()
 
-    def unexpected(*args, **kwargs):
-        pytest.fail("Creation must authorize before password validation")
-
-    monkeypatch.setattr(User, "_set_validated_password", unexpected)
-    assert execute_schema(schema, CREATE, {
+    assert validator.calls == 1 and hasher.encode_calls > 0
+    calls = hasher.encode_calls, hasher.verify_calls, validator.calls
+    denied = execute_schema(schema, CREATE, {
         "object": {"username": "denied", "password": "short"},
-    }, user=password_user).errors
+    }, user=password_user)
+    assert denied.errors and denied.errors[0].extensions["code"] == "PERMISSION_DENIED"
+    assert not User._base_manager.filter(username="denied").exists()
+    assert (hasher.encode_calls, hasher.verify_calls, validator.calls) == calls
 
 
 @pytest.mark.parametrize("order", [("login", "change"), ("change", "login")])
 def test_login_and_change_password_share_lockout_without_hashing_when_locked_out(
-    password_user, settings, caplog, monkeypatch, order,
+    password_user, settings, caplog, password_checks, order,
 ):
+    hasher, validator = password_checks
     settings.AUTHENTICATION_BACKENDS = IAM_SETTINGS["AUTHENTICATION_BACKENDS:append"]
     settings.AXES_FAILURE_LIMIT = 2
     settings.AXES_LOCKOUT_PARAMETERS = ["username"]
@@ -246,11 +284,8 @@ def test_login_and_change_password_share_lockout_without_hashing_when_locked_out
         # Both operations contribute to exactly the same username counter.
         assert AccessAttempt.objects.get(username=password_user.username).failures_since_start == count
 
-    def unexpected(*args, **kwargs):
-        pytest.fail("A locked-out authentication attempt must not invoke the password hasher")
-
-    monkeypatch.setattr(type(get_hasher()), "encode", unexpected)
-    monkeypatch.setattr(type(get_hasher()), "verify", unexpected)
+    assert hasher.verify_calls > 0 and validator.calls == 0
+    calls = hasher.encode_calls, hasher.verify_calls, validator.calls
     refused_login = result_data(execute_schema(schema, LOGIN, {
         "name": password_user.username, "password": CURRENT,
     }, user=AnonymousUser(), session=True))["login"]
@@ -261,6 +296,7 @@ def test_login_and_change_password_share_lockout_without_hashing_when_locked_out
     assert refused_change["ok"] is False and "current_password" in refused_change["validation_errors"]
     stored = User._base_manager.get(pk=password_user.pk)
     assert (stored.password, stored.account_revision) == (before.password, before.account_revision)
+    assert (hasher.encode_calls, hasher.verify_calls, validator.calls) == calls
     recorded = str(list(AccessAttempt.objects.values())) + caplog.text + str([*results, refused_login, refused_change])
     assert all(secret not in recorded for secret in (CURRENT, NEW, "wrong-login", "wrong-current"))
 
