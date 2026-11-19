@@ -1,4 +1,4 @@
-import { archiveFlagField, isClientRowModel, rowPublicId, type DataResourceMetadata, type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
+import { archiveFlagField, isClientRowModel, rowPublicId, trashFlagField, type DataResourceMetadata, type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
 import type {
   GroupingState,
   Row as TableRowModel,
@@ -43,6 +43,8 @@ export function requestedFieldPaths<TRow extends Row>(
   const paths = new Set<string>([query.contract.identity.field]);
   const archiveFlag = archiveFlagField(modelMetadata?.resource);
   if (archiveFlag) paths.add(archiveFlag);
+  const trashFlag = trashFlagField(modelMetadata?.resource);
+  if (trashFlag) paths.add(trashFlag);
   const addSelections = (
     field: string,
     explicit?: readonly string[],

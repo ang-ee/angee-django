@@ -22,6 +22,28 @@ test("archivable rows carry their flag beside identity without a declared column
   expect(requestedFieldPaths([{ field: "retired" }], ["retired"], model)).toEqual(["public_key", "retired"]);
 });
 
+test("trashable rows carry their flag without a declared column or duplicate selections", () => {
+  const resource = testDataResource("example.Record", {
+    fields: [field("name", "scalar"), field("removed", "scalar", { scalar: "Boolean", trashable: true })],
+    query: testResourceQuery({ identity: { field: "public_key" }, fields: { name: testQueryField("name") } }),
+  });
+  const model = schemaFieldMetadataFromDataResources([resource]).labels[resource.modelLabel]!;
+  expect(requestedFieldPaths([{ field: "name" }], undefined, model)).toEqual(["public_key", "removed", "name"]);
+  expect(requestedFieldPaths([{ field: "removed" }], ["removed"], model)).toEqual(["public_key", "removed"]);
+});
+
+test("archive and trash flags are independent metadata facts, not inferred field names", () => {
+  const resource = testDataResource("example.Record", {
+    fields: [
+      field("retired", "scalar", { scalar: "Boolean", archivable: true }),
+      field("removed", "scalar", { scalar: "Boolean", trashable: true }),
+      field("is_trashed", "scalar", { scalar: "Boolean" }),
+    ],
+  });
+  const model = schemaFieldMetadataFromDataResources([resource]).labels[resource.modelLabel]!;
+  expect(requestedFieldPaths([], undefined, model)).toEqual(["id", "retired", "removed"]);
+});
+
 test("selects native relation representation leaves for resolved sublines", () => {
   const invoice = testDataResource("billing.Invoice", {
     fields: [

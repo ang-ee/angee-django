@@ -127,7 +127,6 @@ export const enStorageMessages: Record<string, string> = {
     "Infrastructure a drive is created against.",
 
   // Settings admin console — drive/backend form field labels.
-  "settings.archived": "Archived",
   "settings.backendClass": "Backend class",
   "settings.config": "Config",
 };
