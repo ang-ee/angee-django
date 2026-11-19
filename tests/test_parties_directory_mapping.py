@@ -40,6 +40,7 @@ class ColourMapping(DirectoryMapping):
     key = "colour"
     backend = PullDirectoryBackend.key
     fields = ("do_not_record", "fav_colour")
+    aspects = ("colour",)
 
     def project(self, row: Mapping[str, Any]) -> dict[str, Any]:
         return {"favourite_colour": "" if row.get("do_not_record") else str(row.get("fav_colour") or "")}
@@ -66,6 +67,7 @@ class NumberMapping(DirectoryMapping):
     key = "number"
     backend = PullDirectoryBackend.key
     fields = ("do_not_record", "fav_number")
+    aspects = ("number",)
 
     def project(self, row: Mapping[str, Any]) -> dict[str, Any]:
         return {"favourite_number": None if row.get("do_not_record") else row.get("fav_number")}
@@ -74,6 +76,42 @@ class NumberMapping(DirectoryMapping):
         person.statements_for("number").set(
             aspect="number", values=values, asserted_by=link.asserting_source(), link=link
         )
+
+
+class CountedNumberMapping(NumberMapping):
+    """A favourite number the source sends as text; a value that is no number is one it cannot read."""
+
+    key = "counted_number"
+    fields = ("fav_number",)
+
+    def project(self, row: Mapping[str, Any]) -> dict[str, Any]:
+        value = row.get("fav_number")
+        return {"favourite_number": int(value) if value not in (None, "") else None}
+
+
+class RefusingNumberMapping(NumberMapping):
+    """States the number, but cannot state one above a hundred (its value helper raises)."""
+
+    key = "refusing_number"
+
+    def apply_record(self, person: Any, values: Mapping[str, Any], *, link: Any) -> None:
+        if (values["favourite_number"] or 0) > 100:
+            raise ValueError(f"{values['favourite_number']} is out of range")
+        super().apply_record(person, values, link=link)
+
+
+class UndeclaredMapping(ColourMapping):
+    """States a group it does not declare."""
+
+    key = "undeclared"
+    aspects = ()
+
+
+class UnknownGroupMapping(ColourMapping):
+    """Declares a group the person model does not have."""
+
+    key = "unknown_group"
+    aspects = ("shoe_size",)
 
 
 class ElsewhereMapping(ColourMapping):
@@ -325,13 +363,6 @@ def test_removing_the_last_mapping_replays_each_record_once_without_its_projecti
     assert ada.applied_base.mapped_payload == ada.source_payload["contact"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "A removed mapping's class is gone and what it stated is opaque to the base; the replay withdraws it "
-        "only once a mapping declares the statement groups it states (see the lane report)."
-    ),
-)
 def test_removing_a_mapping_withdraws_what_it_stated_on_its_replay(pull: Pull, settings: Any) -> None:
     _colours(pull, ada="green")
     _register(settings, ColourMapping)
@@ -345,6 +376,79 @@ def test_removing_a_mapping_withdraws_what_it_stated_on_its_replay(pull: Pull, s
 
     statement.refresh_from_db()
     assert statement.status == "withdrawn"
+
+
+def test_the_replay_withdraws_only_the_groups_no_registered_mapping_and_no_ingest_states(
+    pull: Pull, settings: Any
+) -> None:
+    """The removed mapping's group goes; a mapping still registered and the contact's own groups stay."""
+
+    pull.source.fields["ada"] = {"fav_colour": "green", "fav_number": 7}
+    _register(settings, ColourMapping, NumberMapping)
+    pull.reopen()
+    pull.sync()
+
+    _register(settings, NumberMapping)
+    pull.reopen()
+    pull.sync()
+
+    link = pull.link("ada")
+    statuses = dict(
+        Person.statements.filter(subject_id=link.target_object_id, link=link).current().values_list("aspect", "status")
+    )
+    assert statuses == {"colour": "withdrawn", "number": "asserted", "name": "asserted", "dates": "asserted"}
+    assert _person(pull, "ada").favourite_number == 7
+
+
+def _refusals(pull: Pull, key: str) -> list[Any]:
+    return list(pull.link(key).failures(open_only=True))
+
+
+def test_a_value_a_projection_cannot_read_refuses_its_record_alone_until_the_source_changes_it(
+    pull: Pull, settings: Any
+) -> None:
+    """The refusal names the mapping and never the value; the rest of the page lands, and a fixed value applies."""
+
+    pull.source.fields.update(ada={"fav_number": "seven"}, grace={"fav_number": "7"})
+    _register(settings, CountedNumberMapping)
+    pull.reopen()
+
+    result = pull.sync()
+
+    assert len(result.failure_ids) == 1
+    assert _person(pull, "grace").favourite_number == 7
+    assert pull.link("ada").target_object_id is None
+    (refusal,) = _refusals(pull, "ada")
+    assert "counted_number" in json.dumps(refusal.model_dump(mode="json"), default=str)
+    assert "seven" not in json.dumps([refusal.model_dump(mode="json"), pull.link("ada").source_payload], default=str)
+
+    pull.source.put("ada", _ADA, fields={"fav_number": "8"})
+    assert pull.sync().count == 1
+    assert _person(pull, "ada").favourite_number == 8
+    assert not _refusals(pull, "ada")
+
+
+def test_a_value_a_mapping_cannot_state_refuses_its_record_alone_and_lands_nothing_of_it(
+    pull: Pull, settings: Any
+) -> None:
+    """The record's savepoint rolls back its ingest too; the rest of the page lands."""
+
+    pull.source.fields.update(ada={"fav_number": 1000}, grace={"fav_number": 7})
+    _register(settings, RefusingNumberMapping)
+    pull.reopen()
+
+    result = pull.sync()
+
+    assert len(result.failure_ids) == 1
+    assert _person(pull, "grace").favourite_number == 7
+    assert pull.link("ada").target_object_id is None
+    (refusal,) = _refusals(pull, "ada")
+    assert "refusing_number" in json.dumps(refusal.model_dump(mode="json"), default=str)
+    assert "1000" not in json.dumps(refusal.model_dump(mode="json"), default=str)
+
+    pull.source.put("ada", _ADA, fields={"fav_number": 8})
+    assert pull.sync().count == 1
+    assert _person(pull, "ada").favourite_number == 8
 
 
 def test_a_mapping_of_a_backend_that_writes_back_or_of_no_backend_fails_the_system_check(settings: Any) -> None:
@@ -365,6 +469,9 @@ def test_a_mapping_of_a_backend_that_writes_back_or_of_no_backend_fails_the_syst
     assert ids(ColourMapping, CardDavMapping) == ["parties.E002"]
     assert ids(TwoWayMapping) == ["parties.E002"]
     assert ids(ElsewhereMapping) == ["parties.E001"]
+    # A mapping declares the person groups it states, so its removal can withdraw them.
+    assert ids(UndeclaredMapping) == ["parties.E003"]
+    assert ids(UnknownGroupMapping) == ["parties.E003"]
     # A mapping claims the one key it is registered under, so one mapping registered twice fails.
     settings.ANGEE_DIRECTORY_MAPPING_CLASSES = {"colour": _path(ColourMapping), "colour_again": _path(ColourMapping)}
     assert [error.id for error in check_directory_mappings()] == ["angee.E004"]

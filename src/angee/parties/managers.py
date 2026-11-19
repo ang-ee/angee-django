@@ -23,7 +23,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from enum import StrEnum
 from itertools import chain, combinations, groupby, islice
-from typing import TYPE_CHECKING, Any, NamedTuple, Self, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, Self, TypedDict, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -948,6 +948,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     inherit the parent's concrete default manager), so the Person-per-user factory
     :meth:`for_user` lives here.
     """
+
+    contact_aspects: ClassVar[frozenset[str]] = frozenset({"identity", "contact", "handle", "name", "dates"})
+    """The person statement groups :meth:`ingest_contact` states through a contact's link."""
 
     def display_avatar(self, party: Any, *, actor: Any) -> Any | None:
         """Return the avatar ``party`` shows ``actor``: its own, else its strongest handle's.
