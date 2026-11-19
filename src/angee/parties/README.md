@@ -150,7 +150,8 @@ lock pass. A batch records no value as the person's choice: each record's
 statements move to the survivor as their sources' own and the provenance ranking
 decides what shows; a field the survivor leaves empty takes a merged record's
 value as a plain value no one states (`Party.merge_values`). The dialog shows, for
-each set, the fields its records disagree on and the value that will show; a
+each set that merges, the fields its records disagree on and the value that will
+show, leaving out a field the person's `read__<field>` gate hides on any record; a
 person who wants to choose merges that pair on the compare page instead. A merge,
 batch or not, reverts from its changeset. A person's `anniversary` is a merge
 choice like their birthday; a party's `avatar` is not one yet. Merging a person

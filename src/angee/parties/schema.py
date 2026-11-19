@@ -433,8 +433,9 @@ class FieldDisagreementType:
 class DuplicateSetPreviewType:
     """A set of records a person says are one, as the batch merge would merge it now.
 
-    ``members`` come oldest first, each with what tells it apart (its handles,
-    its statements' sources, its dates); the first survives.
+    ``members`` come oldest first, each with what tells it apart (its statements'
+    handles and sources, its dates); the first survives. Only a set that merges
+    lists ``disagreements``, and only fields the reader may read on every member.
     """
 
     members: list[PartyType]

@@ -17,8 +17,9 @@ live in code docstrings.
   (`certain_same_as_pairs`, `certain=True` re-checks each) or a selection from a
   list. `duplicate_set_previews(sets, certain)` reads what the dialog shows
   (members oldest first with their statements and handles, the survivor, a
-  refusal, and the fields the records disagree on with the value that will
-  show) in a fixed number of queries. Only an active person account writing
+  refusal, and, for a set that merges, the fields the records disagree on with
+  the value that will show, each field behind its own `read__<field>` gate per
+  record) in a fixed number of queries. Only an active person account writing
   every record may (the party's new `batch_merge` permission,
   `write & person->active_member`, parties schema revision 22), read on the
   party whatever manager is asked; no agent tool offers it. A set holding an
