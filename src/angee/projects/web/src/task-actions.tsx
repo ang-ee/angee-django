@@ -136,14 +136,14 @@ export function useTaskFormDeclaration(
   const dropSubmit = React.useCallback<
     NonNullable<ActionDescriptor["submit"]>
   >(
-    async (values, context) => {
+    async (values, context, options) => {
       const id = context.record?.id;
       if (typeof id !== "string" || id === "") {
         return { ok: false, message: t("task.action.failed") };
       }
       return (await dropTask(id, {
         reason: dropReason(dropReasonOptions, values.reason),
-      })) ?? { ok: false, message: t("task.action.failed") };
+      }, options)) ?? { ok: false, message: t("task.action.failed") };
     },
     [dropReasonOptions, dropTask, t],
   );

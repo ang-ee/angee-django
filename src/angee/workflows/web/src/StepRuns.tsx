@@ -94,7 +94,7 @@ export function StepRuns({ runId, nodeKeys }: {
       <Action id="reprocess-from-duplicate" label={t("action.reprocess_workflow_run_from_step_accepting_duplicate")} danger
         args={reprocessAcknowledgement}
         visibleWhen={(record) => record.can_reprocess_from === true && record.reprocess_requires_duplicate_acknowledgement === true}
-        submit={(_values, { record }) => typeof record?.id === "string" ? reprocessFromDuplicate(record.id) : null} />
+        submit={(_values, { record }, options) => typeof record?.id === "string" ? reprocessFromDuplicate(record.id, {}, options) : null} />
     </Form>
   </DrawerResourceList>;
 }

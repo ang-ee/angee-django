@@ -1,6 +1,6 @@
 import * as React from "react";
 import type { DocumentType } from "@angee/gql/console";
-import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
+import { useAuthoredMutation, useAuthoredQuery, type AuthoredMutateOptions } from "@angee/refine";
 import { jsonValueFromUnknown, type JsonValue } from "@angee/ui";
 import {
   parseDashboardSnapshot,
@@ -116,12 +116,15 @@ function useCreatePersonal() {
   const [create] = useAuthoredMutation(CreatePersonalDashboardDocument, {
     invalidateModels: DASHBOARD_MODELS,
   });
-  return React.useCallback(async (input: { name: string; description?: string; idempotencyKey: string }) => {
+  return React.useCallback(async (
+    input: { name: string; description?: string; idempotencyKey: string },
+    options?: AuthoredMutateOptions,
+  ) => {
     const result = await create({
       name: input.name,
       description: input.description ?? "",
       idempotencyKey: input.idempotencyKey,
-    });
+    }, options);
     return saveResult(result?.create_personal_dashboard);
   }, [create]);
 }
@@ -138,7 +141,7 @@ function useDashboard(target: DashboardTarget) {
   return {
     state: loadedState,
     reload: React.useCallback(async () => { await query.refetch(); }, [query.refetch]),
-    save: React.useCallback(async (command: DashboardSaveCommand) => {
+    save: React.useCallback(async (command: DashboardSaveCommand, options?: AuthoredMutateOptions) => {
       const result = await saveMutation({
         target: targetInput(command.target),
         snapshot: dashboardSnapshotInput(command.snapshot),
@@ -147,7 +150,7 @@ function useDashboard(target: DashboardTarget) {
         declarationRevision: command.declarationRevision ?? "",
         name: command.name ?? "",
         description: command.description ?? "",
-      });
+      }, options);
       return saveResult(result?.save_dashboard);
     }, [saveMutation]),
     reset: React.useCallback(async (resetTarget: DashboardTarget, persistedId: string, expectedRevision: number) => {

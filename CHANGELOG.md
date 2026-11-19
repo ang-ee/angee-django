@@ -16,12 +16,6 @@ live in code docstrings.
   before, the receipt stayed current while the web manifest's roots named the old
   location, and the frontend build failed on a missing addon entry.
 
-- Addons require django-compose 0.1.0.dev13, whose snapshot digest covers each
-  addon's resolved path. A host that changes its sync from `--no-editable` to
-  editable, or moves a source checkout, now recomposes on `compose --if-stale`;
-  before, the receipt stayed current while the web manifest's roots named the old
-  location, and the frontend build failed on a missing addon entry.
-
 - A Docker-mode framework stack serving production on `localhost` comes up: the
   Caddy `frontend` script no longer opens with a blank line, which the operator
   re-saved as an unparsable `|4-` block once it had cut the `src` workspace
@@ -147,6 +141,70 @@ live in code docstrings.
   drops it and declares `auth.login` at that path. `DEFAULT_LOGIN_PATH` remains
   only for a runtime that composes no `auth.login` route.
 
+- `@angee/ui`: `CommandBand.editable` keeps an editable record's command band
+  row in the layout while nothing in it renders, blank and hidden from assistive
+  technology, so the Save and Discard its first edit brings shift nothing.
+  `FormView` sets it from the save surface's `formTakesEdits` (`formReadOnly`
+  without the wait for the record), so the row holds from load on. The layout
+  band marks the band holding its row `data-layout-band`; an inline band (the file
+  details card, a relation record dialog) collapses as before, as does a record
+  that takes no edits and has no verbs.
+- `@angee/ui`: every call `MutationDialog` makes for its caller (`validate`,
+  `onSubmit`, `mutation`) gets the `AuthoredMutateOptions` that turn refine's
+  generic error notification off, so a failure is reported once, in the dialog.
+  `@angee/refine`'s `ActionMutate` takes them as a third argument; the dashboard
+  store's `save` and `createPersonal`, the operator's `OperatorActionHook.run` and
+  `useDaemonMutationRun` take them per call. The dashboard, portfolio-update and
+  add-source dialogs run their owner's call as `mutation` (deleting their
+  `onSubmit` result wrappers); the operator's workspace-create and secret dialogs
+  pass the options on from `validate` and `onSubmit`.
+- `@angee/ui`: an action's `submit(values, context, options)` gets the same
+  `AuthoredMutateOptions` from the surface running it: `useActionForm` (so
+  `ActionFormDialog` and the stream composers) renders a failure in its form, and
+  a row's direct submit settles it in one toast. The framework's action submits
+  pass them on to their authored call, and `useRecordChromeActionOutcome`'s
+  authored transport forwards them, so a transport failure is reported once.
+- `angee.integrate`: `Integration.credential_blocker(credential)` is a
+  capability's one admission rule, a public-safe refusal or `None`;
+  `admit_credential` raises it on every attachment and the connect picker shows
+  it. `ConnectWithAccount.accounts` lists `ConnectWithAccountChoice` entries (`id`,
+  `display_name`, `blocked_reason`), so the connect-with-account field lists an
+  account the capability refuses with its reason ("Already connected" for a Google
+  account another calendar source syncs) and never offers it, instead of refusing
+  it once picked. `Mount`, `CalendarSource` and the calendar backends move their
+  rules onto `credential_blocker`; `GoogleCalendarBackend.admit_credential` only
+  holds the credential's row lock around it.
+- `@angee/ui`: `PaneRow` takes `disabled` and `disabledReason`. An unavailable row
+  stays listed, muted and without a hover fill; it is a focusable button with
+  `aria-disabled`, so keyboard users reach it, and its reason, shown in full under
+  the title, is its `aria-describedby` description. The connect-with-account
+  field lists a refused account through it.
+- Calendar time zones follow Google Calendar's model. An all-day event is dates
+  in its effective zone, `CalendarEvent.effective_timezone` (its own, else its
+  calendar's `Calendar.effective_timezone`, else the project `TIME_ZONE`; it
+  replaces `expansion_zone`, which left the project zone blank; the
+  `effective_timezone_expression()` of `CalendarEventQuerySet` and
+  `CalendarQuerySet` reads it as a query), read as `effective_timezone` on an
+  event and on each `event_occurrences` item: the calendar grid, the events list
+  and the event form show and edit those days in every browser zone, and
+  changing an all-day event's own zone keeps its days. The events list shows a
+  timed event's bounds as their date and clock time in the viewer's zone.
+  `@angee/ui`'s `AbsoluteTime` reads a bare `yyyy-MM-dd` value as that date,
+  with no time and no zone, and list date cells compose it. Dragging an all-day
+  event sends the days it lands on, which the event places at midnight in its
+  zone; the nearest-midnight snap is gone, and an instant off that midnight is
+  refused. A dragged timed event refuses a time without an offset. A
+  timed event is an instant edited on the viewer's clock: `@angee/ui`'s
+  `formatDateTimeStorage` (`DATETIME_STORAGE_FORMAT`) writes the local wall time
+  with its UTC offset (`yyyy-MM-dd'T'HH:mm:ssxxx`), so every `datetime` widget
+  (record forms, filters, structured form specs, action dialogs) sends the
+  instant meant, never a naive time the server reads in its own zone, and
+  `mutationDialogValueCodecs.datetime` composes it. `calendarDay(date,
+  timeZone)` reads the day an instant falls on in a zone. A backend asks a parsed
+  event's zone of the same chain (`angee.calendar.backends.effective_timezone`):
+  Google Calendar reads and publishes every zone through it and the two
+  properties, and a published event's version names the zone its projection
+  reads.
 - A calendar source can publish local calendars out. `CalendarBackend.direction`
   (`PULL` by default) declares which way a source's streams sync; a `PUSH`
   backend's calendars and events streams are push streams, never swept.
@@ -207,6 +265,40 @@ live in code docstrings.
   base-manager row lock (each row it reads and its MTI tables): `lock_subject`,
   `lock_target`, storage's and knowledge's target locks and messaging's thread
   teardown compose it.
+- A published calendar's poll projects only the events changed since their push.
+  - **Provenance:** `ModelHistory.current_version(model)` is the outer row's latest
+    history version id, joined with the latest id of each tracked MTI descendant's
+    table that carries its columns; it is opaque, compared only for equality. It is
+    exact and committed with the write, and `NULL` before the row's first version or
+    while capture is off.
+  - **Local versions:** `LocalChange.local_version` (and `RecordChange`'s) carries the
+    version a push adapter read with its projection. The push records it beside the
+    base it writes: `RecordLink.local_version`, a new column the link's history
+    excludes, framed by the mapping version. Every other promotion clears it.
+  - **Narrowing:** `RecordLinkManager.with_local_versions(rows, context=…)` annotates a
+    row's history version under a container setting, folded into a digest; a version
+    is at most `LOCAL_VERSION_LENGTH`, and the push refuses a longer one before it
+    writes. `RecordLinkManager.changed_since_base(stream, rows)` leaves out each row
+    a link holds at that version.
+  - **Sweep:** while `SyncStream.sweep_due` (once per `reconcile_interval`) the read
+    narrows nothing, so a projection change without a mapping version bump, or a
+    write that skipped history capture, still converges. A push stream's push
+    completes its sweep (`last_reconciled_at`). A publishing calendar backend
+    declares an hourly one (`CalendarBackend.reconcile_interval`), so the polls
+    between stay narrowed. A stream keeps the interval it was first opened with
+    (`SyncStreamManager.current` seeds policy once), so streams opened before keep
+    the poll interval.
+  - **Settling:** `push_candidates(settle=True)` (the push) records the newer versions
+    of rows whose projection still equals their base in one statement, conditionally
+    on each base, and baselines a row read without a version
+    (`RecordLinkManager.settle`, `ModelHistory.record_missing_baselines`).
+  - **Google:** `local_changes` versions each event under the calendar's zone, so a
+    zone change re-reads every event without touching one. An edit committing
+    after the push read its row is the next push's. The publishing backend declares
+    its events stream's mapping version (`CalendarBackend.events_mapping_version`),
+    and a test pins what a push writes to it.
+  - Hosts add the `RecordLink.local_version` column (`makemigrations`). Existing
+    links start unknown, so the first poll reads every published event once.
 - **Breaking (`delete_blocker` overrides):** `AngeeModel.delete_blocker(*,
   cascaded=False)` says where the row sits in the delete: `DeletePreview` judges
   its target as the start and every collected row as cascaded, and a model's
@@ -253,8 +345,9 @@ live in code docstrings.
   calendars. `CalendarSource.unsubscribe` returns the backend's `unsubscribed`
   message, and `Calendar.delete_blocker` its `calendar_delete_refusal` (the
   `SOURCE_CALENDAR_DELETE` and `PUBLISHED_CALENDAR_DELETE` constants are
-  deleted). A purge locks every stream of the source. Push streams declare the
-  poll interval like pulled ones; integrate never sweeps them. The Google
+  deleted). A purge locks every stream of the source. A publishing backend's
+  streams sweep hourly (`CalendarBackend.reconcile_interval`; a pulled one's,
+  once per poll interval), and integrate's absence pass never sweeps them. The Google
   publishing backend is `google_publishing` (`GooglePublishingCalendarBackend`,
   `connect_google_calendar_publishing(credential_id)`; formerly
   `google_resource`). A publishing source holds no `statement_source` on the
@@ -442,6 +535,12 @@ live in code docstrings.
   folder's `source_href`. Upgrade cutoff: the template ships through the 3.x
   releases and is removed in 4.0; a host upgrading from an earlier release
   applies it through a 3.x release first.
+  The parties web fragment lists the folders on a read-only Folders page
+  (`parties.folders`, `/parties/directories/folders`). Its record shows the name
+  and directory; field provenance, the Links tab's Sources and History compose
+  onto it from their owners. The `parties.directories` menu node becomes a
+  route-less Settings category holding `parties.directories.list` (the
+  directories) and `parties.folders`.
 
 - A resource row naming a `to_field` foreign key by xref stores the named row's
   target column, not its primary key: `AngeeResource.get_fk_widget` binds the xref

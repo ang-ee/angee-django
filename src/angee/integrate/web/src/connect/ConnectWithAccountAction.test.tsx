@@ -59,8 +59,8 @@ const FACTS: ConnectWithAccountFacts = {
   oauth_client: "ocl_google",
   oauth_scopes: [SCOPE],
   accounts: [
-    { id: "crd_1", display_name: "ada@example.com" },
-    { id: "crd_2", display_name: "bob@example.com" },
+    { id: "crd_1", display_name: "ada@example.com", blocked_reason: null },
+    { id: "crd_2", display_name: "bob@example.com", blocked_reason: null },
   ],
 };
 
@@ -130,6 +130,26 @@ describe("ConnectWithAccountAction", () => {
       label: "Connect another account",
       disabled: false,
     }));
+  });
+
+  test("lists an account the capability refuses with the server's reason, and never chooses it", () => {
+    renderAction({ ...FACTS, accounts: [
+      { id: "crd_1", display_name: "ada@example.com", blocked_reason: "Already connected" },
+      { id: "crd_2", display_name: "bob@example.com", blocked_reason: null },
+    ] });
+    const onChange = vi.fn();
+    render(accountField().control!(controlProps({ onChange })));
+
+    // Listed, with why, but not offered: an unavailable row that keyboard users still reach and
+    // hear the reason on, and no "Use this account" verb.
+    const refused = screen.getByRole("button", { name: "ada@example.com", description: "Already connected" });
+    expect(refused.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(refused);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getAllByTitle("Use this account")).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "bob@example.com" }));
+    expect(onChange).toHaveBeenCalledExactlyOnceWith("crd_2");
   });
 
   test("a read-only control chooses nothing and connects nothing", () => {

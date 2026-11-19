@@ -36,7 +36,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, ClassVar
 
 from django.apps import apps
@@ -349,6 +349,23 @@ def excluded_dates(component: Component) -> list[tuple[date | datetime, str]]:
     return [(value.dt, str(prop.params.get("TZID") or "")) for prop in props for value in prop.dts]
 
 
+def effective_timezone(zone: str, *, calendar_zone: str) -> str:
+    """Return the zone a parsed event keeping ``zone`` keeps on a calendar in ``calendar_zone``.
+
+    ``zone`` is the event's own (``ParsedEvent.timezone``, blank for its
+    calendar's) and ``calendar_zone`` its calendar's (blank for the project's).
+    ``CalendarEvent.effective_timezone`` decides, asked of an unsaved event on an
+    unsaved calendar as :func:`cancelled_instances` asks its series: a backend reads
+    a parsed event's times, its ``EXDATE``s and its exceptions' original starts in it.
+    """
+
+    # The unsaved rows only lend the event owner's chain; nothing writes them.
+    event: Any = apps.get_model("calendar", "CalendarEvent")(
+        calendar=apps.get_model("calendar", "Calendar")(timezone=calendar_zone), timezone=zone
+    )
+    return str(event.effective_timezone)
+
+
 def cancelled_instances(
     event: ParsedEvent,
     uid: str,
@@ -365,21 +382,27 @@ def cancelled_instances(
     an occurrence within about 30 years of its start), so an invalid rule raises
     ``ValidationError`` before anything expands it. Each excluded moment is then
     judged on its own (``CalendarEvent.is_instance``, in the zone the stored series
-    uses: the event's own, else ``calendar_zone``), so a far ``EXDATE`` reads only
-    its own window; ``check_deadline``, the backend's own refusal of a parse past
-    its deadline, runs before each. One that is no instance is dropped, and a
-    cancelled instance ends where the event owner's arithmetic puts it
-    (``CalendarEvent.occurrence_end``: an all-day instance spans local days). Each
-    keeps the master's fields, without its rule and attendees. A blank rule returns none.
+    keeps: ``CalendarEvent.effective_timezone`` on a calendar in ``calendar_zone``),
+    so a far ``EXDATE`` reads only its own window; ``check_deadline``, the backend's
+    own refusal of a parse past its deadline, runs before each. One that is no
+    instance is dropped, and a cancelled instance ends where the event owner's
+    arithmetic puts it (``CalendarEvent.occurrence_end``: an all-day instance spans
+    local days). Each keeps the master's fields, without its rule and attendees. A
+    blank rule returns none.
     """
 
     if not event.recurrence:
         return []
-    zone = event.timezone or calendar_zone
-    # The unsaved row only lends its owner's rule checks and occurrence arithmetic; nothing writes it.
+    # The unsaved rows only lend their owners' zone, rule checks and occurrence arithmetic; nothing writes them.
     series: Any = apps.get_model("calendar", "CalendarEvent")(
-        start=event.start, end=event.end, all_day=event.all_day, recurrence=event.recurrence, timezone=event.timezone
+        calendar=apps.get_model("calendar", "Calendar")(timezone=calendar_zone),
+        start=event.start,
+        end=event.end,
+        all_day=event.all_day,
+        recurrence=event.recurrence,
+        timezone=event.timezone,
     )
+    zone = series.effective_timezone
     series.validate_rule(zone=zone)
     cancelled = []
     for moment in sorted(set(excluded)):
@@ -435,7 +458,7 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
     applies every record and applies integrate's absence sweep (:meth:`on_absent`).
     Its calendars are its source's replicas: they take no local edits
     (``Calendar.is_writable`` reads :attr:`direction`). A backend that reads with
-    one kind of credential refuses any other (:meth:`admit_credential`). An
+    one kind of credential refuses any other (:meth:`credential_blocker`). An
     unsubscribed source's replica goes through :meth:`release`. A publishing
     backend extends :class:`PublishingCalendarBackend` instead.
     """
@@ -464,6 +487,24 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
 
     supports_identity_reads: ClassVar[bool] = True
     """Both stream kinds re-read identities (:meth:`read_keys`), so a retried or held record reads its source."""
+
+    events_mapping_version: ClassVar[int] = 1
+    """The events stream's mapping version (``StreamDefinition.mapping_version``), declared by the backend that maps.
+
+    Raise it when what the backend maps an event to changes: a pulled stream then
+    takes a new baseline, and a push stream compares every event again.
+    """
+
+    reconcile_interval: ClassVar[timedelta | None] = None
+    """How often each stream of this backend sweeps (``StreamDefinition.reconcile_interval``).
+
+    ``None`` sweeps once per its source's poll interval. A pulled stream's sweep
+    finds the records its source stopped serving, so it keeps that interval
+    (``CalendarSource._replica``). A push stream's sweep is a push comparing
+    every event again (``SyncStream.sweep_due``), which
+    :class:`PublishingCalendarBackend` runs hourly: the polls between read only
+    the events changed since their push.
+    """
 
     _page: _EventsPage | None = None
 
@@ -520,15 +561,27 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
             raise IntegrationError("The calendar list came back empty; the next sync reads it again.", transient=True)
         return remotes
 
-    def admit_credential(self, credential: Any) -> None:
-        """Refuse a credential this backend cannot use, raising ``ValidationError`` on ``credential``.
+    def credential_blocker(self, credential: Any) -> str | None:
+        """Return a public-safe refusal of a credential this backend cannot use, or ``None`` when it admits it.
 
-        ``CalendarSource.admit_credential`` asks on every attachment, so no path
-        points a source at a credential its backend would send elsewhere. The base
-        admits any credential.
+        The source's admission rule (``CalendarSource.credential_blocker``):
+        :meth:`admit_credential` raises it on every attachment, so no path points a
+        source at a credential its backend would send elsewhere, and the connect
+        picker shows it beside each account. The base admits any credential.
         """
 
         del credential
+        return None
+
+    def admit_credential(self, credential: Any) -> None:
+        """Refuse a credential this backend cannot use, raising :meth:`credential_blocker` on ``credential``.
+
+        ``CalendarSource.admit_credential`` asks on every attachment. A backend
+        overrides this only to hold a lock around its rule.
+        """
+
+        if (refusal := self.credential_blocker(credential)) is not None:
+            raise ValidationError({"credential": refusal})
 
     def release(self, calendars: Sequence[Any]) -> int:
         """Let an unsubscribed source's replica go; return how many events went.
@@ -939,6 +992,8 @@ class PublishingCalendarBackend(CalendarBackend):
     """
 
     direction: ClassVar[StreamDirection] = StreamDirection.PUSH
+
+    reconcile_interval: ClassVar[timedelta | None] = timedelta(hours=1)
 
     unsubscribed: ClassVar[str] = "Unpublished; its calendars are local again."
 

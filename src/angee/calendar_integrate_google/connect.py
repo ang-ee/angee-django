@@ -19,7 +19,7 @@ def connect_google_calendar(user: Any, credential: Any) -> Any:
     it (``CalendarSourceManager.subscribe``: the quota and rate, then integrate's
     attachment), and the backend admits only an account the source reads with
     (``Integration.reads_with``: its OAuth client, with Calendar access) that no
-    other source syncs (``GoogleCalendarBackend.admit_credential``). The user's
+    other source syncs (``GoogleCalendarBackend.credential_blocker``). The user's
     accounts it reads with are the ``calendar_source_backend`` query's. The first
     sync mirrors each calendar of the account on the user's person, then its events.
     """
@@ -39,7 +39,7 @@ def connect_google_calendar_publishing(user: Any, credential: Any) -> Any:
     ``credential`` must be one of the user's own (``CredentialQuerySet.owned_by``;
     the mutation looks it up there). The calendar owner connects it
     (``CalendarSourceManager.subscribe``), and the backend admits only a
-    ``jwt_bearer`` key (``GooglePublishingCalendarBackend.admit_credential``). The
+    ``jwt_bearer`` key (``GooglePublishingCalendarBackend.credential_blocker``). The
     source publishes nothing until a calendar is published through it
     (``CalendarSource.publish``).
     """

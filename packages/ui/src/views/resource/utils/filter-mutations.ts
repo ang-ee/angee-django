@@ -26,13 +26,15 @@ export function customFilterChipsFor(
       if (field === textField && operator === "iContains") {
         continue;
       }
+      const clause = fieldsByName.get(field);
       chips.push({
         id: customFilterId(field, operator),
         label: customFilterChipLabel({
-          fieldLabel: fieldLabel(field, undefined, fieldsByName.get(field)?.label),
+          fieldLabel: fieldLabel(field, undefined, clause?.label),
           operator,
           value: operatorValue,
-          options: fieldsByName.get(field)?.options,
+          options: clause?.options,
+          type: clause?.type,
           t,
         }),
       });

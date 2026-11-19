@@ -1,7 +1,19 @@
 import * as React from "react";
-import { extractActionOutcome, publicGraphQLErrorsFromUnknown, type ActionOutcome } from "@angee/refine";
+import {
+  extractActionOutcome, publicGraphQLErrorsFromUnknown, type ActionOutcome, type AuthoredMutateOptions,
+} from "@angee/refine";
 import type { FieldValues, Path, UseFormReturn } from "react-hook-form";
 import { errorFromUnknown, graphQLErrorsFromUnknown } from "../../data/errors";
+
+/**
+ * The call options of a surface that renders a submission's failure itself (a dialog's
+ * banner, an action form's fields, an action's settle toast): refine's generic error
+ * notification is off, so the failure is reported once. Pass them on to the authored
+ * call the submission makes.
+ * @kind null
+ * @reason Transport infrastructure: the one quiet-call value form surfaces hand their callers.
+ */
+export const SURFACE_RENDERS_FAILURE: AuthoredMutateOptions = { errorNotification: false };
 
 export type DottedPathFieldErrorMap = Readonly<
   Record<string, readonly string[]>

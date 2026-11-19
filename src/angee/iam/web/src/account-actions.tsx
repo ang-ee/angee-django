@@ -137,14 +137,14 @@ export function useRenameAction(): ActionDescriptor {
     { name: "last_name", label: t("users.rename.lastName"), optional: true,
       fromContext: ({ record }) => record?.last_name ?? "" },
   ], [t]);
-  const submit = React.useCallback<NonNullable<ActionDescriptor["submit"]>>(async (values, context) => {
+  const submit = React.useCallback<NonNullable<ActionDescriptor["submit"]>>(async (values, context, options) => {
     const id = typeof context.record?.id === "string" ? context.record.id : "";
     const outcome = await rename(id, {
       first_name: typeof values.first_name === "string" ? values.first_name : "",
       last_name: typeof values.last_name === "string" ? values.last_name : "",
       confirmed: true,
       expected_revision: expectedRevision(context.record),
-    });
+    }, options);
     return outcome ?? { ok: false, message: t("users.rename.error") };
   }, [rename, t]);
   return {

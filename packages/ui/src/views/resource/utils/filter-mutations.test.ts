@@ -2,7 +2,8 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ResourceQuery } from "@angee/metadata";
 import type { ResourceToolbarFilterOption } from "../../../toolbars";
 import { developmentMode } from "../../../lib/development-mode";
-import { mergeFilterOptions } from "./filter-mutations";
+import { formatDateTimeStorage } from "../../../widgets/date-format";
+import { customFilterChipsFor, mergeFilterOptions } from "./filter-mutations";
 
 vi.mock("../../../lib/development-mode", () => ({ developmentMode: vi.fn() }));
 beforeEach(() => vi.mocked(developmentMode).mockReturnValue(true));
@@ -65,4 +66,26 @@ test.each([true, false])("unexpected query bugs still throw with developmentMode
   vi.spyOn(query, "toWhere").mockImplementation(() => { throw bug; });
   expect(() => mergeFilterOptions([{ id: "open", label: "Open", filter: { state: { exact: "open" } } }], [], query)).toThrow(bug);
   expect(error).not.toHaveBeenCalled();
+});
+
+test("a date, date-time or time chip reads its operand through the date owners, never as its wire form", () => {
+  // The clause editor writes a picked 10:30 as the viewer's wall time with its offset.
+  const picked = formatDateTimeStorage(new Date(2026, 10, 20, 10, 30));
+  const chips = customFilterChipsFor(
+    { start: { gt: picked }, due: { lt: "2031-03-04" }, opens: { gte: "09:05" }, note: { exact: "2031-03-04" } },
+    [],
+    [
+      { id: "start", label: "Start", type: "datetime" },
+      { id: "due", label: "Due", type: "date" },
+      { id: "opens", label: "Opens", type: "time" },
+      { id: "note", label: "Note", type: "text" },
+    ],
+  );
+  const labels = Object.fromEntries(chips.map((chip) => [chip.id, chip.label]));
+
+  expect(labels["start:gt"]).toBe("Start > Nov 20, 2026, 10:30 AM");
+  expect(labels["due:lt"]).toMatch(/^Due < Mar 4(, 2031)?$/);
+  expect(labels["opens:gte"]).toBe("Opens >= 9:05 AM");
+  // A text operand that looks like a date stays the text it is.
+  expect(labels["note:exact"]).toBe("Note is 2031-03-04");
 });

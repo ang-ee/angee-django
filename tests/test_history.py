@@ -182,6 +182,71 @@ def test_native_bulk_history_defaults_reach_every_tracked_mti_table():
         assert snapshot.history_change_reason == "native.default"
 
 
+@pytest.mark.django_db
+def test_a_rows_current_version_changes_with_every_tracked_write_and_none_exists_without_capture(settings):
+    """Instance saves and queryset updates each give the row a new version; an MTI child's write moves its parent's."""
+
+    from rebac import system_context
+
+    from angee.messaging.testing.models import Organization, Party
+    from angee.provenance.querysets import model_history
+
+    def version(model, pk):
+        current = model_history(model).current_version(model)
+        return model._base_manager.filter(pk=pk).annotate(version=current).values_list("version", flat=True).get()
+
+    with system_context(reason="tests.history.current_version"):
+        row = OwnedRow.objects.create(title="created")
+        # A version is opaque: its text joins one id per carrier table, and which tables carry
+        # ``OwnedRow`` depends on the MTI children this process has registered.
+        created = version(OwnedRow, row.pk)
+        assert created is not None
+        assert version(OwnedRow, row.pk) == created
+        row.title = "saved"
+        row.save()
+        saved = version(OwnedRow, row.pk)
+        OwnedRow.objects.filter(pk=row.pk).update(title="updated")
+        assert len({created, saved, version(OwnedRow, row.pk)}) == 3
+
+        # A child's save records only the child's version, which carries the parent's columns.
+        organization = Organization.objects.create(display_name="Versioned")
+        before = version(Party, organization.pk)
+        organization.display_name = "Versioned again"
+        organization.save()
+        assert before is not None
+        assert version(Party, organization.pk) != before
+
+        settings.SIMPLE_HISTORY_ENABLED = False
+        assert version(OwnedRow, row.pk) is None
+
+
+@pytest.mark.django_db
+def test_missing_baselines_version_only_the_rows_without_one_and_nothing_without_capture(settings):
+    """A reader's baseline gives a row written before capture its first version; a versioned row keeps its own."""
+
+    from rebac import system_context
+
+    from angee.provenance.history import BASELINE_REASON
+    from angee.provenance.querysets import model_history
+
+    history = model_history(OwnedRow)
+    with system_context(reason="tests.history.missing_baselines"):
+        settings.SIMPLE_HISTORY_ENABLED = False
+        legacy, later = OwnedRow.objects.create(title="legacy"), OwnedRow.objects.create(title="later")
+        history.record_missing_baselines(OwnedRow, [later.pk])
+        assert not OwnedRow.history.filter(id=later.pk).exists()
+
+        settings.SIMPLE_HISTORY_ENABLED = True
+        tracked = OwnedRow.objects.create(title="tracked")
+        versions = list(OwnedRow.history.filter(id=tracked.pk).values_list("history_id", flat=True))
+        history.record_missing_baselines(OwnedRow, [legacy.pk, tracked.pk])
+        [baseline] = OwnedRow.history.filter(id=legacy.pk)
+        assert (baseline.history_type, baseline.history_change_reason, baseline.title) == (
+            "~", BASELINE_REASON, "legacy"
+        )
+        assert list(OwnedRow.history.filter(id=tracked.pk).values_list("history_id", flat=True)) == versions
+
+
 @pytest.mark.entrypoint_boundaries
 @pytest.mark.django_db
 def test_native_bulk_capture_can_be_unattributed_when_storage_policy_allows(settings):

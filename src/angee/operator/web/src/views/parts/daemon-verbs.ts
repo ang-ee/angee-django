@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import type { Row } from "@angee/metadata";
+import type { AuthoredMutateOptions } from "@angee/refine";
 import { defineRowAction, useUiT, type ActionDescriptor, type RowActionDeclaration } from "@angee/ui";
 
 /**
@@ -67,17 +68,19 @@ export function verbRowActions<TRow extends Row>(
  * error (the transport rejects), so any returned root field is success and a
  * missing root field is a failure, not a silent success; either way the snapshot
  * is refetched. Errors propagate to the owner (`RecordActionBar`, the row action),
- * which toasts them with the verb's label.
+ * which toasts them with the verb's label; a dialog that renders them passes its
+ * call `options` on to the mutation.
  */
 export function useDaemonMutationRun(refetch: () => void): <V extends Record<string, unknown>>(params: {
-  run: (variables: V) => Promise<object | undefined>;
+  run: (variables: V, options?: AuthoredMutateOptions) => Promise<object | undefined>;
   field: string;
   variables: V;
+  options?: AuthoredMutateOptions;
 }) => Promise<void> {
   const t = useUiT();
-  return useCallback(async ({ run, field, variables }) => {
+  return useCallback(async ({ run, field, variables, options }) => {
     try {
-      const data = await run(variables);
+      const data = await run(variables, options);
       if (data == null || (data as Record<string, unknown>)[field] == null) {
         throw new Error(t("action.noResult"));
       }

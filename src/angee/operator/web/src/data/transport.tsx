@@ -7,6 +7,7 @@ import {
   useAuthoredQuery,
   useStableVariables,
   type AuthoredDocument,
+  type AuthoredMutateOptions,
   type AuthoredQueryOptions,
   type AuthoredVariables,
   type DocumentData,
@@ -268,8 +269,10 @@ export function useOperatorSnapshot(
 
 export interface OperatorActionHook<TDocument extends OperatorDocument> {
   result: { fetching: boolean; error: Error | null };
+  /** Run the daemon mutation; a surface rendering its failure (a dialog) passes the call's options. */
   run: (
     variables: OperatorVariables<TDocument>,
+    options?: AuthoredMutateOptions,
   ) => Promise<DocumentData<TDocument> | undefined>;
 }
 
@@ -289,7 +292,7 @@ export function useOperatorAction<TDocument extends OperatorDocument>(
     dataProviderName: OPERATOR_PROVIDER,
   });
   const run = useCallback(
-    (variables: Variables) => mutate(variables),
+    (variables: Variables, options?: AuthoredMutateOptions) => mutate(variables, options),
     [mutate],
   );
   return { result: state, run };

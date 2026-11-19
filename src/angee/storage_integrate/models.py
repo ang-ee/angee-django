@@ -323,17 +323,18 @@ class Mount(Bridge, inherits="integrate.Integration"):
 
         return cast(MountBackend, self.live_impl)
 
-    def admit_credential(self, credential: Any) -> None:
-        """Admit only an account this mount's backend reads with (:meth:`reads_with`).
+    def credential_blocker(self, credential: Any) -> str | None:
+        """Refuse an account this mount's backend does not read with (:meth:`reads_with`).
 
-        Integrate asks on every attachment, so neither the console's credential
-        patch nor a re-attachment can point a Mount at a token of another vendor
-        or one that lacks the backend's scopes.
+        Integrate admits by it on every attachment, so neither the console's
+        credential patch nor a re-attachment can point a Mount at a token of
+        another vendor or one that lacks the backend's scopes. One account reads
+        any number of mounts.
         """
 
-        label = type(self).objects.backend_impl(self.backend_class).label
-        if not self.reads_with(credential):
-            raise ValidationError({"credential": f"This account cannot read a {label}."})
+        if self.reads_with(credential):
+            return None
+        return f"This account cannot read a {type(self).objects.backend_impl(self.backend_class).label}."
 
     def reads_with(self, credential: Any) -> bool:
         """Whether the backend reads with ``credential``: only a backend that requires one, by integrate's rule."""

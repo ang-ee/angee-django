@@ -214,7 +214,7 @@ describe("RecordActionBar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Accept" }));
     const dialog = await screen.findByRole("dialog", { name: "Accept" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Accept" }));
-    await waitFor(() => expect(submit).toHaveBeenCalledWith({}, expect.objectContaining({ record, selectedIds: [record.id] })));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({}, expect.objectContaining({ record, selectedIds: [record.id] }), { errorNotification: false }));
     expect(applyPatch).not.toHaveBeenCalled();
   });
   test("preview keeps allowed verbs and delete visible but blocks click and keyboard activation", async () => {
@@ -300,7 +300,7 @@ describe("RecordActionBar", () => {
     const dialog = await screen.findByRole("dialog", { name: "Review" });
     expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
     fireEvent.click(within(dialog).getByRole("button", { name: "Review" }));
-    await waitFor(() => expect(submit).toHaveBeenCalledWith({}, expect.objectContaining({ record, selectedIds: [record.id] })));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({}, expect.objectContaining({ record, selectedIds: [record.id] }), { errorNotification: false }));
     expect(await screen.findByText("Review recorded.")).toBeTruthy();
     expect(screen.queryByRole("dialog", { name: "Review" })).toBeNull();
   });

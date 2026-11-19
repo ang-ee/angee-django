@@ -45,7 +45,7 @@ from strawberry import auto
 from angee.calendar.backends import EVENT_FIELDS
 from angee.calendar.models import Calendar as CalendarModel
 from angee.calendar.models import CalendarEvent as CalendarEventModel
-from angee.calendar.models import CalendarQuerySet, EventOccurrence, EventTransparency
+from angee.calendar.models import CalendarEventQuerySet, CalendarQuerySet, EventOccurrence, EventTransparency
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, session_user
 from angee.graphql.capabilities import permission_expression, permissions_field
@@ -137,6 +137,19 @@ class CalendarEventType(TaggedNode, AngeeNode):
     all_day: auto
     recurrence: auto
     timezone: auto
+
+    @strawberry_django.field(
+        annotate={"_effective_timezone": lambda info: CalendarEventQuerySet.effective_timezone_expression()}
+    )
+    def effective_timezone(self) -> str:
+        """The zone the event keeps (its own, its calendar's or the project's), where an all-day event's days lie."""
+
+        event = cast(Any, self)
+        if "_effective_timezone" in event.__dict__:
+            return str(event._effective_timezone)
+        # A mutation returns its row rather than an annotated queryset: the model reads the chain.
+        return str(event.effective_timezone)
+
     original_start: auto
     status: auto
     transparency: auto
@@ -168,8 +181,9 @@ class EventOccurrenceType:
     A server-expanded occurrence, not a stored row: the resolver returns
     :class:`~angee.calendar.models.EventOccurrence` values, which own the id
     shapes. ``event_sqid`` opens the stored row, ``calendar`` is the calendar's
-    public id, ``editable`` gates drag, and a ``redacted`` occurrence is busy time
-    whose details the actor may not read.
+    public id, ``effective_timezone`` is the zone whose days an all-day occurrence
+    spans, ``editable`` gates drag, and a ``redacted`` occurrence is busy time whose
+    details the actor may not read.
     """
 
     occurrence_id: str
@@ -179,6 +193,7 @@ class EventOccurrenceType:
     start: datetime
     end: datetime
     all_day: bool
+    effective_timezone: str
     editable: bool
     redacted: bool
 
@@ -325,7 +340,7 @@ class CalendarQuery:
         """Return the actor's occurrences in ``[window_start, window_end)``.
 
         Aware UTC bounds, start inclusive and end exclusive, at most 400 days apart;
-        every occurrence that meets the window is returned, in each event's expansion zone.
+        every occurrence that meets the window is returned, in each event's effective zone.
         """
 
         return CalendarEvent.objects.with_actor(session_user(info)).occurrences(window_start, window_end)

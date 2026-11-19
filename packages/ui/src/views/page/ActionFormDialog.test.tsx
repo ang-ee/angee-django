@@ -372,7 +372,7 @@ describe("ActionFormDialog", () => {
     expect(JSON.parse(nextEditor.state.doc.toString())).toEqual({ text: "Retained" });
     expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Consumer note" }).value).toBe("Consumer draft");
     fireEvent.click(screen.getByRole("button", { name: "Collect" }));
-    await waitFor(() => expect(submit).toHaveBeenCalledWith({ mode: "second", note: "Consumer draft", payload: { text: "Retained" } }, context));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ mode: "second", note: "Consumer draft", payload: { text: "Retained" } }, context, { errorNotification: false }));
   });
 
   test("collects record-specific schema args and keeps a conflict draft locked", async () => {
@@ -427,7 +427,7 @@ describe("ActionFormDialog", () => {
       editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: '{"note":"Updated"}' } });
       fireEvent.click(screen.getByRole("button", { name: "Collect" }));
     });
-    await waitFor(() => expect(submit).toHaveBeenCalledWith({ payload: { note: "Updated" } }, context));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ payload: { note: "Updated" } }, context, { errorNotification: false }));
   });
 
   test("passes normalized relation-list values to a custom submit", async () => {
@@ -445,7 +445,7 @@ describe("ActionFormDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Collect" }));
 
     await waitFor(() => expect(submit).toHaveBeenCalledWith(
-      { documentIds: ["doc-2", "doc-1"] }, context,
+      { documentIds: ["doc-2", "doc-1"] }, context, { errorNotification: false }
     ));
   });
 
@@ -461,7 +461,7 @@ describe("ActionFormDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Collect" }));
 
-    await waitFor(() => expect(submit).toHaveBeenCalledWith({ builderIds: [] }, context));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ builderIds: [] }, context, { errorNotification: false }));
   });
 
   test("does not submit its parent record form through the dialog portal", async () => {
@@ -493,7 +493,7 @@ describe("ActionFormDialog", () => {
       }],
     });
     fireEvent.click(screen.getByRole("button", { name: "Collect" }));
-    await waitFor(() => expect(submit).toHaveBeenCalledWith({ collection: "col-secondary" }, context));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ collection: "col-secondary" }, context, { errorNotification: false }));
   });
 
   test("prefills scalar args from the invoking record and submits user edits", async () => {
@@ -514,7 +514,7 @@ describe("ActionFormDialog", () => {
     fireEvent.change(screen.getByLabelText("Amount"), { target: { value: "500.00" } });
     fireEvent.click(screen.getByRole("button", { name: "Collect" }));
     await waitFor(() => expect(submit).toHaveBeenCalledWith(
-      { amount: "500.00", zero: 0, fallback: "Default" }, context,
+      { amount: "500.00", zero: 0, fallback: "Default" }, context, { errorNotification: false }
     ));
     expect(onSucceeded).toHaveBeenCalledWith(outcome);
   });
@@ -642,7 +642,7 @@ describe("ActionFormDialog", () => {
     }));
     fireEvent.keyDown(screen.getByPlaceholderText("Search…"), { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "Save choice" }));
-    await waitFor(() => expect(submit).toHaveBeenCalledWith({ scope: "cash", collection: null }, context));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ scope: "cash", collection: null }, context, { errorNotification: false }));
   });
 
   test("descriptor many-to-many actions preserve selected records and submit the edited id list", async () => {
@@ -657,7 +657,7 @@ describe("ActionFormDialog", () => {
     fireEvent.input(screen.getByRole("combobox", { name: "Documents" }), { target: { value: "DOC-2" }, inputType: "insertText" });
     fireEvent.click(await screen.findByRole("option", { name: "DOC-2" }));
     fireEvent.click(screen.getByRole("button", { name: "Select documents" }));
-    await waitFor(() => expect(submit).toHaveBeenCalledWith({ documentIds: ["doc-1", "doc-2"] }, context));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ documentIds: ["doc-1", "doc-2"] }, context, { errorNotification: false }));
   });
 
   test("offers the picker's inline create only for relation args that declare it", async () => {
@@ -754,7 +754,7 @@ describe("ActionFormDialog", () => {
       await waitFor(() => expect(submit).toHaveBeenCalledWith({
         // A list of collections never inherits the invoking documents' ids.
         target: argKind === "relation" ? "created-1" : ["created-1"],
-      }, context));
+      }, context, { errorNotification: false }));
     },
   );
 

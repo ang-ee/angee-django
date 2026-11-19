@@ -10,6 +10,7 @@ import {
   useRecordAction,
   useRecordActionMutation,
   useRecordChromeActionMutation,
+  useRecordChromeActionOutcome,
 } from "./record-action";
 
 const dataMocks = vi.hoisted(() => ({
@@ -17,6 +18,8 @@ const dataMocks = vi.hoisted(() => ({
   useActionMutation: vi.fn(),
   settle: vi.fn(),
   useActionResultRun: vi.fn(),
+  authoredMutate: vi.fn(async () => ({ sync_calendar: { ok: true, message: "Synced" } })),
+  useAuthoredResourceMutation: vi.fn(),
   chrome: {
     resource: "messaging.Channel",
     canonicalResource: "integrate.Integration",
@@ -39,6 +42,10 @@ vi.mock("@angee/refine", async (importOriginal) => ({
 
 vi.mock("./action-result-run", () => ({
   useActionResultRun: dataMocks.useActionResultRun,
+}));
+
+vi.mock("./authored-resource-mutation", () => ({
+  useAuthoredResourceMutation: dataMocks.useAuthoredResourceMutation,
 }));
 
 // The metadata edge, faked at the one seam these hooks compose: `@angee/metadata`
@@ -379,6 +386,40 @@ describe("useRecordChromeActionMutation", () => {
       "pause_integration",
       expect.objectContaining({ dataProviderName: "operator" }),
     );
+  });
+});
+
+describe("useRecordChromeActionOutcome", () => {
+  beforeEach(() => {
+    dataMocks.authoredMutate.mockClear();
+    dataMocks.useAuthoredResourceMutation.mockReset();
+    dataMocks.useAuthoredResourceMutation.mockReturnValue([
+      dataMocks.authoredMutate,
+      { fetching: false, error: null, reset: vi.fn() },
+    ]);
+  });
+
+  test("an authored verb passes a call's quiet options on to its mutation", async () => {
+    // `ActionFormDialog` renders the refusal itself, so the authored call it runs
+    // must turn refine's toast off as the action-field transport does.
+    const { result } = renderHook(() =>
+      useRecordChromeActionOutcome({
+        document: {} as never,
+        resultField: "sync_calendar",
+        idArgument: "calendar_id",
+      }),
+    );
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current[0]("cal_1", { full: true }, { errorNotification: false });
+    });
+
+    expect(dataMocks.authoredMutate).toHaveBeenCalledExactlyOnceWith(
+      { full: true, calendar_id: "cal_1" },
+      { errorNotification: false },
+    );
+    expect(outcome).toEqual({ ok: true, message: "Synced" });
   });
 });
 
