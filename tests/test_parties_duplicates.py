@@ -928,3 +928,29 @@ def test_a_hand_merge_publishes_its_own_changes_as_before(db: None, django_captu
 
     # The record merge's own writes publish row by row, as they always have: the merged record's trash and redirect.
     assert _sent_parties(sent) == [("parties.Party", merged.public_id)] * 2
+
+
+def _merge_statements(actor: Any, *sets: list[Any]) -> tuple[int, int]:
+    """Statements and actor-scoped statements a batch merge issues."""
+
+    with CaptureQueriesContext(connection) as queries:
+        Party.objects.merge_duplicates(actor=actor, sets=[[party.public_id for party in members] for members in sets])
+    statements = [query["sql"] for query in queries.captured_queries]
+    return len(statements), sum("rebac_ids" in sql for sql in statements)
+
+
+def test_a_sets_merge_costs_a_counted_number_of_statements(db: None) -> None:
+    """Each set's own reads, as the batch asks them: the batch permission and the members once for the batch.
+
+    Per set, under its lock: the lock pass, the judgement (members, statements and handles through the actor,
+    party kinds, keep-apart decisions, field values) and the record merge itself (``Party.merge``).
+    """
+
+    del db
+    owner = create_user("duplicates-statement-count")
+    sets = [_people(owner, f"Zoe Example {i}", f"Zoe Example {i}", value=f"count{i}@example.com") for i in range(3)]
+
+    one = _merge_statements(owner, sets[0])
+    two = _merge_statements(owner, *sets[1:])
+
+    assert (two[0] - one[0], two[1] - one[1]) == (374, 18)

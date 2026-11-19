@@ -944,7 +944,11 @@ live in code docstrings.
   last set is done each record of a merged set is published once, as its
   concrete row, so a chunk is one change for every viewer of those pages; a
   set that was refused, stopped or failed rolled back and publishes nothing,
-  and a hand merge publishes as before. A disagreement is a field the records
+  and a hand merge publishes as before. Each set asks the batch permission and
+  reads its members once for the whole batch, before any lock, and keeps under
+  its own lock what must be live there (the members, their statements and
+  handles through the person, the kinds, the keep-apart decisions and the field
+  values the digest covers). A disagreement is a field the records
   state at least two different values for; a field one value is stated for,
   the rest empty, is a fill (`DuplicateSetPreview.fills`, the same
   `MergeFieldValues` rows), which the merge gives the survivor and which warns

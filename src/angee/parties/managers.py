@@ -2647,11 +2647,11 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                     continue
                 try:
                     with transaction.atomic():
-                        rows = instances_from_public_ids(party_model, ids, queryset=party_model._base_manager.all())
-                        if rows:
-                            party_model.lock_merge_records(sorted(rows.values(), key=lambda row: row.pk))
+                        # The members the batch read before any lock (``_admission``) anchor the set's lock pass.
+                        party_model.lock_merge_records(sorted((readable[pk] for pk in ids), key=lambda row: row.pk))
                         (preview,) = self._judge_sets(
                             actor, [ids], certain=certain, groupings=None if groupings is None else [groupings[index]],
+                            permitted=permitted,
                         )
                         if preview.outcome is not None:
                             outcomes.append(DuplicateSetOutcome(ids, preview.outcome, reason=preview.reason))
@@ -2752,8 +2752,14 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         *,
         certain: bool,
         groupings: Sequence[Sequence[str]] | None = None,
+        permitted: Collection[Any] | None = None,
     ) -> list[DuplicateSetPreview]:
-        """Judge every confirmed set against the live records in one batch of reads (:meth:`preview_duplicates`)."""
+        """Judge every confirmed set against the live records in one batch of reads (:meth:`preview_duplicates`).
+
+        ``permitted`` is the actor's batch permission (:meth:`batch_mergeable`) when
+        the caller asked it once for the whole batch, as :meth:`merge_duplicates`
+        does before any lock; ``Party.merge`` still checks write on every record.
+        """
 
         party_model = apps.get_model("parties", "Party")
         readable = party_model._default_manager.with_actor(actor)
@@ -2761,7 +2767,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         found = self._readable_members(actor, confirmed, statements=True)
         pks = sorted({row.pk for row in found.values()})
         people, organizations = self.party_kinds(pks)
-        permitted = self.batch_mergeable(actor, pks)
+        if permitted is None:
+            permitted = self.batch_mergeable(actor, pks)
         stance = party_model.same_as.model.statements.model
         # The same keep-apart decision ``StatementPairManager.kept_separate`` reads, for every pair of the sets at once.
         kept_apart = set(
