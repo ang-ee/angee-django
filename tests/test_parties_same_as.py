@@ -6,9 +6,10 @@ from datetime import date, timedelta
 from typing import Any
 
 import pytest
+from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.db import connection, transaction
+from django.db import OperationalError, connection, transaction
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
@@ -952,3 +953,117 @@ def test_a_claim_restated_with_more_evidence_changes_no_pair(
     with system_context(reason="same_as decision readback"):
         assert Party.same_as.kept_separate(holder, claimant) is (decision == "kept")
     assert _pairs() == ([({holder.pk, claimant.pk}, (handle,))] if decision == "asserted" else [])
+
+
+def _claimed_people(account: Any) -> tuple[Any, Any]:
+    """Two people ``account`` owns, each claimed for one address by a source: a certain pair ``account`` reviews."""
+
+    handle = _address(account, "zoe@example.com")
+    with system_context(reason="same_as an account's two people"):
+        older, newer = (
+            Person._base_manager.create(display_name=name, created_by=account)
+            for name in ("Zoë Example", "Zoe Example")
+        )
+        for person in (older, newer):
+            Party.objects.propose_claimed_handle_as_system(person, handle, evidence=handle, reason="tests.claim")
+    return older, newer
+
+
+def _account(kind: str) -> Any:
+    if kind == "person":
+        return create_user("same-as-certain-person")
+    if kind == "service":
+        return get_user_model().objects.create_user(username="same-as-certain-service", kind="service")
+    with system_context(reason="same_as an agent's account"):
+        agent = apps.get_model("agents", "Agent").objects.create(
+            name="Reviewer", owner=create_user("same-as-agent-owner"), runtime_class="pydantic",
+        )
+    return agent.user
+
+
+@pytest.mark.parametrize(
+    ("kind", "outcome"),
+    [
+        pytest.param("person", "merged", id="an-active-person"),
+        pytest.param("service", "not_permitted", id="a-service-account"),
+        pytest.param("agent", "not_permitted", id="an-agents-account"),
+    ],
+)
+def test_only_an_active_person_merges_certain_pairs(db: None, kind: str, outcome: str) -> None:
+    """The bulk merge is a person's action: an account that is not an active person merges nothing, even its own."""
+
+    del db
+    account = _account(kind)
+    older, newer = _claimed_people(account)
+    assert _reconcile() == 1
+
+    assert _merge_certain(account) == [(outcome, {older.pk, newer.pk}, older.pk if outcome == "merged" else None)]
+    with system_context(reason="same_as person-only readback"):
+        assert (Party._base_manager.get(pk=newer.pk).merged_into_id == older.pk) is (outcome == "merged")
+
+
+def test_a_merge_the_database_stops_is_reported_and_the_next_pair_still_merges(db: None) -> None:
+    """A deadlock in one merge rolls that merge back and is its outcome; earlier and later merges stand."""
+
+    del db
+    owner = create_user("same-as-certain-busy")
+    first = _people(owner, "Zoë Example", "Zoe Example", value="zoe@example.com")
+    second = _people(owner, "Yan Example", "yan example", value="yan@example.com")
+    assert _reconcile() == 2
+    stopped: list[str] = []
+
+    def deadlock_once(execute: Any, sql: str, params: Any, many: bool, context: Any) -> Any:
+        if not stopped and sql.lstrip().upper().startswith("UPDATE") and '"merged_into_id"' in sql:
+            stopped.append(sql)
+            raise OperationalError("deadlock detected")
+        return execute(sql, params, many, context)
+
+    with connection.execute_wrapper(deadlock_once):
+        outcomes = _merge_certain(owner)
+
+    assert outcomes == [
+        ("busy", {first[0].pk, first[1].pk}, None),
+        ("merged", {second[0].pk, second[1].pk}, second[0].pk),
+    ]
+    with system_context(reason="same_as busy readback"):
+        assert Party._base_manager.get(pk=first[1].pk).merged_into_id is None
+
+
+def _decided_pair_citing_a_deleted_handle(owner: Any, decide: Any) -> tuple[Any, Any]:
+    """A pair the job proposed citing a holder's written row, decided by a person, then the written row deleted."""
+
+    with system_context(reason="same_as a holder written onto its row"):
+        holder = Party._base_manager.create(display_name="Ada Example", created_by=owner)
+        written = Handle._base_manager.create(platform="email", value="Ada@Example.com", party=holder, created_by=owner)
+    stated = _address(owner, "ADA@example.com")
+    with system_context(reason="same_as the holder's own statement"):
+        Party.objects.assert_handle(holder, stated, asserted_by=owner)
+    claimant = _claimant(owner, _address(owner))
+    assert _reconcile() == 1
+    decide(owner, holder, claimant)
+    with system_context(reason="same_as the written row goes"):
+        Handle._base_manager.filter(pk=written.pk).delete()
+    return holder, claimant
+
+
+@pytest.mark.parametrize(
+    "decide", [pytest.param(_kept_separate, id="kept-apart"), pytest.param(_confirmed, id="confirmed")],
+)
+def test_a_decided_pair_with_stale_evidence_never_holds_back_a_new_proposal(db: None, decide: Any) -> None:
+    """Only the rule's own undecided pair is restated; a person's decision stands and spends no budget."""
+
+    del db
+    owner = create_user("same-as-stale-decided")
+    holder, claimant = _decided_pair_citing_a_deleted_handle(owner, decide)
+    second = _address(owner, "bob@example.com")
+    with system_context(reason="same_as a second pair"):
+        bob = Party._base_manager.create(display_name="Bob Example", created_by=owner)
+        Party.objects.assert_handle(bob, second, asserted_by=owner)
+    bob_claimant = _claimant(owner, second, "B. Example")
+
+    with system_context(reason="same_as a run of one"):
+        assert Party.objects.reconcile_same_as(limit=1) == 1
+    assert [row.status for row in _rule_pair_statements(bob, bob_claimant)] == ["asserted"]
+    with system_context(reason="same_as nothing left"):
+        assert Party.objects.reconcile_same_as(limit=1) == 0
+        assert Party.same_as.kept_separate(holder, claimant) is (decide is _kept_separate)

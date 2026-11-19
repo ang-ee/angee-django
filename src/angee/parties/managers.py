@@ -31,7 +31,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.prefetch import GenericPrefetch
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, connection, models, transaction
+from django.db import IntegrityError, OperationalError, connection, models, transaction
 from django.db.models import (
     Case,
     Count,
@@ -928,9 +928,11 @@ class SameAsMergeOutcome(StrEnum):
     NAMES_DIFFER = "names_differ"
     """A name is missing, or the names differ beyond case, accents and hyphens."""
     NOT_PERMITTED = "not_permitted"
-    """The merge's own permission refused the acting person."""
+    """The account is not an active person writing both parties (``merge_certain``), or the merge refused it."""
     REFUSED = "refused"
     """The merge's guards refused it (a party kept apart, merged meanwhile, held by an addon)."""
+    BUSY = "busy"
+    """The database stopped the merge for a concurrent write (a deadlock, a lock timeout); nothing merged, try again."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1732,21 +1734,29 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             .order_by("subject__left_id", "subject__right_id")
             .values_list("subject_id", "subject__left_id", "subject__right_id", "updated_at", "evidence")
         )
+        source_ref = str(to_subject_ref(source))
         decided = {(left_id, right_id) for _subject, left_id, right_id, _at, _cited in own}
-        for batch in batched(sorted({left_id for left_id, _right in supported}), query_batch_size(current)):
-            decided.update(
-                current.filter(subject__left_id__in=batch).values_list("subject__left_id", "subject__right_id")
-            )
+        others: set[tuple[Any, Any]] = set()
+        lefts = sorted({left_id for left_id, _right in supported})
+        for batch in batched(lefts, query_batch_size(current)):
+            for left_id, right_id, asserted_by in current.filter(subject__left_id__in=batch).values_list(
+                "subject__left_id", "subject__right_id", "asserted_by"
+            ):
+                decided.add((left_id, right_id))
+                if asserted_by != source_ref:
+                    others.add((left_id, right_id))
         unsupported = [
             subject for subject, left_id, right_id, at, _cited in own if (left_id, right_id) not in supported
             and at < started
         ][:limit]
         changed = statements.withdraw(source, unsupported) if unsupported else 0
         handle_model = apps.get_model("parties", "Handle")
+        # Only the rule's own undecided pair is restated: a person's decision (or another source's) stands.
         stale = [
             (left_id, right_id)
             for _subject, left_id, right_id, _at, cited in own
             if (left_id, right_id) in supported
+            and (left_id, right_id) not in others
             and not {EvidenceReference.model_validate(ref).id for ref in cited}
             <= {public_id_for(handle_model, pk) for pk in supported[left_id, right_id]}
         ]
@@ -1825,6 +1835,16 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
         party_model = apps.get_model("parties", "Party")
         stances = party_model.same_as.model.statements
+        decided = stances.current().filter(
+            subject__left_id=min(left_id, right_id),
+            subject__right_id=max(left_id, right_id),
+            status=stances.model.StatementStatus.ASSERTED,
+        )
+        if restate:
+            decided = decided.exclude(asserted_by=str(to_subject_ref(source)))
+        # A decided pair is read before it is locked: it takes no lock and makes no pair row.
+        if decided.exists():
+            return None
         with transaction.atomic():
             parties = party_model._base_manager.filter(pk__in=(left_id, right_id))
             live = parties.filter(is_trashed=False, merged_into__isnull=True)
@@ -1832,9 +1852,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 return None
             first, second = parties.order_by("pk")
             pair = party_model.same_as.for_pair(first.with_actor(to_subject_ref(source)), second)
-            decided = stances.current().filter(subject=pair, status=stances.model.StatementStatus.ASSERTED)
-            if restate:
-                decided = decided.exclude(asserted_by=str(to_subject_ref(source)))
+            # The pair locked both parties: read their state and the pair's decisions again under the lock.
             if live.count() != 2 or decided.exists():
                 return None
             return pair.statements.set(
@@ -2206,8 +2224,13 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         (:meth:`same_person_links`, the shared-sender providers consulted), and both
         bear a real name and the names agree but for case, accents and hyphens
         (``Party.comparable_name``); a pair someone kept apart awaits no review.
-        Each certain pair merges into the older record through ``Party.merge`` as
-        ``actor``, so the merge's own permission and guards decide. It loses no
+        A merge the database stops (an ``OperationalError``: a deadlock, a lock or
+        statement timeout, a serialization failure) is reported as ``busy`` and the
+        pairs after it still run; any other database error propagates.
+        Only an active person account merges, and only parties it writes (the
+        party's ``merge_certain`` permission); a service or agent account merges
+        nothing. Each certain pair merges into the older record through
+        ``Party.merge`` as ``actor``, so the merge's own permission and guards decide. It loses no
         value: a merge field the survivor leaves empty takes the newer record's
         value (``Party.merge_values``), the survivor's stands where both have one,
         and each kept value is recorded as ``actor``'s choice, as choosing those
@@ -2224,6 +2247,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 shared=self.shared_sender_ids(),
             )
         linked = {address: {link.party for link in address_links} for address, address_links in links.items()}
+        permitted = set(
+            self.with_actor(actor).with_action("merge_certain").filter(pk__in=list(people)).values_list("pk", flat=True)
+        )
         outcomes = []
         for pair in pairs:
             ids = {pair.left.pk, pair.right.pk}
@@ -2239,6 +2265,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 and pair.left.comparable_name == pair.right.comparable_name
             ):
                 outcome = SameAsMergeOutcome.NAMES_DIFFER
+            elif not ids <= permitted:
+                outcome = SameAsMergeOutcome.NOT_PERMITTED
             else:
                 survivor, merged = sorted((pair.left, pair.right), key=lambda party: (party.created_at, party.pk))
                 try:
@@ -2249,6 +2277,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                     outcome = SameAsMergeOutcome.NOT_PERMITTED
                 except ValidationError:
                     outcome = SameAsMergeOutcome.REFUSED
+                except OperationalError:
+                    # The merge's own transaction rolled back; the pairs after it still run.
+                    outcome = SameAsMergeOutcome.BUSY
                 else:
                     outcomes.append(
                         SameAsPairOutcome(

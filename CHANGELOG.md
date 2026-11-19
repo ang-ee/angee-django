@@ -652,8 +652,11 @@ live in code docstrings.
 
 - Parties: a person merges the certain same-person pairs awaiting their review in
   one action, `Party.objects.merge_certain_same_as_pairs(actor=, limit=)`,
-  exposed as the `merge_certain_same_as_pairs(limit)` mutation and the agent
-  tool of the same name. A pair is certain when both are people, neither is an
+  exposed as the `merge_certain_same_as_pairs(limit)` mutation. Only an active
+  person account writing both parties may: the party's new `merge_certain`
+  permission (`write & person->active_member`, parties schema revision 29)
+  refuses service and agent accounts, and no agent tool offers the action. A
+  pair is certain when both are people, neither is an
   account's own person, exactly the two are linked to an address it cites, and
   their names are equal but for case, accents and hyphens
   (`Party.comparable_name`). Each merges into the older record as the acting
@@ -681,10 +684,19 @@ live in code docstrings.
   never merges, and a failure after the commit is logged for the job to heal. A
   pair now locks both parties in one identity pass, Handles before Parties
   (`StatementsMixin.lock_subjects`, which `Party` implements and its merges use);
-  locking one party after the other ran against the Handle, Party order. The job
+  locking one party after the other ran against the Handle, Party order. A party
+  merge also takes its same-person partners and every Handle its parties hold in
+  that pass (`Party.lock_merge_records`): the fold re-keys the merged party's
+  other pairs onto the survivor, which locked each partner's Handles after party
+  rows and could deadlock with a resolution of the partner's address (a defect
+  already on `main`). The bulk merge reports a merge the database stops (an
+  `OperationalError`: deadlock, lock or statement timeout) as `busy` and goes on. The job
   no longer withdraws a proposal stated after its run began, and restates a
   standing proposal whose cited handle was deleted or merged away with the handles
-  that still link the two, so it never hides from the review list.
+  that still link the two, so it never hides from the review list. Only the
+  rule's own undecided proposal is restated: a pair a person kept apart or
+  confirmed spends none of the run's budget, and a decided pair is read before
+  it is locked, so it takes no lock and makes no pair row.
 
 - Parties proposes a same-person pair for every two live parties of one kind
   linked to one address (`PartyManager.reconcile_same_as`, over

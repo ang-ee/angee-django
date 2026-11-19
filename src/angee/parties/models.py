@@ -285,22 +285,36 @@ class Party(
     def lock_subjects(cls, subjects: Sequence[Any]) -> None:
         """Lock every one of these parties' Handles, then the parties and statements, in one identity pass.
 
-        Locking party after party would take a later party's Handles after an
-        earlier party's row, the reverse of the Handle, Party order resolution
-        and the identity verbs keep, so a pair (both endpoints) and a merge (every
-        record) lock here.
+        A party's Handles are the ones it has a statement on and the ones it holds
+        (a holder written onto its row has no statement). Locking party after party
+        would take a later party's Handles after an earlier party's row, the reverse
+        of the Handle, Party order resolution and the identity verbs keep, so a pair
+        (both endpoints) locks here.
         """
 
-        owner = apps.get_model("parties", "Party").objects
-        ids = sorted({row.pk for row in subjects})
-        handle_ids = owner.handle_statements().filter(subject_id__in=ids).values_list("handle_id", flat=True)
-        owner.lock_identity_rows(party_ids=ids, handle_ids=handle_ids)
+        cls._lock_identities({row.pk for row in subjects})
 
     @classmethod
     def lock_merge_records(cls, records: Sequence[Any]) -> None:
-        """Lock every merged party's Handles before the shared merge owner locks Parties (:meth:`lock_subjects`)."""
+        """Lock the merge's parties and their same-person partners in one identity pass, before any party row.
 
-        cls.lock_subjects(records)
+        The fold re-keys each merged party's other pairs onto the survivor
+        (``StatementPairManager.merge``), which locks the partner's Handles; taken
+        then, after party rows, they would invert the Handle, Party order, so the
+        partners join this pass.
+        """
+
+        ids = {row.pk for row in records}
+        pairs = cls.same_as.model._base_manager.filter(models.Q(left_id__in=ids) | models.Q(right_id__in=ids))
+        cls._lock_identities(ids | {pk for pair in pairs.untrashed().values_list("left_id", "right_id") for pk in pair})
+
+    @staticmethod
+    def _lock_identities(party_ids: set[Any]) -> None:
+        owner = apps.get_model("parties", "Party").objects
+        ids = sorted(party_ids)
+        stated = owner.handle_statements().filter(subject_id__in=ids).values_list("handle_id", flat=True)
+        held = apps.get_model("parties", "Handle")._base_manager.filter(party_id__in=ids).values_list("pk", flat=True)
+        owner.lock_identity_rows(party_ids=ids, handle_ids={*stated, *held})
 
     def __str__(self) -> str:
         """Return the party's display name for Django displays."""
