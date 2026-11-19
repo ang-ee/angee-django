@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -20,9 +21,10 @@ from django.core.exceptions import ImproperlyConfigured
 from angee.integrate.states import LinkStatus
 from angee.integrate.streams import begin_stream_cycle
 from angee.integrate.testing.models import RecordLink
-from angee.messaging.testing.models import Party, Person
-from angee.parties.backends import MAPPINGS, DirectoryMapping
+from angee.messaging.testing.models import Handle, Party, Person
+from angee.parties.backends import MAPPINGS, DirectoryMapping, ParsedContact
 from angee.parties.checks import check_directory_mappings
+from angee.tags.testing.models import Tag, TagAssignment
 from tests.stream_adapters import applied_history
 from tests.test_parties_directory_backend import (
     _ADA,
@@ -170,6 +172,70 @@ class CardDavMapping(ColourMapping):
 
     key = "carddav_colour"
     backend = "carddav"
+
+
+class HouseNameMapping(DirectoryMapping):
+    """The name a house uses for a person: it refines the contact's nickname, so the ingest states it."""
+
+    key = "house_name"
+    backend = PullDirectoryBackend.key
+    fields = ("house_name",)
+    refines = ("nickname",)
+
+    def project(self, row: Mapping[str, Any]) -> dict[str, Any]:
+        return {"nickname": str(row.get("house_name") or "")}
+
+    def refine(self, contact: ParsedContact, values: Mapping[str, Any]) -> ParsedContact:
+        return replace(contact, nickname=values["nickname"]) if values["nickname"] else contact
+
+
+class AnotherHouseNameMapping(HouseNameMapping):
+    """A second mapping of the same backend refining the same field."""
+
+    key = "house_name_again"
+
+
+class ElsewhereRefiningMapping(HouseNameMapping):
+    """Refines the same field for another backend's contacts."""
+
+    key = "elsewhere_house_name"
+    backend = "elsewhere"
+
+
+class EmailRefiningMapping(HouseNameMapping):
+    """Would refine the contact's addresses, which are no mapping's to refine."""
+
+    key = "email_refining"
+    refines = ("emails",)
+
+
+class UndeclaredRefinementMapping(HouseNameMapping):
+    """Refines the nickname while declaring the given name."""
+
+    key = "undeclared_refinement"
+    refines = ("given_name",)
+
+
+class FlagsMapping(DirectoryMapping):
+    """Plain tags from a source's multi-select field, and the preferred mark on the channel the contact chose.
+
+    Neither is a statement group, so it declares none; it writes through the owners' own verbs.
+    """
+
+    key = "flags"
+    backend = PullDirectoryBackend.key
+    fields = ("flags", "channel")
+
+    def project(self, row: Mapping[str, Any]) -> dict[str, Any]:
+        flags = sorted({flag.strip() for flag in str(row.get("flags") or "").split(";") if flag.strip()})
+        channel = {"text": Handle.Platform.PHONE, "whatsapp": Handle.Platform.WHATSAPP}.get(str(row.get("channel")))
+        return {"tags": flags, "preferred": str(channel or "")}
+
+    def apply_record(self, person: Any, values: Mapping[str, Any], *, link: Any) -> None:
+        tags = [str(tag.sqid) for tag in Tag.objects.filter(name__in=values["tags"])]
+        TagAssignment.objects.attach("parties/party", str(person.sqid), tags)
+        for handle in Handle.objects.filter(party=person.pk, platform=values["preferred"]).order_by("pk"):
+            Handle.objects.upsert(platform=handle.platform, value=handle.value, is_preferred=True)
 
 
 class ProfileMapping(DirectoryMapping):
@@ -399,6 +465,160 @@ def test_a_mapping_states_parties_own_languages_and_occupation_and_a_persons_own
     person = _person(pull, "ada")
     assert (person.languages, person.occupation) == (["es"], "Surveyor")
     assert (_stated(pull, "ada", "languages").languages, _stated(pull, "ada", "languages").applied) == (["en"], False)
+
+
+def _checked(settings: Any, *mappings: type[DirectoryMapping]) -> list[str]:
+    """Register ``mappings`` with the scripted backend registered too; return the system check's error ids."""
+
+    settings.ANGEE_DIRECTORY_BACKEND_CLASSES = {
+        **settings.ANGEE_DIRECTORY_BACKEND_CLASSES,
+        PullDirectoryBackend.key: _path(PullDirectoryBackend),
+    }
+    _register(settings, *mappings)
+    return [error.id for error in check_directory_mappings() if isinstance(error, Error)]
+
+
+def _name_statement(pull: Pull, key: str) -> Any:
+    return _stated(pull, key, "name")
+
+
+def test_a_refined_nickname_lands_through_the_ingests_own_statement_and_a_source_change_reapplies_it(
+    pull: Pull, settings: Any
+) -> None:
+    """The refined contact is what the record compares and the ingest states; the mapping states no group."""
+
+    pull.source.fields["ada"] = {"house_name": "Addie"}
+    assert _checked(settings, HouseNameMapping) == []
+    pull.reopen()
+
+    assert pull.sync().count == 2
+
+    ada = pull.link("ada")
+    assert _person(pull, "ada").nickname == "Addie"
+    assert ada.source_payload["contact"]["nickname"] == "Addie"
+    assert ada.applied_base.mapped_payload["nickname"] == "Addie"
+    assert (_name_statement(pull, "ada").nickname, _name_statement(pull, "ada").link_id) == ("Addie", ada.pk)
+    assert _person(pull, "grace").nickname == ""
+    # A re-read of the same source applies nothing; a changed source value is a changed record.
+    pull.source.changed.update(pull.source.contacts)
+    assert pull.sync().count == 0
+    pull.source.put("ada", _ADA, fields={"house_name": "Countess"})
+    assert pull.sync().count == 1
+    assert _person(pull, "ada").nickname == "Countess"
+
+
+def test_removing_a_refining_mapping_replays_and_the_ingest_restates_the_sources_own_value(
+    pull: Pull, settings: Any
+) -> None:
+    pull.source.fields["ada"] = {"house_name": "Addie"}
+    _register(settings, HouseNameMapping)
+    pull.reopen()
+    pull.sync()
+
+    _register(settings)
+    pull.reopen()
+    assert pull.sync().count == 2
+
+    assert _person(pull, "ada").nickname == ""
+    assert _name_statement(pull, "ada").nickname == ""
+
+
+def test_a_persons_own_nickname_still_wins_over_a_refined_one_by_rank(pull: Pull, settings: Any) -> None:
+    pull.source.fields["ada"] = {"house_name": "Addie"}
+    _register(settings, HouseNameMapping)
+    pull.reopen()
+    pull.sync()
+    person = _person(pull, "ada")
+    names = {name: getattr(person, name) for name in Person.statements.model.statement_aspects["name"].fields}
+    person.with_actor(pull.directory.owner).statements_for("name").set(
+        aspect="name", values={**names, "nickname": "Lady Ada"}
+    )
+
+    pull.source.put("ada", _ADA, fields={"house_name": "Countess"})
+    assert pull.sync().count == 1
+
+    assert _person(pull, "ada").nickname == "Lady Ada"
+    assert (_name_statement(pull, "ada").nickname, _name_statement(pull, "ada").applied) == ("Countess", False)
+
+
+def test_refining_a_field_the_mapping_does_not_declare_fails_the_sync(pull: Pull, settings: Any) -> None:
+    pull.source.fields["ada"] = {"house_name": "Addie"}
+    _register(settings, UndeclaredRefinementMapping)
+    pull.reopen()
+
+    with pytest.raises(ImproperlyConfigured, match="nickname"):
+        pull.sync()
+
+
+def _tags(person: Any) -> list[str]:
+    return sorted(TagAssignment.objects.for_record(person).values_list("tag__name", flat=True))
+
+
+def test_a_mapping_declaring_no_group_tags_and_marks_preferred_and_a_rerun_changes_nothing(
+    pull: Pull, settings: Any
+) -> None:
+    """Tags and the preferred mark go through their owners' verbs; neither is taken back when the mapping goes."""
+
+    for name in ("Press", "Regular", "Unused"):
+        Tag.objects.create(name=name)
+    pull.source.fields["ada"] = {"flags": "Press;Regular", "channel": "whatsapp"}
+    pull.sync()
+    person = _person(pull, "ada")
+    whatsapp = Handle.objects.upsert(platform=Handle.Platform.WHATSAPP, value="+14155550100")
+    Party.objects.assert_handle(person, whatsapp, asserted_by=pull.directory.owner)
+    assert _checked(settings, FlagsMapping) == []
+    pull.reopen()
+
+    assert pull.sync().count == 2
+
+    assert _tags(person) == ["Press", "Regular"]
+    whatsapp.refresh_from_db()
+    assert whatsapp.is_preferred is True
+    assert _tags(_person(pull, "grace")) == []
+    # A re-read applies nothing and writes nothing.
+    edges, marks = TagAssignment.history.count(), Handle.history.count()
+    pull.source.changed.update(pull.source.contacts)
+    assert pull.sync().count == 0
+    assert (TagAssignment.history.count(), Handle.history.count()) == (edges, marks)
+    # A tag the source drops stays: an import adds tags, it never takes them back.
+    pull.source.put("ada", _ADA, fields={"flags": "Press", "channel": "whatsapp"})
+    assert pull.sync().count == 1
+    assert _tags(person) == ["Press", "Regular"]
+    assert Handle.history.count() == marks
+
+    _register(settings)
+    pull.reopen()
+    pull.sync()
+
+    assert _tags(person) == ["Press", "Regular"]
+    whatsapp.refresh_from_db()
+    assert whatsapp.is_preferred is True
+
+
+def test_a_preferred_mark_on_an_address_the_contact_lands_is_the_sources_own_once_the_mapping_goes(
+    pull: Pull, settings: Any
+) -> None:
+    """The ingest keeps a landed address's preference as its source gives it; the mapping's mark follows it."""
+
+    pull.source.put("ada", replace(_ADA, phones=(("+14155550123", "cell", False),)), fields={"channel": "text"})
+    _register(settings, FlagsMapping)
+    pull.reopen()
+    pull.sync()
+    phone = Handle.objects.get(platform=Handle.Platform.PHONE, party=pull.link("ada").target_object_id)
+    assert phone.is_preferred is True
+
+    pull.source.put("ada", replace(_ADA, phones=(("+14155550123", "cell", False),), notes="Moved"), fields={
+        "channel": "text"
+    })
+    assert pull.sync().count == 1
+    phone.refresh_from_db()
+    assert phone.is_preferred is True
+
+    _register(settings)
+    pull.reopen()
+    pull.sync()
+    phone.refresh_from_db()
+    assert phone.is_preferred is False
 
 
 @pytest.mark.usefixtures("adoption")
@@ -639,9 +859,15 @@ def test_a_mapping_of_a_backend_that_writes_back_or_of_no_backend_fails_the_syst
     assert ids(ColourMapping, CardDavMapping) == ["parties.E002"]
     assert ids(TwoWayMapping) == ["parties.E002"]
     assert ids(ElsewhereMapping) == ["parties.E001"]
-    # A mapping declares the person groups it states, so its removal can withdraw them.
-    assert ids(UndeclaredMapping) == ["parties.E003"]
+    # A mapping declares the person groups it states, so its removal can withdraw them; one that states none
+    # (it refines the contact, or writes pages, tags or a preferred mark) declares none, and stating a group
+    # it does not declare fails its page instead.
+    assert ids(UndeclaredMapping) == []
     assert ids(UnknownGroupMapping) == ["parties.E003"]
+    # A mapping refines only the contact fields open to it, and no two mappings of one backend refine one field.
+    assert ids(EmailRefiningMapping) == ["parties.E005"]
+    assert ids(HouseNameMapping, AnotherHouseNameMapping) == ["parties.E006"]
+    assert ids(HouseNameMapping, ElsewhereRefiningMapping) == ["parties.E001"]
     # The contact ingest's own groups are its; a mapping stating one would overwrite the ingest's statement.
     assert ids(NameMapping) == ["parties.E004"]
     # A mapping claims the one key it is registered under, so one mapping registered twice fails.

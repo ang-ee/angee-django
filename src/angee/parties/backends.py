@@ -7,8 +7,9 @@ discovered book as a folder, and each book's link is the container of its
 (:attr:`DirectoryBackend.direction`). The base turns payloads into records and
 applies them; both sides compare one deterministic projection, and every inbound
 write composes the parties ingest owners. A consumer's :class:`DirectoryMapping`
-adds source fields of a pull-only backend's contacts to that projection and
-states them on its own person columns. The manual backend declares no streams.
+adds source fields of a pull-only backend's contacts to that projection, refines
+the contact with them and states them on person columns no contact carries. The
+manual backend declares no streams.
 """
 
 from __future__ import annotations
@@ -263,14 +264,44 @@ def organization_projection(organization: ParsedOrganization) -> dict[str, Any]:
     }
 
 
-class DirectoryMapping(ImplBase):
-    """Fill person columns from source fields of one pull-only directory backend.
+REFINABLE_FIELDS = (
+    "name_prefix",
+    "given_name",
+    "additional_name",
+    "family_name",
+    "name_suffix",
+    "nickname",
+    "birthday",
+    "anniversary",
+    "organization",
+    "title",
+    "role",
+)
+"""The neutral contact's fields a mapping may refine (:attr:`DirectoryMapping.refines`).
 
-    The columns are a consumer's own, declared with the statement group that
-    owns them on a donor of ``parties.Person`` (its precedence decides against
-    the person's own values), or parties' own groups no contact carries
-    (``Person.MAPPED_ASPECTS``: languages, occupation). The consumer registers
-    its mapping under the mapping's ``key`` from its
+Each is a plain value the ingest states in the ordinary way: the name parts,
+the dates, the employment. Not the display name, which names the person and
+the handles the contact lands, nor the notes, a source's free text, whose home
+is a page. Never the emails, phones or addresses, which decide the contact's
+handles, its claims, the people proposed as its same person and the page's
+locks, nor the photo, media the base stores before the record is built.
+"""
+
+
+class DirectoryMapping(ImplBase):
+    """Carry source fields of one pull-only directory backend onto the people its contacts land on.
+
+    A mapping's ``project`` keeps what may enter the system; the mapping then
+    does any of: refine the neutral contact before the ingest states it
+    (:meth:`refine`, the fields it declares as ``refines``), so the ingest's own
+    statement carries the value; state a group no contact carries
+    (:meth:`apply_record`, the groups it declares as ``aspects``): a consumer's
+    own, declared with its columns on a donor of ``parties.Person`` (its
+    precedence decides against the person's own values), or parties' own
+    (``Person.MAPPED_ASPECTS``: languages, occupation); or write through other
+    owners' verbs in :meth:`apply_record` (tags, a handle's preferred mark),
+    which it declares nothing for. The consumer registers it under its
+    ``key`` from its
     ``autoconfig.py``: ``"ANGEE_DIRECTORY_MAPPING_CLASSES.<key>": "<dotted.path>"``.
     ``backend`` is the registry key of the directory backend whose contacts it
     maps; that backend asks its source for ``fields`` too
@@ -279,27 +310,36 @@ class DirectoryMapping(ImplBase):
     mapping replays every contact once.
 
     While extracting, :meth:`project` turns the source's values of ``fields``
-    into the values to state, dropping what must not enter the system: only its
+    into the mapping's values, dropping what must not enter the system: only its
     result is kept, in the record's payloads, and a change of it is a change of
-    the record. After the contact's ingest, in its savepoint, :meth:`apply_record`
-    states them on the person the contact landed on, minted or adopted, through
-    the contact's link, so withdrawing the link withdraws them. Mappings apply in
-    key order, each stating its own groups, which it declares as ``aspects``:
-    never a group the contact ingest states (``Person.contact_aspects``). On
-    every record the base first withdraws what the link states in any person
-    group no registered mapping declares and the ingest does not state, so a
-    mapping removed from the registry has its statements withdrawn on its
-    replay; a mapping that then states such a group fails the page
-    (``ImproperlyConfigured``). A mapping states every field of its group: a
-    field it leaves out is stated as empty. Either step raises ``ValueError``
-    for a value it cannot read or state: that record alone is refused
+    the record. Then :meth:`refine` returns the contact with the fields it
+    refines set from those values, before the base keeps the contact's
+    projection, so a refined field is compared, versioned and stated by the
+    ingest like the source's own; removing the mapping replays the contact
+    without it, and the ingest states the source's own value. After the
+    contact's ingest, in its savepoint, :meth:`apply_record` states the values
+    on the person the contact landed on, minted or adopted, through the
+    contact's link, so withdrawing the link withdraws them. Mappings apply in
+    key order, each stating its own groups, never a group the contact ingest
+    states (``Person.contact_aspects``). On every record the base first
+    withdraws what the link states in any person group no registered mapping
+    declares and the ingest does not state, so a mapping removed from the
+    registry has its statements withdrawn on its replay; a mapping that then
+    states such a group fails the page, and one that refines a field it does
+    not declare fails the extract (``ImproperlyConfigured``). A mapping states
+    every field of its group: a field it leaves out is stated as empty. What it
+    writes through other owners is theirs to keep: a tag stays when the mapping
+    or the link goes. A step raises ``ValueError`` for a value it cannot read
+    or state: that record alone is refused
     (:data:`MAPPING_REFUSED`, naming the mapping, never the value, and logged
     with the mapping's and the record's key), the rest of its page lands, and
     the stream's rescan retries it on its backoff, so a fixed mapping applies it
     without a source change. Any other error is a bug and fails the page with
-    its traceback. A mapping of a backend that writes back, or one declaring no
-    group, a group the person has not or a group the ingest states, is refused
-    at startup (``check_directory_mappings``).
+    its traceback. A mapping of a backend that writes back, of no registered
+    backend, declaring a group the person has not or a group the ingest
+    states, refining a field outside :data:`REFINABLE_FIELDS`, or refining a
+    field another mapping of its backend refines, is refused at startup
+    (``check_directory_mappings``).
     """
 
     registry_setting = "ANGEE_DIRECTORY_MAPPING_CLASSES"
@@ -309,12 +349,14 @@ class DirectoryMapping(ImplBase):
     fields: ClassVar[tuple[str, ...]] = ()
     """The source fields this mapping reads; its backend asks the source for them."""
     version: ClassVar[int] = 1
-    """This mapping's version; raise it when :meth:`project` or :meth:`apply_record` changes what it states."""
+    """This mapping's version; raise it when what it refines, states or writes changes."""
     aspects: ClassVar[tuple[str, ...]] = ()
-    """The person statement groups :meth:`apply_record` states, its donor's: nothing it states lies outside them."""
+    """The person statement groups :meth:`apply_record` states: nothing it states lies outside them."""
+    refines: ClassVar[tuple[str, ...]] = ()
+    """The neutral contact's fields :meth:`refine` sets, among :data:`REFINABLE_FIELDS`."""
 
     def project(self, row: Mapping[str, Any]) -> dict[str, Any]:
-        """Return the JSON values to state from ``row``, the source's values of :attr:`fields` it sent.
+        """Return the mapping's JSON values from ``row``, the source's values of :attr:`fields` it sent.
 
         Drop here whatever must not enter the system: the result is the only
         trace of the source fields that the record keeps, in link history
@@ -323,14 +365,27 @@ class DirectoryMapping(ImplBase):
 
         raise NotImplementedError("DirectoryMapping subclasses must implement project().")
 
-    def apply_record(self, person: Any, values: Mapping[str, Any], *, link: Any) -> None:
-        """State ``values`` (:meth:`project`'s result) on ``person`` through ``link``, asserted by its source.
+    def refine(self, contact: ParsedContact, values: Mapping[str, Any]) -> ParsedContact:
+        """Return ``contact`` with the fields of :attr:`refines` set from ``values`` (:meth:`project`'s result).
 
-        For a donor's group ``"example"``: ``person.statements_for("example").set(aspect="example",
-        values=values, asserted_by=link.asserting_source(), link=link)``.
+        For a house's name for the person: ``dataclasses.replace(contact,
+        nickname=values["nickname"])``. Called while extracting, before the
+        contact takes its stored form; the default refines nothing.
         """
 
-        raise NotImplementedError("DirectoryMapping subclasses must implement apply_record().")
+        del values
+        return contact
+
+    def apply_record(self, person: Any, values: Mapping[str, Any], *, link: Any) -> None:
+        """State ``values`` (:meth:`project`'s result) on ``person`` through ``link``, or write through other owners.
+
+        For a donor's group ``"example"``: ``person.statements_for("example").set(aspect="example",
+        values=values, asserted_by=link.asserting_source(), link=link)``. Tags go through
+        ``TagAssignment.objects.attach``; a handle's preferred mark through ``Handle.objects.upsert(...,
+        is_preferred=True)``. The default writes nothing, for a mapping that only refines.
+        """
+
+        del person, values, link
 
 
 class DirectoryConfig(BaseModel):
@@ -595,30 +650,34 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
     ) -> dict[str, Any]:
         """Return the retained source payload of one contact, in the form parties stores.
 
-        The contact takes its stored form first (photo stored, addresses as
-        stored: ``PartyManager.prepare_contact``), so an unchanged source compares
+        ``row`` holds the source's values of :meth:`mapped_fields`: each mapping
+        projects the ones it names and refines the contact from its projection
+        (:meth:`DirectoryMapping.refine`), in key order, and the payload keeps
+        only those projections, under :data:`MAPPINGS`, never ``row`` itself; a
+        mapping that cannot read its values makes the payload the record's
+        refusal (:class:`DirectoryMapping`). The refined contact then takes its
+        stored form (photo stored, addresses as stored:
+        ``PartyManager.prepare_contact``), so an unchanged source compares
         unchanged. ``replaces`` names the keys of the records a merge at the source
         folded into this one, in the source's order (the first one's person is the
-        survivor's: :meth:`apply_record`); the payload keeps each once. ``row``
-        holds the source's values of :meth:`mapped_fields`: each mapping projects
-        the ones it names, and the payload keeps only those projections, under
-        :data:`MAPPINGS`, never ``row`` itself; a mapping that cannot read its
-        values makes the payload the record's refusal (:class:`DirectoryMapping`).
+        survivor's: :meth:`apply_record`); the payload keeps each once.
         Call it while extracting, outside any transaction.
         """
 
-        payload: dict[str, Any] = {"contact": contact_projection(self._prepare_contact(contact))}
+        projections = {}
         if mappings := self.mappings():
             row = row or {}
-            projections = {}
             for mapping in mappings:
                 try:
-                    projections[mapping.key] = mapping.project(
+                    values = projections[mapping.key] = mapping.project(
                         {name: row[name] for name in mapping.fields if name in row}
                     )
+                    contact = _refined(mapping, contact, values)
                 except ValueError:
                     # The record alone is refused; the refusal names the mapping, never the value it could not read.
                     return {"error": MAPPING_REFUSED, "mapping": mapping.key}
+        payload: dict[str, Any] = {"contact": contact_projection(self._prepare_contact(contact))}
+        if mappings:
             payload[MAPPINGS] = projections
         if replaced := list(dict.fromkeys(replaces)):
             payload["replaces"] = replaced
@@ -1032,6 +1091,19 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             target, projection = states[link.external_key]
             if link.local_changed(projection):
                 yield LocalChange(link.external_key, projection, target=target)
+
+
+def _refined(mapping: DirectoryMapping, contact: ParsedContact, values: Mapping[str, Any]) -> ParsedContact:
+    """Return ``mapping``'s refinement of ``contact``; a field it sets that it does not declare fails the extract."""
+
+    refined = mapping.refine(contact, values)
+    changed = {name for name in CONTACT_FIELDS if getattr(refined, name) != getattr(contact, name)}
+    if undeclared := sorted(changed - set(mapping.refines)):
+        raise ImproperlyConfigured(
+            f"Directory mapping {mapping.key!r} refined the contact fields {undeclared!r}, which it does not declare: "
+            "declare them in its refines."
+        )
+    return refined
 
 
 def _log_mapping_refusal(mapping: Any, key: str) -> None:

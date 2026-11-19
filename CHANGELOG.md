@@ -10,6 +10,20 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: a directory mapping refines the neutral contact before the
+  ingest states it (`DirectoryMapping.refine` and `refines`, among
+  `REFINABLE_FIELDS`: the name parts, the dates, the employment), so a source
+  field that belongs in a group the ingest states, a house's name for a person
+  as the `nickname`, is compared, versioned and stated by the ingest's own
+  statement, and goes with it when the mapping is removed. A mapping may declare
+  no statement group: one that only refines, or writes tags
+  (`TagAssignment.objects.attach`) or a handle's preferred mark
+  (`Handle.objects.upsert(..., is_preferred=True)`) in its `apply_record`, which
+  now writes nothing by default. Tags and marks are not taken back when the
+  mapping or the link goes; the ingest keeps an address the contact itself lands
+  as preferred as its source says. `parties.E003` refuses only a group the
+  person has not; `parties.E005` a refined field outside `REFINABLE_FIELDS`;
+  `parties.E006` two mappings of one backend refining one field.
 - `angee.knowledge`: a party (a person or an organization) is a record-binding
   target, read through the party's `read` and written through its `write`.
   Parties cannot name knowledge (knowledge depends on messaging, which depends

@@ -83,7 +83,23 @@ the person statement groups it states (`aspects`), never one the ingest states
 `languages` (ISO 639 codes, most preferred first, `LanguageCodesField`) and
 `occupation` (free text, apart from an employment's title) are parties' own
 groups, one each, that no contact carries (`Person.MAPPED_ASPECTS`): a mapping
-states them, and a person's own statement outranks it. On every
+states them, and a person's own statement outranks it. A source field that
+belongs in a group the ingest states (a house's name for a person is the
+contact's `nickname`) is no statement of the mapping's: the mapping refines the
+neutral contact from its projection before the base keeps it
+(`DirectoryMapping.refine`, the fields it declares as `refines`, among
+`REFINABLE_FIELDS`: the name parts, the dates and the employment, never the
+display name, notes, addresses or photo), so the refined field is compared,
+versioned and stated by the ingest like the source's own, a person's own value
+still wins by rank, and removing the mapping replays the contact, whose
+ingest then states the source's own value. A mapping may also write through
+other owners' verbs in its `apply_record`, declaring nothing for them: tags
+(`TagAssignment.objects.attach`) and a handle's preferred mark
+(`Handle.objects.upsert(..., is_preferred=True)`). Neither is taken back when
+the mapping or the link goes, except that the ingest keeps an address the
+contact itself lands as preferred as its source says: a mark the mapping set on
+it holds while the mapping applies, and the source's own preference returns on
+the replay once the mapping is gone. On every
 pull-only record the base first withdraws what the link states in a person group
 that neither the ingest nor a registered mapping states, so a mapping removed
 from the registry has its statements withdrawn on its replay, and nothing else on
@@ -96,8 +112,9 @@ day; an operator's retry makes it due at once), so a mapping fixed in code appli
 it without a source change, and a changed source applies it on its next page. Any
 other error a mapping raises is a bug: it fails the page with its traceback.
 Without a mapping a backend asks for, keeps and compares exactly what it did
-before. A mapping of a backend that writes back, of no registered backend, or
-declaring no group, a group the person has not or a group the ingest states,
+before. A mapping of a backend that writes back, of no registered backend,
+declaring a group the person has not or a group the ingest states, or refining
+a field that is not open to it or that another mapping of its backend refines,
 fails the system check.
 
 Each source creates its own people, and a merge joins them. One function
