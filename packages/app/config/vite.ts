@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, extname, join, matchesGlob, posix, resolve } from "node:path";
+import { basename, dirname, join, matchesGlob, posix, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { build, defineConfig, mergeConfig, searchForWorkspaceRoot, type HtmlTagDescriptor, type Plugin, type UserConfig, type ViteDevServer } from "vite";
+import { build, defineConfig, mergeConfig, normalizePath, type HtmlTagDescriptor, type Plugin, type UserConfig, type ViteDevServer } from "vite";
 import { generateWebRuntime, type WebCodegenInputs, type WebCodegenResult } from "@angee/app/web-codegen";
 import {
   resolveThemeOptions,
@@ -414,7 +414,7 @@ function angeeWebCodegenPlugin({
     inputs = generated.inputs;
     discovering = inputs;
     appearancePlugin.update(payload);
-    sitePlugin.update(generated.site);
+    sitePlugin.update(generated.head);
     const module = server?.environments.client.moduleGraph.getModuleById(RESOLVED_VIRTUAL_APPEARANCE);
     if (module) server!.environments.client.moduleGraph.invalidateModule(module);
   };
@@ -490,91 +490,121 @@ function angeeWebCodegenPlugin({
 }
 
 /** Write the deployment's static head through Vite's native HTML and asset hooks. */
-function angeeSitePlugin(): Plugin & { update(site: WebCodegenResult["site"]): void } {
-  let site: WebCodegenResult["site"];
+function angeeSitePlugin(): Plugin & { update(head: WebCodegenResult["head"]): void } {
+  let head: WebCodegenResult["head"];
+  let root = "";
   let base = "/";
   let origin: string | undefined;
   let building = false;
   let server: ViteDevServer | undefined;
   let allowed: string[] = [];
-  const files = () => [...new Set([site?.icon, site?.touchIcon, site?.image].filter((file): file is string => !!file))].sort();
+  const files = () => [...new Set([head?.site?.icon, head?.site?.touchIcon, head?.site?.image]
+    .filter((file): file is string => !!file))].sort();
+  // Vite's own convention for emitted assets, so no build-machine path reaches its manifest.
+  const originalFileName = (file: string) => normalizePath(relative(root, file));
   const allowFiles = () => {
-    if (server) server.config.server.fs.allow = [...new Set([...allowed, ...files()])].sort();
+    if (!server) return;
+    // Vite resolved the host's list, else its default. Admit the selected files,
+    // never their package directories, and retract only what this plugin added.
+    const allow = server.config.server.fs.allow;
+    for (const file of allowed) if (allow.includes(file)) allow.splice(allow.indexOf(file), 1);
+    allowed = files().map(normalizePath).filter((file) => !allow.includes(file));
+    allow.push(...allowed);
   };
   return {
     name: "angee:site",
     update(next) {
-      site = next;
+      head = next;
       allowFiles();
     },
     config(_config, env) {
       if (env.isPreview) return;
       const value = process.env.ANGEE_PUBLIC_ORIGIN;
-      if (value) {
-        try {
-          const parsed = new URL(value);
-          if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error();
-          origin = parsed.origin;
-        } catch {
-          throw new Error("ANGEE_PUBLIC_ORIGIN must be an http(s) URL.");
-        }
+      if (!value) return;
+      // Django's public_origin and its check angee.E051 keep the rest of the rule (https outside DEBUG, wildcards).
+      const parsed = URL.canParse(value) ? new URL(value) : undefined;
+      if (!parsed || !["http:", "https:"].includes(parsed.protocol) || parsed.origin !== value.replace(/\/$/, "")) {
+        throw new Error(`ANGEE_PUBLIC_ORIGIN must be a bare http(s) origin such as https://example.com, not ${JSON.stringify(value)}.`);
       }
+      origin = parsed.origin;
     },
     configResolved(config) {
+      root = config.root;
       base = config.base;
       building = config.command === "build";
     },
     configureServer(value) {
       server = value;
-      // Keep both the host's list and Vite's workspace/client allowances. Add
-      // selected files, never their package directories; refresh on regeneration.
-      allowed = [...new Set([searchForWorkspaceRoot(server.config.root), ...server.config.server.fs.allow])];
       allowFiles();
     },
     buildStart() {
       if (!building) return;
       for (const file of files()) {
         this.addWatchFile(file);
-        this.emitFile({ type: "asset", name: basename(file), originalFileName: file, source: readFileSync(file) });
+        this.emitFile({ type: "asset", name: basename(file), originalFileName: originalFileName(file), source: readFileSync(file) });
       }
     },
     transformIndexHtml: {
       order: "post",
       handler(html, context) {
-        if (!site) return;
-        // Post hooks receive the final bundle, as in schema-metadata-preload.
+        if (!head) return;
+        // Post hooks receive the final bundle; URLs follow schema-metadata-preload.
         // Native emission supplies names and hashing and never inlines the files.
         const assetUrl = (file: string) => {
-          if (!building) return encodeURI(posix.join("/@fs/", file.replaceAll("\\", "/")));
+          if (!building) return `${base}${encodeURI(posix.join("@fs", normalizePath(file)))}`;
           const asset = Object.values(context.bundle ?? {}).find((entry) =>
-            entry.type === "asset" && entry.originalFileNames.includes(file));
-          if (!asset) throw new Error(`Missing emitted site asset: ${file}`);
-          // A relative or full-URL Vite base still gives head icons root-relative URLs.
-          return new URL(`${base}${asset.fileName}`, "http://angee.invalid/").pathname;
+            entry.type === "asset" && entry.originalFileNames.includes(originalFileName(file)));
+          if (!asset) throw new Error(`Missing emitted site asset: ${originalFileName(file)}`);
+          return `${base}${asset.fileName}`;
         };
-        const image = site.image ? assetUrl(site.image) : undefined;
         const tags: HtmlTagDescriptor[] = [{
-          tag: "title", children: site.title.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
+          tag: "title", children: head.title.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
         }];
-        const meta = (attribute: "name" | "property", name: string, content: string | undefined) => {
-          if (content !== undefined) tags.push({ tag: "meta", attrs: { [attribute]: name, content } });
-        };
-        meta("name", "description", site.description);
-        meta("property", "og:type", "website");
-        meta("property", "og:site_name", site.siteName);
-        meta("property", "og:title", site.title);
-        meta("property", "og:description", site.description);
-        meta("property", "og:url", origin ? new URL(new URL(base, "http://angee.invalid/").pathname, origin).href : undefined);
-        meta("property", "og:image", image && origin ? new URL(image, origin).href : image);
-        meta("name", "twitter:card", image ? "summary_large_image" : "summary");
-        if (site.icon) {
-          const types: Record<string, string> = { ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon" };
-          tags.push({ tag: "link", attrs: { rel: "icon", type: types[extname(site.icon).toLowerCase()], href: assetUrl(site.icon) } });
+        // Every other fact this head writes, keyed as a host tag declares it.
+        const written = new Set<string>();
+        const { site } = head;
+        if (site) {
+          // A relative base cannot be made absolute, and a full-URL base already is.
+          const absolute = origin !== undefined && base.startsWith("/");
+          const image = site.image ? assetUrl(site.image) : undefined;
+          const meta = (attribute: "name" | "property", name: string, content: string | undefined) => {
+            if (content === undefined) return;
+            tags.push({ tag: "meta", attrs: { [attribute]: name, content } });
+            written.add(`${attribute}=${name}`);
+          };
+          const link = (rel: string, file: string | undefined) => {
+            if (file === undefined) return;
+            tags.push({ tag: "link", attrs: { rel, href: assetUrl(file) } });
+            written.add(`rel=${rel}`);
+          };
+          meta("name", "description", site.description);
+          meta("property", "og:type", "website");
+          meta("property", "og:site_name", site.siteName);
+          meta("property", "og:title", head.title);
+          meta("property", "og:description", site.description);
+          meta("property", "og:url", absolute ? new URL(base, origin).href : undefined);
+          meta("property", "og:image", image && absolute ? new URL(image, origin).href : image);
+          meta("name", "twitter:card", image ? "summary_large_image" : "summary");
+          link("icon", site.icon);
+          link("apple-touch-icon", site.touchIcon);
         }
-        if (site.touchIcon) tags.push({ tag: "link", attrs: { rel: "apple-touch-icon", href: assetUrl(site.touchIcon) } });
+        // Edit only the document's own head: an SVG or script string elsewhere keeps its <title>.
+        const span = /<head(?=[\s>])[^>]*>[\s\S]*?<\/head\s*>/i.exec(html);
+        if (!span) throw new Error(`${context.filename} needs a <head> element for the static head ANGEE_UI.shell declares.`);
+        // Only <title> is the host template's to replace. A host tag for a fact this head
+        // writes, or any Open Graph tag beside it, is a second owner crawlers read first.
+        for (const [tag, attributes = ""] of span[0].matchAll(/<(?:meta|link)(\s[^>]*)?>/gi)) {
+          const value = (key: string) => (new RegExp(`\\s${key}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i")
+            .exec(attributes) ?? []).slice(1).join("").toLowerCase();
+          const keys = [`name=${value("name")}`, `property=${value("property")}`, ...value("rel").split(/\s+/).map((rel) => `rel=${rel}`)];
+          if (keys.some((key) => written.has(key) || (site && key.startsWith("property=og:")))) {
+            throw new Error(`${context.filename} declares ${tag} in its head; ANGEE_UI.shell.site owns that tag.`);
+          }
+        }
         return {
-          html: html.replace(/<title\b[^>]*>[\s\S]*?<\/title\s*>/gi, ""),
-          tags: tags.map((tag) => ({ ...tag, injectTo: "head" })),
+          html: html.slice(0, span.index) + span[0].replace(/<title(?=[\s>])[^>]*>[\s\S]*?<\/title\s*>/gi, "")
+            + html.slice(span.index + span[0].length),
+          tags: tags.map((tag) => ({ ...tag, injectTo: "head" as const })),
         };
       },
     },

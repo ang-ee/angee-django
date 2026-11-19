@@ -340,9 +340,8 @@ jobs:
       - source://app:/app
     workdir: /app
     command: ["sh", "-c", "corepack enable pnpm && exec pnpm --dir {{ web_path }} build"]{% if public_origin or sentry_web_dsn %}
-    env:
-{% if public_origin %}      ANGEE_PUBLIC_ORIGIN: "{{ public_origin }}"
-{% endif %}{% if sentry_web_dsn %}
+    env:{% if public_origin %}
+      ANGEE_PUBLIC_ORIGIN: "{{ public_origin }}"{% endif %}{% if sentry_web_dsn %}
       VITE_SENTRY_DSN: "{{ sentry_web_dsn }}"
       VITE_SENTRY_ENVIRONMENT: "{{ effective_serve_mode }}"{% endif %}{% endif %}
     depends_on: [deps, compose, operator-schema]
@@ -368,9 +367,8 @@ jobs:
         pnpm install --lockfile-only --no-frozen-lockfile --lockfile-dir {{ container_project_dir }} || exit; fi
         && pnpm install --frozen-lockfile --lockfile-dir {{ container_project_dir }}
         && pnpm --config.verify-deps-before-run=false --filter ./../angee-project/{{ web_path }} --fail-if-no-match run build{% if public_origin or sentry_web_dsn %}
-    env:
-{% if public_origin %}      ANGEE_PUBLIC_ORIGIN: "{{ public_origin }}"
-{% endif %}{% if sentry_web_dsn %}
+    env:{% if public_origin %}
+      ANGEE_PUBLIC_ORIGIN: "{{ public_origin }}"{% endif %}{% if sentry_web_dsn %}
       VITE_SENTRY_DSN: "{{ sentry_web_dsn }}"
       VITE_SENTRY_ENVIRONMENT: "{{ effective_serve_mode }}"{% endif %}{% endif %}
     depends_on: [compose, operator-schema]
@@ -391,7 +389,7 @@ services:
 {# the same path, so git over SSH resolves keys, aliases and known_hosts as on the host. #}
     runtime: container
     image: {{ operator_image }}
-    command: ["--root", "${stack.root}", "--bind", "0.0.0.0", "--port", "9000", "--token", "${secret.operator-token}"{% if effective_serve_mode == "production" %}, "--allowed-origin", "{% if ingress_domain_value == "localhost" %}http://localhost:{{ ui_port }}{% else %}https://{{ ingress_domain_value }}{% endif %}"{% endif %}]
+    command: ["--root", "${stack.root}", "--bind", "0.0.0.0", "--port", "9000", "--token", "${secret.operator-token}"{% if effective_serve_mode == "production" %}, "--allowed-origin", "{% if public_origin %}{{ public_origin }}{% else %}http://localhost:{{ ui_port }}{% endif %}"{% endif %}]
     mounts:
       - "bind://.:${stack.root}"
       - "bind:///var/run/docker.sock:/var/run/docker.sock"

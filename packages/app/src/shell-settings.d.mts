@@ -8,6 +8,17 @@ export function assertBrand(where: string, brand: unknown): asserts brand is Run
  */
 export function assertShellSettings(shell: unknown): asserts shell is ShellSettings;
 
-/** Static head facts from validated shell settings; asset names remain unresolved. */
-export function shellSiteSettings(shell: ShellSettings):
-  (Omit<NonNullable<ShellSettings["site"]>, "title"> & { title: string; siteName?: string }) | undefined;
+/**
+ * The static head the web build writes. `title` is `shell.site.title`, else
+ * `shell.brand.name`; `site` is present only when `shell.site` is declared and
+ * carries the description, link-preview and icon facts (`siteName` is the shell
+ * brand's name). Asset slots hold `angee.assets` names until `generateWebRuntime`
+ * resolves them to absolute canonical files.
+ */
+export interface SiteHead {
+  title: string;
+  site?: Omit<NonNullable<ShellSettings["site"]>, "title"> & { siteName?: string };
+}
+
+/** The static head validated shell settings ask for: a brand alone gives only the title. */
+export function shellSiteHead(shell: ShellSettings): SiteHead | undefined;

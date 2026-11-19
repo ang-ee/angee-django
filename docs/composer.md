@@ -261,7 +261,8 @@ An addon ships its own `pyproject.toml` as package data. Common metadata stays i
 - `[tool.angee.graphql]` owns schema/domain declaration overrides.
 - `AppConfig.rebac_schema` owns the permission schema path.
 - Conventional Python modules own executable contributions.
-- `web/package.json` owns web identity and external `angee.codegen` entries.
+- `web/package.json` owns web identity, external `angee.codegen` entries and
+  named `angee.assets` files.
 
 Resources are resolved relative to the addon's `resources/` directory. The
 resource owner preserves canonical ledger paths and adoption keys. Removing a

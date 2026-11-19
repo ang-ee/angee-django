@@ -131,9 +131,15 @@ export interface AppDeclaration {
  */
 export interface ShellSettings {
   brand?: RuntimeBrand;
-  /** Static head shared by every ingress alias; assets name addon package declarations. */
+  /**
+   * The deployment's static HTML head, shared by every ingress alias. The runtime
+   * never reads it: it travels in the deployment layer, boot validates it, and only
+   * the web build writes it. Every value is a non-empty string; `icon` (.svg, .png
+   * or .ico), `touchIcon` (.png) and `image` (.png, .jpg or .jpeg) name an
+   * `angee.assets` entry an addon declares in its `web/package.json`.
+   */
   site?: {
-    /** Defaults to shell.brand.name; required without a shell brand. */
+    /** Defaults to `shell.brand.name`; required without a shell brand. */
     title?: string;
     description?: string;
     icon?: string;

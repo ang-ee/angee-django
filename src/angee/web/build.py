@@ -19,7 +19,7 @@ import os
 import re
 from collections.abc import Iterable, Mapping
 from graphlib import TopologicalSorter
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING, Any, cast
 
 from django.apps import AppConfig
@@ -103,15 +103,15 @@ class WebRuntime:
             web = document.get("angee", {})
             if not isinstance(web, Mapping):
                 raise ImproperlyConfigured(f"{addon.name} web/package.json angee must be an object")
-            if "assets" in web:
-                assets = self._asset_entries(addon, web["assets"])
-                for name in sorted(assets):
-                    if name in assets_seen:
-                        raise ImproperlyConfigured(
-                            f"Duplicate web/package.json angee.assets name {name!r}: "
-                            f"{assets_seen[name]} and {addon.name}"
-                        )
-                    assets_seen[name] = addon.name
+            assets = self._asset_entries(addon, web.get("assets", {}))
+            for name in sorted(assets):
+                if name in assets_seen:
+                    raise ImproperlyConfigured(
+                        f"Duplicate web/package.json angee.assets name {name!r}: "
+                        f"{assets_seen[name]} and {addon.name}"
+                    )
+                assets_seen[name] = addon.name
+            if assets:
                 entry["assets"] = assets
             if "codegen" in web:
                 codegen = self._codegen_entry(addon, web["codegen"], package)
@@ -206,21 +206,20 @@ class WebRuntime:
 
     @staticmethod
     def _asset_entries(addon: AppConfig, raw: object) -> dict[str, str]:
-        """Admit named package-relative files; Vite owns selected-file validation and bytes."""
+        """Admit named package-relative POSIX paths; the web generator checks the selected files."""
 
         where = f"{addon.name} web/package.json angee.assets"
         if not isinstance(raw, Mapping):
             raise ImproperlyConfigured(f"{where} must be an object")
-        if any(not isinstance(name, str) or not name.strip() for name in raw):
-            raise ImproperlyConfigured(f"{where} names must be non-empty strings")
         for name, value in sorted(raw.items()):
-            # PureWindowsPath also recognizes POSIX separators and rooted paths.
-            if (
-                not isinstance(value, str) or not value.strip()
-                or PureWindowsPath(value).anchor or ".." in PureWindowsPath(value).parts
-            ):
+            if not name or name != name.strip():
+                raise ImproperlyConfigured(f"{where} name {name!r} must be non-empty without surrounding whitespace")
+            parts = PurePosixPath(value).parts if isinstance(value, str) else ()
+            # npm paths are POSIX; the Windows anchor still catches drive and UNC forms.
+            if not parts or ".." in parts or value != value.strip() or "\\" in value or PureWindowsPath(value).anchor:
                 raise ImproperlyConfigured(
-                    f"{where}[{name!r}] must be a non-empty relative path without '..' segments"
+                    f"{where}[{name!r}] must be a relative POSIX path to a file, without surrounding whitespace, "
+                    "backslashes or '..' segments"
                 )
         return dict(raw)
 

@@ -80,19 +80,29 @@ def test_web_assets_project_only_sorted_declarations_on_the_package(tmp_path: Pa
     config = make_addon(path=tmp_path, web={"package": "@example/site"})
     assets = {"site.preview": "./art/preview.png", "site.icon": "./art/icon.svg"}
     (tmp_path / "web/package.json").write_text(json.dumps({"name": "@example/site", "angee": {"assets": assets}}))
-    projection = WebRuntime((config,), dependencies={config.name: ()})
-    # Files need not exist during compose: it publishes declarations, never bytes.
-    assert projection.manifest["addonPackages"][0]["assets"] == assets
+    projection = WebRuntime((config,), runtime_dir=tmp_path / "runtime", dependencies={config.name: ()})
+    entry = projection.manifest["addonPackages"][0]
+    # The entry's package root resolves the files; compose publishes declarations, never paths or bytes.
+    assert entry["root"] == "../../web"
+    assert entry["assets"] == assets
     manifest = projection.manifest_json()
     assert manifest.index('"site.icon"') < manifest.index('"site.preview"')
     assert str(tmp_path) not in manifest
 
 
+def test_web_assets_omit_an_empty_declaration(tmp_path: Path) -> None:
+    config = make_addon(path=tmp_path, web={"package": "@example/site"})
+    (tmp_path / "web/package.json").write_text(json.dumps({"name": "@example/site", "angee": {"assets": {}}}))
+    assert "assets" not in WebRuntime((config,), dependencies={config.name: ()}).manifest["addonPackages"][0]
+
+
 @pytest.mark.parametrize(
     "assets",
-    [None, [], "icon.svg", {"": "icon.svg"}, {" ": "icon.svg"}, {"icon": ""}, {"icon": " "},
-     {"icon": 1}, {"icon": "/icon.svg"}, {"icon": "../icon.svg"}, {"icon": "art/../icon.svg"},
-     {"icon": "C:\\art\\icon.svg"}, {"icon": "..\\icon.svg"}],
+    [None, [], "icon.svg", {"": "icon.svg"}, {" ": "icon.svg"}, {" icon": "icon.svg"}, {"icon": ""},
+     {"icon": " "}, {"icon": " ./icon.svg"}, {"icon": 1}, {"icon": "."}, {"icon": "./"}, {"icon": "/icon.svg"},
+     {"icon": "../icon.svg"}, {"icon": "art/../icon.svg"}, {"icon": "art\\icon.svg"},
+     {"icon": "C:\\art\\icon.svg"}, {"icon": "C:/art/icon.svg"}, {"icon": "//server/share/icon.svg"},
+     {"icon": "..\\icon.svg"}],
 )
 def test_web_assets_refuse_malformed_declarations(tmp_path: Path, assets: object) -> None:
     config = make_addon(path=tmp_path, web={"package": "@example/site"})

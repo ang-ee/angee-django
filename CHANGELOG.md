@@ -10,11 +10,15 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
-- Deployments declare static site facts in `ANGEE_UI.shell.site`, selecting
-  addon-owned `angee.assets` from web package metadata. Vite writes the title,
-  description, icons and link-preview tags, emits selected assets through its
-  native pipeline, and uses the stack's shared `ANGEE_PUBLIC_ORIGIN` for absolute
-  preview URLs. Image-only edits need no compose and refresh through Vite.
+- A deployment declares its static page head in `ANGEE_UI.shell.site` (`title`,
+  `description`, `icon`, `touchIcon`, `image`), selecting files addons name in
+  their `web/package.json` `angee.assets`; Vite emits them and writes the title,
+  description, Open Graph, `twitter:card` and icon tags. Behaviour change: a
+  deployment with `shell.brand` now gets the brand's name as its static
+  `<title>`, and nothing else without `shell.site`. Absolute preview URLs use the
+  stack's `ANGEE_PUBLIC_ORIGIN` environment variable, the only origin the web
+  build reads: one authored only in a settings file leaves `og:url` out and
+  `og:image` relative.
 
 - The UX guard accepts manifest `vocabulary` field tones by structure while rejecting local tone maps and switches.
 

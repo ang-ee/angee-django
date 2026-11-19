@@ -8,9 +8,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { generateWebRuntime, type WebCodegenInputs } from "@angee/app/web-codegen";
 
 // Regression coverage for the frontend runtime codegen CLI this package ships.
-// The suites run the real binary against synthetic manifests in a temp dir —
-// no composed host is involved (moved from angee-django's pytest suite when
-// the example host dissolved; @angee/app owns the CLI, so the tests live here).
+// The suites run against synthetic manifests in a temp dir — no composed host is
+// involved (moved from angee-django's pytest suite when the example host
+// dissolved; @angee/app owns the CLI, so the tests live here). Output files are
+// read after running the real binary; the static site suite reads the head the
+// generator returns, so it calls `generateWebRuntime`, which the binary wraps.
 const CODEGEN = fileURLToPath(new URL("../bin/angee-web-codegen.mjs", import.meta.url));
 const run = promisify(execFile);
 
@@ -58,10 +60,10 @@ describe("angee-web-codegen", () => {
         description: "Suite tools", icon: "demo.icon", touchIcon: "demo.touch", image: "demo.preview",
       } }, assets, installed);
       const result = await generateWebRuntime({ webRoot: web, runtimeDir: runtime });
-      expect(result.site).toEqual({
-        title: "Suite", siteName: "Suite", description: "Suite tools",
+      expect(result.head).toEqual({ title: "Suite", site: {
+        siteName: "Suite", description: "Suite tools",
         icon: join(addon, "art/icon.svg"), touchIcon: join(addon, "art/touch.png"), image: join(addon, "art/preview.png"),
-      });
+      } });
       const app = await readFile(join(runtime, "web/app.ts"), "utf8");
       for (const file of Object.values(assets)) {
         expect(result.inputs.files).toContain(join(addon, file));
@@ -69,13 +71,15 @@ describe("angee-web-codegen", () => {
       }
     });
 
-    it("leaves the site absent without a shell brand or site, and defaults a brand-only title", async () => {
+    it("leaves the head absent without a shell brand or site, and a brand alone gives only the title", async () => {
       await siteManifest();
-      expect(await generateWebRuntime({ webRoot: web, runtimeDir: runtime })).not.toHaveProperty("site");
+      expect(await generateWebRuntime({ webRoot: web, runtimeDir: runtime })).not.toHaveProperty("head");
       await siteManifest({ brand: { name: "Suite", mark: "suite" } });
-      expect((await generateWebRuntime({ webRoot: web, runtimeDir: runtime })).site).toEqual({ title: "Suite", siteName: "Suite" });
+      expect((await generateWebRuntime({ webRoot: web, runtimeDir: runtime })).head).toEqual({ title: "Suite" });
+      await siteManifest({ brand: { name: "Suite", mark: "suite" }, site: {} });
+      expect((await generateWebRuntime({ webRoot: web, runtimeDir: runtime })).head).toEqual({ title: "Suite", site: { siteName: "Suite" } });
       await siteManifest({ brand: { name: "Suite", mark: "suite" }, site: { title: "Chosen" } });
-      expect((await generateWebRuntime({ webRoot: web, runtimeDir: runtime })).site?.title).toBe("Chosen");
+      expect((await generateWebRuntime({ webRoot: web, runtimeDir: runtime })).head?.title).toBe("Chosen");
     });
 
     it("lists unknown asset choices in sorted order", async () => {
@@ -95,15 +99,37 @@ describe("angee-web-codegen", () => {
       await siteManifest({ site: { title: "Site", icon: "demo.icon" } });
       let inputs: WebCodegenInputs | undefined;
       await expect(generateWebRuntime({ webRoot: web, runtimeDir: runtime, onInputs: (next) => { inputs = next; } }))
-        .rejects.toThrow(kind === "escaping symlink" ? "outside package @demo/site" : "must be a regular file");
+        .rejects.toThrow('site.icon asset "demo.icon" must be a regular file inside package @demo/site');
       expect(inputs?.files).toContain(kind === "escaping symlink" ? join(root, "outside.svg") : file);
+    });
+
+    it("refuses a sibling directory that shares the package directory's name prefix", async () => {
+      await mkdir(join(root, "addon-evil"));
+      await writeFile(join(root, "addon-evil", "icon.svg"), "sibling");
+      await siteManifest({ site: { title: "Site", icon: "demo.evil" } }, { "demo.evil": "../addon-evil/icon.svg" });
+      await expect(generateWebRuntime({ webRoot: web, runtimeDir: runtime }))
+        .rejects.toThrow('site.icon asset "demo.evil" must be a regular file inside package @demo/site');
+    });
+
+    it.each(["./art/icon#1.svg", "./art/icon?.svg"])("refuses %s, which Vite's dev file route cannot serve", async (file) => {
+      await writeFile(join(addon, file), "unservable");
+      await siteManifest({ site: { title: "Site", icon: "demo.unservable" } }, { "demo.unservable": file });
+      await expect(generateWebRuntime({ webRoot: web, runtimeDir: runtime }))
+        .rejects.toThrow('site.icon asset "demo.unservable" must not contain "#" or "?" in its path');
+    });
+
+    it("accepts an upper-case extension", async () => {
+      // A distinct basename: case-insensitive file systems would fold ICON.SVG into icon.svg.
+      await writeFile(join(addon, "art/MARK.SVG"), "upper");
+      await siteManifest({ site: { title: "Site", icon: "demo.upper" } }, { "demo.upper": "./art/MARK.SVG" });
+      expect((await generateWebRuntime({ webRoot: web, runtimeDir: runtime })).head?.site?.icon).toBe(join(addon, "art/MARK.SVG"));
     });
 
     it.each([
       ["icon", "demo.preview"], ["touchIcon", "demo.touch"], ["image", "demo.preview"],
     ])("resolves %s with a PNG", async (slot, name) => {
       await siteManifest({ site: { title: "Site", [slot]: name } });
-      expect((await generateWebRuntime({ webRoot: web, runtimeDir: runtime })).site).toHaveProperty(slot);
+      expect((await generateWebRuntime({ webRoot: web, runtimeDir: runtime })).head?.site).toHaveProperty(slot);
     });
 
     it.each([

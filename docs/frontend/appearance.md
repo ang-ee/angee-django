@@ -272,6 +272,10 @@ stylesheets: ["./theme.css"]
 }
 ```
 
+The page icon and link-preview image are not theme assets: an addon names them in
+`web/package.json` `angee.assets` and the deployment selects them through
+[`ANGEE_UI.shell.site`](guidelines.md#rules), whatever theme is selected.
+
 Options declare one current version, defaults, a strict parser and a resolver
 that returns token layers. Inputs must be a closed, bounded set such as approved
 enums, numeric ranges or six-digit hex colors. User-provided CSS, URLs, classes
@@ -293,12 +297,6 @@ The explicit host build discovers `./themes` only for composed addon packages an
 entry imports the generated stylesheet; Vite resolves theme-relative images and
 fonts through its normal asset pipeline. Browser composition also checks that
 each addon contribution references its canonical discovered definition.
-
-Static head icons and link-preview images use the addon's named `angee.assets`
-declarations in `web/package.json`, selected by the deployment's
-[`ANGEE_UI.shell.site`](guidelines.md#rules). They are independent of the selected
-theme and app. Vite emits these files without inlining them; selected assets must
-remain inside their package, including after resolving symlinks.
 
 Projects created before this feature need a template update. Re-render the
 project template, review the explicit `/src/index.css` head link and virtual

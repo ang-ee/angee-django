@@ -349,17 +349,25 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   ([integration inputs](../composer.md#runtime-build-and-import)).
 
   `brand` owns runtime identity; `site` owns the static HTML head, one per
-  deployment on every ingress alias. Its title defaults to `shell.brand.name`;
-  without a shell brand, declare `site.title`. The addon that ships a public
-  asset declares its name and package-relative path in `web/package.json`:
-  `"angee": { "assets": { "suite.icon": "./src/assets/icon.svg" } }`.
-  The deployment selects those names through `site.icon`, `site.touchIcon`
-  and `site.image`; see [`ShellSettings`](../../packages/app/src/define-addon.ts)
-  and [`generateWebRuntime`](../../packages/app/src/web-codegen.mjs). Vite emits
-  the selected files and writes the title, description, icons and link-preview
-  tags before JavaScript runs. The static head's absolute URLs follow the
-  stack's `ANGEE_PUBLIC_ORIGIN`. Asset declarations are compose inputs; changing
-  only image bytes needs no compose, and Vite rereads them on build or dev reload.
+  deployment on every ingress alias. Its keys are `title`, `description`,
+  `icon`, `touchIcon` and `image`. The title defaults to `shell.brand.name`, so
+  without a shell brand declare `site.title`; a `brand` with no `site` sets only
+  the static title, and `site: {}` writes the whole head. The addon that ships a
+  public asset declares its name and package-relative path in `web/package.json`
+  (`"angee": { "assets": { "suite.icon": "./src/assets/icon.svg" } }`); the
+  deployment selects names, `icon` a .svg, .png or .ico file, `touchIcon` a .png
+  and `image` a .png, .jpg or .jpeg (see
+  [`ShellSettings`](../../packages/app/src/define-addon.ts) and
+  [`generateWebRuntime`](../../packages/app/src/web-codegen.mjs)). Vite emits the
+  selected files and writes the title, description, Open Graph, `twitter:card`
+  and icon tags before JavaScript runs. It replaces the host `index.html`'s
+  `<title>` and refuses a host head tag for any other fact the site writes, or
+  any Open Graph tag. The web build reads the public origin only from the stack's
+  `ANGEE_PUBLIC_ORIGIN` environment variable, so an origin authored only in a
+  settings file is not seen; without one, or under a `base` that is not a root
+  path, `og:url` is left out and `og:image` is not absolute. Asset declarations
+  are compose inputs; changing only image bytes needs no compose, and Vite
+  rereads them on build or dev reload.
 
   [`selectApp`](../../packages/app/src/boot-app.tsx) takes `?app=<root id |
   apps name>`, else the hostname's `hosts` entry, else `shell.app`, else

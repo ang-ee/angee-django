@@ -35,15 +35,9 @@ in development and falls back. Only the deployment layer declares `shell`.
 Addons cannot claim the `ui` translation namespace, which belongs to the
 rendered package.
 
-`shell.site` declares the deployment's static title, description, icon, touch icon
-and link-preview image. Its title defaults to `shell.brand.name`; the other
-fields are optional. It is shared by every ingress alias and does not follow
-runtime app selection. Addons declare public assets by name in their
-`web/package.json` `angee.assets` mapping, and the deployment selects those names.
-The shared generator resolves them; Vite writes the head and emits the files,
-using the stack's `ANGEE_PUBLIC_ORIGIN` for absolute preview URLs. See
-[`ShellSettings`](src/define-addon.ts) and the
-[shell and asset guide](../../docs/frontend/guidelines.md#rules).
+`shell.site` selects the static page head `@angee/app/vite` writes, with files
+addons name in `web/package.json` `angee.assets`; the
+[shell and asset guide](../../docs/frontend/guidelines.md#rules) owns the contract.
 
 Addons shape the menu with a dict keyed by node id (`menus: { … }`). A key in
 the addon's own namespace (its id, or `<id>.…`) declares a node; any other key

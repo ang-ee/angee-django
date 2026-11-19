@@ -449,7 +449,6 @@ def _render_local_stack(
     sentry_dsn: str = "",
     sentry_web_dsn: str = "",
     operator_home: str = "",
-    template: Path = LOCAL_TEMPLATE,
 ) -> dict[str, Any]:
     """Render the docker-mode local stack enough for YAML contract tests."""
 
@@ -478,7 +477,7 @@ def _render_local_stack(
         "web_image": "ghcr.io/ang-ee/angee-web:latest",
         "web_path": "web",
     }
-    return _render_stack_manifest(template, variables)
+    return _render_stack_manifest(LOCAL_TEMPLATE, variables)
 
 
 def _render_dev_stack(
@@ -627,6 +626,7 @@ def _render_staging_stack(
     celery_queues: str = "",
     enable_celery: bool = True,
     operator_home: str = "",
+    sentry_web_dsn: str = "",
 ) -> dict[str, Any]:
     """Render the staging stack with the inputs its copier.yml declares, and no others."""
 
@@ -654,7 +654,7 @@ def _render_staging_stack(
         "project_name": "app",
         "repositories": json.dumps(list(repositories)),
         "sentry_dsn": "",
-        "sentry_web_dsn": "",
+        "sentry_web_dsn": sentry_web_dsn,
         "serve_workers": "0",
         "settings_file": settings_file,
         "ui_port": "5173",
@@ -2124,7 +2124,7 @@ def test_serve_modes_cover_both_flavors_and_runtimes() -> None:
             assert "/operator/*" not in caddyfile
             assert frontend["after"][0] == "frontend-build"
             assert django["after"] == ["provision", "frontend" if flavor == "framework" else "caddy"]
-            assert "--allowed-origin" in " ".join(stack["services"]["operator"]["command"])
+            assert "--allowed-origin http://localhost:5173" in " ".join(stack["services"]["operator"]["command"])
             assert '--forwarded-allow-ips "$$TRUSTED_PROXY_CIDR"' in command
             if flavor == "framework":
                 assert stack["jobs"]["frontend-build"]["depends_on"] == ["deps", "compose", "operator-schema"]
@@ -2505,42 +2505,53 @@ def test_empty_sentry_dsns_render_no_error_reporting(stack: Any) -> None:
     assert "SENTRY" not in rendered
 
 
-@pytest.mark.parametrize("ingress", ["localhost", "site.example.test"])
-@pytest.mark.parametrize("sentry", ["", "https://public@example.test/1"])
+_PUBLIC_INGRESS = "site.example.test"
+
+
+@pytest.mark.parametrize("sentry", ["", _WEB_DSN])
 @pytest.mark.parametrize(
-    "runtime, mode, section, service",
+    ("render", "section", "service", "origin"),
     [
-        ("process", "development", "services", "frontend"),
-        ("docker", "development", "services", "frontend"),
-        ("docker", "production", "jobs", "frontend-build"),
-        ("instance", "production", "jobs", "frontend-build"),
+        pytest.param(lambda **inputs: _render_dev_stack(**inputs), "services", "frontend", None, id="dev-process"),
+        pytest.param(
+            lambda **inputs: _render_dev_stack(ingress_domain=_PUBLIC_INGRESS, **inputs),
+            "services", "frontend", f"https://{_PUBLIC_INGRESS}", id="dev-process-public",
+        ),
+        pytest.param(
+            lambda **inputs: _render_dev_stack(_runtime_mode="docker", **inputs),
+            "services", "frontend", None, id="dev-docker",
+        ),
+        pytest.param(
+            lambda **inputs: _render_dev_stack(_runtime_mode="docker", ingress_domain=_PUBLIC_INGRESS, **inputs),
+            "services", "frontend", f"https://{_PUBLIC_INGRESS}", id="dev-docker-public",
+        ),
+        pytest.param(
+            lambda **inputs: _render_dev_stack(_runtime_mode="docker", serve_mode="production", **inputs),
+            "jobs", "frontend-build", None, id="framework-build",
+        ),
+        pytest.param(
+            lambda **inputs: _render_staging_stack(ingress_domain=_PUBLIC_INGRESS, **inputs),
+            "jobs", "frontend-build", f"https://{_PUBLIC_INGRESS}", id="framework-build-staging",
+        ),
+        # No shipped instance wrapper renders a public ingress: local pins localhost.
+        pytest.param(
+            lambda **inputs: _render_local_stack(serve_mode="production", **inputs),
+            "jobs", "frontend-build", None, id="instance-build-local",
+        ),
     ],
-    ids=["dev-process", "dev-docker", "framework-build", "instance-build"],
 )
-def test_public_origin_reaches_python_and_frontend_independently_of_sentry(
-    tmp_path: Path, runtime: str, mode: str, section: str, service: str, ingress: str, sentry: str,
+def test_public_origin_reaches_python_and_one_frontend_independently_of_sentry(
+    render: Any, section: str, service: str, origin: str | None, sentry: str,
 ) -> None:
-    if runtime == "instance":
-        # The shipped local wrapper pins localhost. Exercise the shared instance
-        # branch with a public wrapper too, without inventing a local-stack input.
-        wrapper = tmp_path / "local" / "angee.yaml.jinja"
-        wrapper.parent.mkdir()
-        (wrapper.parent / "copier.yml").touch()
-        (tmp_path / "_shared").symlink_to(ROOT / "templates/stacks/_shared", target_is_directory=True)
-        wrapper.write_text(LOCAL_TEMPLATE.read_text().replace(
-            '{% set ingress_domain_value = "localhost" %}', f'{{% set ingress_domain_value = "{ingress}" %}}',
-        ))
-        stack = _render_local_stack(template=wrapper, serve_mode=mode, sentry_web_dsn=sentry)
+    stack = render(sentry_web_dsn=sentry)
+    assert ("VITE_SENTRY_DSN" in (stack[section][service].get("env") or {})) == bool(sentry)
+    carriers = _env_nodes(stack, "ANGEE_PUBLIC_ORIGIN")
+    if origin is None:
+        assert not carriers
     else:
-        stack = _render_dev_stack(
-            _runtime_mode=runtime, serve_mode=mode, ingress_domain=ingress, sentry_web_dsn=sentry,
-        )
-    environments = [stack[section][service].get("env") or {}, *_env_nodes(stack, "DATABASE_URL").values()]
-    for environment in environments:
-        if ingress == "localhost":
-            assert "ANGEE_PUBLIC_ORIGIN" not in environment
-        else:
-            assert environment["ANGEE_PUBLIC_ORIGIN"] == "https://site.example.test"
+        # Python and the frontend that writes the static head; never the operator, storybook or static frontend.
+        assert set(carriers) == {*_env_nodes(stack, "DATABASE_URL"), service}
+        assert {environment["ANGEE_PUBLIC_ORIGIN"] for environment in carriers.values()} == {origin}
 
 
 @pytest.mark.parametrize(

@@ -56,12 +56,9 @@ export function assertShellSettings(shell) {
   }
 }
 
-/** Static head facts from validated shell settings; asset names remain unresolved. */
-export function shellSiteSettings({ site, brand }) {
-  if (site === undefined && brand === undefined) return undefined;
-  return {
-    ...site,
-    title: site?.title ?? brand.name,
-    ...(brand ? { siteName: brand.name } : {}),
-  };
+/** The static head validated shell settings ask for: a brand alone gives only the title. */
+export function shellSiteHead({ site, brand }) {
+  if (site === undefined) return brand && { title: brand.name };
+  const { title = brand.name, ...facts } = site;
+  return { title, site: { ...facts, ...(brand ? { siteName: brand.name } : {}) } };
 }
