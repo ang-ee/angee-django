@@ -1433,8 +1433,9 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         the integrations already using a credential of that name are not sent to
         discover again (two that derive one name would rediscover each other).
         It overwrites only a credential another integration attaches as derived
-        (:meth:`derived_attachments`): a hand-made credential of that name is
-        refused, so the discovery fails with a message for the operator.
+        (:meth:`derived_attachments`): a hand-made credential of that name, or one
+        left from before integrations removed theirs on delete, is refused, so the
+        discovery fails with a message naming the credential to remove or rename.
         """
 
         values, create_values = self._local_credential_values(
@@ -1447,8 +1448,8 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
                 instance = self.lock_if_supported().get(pk=instance.pk)
                 if not self.derived_attachments(instance.pk).exists():
                     raise IntegrationError(
-                        f'A credential named "{derived.name}" was not derived by connection discovery; '
-                        "rename it, then retry discovery."
+                        f'A credential named "{derived.name}" already exists and no integration holds it as '
+                        "discovered material; remove or rename that credential, then retry discovery."
                     )
                 for field, value in values.items():
                     setattr(instance, field, value)

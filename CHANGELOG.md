@@ -63,6 +63,16 @@ live in code docstrings.
   work; `Integration.lock_for_record_access` now takes the capability lock
   first, for a transfer and a record grant alike.
 
+- `angee.integrate`: a derived credential leaves with its integration. Deleting
+  an integration left the credential its discovery derived, which
+  `CredentialManager.store_derived` then refused to overwrite, so the next
+  integration deriving the same name failed discovery until an operator removed
+  it. A `post_delete` receiver (bound through `angee.base.signals.connect_for_models`
+  from `IntegrateConfig.ready`) now removes it in the delete's transaction, after
+  the integration row, unless another integration still uses it. The refusal
+  stays for a hand-made row or one left from before, and names the credential
+  to remove or rename.
+
 - `angee.workflows_integrate`: a sync step waits for a pending connection
   discovery instead of failing. The discovery refusal reached `bridge_io`'s
   catch-all as a retryable "Stream transport failed.", so a step was failed

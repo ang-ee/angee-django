@@ -1078,8 +1078,45 @@ def test_discovery_refuses_to_overwrite_a_hand_made_credential_of_the_name_it_de
         assert settle(bridge) == {"ok": False, "reason": "discovery-failed"}
         hand_made.refresh_from_db()
     assert hand_made.kind == "basic_auth" and hand_made.reveal()["password"] == "hand-made"
-    assert f"Resource {bridge.pk}" in bridge.last_error and "rename" in bridge.last_error
+    assert f'"Resource {bridge.pk}"' in bridge.last_error and "remove or rename" in bridge.last_error
     assert not bridge.discovery_ready and bridge.credential_id != hand_made.pk
+
+
+def test_a_derived_credential_leaves_with_its_integration(bridge, sent_tasks):
+    config = {"derived": True, "derived_name": "Discovered resource key"}
+    with system_context(reason="test an integration deleted with its derived credential"):
+        source, vendor, owner = bridge.credential, bridge.vendor, bridge.owner
+        bridge.config = config
+        bridge.save(update_fields=["config"])
+        assert settle(bridge)["ok"]
+        derived_pk = bridge.credential_id
+        bridge.delete()
+        assert not Credential.objects.filter(pk=derived_pk).exists()
+        assert Credential.objects.filter(pk=source.pk).exists()
+        # A new integration deriving the same name is not blocked by what the first one left.
+        again = ConnectionBridge.objects.create(
+            vendor=vendor, owner=owner, credential=source, lifecycle="connected", config=config,
+        )
+        assert settle(again)["ok"]
+        derived = Credential.objects.get(pk=again.credential_id)
+    assert derived.name == "Discovered resource key" and again.discovery_credential_id == source.pk
+
+
+def test_a_derived_credential_another_integration_attaches_stays_when_one_leaves(bridge, sent_tasks):
+    with system_context(reason="test one of two integrations deriving one name deleted"):
+        sibling = ConnectionBridge.objects.create(
+            vendor=bridge.vendor, owner=bridge.owner, credential=bridge.credential, lifecycle="paused",
+        )
+        for row in (bridge, sibling):
+            row.config = {"derived": True, "derived_name": "Shared resource"}
+            row.save(update_fields=["config"])
+            assert settle(row)["ok"]
+        derived_pk = bridge.credential_id
+        assert sibling.credential_id == derived_pk
+        sibling.delete()
+        bridge.refresh_from_db()
+        assert Credential.objects.filter(pk=derived_pk).exists()
+    assert bridge.credential_id == derived_pk and bridge.discovery_ready
 
 
 @pytest.mark.parametrize("path", ["replace", "create"])

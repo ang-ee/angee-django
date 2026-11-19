@@ -319,7 +319,8 @@ there with `IntegrationError`; discovery then fails with that operator message a
 sync stays refused. Integrate persists derived material through the credential
 manager (`store_derived`, which sends no integration already using that name to
 discover again and overwrites only a credential another integration attaches as
-derived: a hand-made credential of the name fails the discovery with a message)
+derived: a hand-made credential of the name fails the discovery with a message
+naming the credential to remove or rename)
 and `attach_connection`; adapters never persist credentials or implement
 the generation fence. Integrate then settles and sends
 `signals.discovery_finished.send(sender=type(instance), instance=instance)` on commit.
@@ -330,7 +331,9 @@ preserves direct attachments but regenerates tokens derived from the old grant.
 A callback also reconnects a disconnected attachment of the same credential.
 A changed credential identity
 invalidates its attachments, preserving pauses. Disconnecting a source grant
-releases its derived attachments and disposes of unused derived material. Switching
+releases its derived attachments and disposes of unused derived material. So do
+detaching a derived credential and deleting the integration that holds it, in the
+same transaction, unless another integration still uses it. Switching
 the external account on an in-use credential is refused.
 
 The minute scheduler redispatches due pending discovery, with robust sends and
