@@ -97,7 +97,7 @@ class IntegrationFailure:
 def is_transient_status(status: int) -> bool:
     """Whether a later attempt can outlive an HTTP answer with ``status``: a 429 rate limit or any 5xx."""
 
-    return status == 429 or status >= 500
+    return status == 429 or 500 <= status < 600
 
 
 def is_transient_failure(error: BaseException) -> bool:

@@ -310,14 +310,20 @@ are the shared admission rule; generation zero preserves existing integrations
 until their next attachment or Resume. There is no separate polling repair scan.
 
 A vendor's JSON request is `HttpClient.request_model` ([outbound HTTP](http.py)):
-one pinned, size-capped request whose answer is validated into a Pydantic model.
-Whatever brings no usable answer is one `HttpRefusal`, classified once: a
-transport failure, a 429 or a 5xx is transient and waits for the answer's
-`Retry-After`; any other status, an oversized answer and one that does not
-validate are permanent, because the same request brings the same answer. The
-vendor's `error=` factory composes its `IntegrationError` from those facts
-(`HttpRefusal.message` names the service and nothing the answer said) and adds
-its own transient statuses and waits there.
+one pinned, size-capped request whose answer is validated into a Pydantic model;
+a capped request asks for an unencoded answer. Whatever brings it no usable
+answer is one `HttpRefusal`, classified once: a transport failure, a 429 or a
+5xx is transient and waits for the answer's `Retry-After`; any other status, an
+oversized answer and one that does not validate are permanent, because the same
+request brings the same answer. A whole-resource poll reads it again on its next
+run, a pager shrinks its page, and one record's oversized answer is that
+record's refusal, quarantined while the page of results continues. The vendor's
+`error=` factory turns the refusal into its `IntegrationError` with
+`HttpRefusal.as_error`, whose `public_message` names the service and nothing the
+answer said; the vendor words its own cases and adds its own transient statuses
+and waits before that hand-off. A refusal keeps the failure that stopped its
+request: its `cause` tells a request `not_sent` from one `unreachable` after it
+may have been sent.
 
 `IntegrationError(public_message, transient=…, retry_after=…)` owns the optional
 positive provider horizon. `RequestNotSentError` declares that connect, DNS or

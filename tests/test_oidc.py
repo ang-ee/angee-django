@@ -108,11 +108,18 @@ def test_ensure_endpoints_caches_document_by_discovery_url() -> None:
     assert oauth_client.token_endpoint == "https://cached.example/oauth/token"
 
 
-@pytest.mark.parametrize(("answer", "status"), [("list", 400), ("text", 400), ("unreachable", 503)])
+@pytest.mark.parametrize(("answer", "status"), [
+    ("list", 400), ("text", 400), ("unreachable", 503), ("server-error", 503), ("rate-limit", 503), ("not-found", 400),
+])
 def test_discovery_rejects_invalid_documents_without_caching(answer: str, status: int) -> None:
+    """A provider that cannot answer now (unreachable, 5xx, 429) is a transient 503; any other refusal a 400."""
+
     def respond(request: httpx2.Request) -> httpx2.Response:
         if answer == "unreachable":
             raise httpx2.ConnectError("unavailable", request=request)
+        refusals = {"server-error": 503, "rate-limit": 429, "not-found": 404}
+        if answer in refusals:
+            return httpx2.Response(refusals[answer])
         return httpx2.Response(200, json=[]) if answer == "list" else httpx2.Response(200, text="not json")
 
     url = f"https://invalid-{answer}.example/discovery"

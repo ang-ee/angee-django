@@ -45,6 +45,7 @@ def _status_error(status: int) -> httpx2.HTTPStatusError:
         (_status_error(503), True),
         (_status_error(429), True),
         (_status_error(404), False),
+        (_status_error(600), False),
         (ValueError("bad input"), False),
         (ValidationError("bad config"), False),
         (ssl.SSLCertVerificationError("certificate verify failed"), False),
