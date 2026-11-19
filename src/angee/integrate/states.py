@@ -156,6 +156,8 @@ class StreamDefinition:
     declarers declares ``mapping_contributions`` instead and leaves this at its
     default; any other version beside them is refused.
     """
+    # No stream column holds this declaration, so the mark keeps it out of the copy into a stream; dropping
+    # the mark would mean probing the model's fields instead, which fails silently on a missing column.
     mapping_contributions: tuple[MappingContribution, ...] = field(default=(), metadata={"stream_field": False})
     """A mapping composed from several declarers, one :class:`MappingContribution` each.
 
