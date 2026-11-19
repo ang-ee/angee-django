@@ -52,6 +52,16 @@ wholly withdrawn rows. [Handle sources](managers.py) compose `Party.statements`
 through the shared Handle, Party lock order; resolution owns the cross-party
 winner and derived counters outside Party history.
 
+Who an email address names is one verb,
+[PartyManager.people_for_emails](managers.py): given addresses in a caller's
+preference order, it answers the people they name, each with its basis (the
+account with that address, the person holding it, else the one person a current
+contact claim proposes it for), comparing handles by their normalized value. A
+trashed person, an organization and a merged-away row are nobody's answer. It
+decides nothing: directory adoption, the connections import (which shares its
+holding rule) and an importer in another addon each apply their own policy, and
+only a `HELD` answer holds the address.
+
 [PartyManager.ingest_organization](managers.py) lands a `ParsedOrganization`
 from a directory stream the same way: it binds the link, mints an Organization
 for an unbound link (matching an existing one is not decided yet), and states the

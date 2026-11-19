@@ -62,6 +62,18 @@ live in code docstrings.
   credentials, names its server by host name and port in its connection message,
   and refuses a per-book contacts setting other than `local_delete`.
 
+- `PartyManager.people_for_emails(emails)` answers who email addresses name: per
+  address, in the caller's preference order, an `EmailHolder(email, person,
+  basis, handle)` for each basis that names someone (`EmailBasis.ACCOUNT`, the
+  account's own person; `HELD`, the person holding a handle of the address through
+  merge survivors; `CLAIM`, when nobody holds it, the one person a current asserted
+  contact claim proposes it for). Handles compare by `normalized_value`; a trashed
+  person, an organization and a merged-away row are nobody's answer; any batch
+  reads in a bounded number of queries. The connections import finds a handle's
+  holder by the same rule, so a handle an organization or a trashed person holds
+  now falls back to the person the import's earlier run linked instead of minting
+  (organization) or landing on the trashed row unless the import linked it.
+
 - Parties land organizations and employment from a source.
   `PartyManager.ingest_organization(parsed, *, stream, link, created_by_id,
   target=None)` lands a `ParsedOrganization` (comparison shape:

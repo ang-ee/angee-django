@@ -7,7 +7,7 @@ import tests.test_parties_circles  # noqa: F401 -- declare the native fixture mo
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
 from angee.messaging.backends import ManualChannelBackend, ParsedHandle
-from angee.messaging.testing.models import Channel, Handle, Party, Person, Relationship, RelationshipKind
+from angee.messaging.testing.models import Channel, Handle, Organization, Party, Person, Relationship, RelationshipKind
 from angee.parties.connections import ParsedConnection
 from angee.provenance.statements import SourceKind
 from tests.conftest import current_stream, make_integration
@@ -86,3 +86,31 @@ def test_a_connection_handle_is_identified_by_an_identifier_or_its_typed_confide
     assert Handle.identified_connection(ParsedHandle(platform="facebook", value="friend42", external_id="42"))
     assert Handle.identified_connection(ParsedHandle(platform="email", value="friend@example.test"))
     assert Handle.identified_connection(ParsedHandle(platform="facebook", value="Friend", confidence=1.0))
+
+
+def test_a_reimport_of_a_handle_an_organization_holds_lands_on_the_imports_earlier_person(db, monkeypatch):
+    """An organization is nobody's person: the import finds the person its earlier run linked, and mints none."""
+
+    del db
+    monkeypatch.setattr(ManualChannelBackend, "source_kind", SourceKind.IMPORT)
+    with system_context(reason="parties.connection.organization_holder"):
+        user = get_user_model().objects.create_user(username="connection-organization-importer")
+        channel = make_integration("connection-organization", model=Channel, backend_class="manual")
+        RelationshipKind.objects.get_or_create(slug="acquaintance", defaults={"name": "Acquaintance"})
+        stream = current_stream(channel, "connections", kind=StreamKind.RECORD_REPLICA)
+        link = RecordLink.objects.observe(stream, "friend:9")
+        parsed = ParsedConnection(
+            handle=ParsedHandle(platform="facebook", value="friend9", external_id="9", display_name="Friend")
+        )
+        (first,) = Party.objects.ingest_connections(
+            [(parsed, link)], created_by_id=user.pk, asserted_by=channel.integration_ptr,
+        )
+        company = Organization.objects.create(display_name="Example Ltd", created_by=user)
+        Handle.objects.filter(platform="facebook", value="friend9").update(party=company)
+
+        (second,) = Party.objects.ingest_connections(
+            [(parsed, link)], created_by_id=user.pk, asserted_by=channel.integration_ptr,
+        )
+
+        assert second.pk == first.pk
+        assert Person.objects.count() == 2  # The importer's own person and the friend.
