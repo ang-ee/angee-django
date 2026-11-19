@@ -138,7 +138,12 @@ class Party(
                 precedence=cast(tuple[SourceKind, ...], (SourceKind.PERSON, SourceKind.DIRECTORY)),
             ),
             "handle": Aspect(
-                member={"handle": models.ForeignKey("parties.Handle", on_delete=models.PROTECT)},
+                # The reverse name lets a handle reach the directories asserting it (parties/handle).
+                member={
+                    "handle": models.ForeignKey(
+                        "parties.Handle", on_delete=models.PROTECT, related_name="party_statements"
+                    )
+                },
                 precedence=cast(
                     tuple[SourceKind, ...],
                     (
@@ -1582,6 +1587,7 @@ class Directory(Bridge, inherits="integrate.Integration"):
     """
 
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.CONNECT
+    rebac_grantable = {"contact_reader": "write"}
 
     @property
     def source_kind(self) -> SourceKind:

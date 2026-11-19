@@ -62,11 +62,14 @@ keep their own gates. The existing `reader` relation includes private Party read
 when that wider access is intended. Both use the native record-access owner.
 
 Sharing a directory shares its contacts: `contact_reader`, granted on the
-directory row, reads the people and organizations its live links name and the
-addresses and relationships those links state ([permissions.zed](permissions.zed)).
-A tombstoned or unbound link lends nothing, private fields keep `read_private`,
-handles keep their own gates, and the grant reads nothing of the directory, its
-integration, streams, links or credential.
+directory row through its share surface, and the directory's owner read the
+people and organizations its live links name and the handles, addresses and
+relationships those links state (`read_contacts` in [permissions.zed](permissions.zed)).
+A handle reaches the directories asserting it through the reverse name its
+statement member declares (`party_statements`). A tombstoned or unbound link, or a
+withdrawn claim, lends nothing; a handle only another source asserted keeps its
+own gates; private fields keep `read_private`; and the grant reads nothing of the
+directory, its integration, streams, links or credential.
 
 Source admission follows RecordLinks and seeded Rule/Seed role membership.
 Sources gain no private reads. Imports supply their

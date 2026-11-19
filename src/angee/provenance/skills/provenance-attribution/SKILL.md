@@ -126,6 +126,8 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
 
    `Aspect.precedence` orders `SourceKind`s; `link="integrate.RecordLink"` and `sqid_prefix` belong to the subject source's
    declaration, donors contribute aspects only (`StatementRecords.aspects_for` in `statements.py`); `model_name=` when `<Model>Statement` is taken.
+   A mapped foreign-key member keeps the `related_name` it declares, so its target reaches the statements naming it
+   (`StatementRecords.copy_fields`); a member that declares none has no reverse accessor.
    Writes go through `instance.statements.set(...)`. **Owner rule:** [Persistence primitives](../../../../../docs/backend/guidelines.md#persistence-primitives),
    statements paragraphs; [Glossary: Statement](../../../../../docs/glossary.md#backend).
 
