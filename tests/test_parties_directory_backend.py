@@ -416,11 +416,16 @@ def test_a_merge_at_the_source_lands_on_the_replaced_records_person_and_withdraw
 
 
 def _proposal_rows() -> list[Any]:
-    """The ``directory_match`` rule's current same-as statements, oldest first."""
+    """The current same-as statements a directory's contacts made, oldest first.
 
-    rule = str(to_subject_ref(Party.objects.rule_source("directory_match")))
+    An address pair is the same-person verb's (the ``same_as`` rule, citing the
+    handle that links the other person); what no address links is the
+    ``directory_match`` rule's (citing the contact's link first).
+    """
+
+    rules = [str(to_subject_ref(Party.objects.rule_source(key))) for key in ("same_as", "directory_match")]
     return list(
-        Party.same_as.model.statements.filter(asserted_by=rule).current().select_related("subject").order_by("pk")
+        Party.same_as.model.statements.filter(asserted_by__in=rules).current().select_related("subject").order_by("pk")
     )
 
 
@@ -553,6 +558,8 @@ def test_a_record_minting_again_after_its_person_is_trashed_withdraws_the_pair_t
 
     second = pull.link("ada").target_object_id
     assert second not in (str(first.pk), str(person.pk))
+    # A trashed person is linked to nothing, so the pairing job withdraws the pair the old mint had.
+    Party.objects.reconcile_same_as()
     assert sorted((sorted(pair), status) for pair, status, _evidence in _proposals()) == sorted(
         [(sorted({str(first.pk), str(person.pk)}), "withdrawn"), (sorted({second, str(person.pk)}), "asserted")]
     )
@@ -593,7 +600,7 @@ def test_a_contact_adopts_a_later_candidate_when_the_first_is_refused_and_only_c
     assert (_held_by("ada@example.com"), _held_by("ada@work.example")) == (refused.pk, adopted.pk)
     assert _claim_confidences(adopted.pk, "ada@example.com") == [0.4]
     assert _identity_evidence(adopted.pk) == _refs(adopted_handle)
-    assert _proposals() == [(frozenset({str(adopted.pk), str(refused.pk)}), "asserted", _refs(ada, refused_handle))]
+    assert _proposals() == [(frozenset({str(adopted.pk), str(refused.pk)}), "asserted", _refs(refused_handle))]
 
 
 def test_a_merge_whose_replaced_record_is_bound_to_an_organization_quarantines_the_record(pull: Pull) -> None:
@@ -667,6 +674,50 @@ def _user(username: str) -> Any:
     return get_user_model().objects.create_user(username=username)
 
 
+def _phone_holder(creator: Any, number: str = "+44 20 7946 0000") -> tuple[Any, Any]:
+    """A person ``creator`` owns, holding the phone ``number`` at full confidence, as another importer mints one."""
+
+    person = Person.objects.create(display_name="Ada (existing)", created_by=creator)
+    handle = Handle.objects.upsert(platform="phone", value=number, label="office", created_by_id=creator.pk)
+    Party.objects.assert_handle(person, handle, asserted_by=Party.objects.rule_source("source_sender"), confidence=1.0)
+    handle.refresh_from_db()
+    assert handle.party_id == person.pk
+    return person, handle
+
+
+def test_a_contact_only_claims_a_phone_number_another_person_holds_and_proposes_them(pull: Pull) -> None:
+    """A number names one account as an address does: the contact claims it for review, its holder keeps it.
+
+    The pair is the same-person verb's, citing the holder's handle, once the page commits.
+    """
+
+    holder, held = _phone_holder(_user("someone-else"))
+    pull.source.put("ada", replace(_ADA, phones=((held.value, "mobile", True),)))
+
+    pull.sync()
+
+    minted = pull.link("ada").target_object_id
+    assert minted not in (None, str(holder.pk))
+    held.refresh_from_db()
+    assert (held.party_id, held.label) == (holder.pk, "office")
+    assert _claim_confidences(minted, held.normalized_value) == [Party.CLAIM_CONFIDENCE]
+    assert (frozenset({minted, str(holder.pk)}), "asserted", _refs(held)) in _proposals()
+
+
+def test_a_contact_holds_a_phone_number_nobody_is_linked_to(pull: Pull) -> None:
+    """Nobody is linked to the number: the contact states it in full and its person holds it, as before."""
+
+    pull.source.put("ada", replace(_ADA, phones=(("+44 20 7946 0001", "mobile", True),)))
+
+    pull.sync()
+
+    minted = pull.link("ada").target_object_id
+    (handle,) = Handle.objects.filter(platform="phone", normalized_value__endswith="2079460001")
+    assert handle.party_id == int(minted)
+    assert _claim_confidences(minted, handle.normalized_value) == [1.0]
+    assert _proposals() == []
+
+
 def _identity_evidence(party_id: Any) -> list[Any]:
     """The evidence of the directory's current identity statement on the party."""
 
@@ -699,7 +750,7 @@ def test_by_default_a_contact_whose_address_the_owners_person_holds_lands_on_a_n
     assert not Party.statements.filter(subject_id=person.pk, asserted_by=str(ada.asserted_by)).exists()
     assert _held_by("ada@example.com") == person.pk
     assert _claim_confidences(ada.target_object_id, "ada@example.com") == [Party.CLAIM_CONFIDENCE]
-    assert _proposals() == [(frozenset({ada.target_object_id, str(person.pk)}), "asserted", _refs(ada, handle))]
+    assert _proposals() == [(frozenset({ada.target_object_id, str(person.pk)}), "asserted", _refs(handle))]
     link = RecordLink.objects.observe(pull.stream, "downstream")
     with pytest.raises(ValidationError, match="binds no existing person"):
         Party.objects.ingest_contact(
@@ -728,9 +779,10 @@ def test_by_default_a_contact_only_claims_each_address_someone_else_is_linked_to
     minted = ada.target_object_id
     assert minted not in (None, str(holder.pk), str(claimant.pk), str(signer.pk))
     assert [_claim_confidences(minted, address) for address in addresses] == [[Party.CLAIM_CONFIDENCE]] * 3
+    # The holder is the same-person verb's pair (the handle links them); the account, whose sign-in address no
+    # handle of theirs carries, is the directory's; a name suggester's claim links no one (same_person_links).
     assert {pair: evidence for pair, _status, evidence in _proposals()} == {
-        frozenset({minted, str(holder.pk)}): _refs(ada, held),
-        frozenset({minted, str(claimant.pk)}): _refs(ada, claimed),
+        frozenset({minted, str(holder.pk)}): _refs(held),
         frozenset({minted, str(signer.pk)}): _refs(ada),
     }
 
@@ -978,7 +1030,11 @@ def test_a_contact_mints_its_own_person_when_an_adoption_limit_refuses_the_one_i
     assert not Party.statements.filter(subject_id=person.pk, asserted_by=str(ada.asserted_by)).exists()
     assert _held_by("ada@example.com") == holder
     assert _claim_confidences(ada.target_object_id, "ada@example.com") == [0.4]
-    proposed = [(frozenset({ada.target_object_id, str(person.pk)}), "asserted", _refs(ada, *filter(None, [found_by])))]
+    proposed = [(
+        frozenset({ada.target_object_id, str(person.pk)}),
+        "asserted",
+        _refs(found_by) if found_by is not None else _refs(ada),
+    )]
     assert _proposals() == proposed
     pull.source.put("ada", replace(_ADA, notes="Edited at the source."))
     assert pull.sync().count == 1
@@ -989,38 +1045,34 @@ def test_a_contact_mints_its_own_person_when_an_adoption_limit_refuses_the_one_i
 
 @pytest.mark.usefixtures("adoption")
 def test_merging_a_proposed_pair_withdraws_it_and_the_same_as_reconciler_leaves_it_standing(pull: Pull) -> None:
-    """The minted and the existing person are linked to one address by two sources: a supported same-person pair.
+    """A contact's minted person and the existing person linked to one address are proposed once, by one rule.
 
-    The existing person holds the address and the directory's contact claims it,
-    so the ``same_as`` rule's reconciler keeps its own statement of the pair beside
-    the directory's (a claim links its party: ``PartyManager.same_person_links``;
-    before, a pair resting on one handle row's claims was unsupported and the
-    reconciler withdrew it). The review lists the pair once, by the address;
-    merging the two through the review's verb withdraws the directory's proposal.
-    The merging person writes both (the platform admin who owns the directory), the
-    deliberate override of the ``adopt`` permission the limit refused; the merge
-    leaves the directory one contact on the survivor.
+    The existing person holds the address and the directory's contact claims it:
+    two sources at one address, the pair the same-person verb proposes once the
+    page commits, citing the handle (``propose_same_person_as_system``), and no
+    second proposal by the directory's rule. The pairing job keeps it, since a
+    link supports it. Merging the two through the review's verb records the
+    person's decision and leaves no proposal standing. The merging person writes
+    both (the platform admin who owns the directory), the deliberate override of
+    the ``adopt`` permission the limit refused.
     """
 
     owner = pull.directory.owner
     person = _refused_admin_owner(pull)
     pull.sync()
     minted = pull.link("ada").target_object_id
+    handle = Handle.objects.get(platform="email", normalized_value="ada@example.com")
+    pair_ids = frozenset({minted, str(person.pk)})
     reviewed = Party.objects.with_actor(owner).same_as_pairs()
     assert [(frozenset({str(pair.left.pk), str(pair.right.pk)}), pair.normalized_value) for pair in reviewed] == [
-        (frozenset({minted, str(person.pk)}), "ada@example.com")
+        (pair_ids, "ada@example.com")
     ]
-    same_as = Party.objects.rule_source("same_as")
-    with system_context(reason="tests.directory_match.reconciler"):
-        left, right = (Party._base_manager.get(pk=pk) for pk in (minted, person.pk))
-        pair = Party.same_as.for_pair(left.with_actor(to_subject_ref(same_as)), right)
-        pair.statements.set(aspect="same_as", values={}, asserted_by=same_as)
-        Party.objects.reconcile_same_as()
-    statements = Party.same_as.model.statements.filter(subject=pair).current()
-    assert dict(statements.values_list("asserted_by", "status")) == {
-        str(to_subject_ref(same_as)): "asserted",
-        str(to_subject_ref(Party.objects.rule_source("directory_match"))): "asserted",
-    }
+    (proposal,) = _proposal_rows()
+    same_as = str(to_subject_ref(Party.objects.rule_source("same_as")))
+    assert (proposal.asserted_by, proposal.evidence) == (same_as, _refs(handle))
+
+    Party.objects.reconcile_same_as()
+    assert _proposals() == [(pair_ids, "asserted", _refs(handle))]
 
     assert Party.objects.apply_same_as_pair(
         left_id=public_id_of(Party.objects.get(pk=person.pk)),
@@ -1030,7 +1082,55 @@ def test_merging_a_proposed_pair_withdraws_it_and_the_same_as_reconciler_leaves_
         actor=owner,
     ) == "merged"
 
-    assert [status for _pair, status, _evidence in _proposals()] == ["withdrawn"]
+    statements = Party.same_as.model.statements.filter(subject=proposal.subject).current()
+    decided = statements.filter(asserted_by=str(to_subject_ref(owner)))
+    assert list(decided.values_list("status", "rank")) == [("asserted", "preferred")]
+    assert not Party.objects.with_actor(owner).same_as_pairs()
+    Party.objects.reconcile_same_as()  # The merged record is linked to nothing: the pairing job withdraws the proposal.
+    assert _proposals() == [(pair_ids, "withdrawn", _refs(handle))]
+
+
+@pytest.mark.usefixtures("adoption")
+def test_an_address_pair_the_directory_rule_proposed_before_stays_in_review_until_merged(pull: Pull) -> None:
+    """An upgrade keeps the directory rule's earlier proposals of address pairs as they are.
+
+    Before, the directory's own rule proposed an address pair, citing the
+    contact's link and the handle. Such a statement stays readable and in review,
+    the pairing job states no second proposal beside it, and merging the two
+    withdraws it, as before.
+    """
+
+    owner = pull.directory.owner
+    person = _refused_admin_owner(pull)
+    pull.sync()
+    ada = pull.link("ada")
+    minted = Person.objects.get(pk=ada.target_object_id)
+    handle = Handle.objects.get(platform="email", normalized_value="ada@example.com")
+    (proposal,) = _proposal_rows()
+    same_as, directory_match = (Party.objects.rule_source(key) for key in ("same_as", "directory_match"))
+    with system_context(reason="tests.directory_match.earlier_release"):
+        Party.same_as.model.statements.withdraw(same_as, [proposal.subject_id])
+        Party.objects.propose_directory_match(minted, person, evidence=[ada, handle])
+    earlier = [(str(to_subject_ref(directory_match)), "asserted", _refs(ada, handle))]
+
+    def stated() -> list[tuple[str, str, list[Any]]]:
+        rows = Party.same_as.model.statements.filter(subject_id=proposal.subject_id).current()
+        return [(row.asserted_by, row.status, row.evidence) for row in rows.exclude(status="withdrawn")]
+
+    assert stated() == earlier
+    reviewed = Party.objects.with_actor(owner).same_as_pairs()
+    assert [frozenset({pair.left.pk, pair.right.pk}) for pair in reviewed] == [frozenset({minted.pk, person.pk})]
+    Party.objects.reconcile_same_as()
+    assert stated() == earlier
+
+    assert Party.objects.apply_same_as_pair(
+        left_id=public_id_of(Party.objects.get(pk=person.pk)),
+        right_id=public_id_of(Party.objects.get(pk=minted.pk)),
+        survivor="left",
+        action="merge",
+        actor=owner,
+    ) == "merged"
+    assert stated() == [(str(to_subject_ref(owner)), "asserted", [])]  # The person's decision; the proposal withdrawn.
 
 
 def _merge(pull: Pull, survivor: Any, merged: Any) -> str:
@@ -1090,6 +1190,7 @@ def test_adopting_a_person_once_refused_withdraws_the_proposal_its_refusal_made(
     assert pull.sync().count == 1
 
     assert pull.link("ada").target_object_id == str(person.pk)
+    Party.objects.reconcile_same_as()  # The trashed mint is linked to nothing: the pairing job withdraws the pair.
     assert [(pair, status) for pair, status, _evidence in _proposals()] == [
         (frozenset({str(minted.pk), str(person.pk)}), "withdrawn")
     ]
@@ -1125,7 +1226,7 @@ def test_two_contacts_that_would_adopt_one_person_adopt_it_once(pull: Pull) -> N
     assert copy.target_object_id not in (None, str(person.pk))
     assert _held_by("ada@example.com") == person.pk
     assert _claim_confidences(copy.target_object_id, "ada@example.com") == [0.4]
-    assert _proposals() == [(frozenset({copy.target_object_id, str(person.pk)}), "asserted", _refs(copy, handle))]
+    assert _proposals() == [(frozenset({copy.target_object_id, str(person.pk)}), "asserted", _refs(handle))]
 
 
 def test_two_contacts_with_one_address_nobody_held_leave_it_with_the_first(pull: Pull) -> None:
@@ -1137,13 +1238,12 @@ def test_two_contacts_with_one_address_nobody_held_leave_it_with_the_first(pull:
 
     ada, copy = pull.link("ada"), pull.link("ada-copy")
     assert ada.target_object_id != copy.target_object_id
-    handle = Handle.objects.get(platform="email", normalized_value="ada@example.com")
     assert _held_by("ada@example.com") == int(ada.target_object_id)
     assert _claim_confidences(ada.target_object_id, "ada@example.com") == [1.0]
     assert _claim_confidences(copy.target_object_id, "ada@example.com") == [0.4]
-    assert _proposals() == [
-        (frozenset({ada.target_object_id, copy.target_object_id}), "asserted", _refs(copy, handle))
-    ]
+    # One source's two records are no same-person pair (two sources link a pair), and the merge guard keeps two
+    # live contacts of one pull-only directory apart anyway.
+    assert _proposals() == []
     pull.source.put("ada-copy", replace(_ADA, display_name="Ada L.", notes="Edited at the source."))
     assert pull.sync().count == 1
     assert _held_by("ada@example.com") == int(ada.target_object_id)
@@ -1167,7 +1267,7 @@ def test_a_contact_refused_the_one_person_claimed_for_its_address_keeps_only_cla
     assert ada.target_object_id not in (None, str(claimant.pk))
     assert _held_by("ada@example.com") is None
     assert _claim_confidences(ada.target_object_id, "ada@example.com") == [0.4]
-    assert _proposals() == [(frozenset({ada.target_object_id, str(claimant.pk)}), "asserted", _refs(ada, handle))]
+    assert _proposals() == []  # A name suggester's claim links its party to nothing (same_person_links).
     pull.source.put("ada", replace(_ADA, notes="Edited at the source."))
     assert pull.sync().count == 1
     assert _held_by("ada@example.com") is None

@@ -61,6 +61,7 @@ from rebac import (
     system_context,
 )
 from rebac.actors import is_sudo, to_subject_ref
+from rebac.field_visibility import redacted_fields
 from rebac.resources import model_resource_type
 
 from angee.base.hooks import resolve_hooks
@@ -227,6 +228,8 @@ class HolderRepair(NamedTuple):
     """Handles whose holder was left as it is because another party's applied statement stands on the row."""
     resolved: int = 0
     """Holders whose statements no longer decided them, re-resolved."""
+    remaining: int = 0
+    """Holders a capped run left for the next one, at most this many (``limit``)."""
 
 
 class HandleQuerySet[HandleT: Handle](MergeableQuerySet[HandleT], AngeeHistoryQuerySet[HandleT]):
@@ -332,6 +335,9 @@ _HandleManagerBase = AngeeHistoryManager.from_queryset(HandleQuerySet)
 
 class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
     """Factory + upsert for handles (the contact-point write path)."""
+
+    REPAIR_LIMIT: ClassVar[int] = 500
+    """The most holders one holder repair writes by default (``resolve_stale_owners``); the next run continues."""
 
     def for_user(self, user: Any) -> Any:
         """Return the account's self-claimed handle for internal attribution."""
@@ -638,22 +644,23 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             )
         return handle
 
-    def state_stored_holders(self, handles: Iterable[Any] | None = None) -> HolderRepair:
+    def state_stored_holders(self, handles: Iterable[Any] | None = None, *, limit: int | None = None) -> HolderRepair:
         """State each stored holder's link as the ``stored_holder`` rule, so resolution keeps it; return what it did.
 
         A holder no current statement names (:meth:`HandleQuerySet.stored_holders`)
         gains that rule's normal statement at full confidence, with the handle as its
-        evidence, as named system work rechecked under the identity locks: a
-        merged-away holder for its survivor, a trashed one for itself (resolution
-        ignores a trashed party, so its row is unheld until the handle resolves
-        after a restore). Two holders are left as they are and reported, so the
-        repair moves no address and clears no confirmation. A confirmed one: only a
-        person or a seed states the preferred link that keeps the flag, and the
-        rule's normal statement would clear it. A contested one, on a row where
-        another live party's applied statement stands: the rule is the last kind
-        the handle aspect ranks (below a person, a system of record, a directory and
-        an import, above kinds it does not list), so that party would take the
-        address.
+        evidence, as named system work rechecked under the identity locks; a
+        merged-away holder is stated for its survivor. Three holders are left as
+        they are, so the repair moves no address and clears no confirmation. A
+        trashed one: resolution ignores a trashed party, so stating its link would
+        clear the row; the repair after a restore states it. A confirmed one,
+        reported: only a person or a seed states the preferred link that keeps the
+        flag, and the rule's normal statement would clear it. A contested one,
+        reported, on a row where another live party's applied statement stands: the
+        rule is the last kind the handle aspect ranks (below a person, a system of
+        record, a directory and an import, above kinds it does not list), so that
+        party would take the address. A run states at most ``limit`` holders and
+        counts the ones it did not reach as ``remaining``.
 
         ``handles`` are resource rows a load just wrote, and the holder each names
         is the seed's word. What an earlier load stated for a holder a row no
@@ -665,6 +672,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         party_model = apps.get_model("parties", "Party")
         statements = party_model.objects.handle_statements()
         stated = 0
+        remaining = 0
         confirmed: list[Any] = []
         contested: list[Any] = []
         with system_context(reason="parties.handle.state_stored_holders"):
@@ -679,13 +687,19 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             survivors = party_model.canonical_ids({party_id for _pk, party_id in pending})
             competing = statements.applied().filter(subject__is_trashed=False)
             source = None
-            for pk, party_id in pending:
+            for index, (pk, party_id) in enumerate(pending):
+                if limit is not None and stated >= limit:
+                    remaining = len(pending) - index
+                    break
                 holder = survivors.get(party_id, party_id)
                 with transaction.atomic():
                     locked, parties = party_model.objects.lock_identity_rows(party_ids=(holder,), handle_ids=(pk,))
                     row = locked.get(pk)
+                    party = parties.get(holder)
                     if (
                         row is None
+                        or party is None
+                        or party.is_trashed
                         or (handles is None and row.party_id != party_id)
                         or naming.filter(handle_id=pk, subject_id=holder).exists()
                     ):
@@ -697,9 +711,9 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                         contested.append(pk)
                         continue
                     source = source or party_model.objects.rule_source("stored_holder")
-                    party_model.objects.assert_handle(parties[holder], row, asserted_by=source, evidence=[row])
+                    party_model.objects.assert_handle(party, row, asserted_by=source, evidence=[row])
                 stated += 1
-        return HolderRepair(stated, tuple(confirmed), tuple(contested))
+        return HolderRepair(stated, tuple(confirmed), tuple(contested), remaining=remaining)
 
     @staticmethod
     def _withdraw_moved_holders(holders: Mapping[Any, Any]) -> int:
@@ -732,30 +746,40 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         ]
         return int(party_model.statements.withdraw_unsupported(source, kept, aspect="handle"))
 
-    def resolve_stale_owners(self) -> HolderRepair:
+    def resolve_stale_owners(self, *, limit: int | None = None) -> HolderRepair:
         """Make every holder the projection of its statements again; return what was stated, left and re-resolved.
 
         Stored holders are stated first (:meth:`state_stored_holders`); the ones it
-        leaves (confirmed, contested) keep their row as it is for a person to
-        decide. A holder whose statements no longer decide it (a withdrawn link, a
-        suggestion below review confidence) re-resolves. Idempotent: a second run
-        states and re-resolves nothing.
+        leaves (trashed, confirmed, contested) keep their row as it is. A holder
+        whose statements no longer decide it (a withdrawn link, a suggestion below
+        review confidence) re-resolves, unless it is trashed: resolution ignores a
+        trashed party and would clear its address. A run writes at most ``limit``
+        holders, stated and re-resolved together, and reports the rest as
+        ``remaining`` for the next run, which continues where it stopped.
+        Idempotent: a second complete run states and re-resolves nothing.
         """
 
-        repair = self.state_stored_holders()
+        repair = self.state_stored_holders(limit=limit)
+        budget = None if limit is None else limit - repair.stated
         statements = apps.get_model("parties", "Party").objects.handle_statements()
         decisive = statements.applied().filter(handle_id=OuterRef("pk"), subject_id=OuterRef("party_id"))
         stale = (
             self.filter(party__isnull=False)
+            .exclude(party__is_trashed=True, party__merged_into__isnull=True)
             .exclude(Exists(decisive))
             .exclude(pk__in=self.stored_holders().values("pk"))
             .order_by("pk")
         )
         resolved = 0
         for handle in stale.iterator():
+            if budget is not None and resolved >= budget:
+                break
             handle.resolve()
             resolved += 1
-        return repair._replace(resolved=resolved)
+        remaining = repair.remaining
+        if budget is not None and resolved >= budget:
+            remaining += stale.count()
+        return repair._replace(resolved=resolved, remaining=remaining)
 
     def fill_avatar(self, report: AvatarReport) -> bool:
         """Set the avatar a source reports on its handle; return whether it changed.
@@ -960,7 +984,8 @@ class DuplicateSetPreview:
     """``None`` when the set merges as listed; else why it would not."""
     reason: str = ""
     disagreements: tuple[FieldDisagreement, ...] = ()
-    """The merge fields the members disagree on (a field ``actor`` may not read on every member is left out)."""
+    """The merge fields the members disagree on, only for a set that merges; a field the actor's
+    ``read__<field>`` gate hides on any member is left out."""
 
     @property
     def survivor(self) -> Any:
@@ -1024,6 +1049,9 @@ def _refusal(error: Exception) -> str:
 
 class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQuerySet[PartyT]):
     """Party read scopes: canonical (unmerged) rows and organisation membership."""
+
+    SAME_AS_REVIEW_PAGES: ClassVar[int] = 4
+    """The most pages of pairs one review read walks to fill its page (:meth:`same_as_pairs`)."""
 
     def with_display_avatars(self, actor: Any) -> Self:
         """Batch :meth:`PartyManager.display_avatar` for these parties, through ``actor``'s readable files.
@@ -1163,9 +1191,11 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         """Read up to ``limit`` resolved value pairs through both endpoints and each evidence row.
 
         A pair whose evidence the reader cannot read in full is dropped before the
-        page fills, so a page holds every readable pair up to its limit; the read
-        walks the ordered pairs one page at a time until it does. ``parties``
-        narrows the read to pairs whose both endpoints are among those keys.
+        page fills; the read walks the ordered pairs one page at a time until the
+        page is full or it has read :attr:`SAME_AS_REVIEW_PAGES` pages, so a reader
+        who sees many pairs but little of their evidence gets a short page, never a
+        scan of every pair. ``parties`` narrows the read to pairs whose both
+        endpoints are among those keys.
         """
 
         limit = max(0, min(int(limit), 101))
@@ -1204,7 +1234,11 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         )
         result: list[SameAsPair] = []
         start = 0
-        while len(result) < limit and (page := list(pairs[start : start + limit])):
+        while (
+            len(result) < limit
+            and start < limit * self.SAME_AS_REVIEW_PAGES
+            and (page := list(pairs[start : start + limit]))
+        ):
             start += limit
             refs_by_pair = {
                 pair: [
@@ -1346,9 +1380,18 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         return [str(to_subject_ref(rule)) for rule in rules.order_by("pk")]
 
     def same_person_links(
-        self, *, addresses: Collection[tuple[str, str]] | None = None, shared: Collection[Any] = ()
+        self,
+        *,
+        addresses: Collection[tuple[str, str]] | None = None,
+        shared: Collection[Any] = (),
+        every_address: bool = False,
     ) -> dict[tuple[str, str], list[SamePersonLink]]:
         """Each address two to :attr:`SHARED_ADDRESS_LIMIT` live parties are linked to, with its links.
+
+        With ``every_address`` (and ``addresses``), every requested address any
+        live party is linked to, whatever their number: who is linked to an
+        address, for a source deciding whether it may only claim it
+        (:meth:`_contested_addresses`); a shared one is still no pair.
 
         A link is a holding or a standing statement (asserted, current, a value, not
         dismissed by a person), whatever its confidence, by a source that states its
@@ -1416,7 +1459,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         candidates = set(
             links.values("handle__platform", "handle__normalized_value")
             .annotate(parties=Count("subject_id", distinct=True))
-            .filter(parties__gte=2, parties__lte=self.SHARED_ADDRESS_LIMIT)
+            .filter(**({} if every_address else {"parties__gte": 2, "parties__lte": self.SHARED_ADDRESS_LIMIT}))
             .values_list("handle__platform", "handle__normalized_value")
         )
         held = list(bare.values_list("platform", "normalized_value", "party_id", "pk"))
@@ -1448,7 +1491,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         return {
             address: address_links
             for address, address_links in sorted(found.items())
-            if 2 <= len({link.party for link in address_links}) <= self.SHARED_ADDRESS_LIMIT
+            if every_address or 2 <= len({link.party for link in address_links}) <= self.SHARED_ADDRESS_LIMIT
         }
 
     @staticmethod
@@ -1931,20 +1974,21 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     def propose_directory_match(self, person: Any, other: Any, *, evidence: Sequence[Any]) -> Any | None:
         """Propose, as the ``directory_match`` rule, that a directory's ``person`` and ``other`` are one person.
 
-        A directory proposes it for each other person a contact's address names,
-        whoever holds, claims or signs in with it, whether or not the directory
-        adopts (:meth:`ingest_contact`, the one call site for an address), and for
-        the person of another record the source merged into it
-        (``DirectoryBackend.apply_record``).
-        ``evidence`` names what ties them (the contact's link, then the handle its
-        email found ``other`` by, or the merged record's link). The
-        pair joins the same-as review (:meth:`PartyQuerySet.same_as_pairs`), where a
-        person merges or dismisses it. A pair kept separate is not proposed again,
-        and proposing an unchanged pair again changes nothing (``StatementManager.set``).
-        The ``same_as`` rule's reconciler withdraws only its own rule's pairs
-        (:meth:`reconcile_same_as`), so it leaves these, which no shared handle row
-        supports, standing. Returns the rule's statement, ``None`` when nothing is
-        proposed.
+        Only for what no address links, which the one same-person verb
+        (:meth:`propose_same_person_as_system`) cannot cite and its job would
+        withdraw as unsupported: the person of another record the source merged
+        into the contact (``DirectoryBackend.apply_record``), and an account whose
+        sign-in address the contact states while no handle of theirs carries it
+        (:meth:`ingest_contact`). A pair two people's links to one address tie is
+        the verb's. ``evidence`` names what ties them (the contact's link, then
+        the merged record's link). The pair joins the same-as review
+        (:meth:`PartyQuerySet.same_as_pairs`), where a person merges or dismisses
+        it. A pair kept separate is not proposed again, and proposing an unchanged
+        pair again changes nothing (``StatementManager.set``). The ``same_as``
+        rule's reconciler withdraws only its own rule's pairs
+        (:meth:`reconcile_same_as`), so it leaves these standing; the rule's
+        earlier proposals of an address pair stay reviewable as they are. Returns
+        the rule's statement, ``None`` when nothing is proposed.
         """
 
         party = apps.get_model("parties", "Party")
@@ -2398,10 +2442,13 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     ) -> list[DuplicateSetOutcome]:
         """Merge each confirmed set of records into its oldest member as ``actor``'s merge; return every outcome.
 
-        A set merges exactly as confirmed. In its own transaction, its members,
-        their same-person partners and every Handle any of them holds or names are
-        locked in one pass (``Party.lock_merge_records``), the set is judged again
-        under those locks (:meth:`preview_duplicates`), and a member that changed
+        A set merges exactly as confirmed. Its size and the actor's read of every
+        member are checked first, for every set in one read (:meth:`_admission`),
+        so a set the actor may not name takes no lock and is not read further.
+        Then, in its own transaction, its members, their same-person partners and
+        every Handle any of them holds or names are locked in one pass
+        (``Party.lock_merge_records``), the set is judged again under those locks
+        (:meth:`preview_duplicates`), and a member that changed
         since the person looked (merged elsewhere, trashed, kept apart from another)
         refuses the set rather than shrinking it. Then the others fold into the
         oldest in key order through ``Party.merge``, whose own permission and guards
@@ -2418,8 +2465,13 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         """
 
         party_model = apps.get_model("parties", "Party")
+        confirmed = self._confirmed_sets(sets)
+        readable = self._readable_members(actor, confirmed)
         outcomes = []
-        for ids in self._confirmed_sets(sets):
+        for ids in confirmed:
+            if refusal := self._admission(ids, readable):
+                outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.REFUSED, reason=refusal))
+                continue
             try:
                 with transaction.atomic():
                     rows = instances_from_public_ids(party_model, ids, queryset=party_model._base_manager.all())
@@ -2450,6 +2502,22 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.MERGED, survivor=kept))
         return outcomes
 
+    def _readable_members(self, actor: Any, confirmed: Sequence[tuple[str, ...]]) -> Mapping[str, Any]:
+        """The members of the sets within the size cap that ``actor`` reads, by the public id given, in one read."""
+
+        party_model = apps.get_model("parties", "Party")
+        named = {pk for ids in confirmed if len(ids) <= self.SET_MEMBERS for pk in ids}
+        return instances_from_public_ids(party_model, named, queryset=party_model._default_manager.with_actor(actor))
+
+    def _admission(self, ids: Sequence[str], readable: Mapping[str, Any]) -> str:
+        """Why a set is refused before anything else is read of it, or ``""``: its size, then the actor's read."""
+
+        if not 2 <= len(ids) <= self.SET_MEMBERS:
+            return f"Choose two to {self.SET_MEMBERS} records to merge as one."
+        if any(pk not in readable for pk in ids):
+            return "A record is gone or you may not read it."
+        return ""
+
     def _confirmed_sets(self, sets: Sequence[Sequence[str]]) -> list[tuple[str, ...]]:
         confirmed = [tuple(dict.fromkeys(str(pk) for pk in ids)) for ids in sets]
         if len(confirmed) > self.BATCH_SETS:
@@ -2463,7 +2531,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
         party_model = apps.get_model("parties", "Party")
         readable = party_model._default_manager.with_actor(actor)
-        found = instances_from_public_ids(party_model, {pk for ids in confirmed for pk in ids}, queryset=readable)
+        found = self._readable_members(actor, confirmed)
         pks = sorted({row.pk for row in found.values()})
         people, organizations = self.party_kinds(pks)
         permitted = self.batch_mergeable(actor, pks)
@@ -2485,10 +2553,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         for ids in confirmed:
             members = sorted((found[pk] for pk in ids if pk in found), key=_age)
             keys = [row.pk for row in members]
-            if not 2 <= len(ids) <= self.SET_MEMBERS:
-                reason = f"Choose two to {self.SET_MEMBERS} records to merge as one."
-            elif len(members) != len(ids):
-                reason = "A record is gone or you may not read it."
+            if admission := self._admission(ids, found):
+                reason = admission
             elif any(row.is_trashed or row.merged_into_id is not None for row in members):
                 reason = "A record is trashed or already merged into another."
             elif not (set(keys) <= people.keys() or set(keys) <= organizations):
@@ -2509,7 +2575,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 )
             else:
                 previews.append(DuplicateSetPreview(tuple(members), None))
-        shown = self._disagreements(actor, [preview.members for preview in previews], people)
+        # Only a set the actor may merge discloses its members' values.
+        shown = self._disagreements(
+            actor, [preview.members if preview.outcome is None else () for preview in previews], people,
+        )
         return [
             replace(preview, disagreements=shown[index]) for index, preview in enumerate(previews)
         ]
@@ -2518,19 +2587,21 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     def _disagreements(
         actor: Any, sets: Sequence[Sequence[Any]], people: Mapping[Any, Any],
     ) -> list[tuple[FieldDisagreement, ...]]:
-        """For each set, the merge fields its members disagree on and what the survivor will show, in four reads."""
+        """For each set, the merge fields its members disagree on and what the survivor will show, in fixed reads.
+
+        ``sets`` hold members read through ``actor`` and the person rows are read
+        through it too, so each field's own ``read__<field>`` gate has hidden what
+        the actor may not read, as on the record read, for the whole batch at
+        once. A field hidden on any member of a set is not compared there: the
+        actor sees neither its values nor whether they differ.
+        """
 
         party_model = apps.get_model("parties", "Party")
         person_model = apps.get_model("parties", "Person")
         pks = sorted({row.pk for members in sets for row in members})
         if not pks:
             return [() for _members in sets]
-        persons = person_model._base_manager.in_bulk([pk for pk in pks if pk in people])
-        private = set(
-            party_model._default_manager.with_actor(actor).with_action("read_private")
-            .filter(pk__in=pks).values_list("pk", flat=True)
-        )
-        gated = {"notes", "first_met_note"}
+        persons = person_model._default_manager.with_actor(actor).in_bulk([pk for pk in pks if pk in people])
         owners: dict[str, tuple[Any, str]] = {}
         stated: defaultdict[tuple[str, Any], list[Any]] = defaultdict(list)
         for statements in (party_model.statements, person_model.statements):
@@ -2558,8 +2629,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
         personal = set(party_model.merge_scalar_fields_of("person")) - set(party_model.merge_scalar_fields_of(None))
 
-        def value_of(row: Any, name: str) -> Any:
-            return getattr(persons.get(row.pk, row) if name in personal else row, name, None)
+        def source_of(row: Any, name: str) -> Any:
+            return persons.get(row.pk, row) if name in personal else row
 
         result: list[tuple[FieldDisagreement, ...]] = []
         for members in sets:
@@ -2570,9 +2641,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             fields = party_model.merge_scalar_fields_of(kind)
             disagreements = []
             for name in fields:
-                if name in gated and not all(row.pk in private for row in members):
+                sources = [source_of(row, name) for row in members]
+                if any(name in redacted_fields(source) for source in sources):
                     continue
-                values = tuple(text(value_of(row, name)) for row in members)
+                values = tuple(text(getattr(source, name, None)) for source in sources)
                 if len(set(values)) < 2:
                     continue
                 _model, aspect = owners.get(name, (None, ""))
@@ -3552,7 +3624,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         created_by_id: Any,
         replaces: Sequence[Any] = (),
         through: Handle | None = None,
-        claims: Collection[str] = (),
+        claims: Collection[tuple[str, str]] = (),
     ) -> set[str]:
         """Assert the emails and phones ``link`` names for ``party``; withdraw the others it or ``replaces`` asserted.
 
@@ -3561,8 +3633,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         a blank one keeps the handle's); the Party row is the assertion's evidence.
         An email spelling ``through``'s address lands on that handle, the one an
         adoption found ``party`` by, never on a second row of another spelling.
-        An email whose normalized value is in ``claims`` is someone else's
-        (:meth:`_contested_emails`): it is stated as a claim for review, below
+        An email or phone whose ``(platform, normalized value)`` is in ``claims``
+        is someone else's (:meth:`_contested_addresses`): it is stated as a claim for review, below
         ``Party.REVIEW_CONFIDENCE``, so it never resolves the handle, and the
         handle's display fields stay its holder's. ``replaces`` are the links of
         records a merge at the source folded into this one: a handle only they
@@ -3588,7 +3660,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 normalized = handle_model.normalize_value(platform, value)
                 if through is not None and platform == through.platform and normalized == through.normalized_value:
                     value = through.value
-                claim = platform == handle_model.Platform.EMAIL and normalized in claims
+                claim = (platform, normalized) in claims
                 shown = {} if claim else {"display_name": display_name, "label": label, "is_preferred": preferred}
                 handle = handles.upsert(platform=platform, value=value, created_by_id=created_by_id, **shown)
                 mapped = {} if claim else {"label": label, "is_preferred": preferred}
@@ -3608,12 +3680,20 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             party.statements.withdraw_unsupported(source, supported, aspect="handle", link=stating)
         return landed
 
-    def _contested_emails(
+    def _contested_addresses(
         self, person: Person, parsed: ParsedContact, *, source: Any, lookup: EmailLookup
-    ) -> tuple[set[str], list[tuple[Person, Handle | None]]]:
-        """Return the contact's emails ``source`` may only claim for ``person``, and the people they name instead.
+    ) -> tuple[set[tuple[str, str]], list[tuple[Any, Handle | None]]]:
+        """Return the contact's addresses ``source`` may only claim for ``person``, and the parties they name instead.
 
-        What a contact may state about an address depends on whom ``lookup``
+        Claims are ``(platform, normalized value)`` pairs. A phone number names one
+        account as an email does (``Handle.identifies_account``): one another live
+        party is linked to (:meth:`same_person_links` with ``every_address``: a
+        holding, or a standing statement by a source that states its own record)
+        is theirs unless ``person`` holds it, so it is a claim and each such party
+        comes back with its handle; a number four or more parties are linked to
+        is still only claimed, and pairs nobody.
+
+        What a contact may state about an email depends on whom ``lookup``
         (:meth:`lookup_emails`: :meth:`people_for_emails` on any basis, and the
         addresses a person account signs in with) finds by it. One that names a
         person other than ``person`` is theirs, unless ``person`` holds it too:
@@ -3628,12 +3708,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         until ``person`` holds it through another statement or a person confirms
         the claim (either makes ``person`` its holder), so no lapse of its holder
         (trashed, or its statement withdrawn) and no second claimant turns the
-        claim into a holding. Any other address is stated in full. Values are
-        normalized email addresses (``Handle.normalize_value``).
+        claim into a holding; the same holds for a number. Any other address is
+        stated in full. Values are normalized (``Handle.normalize_value``).
         """
 
         handle_model = apps.get_model("parties", "Handle")
-        email = handle_model.Platform.EMAIL
+        email, phone = handle_model.Platform.EMAIL, handle_model.Platform.PHONE
         claimed = set(
             self.handle_statements()
             .filter(
@@ -3641,12 +3721,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 asserted_by=str(to_subject_ref(source)),
                 status=self.handle_statements().model.StatementStatus.ASSERTED,
                 confidence__lt=self.model.REVIEW_CONFIDENCE,
-                handle__platform=email,
+                handle__platform__in=(email, phone),
             )
-            .values_list("handle__normalized_value", flat=True)
+            .values_list("handle__platform", "handle__normalized_value")
         )
-        claims: set[str] = set()
-        others: dict[Any, tuple[Person, Handle | None]] = {}
+        claims: set[tuple[str, str]] = set()
+        others: dict[Any, tuple[Any, Handle | None]] = {}
         for value, _label, _preferred in parsed.emails:
             normalized = handle_model.normalize_value(email, value)
             found = lookup.named(value)
@@ -3656,10 +3736,38 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             account = normalized in lookup.sign_in and not any(
                 holder.basis == EmailBasis.ACCOUNT and holder.person.pk == person.pk for holder in found
             )
-            if rivals or account or lookup.lapsed.get(normalized) or normalized in claimed:
-                claims.add(normalized)
+            if rivals or account or lookup.lapsed.get(normalized) or (email, normalized) in claimed:
+                claims.add((email, normalized))
             for holder in rivals:
                 others.setdefault(holder.person.pk, (holder.person, holder.handle))
+        numbers = {(phone, handle_model.normalize_value(phone, value)) for value, _label, _preferred in parsed.phones}
+        numbers = {address for address in numbers if address[1]}
+        if numbers:
+            linked = self.same_person_links(addresses=numbers, every_address=True)
+            held = set(
+                handle_model._base_manager.filter(
+                    platform=phone,
+                    normalized_value__in=sorted(value for _platform, value in numbers),
+                    party_id=person.pk,
+                ).values_list("platform", "normalized_value")
+            )
+            rivals_by_address = {
+                address: [link for link in links if link.party != person.pk] for address, links in linked.items()
+            }
+            parties = apps.get_model("parties", "Party")._base_manager.in_bulk(
+                sorted({link.party for links in rivals_by_address.values() for link in links})
+            )
+            handles = handle_model._base_manager.in_bulk(
+                sorted({link.handle for links in rivals_by_address.values() for link in links})
+            )
+            for address in sorted(numbers):
+                linked_others = rivals_by_address.get(address, [])
+                if address in held:
+                    continue
+                if linked_others or address in claimed:
+                    claims.add(address)
+                for link in linked_others:
+                    others.setdefault(link.party, (parties[link.party], handles[link.handle]))
         return claims, list(others.values())
 
     def ingest_contact(
@@ -3693,8 +3801,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         who each address names: an email another person is linked to (holds it,
         claims it, keeps it as a lapsed holder, or signs in with it) is only
         claimed, for review, and each such live person is proposed here as the
-        contact's same person, the directory's one proposal for an address
-        (:meth:`_contested_emails`, :meth:`propose_directory_match`), so a
+        contact's same person (:meth:`_contested_addresses`; a phone number
+        another live party is linked to likewise): through the one
+        same-person verb, citing the handle that names them
+        (:meth:`propose_same_person_as_system`, once the page commits), or, for an
+        account's sign-in address no handle of theirs carries, which links no
+        one to it, through :meth:`propose_directory_match`; so a
         contact never moves an address away from anyone; the addresses it lands
         are marked changed in the lookup. A link leaving a person
         withdraws what it stated on them before it binds its new person (the
@@ -3784,7 +3896,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 # What the link withdrew from the person it left may have been all that held an address.
                 lookup = self.lookup_emails((value for value, _label, _preferred in parsed.emails), lookup=lookup)
             claims, others = (
-                self._contested_emails(person, parsed, source=source, lookup=lookup)
+                self._contested_addresses(person, parsed, source=source, lookup=lookup)
                 if pull and lookup is not None
                 else (set(), [])
             )
@@ -3802,7 +3914,14 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             if lookup is not None:
                 lookup.changed.update(landed)
             for other, handle in others:
-                self.propose_directory_match(person, other, evidence=[link, *([handle] if handle is not None else [])])
+                if handle is not None:
+                    # Linked to one address: the same-person verb proposes the pair once this page commits.
+                    self.propose_same_person_as_system(
+                        person, other, evidence=[handle], reason="parties.directory.contact_claim"
+                    )
+                else:
+                    # An account's sign-in address that no handle of theirs carries links no one to it.
+                    self.propose_directory_match(person, other, evidence=[link])
             if gone:
                 # What the link proposed for the trashed person it left is moot: its new person is, or is
                 # proposed as, them. A live person it left (refused on its return) stays proposed.

@@ -8,6 +8,8 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.base.identity import public_subject_ref
@@ -776,4 +778,53 @@ def test_a_person_lists_previews_and_merges_a_certain_pair_through_the_schema(db
     assert {row["source_kind"] for row in preview["members"][1]["statements"]} == {"RULE"}
     assert _data(execute_schema(console, _MERGE, sets, user=owner))["merge_duplicates"] == [
         {"members": [older.sqid, newer.sqid], "outcome": "MERGED", "reason": "", "survivor": {"id": older.sqid}},
+    ]
+
+
+# What the batch merge dialog selects of each set (the web fragment's ``DuplicateSetPreviews``).
+_DIALOG = """query DuplicateSetPreviews($sets: [[ID!]!]!) {
+  duplicate_set_previews(sets: $sets) {
+    outcome
+    reason
+    survivor { id }
+    members {
+      id display_name concrete_kind created_at first_met_note
+      statements { id source_kind handle { id platform value } }
+    }
+    disagreements { field values shown }
+  }
+}"""
+
+
+def test_the_dialog_read_costs_the_same_for_one_set_as_for_many_through_the_schema(db: None) -> None:
+    """The whole dialog document costs as much for one pair as for fifty pairs or fifty sets of ten.
+
+    The members reach the schema outside the optimizer: their kind and their
+    statements' handles are batched, and every field gate is asked for the batch.
+    """
+
+    del db
+    from tests.test_parties_duplicates import _people
+
+    owner = User.objects.create_user(username="dialog-read-owner")
+    sets = [_people(owner, *(f"Zoe Example {index}" for _ in range(10)), value=f"zoe{index}@example.com")
+            for index in range(50)]
+    console = _schema("console")
+
+    def read(chosen: list[list[Any]]) -> tuple[int, Any]:
+        with CaptureQueriesContext(connection) as queries:
+            data = _data(execute_schema(console, _DIALOG, {"sets": [[p.sqid for p in members] for members in chosen]},
+                                        user=owner))
+        return len(queries.captured_queries), data["duplicate_set_previews"]
+
+    one, _previews = read([sets[0][:2]])
+    pairs, previews = read([members[:2] for members in sets])
+    tens, ten_previews = read(sets)
+
+    assert one == pairs == tens
+    assert [row["outcome"] for row in previews + ten_previews] == [None] * 100
+    first = previews[0]
+    assert [member["concrete_kind"] for member in first["members"]] == ["PERSON", "PERSON"]
+    assert [{row["handle"]["value"] for row in member["statements"]} for member in first["members"]] == [
+        {"zoe0@example.com"}, {"zoe0@example.com"},
     ]

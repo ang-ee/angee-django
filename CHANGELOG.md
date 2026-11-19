@@ -10,6 +10,30 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: one owner proposes same-person pairs. A pull-only
+  directory's contact that may only claim an address another live party is
+  linked to proposes them through `Party.objects.propose_same_person_as_system`
+  (reason `parties.directory.contact_claim`), citing the handle that links them,
+  once the page commits, instead of through the directory's own rule. The
+  `parties.directory_match` rule stays for what no address links, which the
+  verb cannot cite and its job would withdraw: the people of the records a merge
+  at the source replaced, and an account whose sign-in address no handle of
+  theirs carries. Its earlier proposals of address pairs stay in review as they
+  are, the pairing job states no second proposal beside one, and merging the two
+  withdraws it. A contact's phone number another live party is linked to is now
+  only claimed, like an email (`PartyManager._contested_addresses`, through the
+  pairing's read `same_person_links(addresses=, every_address=True)`): before, it
+  was stated in full and its holder moved to the contact's person. A number four
+  or more parties are linked to is still only claimed and pairs nobody. Changes
+  in what is proposed: a pair of a person later trashed or merged leaves the
+  review at once and is withdrawn by the next pairing run; two records of one
+  directory that share an address, and a party linked only by a name
+  suggester's claim, are no longer proposed. Upgrade: no migration, resource or
+  permission change. A number a directory already took this way keeps its holder
+  until a person merges or decides the pair, or the number is restated: an
+  unchanged record is not applied again, and a changed one finds the contact's
+  person holding the number and states it in full again.
+
 - `angee.parties`: the read of a directory's contacts is a stored grant alone.
   `parties/directory#contact_read` is `contact_reader` (revision 31); the
   integration owner's column arm is gone, because a column arm is never folded
@@ -21,6 +45,15 @@ live in code docstrings.
   missing (`grant_directory_owner_contact_reads`, beside
   `resolve_stale_owners`). A transfer moves no grant: a person grants a later
   owner. Upgrade: `rebac sync`; provision runs the repair.
+
+- `angee.messaging`, `angee.workflows_integrate`: a send and a workflow step ask
+  about discovery again once they hold their lock. Both asked before taking
+  `delivery_lock()` or `sync_lock()`, so a secret re-entered while they waited
+  for it sent one reply, or ran one step's IO, on the new secret. Under the lock
+  they now ask the row as stored (`Integration.require_stored_discovery_ready`,
+  one read of the readiness columns, which the stream driver's pre-write check
+  uses too): a send defers as for a pending discovery, and a step waits as for
+  contention.
 
 - `angee.integrate`: the discovery checks cost no more than they need. A push
   asked about discovery for each candidate before its pinned, held, unchanged and
@@ -725,15 +758,17 @@ live in code docstrings.
   (`certain_same_as_pairs`, `certain=True` re-checks each) or a selection from a
   list. `duplicate_set_previews(sets, certain)` reads what the dialog shows
   (members oldest first with their statements and handles, the survivor, a
-  refusal, and the fields the records disagree on with the value that will
-  show) in a fixed number of queries. Only an active person account writing
+  refusal, and, for a set that merges, the fields the records disagree on with
+  the value that will show, each field behind its own `read__<field>` gate per
+  record) in a fixed number of queries. Only an active person account writing
   every record may (the party's new `batch_merge` permission,
   `write & person->active_member`, parties schema revision 30), read on the
   party whatever manager is asked; no agent tool offers it. A set holding an
   account's own person, two kinds, a trashed or merged record or two records a
-  person kept apart refuses with its reason; a set merges exactly as confirmed,
-  judged again under one lock pass of its members, their same-person partners
-  and their handles; the oldest record survives and the others fold into it in
+  person kept apart refuses with its reason; a set of more than ten records or
+  one holding a record the person may not read is refused before anything is
+  read further or locked; a set merges exactly as confirmed, judged again under
+  one lock pass of its members, their same-person partners and their handles; the oldest record survives and the others fold into it in
   key order; a lock conflict (deadlock, lock not granted) is that set's
   `stopped`, any other database error stops the call. A batch records no value
   as the person's choice (`PartyManager.BATCH_CONFIRMED_FIELDS`): statements move
@@ -744,7 +779,12 @@ live in code docstrings.
   (`Party.comparable_name`); a name that is one of the pair's cited addresses
   (`Party.names_an_address`) is no name. Every party merge now refuses a person
   with an organization (`Party.validate_merge`). A person's `anniversary` is a
-  merge choice (the Merge page shows it).
+  merge choice (the Merge page shows it). The web fragment's `DuplicatesDialog`
+  is the one batch surface: the Review page's "Merge certain pairs" action, and
+  the People and Organizations lists' Merge…, where one selected record opens
+  the person form's "Merge into…" (`useMergeIntoAction`, shared by both), two
+  open their compare page, and three or more open the dialog as one explicit
+  set, the whole selection.
 
 - Parties: `Party.objects.propose_same_person_as_system(left, right, *, evidence,
   reason)` lets an importer propose that two parties are one person, citing the
@@ -798,7 +838,8 @@ live in code docstrings.
   link supports; the hourly task reads the shared-sender providers once for both
   passes (`PartyManager.shared_sender_ids`, the new `shared=` argument of
   `reconcile_suggestions` and `reconcile_same_as`). The review list
-  (`same_as_pairs`) drops a pair the reader cannot read before it fills a page.
+  (`same_as_pairs`) drops a pair the reader cannot read before it fills a page,
+  and walks at most `PartyQuerySet.SAME_AS_REVIEW_PAGES` (four) pages to fill it.
 
 - Parties: a handle's holder is always the projection of a statement. A holder
   written onto the row with no statement behind it lost its address the moment
@@ -813,13 +854,18 @@ live in code docstrings.
   aspect ranks (below a person, a system of record, a directory and an import),
   so the repair leaves a confirmed holder and one another party's applied
   statement contests as they are, for a person, rather than clear the
-  confirmation or move the address; it states a trashed holder for itself and a
-  merged-away one for its survivor. It returns a `HolderRepair`, and the command
-  reports how many it stated, left confirmed, left contested and re-resolved
-  (`-v 2` lists the handles left). Every provision runs it
+  confirmation or move the address; it leaves a trashed holder's address alone,
+  neither stating nor re-resolving it (resolution ignores a trashed party, so
+  either would clear the row), states it after a restore, and states a
+  merged-away holder for its survivor. It returns a `HolderRepair`, and the
+  command reports how many it stated, left confirmed, left contested and
+  re-resolved (`-v 2` lists the handles left). Every provision runs it
   (`PartiesConfig.compose_provision`), after the install resources load the
-  rule; it is idempotent. Test fixtures that create a handle with `party=` still
-  write a bare holder.
+  rule; it is idempotent. One run writes at most `HandleManager.REPAIR_LIMIT`
+  (500) holders (`resolve_stale_owners(limit=)`, the command's `--limit`); past
+  the cap the command's last line, in the provision log too, says how many
+  remain (`HolderRepair.remaining`) and the next run continues. Test fixtures
+  that create a handle with `party=` still write a bare holder.
 
 - `angee.integrate`: a stream's mapping can be composed from several declarers.
   `StreamDefinition.mapping_contributions` declares one

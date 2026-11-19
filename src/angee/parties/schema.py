@@ -21,6 +21,7 @@ from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.queryset import run_type_get_queryset
 
 from angee.base.identity import public_subject_ref
+from angee.base.lineage import concrete_child_accessor, concrete_child_models
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, session_user
 from angee.graphql.data.hasura import (
     AngeeHasuraWriteBackend,
@@ -434,8 +435,9 @@ class FieldDisagreementType:
 class DuplicateSetPreviewType:
     """A set of records a person says are one, as the batch merge would merge it now.
 
-    ``members`` come oldest first, each with what tells it apart (its handles,
-    its statements' sources, its dates); the first survives.
+    ``members`` come oldest first, each with what tells it apart (its statements'
+    handles and sources, its dates); the first survives. Only a set that merges
+    lists ``disagreements``, and only fields the reader may read on every member.
     """
 
     members: list[PartyType]
@@ -456,17 +458,27 @@ class DuplicateSetOutcomeType:
 
 
 def _prefetch_member_facts(members: list[Any], actor: Any) -> None:
-    """Load what the duplicate dialog shows of every member in one batch: statements, handles, avatars."""
+    """Load what the duplicate dialog shows of every member in one batch: kind, statements, avatars.
+
+    The members reach the schema in a plain list, outside the optimizer, so these
+    prefetches stand in for its hints: the MTI children ``concrete_kind`` reads,
+    and the reader's handle statements, each statement's handle read through
+    ``actor`` so ``actor_scoped_to_one`` reuses it. A member's addresses are its
+    statements' handles: every holder is the projection of one (the
+    ``stored_holder`` rule states a bare one), so ``handles`` adds no address.
+    """
 
     files = apps.get_model("storage", "File").objects.with_actor(actor)
     prefetch_related_objects(
         members,
+        *(concrete_child_accessor(Party, child) for child in concrete_child_models(Party)),
         Prefetch(
             "partystatement_set",
-            queryset=Party.objects.handle_statements().for_reader(actor).select_related("subject", "handle"),
+            queryset=Party.objects.handle_statements()
+            .for_reader(actor)
+            .prefetch_related(Prefetch("handle", queryset=Handle.objects.with_actor(actor))),
             to_attr="_readable_handle_statements",
         ),
-        Prefetch("handles", queryset=Handle.objects.with_actor(actor)),
         *Party.objects.display_avatar_prefetches(actor, avatars=files),
     )
 

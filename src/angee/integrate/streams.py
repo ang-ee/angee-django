@@ -353,14 +353,12 @@ def _require_discovery_ready(stream: Any) -> None:
     """Refuse a remote write or a reset while the stream's integration is not discovery-ready.
 
     The driver asks before each one, outside the page transaction, on the
-    integration as it is stored now, in one read of the columns the check uses
-    (``Integration.discovery_readiness_fields``); every commit resting on remote
-    facts is also refused under the stream lock (``SyncStreamManager.lock_current``).
+    integration as it is stored now (``Integration.require_stored_discovery_ready``);
+    every commit resting on remote facts is also refused under the stream lock
+    (``SyncStreamManager.lock_current``).
     """
 
-    integration_model = stream._meta.get_field("integration").related_model
-    readiness = integration_model._base_manager.only(*integration_model.discovery_readiness_fields)
-    readiness.get(pk=stream.integration_id).require_discovery_ready()
+    stream._meta.get_field("integration").related_model.require_stored_discovery_ready(stream.integration_id)
 
 
 def reset_stream(stream: Any, *, cursor: dict[str, Any]) -> PageResult:

@@ -6,10 +6,14 @@ import { AppRuntimeProvider, ToastProvider, aliasRouteHref, createRouteHref, pag
 import { createUiTestProviders } from "@angee/ui/testing";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+const reads = vi.hoisted(() => ({ variables: [] as unknown[] }));
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
-  // The people workbench's scope counts; the list declarations do not read them.
-  useAuthoredQuery: () => ({ data: undefined, isFetching: false, error: null }),
+  // The people workbench's scope counts and the batch dialog's preview; each read's variables are kept.
+  useAuthoredQuery: (_document: unknown, variables: unknown) => {
+    reads.variables.push(variables);
+    return { data: undefined, isFetching: false, error: null };
+  },
 }));
 
 import { enPartiesMessages } from "./i18n";
@@ -22,6 +26,7 @@ const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://parti
 afterEach(() => {
   cleanup();
   clearClients();
+  reads.variables = [];
 });
 
 const MERGE = enPartiesMessages["merge.selection.action"]!;
@@ -45,12 +50,22 @@ function renderMountedSelection(ids: readonly string[], search = "peopleScope=UN
   const root = createRootRoute({ search: { middlewares: [retainSearchParams(["app"])] } });
   const router = createRouter({
     routeTree: root.addChildren([
-      createRoute({ getParentRoute: () => root, path: MOUNTED_PEOPLE, component: () => <MergeSelectionAction ids={new Set(ids)} /> }),
+      createRoute({
+        getParentRoute: () => root,
+        path: MOUNTED_PEOPLE,
+        component: () => <MergeSelectionAction ids={new Set(ids)} />,
+      }),
       createRoute({ getParentRoute: () => root, path: MERGE_PATH, component: () => <div>Comparison</div> }),
     ]),
     history: createMemoryHistory({ initialEntries: [`${MOUNTED_PEOPLE}?${search}`] }),
   });
-  render(<Provider><AppRuntimeProvider runtime={{ routeHref: mountedRouteHref }}><RouterProvider router={router} /></AppRuntimeProvider></Provider>);
+  render(
+    <Provider>
+      <AppRuntimeProvider runtime={{ routeHref: mountedRouteHref }}>
+        <ToastProvider><RouterProvider router={router} /></ToastProvider>
+      </AppRuntimeProvider>
+    </Provider>,
+  );
   return router;
 }
 
@@ -93,21 +108,17 @@ describe("Merge in a parties list's selection bar", () => {
     fireEvent.click(await screen.findByRole("button", { name: MERGE }));
 
     expect(await screen.findByText(enPartiesMessages["duplicates.title"]!)).toBeTruthy();
+    expect(reads.variables).toContainEqual({ sets: [["ada", "grace", "joan"]], certain: false });
     expect(screen.queryByText("Comparison")).toBeNull();
   });
 
-  test.each([
-    { count: 1, ids: ["ada"], reason: enPartiesMessages["merge.selection.tooFew"]! },
-  ])("with $count selected, Merge stays in the bar, disabled, and says why", async ({ ids, reason }) => {
-    const router = renderMountedSelection(ids);
-    const merge = await screen.findByRole("button", { name: MERGE });
+  test("one selected opens Merge into, where the person chooses the other record", async () => {
+    const router = renderMountedSelection(["ada"]);
 
-    expect(merge.getAttribute("aria-disabled")).toBe("true");
-    fireEvent.mouseEnter(merge);
-    expect(screen.getByText(reason)).toBeTruthy();
-    fireEvent.click(merge);
+    fireEvent.click(await screen.findByRole("button", { name: MERGE }));
+
+    expect(await screen.findByText(enPartiesMessages["person.action.mergeOther"]!)).toBeTruthy();
     expect(router.state.location.pathname).toBe(MOUNTED_PEOPLE);
-    expect(screen.queryByText("Comparison")).toBeNull();
   });
 
   test("the people and organizations lists add Merge to their selection and keep the resource's default selectability", async () => {

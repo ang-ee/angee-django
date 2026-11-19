@@ -189,7 +189,7 @@ birthday clears the person's.
 
 What a pull-only contact may state about an address, whether or not its
 directory adopts, depends on whom the lookup finds by it
-(`PartyManager._contested_emails`): an address it answers with a
+(`PartyManager._contested_addresses`): an address it answers with a
 person other than the contact's own, who does not hold it too, is someone else's,
 and so is an address a person account signs in with, whether or not the account
 has a person, so the contact states it as a claim for review (below the confidence at which a
@@ -224,16 +224,20 @@ so a claim would drop the address from the card and write that back to the
 server, and what a two-way card publishes about a person other sources state is
 open with the architect.
 
-Each person the contact's addresses name instead (whoever holds, claims or signs
-in with one, an adoption candidate a limit refused included; the ingest's one
-proposal call site) and each other person a replaced record was linked to (the
-directory base's `apply_record`) is proposed as the landed person's same
-person by parties' `directory_match` rule
-(`PartyManager.propose_directory_match`), citing the contact's link and the
-handle or the replaced link, and joins the same-as review. A pair kept separate
-is not proposed again; merging the two withdraws the proposal. The `same_as`
-rule's reconciler withdraws only its own rule's pairs, so it leaves these
-standing, though no shared handle row supports them.
+Each person the contact's addresses name instead (whoever holds or claims one,
+an adoption candidate a limit refused included) is proposed as the landed
+person's same person through the one same-person verb,
+`Party.objects.propose_same_person_as_system`, citing the handle that names them,
+once the page commits: the pair is the one the pairing job would find, two
+parties linked to one address. What no address links is proposed by parties'
+`directory_match` rule (`PartyManager.propose_directory_match`), citing the
+contact's link and the replaced link: each other person a replaced record was
+linked to (a merge at the source, the directory base's `apply_record`), and an
+account whose sign-in address the contact states while no handle of theirs
+carries it. Both join the same-as review. A pair kept separate is not proposed
+again; merging the two withdraws the directory's proposal. The `same_as` rule's
+reconciler withdraws only its own rule's pairs, so it leaves the directory's
+standing, and the rule's earlier proposals of address pairs stay reviewable.
 
 The survivor of a merge takes every link of the merged person, so a person who
 writes both may merge any pair, an account's own person or a person a two-way
@@ -268,9 +272,14 @@ record's, a directory's or an import's statement outranks it, kinds the aspect d
 not list rank below it. So the repair moves no address and clears no
 confirmation: it leaves a confirmed holder (only a person or a seed states the
 preferred link that keeps the flag) and a holder another party's applied statement
-contests for a person, and reports both. A trashed holder is stated for itself,
-a merged-away one for its survivor. A seed that moves or clears a holder withdraws
-the statement its earlier load made for the old one.
+contests for a person, and reports both. It leaves a trashed holder's address
+alone (resolution ignores a trashed party, so stating or re-resolving it would
+clear the row) and states it after a restore; a merged-away holder is stated for
+its survivor. One run writes at most `HandleManager.REPAIR_LIMIT` (500) holders;
+past the cap the command, and so the provision log, ends with "Stopped at the cap
+of N holder(s); M more await the next provision or resolve_stale_owners run", and
+the next run continues (`--limit` sets another cap). A seed that moves or clears a
+holder withdraws the statement its earlier load made for the old one.
 
 Who an email address names is one verb,
 [PartyManager.people_for_emails](managers.py): given addresses in a caller's
@@ -428,9 +437,9 @@ Nothing merges unattended. A person may also merge in a batch: confirmed sets of
 two to ten records each (`PartyManager.merge_duplicates`, the `merge_duplicates`
 mutation; at most 50 sets), either the certain pairs the Review page lists
 (`certain_same_as_pairs`) or a selection from the People or Organizations list.
-There, two selected records of an ungrouped list open their compare page; three
-or more are one set, and a grouped list gives one set per group of two or more
-selected (a group without a value is never a set). Only an active person account that writes every record may (the party's
+There, one selected record opens "Merge into…" to choose the other, two open
+their compare page, and three or more are one explicit set, the whole
+selection, which the dialog lists before anything merges. Only an active person account that writes every record may (the party's
 `batch_merge` permission, `write & person->active_member`); a service or agent
 account merges nothing, and no agent tool offers it. A set never holds an account's
 own person (merged by hand, on the compare page), records of two kinds, a trashed
@@ -445,7 +454,8 @@ lock pass. A batch records no value as the person's choice: each record's
 statements move to the survivor as their sources' own and the provenance ranking
 decides what shows; a field the survivor leaves empty takes a merged record's
 value as a plain value no one states (`Party.merge_values`). The dialog shows, for
-each set, the fields its records disagree on and the value that will show; a
+each set that merges, the fields its records disagree on and the value that will
+show, leaving out a field the person's `read__<field>` gate hides on any record; a
 person who wants to choose merges that pair on the compare page instead. A merge,
 batch or not, reverts from its changeset. A person's `anniversary` is a merge
 choice like their birthday; a party's `avatar` is not one yet. Merging a person

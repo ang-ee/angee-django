@@ -81,7 +81,7 @@ def test_the_repair_states_a_stored_holder_once(db: None) -> None:
         second = Handle.objects.resolve_stale_owners()
 
     handle.refresh_from_db()
-    assert (handle.party_id, first.stated, second) == (holder.pk, 1, (0, (), (), 0))
+    assert (handle.party_id, first.stated, second) == (holder.pk, 1, (0, (), (), 0, 0))
     assert _stated_links(handle) == [(holder.pk, True)]
 
 
@@ -124,16 +124,77 @@ def test_the_repair_leaves_a_contested_holder_on_its_row_and_reports_it(db: None
     assert (repair.stated, repair.confirmed, repair.contested, repair.resolved) == (0, (), (handle.pk,), 0)
 
 
-def test_the_repair_states_a_trashed_holder_rather_than_clearing_it(db: None) -> None:
-    """The link survives for a restore; resolution ignores a trashed party meanwhile."""
+def test_the_repair_leaves_a_trashed_holders_address_for_its_restore(db: None) -> None:
+    """Resolution ignores a trashed party, so stating its link would clear the row; the restored holder is stated."""
 
     del db
     holder, handle = _stored_holder(create_user("stored-holder-trashed"))
     with system_context(reason="test trashed holder"):
         Party._base_manager.get(pk=holder.pk).trash(reason="test")
 
+    left = _repair()
+
+    handle.refresh_from_db()
+    assert (handle.party_id, left.stated, _stated_links(handle)) == (holder.pk, 0, [])
+    with system_context(reason="test restored holder"):
+        Party._base_manager.get(pk=holder.pk).restore()
     assert _repair().stated == 1
-    assert [subject for subject, _applied in _stated_links(handle)] == [holder.pk]
+    handle.refresh_from_db()
+    assert (handle.party_id, _stated_links(handle)) == (holder.pk, [(holder.pk, True)])
+
+
+def test_the_repair_never_re_resolves_a_trashed_holders_address(db: None) -> None:
+    """A trashed holder whose statements no longer decide it keeps its row until a restore."""
+
+    del db
+    owner = create_user("stale-holder-trashed")
+    holder, handle = _stored_holder(owner)
+    with system_context(reason="test stale trashed holder"):
+        Party.objects.propose_claimed_handle_as_system(holder, handle, evidence=handle, reason="tests.parties.claim")
+        Handle._base_manager.filter(pk=handle.pk).update(party=holder)
+        Party._base_manager.get(pk=holder.pk).trash(reason="test")
+
+    assert _repair().resolved == 0
+    handle.refresh_from_db()
+    assert handle.party_id == holder.pk
+
+
+def _stored_holders(owner: Any, count: int) -> list[Any]:
+    with system_context(reason="test stored holders"):
+        return [
+            Handle._base_manager.create(
+                platform="email",
+                value=f"holder-{index}@example.com",
+                party=Party._base_manager.create(display_name=f"Holder {index}", created_by=owner),
+                created_by=owner,
+            )
+            for index in range(count)
+        ]
+
+
+def test_the_repair_stops_at_its_cap_and_the_next_run_continues(db: None) -> None:
+    """Each run writes at most ``limit`` holders and says how many it left; the next run takes them."""
+
+    del db
+    handles = _stored_holders(create_user("stored-holder-cap"), 3)
+    with system_context(reason="test capped repair"):
+        first = Handle.objects.resolve_stale_owners(limit=2)
+        second = Handle.objects.resolve_stale_owners(limit=2)
+
+    assert (first.stated, first.remaining, second.stated, second.remaining) == (2, 1, 1, 0)
+    assert all(_stated_links(handle) for handle in handles)
+
+
+def test_an_operator_sees_where_a_capped_repair_stopped(db: None) -> None:
+    del db
+    _stored_holders(create_user("stored-holder-cap-output"), 2)
+    output = StringIO()
+
+    call_command("resolve_stale_owners", limit=1, stdout=output)
+
+    assert output.getvalue().splitlines()[-1] == (
+        "Stopped at the cap of 1 holder(s); 1 more await the next provision or resolve_stale_owners run."
+    )
 
 
 def test_the_repair_states_a_merged_holder_for_its_survivor(db: None) -> None:

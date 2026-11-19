@@ -17,10 +17,15 @@ import { usePartiesT } from "./i18n";
 
 const DateTimeRead = defaultWidgets.datetime.read;
 
-/** One set of records a person says are one: its member ids, and the heading its list grouping gives it. */
+/**
+ * One set of records a person says are one: its member ids, and what its list
+ * grouping said of it at selection, the heading and each level's field and value.
+ * Only the ids are sent; the grouping marks a member that no longer matches it.
+ */
 export interface DuplicateSetInput {
   members: readonly string[];
   heading?: string;
+  grouping?: readonly { field: string; key: string | null }[];
 }
 
 interface MergeResult {
@@ -32,19 +37,17 @@ export interface DuplicatesDialogProps {
   sets: readonly DuplicateSetInput[];
   /** The Review page's certain pairs: each set is re-checked as still certain when merged. */
   certain?: boolean;
-  /** Lines about what the selection left out (people with no one to merge with, blank groups). */
-  notes?: readonly string[];
   onClose: (merged: boolean) => void;
 }
 
 /**
  * The batch merge's one dialog. It lists each set with what tells its records
- * apart (handles, sources, dates), which record survives and why, and the fields
+ * apart (addresses, sources, dates), which record survives and why, and the fields
  * they disagree on with the value that will show; one confirm merges exactly the
  * listed sets and the dialog then shows each set's outcome. The server judges and
  * merges (`duplicate_set_previews`, `merge_duplicates`); the dialog only shows.
  */
-export function DuplicatesDialog({ sets: opened, certain = false, notes = [], onClose }: DuplicatesDialogProps): React.ReactElement {
+export function DuplicatesDialog({ sets: opened, certain = false, onClose }: DuplicatesDialogProps): React.ReactElement {
   const t = usePartiesT();
   // The dialog lists the sets it opened with; a caller's later reads never change what is confirmed.
   const [sets] = React.useState(opened);
@@ -89,7 +92,6 @@ export function DuplicatesDialog({ sets: opened, certain = false, notes = [], on
           </Dialog.Header>
           <Dialog.Body className="space-y-4">
             <Alert tone="info">{t("duplicates.valueRule")} {t("duplicates.undo")}</Alert>
-            {notes.map((note) => <Alert key={note} tone="warning">{note}</Alert>)}
             {preview.error ? <ErrorBanner description={t("duplicates.error")} /> : null}
             {mergeState.error ? <ErrorBanner description={t("duplicates.mergeError")} /> : null}
             {preview.isFetching && previews.length === 0 ? <LoadingPanel loadingLabel={t("duplicates.loading")} /> : null}
@@ -98,6 +100,7 @@ export function DuplicatesDialog({ sets: opened, certain = false, notes = [], on
                 key={sets[index]?.members.join(":") ?? index}
                 preview={row}
                 heading={sets[index]?.heading}
+                grouping={sets[index]?.grouping}
                 outcome={result?.outcomes.get(row)}
               />
             ))}
@@ -131,10 +134,12 @@ export function DuplicatesDialog({ sets: opened, certain = false, notes = [], on
 function DuplicateSetSection({
   preview,
   heading,
+  grouping,
   outcome,
 }: {
   preview: DuplicateSetPreview;
   heading?: string;
+  grouping?: DuplicateSetInput["grouping"];
   outcome?: DuplicateSetOutcome;
 }): React.ReactElement {
   const t = usePartiesT();
@@ -142,6 +147,7 @@ function DuplicateSetSection({
   const sources = useEnumOptions("parties.PartyStatement", "source_kind", { casing: "upper" });
   const survivorId = preview.survivor?.id ?? null;
   const members = preview.members;
+  const moved = React.useMemo(() => movedMembers(preview, grouping), [grouping, preview]);
   const memberColumns = React.useMemo<readonly ListColumn<DuplicateSetMember>[]>(() => [
     {
       field: "display_name",
@@ -151,12 +157,13 @@ function DuplicateSetSection({
         <span className="flex flex-wrap items-center gap-2">
           {row.display_name}
           {row.id === survivorId ? <Chip tone="success">{t("duplicates.survives")}</Chip> : null}
+          {moved.has(row.id) ? <Chip tone="warning">{t("duplicates.moved")}</Chip> : null}
         </span>
       ),
     },
     { field: "created_at", header: t("duplicates.created"), sortable: false, render: (row) => <DateTimeRead value={row.created_at} /> },
     { field: "first_met_note", header: t("duplicates.firstMet"), sortable: false },
-    { field: "handles", header: t("duplicates.addresses"), sortable: false, render: (row) => memberAddresses(row).join(", ") },
+    { field: "addresses", header: t("duplicates.addresses"), sortable: false, render: (row) => memberAddresses(row).join(", ") },
     {
       field: "statements",
       header: t("duplicates.sources"),
@@ -167,7 +174,7 @@ function DuplicateSetSection({
         </span>
       ),
     },
-  ], [sources, survivorId, t]);
+  ], [moved, sources, survivorId, t]);
   const disagreementRows = React.useMemo(
     () => preview.disagreements.map((row) => ({ id: row.field, ...row })),
     [preview.disagreements],
@@ -227,13 +234,25 @@ function OutcomeLine({ outcome }: { outcome: DuplicateSetOutcome }): React.React
   return <Alert tone="danger">{t("duplicates.outcome.refused", { reason: outcome.reason })}</Alert>;
 }
 
-/** Every address a member holds or a source states for it, once each. */
+/** Every address a source states for a member, the one it holds included, once each. */
 function memberAddresses(member: DuplicateSetMember): string[] {
-  const values = [
-    ...member.handles.map((handle) => handle.value),
-    ...member.statements.flatMap((statement) => (statement.handle ? [statement.handle.value] : [])),
-  ];
-  return [...new Set(values)];
+  return [...new Set(member.statements.flatMap((statement) => (statement.handle ? [statement.handle.value] : [])))];
+}
+
+/**
+ * The members whose current value of a field the list grouped the set by is no
+ * longer the group's: the fresh read's disagreements hold each member's value of
+ * every merge field they disagree on, so a stale grouping shows at no extra read.
+ */
+function movedMembers(preview: DuplicateSetPreview, grouping: DuplicateSetInput["grouping"]): ReadonlySet<string> {
+  const moved = new Set<string>();
+  for (const level of grouping ?? []) {
+    const disagreement = level.key === null ? undefined : preview.disagreements.find((row) => row.field === level.field);
+    preview.members.forEach((member, index) => {
+      if (disagreement && disagreement.values[index] !== level.key) moved.add(member.id);
+    });
+  }
+  return moved;
 }
 
 /** The kinds of source that state a member's addresses, once each. */

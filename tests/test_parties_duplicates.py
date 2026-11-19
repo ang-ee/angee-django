@@ -395,3 +395,109 @@ def test_the_dialog_read_shows_disagreements_in_a_fixed_number_of_queries(db: No
     assert [(row.field, row.values, row.shown) for row in first.disagreements] == [
         ("display_name", ("Zoë Example 0", "Zoe Example 0"), "Zoë Example 0"),
     ]
+
+
+# The person's fields each ``read__<field>`` gate hides from a reader without ``read_private``, with two values each.
+# A nickname is identity, read with the person like the name parts, so it is not one of them.
+PRIVATE_FIELDS = {
+    "birthday": (date(1990, 1, 2), date(1985, 3, 4)),
+    "anniversary": (date(2010, 6, 1), date(2012, 7, 2)),
+    "notes": ("Met at the fair.", "Supplier contact."),
+    "first_met_note": ("At the fair", "On a call"),
+}
+
+
+def _private_pair(owner: Any, viewer: Any) -> list[Any]:
+    """Two people ``owner`` owns that differ in every private field and in a public one; ``viewer`` reads them."""
+
+    pair = _people(owner, "Zoe Example", "Zoe Example", value="private@example.com")
+    with system_context(reason="duplicates private values"):
+        for index, person in enumerate(pair):
+            Person._base_manager.filter(pk=person.pk).update(
+                given_name=("Zoe", "Zoey")[index], **{field: values[index] for field, values in PRIVATE_FIELDS.items()},
+            )
+    with actor_context(owner):
+        for party in Party.objects.filter(pk__in=[person.pk for person in pair]):
+            party.grant_record_access("identity_reader", viewer)
+    return pair
+
+
+def _direct_read(viewer: Any, person: Any) -> dict[str, Any]:
+    """What ``viewer`` reads of ``person`` through the schema's own record read."""
+
+    from angee.graphql.testing.documents import execute_schema, result_data
+    from tests.test_parties_graphql import _schema
+
+    fields = " ".join(["given_name", *PRIVATE_FIELDS])
+    query = f"query($id: String!) {{ people_by_pk(id: $id) {{ {fields} }} }}"
+    return result_data(execute_schema(_schema("console"), query, {"id": person.sqid}, user=viewer))["people_by_pk"]
+
+
+def test_a_reader_without_a_fields_gate_sees_none_of_its_values_in_the_preview(
+    db: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each field's own ``read__<field>`` gate decides, per member, as the record read does: no second list."""
+
+    del db
+    owner, viewer = create_user("duplicates-gate-owner"), create_user("duplicates-gate-viewer")
+    pair = _private_pair(owner, viewer)
+    # A reader who may merge but not read the private fields: the batch permission is granted here alone.
+    monkeypatch.setattr(type(Party.objects), "batch_mergeable", lambda self, actor, pks: set(pks))
+    ids = [[person.public_id for person in pair]]
+
+    (seen,) = Party.objects.preview_duplicates(actor=viewer, sets=ids)
+    (owned,) = Party.objects.preview_duplicates(actor=owner, sets=ids)
+
+    hidden = {field for field, value in _direct_read(viewer, pair[0]).items() if value is None}
+    assert hidden == set(PRIVATE_FIELDS)
+    assert seen.outcome is None
+    assert {row.field: row.values for row in seen.disagreements} == {"given_name": ("Zoe", "Zoey")}
+    assert {row.field for row in owned.disagreements} == {"given_name", *PRIVATE_FIELDS}
+
+
+def test_a_refused_set_discloses_no_value_of_its_members(db: None) -> None:
+    """An identity reader may not merge these records, so the preview shows nothing of their values."""
+
+    del db
+    from angee.graphql.testing.documents import execute_schema, result_data
+    from tests.test_parties_graphql import _schema
+
+    owner, viewer = create_user("duplicates-refused-owner"), create_user("duplicates-refused-viewer")
+    pair = _private_pair(owner, viewer)
+
+    (preview,) = Party.objects.preview_duplicates(actor=viewer, sets=[[person.public_id for person in pair]])
+    document = """query($sets: [[ID!]!]!) {
+      duplicate_set_previews(sets: $sets) { outcome members { id first_met_note } disagreements { field values } }
+    }"""
+    (row,) = result_data(execute_schema(_schema("console"), document, {"sets": [[p.sqid for p in pair]]}, user=viewer))[
+        "duplicate_set_previews"
+    ]
+
+    assert (preview.outcome, preview.disagreements) == ("refused", ())
+    assert (row["outcome"], row["disagreements"]) == ("REFUSED", [])
+    assert [member["first_met_note"] for member in row["members"]] == [None, None]
+
+
+def test_an_oversized_or_unreadable_set_is_refused_before_anything_is_locked(
+    db: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Any signed-in account may name any public ids: size and readability are checked before a lock is taken."""
+
+    del db
+    owner, stranger = create_user("duplicates-prelock-owner"), create_user("duplicates-prelock-stranger")
+    many = _people(owner, *(f"Zoe Example {index}" for index in range(30)), value="prelock@example.com")
+    locked: list[int] = []
+    original = Party.lock_merge_records.__func__  # type: ignore[attr-defined]
+
+    def spy(cls: Any, records: Any) -> None:
+        locked.append(len(records))
+        original(cls, records)
+
+    monkeypatch.setattr(Party, "lock_merge_records", classmethod(spy))
+
+    assert _merge(owner, many) == [("refused", None, "Choose two to 10 records to merge as one.")]
+    assert _merge(stranger, many[:10]) == [("refused", None, "A record is gone or you may not read it.")]
+    assert locked == []
+    assert [outcome for outcome, _survivor, _reason in _merge(owner, many[:2])] == ["merged"]
+    # The set that passes locks its two records (the verb's pass, then the merge's own, already held).
+    assert locked and set(locked) == {2}
