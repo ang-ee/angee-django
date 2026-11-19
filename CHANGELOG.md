@@ -10,6 +10,18 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Creating a `parties.Address` or `parties.Relationship` takes write on its party
+  (`create = party->write + admin->member`, evaluated on the unsaved row; a
+  relationship's party is its anchor). It was `authenticated`, so anyone who could
+  read a party (an identity reader, a per-row reader, a directory's contact reader)
+  could attach a row its owner does not read, and a two-way directory wrote it to
+  the remote card. Sync and imports run under system context and are unaffected.
+  A caller that attached rows to parties it only reads is now refused: the
+  console's Relationships page and the `create_relationship` MCP tool offer any
+  readable party, and so does a consumer page with a party picker over
+  `parties.Address`. The permission is schema revision 23: `rebac sync` after
+  compose.
+
 - Addons require django-compose 0.1.0.dev13, whose snapshot digest covers each
   addon's resolved path. A host that changes its sync from `--no-editable` to
   editable, or moves a source checkout, now recomposes on `compose --if-stale`;
