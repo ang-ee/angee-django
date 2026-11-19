@@ -26,8 +26,10 @@ class PartiesConfig(AppConfig):
         """Repair handle holders on every provision, after the resources load parties' install rules.
 
         ``resolve_stale_owners`` states each holder written onto its row, leaves a
-        confirmed or contested one for a person and re-resolves stale ones; it is
-        idempotent, so a deployment never depends on someone running it.
+        trashed, confirmed or contested one as it is and re-resolves stale ones; it
+        is idempotent, so a deployment never depends on someone running it. One run
+        writes at most ``HandleManager.REPAIR_LIMIT`` holders; past that, the
+        provision log says how many remain and the next provision continues.
         """
 
         context.call("resolve_stale_owners")

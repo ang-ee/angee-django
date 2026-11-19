@@ -33,9 +33,14 @@ record's, a directory's or an import's statement outranks it, kinds the aspect d
 not list rank below it. So the repair moves no address and clears no
 confirmation: it leaves a confirmed holder (only a person or a seed states the
 preferred link that keeps the flag) and a holder another party's applied statement
-contests for a person, and reports both. A trashed holder is stated for itself,
-a merged-away one for its survivor. A seed that moves or clears a holder withdraws
-the statement its earlier load made for the old one.
+contests for a person, and reports both. It leaves a trashed holder's address
+alone (resolution ignores a trashed party, so stating or re-resolving it would
+clear the row) and states it after a restore; a merged-away holder is stated for
+its survivor. One run writes at most `HandleManager.REPAIR_LIMIT` (500) holders;
+past the cap the command, and so the provision log, ends with "Stopped at the cap
+of N holder(s); M more await the next provision or resolve_stale_owners run", and
+the next run continues (`--limit` sets another cap). A seed that moves or clears a
+holder withdraws the statement its earlier load made for the old one.
 
 A card's `PHOTO` is stored as the person's avatar through storage's idempotent
 `File.objects.ingest_image` before the page transaction; a photo storage refuses

@@ -105,13 +105,18 @@ live in code docstrings.
   aspect ranks (below a person, a system of record, a directory and an import),
   so the repair leaves a confirmed holder and one another party's applied
   statement contests as they are, for a person, rather than clear the
-  confirmation or move the address; it states a trashed holder for itself and a
-  merged-away one for its survivor. It returns a `HolderRepair`, and the command
-  reports how many it stated, left confirmed, left contested and re-resolved
-  (`-v 2` lists the handles left). Every provision runs it
+  confirmation or move the address; it leaves a trashed holder's address alone,
+  neither stating nor re-resolving it (resolution ignores a trashed party, so
+  either would clear the row), states it after a restore, and states a
+  merged-away holder for its survivor. It returns a `HolderRepair`, and the
+  command reports how many it stated, left confirmed, left contested and
+  re-resolved (`-v 2` lists the handles left). Every provision runs it
   (`PartiesConfig.compose_provision`), after the install resources load the
-  rule; it is idempotent. Test fixtures that create a handle with `party=` still
-  write a bare holder.
+  rule; it is idempotent. One run writes at most `HandleManager.REPAIR_LIMIT`
+  (500) holders (`resolve_stale_owners(limit=)`, the command's `--limit`); past
+  the cap the command's last line, in the provision log too, says how many
+  remain (`HolderRepair.remaining`) and the next run continues. Test fixtures
+  that create a handle with `party=` still write a bare holder.
 
 - The UX guard accepts manifest `vocabulary` field tones by structure while rejecting local tone maps and switches.
 

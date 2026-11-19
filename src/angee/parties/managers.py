@@ -216,6 +216,8 @@ class HolderRepair(NamedTuple):
     """Handles whose holder was left as it is because another party's applied statement stands on the row."""
     resolved: int = 0
     """Holders whose statements no longer decided them, re-resolved."""
+    remaining: int = 0
+    """Holders a capped run left for the next one, at most this many (``limit``)."""
 
 
 class HandleQuerySet[HandleT: Handle](MergeableQuerySet[HandleT], AngeeHistoryQuerySet[HandleT]):
@@ -321,6 +323,9 @@ _HandleManagerBase = AngeeHistoryManager.from_queryset(HandleQuerySet)
 
 class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
     """Factory + upsert for handles (the contact-point write path)."""
+
+    REPAIR_LIMIT: ClassVar[int] = 500
+    """The most holders one holder repair writes by default (``resolve_stale_owners``); the next run continues."""
 
     def for_user(self, user: Any) -> Any:
         """Return the account's self-claimed handle for internal attribution."""
@@ -610,22 +615,23 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             )
         return handle
 
-    def state_stored_holders(self, handles: Iterable[Any] | None = None) -> HolderRepair:
+    def state_stored_holders(self, handles: Iterable[Any] | None = None, *, limit: int | None = None) -> HolderRepair:
         """State each stored holder's link as the ``stored_holder`` rule, so resolution keeps it; return what it did.
 
         A holder no current statement names (:meth:`HandleQuerySet.stored_holders`)
         gains that rule's normal statement at full confidence, with the handle as its
-        evidence, as named system work rechecked under the identity locks: a
-        merged-away holder for its survivor, a trashed one for itself (resolution
-        ignores a trashed party, so its row is unheld until the handle resolves
-        after a restore). Two holders are left as they are and reported, so the
-        repair moves no address and clears no confirmation. A confirmed one: only a
-        person or a seed states the preferred link that keeps the flag, and the
-        rule's normal statement would clear it. A contested one, on a row where
-        another live party's applied statement stands: the rule is the last kind
-        the handle aspect ranks (below a person, a system of record, a directory and
-        an import, above kinds it does not list), so that party would take the
-        address.
+        evidence, as named system work rechecked under the identity locks; a
+        merged-away holder is stated for its survivor. Three holders are left as
+        they are, so the repair moves no address and clears no confirmation. A
+        trashed one: resolution ignores a trashed party, so stating its link would
+        clear the row; the repair after a restore states it. A confirmed one,
+        reported: only a person or a seed states the preferred link that keeps the
+        flag, and the rule's normal statement would clear it. A contested one,
+        reported, on a row where another live party's applied statement stands: the
+        rule is the last kind the handle aspect ranks (below a person, a system of
+        record, a directory and an import, above kinds it does not list), so that
+        party would take the address. A run states at most ``limit`` holders and
+        counts the ones it did not reach as ``remaining``.
 
         ``handles`` are resource rows a load just wrote, and the holder each names
         is the seed's word. What an earlier load stated for a holder a row no
@@ -637,6 +643,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         party_model = apps.get_model("parties", "Party")
         statements = party_model.objects.handle_statements()
         stated = 0
+        remaining = 0
         confirmed: list[Any] = []
         contested: list[Any] = []
         with system_context(reason="parties.handle.state_stored_holders"):
@@ -651,13 +658,19 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             survivors = party_model.canonical_ids({party_id for _pk, party_id in pending})
             competing = statements.applied().filter(subject__is_trashed=False)
             source = None
-            for pk, party_id in pending:
+            for index, (pk, party_id) in enumerate(pending):
+                if limit is not None and stated >= limit:
+                    remaining = len(pending) - index
+                    break
                 holder = survivors.get(party_id, party_id)
                 with transaction.atomic():
                     locked, parties = party_model.objects.lock_identity_rows(party_ids=(holder,), handle_ids=(pk,))
                     row = locked.get(pk)
+                    party = parties.get(holder)
                     if (
                         row is None
+                        or party is None
+                        or party.is_trashed
                         or (handles is None and row.party_id != party_id)
                         or naming.filter(handle_id=pk, subject_id=holder).exists()
                     ):
@@ -669,9 +682,9 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                         contested.append(pk)
                         continue
                     source = source or party_model.objects.rule_source("stored_holder")
-                    party_model.objects.assert_handle(parties[holder], row, asserted_by=source, evidence=[row])
+                    party_model.objects.assert_handle(party, row, asserted_by=source, evidence=[row])
                 stated += 1
-        return HolderRepair(stated, tuple(confirmed), tuple(contested))
+        return HolderRepair(stated, tuple(confirmed), tuple(contested), remaining=remaining)
 
     @staticmethod
     def _withdraw_moved_holders(holders: Mapping[Any, Any]) -> int:
@@ -704,30 +717,40 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         ]
         return int(party_model.statements.withdraw_unsupported(source, kept, aspect="handle"))
 
-    def resolve_stale_owners(self) -> HolderRepair:
+    def resolve_stale_owners(self, *, limit: int | None = None) -> HolderRepair:
         """Make every holder the projection of its statements again; return what was stated, left and re-resolved.
 
         Stored holders are stated first (:meth:`state_stored_holders`); the ones it
-        leaves (confirmed, contested) keep their row as it is for a person to
-        decide. A holder whose statements no longer decide it (a withdrawn link, a
-        suggestion below review confidence) re-resolves. Idempotent: a second run
-        states and re-resolves nothing.
+        leaves (trashed, confirmed, contested) keep their row as it is. A holder
+        whose statements no longer decide it (a withdrawn link, a suggestion below
+        review confidence) re-resolves, unless it is trashed: resolution ignores a
+        trashed party and would clear its address. A run writes at most ``limit``
+        holders, stated and re-resolved together, and reports the rest as
+        ``remaining`` for the next run, which continues where it stopped.
+        Idempotent: a second complete run states and re-resolves nothing.
         """
 
-        repair = self.state_stored_holders()
+        repair = self.state_stored_holders(limit=limit)
+        budget = None if limit is None else limit - repair.stated
         statements = apps.get_model("parties", "Party").objects.handle_statements()
         decisive = statements.applied().filter(handle_id=OuterRef("pk"), subject_id=OuterRef("party_id"))
         stale = (
             self.filter(party__isnull=False)
+            .exclude(party__is_trashed=True, party__merged_into__isnull=True)
             .exclude(Exists(decisive))
             .exclude(pk__in=self.stored_holders().values("pk"))
             .order_by("pk")
         )
         resolved = 0
         for handle in stale.iterator():
+            if budget is not None and resolved >= budget:
+                break
             handle.resolve()
             resolved += 1
-        return repair._replace(resolved=resolved)
+        remaining = repair.remaining
+        if budget is not None and resolved >= budget:
+            remaining += stale.count()
+        return repair._replace(resolved=resolved, remaining=remaining)
 
     def fill_avatar(self, report: AvatarReport) -> bool:
         """Set the avatar a source reports on its handle; return whether it changed.

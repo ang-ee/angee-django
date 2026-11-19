@@ -828,7 +828,8 @@ class Handle(
     (``HandleManager.state_stored_holders``) after a resource load and by the
     ``resolve_stale_owners`` repair that provisioning runs, except a confirmed one
     or one another party's applied statement contests, which the repair leaves for
-    a person; until then a resolution of the handle clears it.
+    a person, and a trashed one, left until a restore; until then a resolution of
+    the handle clears it.
     """
     party_link_confirmed = models.BooleanField(default=False, editable=False)
     """Whether the winning link materialised into ``party`` is human-confirmed."""
