@@ -722,7 +722,7 @@ def test_serving_reads_with_the_mounts_own_credential_while_it_is_connected(
     assert set(fake.bearers) == {TOKEN}
 
     fake.tokens.add("rotated-token")
-    drive_env.credential.update_material(access_token="rotated-token")
+    drive_env.credential.replace_material({"access_token": "rotated-token"})
     fake.bearers.clear()
     assert _read(storage, "x-served") == b"served"
     assert set(fake.bearers) == {"rotated-token"}

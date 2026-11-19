@@ -24,6 +24,19 @@ live in code docstrings.
   documented as holding the connection facts discovery learned, beside
   live-session state.
 
+- `angee.integrate`: every way a secret is re-entered is discovered again.
+  `CredentialManager.create_local_credential` with a name the user's credential
+  already has (the console's create, connect flows that key their credential by
+  name) replaced its material, and even its kind, without the integrations using
+  it discovering again. That update and `Credential.replace_material` now share
+  one owner, `CredentialManager.reenter_secret`. Discovery stores the material it
+  derived through `CredentialManager.store_derived` instead, which sends no
+  integration to discover again, so two that derive a credential of one name do
+  not loop. `Credential.update_material` refuses the kind's own input fields
+  (`api_key`, `password`, …) and points to `replace_material`. Known gap: a
+  `jwt_bearer` credential's stored signing fields are not its input field
+  (`key_file`), so `update_material` still accepts them.
+
 - The UX guard accepts manifest `vocabulary` field tones by structure while rejecting local tone maps and switches.
 
 - Integrate compares synchronized JSON as JSON values (`json_equal` in

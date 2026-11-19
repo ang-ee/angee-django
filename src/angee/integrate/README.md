@@ -276,10 +276,14 @@ Connection discovery locates the external resource; a REBAC binding grants a
 relationship. Integration owns the `discovery_*` handshake, and the task is
 named `integrate.discover_connection`. Every credential attach
 enters `await_discovery`, clears completion and advances `discovery_generation`.
-So does a re-entered secret: `Credential.replace_material` locks the integrations
-the credential serves before the credential, as an attach does, and in the same
-transaction each whose capability requires discovery awaits it again, so none
-syncs on facts found with the old secret. No-op discovery settles synchronously.
+So does a re-entered secret, on either path: `Credential.replace_material`, and
+`create_local_credential` with a name the user's credential already has (the
+console's create, a connect flow that keys its credential by name). Both go
+through `CredentialManager.reenter_secret`, which locks the integrations the
+credential serves before the credential, as an attach does, and in the same
+transaction sends each whose capability requires discovery to await it again, so
+none syncs on facts found with the old secret. `update_material` refuses the
+kind's own input fields. No-op discovery settles synchronously.
 The worker runs
 `IntegrationImpl.discover_connection(credential) -> ConnectionDiscovery` outside
 transactions under the sync advisory lock. The result contains adapter-owned
@@ -291,7 +295,8 @@ integration, verifies both original task values, and invokes the adapter's
 database work. An adapter that keeps the remote account it found refuses another
 there with `IntegrationError`; discovery then fails with that operator message and
 sync stays refused. Integrate persists derived material through the credential
-manager and `attach_connection`; adapters never persist credentials or implement
+manager (`store_derived`, which sends no integration already using that name to
+discover again) and `attach_connection`; adapters never persist credentials or implement
 the generation fence. Integrate then settles and sends
 `signals.discovery_finished.send(sender=type(instance), instance=instance)` on commit.
 The source grant is retained in `discovery_credential` so reconnect can regenerate

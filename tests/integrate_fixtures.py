@@ -46,9 +46,9 @@ class ConnectionAdapter(BridgeImpl):
             raise RuntimeError("private provider diagnostic")
         derived = None
         if self.bridge.config.get("derived"):
-            derived = DerivedCredential(
-                kind="static_token", name=f"Resource {self.bridge.pk}", material={"api_key": "fake"},
-            )
+            # ``derived_name`` lets two integrations derive a credential of one name.
+            name = self.bridge.config.get("derived_name") or f"Resource {self.bridge.pk}"
+            derived = DerivedCredential(kind="static_token", name=name, material={"api_key": "fake"})
         data = {"display_name": "Discovered resource"}
         # A scripted provider: ``accounts`` names the remote account each secret reads.
         if account := self.bridge.config.get("accounts", {}).get(credential.secret_value()):

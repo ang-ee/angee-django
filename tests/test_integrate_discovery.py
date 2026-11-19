@@ -1,5 +1,6 @@
 """Connection discovery owns attachment, fenced apply and bounded retries."""
 
+import importlib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import timedelta
@@ -40,10 +41,23 @@ from angee.integrate.signals import discovery_finished
 from angee.integrate.streams import BridgeSyncError
 from angee.integrate.testing.http import mock_transport
 from angee.jobs.celery import app as celery_app
-from tests.conftest import Credential, create_platform_admin, make_addon, make_integration
+from tests.conftest import (
+    Credential,
+    addon_schema,
+    create_platform_admin,
+    create_user,
+    make_addon,
+    make_integration,
+)
 from tests.integrate_fixtures import CONNECTION_CLASSES, ConnectionBridge, LiveConnectionAdapter
 
 pytestmark = pytest.mark.django_db(transaction=True)
+
+CREATE_CREDENTIAL = """
+    mutation CreateCredential($data: CredentialInput!) {
+        create_credential(data: $data) { id }
+    }
+"""
 
 
 @pytest.fixture(autouse=True)
@@ -396,6 +410,79 @@ def test_a_secret_of_another_account_reaches_the_operator_as_failed_discovery(br
     assert not bridge.discovery_ready and not bridge.discovery_pending
     assert bridge.subscription_state["account"] == "account-one"
     assert bridge.next_sync_at is None
+
+
+@pytest.mark.parametrize("path", ["connect", "console"])
+def test_a_reused_credential_name_awaits_discovery_again_for_the_integration_using_it(bridge, sent_tasks, path):
+    with system_context(reason="test credential name in use"):
+        credential = Credential.objects.create_local_credential(
+            bridge.owner, kind="static_token", name="Shared key", material={"api_key": "first"},
+        )
+        bridge.attach_credential(credential)
+        assert settle(bridge)["ok"]
+        generation = bridge.discovery_generation
+        sent_tasks.clear()
+    if path == "connect":
+        # A connect flow keys its credential by name and may change its kind.
+        with system_context(reason="test connect reusing the name"), transaction.atomic():
+            Credential.objects.create_local_credential(
+                bridge.owner, kind="basic_auth", name="Shared key",
+                material={"username": "ada@example.com", "password": "re-entered"},
+            )
+    else:
+        schema = addon_schema(
+            importlib.import_module("angee.integrate.schema").schemas, "console",
+            importlib.import_module("angee.iam.schema").schemas,
+        )
+        data = {"name": "Shared key", "kind": "static_token", "api_key": "re-entered"}
+        data["user"] = public_id_of(bridge.owner)
+        admin = create_platform_admin("reuse")
+        created = result_data(execute_schema(schema, CREATE_CREDENTIAL, {"data": data}, user=admin))
+        assert created["create_credential"]["id"] == public_id_of(credential)
+    with system_context(reason="test re-entered by name"):
+        bridge.refresh_from_db()
+        credential.refresh_from_db()
+        assert bridge.credential_id == credential.pk
+        assert bridge.discovery_generation == generation + 1 and bridge.discovery_pending
+        task = {"integration_pk": bridge.pk, "credential_pk": credential.pk, "generation": generation + 1}
+        assert [(name, options["kwargs"]) for name, options in sent_tasks] == [(DISCOVERY_TASK, task)]
+        assert not bridge.mark_sync_started(now=timezone.now())
+    assert credential.secret_value() == "re-entered"
+
+
+def test_two_integrations_deriving_one_credential_name_do_not_rediscover_each_other(bridge, sent_tasks):
+    with system_context(reason="test one derived name"):
+        sibling = ConnectionBridge.objects.create(
+            vendor=bridge.vendor, owner=bridge.owner, credential=bridge.credential, lifecycle="paused",
+        )
+        for row in (bridge, sibling):
+            row.config = {"derived": True, "derived_name": "Shared resource"}
+            row.save(update_fields=["config"])
+        assert settle(bridge)["ok"]
+        generation = bridge.discovery_generation
+        sent_tasks.clear()
+        # The sibling's discovery stores the same derived credential again.
+        assert settle(sibling)["ok"]
+        bridge.refresh_from_db()
+    assert bridge.discovery_generation == generation and bridge.discovery_ready
+    assert sibling.discovery_ready and sibling.credential_id == bridge.credential_id
+    assert sent_tasks == []
+
+
+@pytest.mark.parametrize(
+    ("kind", "material", "secret"),
+    [("static_token", {"api_key": "x"}, "api_key"), ("basic_auth", {"username": "ada", "password": "x"}, "password")],
+)
+def test_update_material_merges_transient_keys_and_refuses_the_kinds_secret(kind, material, secret):
+    owner = create_user(f"transient-{kind}")
+    with system_context(reason="test transient credential material"):
+        credential = Credential.objects.create_local_credential(owner, kind=kind, name="Paired", material=material)
+        credential.update_material(recovery_key="transient-answer")
+        for value in ("rotated", None):
+            with pytest.raises(ValueError, match="replace_material"):
+                credential.update_material(**{secret: value})
+        credential.refresh_from_db()
+    assert credential.reveal() == {**material, "recovery_key": "transient-answer"}
 
 
 def test_derived_material_applies_after_fencing_and_retains_the_source_for_reconnect(bridge):

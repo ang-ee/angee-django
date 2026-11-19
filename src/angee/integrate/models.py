@@ -89,7 +89,7 @@ from angee.graphql.capabilities import held_permissions
 from angee.graphql.mixins import ImplementationChoicesMixin
 from angee.integrate.constants import DISCOVERY_ATTEMPT_LIMIT, DISCOVERY_TASK, DISCOVERY_TASK_EXPIRES
 from angee.integrate.credentials import CredentialKind, CredentialKindHandler
-from angee.integrate.discovery import ConnectionDiscovery
+from angee.integrate.discovery import ConnectionDiscovery, DerivedCredential
 from angee.integrate.errors import (
     INTEGRATION_FAILURE_MESSAGE,
     IntegrationError,
@@ -1215,6 +1215,24 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         ]
         return credential, integrations
 
+    @contextmanager
+    def reenter_secret(self, credential_pk: int) -> Iterator[Any]:
+        """Hold one re-entry of ``credential_pk``'s secret; yield the credential, locked, to write it.
+
+        A new secret may read another remote account than the one discovery
+        found, so once the caller's write is done, every integration the
+        credential serves whose capability requires connection discovery awaits
+        it again (:meth:`Integration.await_discovery`) and syncs only once it
+        settles. They lock before the credential
+        (:meth:`lock_with_served_integrations`). Runs inside the caller's transaction.
+        """
+
+        credential, integrations = self.lock_with_served_integrations(credential_pk)
+        yield credential
+        for integration in integrations:
+            if integration.requires_connection_discovery:
+                integration.await_discovery()
+
     def live_oauth_for_user(
         self, user: Any, oauth_client: Any, *, external_account: Any, oauth_scopes: Iterable[str] = (),
     ) -> Any | None:
@@ -1369,28 +1387,38 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         The provider-less counterpart to :meth:`upsert_for_user`: ``oauth_client`` is
         ``NULL`` (the kind/provider invariant forbids one), and ``name`` is the
         credential's identity. OAuth credentials are minted by the connect/login flow only.
+        An existing name re-enters that credential's secret, and may change its
+        kind: its material is replaced through :meth:`reenter_secret`, so the
+        integrations it serves discover again.
         """
 
-        operation_values, update_values = self._local_credential_values(
-            kind=kind,
-            name=name,
-            material=material,
-            fields=fields,
+        values, create_values = self._local_credential_values(kind=kind, name=name, material=material, fields=fields)
+        with system_context(reason=self._REASON), transaction.atomic():
+            identity = {"user_id": user.pk, "name": name, "oauth_client": None}
+            instance, created = self.get_or_create(**identity, defaults=create_values)
+            if not created:
+                with self.reenter_secret(instance.pk) as instance:
+                    for field, value in values.items():
+                        setattr(instance, field, value)
+                    instance.save(update_fields=[*values, "updated_at"])
+        return instance
+
+    def store_derived(self, user: Any, derived: DerivedCredential) -> Any:
+        """Create or update the provider-less credential ``derived`` names for ``user``, keyed like a local one.
+
+        :meth:`Integration.finish_discovery` stores what a discovery derived
+        through this, never through :meth:`create_local_credential`: the material
+        comes from the discovery that is settling, not from a re-entered secret, so
+        the integrations already using a credential of that name are not sent to
+        discover again (two that derive one name would rediscover each other).
+        """
+
+        values, create_values = self._local_credential_values(
+            kind=derived.kind, name=derived.name, material=dict(derived.material), fields={},
         )
-        create_values = {
-            "oauth_client": None,
-            "external_account": None,
-            **self._blank_create_values(),
-            **operation_values,
-            **update_values,
-        }
         with system_context(reason=self._REASON), transaction.atomic():
             instance, _created = self.update_or_create(
-                user_id=user.pk,
-                name=name,
-                oauth_client=None,
-                defaults={**operation_values, **update_values},
-                create_defaults=create_values,
+                user_id=user.pk, name=derived.name, oauth_client=None, defaults=values, create_defaults=create_values,
             )
         return instance
 
@@ -1405,24 +1433,8 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
     ) -> Any:
         """Return a validated, unsaved provider-less credential for external preflight."""
 
-        operation_values, update_values = self._local_credential_values(
-            kind=kind,
-            name=name,
-            material=material,
-            fields=fields,
-        )
-        create_values = {
-            "external_account": None,
-            **self._blank_create_values(),
-            **operation_values,
-            **update_values,
-        }
-        return self.model(
-            user=user,
-            name=name,
-            oauth_client=None,
-            **create_values,
-        )
+        _values, create_values = self._local_credential_values(kind=kind, name=name, material=material, fields=fields)
+        return self.model(user=user, name=name, oauth_client=None, **create_values)
 
     def _local_credential_values(
         self,
@@ -1432,7 +1444,7 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         material: dict[str, Any],
         fields: dict[str, Any],
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Validate one local credential and return its owned operation/update values."""
+        """Validate one local credential; return the values an update stores and those a create stores."""
 
         handler = CredentialKind(kind).handler
         if handler.kind == CredentialKind.OAUTH:
@@ -1440,7 +1452,8 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         if not name:
             raise ValidationError({"name": "This field is required."})
         material, update_values = self._assemble_values(handler, material, fields)
-        return {"kind": handler.kind, "material": self.model.encode_material(material)}, update_values
+        values = {"kind": handler.kind, "material": self.model.encode_material(material), **update_values}
+        return values, {"external_account": None, **self._blank_create_values(), **values}
 
     def _assemble_values(
         self,
@@ -1671,10 +1684,14 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         Kind handlers validate required keys at credential creation; transient
         extra keys remain permitted here. A transient key (an answer a live
         session consumes) is not the kind's secret, so the integrations this
-        credential serves keep their discovery; the secret is re-entered through
-        :meth:`replace_material`.
+        credential serves keep their discovery. The kind's own input fields
+        (:meth:`CredentialKindHandler.input_material_fields`) are refused: the
+        secret is re-entered through :meth:`replace_material`, which sends them
+        to discover again.
         """
 
+        if secret := sorted(changes.keys() & set(self.handler.input_material_fields())):
+            raise ValueError(f"Re-enter {', '.join(secret)} through replace_material(), not update_material().")
         self._merge_material(changes)
 
     def _merge_material(self, changes: Mapping[str, Any], fields: Mapping[str, Any] | None = None) -> None:
@@ -1708,14 +1725,9 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         derives from it (:meth:`CredentialKindHandler.upsert_fields`) in the same
         save — the row, its kind, and its owner stay as they are, so every
         integration attached to it keeps its attachment. Only material the
-        handler explicitly carries forward survives replacement.
-
-        A new secret may read another remote account than the one discovery
-        found, so in the same transaction every integration this credential
-        serves whose capability requires connection discovery awaits it again
-        (:meth:`Integration.await_discovery`), and syncs only once it settles.
-        They lock before this row, as an attachment does
-        (:meth:`CredentialManager.lock_with_served_integrations`).
+        handler explicitly carries forward survives replacement. In the same
+        transaction the integrations it serves discover again
+        (:meth:`CredentialManager.reenter_secret`).
         """
 
         handler = self.handler
@@ -1724,14 +1736,11 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         assigned = handler.upsert_fields(replacement)
         updated = ["material", *assigned, "updated_at"]
         with system_context(reason="integrate.credential.replace"), transaction.atomic():
-            row, integrations = type(self).objects.lock_with_served_integrations(self.pk)
-            row.material = self.encode_material(handler.carry_forward(replacement, row.reveal()))
-            for name, value in assigned.items():
-                setattr(row, name, value)
-            row.save(update_fields=updated)
-            for integration in integrations:
-                if integration.requires_connection_discovery:
-                    integration.await_discovery()
+            with type(self).objects.reenter_secret(self.pk) as row:
+                row.material = self.encode_material(handler.carry_forward(replacement, row.reveal()))
+                for name, value in assigned.items():
+                    setattr(row, name, value)
+                row.save(update_fields=updated)
             self.refresh_from_db(fields=updated)
 
     def auth_headers(self, *, scopes: Collection[str] = ()) -> dict[str, str]:
@@ -3483,13 +3492,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
                     if credential_pk is None:
                         raise IntegrationError("No credential is attached.")
                     source = apps.get_model("integrate", "Credential").objects.get(pk=credential_pk)
-                    derived = result.credential
-                    credential = type(source).objects.create_local_credential(
-                        source.user,
-                        kind=derived.kind,
-                        name=derived.name,
-                        material=dict(derived.material),
-                    )
+                    credential = type(source).objects.store_derived(source.user, result.credential)
                     row.attach_connection(
                         credential,
                         account=source.external_account,
