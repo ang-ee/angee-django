@@ -27,7 +27,7 @@ export function useWorkspaceActions(refetch: () => void): {
       perform: (workspace) => runDaemon({ run: syncBase.run, field: "workspaceSyncBase", variables: { name: workspace.name } }),
     },
     {
-      id: "destroy", label: t("workspaces.destroy"), danger: true,
+      id: "destroy", label: t("workspaces.destroy"), danger: true, placement: "menu",
       confirm: { title: t("workspaces.destroy.confirm.title"), body: (workspace) => t("workspaces.destroy.confirm.body", { name: workspace.name }) },
       perform: (workspace) => runDaemon({ run: destroy.run, field: "delete_workspaces_by_pk", variables: { id: workspace.id } }),
     },

@@ -91,7 +91,7 @@ export function ConditionalMutationButton<
     id: field,
     label,
     icon: glyph,
-    placement: "toolbar",
+    placement: variant === "primary" ? undefined : "toolbar",
     danger: variant === "danger",
     primary: variant === "primary",
     ...(confirm ? { confirm } : {}),

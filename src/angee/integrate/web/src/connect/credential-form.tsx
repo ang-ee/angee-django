@@ -137,6 +137,7 @@ export function CredentialForm({
           />
           <Action
             id="reveal"
+            placement="menu"
             label={t("credentials.action.reveal")}
             icon="eye"
             run={reveal}

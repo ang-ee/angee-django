@@ -374,12 +374,15 @@ export function SpacesPage(): React.ReactElement {
         <Field name="description" />
         <Action
           id="visibility-public"
+          placement="menu"
           label={t("group.makePublic")}
+          confirm={{ title: t("group.makePublic"), body: t("group.makePublicConfirmBody") }}
           set={{ visibility: "public" }}
           visibleWhen={(record) => record.visibility !== "PUBLIC"}
         />
         <Action
           id="visibility-private"
+          placement="menu"
           label={t("group.makePrivate")}
           set={{ visibility: "private" }}
           visibleWhen={(record) => record.visibility !== "PRIVATE"}

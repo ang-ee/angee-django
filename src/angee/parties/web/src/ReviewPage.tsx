@@ -55,6 +55,8 @@ export function ReviewPage(): React.ReactElement {
             <Alert tone="info" className="mb-3">{t("identity.authenticationScope")}</Alert>
             <ListView<SuggestionRow>
               resource="parties.PartyStatement"
+              // Statements are reviewed per row; no action consumes a selection.
+              selectable={false}
               fields={[
                 "id",
                 "handle.value",

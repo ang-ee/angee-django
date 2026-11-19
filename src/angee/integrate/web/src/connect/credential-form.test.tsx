@@ -1,12 +1,13 @@
 // @vitest-environment happy-dom
 
 import { render } from "@testing-library/react";
-import type { ActionContext, FormSubmit, RecordActionRunner, UseRecordActionOptions } from "@angee/ui";
+import type { ActionContext, ActionDescriptor, FormSubmit, RecordActionRunner, UseRecordActionOptions } from "@angee/ui";
 import * as React from "react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   fields: [] as Array<Record<string, unknown>>,
+  actions: [] as ActionDescriptor[],
   revealCredential: vi.fn(async () => ({ reveal_credential: { secret: "test-secret" } })),
   reveal: vi.fn(async () => undefined),
   useAuthoredMutation: vi.fn(),
@@ -23,7 +24,7 @@ vi.mock("@angee/refine", async (importOriginal) => ({
 
 vi.mock("@angee/ui", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/ui")>()),
-  Action: () => null,
+  Action: (action: ActionDescriptor) => { mocks.actions.push(action); return null; },
   Field: (props: Record<string, unknown>) => {
     mocks.fields.push(props);
     return null;
@@ -55,6 +56,7 @@ interface FieldLike {
 describe("credentialCreateForm", () => {
   beforeEach(() => {
     mocks.fields = [];
+    mocks.actions = [];
     mocks.createSubmit = undefined;
     mocks.createCredential.mockReset().mockResolvedValue({ create_credential: { id: "credential-1" } });
     mocks.useAuthoredResourceMutation.mockReset().mockReturnValue([
@@ -94,6 +96,7 @@ describe("credentialCreateForm", () => {
     const Component = credentialCreateForm.Component;
     render(<Component resource={credentialCreateForm.resource} id="credential-1" />);
 
+    expect(mocks.actions.find(({ id }) => id === "reveal")?.placement).toBe("menu");
     expect(mocks.useAuthoredMutation).toHaveBeenCalledWith(
       IntegrateRevealCredential,
       { transient: true },

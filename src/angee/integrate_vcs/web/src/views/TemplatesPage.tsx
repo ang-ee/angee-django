@@ -11,7 +11,8 @@ const TEMPLATE_SOURCE_DEFAULTS = { kind: TEMPLATE_SOURCE_KIND };
 
 function templateList(t: ReturnType<typeof useIntegrateVcsT>): React.ReactElement {
   return (
-    <List resource={TEMPLATE_MODEL} pageSize={50}>
+    // Discovered templates are read-only and have no selection actions.
+    <List resource={TEMPLATE_MODEL} selectable={false} pageSize={50}>
       <Facet field="source" label={t("col.source")} />
       <Column field="kind" />
       <Column field="name" />

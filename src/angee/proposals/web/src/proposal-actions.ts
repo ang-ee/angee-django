@@ -45,6 +45,7 @@ export function useProposalCeremonyActions(): readonly ActionDescriptor[] {
     () => [
       {
         id: "submit-proposal",
+        primary: true,
         label: t("proposal.action.submit"),
         icon: "proposals-submit",
         run: submitRun,

@@ -179,6 +179,7 @@ export const enMessagingMessages: Record<string, string> = {
   "threads.makePrivate": "Make private",
   "threads.makeUnlisted": "Make unlisted",
   "threads.makePublic": "Make public",
+  "threads.makePublicConfirmBody": "This widens who can read this thread. Make it public?",
   "threads.makeRestricted": "Make restricted",
 
   // ChannelsPage — connected message channels.

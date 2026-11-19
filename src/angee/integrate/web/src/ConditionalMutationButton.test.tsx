@@ -49,7 +49,7 @@ vi.mock("@angee/ui", () => ({
 import { ConditionalMutationButton } from "./ConditionalMutationButton";
 
 type Declared = {
-  id: string; label: React.ReactNode; placement: string; danger: boolean; primary: boolean;
+  id: string; label: React.ReactNode; placement?: string; danger: boolean; primary: boolean;
   confirm?: unknown; args?: unknown;
   run?: () => Promise<unknown>; submit?: (values: Record<string, unknown>) => Promise<unknown>;
 };
@@ -107,6 +107,11 @@ describe("ConditionalMutationButton", () => {
       id: "mark_integration_disconnected", danger: true,
       confirm: { title: "Disconnect this integration?", body: "It stops syncing.", danger: true },
     });
+  });
+
+  test("a primary verb lets primary supply its toolbar placement", () => {
+    render(<ConditionalMutationButton field="pause_integration" label="Pause" when={() => true} variant="primary" />);
+    expect(mocks.verbs.at(-1)).toMatchObject({ primary: true, placement: undefined });
   });
 
   test("rejects a destructive verb that declares no confirm", () => {

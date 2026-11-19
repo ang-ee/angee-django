@@ -108,6 +108,8 @@ export function ModelsPage(): ReactElement {
   return (
     <ListView<ModelResourceRow>
       resource="platform.Model"
+      // Composed model metadata is read-only and has no selection actions.
+      selectable={false}
       columns={columns(t, routeHref)}
       // Render-only reads (see the frontend guidelines' undeclared-field rule).
       fields={["addon_id"]}
