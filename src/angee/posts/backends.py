@@ -292,7 +292,7 @@ class FeedBackend(BridgeImpl, HttpClientMixin):
         transient=True and retry_after=...), a rejection (permanent
         IntegrationError), CursorInvalid, or SemanticError for a record-local read
         refusal. Any other refused answer, a 3xx included, is integrate's refusal:
-        a 429 transient, any other status permanent. A refused answer whose body
+        transient or permanent by its status rule. A refused answer whose body
         is not a JSON object runs the predicates with empty data. Predicate
         exceptions propagate. All public messages must be bounded and safe.
 

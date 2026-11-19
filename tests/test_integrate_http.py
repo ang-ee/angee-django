@@ -739,8 +739,24 @@ def _answer(answer: httpx2.Response | Exception) -> Any:
             "Example API returned an oversized response.", id="oversized-is-permanent",
         ),
         pytest.param(
-            httpx2.ConnectError("refused"), "unreachable", None, True, None,
-            "Example API could not be reached.", id="transport-failure",
+            httpx2.Response(408), "status", 408, True, None,
+            "Example API is temporarily unavailable (HTTP 408).", id="a-request-timeout-may-be-repeated",
+        ),
+        pytest.param(
+            httpx2.Response(501), "status", 501, False, None,
+            "Example API refused the request (HTTP 501).", id="a-method-not-implemented-is-permanent",
+        ),
+        pytest.param(
+            httpx2.Response(204), "unreadable", None, False, None,
+            "Example API returned an unreadable response.", id="a-typed-request-answered-with-no-content",
+        ),
+        pytest.param(
+            httpx2.ReadTimeout("slow"), "unreachable", None, True, None,
+            "Example API did not answer.", id="a-transport-failure-after-sending",
+        ),
+        pytest.param(
+            httpx2.ConnectError("refused"), "not_sent", None, True, None,
+            "Example API could not be reached.", id="a-connect-failure-sent-nothing",
         ),
         pytest.param(
             RequestNotSentError(), "not_sent", None, True, None,

@@ -154,8 +154,8 @@ record-local refusal. Definite temporary refusals use
 `IntegrationError(transient=True, retry_after=...)`; permanent refusals use
 `IntegrationError`, cursor failures use `CursorInvalid`, and record-local reads
 may use `SemanticError`. Predicate exceptions propagate. Any other refused answer,
-a 3xx included, is integrate's refusal: a 429 is transient, any other status
-permanent. A refused answer whose body is not a JSON object runs both predicates
+a 3xx included, is integrate's refusal, transient or permanent by its status
+rule (a 429 waits). A refused answer whose body is not a JSON object runs both predicates
 with empty data. All exception messages/codes must be safe and bounded. A
 transient answer waits `retry_delay(response)`, defaulting to
 `self.retry_after(response)` (the answer's `Retry-After`, else one minute);

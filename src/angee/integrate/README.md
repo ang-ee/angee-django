@@ -312,8 +312,9 @@ until their next attachment or Resume. There is no separate polling repair scan.
 A vendor's JSON request is `HttpClient.request_model` ([outbound HTTP](http.py)):
 one pinned, size-capped request whose answer is validated into a Pydantic model;
 a capped request asks for an unencoded answer. Whatever brings it no usable
-answer is one `HttpRefusal`, classified once: a transport failure, a 429 or a
-5xx is transient and waits for the answer's `Retry-After`; any other status, and
+answer is one `HttpRefusal`, classified once: a transport failure, a 408, a 429
+or a 5xx other than 501 and 505 is transient and waits for the answer's
+`Retry-After`; any other status, and
 a success that is over the cap, cannot be decoded or does not validate, are
 permanent, because the same request brings the same answer. The status decides
 before the body does: a refused answer whose body is over the cap or cannot be
@@ -334,7 +335,8 @@ used instead of the answer's `Retry-After` and implying transience. The
 refusal's `headers` are a read-only copy of the answer's without the credential
 and cookie headers, and neither its `repr` nor any owner message shows a header
 value. A refusal keeps the failure that stopped its request: its `cause` tells a request
-`not_sent` from one `unreachable` after it may have been sent. A request the
+`not_sent` ("could not be reached") from one `unreachable` after it may have
+been sent ("did not answer"). A request the
 HTTP library will not build, a header value it cannot encode or will not send,
 is `not_sent` and permanent (`RequestNotBuiltError`), worded as a request that
 could not be sent as configured; it chains none of the library's text, which

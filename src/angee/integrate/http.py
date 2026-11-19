@@ -218,15 +218,17 @@ class HttpRefusal:
     @property
     def cause(self) -> Literal["status", "not_sent", "unreachable", "oversized", "unreadable"]:
         """What stopped the request: a ``"status"``, or a failure. ``"not_sent"`` left no request bytes, so
-        even a write may be sent again: a connection that could not be made, or a request the HTTP library
-        would not build (:class:`RequestNotBuiltError`); ``"unreachable"``, any other transport failure, may
-        have taken effect; ``"oversized"`` is a success answer over the byte cap; ``"unreadable"`` is a success
-        answer whose body httpx2 cannot decode or does not validate.
+        even a write may be sent again: a connection that could not be made (:class:`RequestNotSentError`, or
+        httpx2's own connect failure from a transport other than the pinned one), or a request the HTTP library
+        would not build (:class:`RequestNotBuiltError`); ``"unreachable"``, any other transport failure (a read
+        timeout, a dropped connection), brought no answer and may have taken effect; ``"oversized"`` is a success
+        answer over the byte cap; ``"unreadable"`` is a success answer whose body httpx2 cannot decode or does not
+        validate.
         """
 
         if self.status is not None:
             return "status"
-        if isinstance(self.failure, RequestNotSentError):
+        if isinstance(self.failure, (RequestNotSentError, httpx2.ConnectError, httpx2.ConnectTimeout)):
             return "not_sent"
         if isinstance(self.failure, ResponseTooLargeError):
             return "oversized"
@@ -253,8 +255,10 @@ class HttpRefusal:
         if isinstance(self.failure, RequestNotBuiltError):
             return f"The request to {service} could not be sent as configured."
         cause = self.cause
-        if cause in ("not_sent", "unreachable"):
+        if cause == "not_sent":
             return f"{service} could not be reached."
+        if cause == "unreachable":
+            return f"{service} did not answer."
         if cause == "oversized":
             return f"{service} returned an oversized response."
         if cause == "unreadable":
@@ -734,7 +738,9 @@ class HttpClient:
         ``json`` is the body; ``Accept: application/json`` is sent unless
         ``headers`` names another. Every :class:`HttpRefusal` (a transport failure,
         a non-success status whatever its body, a success over ``max_bytes``, one
-        that cannot be decoded or does not validate) raises what ``error`` returns for it: the caller's
+        that cannot be decoded or does not validate, a 204 or any success with no
+        JSON body included: send a request that may answer without one through
+        :meth:`request`) raises what ``error`` returns for it: the caller's
         ``IntegrationError`` (:meth:`HttpRefusal.as_error`), or a domain signal it
         owns (a ``FileNotFoundError`` for a 404). The URL gate's and address
         policy's ``ValidationError`` propagate.

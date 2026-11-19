@@ -12,8 +12,11 @@ live in code docstrings.
 
 - `angee.integrate.http` owns a vendor's typed JSON request
   (`HttpClient.request_model`) and one rule for a refused answer
-  (`HttpRefusal`): a transport failure, a 429 or a 5xx is transient and waits
-  for `Retry-After`; a success that is oversized or unreadable, a body httpx2
+  (`HttpRefusal`): a transport failure, a 408, a 429 or a 5xx other than 501
+  and 505 is transient and waits for `Retry-After` (`is_transient_status`: a
+  408 may be repeated, a 501 or 505 refuses the request itself); a transport
+  failure after sending is worded "<service> did not answer.", a connect
+  failure "<service> could not be reached."; a success that is oversized or unreadable, a body httpx2
   cannot decode included, is permanent; an adapter that reads one record per
   request makes that record's oversized or unreadable answer the record's
   refusal (Notion does). The status decides before the
@@ -50,8 +53,9 @@ live in code docstrings.
   returns the failure it was handed has it raised unchanged.
   Google Drive and Google Calendar word a file's or an event's refusal in their
   own phrases, never Google's reason. Capped JSON requests, GitHub's and
-  OAuth's included, ask for an unencoded answer, and `is_transient_status`
-  reads only 500–599 as server errors.
+  OAuth's included, ask for an unencoded answer, `is_transient_status`
+  reads only 500–599 as server errors, and a typed request answered with no
+  JSON body (a 204) is unreadable.
 
 - The UX guard accepts manifest `vocabulary` field tones by structure while rejecting local tone maps and switches.
 

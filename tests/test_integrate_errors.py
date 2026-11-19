@@ -44,7 +44,12 @@ def _status_error(status: int) -> httpx2.HTTPStatusError:
         (httpx2.ConnectError("refused"), True),
         (_status_error(503), True),
         (_status_error(429), True),
+        # RFC 9110 §15.5.9: the client may repeat a request the server timed out waiting for.
+        (_status_error(408), True),
         (_status_error(404), False),
+        # A server that does not implement the method, or the HTTP version, answers the same request the same way.
+        (_status_error(501), False),
+        (_status_error(505), False),
         (_status_error(600), False),
         (ValueError("bad input"), False),
         (ValidationError("bad config"), False),

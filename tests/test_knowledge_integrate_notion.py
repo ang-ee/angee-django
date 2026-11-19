@@ -331,7 +331,7 @@ def test_a_transient_refusal_after_progress_commits_completed_pages(bridge, api,
     pytest.param(httpx2.Response(503), True, "Notion is temporarily unavailable (HTTP 503).", id="outage"),
     pytest.param(httpx2.Response(429), True, "Notion is rate limiting requests (HTTP 429).", id="rate-limit"),
     pytest.param(httpx2.Response(409), False, "Notion refused the request (HTTP 409).", id="other-status"),
-    pytest.param(httpx2.ReadTimeout("slow"), True, "Notion could not be reached.", id="transport-failure"),
+    pytest.param(httpx2.ReadTimeout("slow"), True, "Notion did not answer.", id="transport-failure"),
     pytest.param(
         httpx2.Response(200, text="not json"), False, "Notion returned an unreadable response.", id="unreadable",
     ),
