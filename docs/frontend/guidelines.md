@@ -295,7 +295,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   holds selection: entering another inherited scope or selecting at the owner
   clears the previous scope. Collection changes clear them before children
   render; returning to an inherited base-filter scope after entering another
-  never revives its old selection. See the
+  never revives its old selection. Resource metadata supplies the selection bar's
+  generic Archive/Unarchive, Move to trash/Restore and Delete actions. Bulk is a
+  bounded client fan-out over each single-record verb: successful rows leave the
+  selection, refused and overflow rows stay, and one refresh and toast settle the
+  run. See the
   [selection and bulk-action contracts](../../packages/ui/src/views/resource/resource-view-context.tsx)
   and [list declarations](../../packages/ui/src/views/resource/resource-view-types.ts).
 - **Derive during render.** Do not store `filteredRows`, selected records,
@@ -704,14 +708,20 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   or local copies of shared resource-view state.
 - **A list selects only declared fields.** The selection owner
   (`requestedFieldPaths`) fetches the paths its columns declare plus the
-  `ListView fields={[…]}` extras and nothing else; a render callback reads only
-  those fields.
+  `ListView fields={[…]}` extras and shared resource requirements, including the
+  archive and trash flags used by generic actions. A render callback reads only
+  its declared fields.
 - A row verb is a `rowActions` declaration on `ListView`/`RowsListView`, never a
   hand-rolled trailing column with local `useConfirm`/`toast.danger` ceremony.
   Declare `presentation="icon"`, `"label"`, or `"both"`; labelled text is the default
   because a verb must remain understandable without recognizing its icon.
   Mark the state's next descriptor `primary`; keep infrequent descriptors at
   `placement: "menu"`. Secondary inline verbs appear on hover and focus.
+- A page's `bulkActions` render first, added to the generic actions derived from
+  resource metadata; they never replace them. A list with a `source` receives
+  only its page's actions. Generic bulk actions share the bounded single-verb
+  fan-out in [the bulk owner](../../packages/ui/src/views/resource/bulk-action.ts),
+  including the view-as write guard; they introduce no server bulk verb.
 - Editable lines are the data view in edit mode; compose `RowsListView` and its column, visibility, action, reorder and footer seams, never form-local tables.
 - A list route declares its shipped `presetIds`, `search` shortcuts, `createAction`,
   and `boardCard` fields on `ResourceList`/`List`. Undeclared search shows the full

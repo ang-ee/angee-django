@@ -49,6 +49,7 @@ export function ListSelectionBar({
       {onDelete ? (
         <SelectionBarPrimitive.Action
           surface="brand"
+          tone="danger"
           pending={deletePending}
           disabled={previewBlocked}
           onClick={() => { if (!previewBlocked) onDelete(); }}

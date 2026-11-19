@@ -22,6 +22,8 @@ import type { ColumnDescriptor } from "../../page";
 import { useRelationFacets } from "../../relation/relation-facet";
 import { useScalarFacets } from "../../relation/scalar-facet";
 import { useBulkDelete } from "../useBulkDelete";
+import { BulkArchiveActions } from "../archive";
+import { BulkTrashActions } from "../trash";
 import { recordRepresentationValue, titleText } from "../../form/form-view-model";
 import { requireDataResource, useAggregateOperation } from "../resource-operations";
 import { useResourceSearch } from "../search/use-resource-search";
@@ -160,10 +162,17 @@ export function ListViewContent<TRow extends Row = Row>({
   const selectedIds = selectable ? surface.selectedIds : EMPTY_SELECTED_IDS;
   // A card's checkbox toggles its row in the shared selection, keeping the row as its snapshot.
   const toggleCardSelected = selectable ? resourceView.toggleSelectedId : undefined;
+  const deselectSucceeded = React.useCallback((ids: readonly string[]) => {
+    resourceView.setRowSelection((selection) => {
+      const remaining = { ...selection };
+      for (const id of ids) delete remaining[id];
+      return remaining;
+    });
+  }, [resourceView.setRowSelection]);
   const bulkDelete = useBulkDelete(
     source ? "" : resource,
     selectedIds,
-    resourceView.clearSelectedIds,
+    deselectSucceeded,
   );
   const cardActionContext = React.useMemo(
     () => ({ refresh: surface.list.refetch }),
@@ -251,7 +260,11 @@ export function ListViewContent<TRow extends Row = Row>({
       // Scope snapshots are shared Rows; narrow to the declared row type (see bulkActions).
       selectedRows: resourceView.selectedRows as readonly TRow[],
     }) : null;
-  const replacesDelete = domainBulkActions != null && domainBulkActions !== false;
+  const genericSelection = !source && modelMetadata ? {
+    resource: modelMetadata.resource,
+    selectedRows: resourceView.selectedRows,
+    onSucceeded: deselectSucceeded,
+  } : null;
 
   return (
     <ResourceListFrame
@@ -264,11 +277,17 @@ export function ListViewContent<TRow extends Row = Row>({
         count: selectedIds.size,
         onClear: resourceView.clearSelectedIds,
         onDelete:
-          !source && !replacesDelete && bulkDelete.canDelete
+          !source && bulkDelete.canDelete
             ? bulkDelete.deleteInitiate
             : undefined,
-        deletePending: !replacesDelete && bulkDelete.isPending,
-        actions: replacesDelete ? domainBulkActions : undefined,
+        deletePending: bulkDelete.isPending,
+        actions: <>
+          {domainBulkActions}
+          {genericSelection ? <>
+            <BulkArchiveActions {...genericSelection} />
+            <BulkTrashActions {...genericSelection} />
+          </> : null}
+        </>,
       } : undefined}
       error={surface.list.error}
       onRetry={() => void surface.list.refetch()}

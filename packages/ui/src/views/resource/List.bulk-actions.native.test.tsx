@@ -1,0 +1,268 @@
+// @vitest-environment happy-dom
+
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvider } from "@tanstack/react-router";
+import type { BaseKey, MetaQuery } from "@refinedev/core";
+import { ResourceQuery, type DataResourceFieldMetadata, type DataResourceMetadata, type Row } from "@angee/metadata";
+import { testDataResource } from "@angee/metadata/testing";
+import type { TypedDocumentNode } from "@angee/refine";
+import { gql } from "graphql-tag";
+import { afterEach, expect, test, vi } from "vitest";
+
+import { baseIcons } from "../../chrome/icon-registry";
+import { ModalsHost, ToastProvider } from "../../feedback";
+import { AppRuntimeProvider, type RuntimeViewAs } from "../../runtime";
+import { createUiTestProviders } from "../../testing";
+import { Column } from "../page";
+import { collectionQuery } from "./collection-source";
+import { List } from "./List";
+import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "./resource-view-context";
+
+const flags: DataResourceFieldMetadata[] = [
+  { name: "archived", kind: "scalar", scalar: "Boolean", readable: true, aggregatable: false,
+    creatable: true, updatable: true, requiredOnCreate: false, archivable: true },
+  { name: "removed", kind: "scalar", scalar: "Boolean", readable: true, aggregatable: false,
+    creatable: false, updatable: false, requiredOnCreate: false, trashable: true },
+];
+const query = ResourceQuery.forRows({ fields: {
+  id: { scalar: "ID" }, title: { scalar: "String" }, archived: { scalar: "Boolean" }, removed: { scalar: "Boolean" },
+} });
+const resource = testDataResource("notes.Note", {
+  resourceType: "notes/note", fields: flags, updateFields: ["archived"],
+  typeNames: { filter: "NoteBoolExp", order: "NoteOrderBy" }, query: query.contract,
+});
+const { Provider, clearClients } = createUiTestProviders({
+  apiUrl: "test://bulk-actions", resources: [resource],
+  queryClientConfig: { defaultOptions: { queries: { retry: false }, mutations: { retry: false } } },
+});
+afterEach(() => { cleanup(); clearClients(); });
+
+const sourceDocument: TypedDocumentNode<{ rows: Row[] }, Record<string, never>> = gql`query SelectedNotes { rows { id title archived removed } }`;
+const note = (id: string, archived = false, removed = false): Row => ({ id, title: `Note ${id}`, archived, removed });
+
+async function fixture({ rows = [note("one"), note("two")], metadata = resource, source = false,
+  preview, update: write, custom: authored }: {
+  rows?: Row[];
+  metadata?: DataResourceMetadata;
+  source?: boolean;
+  preview?: RuntimeViewAs;
+  update?: (id: BaseKey | undefined, values: unknown) => Promise<{ data: Row }>;
+  custom?: (variables: Record<string, unknown>) => Promise<unknown>;
+} = {}) {
+  const getList = vi.fn(async () => ({ data: rows, total: rows.length }));
+  const update = vi.fn(async ({ id, variables }: { id?: BaseKey; variables?: unknown }) =>
+    write ? write(id, variables) : { data: { id } });
+  const custom = vi.fn(async ({ meta }: { meta?: MetaQuery }) => ({ data: source ? { rows }
+    : authored ? await authored(meta?.gqlVariables ?? {})
+      : { trash_record: { ok: true, message: "Moved." }, restore_record: { ok: true, message: "Restored." } } }));
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  let view!: ResourceViewContextValue;
+  function Probe() { view = useResourceView(); return null; }
+  const sourceRows = source ? { query, rows: collectionQuery({ document: sourceDocument, variables: () => ({}),
+    select: (data) => ({ rows: data.rows, total: data.rows.length }) }) } : undefined;
+  function Tree({ preview: currentPreview = preview }: { preview?: RuntimeViewAs }) {
+    return <RouterContextProvider router={router}><Provider resources={[metadata]} dataProvider={{ getList, update, custom }}>
+      <AppRuntimeProvider runtime={{ icons: baseIcons,
+        ...(currentPreview ? { auth: { user: currentPreview.currentUser, status: "authenticated", hasRole: () => false, viewAs: currentPreview } } : {}),
+      }}><ModalsHost><ToastProvider>
+        <ResourceViewProvider resource={metadata.modelLabel} scope="local">
+          <Probe />
+          <List resource={metadata.modelLabel} scope="inherit" selectable source={sourceRows}>
+            <Column field="title" />
+          </List>
+        </ResourceViewProvider>
+      </ToastProvider></ModalsHost></AppRuntimeProvider>
+    </Provider></RouterContextProvider>;
+  }
+  const mounted = render(<Tree />);
+  await screen.findByText(String(rows[0]!.title));
+  return { getList, update, custom, view: () => view,
+    preview: (value: RuntimeViewAs) => mounted.rerender(<Tree preview={value} />),
+    selectAll: () => act(() => view.setRowSelection(Object.fromEntries(rows.map((row) => [String(row.id), true])),
+      (id) => rows.find((row) => row.id === id))),
+  };
+}
+
+test.each([false, true])("%s archive state offers its inverse and updates each selected row once", async (archived) => {
+  const f = await fixture({ rows: [note("one", archived), note("two", archived)] });
+  for (const checkbox of screen.getAllByRole("checkbox", { name: "Select row" })) fireEvent.click(checkbox);
+  const action = archived ? "Unarchive" : "Archive";
+  expect(screen.queryByRole("button", { name: archived ? "Archive" : "Unarchive" })).toBeNull();
+  const reads = f.getList.mock.calls.length;
+  fireEvent.click(screen.getByRole("button", { name: action }));
+  await screen.findByText("Updated archive status for 2 records.");
+  expect(f.update).toHaveBeenCalledTimes(2);
+  for (const id of ["one", "two"]) expect(f.update).toHaveBeenCalledWith(expect.objectContaining({
+    resource: "notes", id, variables: { archived: !archived }, meta: expect.objectContaining({ fields: ["id"] }),
+  }));
+  expect(f.getList).toHaveBeenCalledTimes(reads + 1);
+  expect(f.view().selectedRows).toEqual([]);
+});
+
+test("mixed archive selection offers both verbs and changes only the matching rows", async () => {
+  const f = await fixture({ rows: [note("one"), note("two", true)] });
+  f.selectAll();
+  expect(screen.getByRole("button", { name: "Unarchive" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+  await screen.findByText("Updated archive status for 1 record.");
+  expect(f.update).toHaveBeenCalledTimes(1);
+  expect(f.update).toHaveBeenCalledWith(expect.objectContaining({ id: "one", variables: { archived: true } }));
+  expect(f.view().selectedRows.map((row) => row.id)).toEqual(["two"]);
+});
+
+test.each([
+  { ...resource, updateFields: ["title"] },
+  { ...resource, roots: { ...resource.roots, update: undefined } },
+  { ...resource, fields: flags.map((field) => ({ ...field, updatable: false })) },
+])("a resource whose update contract excludes the archive flag offers neither verb", async (metadata) => {
+  const f = await fixture({ metadata, rows: [note("one"), note("two", true)] });
+  f.selectAll();
+  expect(screen.queryByRole("button", { name: /^(Archive|Unarchive)$/ })).toBeNull();
+  expect(f.update).not.toHaveBeenCalled();
+});
+
+test("trash asks once, calls the shared verb per row, and retains and reports a refused row", async () => {
+  const f = await fixture({ rows: [note("one"), note("two"), note("three")], custom: async ({ target_id }) => ({
+    trash_record: { ok: target_id === "one", message: "Move refused.",
+      validation_errors: target_id === "one" ? null : { __all__: ["Still in use."] } },
+  }) });
+  f.selectAll();
+  const reads = f.getList.mock.calls.length;
+  fireEvent.click(screen.getByRole("button", { name: "Move to trash" }));
+  const dialog = await screen.findByRole("alertdialog");
+  expect(within(dialog).getByText("Move “3 records” to the trash?")).toBeTruthy();
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Reason (optional)" }), { target: { value: "  Superseded  " } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Move to trash" }));
+  await screen.findByText("Moved 1 record to the trash.");
+  expect(screen.getByText("Could not move 2 records to the trash. Still in use.")).toBeTruthy();
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(f.custom).toHaveBeenCalledTimes(3);
+  for (const id of ["one", "two", "three"]) expect(f.custom).toHaveBeenCalledWith(expect.objectContaining({
+    payload: { target_type: "notes/note", target_id: id, reason: "Superseded" },
+  }));
+  expect(f.view().selectedRows.map((row) => row.id)).toEqual(["two", "three"]);
+  expect(f.getList).toHaveBeenCalledTimes(reads + 1);
+  expect(screen.getAllByRole("button", { name: "Dismiss notification" })).toHaveLength(1);
+});
+
+test("Restore handles only trashed rows without a reason prompt", async () => {
+  const f = await fixture({ rows: [note("one"), note("two", false, true)] });
+  f.selectAll();
+  expect(screen.getByRole("button", { name: "Move to trash" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+  await screen.findByText("Restored 1 record from the trash.");
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(f.custom).toHaveBeenCalledTimes(1);
+  expect(f.custom).toHaveBeenCalledWith(expect.objectContaining({ payload: { target_type: "notes/note", target_id: "two" } }));
+  expect(f.view().selectedRows.map((row) => row.id)).toEqual(["one"]);
+});
+
+test("canceling bulk trash leaves every row selected and performs no writes", async () => {
+  const f = await fixture();
+  f.selectAll();
+  fireEvent.click(screen.getByRole("button", { name: "Move to trash" }));
+  const dialog = await screen.findByRole("alertdialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Keep “2 records”" }));
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  expect(f.custom).not.toHaveBeenCalled();
+  expect(f.view().selectedRows).toHaveLength(2);
+});
+
+test.each([
+  { ...resource, resourceType: undefined },
+  { ...resource, fields: [flags[0]!] },
+])("trash and restore require both the flag and resource type", async (metadata) => {
+  const f = await fixture({ metadata, rows: [note("one"), note("two", false, true)] });
+  f.selectAll();
+  expect(screen.queryByRole("button", { name: /^(Move to trash|Restore)$/ })).toBeNull();
+});
+
+test("projected delete permission gates trash for selected rows", async () => {
+  const f = await fixture({ rows: [
+    { ...note("one"), permissions: ["write"] }, { ...note("two", false, true), permissions: [] },
+  ] });
+  f.selectAll();
+  expect(screen.queryByRole("button", { name: /^(Move to trash|Restore)$/ })).toBeNull();
+});
+
+test.each(["transport", "missing"] as const)("an archive %s failure is reported and stays selected", async (failure) => {
+  const f = await fixture({ update: async (id) => {
+    if (id === "one") return { data: { id } };
+    if (failure === "transport") throw new Error("Archive refused.");
+    return { data: {} };
+  } });
+  f.selectAll();
+  fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+  await screen.findByText("Updated archive status for 1 record.");
+  expect(screen.getByText(/Could not update archive status for 1 record\./)).toBeTruthy();
+  expect(f.view().selectedRows.map((row) => row.id)).toEqual(["two"]);
+});
+
+test.each(["Archive", "Move to trash", "Restore"] as const)("%s caps the operation at 25 rows with five writes in flight and one refresh", async (action) => {
+  const releases: (() => void)[] = [];
+  const f = await fixture({ rows: Array.from({ length: 27 }, (_, index) => note(`note-${index}`, false, action === "Restore")),
+    update: (id) => new Promise((resolve) => releases.push(() => resolve({ data: { id } }))),
+    custom: () => new Promise((resolve) => releases.push(() => resolve({
+      [action === "Restore" ? "restore_record" : "trash_record"]: { ok: true, message: "Done." },
+    }))),
+  });
+  f.selectAll();
+  const reads = f.getList.mock.calls.length;
+  fireEvent.click(screen.getByRole("button", { name: action }));
+  if (action === "Move to trash") {
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Move “25 records” to the trash?")).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: action }));
+  }
+  const write = action === "Archive" ? f.update : f.custom;
+  for (let batch = 1; batch <= 5; batch++) {
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(batch * 5));
+    expect(releases).toHaveLength(5);
+    await act(async () => { releases.splice(0).forEach((release) => release()); });
+  }
+  await screen.findByText(action === "Archive" ? "Updated archive status for 25 records."
+    : action === "Restore" ? "Restored 25 records from the trash." : "Moved 25 records to the trash.");
+  expect(screen.getByText("2 records were not processed and remain selected.")).toBeTruthy();
+  expect(write).toHaveBeenCalledTimes(25);
+  expect(f.view().selectedRows.map((row) => row.id)).toEqual(["note-25", "note-26"]);
+  expect(f.getList).toHaveBeenCalledTimes(reads + 1);
+});
+
+test("a source list has no generic actions, even with archivable and trashable metadata", async () => {
+  const f = await fixture({ source: true, rows: [note("one"), note("two", true, true)],
+    metadata: { ...resource, roots: { ...resource.roots, deletePreview: "notes_delete" } },
+  });
+  f.selectAll();
+  expect(screen.getByText("2 selected")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /^(Archive|Unarchive|Move to trash|Restore|Delete)$/ })).toBeNull();
+  expect(f.update).not.toHaveBeenCalled();
+});
+
+const preview: RuntimeViewAs = {
+  viewAs: { userId: "person" }, currentUser: { id: "person", name: "Person" }, realUser: null,
+  viewablePeople: [], enter: () => undefined, exit: () => undefined,
+};
+
+test.each([preview, { ...preview, viewAs: null, pending: true }])("view-as blocks all bulk archive and trash writes", async (value) => {
+  const f = await fixture({ preview: value, rows: [note("one"), note("two", true, true)] });
+  f.selectAll();
+  for (const name of ["Archive", "Unarchive", "Move to trash", "Restore"]) {
+    const button = screen.getByRole<HTMLButtonElement>("button", { name });
+    expect(button.disabled).toBe(true);
+    fireEvent.click(button);
+  }
+  expect(f.update).not.toHaveBeenCalled();
+  expect(f.custom).not.toHaveBeenCalled();
+});
+
+test("entering view-as while the trash prompt is open blocks its confirmed writes", async () => {
+  const f = await fixture();
+  f.selectAll();
+  fireEvent.click(screen.getByRole("button", { name: "Move to trash" }));
+  const dialog = await screen.findByRole("alertdialog");
+  f.preview(preview);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Move to trash" }));
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  expect(f.custom).not.toHaveBeenCalled();
+  expect(f.view().selectedRows).toHaveLength(2);
+});

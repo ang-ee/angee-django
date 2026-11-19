@@ -16,16 +16,19 @@ import {
 } from "@angee/metadata";
 
 import { usePrompt } from "../../feedback";
+import { Glyph } from "../../chrome/Glyph";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
 import { useUiT } from "../../i18n";
 import { Button } from "../../ui/button";
 import { Collapsible } from "../../ui/collapsible";
 import { Pager } from "../../ui/pager";
+import { SelectionBar } from "../../ui/selection-bar";
 import type { ActionDescriptor } from "../page/Action";
 import { useActionResultRun } from "./action-result-run";
 import { useAuthoredResourceMutation } from "./authored-resource-mutation";
 import { RestoreRecord, TrashRecord } from "./documents";
 import { defineRowAction, type RowActionDeclaration } from "./RowActions";
+import { BULK_ACTION_LIMIT, useBulkAction, type BulkSelectionProps } from "./bulk-action";
 
 /** The record permission that offers trash and restore — the shared verbs' authority.
  * @kind null
@@ -87,6 +90,14 @@ export interface UseTrashRecordResult {
   restore: (id: string) => Promise<boolean>;
 }
 
+function trashTargetType(resource: DataResourceMetadata | null | undefined): string | null {
+  return resource && trashFlagField(resource) ? resource.resourceType ?? null : null;
+}
+
+function canManageTrash(record: Row): boolean {
+  return !("permissions" in record) || holdsPermission(record, TRASH_PERMISSION);
+}
+
 /**
  * Run the shared `trash_record` / `restore_record` verbs for one trashable
  * resource, settling their outcome through the shared toast owner and
@@ -96,7 +107,7 @@ export interface UseTrashRecordResult {
 export function useTrashRecord(resource: DataResourceMetadata | null | undefined): UseTrashRecordResult {
   const askTrash = useTrashPrompt();
   const settle = useActionResultRun();
-  const targetType = resource && trashFlagField(resource) ? resource.resourceType ?? null : null;
+  const targetType = trashTargetType(resource);
   const options = resource
     ? { dataProviderName: resource.schemaName, invalidateModels: [resource.modelLabel] }
     : {};
@@ -136,6 +147,63 @@ export function useTrashRecord(resource: DataResourceMetadata | null | undefined
   };
 }
 
+/** Generic selection verbs over the same trashable resource contract as the record.
+ * @owner SelectionBar
+ */
+export function BulkTrashActions(props: BulkSelectionProps): React.ReactElement | null {
+  const targetType = trashTargetType(props.resource);
+  const flag = trashFlagField(props.resource);
+  return targetType && flag ? <TrashSelectionActions {...props} targetType={targetType} flag={flag} /> : null;
+}
+
+function TrashSelectionActions({ resource, selectedRows, onSucceeded, targetType, flag }: BulkSelectionProps & {
+  targetType: string;
+  flag: string;
+}): React.ReactElement {
+  const t = useUiT();
+  const askTrash = useTrashPrompt();
+  const bulk = useBulkAction(resource, onSucceeded);
+  // No per-row cache invalidation or toast: the bulk owner settles the whole run.
+  const options = { dataProviderName: resource.schemaName, errorNotification: false as const };
+  const [trashRecord] = useAuthoredResourceMutation(TrashRecord, options);
+  const [restoreRecord] = useAuthoredResourceMutation(RestoreRecord, options);
+  return <>{[false, true].map((restore) => {
+    const ids = selectedRows.flatMap((row) => {
+      const id = rowPublicId(row);
+      return id && canManageTrash(row) && (row[flag] === true) === restore ? [id] : [];
+    });
+    if (!ids.length) return null;
+    return <SelectionBar.Action key={String(restore)} surface="brand" pending={bulk.pending} disabled={bulk.blocked}
+      onClick={() => {
+        let reason = "";
+        void bulk.run({
+          ids,
+          confirm: restore ? undefined : async () => {
+            const answer = await askTrash(t("deletePreview.recordCount", { count: Math.min(ids.length, BULK_ACTION_LIMIT) }));
+            if (!answer) return false;
+            reason = answer.reason;
+            return true;
+          },
+          perform: async (id) => {
+            const target = { target_type: targetType, target_id: id };
+            const outcome = extractActionOutcome(
+              restore ? await restoreRecord(target) : await trashRecord({ ...target, reason }),
+              restore ? "restore_record" : "trash_record",
+            );
+            if (!outcome?.ok) {
+              const firstReason = Object.values(outcome?.validationErrors ?? {}).flat()[0];
+              throw new Error(firstReason || outcome?.message || t("action.noResult"));
+            }
+          },
+          done: (count) => t(restore ? "trash.bulkRestored" : "trash.bulkDone", { count }),
+          failed: (count) => t(restore ? "trash.bulkRestoreFailed" : "trash.bulkFailed", { count }),
+        });
+      }}>
+      <Glyph name={restore ? "undo-2" : "trash"} />{t(restore ? "trash.restore" : "trash.action")}
+    </SelectionBar.Action>;
+  })}</>;
+}
+
 export interface TrashActionOptions<TRow extends Row = Row> {
   /** The record's display name in the confirmation copy. */
   name?: (record: TRow) => string;
@@ -157,14 +225,13 @@ export function useTrashActions(
   const { name } = options;
   return React.useMemo<readonly ActionDescriptor[]>(() => {
     if (!available || flag === null) return [];
-    const manages = (record: Row) => !("permissions" in record) || holdsPermission(record, TRASH_PERMISSION);
     return [
       {
         id: "trash",
         label: t("trash.action"),
         icon: "trash",
         placement: "menu",
-        visibleWhen: (record) => manages(record) && record[flag] !== true,
+        visibleWhen: (record) => canManageTrash(record) && record[flag] !== true,
         run: async (context) => {
           const id = rowPublicId(context.record);
           if (id && context.record && await trash(id, name?.(context.record))) context.refresh();
@@ -175,7 +242,7 @@ export function useTrashActions(
         label: t("trash.restore"),
         icon: "undo-2",
         placement: "menu",
-        visibleWhen: (record) => manages(record) && record[flag] === true,
+        visibleWhen: (record) => canManageTrash(record) && record[flag] === true,
         run: async (context) => {
           const id = rowPublicId(context.record);
           if (id && await restore(id)) context.refresh();
