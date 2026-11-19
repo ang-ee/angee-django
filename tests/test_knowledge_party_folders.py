@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from rebac import PermissionDenied, actor_context, system_context
 
 from angee.messaging.testing.models import Party, Person
@@ -47,7 +48,7 @@ def test_the_people_vault_is_provisioned_once_unowned_and_administered_by_platfo
     assert not Vault.objects.with_actor(outsider).filter(pk=vault.pk).exists()
 
 
-def test_a_vault_viewer_reads_a_persons_folder_and_subpage_and_a_reader_of_the_person_alone_does_not(
+def test_a_vault_viewer_reads_a_persons_folder_and_note_and_a_reader_of_the_person_alone_does_not(
     db: None,
 ) -> None:
     """Pages read through the vault: a binding to the person lends nothing, and an editor writes."""
@@ -59,7 +60,7 @@ def test_a_vault_viewer_reads_a_persons_folder_and_subpage_and_a_reader_of_the_p
     person = _person(owner)
     with system_context(reason="tests.knowledge.import"):
         folder = RecordBinding.objects.party_folder(person, vault=vault, title="Ada Example (folder)")
-        subpage = Page.objects.subpage(folder, title="Ada Example: notes")
+        subpage = Page.objects.create_in(vault, parent=folder, title="Ada Example: notes")
         party = Party.objects.get(pk=person.pk)
     _grant(vault, "viewer", viewer)
     _grant(vault, "editor", editor)
@@ -96,9 +97,6 @@ def test_a_persons_folder_is_made_once_and_found_after_by_a_person_or_an_import(
         folder = RecordBinding.objects.party_folder(person, vault=vault, title="Ada Example (folder)")
         assert RecordBinding.objects.party_folder(person, vault=vault, title="Ada Example (folder)").pk == folder.pk
         assert folder.kind == Page.PageKind.FOLDER
-        subpage = Page.objects.subpage(folder, title="Ada Example: notes")
-        assert Page.objects.subpage(folder, title="Ada Example: notes").pk == subpage.pk
-        assert (subpage.parent_id, subpage.kind) == (folder.pk, Page.PageKind.NOTE)
     with system_context(reason="tests.knowledge.import"):
         assert RecordBinding.objects.party_folder(person, vault=vault, title="Ada Example (folder)").pk == folder.pk
     assert _folders(person) == [folder.pk]
@@ -113,7 +111,7 @@ def test_after_a_merge_the_survivor_keeps_both_folders_and_its_folder_is_the_old
     with system_context(reason="tests.knowledge.import"):
         older = RecordBinding.objects.party_folder(merged, vault=vault, title="Ada E. (folder)")
         newer = RecordBinding.objects.party_folder(survivor, vault=vault, title="Ada Example (folder)")
-        kept = Page.objects.subpage(older, title="Ada E.: notes")
+        kept = Page.objects.create_in(vault, parent=older, title="Ada E.: notes")
     with actor_context(owner):
         Party.objects.get(pk=survivor.pk).merge(records=[merged.public_id])
 
@@ -122,6 +120,29 @@ def test_after_a_merge_the_survivor_keeps_both_folders_and_its_folder_is_the_old
         assert RecordBinding.objects.party_folder(survivor, vault=vault, title="Another title").pk == older.pk
         assert Page.objects.get(pk=kept.pk).parent_id == older.pk
     assert _folders(survivor) == [older.pk, newer.pk]
+
+
+def _write(person: Any, vault: Any, body: str, written: str | None, *, title: str = "Ada Example: remember") -> str:
+    """Write the ``remember`` text as an import does."""
+
+    with system_context(reason="tests.knowledge.import"):
+        return RecordBinding.objects.write_sourced_page(
+            person, vault=vault, role="remember", folder_title=f"{person.display_name} (folder)", title=title,
+            body=body, written=written,
+        )
+
+
+def _notes(person: Any) -> list[Any]:
+    """The person's live pages bound under ``remember``, oldest first."""
+
+    with system_context(reason="tests.knowledge.sourced.notes"):
+        bindings = RecordBinding.objects.for_record(person, role="remember").filter(page__is_trashed=False)
+        return list(MarkdownPage.objects.filter(pk__in=bindings.values("page_id")).order_by("pk"))
+
+
+def _note(person: Any) -> Any:
+    notes = _notes(person)
+    return notes[0] if notes else None
 
 
 def test_a_sourced_note_is_written_once_updated_while_untouched_and_never_written_over_an_edit(db: None) -> None:
@@ -133,15 +154,10 @@ def test_a_sourced_note_is_written_once_updated_while_untouched_and_never_writte
     _grant(vault, "editor", editor)
 
     def write(body: str, written: str | None) -> str:
-        with system_context(reason="tests.knowledge.import"):
-            return RecordBinding.objects.write_sourced_page(
-                person, vault=vault, folder_title="Ada Example (folder)", title="Ada Example: remember",
-                body=body, written=written,
-            )
+        return _write(person, vault, body, written)
 
     def note() -> Any:
-        with system_context(reason="tests.knowledge.sourced.readback"):
-            return MarkdownPage.objects.filter(title="Ada Example: remember").first()
+        return _note(person)
 
     # An empty first text writes nothing at all, not even the folder.
     assert write("", None) == "unchanged"
@@ -169,3 +185,69 @@ def test_a_sourced_note_is_written_once_updated_while_untouched_and_never_writte
     assert "> Prefers coffee.\n> No sugar." in body
     assert write("Prefers coffee.\nNo sugar.", "Prefers coffee.\nNo sugar.") == "unchanged"
     assert note().body == body
+
+
+def test_a_renamed_or_moved_note_stays_the_sources_note(db: None) -> None:
+    """The note is found by its binding to the person under the caller's role, never by its title or place."""
+
+    vault = _people_vault()
+    owner, editor = create_user("people-renamed-owner"), create_user("people-renamed-editor")
+    person = _person(owner)
+    _grant(vault, "editor", editor)
+    assert _write(person, vault, "Prefers tea.", None) == "written"
+    note = _note(person)
+
+    with actor_context(editor):
+        renamed = Page.objects.get(pk=note.pk)
+        renamed.title = "What to remember about Ada"
+        renamed.save(update_fields=["title", "updated_at"])
+    assert _write(person, vault, "Prefers green tea.", "Prefers tea.") == "written"
+    assert [row.pk for row in _notes(person)] == [note.pk]
+    assert (_note(person).title, _note(person).body) == ("What to remember about Ada", "Prefers green tea.")
+
+    with actor_context(editor):
+        elsewhere = Page.objects.create_in(vault, title="Kept notes", kind=Page.PageKind.FOLDER)
+        moved = Page.objects.get(pk=note.pk)
+        moved.parent = elsewhere
+        moved.save(update_fields=["parent", "updated_at"])
+    assert _write(person, vault, "Prefers coffee.", "Prefers green tea.") == "written"
+    assert [row.pk for row in _notes(person)] == [note.pk]
+    assert (_note(person).parent_id, _note(person).body) == (elsewhere.pk, "Prefers coffee.")
+
+
+def test_after_a_merge_the_oldest_note_under_a_role_is_the_sources_and_none_is_made(db: None) -> None:
+    vault = _people_vault()
+    owner = create_user("people-merged-notes-owner")
+    survivor, merged = _person(owner, "Ada Example"), _person(owner, "Ada E.")
+    assert _write(merged, vault, "Met at the door.", None, title="Ada E.: remember") == "written"
+    assert _write(survivor, vault, "Prefers tea.", None, title="Ada Example: remember") == "written"
+    older, newer = _notes(merged)[0], _notes(survivor)[0]
+    with actor_context(owner):
+        Party.objects.get(pk=survivor.pk).merge(records=[merged.public_id])
+
+    assert [row.pk for row in _notes(survivor)] == [older.pk, newer.pk]
+    assert _write(survivor, vault, "Met at the door, twice.", "Met at the door.") == "written"
+    assert [row.pk for row in _notes(survivor)] == [older.pk, newer.pk]
+    with system_context(reason="tests.knowledge.sourced.readback"):
+        assert MarkdownPage.objects.get(pk=older.pk).body == "Met at the door, twice."
+        assert MarkdownPage.objects.get(pk=newer.pk).body == "Prefers tea."
+
+
+def test_a_sourced_notes_role_is_a_slug_of_its_own_and_its_new_title_must_be_free(db: None) -> None:
+    """The model's own roles are refused; a title another page holds refuses the new note, saying so."""
+
+    vault = _people_vault()
+    owner = create_user("people-roles-owner")
+    person = _person(owner)
+    with system_context(reason="tests.knowledge.import"):
+        for role in ("folder", " related ", "two words"):
+            with pytest.raises(ValidationError):
+                RecordBinding.objects.write_sourced_page(
+                    person, vault=vault, role=role, folder_title="Ada Example (folder)", title="Ada Example: x",
+                    body="Text", written=None,
+                )
+        Page.objects.create_in(vault, title="Ada Example: remember")
+    with pytest.raises(ValidationError, match="already uses the title"):
+        _write(person, vault, "Prefers tea.", None)
+    assert _notes(person) == []
+    assert _write(person, vault, "Prefers tea.", None, title="Ada Example: remember (2)") == "written"

@@ -138,8 +138,12 @@ live in code docstrings.
   which now show their placeholders.
 
 - `angee.knowledge`: a source's text about a person, as a note in their folder:
-  `RecordBindingManager.write_sourced_page(party, vault=, folder_title=,
-  title=, body=, written=)` writes nothing for the same text, replaces a note
+  `RecordBindingManager.write_sourced_page(party, vault=, role=, folder_title=,
+  title=, body=, written=)` finds the note by its binding to the party under
+  `role` (a slug of the consumer's; knowledge's `related` and `folder` are
+  refused), the oldest live one, so a renamed or moved note stays the source's,
+  and makes one titled `title` under the folder only when there is none (a
+  taken title refuses it, saying so). It writes nothing for the same text, replaces a note
   that still holds what the source last wrote (compare-and-set on its hash),
   and appends the newer text, quoted under a marker line, below a person's
   edit, never over it (`SourcedWrite`). `angee.parties`:
@@ -153,8 +157,7 @@ live in code docstrings.
   cannot read in parties included; finer control is a later version.
   `RecordBindingManager.party_folder(party, vault=, title=)` finds or makes a
   party's folder page bound under the new `FOLDER_ROLE` (`folder`), locking the
-  party first, and returns the oldest when a merge left several;
-  `PageManager.subpage(folder, title=)` finds or makes a named note under it.
+  party first, and returns the oldest when a merge left several.
   `PageManager.create_in` without an actor, inside a system context, creates
   the page as system work. Nothing changes in knowledge's permission schema.
   Upgrade: load the install tier (provision does).

@@ -463,30 +463,6 @@ class PageManager[PageT: Page](_PageManagerBase[PageT]):
         created = self.model._base_manager.get(pk=page.pk)
         return created.with_actor(actor) if actor is not None else created
 
-    def subpage(self, folder: Any, *, title: str) -> PageT:
-        """Return the note titled ``title`` directly under ``folder``, creating it there when there is none.
-
-        The folder's row is locked before its children are read, so two requests
-        make one note. A title is unique in its vault: a page so titled elsewhere
-        in it refuses the creation. A person makes it by the vault's permissions
-        (:meth:`create_in`); an import, in a system context, as system work.
-        """
-
-        with transaction.atomic():
-            with system_context(reason="knowledge.page.subpage"):
-                folder = row_lock_queryset(self.model, no_key=True).get(pk=folder.pk)
-                found = (
-                    self.model._base_manager.filter(parent=folder, title=title, is_trashed=False)
-                    .values_list("pk", flat=True)
-                    .first()
-                )
-            if found is None:
-                return self.create_in(folder.vault, parent=folder, title=title)
-            page = self.filter(pk=found).first()
-            if page is None:
-                raise PermissionDenied("The page is not readable.")
-            return page
-
     def _copy_tree_in(
         self, vault: Vault, pages: Mapping[Any, Page], *, actor: SubjectRef,
     ) -> dict[Any, PageT]:
@@ -717,65 +693,103 @@ class RecordBindingManager[BindingT: RecordBinding](_RecordBindingManagerBase[Bi
         system work. The folder's pages read and write through the vault alone.
         """
 
-        party_model = apps.get_model("parties", "Party")
-        reference = generic_target(self.model.require_saved(party, "party"))
-        if reference.content_type.model_class() is not party_model:
-            raise ValidationError("A folder belongs to a person or an organization.")
         page_model = self.model._meta.apps.get_model("knowledge", "Page")
         with transaction.atomic():
-            with system_context(reason="knowledge.party_folder"):
-                row_lock_queryset(party_model, no_key=True).get(pk=reference.object_id)
-                found = (
-                    self.model._base_manager.filter(
-                        **reference.lookups(self.model, "target"),
-                        role=self.FOLDER_ROLE,
-                        page__vault=vault,
-                        page__is_trashed=False,
-                    )
-                    .order_by("page_id")
-                    .values_list("page_id", flat=True)
-                    .first()
-                )
+            found = self._oldest_bound_page(party, vault=vault, role=self.FOLDER_ROLE)
             if found is None:
                 created = page_model.objects.create_in(vault, title=title, kind=page_model.PageKind.FOLDER)
                 self.upsert(target=party, page=created, role=self.FOLDER_ROLE)
                 return created
-            readable = page_model.objects.filter(pk=found).first()
-            if readable is None:
-                raise PermissionDenied("The folder is not readable.")
-            return readable
+            return self._readable(page_model, found)
 
     def write_sourced_page(
-        self, party: models.Model, *, vault: Vault, folder_title: str, title: str, body: str, written: str | None
+        self, party: models.Model, *, vault: Vault, role: str, folder_title: str, title: str, body: str,
+        written: str | None,
     ) -> SourcedWrite:
-        """Write a source's text ``body`` as ``party``'s note ``title`` in its folder, never over a person's edit.
+        """Write a source's text ``body`` into ``party``'s note bound to it under ``role``, never over a person's edit.
 
-        ``written`` is the text this source last wrote there, ``None`` for none
-        (a directory mapping reads it from its link: ``DirectoryMapping.applied``).
-        The same text again, or an empty first one, writes nothing, not even the
-        folder (``UNCHANGED``). Otherwise the folder (:meth:`party_folder`) and the
-        note (``PageManager.subpage``) are found or made. A note that still holds
-        ``written`` (an empty one when there is none) takes ``body``, compare-and-set
-        on the hash it holds (``WRITTEN``). A note a person has edited since keeps
-        their text, and the newer text is appended below it under a marker, quoted,
-        so it is neither applied over theirs nor lost (``EDITED``); the source's
-        record history keeps it too. A concurrent edit refuses the write
-        (``StaleBodyError``). An import calls it as system work.
+        The note is the oldest live markdown page of ``vault`` bound to the party
+        under ``role`` (normalized as every role is: stripped, a slug; knowledge's
+        own :attr:`DEFAULT_ROLE` and :attr:`FOLDER_ROLE` are refused), so a person
+        may rename or move it and it stays the source's; after a merge the
+        survivor's oldest is it, and none is made. When there is none, a note
+        titled ``title`` is made under the party's folder (:meth:`party_folder`,
+        ``folder_title``) and bound under ``role``: the title must be free in the
+        vault. ``written`` is the text this source last wrote there, ``None`` for
+        none (a directory mapping reads it from its link:
+        ``DirectoryMapping.applied``). The same text again, or an empty first one,
+        writes nothing, not even the folder (``UNCHANGED``). A new note, or one
+        that still holds ``written`` (an empty one when there is none), takes
+        ``body``, compare-and-set on the hash it holds (``WRITTEN``). A note a
+        person has edited since keeps their text, and the newer text is appended
+        below it under a marker, quoted, so it is neither applied over theirs nor
+        lost (``EDITED``); the source's record history keeps it too. A concurrent
+        edit refuses the write (``StaleBodyError``). An import calls it as system
+        work. The binding shows the note in the party's Pages group, by its title.
         """
 
+        role = self.model.normalize_role(role)
+        if role in (self.DEFAULT_ROLE, self.FOLDER_ROLE):
+            raise ValidationError({"role": f"{role!r} is a role of knowledge's own: name the source's text."})
         if body == (written or ""):
             return SourcedWrite.UNCHANGED
-        pages = self.model._meta.apps.get_model("knowledge", "Page").objects
-        bodies = self.model._meta.apps.get_model("knowledge", "MarkdownPage").objects
+        apps_ = self.model._meta.apps
+        page_model, markdown_model = apps_.get_model("knowledge", "Page"), apps_.get_model("knowledge", "MarkdownPage")
+        bodies = markdown_model.objects
         with transaction.atomic():
-            note = pages.subpage(self.party_folder(party, vault=vault, title=folder_title), title=title)
-            markdown = bodies.get(pk=note.pk)
+            found = self._oldest_bound_page(party, vault=vault, role=role, page__markdown__isnull=False)
+            if found is None:
+                if page_model._base_manager.filter(vault=vault, title=title, is_trashed=False).exists():
+                    raise ValidationError(
+                        {"title": f"Another page of this vault already uses the title {title!r}: give the source's "
+                         "new note a title of its own."}
+                    )
+                folder = self.party_folder(party, vault=vault, title=folder_title)
+                note = page_model.objects.create_in(vault, parent=folder, title=title, body=body)
+                self.upsert(target=party, page=note, role=role)
+                return SourcedWrite.WRITTEN
+            markdown = self._readable(markdown_model, found)
             if markdown.body_hash == markdown.hash_body(written or ""):
                 bodies.write_body(markdown, body, expected_hash=markdown.body_hash)
                 return SourcedWrite.WRITTEN
             quoted = "\n".join(f"> {line}" if line else ">" for line in body.splitlines())
             bodies.append(markdown, f"{SOURCED_TEXT_MARKER}\n\n{quoted}", expected_hash=markdown.body_hash)
             return SourcedWrite.EDITED
+
+    def _oldest_bound_page(self, party: models.Model, *, vault: Vault, role: str, **filters: Any) -> Any | None:
+        """Lock ``party``'s row, then return the id of its oldest live page of ``vault`` bound under ``role``.
+
+        The lock is the one :meth:`upsert` takes on a target, so two requests for
+        one party's page serialize and the second reads the first's binding.
+        """
+
+        party_model = apps.get_model("parties", "Party")
+        reference = generic_target(self.model.require_saved(party, "party"))
+        if reference.content_type.model_class() is not party_model:
+            raise ValidationError("A person's pages belong to a person or an organization.")
+        with system_context(reason="knowledge.party_page"):
+            row_lock_queryset(party_model, no_key=True).get(pk=reference.object_id)
+            return (
+                self.model._base_manager.filter(
+                    **reference.lookups(self.model, "target"),
+                    role=role,
+                    page__vault=vault,
+                    page__is_trashed=False,
+                    **filters,
+                )
+                .order_by("page_id")
+                .values_list("page_id", flat=True)
+                .first()
+            )
+
+    @staticmethod
+    def _readable(model: type[models.Model], pk: Any) -> Any:
+        """Return the row ``pk`` as the caller reads it; refuse one the caller cannot read."""
+
+        row = model._default_manager.filter(pk=pk).first()
+        if row is None:
+            raise PermissionDenied("The page is not readable.")
+        return row
 
     def create_note(
         self, *, target: models.Model, vault: Vault, body: str,
