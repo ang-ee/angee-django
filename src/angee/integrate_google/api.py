@@ -146,10 +146,14 @@ class GoogleApi:
     def _send(
         self, method: str, url: str, *, body: Any, headers: Mapping[str, str] | None, max_bytes: int
     ) -> httpx2.Response:
-        """Send once with ``body`` as JSON; a transport failure or an oversized answer is the API's refusal."""
+        """Send once with ``body`` as JSON; a transport failure or an oversized answer is the API's refusal.
 
-        sent = httpx2.Headers(self.headers())
-        sent.update(headers)
+        The headers stay plain strings, a caller's replacing the transport's own whatever its case: integrate's
+        request encodes them, so a value it cannot encode is that request's refusal.
+        """
+
+        own = {name.lower() for name in headers or {}}
+        sent = {name: value for name, value in self.headers().items() if name.lower() not in own} | dict(headers or {})
         return self.http.request(
             method, url, headers=sent, json=body, max_bytes=max_bytes,
             error=lambda refusal: refusal.as_error(self.error, self.service),

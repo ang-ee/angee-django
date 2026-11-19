@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import traceback
 from collections.abc import Collection
 from datetime import timedelta
 from types import ModuleType
@@ -295,6 +296,36 @@ def test_the_google_transport_names_account_refusals_and_asks_for_the_clients_sc
     assert api.account_error(HttpRefusal.of(own)) is None
     with pytest.raises(GoogleApiError, match="Google Calendar refused the request"):
         api.raise_for_status(own)
+
+
+class _UnsendableKey(_MintingKey):
+    """A key whose value the HTTP library cannot encode: an invented token ending in a zero-width space."""
+
+    def auth_headers(self, *, scopes: Collection[str] = ()) -> dict[str, str]:
+        return {"Authorization": "Bearer example-key-5f3a\u200b"}
+
+
+def test_the_google_transport_leaves_header_encoding_to_integrate() -> None:
+    """A token the library cannot encode is integrate's permanent not-sent refusal, which keeps none of its value;
+    a caller's header replaces the transport's own whatever its case."""
+
+    api = GoogleApi(_UnsendableKey(), service="Google Calendar", grant="Calendar")
+    url = "https://www.googleapis.com/calendar/v3/users/me/calendarList"
+    with mock_transport(lambda request: httpx2.Response(200, json={})) as requests, pytest.raises(
+        GoogleApiError
+    ) as refused:
+        api.send("GET", url)
+    with mock_transport(lambda request: httpx2.Response(200, json={})) as replaced:
+        GoogleApi(_MintingKey(), service="Google Calendar", grant="Calendar").send(
+            "GET", url, headers={"accept": "application/example"},
+        )
+
+    assert not requests
+    assert (refused.value.transient, str(refused.value)) == (
+        False, "The request to Google Calendar could not be sent as configured.",
+    )
+    assert "example-key-5f3a" not in "".join(traceback.format_exception(refused.value))
+    assert replaced[0].headers.get_list("accept") == ["application/example"]
 
 
 @pytest.mark.parametrize("headers", [{}, {"Retry-After": "30"}], ids=["no-wait", "its-retry-after"])
