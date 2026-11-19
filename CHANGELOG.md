@@ -10,6 +10,19 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.integrate`: derived credentials. `CredentialManager.store_derived` now
+  overwrites a credential of the derived name that nothing holds, so a row left
+  from an integration deleted before derived credentials left with it no longer
+  fails every later discovery of that name; it still refuses one something else
+  holds. `CredentialManager.unattached` derives what holds a credential from the
+  model's own reverse relations (each foreign key under its live policy), so an
+  agent's inference credential or an MCP server's is no longer deleted, and
+  silently nulled, when the integration that derived it leaves. The delete
+  cleanup reads the integration's links from its locked row (a `pre_delete`
+  receiver takes the delete lock, as every delete path then does), covers an
+  integration whose source grant was lost (`Integration.derived_credential_id`),
+  and locks the credential before deciding (`delete_unattached_derived`).
+
 - `angee.messaging`: outbound delivery waits for connection discovery.
   `run_message_delivery` published through a channel whose integration was
   discovering again, so a queued reply on a feed that requires discovery went out

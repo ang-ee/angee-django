@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import httpx2
 import pytest
 import strawberry_django
+from django.apps import apps
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import close_old_connections, connections, transaction
 from django.test import override_settings
@@ -1067,19 +1068,90 @@ def test_re_entering_a_credential_discovery_derived_is_refused(bridge, sent_task
     assert sent_tasks == []
 
 
-def test_discovery_refuses_to_overwrite_a_hand_made_credential_of_the_name_it_derives(bridge):
-    with system_context(reason="test a derived name a hand-made credential holds"):
-        hand_made = Credential.objects.create_local_credential(
+def test_discovery_overwrites_a_credential_of_the_name_it_derives_that_nothing_holds(bridge):
+    with system_context(reason="test a derived name left over and unheld"):
+        left = Credential.objects.create_local_credential(
             bridge.owner, kind="basic_auth", name=f"Resource {bridge.pk}",
-            material={"username": "ada@example.com", "password": "hand-made"},
+            material={"username": "ada@example.com", "password": "left over"},
         )
         bridge.config = {"derived": True}
         bridge.save(update_fields=["config"])
+        assert settle(bridge)["ok"]
+        left.refresh_from_db()
+    assert bridge.credential_id == left.pk and bridge.discovery_ready
+    assert (left.kind, left.reveal()) == ("static_token", {"api_key": "fake"})
+
+
+def _hold(credential, holder, owner):
+    """Have ``holder`` use ``credential`` other than as discovered material."""
+
+    if holder == "integration":
+        return ConnectionBridge.objects.create(vendor=credential_vendor(), owner=owner, credential=credential)
+    if holder == "mcp_server":
+        return apps.get_model("agents", "MCPServer").objects.create(name="Held key server", credential=credential)
+    return apps.get_model("agents", "Agent").objects.create(
+        name="Held key agent", owner=owner, inference_credential=credential,
+    )
+
+
+def credential_vendor():
+    return apps.get_model("integrate", "Vendor").objects.get_or_create(slug="held", display_name="Held")[0]
+
+
+@pytest.mark.parametrize("holder", ["integration", "mcp_server", "agent"])
+def test_discovery_refuses_a_credential_of_the_name_it_derives_that_something_else_holds(bridge, holder):
+    with system_context(reason="test a derived name a used credential holds"):
+        held = Credential.objects.create_local_credential(
+            bridge.owner, kind="static_token", name=f"Resource {bridge.pk}", material={"api_key": "held"},
+        )
+        _hold(held, holder, bridge.owner)
+        bridge.config = {"derived": True}
+        bridge.save(update_fields=["config"])
         assert settle(bridge) == {"ok": False, "reason": "discovery-failed"}
-        hand_made.refresh_from_db()
-    assert hand_made.kind == "basic_auth" and hand_made.reveal()["password"] == "hand-made"
-    assert f'"Resource {bridge.pk}"' in bridge.last_error and "remove or rename" in bridge.last_error
-    assert not bridge.discovery_ready and bridge.credential_id != hand_made.pk
+        held.refresh_from_db()
+    assert held.reveal() == {"api_key": "held"}
+    assert f'"Resource {bridge.pk}"' in bridge.last_error and "rename" in bridge.last_error
+    assert not bridge.discovery_ready and bridge.credential_id != held.pk
+
+
+@pytest.mark.parametrize("holder", ["mcp_server", "agent"])
+def test_a_derived_credential_something_else_uses_stays_when_its_integration_leaves(bridge, holder):
+    with system_context(reason="test a derived credential an agent or server uses"):
+        bridge.config = {"derived": True, "derived_name": "Discovered resource key"}
+        bridge.save(update_fields=["config"])
+        assert settle(bridge)["ok"]
+        derived_pk = bridge.credential_id
+        user = _hold(bridge.credential, holder, bridge.owner)
+        bridge.delete()
+        user.refresh_from_db()
+        assert Credential.objects.filter(pk=derived_pk).exists()
+    assert (user.credential_id if holder == "mcp_server" else user.inference_credential_id) == derived_pk
+
+
+def test_a_derived_credential_whose_grant_was_lost_leaves_with_its_integration(bridge):
+    with system_context(reason="test an integration deleted after its source grant went"):
+        bridge.config = {"derived": True, "derived_name": "Discovered resource key"}
+        bridge.save(update_fields=["config"])
+        assert settle(bridge)["ok"]
+        derived_pk, source_pk = bridge.credential_id, bridge.discovery_credential_id
+        # The grant removed by a path that skips its disconnect: the integration keeps the material.
+        Credential.objects.filter(pk=source_pk).delete()
+        bridge.refresh_from_db()
+        assert (bridge.discovery_credential_id, bridge.credential_id) == (None, derived_pk)
+        bridge.delete()
+        assert not Credential.objects.filter(pk=derived_pk).exists()
+
+
+def test_an_integration_deleted_through_a_stale_instance_takes_the_credential_it_derived_since(bridge):
+    with system_context(reason="test a delete through an instance read before discovery derived"):
+        stale = ConnectionBridge.objects.get(pk=bridge.pk)
+        bridge.config = {"derived": True, "derived_name": "Discovered resource key"}
+        bridge.save(update_fields=["config"])
+        assert settle(bridge)["ok"]
+        derived_pk = bridge.credential_id
+        assert stale.credential_id != derived_pk
+        stale.delete()
+        assert not Credential.objects.filter(pk=derived_pk).exists()
 
 
 def test_a_derived_credential_leaves_with_its_integration(bridge, sent_tasks):

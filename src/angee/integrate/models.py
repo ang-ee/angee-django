@@ -78,7 +78,7 @@ from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel, AngeeModel, record_display_label
 from angee.base.models.implementations import ImplDefaultsMixin
 from angee.base.models.locks import ImmutableFieldsMixin
-from angee.base.models.merge_references import MergePolicy, references
+from angee.base.models.merge_references import ForeignKeyReference, MergePolicy, references
 from angee.base.models.ownership import OwnerMixin, OwnerQuerySet
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.transitions import StateTransitions, save_state, transition
@@ -1137,22 +1137,25 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         transaction.on_commit(copy(credential).revoke_remote, robust=True)
 
     def unattached(self) -> models.QuerySet[Any]:
-        """Return the credentials nothing holds: no integration attaches them, and no account is bound to them.
+        """Return the credentials nothing holds: no live row's foreign key points at them, and they name no account.
 
-        An integration attaches a credential directly or as its discovery grant. An
-        account binds one either way round (``Credential.external_account``, or
+        What holds a credential is derived from the model's own reverse relations
+        (:func:`~angee.base.models.merge_references.references`, each foreign key
+        under its own live policy, so history holds nothing): an integration's
+        credential or discovery grant, an account's credential, and whatever
+        another addon declares (an agent's inference credential, an MCP server's).
+        An account binds one either way round (``Credential.external_account``, or
         ``ExternalAccount.credential``): only the account's own disconnect
         (:meth:`disconnect_account`) retires such a credential, so an integration
         that borrowed it (one reading with the user's connected account) never
         retires it when it lets go.
         """
 
-        bound = apps.get_model("integrate", "ExternalAccount")._base_manager.filter(credential__isnull=False)
-        return self.filter(
-            integrations__isnull=True,
-            discovered_integrations__isnull=True,
-            external_account__isnull=True,
-        ).exclude(pk__in=bound.values("credential_id"))
+        rows = self.filter(external_account__isnull=True)
+        for reference in references(self.model):
+            if isinstance(reference, ForeignKeyReference):
+                rows = rows.exclude(reference.live_pointing(self.model))
+        return rows
 
     def retire_unattached(self, credential: Any) -> bool:
         """Retire ``credential`` once nothing attaches it (:meth:`retire`); return whether it went.
@@ -1177,9 +1180,17 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         return self.retire(credential)
 
     def delete_unattached_derived(self, credential_pk: int | None) -> None:
-        """Dispose of discovery-created material after its last attachment releases it."""
+        """Dispose of discovery-created material after its last attachment releases it.
 
-        if credential_pk is not None:
+        The credential is locked before nothing-holds-it is decided, inside the
+        caller's transaction (as :meth:`retire_unattached` does): an attachment
+        takes the row's key-share lock, so one racing this waits, or is seen. The
+        caller holds the integrations first, the integrate lock order.
+        """
+
+        if credential_pk is None:
+            return
+        if self.filter(pk=credential_pk).lock_if_supported().first() is not None:
             self.unattached().filter(pk=credential_pk).delete()
 
     def served_integrations(self, credential_pk: int) -> models.QuerySet[Any]:
@@ -1434,10 +1445,12 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         comes from the discovery that is settling, not from a re-entered secret, so
         the integrations already using a credential of that name are not sent to
         discover again (two that derive one name would rediscover each other).
-        It overwrites only a credential another integration attaches as derived
-        (:meth:`derived_attachments`): a hand-made credential of that name, or one
-        left from before integrations removed theirs on delete, is refused, so the
-        discovery fails with a message naming the credential to remove or rename.
+        It overwrites a credential of that name that nothing holds (one left from
+        before integrations removed theirs on delete, say) or that another
+        integration attaches as derived (:meth:`derived_attachments`), decided on
+        the locked row; one something else holds (an integration's direct
+        attachment, an account, an agent) is refused, so the discovery fails with
+        a message naming the credential to rename.
         """
 
         values, create_values = self._local_credential_values(
@@ -1448,10 +1461,13 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
             instance, created = self.get_or_create(**identity, defaults=create_values)
             if not created:
                 instance = self.lock_if_supported().get(pk=instance.pk)
-                if not self.derived_attachments(instance.pk).exists():
+                if not (
+                    self.derived_attachments(instance.pk).exists()
+                    or self.unattached().filter(pk=instance.pk).exists()
+                ):
                     raise IntegrationError(
-                        f'A credential named "{derived.name}" already exists and no integration holds it as '
-                        "discovered material; remove or rename that credential, then retry discovery."
+                        f'A credential named "{derived.name}" already exists and is in use other than as '
+                        "discovered material; rename that credential, then retry discovery."
                     )
                 for field, value in values.items():
                     setattr(instance, field, value)
@@ -3324,7 +3340,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             if resolved_account is not _UNSET and row.account is not None and row.account_id != resolved_account.pk:
                 if row.account.provider_identity != resolved_account.provider_identity:
                     raise OAuthFlowError(ACCOUNT_SWITCH_REFUSED, 409)
-            derived_pk = row.credential_id if row.discovery_credential_id not in (None, row.credential_id) else None
+            derived_pk = row.derived_credential_id
             if discovery_generation is not None:
                 if row.discovery_generation != discovery_generation or not row.discovery_pending:
                     raise IntegrationError("Connection discovery has been superseded.")
@@ -3414,6 +3430,23 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         """Whether this connection generation is awaiting discovery or a retry."""
 
         return self.discovery_retry_at is not None
+
+    @property
+    def derived_credential_id(self) -> int | None:
+        """The credential this row attaches as material its discovery derived, or ``None``.
+
+        Discovery attaches it beside the grant it derived from
+        (``discovery_credential``). A row whose grant was deleted still attaches
+        it: every attachment since discovery existed records its grant, so a
+        discovered generation with no grant left holds derived material. A row
+        attached before then holds its credential directly.
+        """
+
+        if self.credential_id is None or self.discovery_credential_id == self.credential_id:
+            return None
+        if self.discovery_credential_id is None and self.discovery_generation == 0:
+            return None
+        return self.credential_id
 
     @property
     def discovery_ready(self) -> bool:

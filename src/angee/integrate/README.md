@@ -326,9 +326,9 @@ database work. An adapter that keeps the remote account it found refuses another
 there with `IntegrationError`; discovery then fails with that operator message and
 sync stays refused. Integrate persists derived material through the credential
 manager (`store_derived`, which sends no integration already using that name to
-discover again and overwrites only a credential another integration attaches as
-derived: a hand-made credential of the name fails the discovery with a message
-naming the credential to remove or rename)
+discover again and overwrites a credential of the name that nothing holds or that
+another integration attaches as derived; one something else holds fails the
+discovery with a message naming the credential to rename)
 and `attach_connection`; adapters never persist credentials or implement
 the generation fence. Integrate then settles and sends
 `signals.discovery_finished.send(sender=type(instance), instance=instance)` on commit.
@@ -340,8 +340,12 @@ A callback also reconnects a disconnected attachment of the same credential.
 A changed credential identity
 invalidates its attachments, preserving pauses. Disconnecting a source grant
 releases its derived attachments and disposes of unused derived material. So do
-detaching a derived credential and deleting the integration that holds it, in the
-same transaction, unless another integration still uses it. Switching
+detaching a derived credential and deleting the integration that holds it (its
+grant lost or not), in the same transaction, unless something else still uses it.
+What holds a credential is read from its model's reverse relations
+(`CredentialManager.unattached`: another integration, an account, an agent's or
+an MCP server's reference); the delete reads the integration's links from its
+locked row, and the credential is locked before it is judged unheld. Switching
 the external account on an in-use credential is refused.
 
 The minute scheduler redispatches due pending discovery, with robust sends and
