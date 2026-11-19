@@ -10,6 +10,7 @@ would run it.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from typing import Any
 
@@ -37,7 +38,6 @@ pytestmark = pytest.mark.django_db(transaction=True)
 SYNC_TASK = "integrate.sync_bridge_now"
 REJECTED = "HubSpot rejected this service key: enter a valid one."
 CHECK_THE_KEY = "This key lacks a service key's usual shape: check it for extra or missing characters."
-NAME_TAKEN = "An account is already connected under that name; choose another name."
 # The presence ref the console's connect entry requires (`DIRECTORY_CREATE`, the parties web fragment).
 CONNECT_ENTRY = "parties.Directory#create"
 CONNECT = """
@@ -88,12 +88,14 @@ def saved_rows() -> tuple[int, int]:
 
 
 def test_an_admin_connects_an_account_tested_first_then_discovered_and_queued_for_its_first_sync(
-    hubspot: HubSpotServer, sent_tasks: list[tuple[str, dict[str, Any]]]
+    hubspot: HubSpotServer, sent_tasks: list[tuple[str, dict[str, Any]]], caplog: pytest.LogCaptureFixture
 ) -> None:
     admin = create_platform_admin("hubspot-connect-admin")
     assert subject_permitted(to_subject_ref(admin), [CONNECT_ENTRY]) == [CONNECT_ENTRY]
 
-    result = connect(admin)
+    with caplog.at_level(logging.WARNING):
+        result = connect(admin)
+    logged = [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING]
 
     assert result.errors is None
     assert result.data is not None
@@ -113,7 +115,7 @@ def test_an_admin_connects_an_account_tested_first_then_discovered_and_queued_fo
         assert (credential.user_id, credential.kind, credential.name) == (
             admin.pk,
             "static_token",
-            "HubSpot — Example contacts",
+            f"HubSpot — Example contacts ({directory.sqid})",
         )
         assert credential.reveal() == {"api_key": TOKEN}
         assert (directory.owner_id, directory.credential_id, directory.backend_class) == (
@@ -123,9 +125,11 @@ def test_an_admin_connects_an_account_tested_first_then_discovered_and_queued_fo
         )
         assert directory.vendor_id == Vendor.objects.get(slug="hubspot").pk
         assert not directory.discovery_ready
-    # A directory that discovers its connection syncs once discovery has learned the account.
+    # A directory that discovers its connection syncs once discovery has learned the account: connect
+    # requests no sync of its own, so it has no refused request to log.
     ((name, discovery),) = sent_tasks
     assert (name, discovery["integration_pk"]) == (DISCOVERY_TASK, directory.pk)
+    assert logged == []
 
     assert discover_connection(**discovery) == {"ok": True, "reason": "applied"}
 
@@ -175,27 +179,24 @@ def test_a_key_hubspot_rejects_answers_its_operator_message_and_saves_nothing(
     assert (len(hubspot.requests), sent_tasks, saved_rows()) == (1, [], (0, 0))
 
 
-def test_a_second_connection_gets_a_credential_of_its_own_and_a_name_in_use_is_refused(
+def test_each_connection_of_one_name_gets_a_credential_of_its_own_named_after_its_directory(
     hubspot: HubSpotServer, sent_tasks: list[tuple[str, dict[str, Any]]]
 ) -> None:
+    """A credential's name carries its directory's id, so a name already in use connects again."""
+
     admin = create_platform_admin("hubspot-twice-admin")
     assert connect(admin).errors is None
 
-    taken = connect(admin)
-    assert taken.errors is not None
-    assert taken.errors[0].extensions["formErrors"] == [NAME_TAKEN]
-    assert saved_rows() == (1, 1)
+    # A second connection under the name the first one holds.
+    assert connect(admin).errors is None
 
-    assert connect(admin, name="Second contacts").errors is None
     with system_context(reason="test.parties.hubspot.connect.twice"):
-        directories = list(Directory.objects.order_by("pk"))
-        assert [directory.display_name for directory in directories] == ["Example contacts", "Second contacts"]
-        credentials = {directory.credential_id for directory in directories}
-        assert len(credentials) == 2
-        assert sorted(Credential.objects.filter(pk__in=credentials).values_list("name", flat=True)) == [
-            "HubSpot — Example contacts",
-            "HubSpot — Second contacts",
-        ]
-    assert sorted(kwargs["integration_pk"] for _name, kwargs in sent_tasks) == [
-        directory.pk for directory in directories
-    ]
+        first, second = Directory.objects.order_by("pk")
+        assert (first.display_name, second.display_name) == ("Example contacts", "Example contacts")
+        assert first.credential_id != second.credential_id
+        names = Credential.objects.filter(pk__in=(first.credential_id, second.credential_id)).values_list("pk", "name")
+        assert dict(names) == {
+            first.credential_id: f"HubSpot — Example contacts ({first.sqid})",
+            second.credential_id: f"HubSpot — Example contacts ({second.sqid})",
+        }
+    assert sorted(kwargs["integration_pk"] for _name, kwargs in sent_tasks) == [first.pk, second.pk]

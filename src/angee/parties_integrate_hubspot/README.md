@@ -84,9 +84,11 @@ A consumer addon fills its own person columns from HubSpot contact properties,
 custom ones especially, with a parties directory mapping (`DirectoryMapping` in
 `angee.parties.backends`, which owns the contract; see the
 [parties README](../parties/README.md)). Its donor of `parties.Person` declares
-the columns and the statement group that owns them; its mapping names the
-`hubspot` backend and the properties' internal names, and is registered under its
-key from the consumer's `autoconfig.py`:
+the columns and the statement group that owns them. Its mapping names the
+`hubspot` backend, the properties' internal names and, as `aspects`, the donor
+groups it states: at least one, and never a group the contact ingest states, both
+checked at startup; a mapping that states a group it does not declare fails the
+page. It is registered under its key from the consumer's `autoconfig.py`:
 
 ```python
 from angee.parties.backends import DirectoryMapping
@@ -97,6 +99,7 @@ class ExampleContactMapping(DirectoryMapping):
     key = "example_hubspot"
     backend = "hubspot"
     fields = ("preferred_colour", "lucky_number", "contact_channels", "do_not_record")
+    aspects = ("example",)
     version = 1
 
     def project(self, row):
@@ -127,17 +130,22 @@ mapping re-derives HubSpot's encodings: `parse_string` (text and single choice),
 (the day HubSpot states as its midnight in UTC). Each answers `None` for an unset
 value and raises `ValueError` for a value not of its type; the mapping's author
 picks the parser by the property's type, and the backend reads no property
-definitions. `project` returns JSON values, so it turns a number, a day or an
+definitions. A `ValueError` that leaves `project` refuses that one contact,
+naming the mapping and never the value, while the rest of its page lands; the
+stream's rescan retries the contact, so it lands once HubSpot states a value of
+the type or the mapping is fixed to read it. Any other error is a bug and fails
+the page. `project` returns JSON values, so it turns a number, a day or an
 instant into the JSON form its column takes.
 
 The backend asks HubSpot for a mapped property only while a mapping names it,
 on every read of contacts, and hands HubSpot's values to the base, which keeps
 only the projections, compares them and applies them after each contact's
 ingest. Registering, removing or re-versioning a mapping replays every contact
-once. HubSpot ignores a property name the account does not define, so a misspelt
-or deleted property reaches `project` as not sent (absent from `row`, where an
-unset one is `None`) and the sync goes on: a mapped column that stays empty
-means the property's internal name needs checking in HubSpot.
+once, and the replay withdraws a removed mapping's statements. HubSpot ignores a
+property name the account does not define, so a misspelt or deleted property
+reaches `project` as not sent (absent from `row`, where an unset one is `None`)
+and the sync goes on: a mapped column that stays empty means the property's
+internal name needs checking in HubSpot.
 
 ## Tests
 

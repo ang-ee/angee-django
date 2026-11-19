@@ -18,7 +18,8 @@ from django.utils import timezone
 
 from angee.integrate.states import LinkStatus, StreamPhase
 from angee.messaging.testing.models import Person
-from angee.parties.backends import MAPPINGS, DirectoryMapping
+from angee.parties.backends import MAPPING_REFUSED, MAPPINGS, DirectoryMapping
+from angee.parties.checks import check_directory_mappings
 from angee.parties_integrate_hubspot.backends import HubSpotDirectoryBackend
 from angee.parties_integrate_hubspot.client import parse_bool, parse_number, parse_string
 from tests.test_parties_directory_backend import _existing
@@ -55,6 +56,7 @@ class ColourMapping(DirectoryMapping):
     key = "hubspot_colour"
     backend = HubSpotDirectoryBackend.key
     fields = ("preferred_colour", "do_not_record")
+    aspects = ("colour",)
 
     def project(self, row: Mapping[str, Any]) -> dict[str, Any]:
         if parse_bool(row.get("do_not_record")):
@@ -73,6 +75,7 @@ class NumberMapping(DirectoryMapping):
     key = "hubspot_number"
     backend = HubSpotDirectoryBackend.key
     fields = ("lucky_number",)
+    aspects = ("number",)
 
     def project(self, row: Mapping[str, Any]) -> dict[str, Any]:
         number = parse_number(row.get("lucky_number"))
@@ -85,11 +88,15 @@ class NumberMapping(DirectoryMapping):
 
 
 class SentMapping(DirectoryMapping):
-    """States nothing: its projection is the row the backend handed it, so a test reads what HubSpot sent."""
+    """States nothing: its projection is the row the backend handed it, so a test reads what HubSpot sent.
+
+    A mapping declares at least one group; this one declares the colour group and states nothing in it.
+    """
 
     key = "hubspot_sent"
     backend = HubSpotDirectoryBackend.key
     fields = ("no_such_property", "preferred_colour")
+    aspects = ("colour",)
 
     def project(self, row: Mapping[str, Any]) -> dict[str, Any]:
         return dict(row)
@@ -246,6 +253,40 @@ def test_an_adopted_contact_is_mapped_like_a_minted_one(hubspot: HubSpot, settin
     assert _stated(hubspot, ada, "colour").link_id == link.pk
 
 
+def test_a_contact_whose_mapped_value_its_parser_cannot_read_is_refused_alone_and_the_page_lands(
+    hubspot: HubSpot, settings: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """``parse_number`` raises ``ValueError`` for a value that is no number: that contact waits, naming the mapping.
+
+    Neither the refusal, the contact's retained payload nor the log repeats the value.
+    """
+
+    _register(settings, NumberMapping)
+    hubspot.reopen()
+    ada = hubspot.server.add("contacts", {**ADA, "lucky_number": "seven"}, modified=ago(days=2))
+    grace = hubspot.server.add("contacts", {**GRACE, "lucky_number": "7"}, modified=ago(days=1))
+
+    with caplog.at_level("WARNING", logger="angee.parties.backends"):
+        assert [page.count for page in hubspot.drain()] == [1]
+
+    assert _person(hubspot, grace).favourite_number == 7
+    assert hubspot.link(ada).target_object_id is None
+    (failure,) = failures(hubspot)
+    assert (failure, failure.code, failure.details["mapping"]) == (
+        *hubspot.link(ada).failures(),
+        MAPPING_REFUSED,
+        NumberMapping.key,
+    )
+    kept = json.dumps([failure.model_dump(mode="json"), hubspot.link(ada).source_payload], default=str)
+    assert "seven" not in kept
+    assert f"{NumberMapping.key!r} refused record {ada!r}" in caplog.text and "seven" not in caplog.text
+
+    # Once HubSpot states a number, the next delta lands the contact.
+    hubspot.server.update("contacts", ada, {"lucky_number": "8"}, modified=timezone.now())
+    assert [page.count for page in hubspot.drain()] == [1]
+    assert _person(hubspot, ada).favourite_number == 8
+
+
 def test_a_property_the_account_lacks_reaches_the_mapping_as_not_sent_and_the_sync_goes_on(
     hubspot: HubSpot, settings: Any
 ) -> None:
@@ -263,3 +304,11 @@ def test_a_property_the_account_lacks_reaches_the_mapping_as_not_sent_and_the_sy
     assert hubspot.link(grace).source_payload[MAPPINGS] == {"hubspot_sent": {"preferred_colour": None}}
     assert {hubspot.link(key).status for key in (ada, grace)} == {LinkStatus.CURRENT}
     assert not failures(hubspot)
+
+
+def test_mappings_of_hubspot_contacts_pass_the_startup_check(settings: Any) -> None:
+    """HubSpot is a registered pull-only backend, and each mapping here declares the donor groups it states."""
+
+    _register(settings, ColourMapping, NumberMapping, SentMapping)
+
+    assert check_directory_mappings() == []

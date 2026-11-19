@@ -267,8 +267,9 @@ live in code docstrings.
   which HubSpot leaves out, reaches the mapping as not sent. `parse_string`,
   `parse_options`, `parse_number`, `parse_bool`, `parse_datetime` and
   `parse_date` (`angee.parties_integrate_hubspot.client`) read HubSpot's string
-  values by property type for mapping authors. Operator messages never repeat
-  HubSpot's message text or error category. The scripted account
+  values by property type for mapping authors; each raises `ValueError` for a
+  value not of its type, which refuses that contact alone. Operator messages
+  never repeat HubSpot's message text or error category. The scripted account
   (`angee.parties_integrate_hubspot.testing.server`) builds its invented keys at
   runtime (`service_key`), so no literal in the repository has a real key's shape.
 
