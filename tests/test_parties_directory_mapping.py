@@ -275,8 +275,9 @@ class RememberMapping(DirectoryMapping):
         RecordBinding.objects.write_sourced_page(
             person,
             vault=Vault.objects.for_resource(Vault.PEOPLE),
+            role="remember",
             folder_title=f"{person.display_name} ({person.sqid})",
-            title=f"Remember: {person.sqid}",
+            title=f"{person.display_name}: remember ({person.sqid})",
             body=values["remember"],
             written=self.applied(link).get("remember"),
         )
@@ -693,7 +694,8 @@ def test_a_mapping_writes_a_sourced_note_that_follows_the_source_until_a_person_
     person = _person(pull, "ada")
 
     def note() -> Any:
-        return MarkdownPage.objects.get(title=f"Remember: {person.sqid}")
+        (binding,) = RecordBinding.objects.for_record(person, role="remember")
+        return MarkdownPage.objects.get(pk=binding.page_id)
 
     assert note().body == "Prefers tea."
     revisions = MarkdownPage.history.filter(id=note().pk).count()
