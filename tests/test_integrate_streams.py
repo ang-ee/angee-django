@@ -794,7 +794,8 @@ def parts(*pairs: tuple[Any, Any]) -> tuple[MappingContribution, ...]:
 def test_a_changed_contribution_list_replays_each_record_once(
     stream_bridge: Channel, before: tuple[tuple[str, int], ...], after: tuple[tuple[str, int], ...]
 ) -> None:
-    adapter = composed_adapter(stream_bridge, contributions=parts(*before))
+    # The delta redelivers both rows unchanged, so a drain that lands nothing proves the version held.
+    adapter = composed_adapter(stream_bridge, contributions=parts(*before), delta=("person:1", "person:2"))
     initial, landed = drain_records(stream_bridge, adapter)
     assert landed == 2 and initial.mapping_version == sum(version for _key, version in before)
     assert initial.retained_contributions == before
