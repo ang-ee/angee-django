@@ -137,7 +137,7 @@ describe("DescriptorFieldList", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(input.getAttribute("contenteditable")).toBe("false"));
     await act(async () => finishValidation?.());
-    await waitFor(() => expect(submit).toHaveBeenCalledWith(values("Updated")));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith(values("Updated"), { errorNotification: false }));
   });
 
   test.each(["text", "readOnly"] as const)("discards old editor validity when changing the same field to %s", async (nextMode) => {
@@ -177,7 +177,7 @@ describe("DescriptorFieldList", () => {
     }
     expect(screen.queryByText("Invalid JSON")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(submit).toHaveBeenCalledWith({ payload: nextMode === "text" ? "Updated" : { note: "Retained" } }));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ payload: nextMode === "text" ? "Updated" : { note: "Retained" } }, { errorNotification: false }));
   });
 
   test("default object projection keeps nested read-only values out of editable controls", async () => {

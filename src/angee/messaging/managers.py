@@ -73,7 +73,7 @@ from angee.base.models.trash import TrashQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.base.permissions import actor_user_id, purpose_read_holds, reader_queryset, require_rebac_queryset
 from angee.base.prefetch import InstancePrefetch, ReaderMemo, prefetched_objects
-from angee.base.querysets import AngeeQuerySet, MergeableQuerySet, row_lock_paths
+from angee.base.querysets import AngeeQuerySet, MergeableQuerySet, row_lock_queryset
 from angee.base.refs import generic_pointer_model, generic_pointer_target
 from angee.base.search import SEARCH_CONFIG, stamp_search_vector
 from angee.base.serialization import STRINGIFIED_JSON, strip_null_bytes
@@ -1352,7 +1352,7 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
             return
         thread_model = self.model.thread.field.related_model
         with system_context(reason="messaging.record_thread.teardown"), transaction.atomic():
-            target_model._base_manager.select_for_update(of=row_lock_paths(target_model)).filter(pk=object_id).exists()
+            row_lock_queryset(target_model).filter(pk=object_id).exists()
             edges = self.model._base_manager
             attachments = list(
                 edges.all()

@@ -572,16 +572,22 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             mapped_payload=projection,
         )
 
-    def on_absent(self, stream: Any, links: Sequence[Any]) -> None:
+    def on_absent(self, stream: Any, links: Sequence[Any]) -> dict[Any, ApplyResult] | None:
         """A confirmed address-book removal withdraws the statements its link made, as a read tombstone does.
 
-        An unavailable book keeps them; contacts keep the sweep's existing absence behaviour.
+        Each withdrawal is reported as a read tombstone's evidence (no projection, the
+        folder kept), so a book that returns applies and states its name again. An
+        unavailable book keeps them; contacts keep the sweep's existing absence behaviour.
         """
 
-        if stream.key == ADDRESSBOOKS:
-            for link in links:
-                if link.status == LinkStatus.TOMBSTONE:
-                    link.withdraw_statements()
+        if stream.key != ADDRESSBOOKS:
+            return None
+        withdrawn: dict[Any, ApplyResult] = {}
+        for link in links:
+            if link.status == LinkStatus.TOMBSTONE:
+                link.withdraw_statements()
+                withdrawn[link.pk] = ApplyResult(mapped_payload=None)
+        return withdrawn
 
     def local_changes(self, stream: Any, *, keys: frozenset[str] | None = None) -> Iterable[LocalChange]:
         """Compare selected local projections to their bases, including deletions."""

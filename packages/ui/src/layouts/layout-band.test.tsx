@@ -29,6 +29,21 @@ describe("createLayoutBand", () => {
     expect(screen.getByTestId("page").textContent).not.toContain("only");
   });
 
+  test("only the band holding the host row is marked as the layout's", () => {
+    render(
+      <Harness>
+        <band.Band>page</band.Band>
+        <section data-testid="card">
+          <band.Provider host={undefined}>
+            <band.Band>card</band.Band>
+          </band.Provider>
+        </section>
+      </Harness>,
+    );
+    expect(screen.getByTestId("row").querySelector(".test-band")?.hasAttribute("data-layout-band")).toBe(true);
+    expect(screen.getByTestId("card").querySelector(".test-band")?.hasAttribute("data-layout-band")).toBe(false);
+  });
+
   test("two bands on one page both render inline, never stacked in the row", () => {
     render(
       <Harness>

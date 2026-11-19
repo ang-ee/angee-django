@@ -39,9 +39,21 @@ from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection, models, transaction
-from django.db.models import OuterRef, Prefetch, Q, Subquery
-from django.db.models.functions import JSONObject
+from django.db.models import (
+    BooleanField,
+    Case,
+    Exists,
+    ExpressionWrapper,
+    OuterRef,
+    Prefetch,
+    Q,
+    Subquery,
+    Value,
+    When,
+)
+from django.db.models.functions import Cast, Concat, JSONObject, NullIf
 from django.utils import timezone
+from django.utils.text import capfirst
 from django.views.decorators.debug import sensitive_variables
 from django_compose.models import Composable
 from rebac import (
@@ -63,7 +75,7 @@ from angee.base.fields.text import DiagnosticTextField
 from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
 from angee.base.locks import LockKey, record_lock_key, task_lock, task_lock_is_held, task_locks_are_cross_process
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel, record_display_label
+from angee.base.models.base import AngeeDataModel, AngeeModel, record_display_label
 from angee.base.models.implementations import ImplDefaultsMixin
 from angee.base.models.locks import ImmutableFieldsMixin
 from angee.base.models.merge_references import MergePolicy, references
@@ -71,8 +83,9 @@ from angee.base.models.ownership import OwnerMixin, OwnerQuerySet
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.transitions import StateTransitions, save_state, transition
 from angee.base.permissions import actor_user_id, instance_actor
-from angee.base.refs import generic_pointer_target
-from angee.base.serialization import canonical_json
+from angee.base.querysets import row_lock_queryset
+from angee.base.refs import generic_pointer_model, generic_pointer_target
+from angee.base.serialization import canonical_json, canonical_json_sha256
 from angee.graphql.capabilities import held_permissions
 from angee.graphql.mixins import ImplementationChoicesMixin
 from angee.integrate.constants import DISCOVERY_ATTEMPT_LIMIT, DISCOVERY_TASK, DISCOVERY_TASK_EXPIRES
@@ -127,6 +140,7 @@ from angee.integrate.streams import (
     PushPreview,
     begin_stream_cycle,
     preview_push,
+    push_candidates,
     push_stream,
     read_stream_keys,
     sync_bridge,
@@ -135,9 +149,10 @@ from angee.integrate.sync import SyncDispatch, progress_bridge_context
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
 from angee.jobs.enqueue import enqueue_task
 from angee.provenance.context import current_changeset
-from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
+from angee.provenance.querysets import model_history
 from angee.provenance.statements import (
     SourceKind,
     Statement,
@@ -991,8 +1006,17 @@ class CredentialQuerySet[CredentialT: Credential](AngeeHistoryQuerySet[Credentia
             )
         )
 
+    def owned_by(self, user: Any) -> Self:
+        """Return ``user``'s own credentials: the rows whose ``user`` is them, whatever their kind.
+
+        A verb that takes one of the caller's credentials looks it up here, so an
+        unknown id and another user's fail alike.
+        """
+
+        return self.filter(user=user)
+
     def connected_for(self, user: Any) -> Self:
-        """Return ``user``'s external-account-backed credentials.
+        """Return ``user``'s external-account-backed credentials (:meth:`owned_by`, with an account).
 
         Each row is a credential whose ``external_account`` (and that account's
         ``credential``) is preloaded under the ambient actor's scope. Owns the
@@ -1000,8 +1024,7 @@ class CredentialQuerySet[CredentialT: Credential](AngeeHistoryQuerySet[Credentia
         connected-accounts surface.
         """
 
-        return self.filter(
-            user=user,
+        return self.owned_by(user).filter(
             external_account__isnull=False,
         ).rebac_select_related("external_account", "external_account__credential")
 
@@ -1071,8 +1094,8 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
     ) -> bool:
         """Retire one credential: prepare its disconnect, then delete it; return whether a row went.
 
-        The verb a credential's owner retires it through (an account disconnect, a
-        calendar subscription's purge). :meth:`prepare_disconnect` owns vetoes,
+        The verb a credential's owner retires it through (an account disconnect, an
+        integration's purge of what it held). :meth:`prepare_disconnect` owns vetoes,
         derived releases and after-commit remote revocation; ``before_delete`` runs
         the caller's own release between the two (an account's), and ``rows`` scopes
         the delete (an actor's ``with_action("delete")``). A credential an
@@ -1121,7 +1144,7 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         account binds one either way round (``Credential.external_account``, or
         ``ExternalAccount.credential``): only the account's own disconnect
         (:meth:`disconnect_account`) retires such a credential, so an integration
-        that borrowed it (a calendar source on the user's connected account) never
+        that borrowed it (one reading with the user's connected account) never
         retires it when it lets go.
         """
 
@@ -1174,7 +1197,7 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
             ).first()
         if row is None or row.is_reconnect_required:
             return None
-        return row if set(oauth_scopes) <= set(row.granted_scopes or ()) else None
+        return row if row.grants(oauth_scopes) else None
 
     def upsert_for_user(
         self,
@@ -1493,6 +1516,21 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
             and self.oauth_client.supports_refresh
             and bool(self.reveal().get("refresh_token"))
         )
+
+    def grants(self, scopes: Iterable[str]) -> bool:
+        """Whether this grant covers every scope in ``scopes``, as the provider reported granting them."""
+
+        return set(scopes) <= set(self.granted_scopes or ())
+
+    @property
+    def delegated(self) -> bool:
+        """Whether this credential acts for another principal: a signing key whose assertions name a ``subject``.
+
+        A ``jwt_bearer`` key with a stored ``subject`` mints tokens as that delegated
+        user (domain-wide delegation), not as its own service account.
+        """
+
+        return self.kind == CredentialKind.JWT_BEARER and bool(self.reveal().get("subject"))
 
     @property
     def is_reconnect_required(self) -> bool:
@@ -2224,17 +2262,33 @@ class IntegrationManager[IntegrationT: Integration](_IntegrationManagerBase[Inte
         if credential.pk != target.credential_id or target.lifecycle == IntegrationLifecycle.DISCONNECTED:
             target.attach_credential(credential)
 
-    def create_capability(self, **fields: Any) -> IntegrationT:
-        """Prepare model-owned defaults and connection identity before native validation."""
+    def build(self, **fields: Any) -> IntegrationT:
+        """Return an unsaved capability row of ``fields``, as a saved one would answer before anything is created.
+
+        It carries the effective actor when there is one, its implementation's
+        defaults (its vendor among them, ``ImplDefaultsMixin.prepare_impl_defaults``;
+        an unknown implementation key is refused on its field) and the account of
+        its credential, unless ``fields`` name one. A connect verb or a connect
+        query builds one to ask what the capability reads with
+        (:meth:`Integration.connectable_credentials`) or connects through
+        (:meth:`Integration.ready_oauth_client`); :meth:`create_capability` saves one.
+        """
 
         instance = self.model(**fields)
-        actor, _sudo = self.effective_actor(strict=True)
+        actor, _sudo = self.effective_actor()
         if actor is not None:
             instance.with_actor(actor)
         instance.prepare_impl_defaults()
         credential = instance.credential
         if "account" not in fields and "account_id" not in fields and credential is not None:
             instance.account = credential.external_account
+        return instance
+
+    def create_capability(self, **fields: Any) -> IntegrationT:
+        """Insert the row :meth:`build` prepares, after native validation; an actor (or sudo) is required."""
+
+        self.effective_actor(strict=True)
+        instance = self.build(**fields)
         instance.full_clean()
         return self.get_queryset().insert(instance)
 
@@ -2434,7 +2488,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
 
         scopes = self.connection_oauth_scopes
         credential = self._credential_health() if scopes else None
-        return credential is not None and not set(scopes) <= set(credential.granted_scopes or ())
+        return credential is not None and not credential.grants(scopes)
 
     def bound_account(self, oauth_client_pk: int) -> ExternalAccount | None:
         """Return the external account this integration is connected as at one OAuth client."""
@@ -2470,6 +2524,55 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         if oauth_client is None:
             raise OAuthFlowError(OAUTH_CLIENT_NOT_CONNECTABLE, 400, f"{owner_label} has no enabled OAuth client.")
         return oauth_client
+
+    def ready_oauth_client(self) -> Any | None:
+        """Return the enabled OAuth registration another account connects through, or ``None`` while there is none.
+
+        :meth:`connect_oauth_client` under this capability's own label, its refusal
+        (no registration hint, or none enabled) read as ``None``.
+        """
+
+        with system_context(reason="integrate.integration.ready_oauth_client"):
+            try:
+                return self.connect_oauth_client(capfirst(str(self._meta.verbose_name)))
+            except OAuthFlowError:
+                return None
+
+    def reads_with(self, credential: Any) -> bool:
+        """Whether this capability reads with ``credential``: an OAuth grant of its client that covers its scopes.
+
+        Only an OAuth credential of the registration this capability connects
+        through (:meth:`connection_oauth_slug`) qualifies, so one vendor's token is
+        never sent to another's API, and only when its grant covers
+        :attr:`connection_oauth_scopes`. A capability without an OAuth client
+        reads with none. A capability whose reads need such a grant composes this
+        rule in its :meth:`credential_blocker`; :meth:`connectable_credentials`
+        offers the accounts it holds for.
+        """
+
+        if credential.kind != CredentialKind.OAUTH:
+            return False
+        with system_context(reason="integrate.integration.reads_with"):
+            try:
+                oauth_slug = self.connection_oauth_slug()
+            except OAuthFlowError:
+                return False
+            scopes = self.connection_oauth_scopes
+            client = credential.oauth_client
+        return client is not None and client.slug == oauth_slug and credential.grants(scopes)
+
+    def connectable_credentials(self, user: Any) -> models.QuerySet[Credential]:
+        """Return ``user``'s connected accounts this capability reads with (:meth:`reads_with`).
+
+        A capability offers them before it exists through an unsaved row of it
+        (:meth:`IntegrationManager.build`).
+        """
+
+        credential_model = apps.get_model("integrate", "Credential")
+        accounts = credential_model.objects.connected_for(user).filter(kind=CredentialKind.OAUTH)
+        # The grant's scopes are JSON, whose containment is not portable to SQLite; a user's accounts are few.
+        readable = [account.pk for account in accounts.select_related("oauth_client") if self.reads_with(account)]
+        return cast("models.QuerySet[Credential]", accounts.filter(pk__in=readable))
 
     @classmethod
     def credential_projection_expressions(cls) -> dict[str, Any]:
@@ -3119,16 +3222,31 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             apps.get_model("integrate", "Credential").objects.delete_unattached_derived(derived_pk)
         self.refresh_from_db()
 
+    def credential_blocker(self, credential: Any) -> str | None:
+        """Return a public-safe refusal to attach ``credential`` to this capability, or ``None`` when admitted.
+
+        The capability's one admission rule: :meth:`admit_credential` raises it on
+        every attachment, and the connect picker shows it beside each account the
+        user could choose (``ConnectWithAccount``), so an account the capability
+        refuses is listed as refused rather than refused only once picked. The base
+        admits any credential; a capability whose reads need its OAuth client's
+        grant refuses one it does not :meth:`reads_with`.
+        """
+
+        del credential
+        return None
+
     def admit_credential(self, credential: Any) -> None:
         """Refuse ``credential`` before it attaches to this capability, raising ``ValidationError`` on ``credential``.
 
         :meth:`attach_connection` asks the capability row on every attachment, so
         no path (connect, the console's credential patch, a reconnect) skips it.
-        The base admits any credential; a capability whose reads need a particular
-        registration or grant overrides it.
+        It raises :meth:`credential_blocker`, the rule; a capability overrides this
+        only to hold a lock around that rule.
         """
 
-        del credential
+        if (refusal := self.credential_blocker(credential)) is not None:
+            raise ValidationError({"credential": refusal})
 
     @transition(
         lifecycle,
@@ -4734,6 +4852,20 @@ class SyncStreamQuerySet[SyncStreamT: SyncStream](AngeeHistoryQuerySet[SyncStrea
         )
         return self.filter(generation=Subquery(latest))
 
+    def in_lock_order(self) -> Self:
+        """Order streams as integrate locks them: roots, then contained streams, by key, partition and generation.
+
+        A page or push locks its stream, then the child streams it retires
+        (:meth:`SyncStreamManager.retire_children`). A caller locking several streams
+        of a bridge at once (a purge) takes them in this order, so it never waits on
+        such a page holding them the other way round. A contained stream holds no
+        containers (:meth:`SyncStreamManager.current`), so this is parents before
+        their children at every depth.
+        """
+
+        contained = ExpressionWrapper(Q(container__isnull=False), output_field=BooleanField())
+        return self.order_by(contained, "key", "partition", "generation")
+
     def retiring(self, stream: models.Model) -> Self:
         """The current child streams of ``stream`` with a pending retirement pass and a container still gone.
 
@@ -4801,15 +4933,19 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         flips it from inside a page.
         A child stream's ``container`` is a live container link
         (:meth:`RecordLinkQuerySet.live_containers`) of a stream of the same bridge,
-        whose external key is the partition. A stream declared before containers
-        existed adopts it once; otherwise it never changes. A retired generation is
-        reopened by :meth:`bump_generation`.
+        whose external key is the partition, and holds no containers of its own. A
+        stream declared before containers existed adopts it once; otherwise it never
+        changes. A retired generation is reopened by :meth:`bump_generation`.
         """
 
         if definition.absence_threshold < 1:
             raise ValidationError("A stream absence threshold must be positive.")
         if definition.mapping_version < 1:
             raise ValidationError("A stream mapping version must be positive.")
+        if definition.container is not None and definition.holds_containers:
+            # Containers nest one level (a source's address books or calendars, then their records):
+            # ``SyncStreamQuerySet.in_lock_order``'s roots-then-contained order is then a depth order.
+            raise ValidationError("A contained stream cannot hold containers of its own.")
         integration_model = self.model.integration.field.related_model
         if bridge._meta.proxy or integration_model not in bridge._meta.get_parent_list():
             raise ValidationError("A stream bridge must be a concrete Integration child.")
@@ -5027,7 +5163,7 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 .exclude(state=StreamState.RETIRED)
                 .latest_generations()
                 .only("pk")
-                .order_by("key", "partition")
+                .in_lock_order()
             )
             retired = 0
             for child in children:
@@ -5122,6 +5258,21 @@ class SyncStream(ImmutableFieldsMixin, SyncStateMixin, AuditMixin, AngeeDataMode
             self.state == StreamState.OPEN
             and self.direction != StreamDirection.PUSH
             and self.kind == StreamKind.RECORD_REPLICA
+        )
+
+    def sweep_due(self) -> bool:
+        """Whether this generation's periodic sweep is due: ``reconcile_interval`` passed since the last one completed.
+
+        Never without an interval. The sweep compares everything: a pull's absence
+        pass (:func:`~angee.integrate.streams.reconcile_stream`) lists every remote
+        record, and a push compares every local row
+        (:meth:`RecordLinkManager.changed_since_base` narrows nothing while it is
+        due). A push stream, which no absence pass sweeps, completes its sweep with
+        that push (:func:`~angee.integrate.streams.push_stream`).
+        """
+
+        return self.reconcile_interval is not None and (
+            self.last_reconciled_at is None or self.last_reconciled_at + self.reconcile_interval <= timezone.now()
         )
 
     @property
@@ -5222,6 +5373,28 @@ class RecordLinkQuerySet[RecordLinkT: RecordLink](AngeeHistoryQuerySet[RecordLin
         """Rows a sweep's enumeration did not observe since it started."""
 
         return self.filter(Q(last_seen_at__isnull=True) | Q(last_seen_at__lt=started))
+
+    def released(self) -> Self:
+        """Links naming no row now: released ones, and ones still bound to a row that is gone.
+
+        A deletion releases its row's push links (:meth:`RecordLink.teardown_for_target`)
+        only if one names the row when the delete reads them. A delete that locked
+        nothing (a cascade Django's collector reaches) can lose the row after a push
+        bound its link meanwhile, and that link keeps naming the missing row. One
+        anti-join per target content type finds it, the pointer cast to the target's
+        key so the key's index answers. A link whose target model is no longer
+        installed stays bound.
+        """
+
+        gone = Q(target_object_id=None)
+        bound = self.exclude(target_object_id=None).order_by().values_list("target_content_type_id", flat=True)
+        for content_type_id in sorted(bound.distinct()):
+            model = ContentType.objects.get_for_id(content_type_id).model_class()
+            if model is None:
+                continue
+            present = model._base_manager.filter(pk=Cast(OuterRef("target_object_id"), output_field=model._meta.pk))
+            gone |= Q(~Exists(present), target_content_type_id=content_type_id)
+        return self.filter(gone)
 
     @staticmethod
     def observing_rule(path: str = "") -> Q:
@@ -5340,6 +5513,12 @@ class RecordLinkQuerySet[RecordLinkT: RecordLink](AngeeHistoryQuerySet[RecordLin
 _RecordLinkManagerBase = AngeeHistoryManager.from_queryset(RecordLinkQuerySet)
 
 
+def _held_version(mapping_version: int, version: str | None) -> str:
+    """Return the stored form of a local version, framed by the mapping version that projected it; ``""`` for none."""
+
+    return f"{mapping_version}:{version}" if version else ""
+
+
 class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLinkT]):
     """Own replica identity, applied bases and count-based absence policy."""
 
@@ -5432,6 +5611,45 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
         link.target = None
         return link
 
+    def release_pushes(self, target: models.Model) -> int:
+        """Let ``target`` go from the push links naming it, so each push writes its removal; return how many.
+
+        A row a push link names is the local side of what it publishes. Once it is
+        deleted (:meth:`RecordLink.teardown_for_target`), or no longer the record a
+        link names, its push links release it, and ``push_stream`` yields each
+        released link's removal. A link that holds the row
+        (:meth:`RecordLink.live_reference_filter`) stays bound; this never refuses.
+        It opens no transaction, so a delete with links takes no extra savepoint.
+        Call inside the transaction that deletes or moves the row, holding the
+        row's lock (its deletion's ``lock_for_delete``, or the lock a move took
+        before changing the row): a push reflecting its write locks the row before
+        binding its link (:meth:`lock_target`), so it either binds first and is
+        released here, or waits and then finds the row gone or moved. The row is
+        locked again here (a plain ``Model.delete()`` took no lock), then its
+        links, the order that push takes them.
+        """
+
+        content_type, object_id = generic_pointer_target(target)
+        pushed = self.model._base_manager.filter(target_content_type=content_type, target_object_id=object_id)
+        self.lock_target(target)
+        return self.release_targets(pushed.exclude(self.model.live_reference_filter(principal=None)))
+
+    def lock_target(self, target: models.Model) -> bool:
+        """Lock a row links name, in its model's delete order; return whether the row is still there.
+
+        An Angee model is locked through its ``lock_for_delete`` hook (its domain
+        locks, then the row), the order its deletion takes before the teardown
+        releases its push links (:meth:`release_pushes`); any other model, its row
+        and multi-table parents. Either way the row is read through its base
+        manager: a row its default manager hides is still there. Lock the row
+        before its links.
+        """
+
+        model = type(target)
+        if isinstance(target, AngeeModel):
+            return target.lock_for_delete(queryset=model._base_manager.all()) is not None
+        return row_lock_queryset(model).filter(pk=target.pk).exists()
+
     def release_targets(self, links: models.QuerySet[Any]) -> int:
         """Let every row ``links`` binds go at once, as :meth:`release_target` lets one go; return how many.
 
@@ -5447,6 +5665,90 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
                 target_content_type=None, target_object_id=None, updated_at=timezone.now()
             )
 
+    def with_local_versions(self, rows: models.QuerySet[Any], *, context: str = "") -> models.QuerySet[Any]:
+        """Annotate ``rows`` with their ``local_version``: their current version under ``context``, else ``NULL``.
+
+        The version of a projection that reads only the row's own tracked columns
+        and ``context`` (what else it reads, such as its container's zone): every
+        tracked write of the row gives it a new one (``ModelHistory.current_version``),
+        and a changed ``context`` changes every row's. ``context`` enters as its
+        digest, so a version stays within ``LOCAL_VERSION_LENGTH`` whatever it is.
+        A projection that reads other rows needs a version of its own. Yield each
+        row's with its projection (``LocalChange.local_version``), read in the same
+        statement; ``NULL`` (``None``) is a row without a version yet, which a push
+        baselines (:meth:`settle`).
+        """
+
+        history = model_history(rows.model)
+        if history is None:
+            return rows.annotate(local_version=Value(None, output_field=models.CharField()))
+        prefix = Value(f"{canonical_json_sha256(context)}@")
+        version = Concat(prefix, history.current_version(rows.model), output_field=models.CharField())
+        # Without a version the concatenation is the bare prefix, which names no state: NULL.
+        return rows.annotate(local_version=NullIf(version, prefix))
+
+    def changed_since_base(self, stream: Any, rows: models.QuerySet[Any]) -> models.QuerySet[Any]:
+        """Narrow ``rows`` to those that changed since a link of ``stream`` last held them, by local version.
+
+        ``rows`` carry each row's current version as their ``local_version``
+        annotation (:meth:`with_local_versions`; ``NULL`` without one), the version
+        a push adapter yields with its projection (``LocalChange.local_version``).
+        A row a link of the stream names at that version, under the stream's
+        mapping version, is unchanged since that link's base and is left out; a
+        new row, a row without a version, and every row after a mapping change
+        stay. One ``NOT EXISTS`` per row, on the link's target index.
+
+        While the stream's sweep is due (``SyncStream.sweep_due``) every row stays:
+        the push compares them all, so what no version names (a projection change
+        without a mapping version bump, a write that skipped history capture) still
+        converges once per ``reconcile_interval``.
+        """
+
+        if stream.sweep_due():
+            return rows
+        held = self.model._base_manager.filter(
+            stream=stream,
+            target_content_type=ContentType.objects.get_for_model(generic_pointer_model(rows.model)),
+            target_object_id=Cast(OuterRef("pk"), models.CharField()),
+            # The stored form (``_held_version``); a row without a version matches no stored one.
+            local_version=Concat(
+                Value(f"{stream.mapping_version}:"), OuterRef("local_version"), output_field=models.CharField()
+            ),
+        )
+        return rows.exclude(Exists(held))
+
+    def settle(self, stream: Any, unchanged: Iterable[tuple[Any, Any]]) -> int:
+        """Record what a push learned of local changes equal to their link's base; return how many links moved.
+
+        ``unchanged`` pairs a link, read with its base, with a ``LocalChange`` whose
+        projection equals that base (``push_candidates``). A change read at a newer
+        local version advances its link's (``RecordLink.local_version``), in one
+        statement conditional on each link's base: a link whose base moved since
+        keeps its version. A row read without a version (``None``: written before
+        its history, or its history pruned) gets its baseline
+        (``ModelHistory.record_missing_baselines``), so the next push reads it once
+        more at that version and settles it.
+        """
+
+        moves: dict[Any, tuple[Any, str]] = {}
+        unversioned: dict[type[models.Model], list[Any]] = {}
+        for link, change in unchanged:
+            held = _held_version(stream.mapping_version, change.local_version)
+            if held and held != link.local_version:
+                moves[link.pk] = (link.applied_base_id, held)
+            elif change.local_version is None and change.target is not None:
+                model = type(change.target)._meta.concrete_model or type(change.target)
+                unversioned.setdefault(model, []).append(change.target.pk)
+        with system_context(reason="integrate.record.settle"):
+            for model, keys in unversioned.items():
+                if (history := model_history(model)) is not None:
+                    history.record_missing_baselines(model, keys)
+            if not moves:
+                return 0
+            bases = Q(*(Q(pk=pk, applied_base_id=base) for pk, (base, _held) in moves.items()), _connector=Q.OR)
+            versions = [When(pk=pk, then=Value(held)) for pk, (_base, held) in moves.items()]
+            return self.filter(bases).update(local_version=Case(*versions, output_field=models.CharField()))
+
     def promote(
         self,
         link: Any,
@@ -5460,12 +5762,15 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
         remote_version: str = "",
         origin: str = "remote",
         tombstone: bool = False,
+        local_version: str | None = "",
     ) -> Any:
         """Append applied evidence and pin its base; the driver owns promotion.
 
         Adapters return their evidence to the driver, never promote its link
         themselves. Omit ``target`` to retain its binding; pass ``None`` to clear
-        it and retain a WITHDRAWN identity.
+        it and retain a WITHDRAWN identity. ``local_version`` is the version of the
+        local state ``mapped_payload`` was read from (a push's write); any other
+        promotion clears the link's, so a held version always projects its base.
         """
 
         with system_context(reason="integrate.record.promote"), transaction.atomic():
@@ -5480,6 +5785,7 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
             if target is not UNSET:
                 self._set_target(locked, target)
             locked.remote_version, locked.origin, locked.status = remote_version, origin, LinkStatus.CURRENT
+            locked.local_version = _held_version(mapping_version, local_version)
             if target is None:
                 locked.status = LinkStatus.WITHDRAWN
             locked.tombstoned_at = timezone.now() if tombstone else None
@@ -5495,6 +5801,7 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
                 "target_content_type_id",
                 "target_object_id",
                 "remote_version",
+                "local_version",
                 "origin",
                 "status",
                 "tombstoned_at",
@@ -5625,6 +5932,10 @@ class RecordLink(
     ``applied_base`` pins this link's own historical application snapshot; an
     observation never advances it. Its protected FK keeps the active comparison
     base out of native history pruning. ``pinned`` withholds automatic updates.
+    :meth:`RecordLinkManager.promote` is the only writer of ``applied_base``, and
+    the held ``local_version`` relies on it: every promotion sets or clears that
+    version with the base, and :meth:`RecordLinkManager.settle` advances it only
+    while the base it compared is still the applied one.
 
     ``inbound`` retains a list of failures, including closed evidence. Each entry
     carries kind, code, source_hash, mapping_version, details, status, attempts,
@@ -5637,6 +5948,7 @@ class RecordLink(
 
     # A link's history is sync evidence read through its target: no timeline of its own.
     timeline_subject = False
+    history = ModelHistory(inherit=True, excluded_fields=("local_version",))
 
     merge_policy = MergePolicy.MOVE
     accepts_any_record_target = True
@@ -5683,6 +5995,16 @@ class RecordLink(
     outbox_retry_at = models.DateTimeField(null=True, blank=True)
     outbox_last_error = models.JSONField(default=dict, blank=True)
     remote_version = models.CharField(max_length=512, blank=True)
+    local_version = models.CharField(max_length=255, blank=True, default="")
+    """The local version (``LocalChange.local_version``) whose projection the applied base holds; ``""``: unknown.
+
+    A push records the version it read with what it wrote; any other promotion
+    clears it; :meth:`RecordLinkManager.settle` advances it when a newer version
+    still projects the base. Stored framed by the mapping version that projected
+    it, so a mapping change reads every row again; a version is at most
+    ``LOCAL_VERSION_LENGTH`` long, so its framed form fits. It advances without a
+    new base, so the link's history leaves it out.
+    """
     origin = models.CharField(max_length=16, blank=True)
     last_seen_at = models.DateTimeField(null=True, blank=True)
     last_verified_generation = models.PositiveIntegerField(default=0)
@@ -5696,6 +6018,36 @@ class RecordLink(
         """Label this remote identity by its external key."""
 
         return self.external_key
+
+    @classmethod
+    def live_reference_filter(cls, *, principal: SubjectRef | None) -> Q:
+        """Select the links that hold their target: every link but a push stream's.
+
+        A push link names the local row its stream publishes, not a remote record
+        Angee keeps: deleting the row releases it (:meth:`teardown_for_target`) and the
+        push writes the removal. A pull or two-way link keeps its row.
+        """
+
+        del principal
+        return ~Q(stream__direction=StreamDirection.PUSH)
+
+    @classmethod
+    def blocks_target_delete(cls, target: type[models.Model]) -> bool:
+        """A link the live filter keeps blocks its target's deletion, before :meth:`teardown_for_target` runs."""
+
+        del target
+        return True
+
+    @classmethod
+    def teardown_for_target(cls, target: models.Model) -> None:
+        """Release the push links naming a deleted row (``release_pushes``); this never refuses.
+
+        Base runs it inside the deleting transaction, which ``release_pushes``
+        requires (a direct caller opens one); the deleter holds the row's lock
+        (``lock_for_delete``), else ``release_pushes`` takes it.
+        """
+
+        cls.objects.release_pushes(target)
 
     @property
     def failure_stream(self) -> SyncStream:
@@ -5862,6 +6214,16 @@ class RecordLink(
         read before it and the apply or push after it are adapter I/O, run by the
         stream driver outside the transaction. A follow-through that leaves the
         record unsynchronized reopens the conflict.
+
+        A push stream never applies its remote: keeping the remote there accepts the
+        remote's current version, read through the adapter's identity read. It
+        becomes the link's applied base, with its ``remote_version``, over the local
+        projection as it stands; nothing is copied into the local row. Nothing is
+        pushed until the row changes locally again, and that push writes over the
+        version accepted here. A remote the adapter still reads, even one it reports
+        cancelled, is a live version, not a tombstone. Keeping the remote of a
+        removal (the row was deleted locally) keeps the remote record, which no local
+        row names any more: the push never writes it again, and it stays unmanaged.
         """
 
         if keep not in ConflictKeep.values:
@@ -5893,9 +6255,20 @@ class RecordLink(
                 if keep == ConflictKeep.LOCAL and (not stream.writes_back or not stream.has_completed_baseline()):
                     raise ValidationError("Keeping local changes requires a completed writable baseline.")
                 precondition = owner.sync_precondition
-                remote = read_stream_keys(adapter, stream, tuple(keys))[0] if keep == ConflictKeep.LOCAL else None
+                accepts_remote = keep == ConflictKeep.REMOTE and stream.direction == StreamDirection.PUSH
+                remote = (
+                    read_stream_keys(adapter, stream, tuple(keys))[0]
+                    if keep == ConflictKeep.LOCAL or accepts_remote
+                    else None
+                )
+                # The local side as it stands: a change the push would write, else the base it already matches.
+                local = (
+                    next((change for change, _link in push_candidates(stream, adapter, keys)), None)
+                    if accepts_remote
+                    else None
+                )
                 with transaction.atomic():
-                    type(stream).objects.lock_current(stream, fenced_to=stream)
+                    locked_stream = type(stream).objects.lock_current(stream, fenced_to=stream)
                     locked = type(owner).objects.lock_if_supported().get(pk=owner.pk)
                     current_link = type(link).objects.lock_if_supported().get(pk=link.pk)
                     current = current_link.failure_at(slot)
@@ -5903,7 +6276,20 @@ class RecordLink(
                         return current
                     if not locked.sync_precondition_matches(precondition):
                         raise RuntimeError("Record bases changed during conflict resolution; retry the choice.")
-                    if remote is not None:
+                    if remote is not None and accepts_remote:
+                        type(locked).objects.promote(
+                            locked,
+                            source_payload=remote.source_payload,
+                            source_hash=remote.source_hash,
+                            mapped_payload=UNSET if local is None else local.projection,
+                            mapping_version=locked_stream.mapping_version,
+                            dependency_digest=locked.dependency_digest,
+                            remote_version=remote.remote_version,
+                            origin="remote",
+                            tombstone=remote.tombstone,
+                            local_version="" if local is None else local.local_version,
+                        )
+                    elif remote is not None:
                         type(locked).objects.observe(
                             stream,
                             locked.external_key,
@@ -5913,11 +6299,11 @@ class RecordLink(
                         )
                     current_link.resolve_failure(slot, conflict=True)
                 resolved = True
-                if keep == ConflictKeep.REMOTE:
+                if keep == ConflictKeep.REMOTE and not accepts_remote:
                     prepared = begin_stream_cycle(stream, adapter, force_apply=keys)
                     if prepared.resync_required:
                         raise ValidationError("Complete the requested stream baseline before resolving its conflict.")
-                elif not push_stream(stream, adapter, external_keys=keys).count:
+                elif keep == ConflictKeep.LOCAL and not push_stream(stream, adapter, external_keys=keys).count:
                     raise ValidationError("The selected local record could not be written; its failure remains open.")
                 if type(link).objects.filter(pk__in=(link.pk, owner.pk)).open_failures():
                     raise ValidationError("The record could not be synchronized; its failure remains open.")

@@ -45,8 +45,27 @@ remote-version fence. Neither makes the two systems atomic.
 Only the driver promotes a primary link; adapters return `ApplyResult` evidence.
 The stream declaration alone owns `mapping_version`. The driver stamps it at
 promotion, write-back reflection and quarantine; `RecordChange`, `LocalChange`
-and `ApplyResult` carry no version copies. Adapters return only the evidence
+and `ApplyResult` carry no mapping-version copies. Adapters return only the evidence
 apply learned.
+
+A push adapter may version its local projection. It yields each row's exact
+`LocalChange.local_version`, read with the projection, and the push records the
+version it read beside the base it wrote (`RecordLink.local_version`). A full
+read may then skip every row a link already holds at its current version
+(`RecordLinkManager.changed_since_base`). A projection that reads only the row's
+own tracked columns, plus a container setting, takes the row's history version
+(`RecordLinkManager.with_local_versions`, the setting folded into a digest so a
+version stays within `LOCAL_VERSION_LENGTH`). Versions are compared for equality,
+never by time: a timestamp is stamped before commit, so a base could postdate an
+uncommitted edit. A push also records the newer version of a row touched without
+a change to its projection, and baselines a row read without one (its history
+predates capture or was pruned) so the next push settles it
+(`RecordLinkManager.settle`). A mapping change reads every row again: raise the
+stream's `mapping_version` with any change to the projection. What no version
+names (such a change left unraised, or a write that skipped history capture)
+converges at the stream's sweep: while `SyncStream.sweep_due`, once per
+`reconcile_interval`, the read skips nothing, and a push stream's push completes
+that sweep.
 
 Each applied record retains the observe row and the application-evidence row;
 a record delivered again unchanged retains only its observe row. Pinning `applied_base` creates no pointer-only history row. History retention is unbounded: deployments budget both full snapshots and
@@ -108,6 +127,12 @@ conflicts await an explicit remote/local choice (`RecordLink.resolve_conflict`).
 identity through `BridgeImpl.read_keys`; unsupported identity reads fall back to
 a baseline with the reason retained in failure details. Refused writes retry
 through the outbox. A due refusal with no remaining local candidate closes.
+A push stream never applies its remote: keeping the remote of its conflict
+records the remote's current version as the link's base over the local
+projection, and the next local change writes over it. A push link holds no row
+(`RecordLink.live_reference_filter`): deleting the row releases the link
+(`RecordLinkManager.release_pushes`), and the push writes its removal as
+`write_back(link, None)`.
 `RecordLink.pin()` withholds automatic application and push; `unpin()` resumes
 them. Admin actions dispatch to those owners.
 
@@ -146,13 +171,33 @@ and scopes once (`OAuthConnectIntent` in [`impl.py`](impl.py)). The owners of th
 connect rules are `OAuthClient.requested_scopes` (scopes),
 `CredentialManager.upsert_for_user` (one credential per external account and the
 grant checks), `Integration.attach_connection` (the account binding),
-`Integration.admit_credential` (which credentials a capability accepts, asked on
-every attachment), `OAuthProviderType.authorize_params` (the prompt),
+`Integration.credential_blocker` (which credentials a capability accepts: the
+refusal `admit_credential` raises on every attachment and the connect picker
+shows), `Integration.reads_with` (an OAuth grant of the capability's
+client covering its scopes), `Integration.connectable_credentials` (the user's
+accounts it reads with, offered from an unsaved row before the capability
+exists), `OAuthProviderType.authorize_params` (the prompt),
 [`connect.complete_account_connect`](connect.py) (account identity: userinfo, the
 `token_identity_keys`, then the verified ID token) and
 `connect.complete_external_account_link` (the consent restart). A credential stored
 without an account, before credentials were per account, and the integrations it
 serves without a binding bind to the first account that connects.
+
+A capability connected with one of the user's accounts projects its connect facts
+through the `ConnectWithAccount` GraphQL interface ([`schema.py`](schema.py)),
+built with `ConnectWithAccount.of` from an unsaved row (`IntegrationManager.build`).
+Its query spreads the `ConnectWithAccountFields` fragment and is read through
+`useConnectWithAccountQuery`, which reloads it as the user's accounts change; its
+dialog composes `ConnectWithAccountAction` (given the capability's authored connect
+mutation over `{ credentialId }`, which its `MutationDialog` runs), or
+`useConnectWithAccountField` among its other fields
+([`ConnectWithAccountAction.tsx`](web/src/connect/ConnectWithAccountAction.tsx)):
+the account choice and "Connect another account" with the capability's scopes.
+An account the capability refuses (its `blocked_reason`, the capability's
+`credential_blocker`) is listed with that reason and cannot be chosen.
+While the capability has no ready OAuth client (`oauth_client` is null) and the
+user holds no account it reads with, the field says the connection is not
+configured instead, and links an administrator to the OAuth providers page.
 
 Connection adapters declare `IntegrationImpl.requires_connection_discovery = True`
 to opt into asynchronous `discover_connection`/`apply_discovery`. Manual and

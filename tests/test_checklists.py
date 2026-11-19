@@ -596,6 +596,11 @@ def test_the_node_projection_reads_the_rule_with_readable_evidence(world: Any) -
     assert (items["signature"]["status"], items["signature"]["evidence"]) == ("not_checked", [])
 
 
+# On committed grants, as a request reads them. While a transaction holds grant writes it
+# has not committed, django-zed-rebac 0.35 reads the actor's grant profile at each compile
+# (those rows may roll back), so inside the test's own transaction this page cost 15
+# statements where a reading request costs 5.
+@pytest.mark.django_db(transaction=True)
 def test_the_node_projection_reads_a_page_in_a_flat_statement_budget(world: Any) -> None:
     def page(size: int) -> int:
         with system_context(reason="tests.checklists.page"):

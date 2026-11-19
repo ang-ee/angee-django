@@ -42,7 +42,13 @@ import {
   useOperationDocuments,
 } from "../operation-documents";
 import { useActiveDataProviderName } from "./data-provider-context";
-import { useAuthoredMutation, useAuthoredQueryBatch, type AuthoredMutationOptions, type AuthoredQueryOptions } from "./authored-hooks";
+import {
+  useAuthoredMutation,
+  useAuthoredQueryBatch,
+  type AuthoredMutateOptions,
+  type AuthoredMutationOptions,
+  type AuthoredQueryOptions,
+} from "./authored-hooks";
 import type { TypedDocumentNode } from "../typed-document";
 import { graphqlDocumentIdentity } from "./wire";
 import { stableKey, useStableArray } from "../stable-deps";
@@ -158,6 +164,7 @@ export type ActionArguments = Readonly<Record<string, unknown>>;
 export type ActionMutate = (
   id: string,
   arguments_?: ActionArguments,
+  options?: AuthoredMutateOptions,
 ) => Promise<ActionOutcome | undefined>;
 
 export interface UseActionMutationOptions extends Pick<AuthoredMutationOptions, "transient" | "errorNotification"> {
@@ -546,7 +553,9 @@ export function useAngeeResourceSave(
  * failure, and deep-linking from one value; registered resource invalidations
  * and authored-read model invalidations run only when the outcome is not a
  * domain failure, unless `invalidateOnFailure` declares that the verb's
- * failures persist state too.
+ * failures persist state too. A call's `AuthoredMutateOptions` turn refine's
+ * generic error notification off for a surface that renders the failure itself
+ * (`MutationDialog`).
  */
 export function useActionMutation<TField extends string = string>(
   field: TField,
@@ -574,7 +583,7 @@ export function useActionMutation<TField extends string = string>(
     },
   });
   const mutate = useCallback<ActionMutate>(
-    async (id, arguments_ = {}) => {
+    async (id, arguments_ = {}, callOptions) => {
       const idArgument = options.idArgument === undefined ? "id" : options.idArgument;
       const variables = idArgument === null ? { ...arguments_ } : { ...arguments_, [idArgument]: id };
       const request = actionRequest(field, variables, {
@@ -586,7 +595,7 @@ export function useActionMutation<TField extends string = string>(
           field,
         ),
       });
-      return extractActionOutcome(await run(variables), request.root) ?? undefined;
+      return extractActionOutcome(await run(variables, callOptions), request.root) ?? undefined;
     },
     [
       dataProviderName,

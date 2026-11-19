@@ -107,17 +107,17 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
       }
       return Object.keys(errors).length ? { values: {}, errors } : { values: { ...values, text }, errors: {} };
     },
-    submit: async ({ text, note, day, activityType }) =>
+    submit: async ({ text, note, day, activityType }, options) =>
       actionOutcomeSubmitResult(
         mode === "log"
           ? extractActionOutcome(
-            await logTask({ ...variables, activityType, occurredOn: day, note: note ? `${text}\n${note}` : text }),
+            await logTask({ ...variables, activityType, occurredOn: day, note: note ? `${text}\n${note}` : text }, options),
             "log_record_task",
           )
           : extractActionOutcome(
             await scheduleTask({
               ...variables, title: text, note, dueDate: day || null, activityType: activityType || null,
-            }),
+            }, options),
             "schedule_record_task",
           ),
       ),

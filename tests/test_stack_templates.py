@@ -25,6 +25,8 @@ from typing import Any
 
 import pytest
 import yaml
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 from uvicorn._types import ASGIReceiveCallable, ASGISendCallable, ASGISendEvent, HTTPRequestEvent, HTTPScope, Scope
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1089,8 +1091,7 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
         "angee.proposals",
         "angee.proposals_work",
         "angee.portfolio",
-        # A top-level web fragment: CI typechecks it against the full profile's documents.
-        "angee.calendar_integrate_ics",
+        # Top-level bridge web fragments: CI typechecks them against the full profile's documents.
         "angee.messaging_integrate_whatsapp",
         "angee.messaging_integrate_telegram",
         "angee.messaging_integrate_discord",
@@ -1103,6 +1104,54 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
     arp = _render_project_settings(framework_workspace=True, include_arp=True)
     assert "ANGEE_ADDON_DIRS" not in arp
     assert not any(app.startswith("arp.") for app in arp["INSTALLED_APPS"])
+
+
+FRAMEWORK_WEB_FRAGMENTS_OUTSIDE_FULL = {
+    "angee.pm": "a deployment's choice: it rearranges the rail into one suite app, and authors no GraphQL documents",
+}
+"""Framework addons with a web fragment the ``full`` profile leaves out, each with why."""
+
+
+def test_full_profile_composes_every_framework_web_fragment() -> None:
+    """CI composes the ``full`` profile and typechecks every framework web fragment against its documents.
+
+    Codegen emits a fragment's typed ``graphql()`` documents only when the composed
+    host includes its addon, listed or required by a listed one; a fragment left out
+    typechecks against ``graphql()``'s ``unknown`` fallback and fails CI. So every
+    ``src/angee/<addon>/web`` is composed by the profile CI renders (the dev stack's
+    chained answers), or exempt with a reason.
+    """
+
+    addons = ROOT / "src" / "angee"
+    projects = {
+        path.parent.name: tomllib.loads(path.read_text())["project"] for path in addons.glob("*/pyproject.toml")
+    }
+    app_of = {canonicalize_name(project["name"]): f"angee.{directory}" for directory, project in projects.items()}
+    requires = {
+        f"angee.{directory}": {
+            app_of[name]
+            for requirement in project.get("dependencies", ())
+            if (name := canonicalize_name(Requirement(requirement).name)) in app_of
+        }
+        for directory, project in projects.items()
+    }
+    full = _render_project_settings(
+        addons_profile="full",
+        framework_workspace=True,
+        include_operator_installer=True,
+        addon_installer_backend="operator",
+    )
+    composed = set(full["INSTALLED_APPS"])
+    pending = list(composed)
+    while pending:
+        for required in requires.get(pending.pop(), set()) - composed:
+            composed.add(required)
+            pending.append(required)
+    fragments = {f"angee.{path.parent.parent.name}" for path in addons.glob("*/web/package.json")}
+
+    assert sorted(fragments - composed - FRAMEWORK_WEB_FRAGMENTS_OUTSIDE_FULL.keys()) == []
+    # An exemption names a fragment that exists and the profile still leaves out.
+    assert sorted(FRAMEWORK_WEB_FRAGMENTS_OUTSIDE_FULL.keys() - (fragments - composed)) == []
 
 
 STALE_MANAGE_PY = textwrap.dedent("""\

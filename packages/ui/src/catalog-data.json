@@ -5568,6 +5568,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "calendarDay",
+    "source": "packages/ui/src/widgets/date-format.ts",
+    "kind": null,
+    "reason": "Format utility: converts data to display or storage text.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "calendarVariants",
     "source": "packages/ui/src/ui/calendar.tsx",
     "kind": "token",
@@ -5905,6 +5914,15 @@
     "source": "packages/ui/src/dashboard/layout.ts",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "dateFromUnknown",
+    "source": "packages/ui/src/widgets/date-format.ts",
+    "kind": null,
+    "reason": "Format utility: converts data to display or storage text.",
     "status": "stable",
     "storyId": null
   },
@@ -6515,6 +6533,15 @@
     "source": "packages/ui/src/views/resource/model/capabilities.ts",
     "kind": null,
     "reason": "Codec and transport infrastructure: translates runtime data and addresses.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "isStorageDate",
+    "source": "packages/ui/src/widgets/date-format.ts",
+    "kind": null,
+    "reason": "Format utility: converts data to display or storage text.",
     "status": "stable",
     "storyId": null
   },

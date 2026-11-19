@@ -288,8 +288,11 @@ function useAuthoredChromeActionOutcome(
     ...options,
     shouldInvalidate: (data) => extractActionOutcome(data, action.resultField)?.ok === true,
   });
-  const run = React.useCallback<ActionMutate>(async (id, args = {}) =>
-    extractActionOutcome(await mutate({ ...args, [action.idArgument]: id } as never), action.resultField) ?? undefined,
+  const run = React.useCallback<ActionMutate>(async (id, args = {}, callOptions) =>
+    extractActionOutcome(
+      await mutate({ ...args, [action.idArgument]: id } as never, callOptions),
+      action.resultField,
+    ) ?? undefined,
   [action.idArgument, action.resultField, mutate]);
   return [run, state];
 }

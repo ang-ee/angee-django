@@ -43,7 +43,7 @@ class GoogleDriveMountBackend(MountBackend):
     key = "google_drive"
     label = "Google Drive"
     requires_credential = True
-    vendor_slug = "google"
+    defaults: ClassVar[dict[str, Any]] = {"vendor": "google"}
     oauth_scopes: ClassVar[tuple[str, ...]] = ("https://www.googleapis.com/auth/drive.readonly",)
     """The Google OAuth scopes this backend reads with; the connected account must grant them."""
 

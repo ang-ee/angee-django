@@ -1,5 +1,7 @@
 import * as React from "react";
-import { Field, Form, Group, dateFromValue, formatDateStorage, registerForm, type RegisteredFormProps } from "@angee/ui";
+import {
+  Field, Form, Group, calendarDay, dateFromUnknown, formatDateStorage, isStorageDate, registerForm, type RegisteredFormProps,
+} from "@angee/ui";
 
 import { useCalendarT } from "../i18n";
 import { EVENT_MODEL } from "../resources";
@@ -8,20 +10,43 @@ import { CALENDAR_PICKER_WIDGET, calendarPickerSelection, useWritableCalendarIds
 // The picker renders the calendar itself, so the field names what it reads; `isReplica` reads `is_writable`.
 const CALENDAR_SELECTION = [...calendarPickerSelection("calendar"), "calendar.is_writable"];
 
-// An all-day event's bounds are days. The form picks them as days and sends them as dates; the
-// event places each at midnight in its own zone (its own, its calendar's or the project's), which
-// only the server knows, so a browser in another zone never sends its own midnight as the bound.
-const startAsDay = (values: Readonly<Record<string, unknown>>) => ({ name: "start", ...(values.all_day === true ? { widget: "date" } : {}) });
-const endAsDay = (values: Readonly<Record<string, unknown>>) => ({ name: "end", ...(values.all_day === true ? { widget: "date" } : {}) });
+/**
+ * The day an all-day bound names. A picked day is itself; a stored bound is the instant of a midnight
+ * in the event's effective zone (`effective_timezone`: its own, its calendar's or the project's), read
+ * as its date there, so every viewer sees the event's own days whichever zone the browser is in.
+ */
+export function allDayBoundDay(value: unknown, zone: unknown): unknown {
+  if (typeof value !== "string" || isStorageDate(value)) return value;
+  const date = dateFromUnknown(value);
+  return date ? calendarDay(date, typeof zone === "string" && zone ? zone : undefined) : null;
+}
+
+// An all-day event's bounds are days: the form shows each as the day it names and sends a picked day
+// as a date, which the event places at midnight in its own zone, so a browser in another zone never
+// sends its own midnight as the bound. A timed event's bounds are instants in the viewer's zone.
+const asDay = (name: string) => (values: Readonly<Record<string, unknown>>) => ({
+  name,
+  ...(values.all_day === true ? {
+    widget: "date",
+    valueCodec: {
+      toControl: (value: unknown) => allDayBoundDay(value, values.effective_timezone),
+      fromControl: (value: unknown) => value,
+    },
+  } : {}),
+});
+const startAsDay = asDay("start");
+const endAsDay = asDay("end");
 
 /**
  * Toggling all day turns the bounds the viewer sees into whole days (the end is exclusive: the day
- * after the last one the event touches), and turning it off turns those days back into the instants
- * of their local midnights.
+ * after the last one the event touches), and turning it off turns the days the event spans back
+ * into the instants of the viewer's own midnights on them.
  */
 export function allDayBounds(allDay: unknown, values: Readonly<Record<string, unknown>>): Record<string, unknown> | null {
-  const start = dateFromValue(values.start as string | null | undefined);
-  const end = dateFromValue(values.end as string | null | undefined);
+  // Off, a bound is still the day it names; on, it is the instant the viewer sees.
+  const read = (value: unknown) => dateFromUnknown(allDay === true ? value : allDayBoundDay(value, values.effective_timezone));
+  const start = read(values.start);
+  const end = read(values.end);
   if (!start || !end) return null;
   if (allDay !== true) return { start: start.toISOString(), end: end.toISOString() };
   const day = (moment: Date, after = 0) => new Date(moment.getFullYear(), moment.getMonth(), moment.getDate() + after);
@@ -52,6 +77,7 @@ function CalendarEventForm({ resource: _resource, ...props }: RegisteredFormProp
         <Field name="all_day" prefill={allDayBounds} />
         <Field name="recurrence" />
         <Field name="timezone" />
+        <Field name="effective_timezone" readOnly hidden />
       </Group>
       <Group label={t("form.details")} columns={2}>
         <Field name="location" />

@@ -16,11 +16,11 @@ export function useAnswerActions(): readonly ActionDescriptor[] {
     id: shared ? "share-answer" : "unshare-answer",
     label: t(shared ? "answer.action.share" : "answer.action.unshare"),
     args: [],
-    submit: async (_values, context) => {
+    submit: async (_values, context, callOptions) => {
       if (typeof context.record?.id !== "string") return;
       return extractActionOutcome(await share({
         answer: context.record.id, revision: recordRevision(context.record), shared,
-      }), "set_proposal_answer_responder_share");
+      }, callOptions), "set_proposal_answer_responder_share");
     },
     visibleWhen: (record) => holdsPermission(record, shared ? "manage" : "narrow") && record.shared_with_responders !== shared,
   }));

@@ -12,7 +12,7 @@ attendee whose ``role`` is ``organizer``.
 
 **Occurrences.** :meth:`CalendarEventQuerySet.occurrences` turns a row set into
 the :class:`EventOccurrence` wire shape the calendar renders, composing
-:meth:`Recurrence.occurrences` for the moments in each event's expansion zone. An override
+:meth:`Recurrence.occurrences` for the moments in each event's effective zone. An override
 replaces the moment at its ``original_start`` and keeps that instance's id, a
 cancelled override drops it, and a cancelled event shows nothing. A recurring
 master's occurrences are not draggable (drag-rescheduling moves a single row); a
@@ -37,7 +37,9 @@ of calendars and of events, live only in the streams' ``RecordLink`` rows.
 source's event write path. A calendar takes local edits when it has no source or
 when its source's backend writes (:attr:`Calendar.is_writable`); a read-only
 subscription refuses them on every save path, and only its source's own work
-writes, cancels or removes its events (:meth:`Calendar.takes_write`).
+writes, cancels or removes its events (:meth:`Calendar.takes_write`). A publishing
+source mirrors the other way: :meth:`CalendarSource.publish` binds an existing
+local calendar to a remote one, whose events the source then pushes out.
 """
 
 from __future__ import annotations
@@ -54,6 +56,7 @@ from typing import Any, ClassVar, Self, cast
 from celery.exceptions import SoftTimeLimitExceeded
 from django.apps import apps
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core.cache import caches
 from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator
@@ -94,7 +97,13 @@ from angee.calendar.choices import (
     EventVisibility,
     OverlapPolicy,
 )
-from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationLifecycle, IntegrationRuntimeStatus
+from angee.integrate.models import (
+    Bridge,
+    IntegrationCreateMode,
+    IntegrationLifecycle,
+    IntegrationManager,
+    IntegrationRuntimeStatus,
+)
 from angee.integrate.states import StreamDefinition, StreamDirection, StreamKind
 from angee.jobs.enqueue import enqueue_task
 from angee.messaging.models import ThreadedModelMixin
@@ -105,14 +114,11 @@ from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.provenance.statements import Aspect, SourceKind, StatementRecords, StatementsMixin
 from angee.scheduling.fields import RecurrenceField, TimeZoneField
 from angee.scheduling.recurrence import Recurrence, moment_after, utc_stamp
-from angee.scheduling.zones import get_zone_info
+from angee.scheduling.zones import get_zone_info, require_aware
 from angee.tags.models import TaggedModel
 
 READ_ONLY_CALENDAR = "This calendar is a read-only subscription."
 """The refusal of a local edit to an event of a calendar whose source takes no writes."""
-
-SOURCE_CALENDAR_DELETE = "This calendar mirrors a subscription; unsubscribe to stop it, which archives the calendar."
-"""The refusal of deleting a source's calendar on its own; its source's record link and statements retain it."""
 
 PURGE_SOURCE_TASK = "calendar.purge_source"
 """The job that purges an unsubscribed source (:meth:`CalendarSource.purge`)."""
@@ -141,9 +147,13 @@ class EventOccurrence:
     basic>`` for every instance of a series, overridden or not, so an id survives
     its instance becoming an override; a plain event is its own ``<event_sqid>``.
     ``event_sqid`` names the row to open (the override, when there is one).
-    ``calendar`` is the calendar's public id. A ``redacted`` occurrence is busy time
-    an actor may see but not read: it carries no title and opens nothing.
-    ``editable`` is whether the actor may drag it: a single row it may write.
+    ``calendar`` is the calendar's public id. ``effective_timezone`` is its event's
+    (:attr:`CalendarEvent.effective_timezone`): an all-day occurrence is the days its
+    bounds fall on there, whichever zone the viewer is in, and a redacted one keeps it
+    so its busy days show where they lie; a redacted timed one carries its calendar's
+    (:attr:`Calendar.effective_timezone`). A ``redacted`` occurrence is busy time an
+    actor may see but not read: it carries no title and opens nothing. ``editable``
+    is whether the actor may drag it: a single row it may write.
     """
 
     occurrence_id: str
@@ -153,6 +163,7 @@ class EventOccurrence:
     start: datetime
     end: datetime
     all_day: bool
+    effective_timezone: str
     editable: bool
     redacted: bool
 
@@ -176,19 +187,6 @@ def _midnight(day: date, tz: Any) -> datetime:
     """The midnight that starts ``day`` in ``tz``: where an all-day bound on that date lies."""
 
     return timezone.make_aware(datetime.combine(day, time.min), tz)
-
-
-def _nearest_midnight(moment: datetime, tz: Any) -> datetime:
-    """The midnight in ``tz`` nearest ``moment``: a dragged date lands on the day the viewer meant."""
-
-    local = moment.astimezone(tz)
-    return _midnight(local.date() + timedelta(days=1 if local.time() >= time(12) else 0), tz)
-
-
-def _same_local_day(moment: datetime, old_tz: Any, new_tz: Any) -> datetime:
-    """The midnight in ``new_tz`` on the local date ``moment`` has in ``old_tz``: an all-day bound keeps its date."""
-
-    return _midnight(moment.astimezone(old_tz).date(), new_tz)
 
 
 logger = logging.getLogger(__name__)
@@ -272,6 +270,15 @@ class CalendarQuerySet[CalendarT: Calendar](ArchiveQuerySet[CalendarT], AngeeHis
         writable = [key for key in field.registered_keys() if CalendarSource.is_backend_writable(key)]
         return Q(source__isnull=True) | Q(source__backend_class__in=writable)
 
+    @staticmethod
+    def effective_timezone_expression(path: str = "") -> Coalesce:
+        """:attr:`Calendar.effective_timezone` as a query, of the calendar at ``path``.
+
+        ``"calendar__"`` reads an event's (:meth:`CalendarEventQuerySet.effective_timezone_expression`).
+        """
+
+        return Coalesce(NullIf(F(f"{path}timezone"), Value("")), Value(timezone.get_default_timezone_name()))
+
     def taking_local_edits(self) -> Self:
         """Calendars that take local edits: the ones an event form may offer, and a user's own may be."""
 
@@ -282,31 +289,7 @@ _CalendarManagerBase = AngeeHistoryManager.from_queryset(CalendarQuerySet)
 
 
 class CalendarManager[CalendarT: Calendar](_CalendarManagerBase[CalendarT]):
-    """Own calendar factories: a user's own calendar, and the calendars a source mirrors."""
-
-    def ensure_personal(self, user: Any) -> CalendarT:
-        """Return ``user``'s own personal calendar, creating it once when there is none.
-
-        A personal calendar belongs to the user's person, is owned by the user and
-        takes local edits (:meth:`CalendarQuerySet.taking_local_edits`): a read-only
-        subscription the user holds is not theirs to add events to. The person comes
-        from :meth:`~angee.parties.managers.PartyManager.for_user`, the
-        one-person-per-user owner, and its row is locked before the lookup, so two
-        concurrent calls converge on one calendar. The calendar is created under the
-        user's own create gate (their person's ``write``), never as system work: a user
-        invokes this, it backfills nothing.
-        """
-
-        person_model = apps.get_model("parties", "Person")
-        with transaction.atomic():
-            with system_context(reason="calendar.ensure_personal.person"):
-                person = person_model.objects.for_user(user)
-            person_model.system_queryset(lock=("self",)).get(pk=person.pk)
-            scoped = self.with_actor(user)
-            existing = scoped.taking_local_edits().filter(party_id=person.pk, owner=user).order_by("pk").first()
-            if existing is not None:
-                return existing
-            return scoped.create(party_id=person.pk, name=person.display_name or user.get_username())
+    """Own calendar factories: the calendars a source mirrors, and the personal calendar a user starts with."""
 
     def mirror(self, source: CalendarSource, remote: ParsedCalendar, *, link: Any) -> CalendarT:
         """Return the calendar ``link`` names, creating it once on the source owner's person; then state its identity.
@@ -342,6 +325,30 @@ class CalendarManager[CalendarT: Calendar](_CalendarManagerBase[CalendarT]):
         calendar.refresh_from_db()
         return calendar
 
+    def ensure_personal(self, user: Any) -> CalendarT:
+        """Return ``user``'s own personal calendar, creating it once when there is none.
+
+        A personal calendar belongs to the user's person, is owned by the user and
+        takes local edits (:meth:`CalendarQuerySet.taking_local_edits`): a read-only
+        subscription the user holds is not theirs to add events to. The person comes
+        from :meth:`~angee.parties.managers.PartyManager.for_user`, the
+        one-person-per-user owner, and its row is locked before the lookup, so two
+        concurrent calls converge on one calendar. The calendar is created under the
+        user's own create gate (their person's ``write``), never as system work: a user
+        invokes this, it backfills nothing.
+        """
+
+        person_model = apps.get_model("parties", "Person")
+        with transaction.atomic():
+            with system_context(reason="calendar.ensure_personal.person"):
+                person = person_model.objects.for_user(user)
+            person_model.system_queryset(lock=("self",)).get(pk=person.pk)
+            scoped = self.with_actor(user)
+            existing = scoped.taking_local_edits().filter(party_id=person.pk, owner=user).order_by("pk").first()
+            if existing is not None:
+                return existing
+            return scoped.create(party_id=person.pk, name=person.display_name or user.get_username())
+
 
 class Calendar(OwnerMixin, ArchiveMixin, StatementsMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """One party's calendar: the container its events belong to and take access from.
@@ -350,13 +357,15 @@ class Calendar(OwnerMixin, ArchiveMixin, StatementsMixin, HistoryMixin, AngeeDat
     transferable ``owner`` (the creator by default), its holder (the user of the
     person it belongs to), and the users and groups it is shared with as
     ``reader``, ``editor`` or ``free_busy``; a ``free_busy`` grantee sees the
-    calendar's busy time and nothing else. A blank ``timezone`` expands recurrence
-    in the project ``TIME_ZONE``; changing it carries the events without a zone of
-    their own onto the new wall clock (:meth:`_follow_zone`). History keeps
+    calendar's busy time and nothing else. A blank ``timezone`` is the project
+    ``TIME_ZONE`` (:attr:`effective_timezone`); changing it carries the events without
+    a zone of their own onto the new wall clock (:meth:`_follow_zone`). History keeps
     ``party``, so reverting a merge of the owning parties restores whose calendar
     it was.
-    ``source`` names the :class:`CalendarSource` a subscribed calendar mirrors; a
-    local calendar has none.
+    ``source`` names the :class:`CalendarSource` a subscribed calendar mirrors, or
+    the publishing source it is published through (:meth:`CalendarSource.publish`);
+    a local calendar has none. A published calendar stays the person's own: it
+    takes every local edit, and its source states nothing about it.
 
     A source's calendar is a stated record: the source's ``calendars``-stream
     ``RecordLink`` names it and the source states its ``identity`` (name, colour,
@@ -367,7 +376,8 @@ class Calendar(OwnerMixin, ArchiveMixin, StatementsMixin, HistoryMixin, AngeeDat
     ``write_statements`` alone. The events of a calendar that is not writable are
     its source's replicas: only its source's own work writes them
     (:meth:`takes_write`), and a zone change re-reads them from the source instead
-    of moving them locally. Unsubscribing archives the calendar.
+    of moving them locally. Unsubscribing its source archives a mirrored calendar,
+    and leaves a published one local with its events (``CalendarBackend.release``).
     """
 
     sqid_prefix = "cal_"
@@ -446,22 +456,19 @@ class Calendar(OwnerMixin, ArchiveMixin, StatementsMixin, HistoryMixin, AngeeDat
         """Carry the events that keep this calendar's zone from ``previous_zone`` onto the current one.
 
         An all-day event (a single row, a master or an override) keeps its local
-        dates: its ``start`` and ``end`` move to the same midnights on the new wall
-        clock. Every series derives its ``series_end`` again, and then each master
-        rebases its overrides from its previous start and zone. This is the
-        calendar's own derived work, written without the event save path.
+        dates (:meth:`CalendarEvent._keep_days`). Every series derives its
+        ``series_end`` again, and then each master rebases its overrides from its
+        previous start and zone. This is the calendar's own derived work, written
+        without the event save path.
         """
 
         model = cast("type[CalendarEvent]", self._meta.get_field("events").related_model)
         rows = model._base_manager.filter(calendar_id=self.pk, timezone="")
-        old_tz, new_tz = get_zone_info(previous_zone), get_zone_info(self.timezone)
         previous_starts: dict[Any, datetime] = {}
         for event in rows.filter(Q(all_day=True) | ~Q(recurrence="")).order_by("pk"):
             previous_starts[event.pk] = event.start
-            if event.all_day:
-                event.start = _same_local_day(event.start, old_tz, new_tz)
-                event.end = _same_local_day(event.end, old_tz, new_tz)
             event.calendar = self
+            event._keep_days(previous_zone)
             model._base_manager.filter(pk=event.pk).update(
                 start=event.start, end=event.end, series_end=event._derive_series_end()
             )
@@ -472,14 +479,38 @@ class Calendar(OwnerMixin, ArchiveMixin, StatementsMixin, HistoryMixin, AngeeDat
             master.rebase_overrides(previous_start=previous_start, previous_zone=previous_zone)
 
     @property
+    def effective_timezone(self) -> str:
+        """The IANA zone this calendar keeps: its own, else the project ``TIME_ZONE``.
+
+        Its events without a zone of their own keep it (:attr:`CalendarEvent.effective_timezone`).
+        :meth:`CalendarQuerySet.effective_timezone_expression` reads it as a query.
+        """
+
+        return self.timezone or timezone.get_default_timezone_name()
+
+    @property
+    def source_backend_key(self) -> str | None:
+        """The ``backend_class`` key of this calendar's source; ``None`` for a local calendar.
+
+        Read from the source when it is loaded, else by ``source_id`` (that one
+        column), so judging a calendar never loads its source row.
+        """
+
+        if self.source_id is None:
+            return None
+        if cast(Any, type(self)).source.is_cached(self):
+            return str(cast("CalendarSource", self.source).backend_class)
+        sources = type(self)._meta.get_field("source").related_model
+        return str(sources._base_manager.filter(pk=self.source_id).values_list("backend_class", flat=True).get())
+
+    @property
     def is_writable(self) -> bool:
         """Whether this calendar takes local edits: a local calendar always, a source's when its backend writes.
 
         :meth:`CalendarQuerySet.local_edits_rule` is the same decision as a query.
         """
 
-        source = self.source
-        return source is None or CalendarSource.is_backend_writable(source.backend_class)
+        return CalendarSource.is_backend_writable(self.source_backend_key)
 
     def takes_write(self) -> bool:
         """Whether a write to this calendar's events and attendees is admitted now.
@@ -501,16 +532,36 @@ class Calendar(OwnerMixin, ArchiveMixin, StatementsMixin, HistoryMixin, AngeeDat
             return bool(origin.integration_id == self.source_id)
         return isinstance(origin, apps.get_model("integrate", "Integration")) and origin.pk == self.source_id
 
-    def delete_blocker(self) -> str | None:
-        """Refuse deleting a source's calendar on its own: its source's link and statements retain it."""
+    def delete_blocker(self, *, cascaded: bool = False) -> str | None:
+        """Refuse deleting a source's calendar, as its backend words it (``calendar_delete_refusal``).
 
-        if self.source_id is not None:
-            return SOURCE_CALENDAR_DELETE
-        return cast(Any, super()).delete_blocker()
+        A mirrored calendar is retained by its source's link and statements: a
+        delete started at it is refused, and one its source's removal cascades to
+        proceeds. A published calendar stays until it is unpublished, wherever it
+        sits in the delete: its events' deletes would propagate, and deleting it
+        must not empty its remote calendar.
+        """
+
+        key = self.source_backend_key
+        backend = CalendarSource.backend_class_for(key) if key is not None else None
+        if backend is not None and (not cascaded or backend.direction == StreamDirection.PUSH):
+            return backend.calendar_delete_refusal
+        return cast(Any, super()).delete_blocker(cascaded=cascaded)
 
 
 class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
     """Event rows that expand to the occurrences a calendar shows."""
+
+    @staticmethod
+    def effective_timezone_expression() -> Coalesce:
+        """:attr:`CalendarEvent.effective_timezone` as a query: the event's own zone, else its calendar's.
+
+        The calendar's is :meth:`CalendarQuerySet.effective_timezone_expression`. Many
+        rows read the chain in their one query: :meth:`moments` expands each row on it,
+        and the event's GraphQL field annotates it.
+        """
+
+        return Coalesce(NullIf(F("timezone"), Value("")), CalendarQuerySet.effective_timezone_expression("calendar__"))
 
     def moments(
         self,
@@ -523,7 +574,8 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
 
         A moment meets the window when it starts before ``window_end`` and ends
         after ``window_start`` (a zero-length moment at ``window_start`` counts). A
-        recurring master unrolls its rule in its expansion zone, minus the moments
+        recurring master unrolls its rule in its effective zone
+        (:attr:`CalendarEvent.effective_timezone`, read here as a query), minus the moments
         its overrides replace; an override is a single row; a cancelled row yields
         nothing, so a cancelled override drops the moment it replaces, and a
         cancelled master takes its moved instances with it. Overrides are read
@@ -546,7 +598,7 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
             return []
         rows = list(
             self.annotate(
-                occurrence_zone=Coalesce(NullIf(F("timezone"), Value("")), F("calendar__timezone")),
+                occurrence_zone=self.effective_timezone_expression(),
                 occurrence_calendar=F("calendar__sqid"),
                 occurrence_series=F("series__sqid"),
                 occurrence_backend=F("calendar__source__backend_class"),
@@ -600,11 +652,12 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
         The rows are those the actor may ``see_busy``. The same row query projects
         whether the actor may ``read`` each row (else it is redacted busy time: no
         title, and nothing at all for a free event) and ``write`` it (a single row it
-        may write is draggable). Called on an actor-scoped queryset, the REBAC policy
-        is the preflight: an event the actor may not see never enters the set; as
-        system work every row reads and writes. A window spans at most
-        :attr:`CalendarEvent.occurrence_window_limit`; narrow to calendars by
-        filtering this queryset first.
+        may write is draggable). A redacted timed occurrence carries its calendar's
+        zone, never its event's own: its instants need none. Called on an
+        actor-scoped queryset, the REBAC policy is the preflight: an event the actor
+        may not see never enters the set; as system work every row reads and writes.
+        A window spans at most :attr:`CalendarEvent.occurrence_window_limit`; narrow
+        to calendars by filtering this queryset first.
         """
 
         limit = self.model.occurrence_window_limit
@@ -620,9 +673,11 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
                 "occurrence_read": permission_expression(self.model, "read", actor=actor),
                 "occurrence_write": permission_expression(self.model, "write", actor=actor),
             }
+        calendar_zone = CalendarQuerySet.effective_timezone_expression("calendar__")
+        rows = self.with_action("see_busy").annotate(**granted, occurrence_calendar_zone=calendar_zone)
         result: list[EventOccurrence] = []
-        for moment in self.with_action("see_busy").annotate(**granted).moments(window_start, window_end):
-            event = moment.event
+        for moment in rows.moments(window_start, window_end):
+            event = cast(Any, moment.event)
             redacted = not event.occurrence_read
             if redacted and event.transparency == EventTransparency.FREE:
                 continue
@@ -635,10 +690,13 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
                     start=moment.start,
                     end=moment.end,
                     all_day=event.all_day,
+                    effective_timezone=(
+                        event.occurrence_calendar_zone if redacted and not event.all_day else event.occurrence_zone
+                    ),
                     editable=bool(event.occurrence_write)
                     and not event.recurrence
                     and not redacted
-                    and CalendarSource.is_backend_writable(cast(Any, event).occurrence_backend),
+                    and CalendarSource.is_backend_writable(event.occurrence_backend),
                     redacted=redacted,
                 )
             )
@@ -865,9 +923,9 @@ class CalendarEvent(
     """An event on one calendar, with optional recurrence, overrides and attendees.
 
     ``start``/``end`` are timezone-aware UTC datetimes; an all-day event stores
-    ``start`` as local midnight in its expansion zone and expands by calendar date.
+    ``start`` as local midnight in its effective zone and expands by calendar date.
     An all-day bound written as a date (no offset, as a date picker sends it) is
-    placed at that date's midnight in the expansion zone (:meth:`clean`): the
+    placed at that date's midnight in the effective zone (:meth:`clean`): the
     writer names the day and the event, which knows its zone, places it.
     A master carries the RRULE; an override carries ``series`` and
     ``original_start`` and no rule. Containment is set once: ``calendar``,
@@ -970,22 +1028,30 @@ class CalendarEvent(
         return self.title or self.sqid
 
     @property
-    def expansion_zone(self) -> str:
-        """The zone this event's recurrence, all-day dates and overlap expand on: its own, else its calendar's."""
+    def effective_timezone(self) -> str:
+        """The IANA zone this event keeps: its own, else its calendar's (:attr:`Calendar.effective_timezone`).
 
-        return self.timezone or self.calendar.timezone
+        Its recurrence, its all-day dates and its overlap check expand on it, and a
+        client reads an all-day event's days in it: an all-day event is dates in this
+        zone, a timed event an instant.
+        :meth:`CalendarEventQuerySet.effective_timezone_expression` reads it as a query.
+        """
+
+        return self.timezone or self.calendar.effective_timezone
 
     def clean(self) -> None:
         """Validate the interval, the all-day bounds and an override's series; this row alone.
 
         Its moments lie within the representable range calendar arithmetic needs
         (two days inside Python's). An all-day event's ``start`` and ``end`` are
-        midnights in its expansion zone, a whole number of days apart; a bound
-        written as a date is first placed there (:meth:`_place_all_day_dates`). The
-        overlap policy reads other rows, so :meth:`save` checks it, after the write,
-        under the calendar's lock.
+        midnights in its effective zone, a whole number of days apart; a change of
+        its own zone first carries its stored days there (:meth:`_follow_own_zone`),
+        and a bound written as a date is placed there (:meth:`_place_all_day_dates`).
+        The overlap policy reads other rows, so :meth:`save` checks it, after the
+        write, under the calendar's lock.
         """
 
+        self._follow_own_zone()
         self._place_all_day_dates()
         super().clean()
         errors: dict[str, Any] = {}
@@ -1028,16 +1094,17 @@ class CalendarEvent(
         if calendar is not None and not calendar.takes_write():
             raise ValidationError(READ_ONLY_CALENDAR)
 
-    def delete_blocker(self, *, takes_write: bool | None = None) -> str | None:
-        """Refuse deleting an event the calendar does not let this caller write (:meth:`Calendar.takes_write`).
+    def delete_blocker(self, *, cascaded: bool = False, takes_write: bool | None = None) -> str | None:
+        """Refuse a delete started at an event its calendar does not let this caller write (``Calendar.takes_write``).
 
+        An event a delete only cascades to goes with the row it started from.
         ``takes_write`` is the calendar's answer when the caller already holds it (a
         queryset delete reads it once per calendar).
         """
 
-        if not (self.calendar.takes_write() if takes_write is None else takes_write):
+        if not cascaded and not (self.calendar.takes_write() if takes_write is None else takes_write):
             return READ_ONLY_CALENDAR
-        return cast(Any, super()).delete_blocker()
+        return cast(Any, super()).delete_blocker(cascaded=cascaded)
 
     def _override_errors(self) -> dict[str, str]:
         """Return why this override does not fit its series, if it does not."""
@@ -1057,7 +1124,7 @@ class CalendarEvent(
         return {}
 
     def _place_all_day_dates(self) -> None:
-        """Place each all-day bound written as a date at that date's midnight in the expansion zone.
+        """Place each all-day bound written as a date at that date's midnight in the effective zone.
 
         A bound without an offset names a day, not an instant: its writer cannot
         know which zone the event expands in (its own, its calendar's or the
@@ -1070,20 +1137,52 @@ class CalendarEvent(
         bounds = {name: getattr(self, name) for name in ("start", "end")}
         days = {name: bound.date() for name, bound in bounds.items() if bound is not None and timezone.is_naive(bound)}
         if days:
-            tz = get_zone_info(self.expansion_zone)
+            tz = get_zone_info(self.effective_timezone)
             for name, day in days.items():
                 setattr(self, name, _midnight(day, tz))
+
+    def _keep_days(self, previous_zone: str) -> None:
+        """Keep this all-day event's days when the zone it keeps changes from ``previous_zone``.
+
+        An all-day event is its days: each bound, a midnight in ``previous_zone``,
+        moves to the midnight of the same date in its effective zone. A timed event is
+        an instant and stays. A calendar zone change carries the events that follow
+        it (:meth:`Calendar._follow_zone`), and an event's own (:meth:`_follow_own_zone`).
+        """
+
+        if self.all_day:
+            old_tz, new_tz = get_zone_info(previous_zone), get_zone_info(self.effective_timezone)
+            self.start = _midnight(self.start.astimezone(old_tz).date(), new_tz)
+            self.end = _midnight(self.end.astimezone(old_tz).date(), new_tz)
+
+    def _follow_own_zone(self) -> None:
+        """Keep a saved all-day event's days when its own zone changes and its bounds do not.
+
+        Its stored bounds are midnights in the zone it kept, so an edit of
+        ``timezone`` alone moves them to the same days in its new effective zone
+        (:meth:`_keep_days`). Bounds the writer changed are the writer's: a date is
+        placed in the new zone (:meth:`_place_all_day_dates`), an instant held to its
+        midnight there (:meth:`_all_day_errors`).
+        """
+
+        if not self.all_day or self._state.adding or self.pk is None or self.calendar_id is None:
+            return
+        if any(bound is None or timezone.is_naive(bound) for bound in (self.start, self.end)):
+            return
+        stored = type(self)._base_manager.filter(pk=self.pk, all_day=True, start=self.start, end=self.end)
+        previous = stored.values_list(CalendarEventQuerySet.effective_timezone_expression(), flat=True).first()
+        if previous is not None and previous != self.effective_timezone:
+            self._keep_days(previous)
 
     def _all_day_errors(self) -> dict[str, str]:
         """Return why this all-day event's bounds are not local midnights in its zone."""
 
-        zone = self.expansion_zone
+        zone = self.effective_timezone
         tz = get_zone_info(zone)
-        named = zone or "the project time zone"
         for name in ("start", "end"):
             local = getattr(self, name).astimezone(tz)
             if local.time() != time.min:
-                return {name: f"An all-day event {name}s at midnight in its time zone ({named})."}
+                return {name: f"An all-day event {name}s at midnight in its time zone ({zone})."}
         if self.end <= self.start:
             return {"end": "An all-day event lasts at least one day."}
         return {}
@@ -1098,17 +1197,17 @@ class CalendarEvent(
 
         if not self.recurrence or self.calendar_id is None:
             return None
-        zone = self.expansion_zone
+        zone = self.effective_timezone
         last = Recurrence(self.recurrence).get_last_occurrence(self.start, zone=zone)
         return self.occurrence_end(last, zone=zone) if last is not None else None
 
     def is_instance(self, moment: datetime, *, zone: str | None = None) -> bool:
-        """Whether ``moment`` is an instance of this master's rule, expanded in ``zone`` (its expansion zone)."""
+        """Whether ``moment`` is an instance of this master's rule, expanded in ``zone`` (its effective zone)."""
 
         return moment in self.instances(moment, moment, zone=zone)
 
     def instances(self, first: datetime, last: datetime, *, zone: str | None = None) -> set[datetime]:
-        """Return this master's instances in ``[first, last]``, expanded once in ``zone`` (its expansion zone).
+        """Return this master's instances in ``[first, last]``, expanded once in ``zone`` (its effective zone).
 
         A row without a rule has none: its own start is no instance of a series.
 
@@ -1120,7 +1219,7 @@ class CalendarEvent(
 
         if not self.recurrence:
             return set()
-        zone = self.expansion_zone if zone is None else zone
+        zone = self.effective_timezone if zone is None else zone
         end = moment_after(last, timedelta(microseconds=1))
         if end is None:
             raise ValidationError(OUT_OF_RANGE_MESSAGE, code="out_of_range")
@@ -1190,7 +1289,7 @@ class CalendarEvent(
 
         horizon = self.horizon_end(max(timezone.now(), self.start))
         try:
-            Recurrence(self.recurrence).validate(dtstart=self.start, zone=self.expansion_zone, through=horizon)
+            Recurrence(self.recurrence).validate(dtstart=self.start, zone=self.effective_timezone, through=horizon)
         except ValidationError as error:
             raise ValidationError({"recurrence": error.error_list}) from None
 
@@ -1209,18 +1308,25 @@ class CalendarEvent(
           result; a refusal rolls the whole save back.
 
         The rule frequency floor and ``series_end`` are enforced and derived here, so
-        every save path (a form, a drag, a sync) keeps them, and so is an all-day
-        bound written as a date placed (:meth:`_place_all_day_dates`): a create
-        validates a copy of the row, then saves the values it was given. So is writability: a
+        every save path (a form, a drag, a sync) keeps them. So does an all-day event
+        keep its days across a change of its own zone (:meth:`_follow_own_zone`; a save
+        naming ``timezone`` writes the bounds with it), and so is an all-day bound
+        written as a date placed (:meth:`_place_all_day_dates`): a create validates a
+        copy of the row, then saves the values it was given. So is writability: a
         replica of a read-only calendar is written only by its source's own work
         (:meth:`_refuse_read_only`), and its series is the source's, so a moved
         master never rebases its overrides there: the source re-sends each instance
         under its own key.
         """
 
+        update_fields = kwargs.get("update_fields")
+        if update_fields is None or "timezone" in update_fields:
+            self._follow_own_zone()
+            if update_fields is not None and self.all_day:
+                # An all-day event's bounds are its days in its zone: a save of the zone writes them.
+                update_fields = kwargs["update_fields"] = [*update_fields, "start", "end"]
         self._place_all_day_dates()
         self._refuse_read_only()
-        update_fields = kwargs.get("update_fields")
         schedule_changes = update_fields is None or bool(_SCHEDULE_FIELDS & set(update_fields))
         takes_time = update_fields is None or bool(_TIME_FIELDS & set(update_fields))
         if schedule_changes:
@@ -1250,7 +1356,7 @@ class CalendarEvent(
                 and previous[:4] != (self.start, self.all_day, self.recurrence, self.timezone)
                 and self.calendar.is_writable
             ):
-                self.rebase_overrides(previous_start=previous[0], previous_zone=previous[3] or previous[4])
+                self.rebase_overrides(previous_start=previous[0], previous_zone=previous[4])
             if takes_time and self.calendar_id is not None:
                 self._refuse_overlap()
 
@@ -1260,20 +1366,20 @@ class CalendarEvent(
         The field refuses a malformed rule, one finer than daily and a ``COUNT``
         past the cap; the recurrence owner then refuses a rule that never occurs
         within about 30 years of ``start`` (``never_occurs``), expanded in ``zone``
-        (this row's expansion zone). A source's parse calls it on an unsaved row.
+        (this row's effective zone). A source's parse calls it on an unsaved row.
         """
 
         try:
             self._meta.get_field("recurrence").clean(self.recurrence, self)
             if self.recurrence and self.start is not None:
                 Recurrence(self.recurrence).validate(
-                    dtstart=self.start, zone=self.expansion_zone if zone is None else zone
+                    dtstart=self.start, zone=self.effective_timezone if zone is None else zone
                 )
         except ValidationError as error:
             raise ValidationError({"recurrence": error.error_list}) from None
 
     def _previous_schedule(self) -> tuple[datetime, bool, str, str, str] | None:
-        """The stored ``(start, all_day, recurrence, timezone, calendar zone)`` of a master with overrides.
+        """The stored ``(start, all_day, recurrence, timezone, effective zone)`` of a master with overrides.
 
         ``None`` for a new row, an override, or a master without overrides.
         """
@@ -1283,7 +1389,8 @@ class CalendarEvent(
         if not type(self)._base_manager.filter(series_id=self.pk).exists():
             return None
         rows = type(self)._base_manager.filter(pk=self.pk)
-        return rows.values_list("start", "all_day", "recurrence", "timezone", "calendar__timezone").first()
+        zone = CalendarEventQuerySet.effective_timezone_expression()
+        return rows.values_list("start", "all_day", "recurrence", "timezone", zone).first()
 
     def lock_subject(self, members: Mapping[str, Any] | None = None) -> Self:
         """Lock the calendar, then this event: the calendar row serializes its schedule and overlap rule."""
@@ -1296,7 +1403,7 @@ class CalendarEvent(
 
         Each ``original_start`` moves by the master's local wall-clock change, from
         ``previous_start`` in ``previous_zone`` to the current ``start`` in its
-        expansion zone. An override that still names an instance keeps it; one that
+        effective zone. An override that still names an instance keeps it; one that
         no longer does is detached as a standalone event when it carries edits, so
         nothing is lost, and deleted when it is a cancellation; one moved past the
         representable dates is no instance. Each moved override is judged on its own
@@ -1306,17 +1413,25 @@ class CalendarEvent(
         edge's own policy:
         :meth:`~angee.base.models.merge_references.Reference.live_pointing`) is left to
         that sync, neither detached nor deleted: a stranded one suppresses no instance.
-        Which overrides are so held is read once, for all of them.
+        Which overrides are so held is read once, for all of them. A push link holds
+        nothing (``RecordLink.live_reference_filter``): an override only pushed is
+        moved, detached or deleted like a local one, and its push links let it go
+        (``RecordLinkManager.release_pushes``), since the instance they name is no
+        longer its own. The push then restores that instance and writes the
+        override's new one. The overrides are locked as they are read, before any
+        is moved or deleted, as ``release_pushes`` requires of its caller.
         """
 
-        old_tz, zone = get_zone_info(previous_zone), self.expansion_zone
+        old_tz, zone = get_zone_info(previous_zone), self.effective_timezone
         new_tz = get_zone_info(zone)
         shift = self.start.astimezone(new_tz).replace(tzinfo=None) - previous_start.astimezone(old_tz).replace(
             tzinfo=None
         )
         order = "-original_start" if shift > timedelta(0) else "original_start"
         rows = type(self)._base_manager.filter(series_id=self.pk)
-        overrides = list(rows.order_by(order, "pk"))
+        # Locked before any moves or goes: a push binding an override's link locks its row first
+        # (``RecordLinkManager.lock_target``), so it binds before this or finds the row moved or gone.
+        overrides = list(rows.order_by(order, "pk").lock_if_supported())
         edges = [
             reference.live_pointing(type(self))
             for reference in references(type(self))
@@ -1332,6 +1447,7 @@ class CalendarEvent(
                 moves[override.pk] = timezone.make_aware(local, new_tz).astimezone(UTC)
             except OverflowError:
                 moves[override.pk] = None
+        links = apps.get_model("integrate", "RecordLink").objects
         for override in overrides:
             moved = moves[override.pk]
             if moved is not None and self.is_instance(moved, zone=zone):
@@ -1344,11 +1460,15 @@ class CalendarEvent(
                 # A synced row: its sync tombstones the old instance through its own stream.
                 continue
             elif override.status == EventStatus.CANCELLED:
+                # Its deletion releases its push links (RecordLink.teardown_for_target).
                 override.delete()
+                continue
             else:
                 override.series, override.original_start = None, None
                 override.allow_immutable_save("series_id", "original_start")
                 override.save(update_fields=["series", "original_start", "updated_at"])
+            if override.pk not in held:
+                links.release_pushes(override)
 
     def _refuse_overlap(self) -> None:
         """Refuse this busy event when any of its instances meets another busy occurrence on a ``refuse`` calendar.
@@ -1418,7 +1538,7 @@ class CalendarEvent(
         if self.recurrence and self.pk is not None:
             stored = type(self)._base_manager.filter(series_id=self.pk)
             replaced = {start for start in stored.values_list("original_start", flat=True) if start is not None}
-        spans = self.spans(since, until, zone=self.expansion_zone, replaced=replaced)
+        spans = self.spans(since, until, zone=self.effective_timezone, replaced=replaced)
         return sorted((max(start, since), end) for start, end in spans)
 
     def _owns(self, other: Any) -> bool:
@@ -1433,23 +1553,30 @@ class CalendarEvent(
         return self._owns(other) or (other.pk == self.series_id and moment.start == self.original_start)
 
     def occurrence_end(self, start: datetime, *, zone: str = "") -> datetime:
-        """Return the end of this row's occurrence starting at ``start``, expanded in ``zone``.
+        """Return the end of this row's occurrence starting at ``start``, expanded in ``zone`` (:meth:`span_end`)."""
+
+        return self.span_end(self.start, self.end, all_day=self.all_day, at=start, zone=zone)
+
+    @staticmethod
+    def span_end(start: datetime, end: datetime, *, all_day: bool, at: datetime, zone: str = "") -> datetime:
+        """Return where an event spanning ``start`` to ``end`` ends when it occurs at ``at``, expanded in ``zone``.
 
         A **timed** event keeps its absolute duration (``end - start``), so a
         60-minute meeting stays 60 minutes across a DST shift. An **all-day** event
-        spans a whole number of **calendar days** in the zone: the row's local
-        day-count is added to the occurrence's local start date and converted back
-        to UTC, so a one-day all-day event ends the next local midnight, not one hour
-        off after a spring-forward. A blank zone is the project ``TIME_ZONE``. An
-        end past the representable dates is refused (``out_of_range``).
+        spans a whole number of **calendar days** in the zone: its local day-count is
+        added to the occurrence's local start date and converted back to UTC, so a
+        one-day all-day event ends the next local midnight, not one hour off after a
+        spring-forward. A blank zone is the project ``TIME_ZONE``. An end past the
+        representable dates is refused (``out_of_range``). A source that wrote a
+        series reads its instances' ends here without a row.
         """
 
         try:
-            if not self.all_day:
-                return start + (self.end - self.start)
+            if not all_day:
+                return at + (end - start)
             tz = get_zone_info(zone)
-            day_span = (self.end.astimezone(tz).date() - self.start.astimezone(tz).date()).days
-            end_local_date = start.astimezone(tz).date() + timedelta(days=day_span)
+            day_span = (end.astimezone(tz).date() - start.astimezone(tz).date()).days
+            end_local_date = at.astimezone(tz).date() + timedelta(days=day_span)
             end_local = datetime.combine(end_local_date, time.min)
             return timezone.make_aware(end_local, tz).astimezone(UTC)
         except OverflowError as error:
@@ -1475,25 +1602,32 @@ class CalendarEvent(
 
         A recurring master refuses: its occurrences are dragged one instance at a
         time through an override, and the series itself is edited through the
-        event form. An all-day event lands on the nearest midnights in its expansion
-        zone, since a drag carries the viewer's own midnight. The moved
-        fields are validated before the write (:meth:`clean`: the interval and the
-        series) and the overlap policy by the save, so an invalid move surfaces as a
-        ``ValidationError``, never an ``IntegrityError``. The ordinary save joins the
-        caller's changeset, so provenance owns the resulting field delta and reason.
+        event form. An all-day event moves by days: a bound written as a date (the
+        day it was dropped on, as the viewer sees the event's days) is placed at that
+        midnight in its effective zone (:meth:`_place_all_day_dates`), and an instant
+        off that midnight is refused, never moved to a guessed day; a move without a
+        later end lasts one day. A timed event moves to instants: a time without an
+        offset is refused (``naive_datetime``), never read in the server's zone. The
+        moved fields are validated before the write (:meth:`clean`: the interval and
+        the series) and the overlap policy by the save, so an invalid move surfaces
+        as a ``ValidationError``, never an ``IntegrityError``. The ordinary save joins
+        the caller's changeset, so provenance owns the resulting field delta and
+        reason.
         """
 
         if self.recurrence:
             raise ValidationError(
                 {"start": "A recurring event's occurrences cannot be dragged; edit the series instead."}
             )
-        if self.all_day:
-            tz = get_zone_info(self.expansion_zone)
-            start, end = _nearest_midnight(start, tz), _nearest_midnight(end, tz)
-            if end <= start:
-                end = _midnight(start.astimezone(tz).date() + timedelta(days=1), tz)
+        if not self.all_day:
+            require_aware(start=start, end=end)
         self.start = start
         self.end = end
+        if self.all_day:
+            self._place_all_day_dates()
+            if self.end <= self.start:
+                tz = get_zone_info(self.effective_timezone)
+                self.end = _midnight(self.start.astimezone(tz).date() + timedelta(days=1), tz)
         self.full_clean(
             exclude=[field.name for field in self._meta.fields if field.name not in ("start", "end")],
             validate_unique=False,
@@ -1617,12 +1751,15 @@ class EventAttendee(ImmutableFieldsMixin, AuditMixin, HistoryMixin, AngeeDataMod
         if self.event_id is not None and not self.event.calendar.takes_write():
             raise ValidationError(READ_ONLY_CALENDAR)
 
-    def delete_blocker(self) -> str | None:
-        """Refuse deleting an attendee its event's calendar does not let this caller write."""
+    def delete_blocker(self, *, cascaded: bool = False) -> str | None:
+        """Refuse a delete started at an attendee its event's calendar does not let this caller write.
 
-        if not self.event.calendar.takes_write():
+        An attendee a delete only cascades to goes with the row it started from.
+        """
+
+        if not cascaded and not self.event.calendar.takes_write():
             return READ_ONLY_CALENDAR
-        return cast(Any, super()).delete_blocker()
+        return cast(Any, super()).delete_blocker(cascaded=cascaded)
 
 
 _ROLE_RANK = (AttendeeRole.ORGANIZER, AttendeeRole.REQUIRED, AttendeeRole.OPTIONAL)
@@ -1637,13 +1774,58 @@ _RESPONSE_RANK = (
 """Attendee answers, weakest first."""
 
 
+class CalendarSourceManager[SourceT: "CalendarSource"](IntegrationManager[SourceT]):
+    """Connect calendar sources: the one sequence every connect verb runs."""
+
+    def subscribe(
+        self,
+        owner: Any,
+        credential: Any,
+        *,
+        backend_class: str,
+        display_name: str,
+        config: Mapping[str, Any] | None = None,
+    ) -> SourceT:
+        """Connect ``credential`` as a new source of ``owner``'s and queue its first sync; nothing is fetched.
+
+        One transaction, as system work. ``owner``'s row is locked first, so their
+        racing connects count one quota; then the credential's, so racing
+        attachments of one account or address serialize. The calendar owner admits
+        one more source (:meth:`CalendarSource.admit_subscription`: the create gate,
+        the quota and the rate). The source is built from ``backend_class``
+        (``IntegrationManager.build``: its defaults name its vendor), its credential attached
+        through integrate, which asks the backend to admit it
+        (``CalendarBackend.admit_credential``), then saved and its first sync
+        requested: a bridge enters the poll loop once its first sync records a result.
+        """
+
+        with system_context(reason="calendar.source.subscribe"), transaction.atomic():
+            get_user_model().system_queryset().lock_if_supported(no_key=True).get(pk=owner.pk)
+            apps.get_model("integrate", "Credential").objects.lock_if_supported().get(pk=credential.pk)
+            self.model.admit_subscription(owner)
+            source = self.build(
+                backend_class=backend_class,
+                owner=owner,
+                display_name=display_name,
+                config=dict(config or {}),
+                lifecycle=IntegrationLifecycle.CONNECTED,
+                created_by_id=owner.pk,
+            )
+            source.attach_connection(credential)
+            source.save()
+            source.request_sync()
+        return source
+
+
 class CalendarSource(Bridge, inherits="integrate.Integration"):
     """A connected calendar account or feed that mirrors its remote calendar and syncs its events.
 
     An ``integrate.Integration`` child (its owner, credential and status come from
     the connection substrate) and a ``Bridge`` (the scheduler and the eager
-    ``syncIntegration`` mutation drive it). ``backend_class`` selects the protocol
-    (``ics``, contributed by ``calendar_integrate_ics``). A secret address (a
+    ``sync_integration`` mutation drive it). ``backend_class`` selects the protocol
+    (``ics`` from ``calendar_integrate_ics``, ``google`` and
+    ``google_publishing`` from ``calendar_integrate_google``), and the backend admits the credential it uses
+    (:meth:`credential_blocker`). A secret address (a
     private feed URL) is its credential's material, never ``config``, which keeps
     only what may be shown. Its owner syncs and unsubscribes it
     (:meth:`sync_now`, :meth:`unsubscribe`); :meth:`admit_subscription` bounds how
@@ -1653,10 +1835,17 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
     stream (:meth:`calendars_stream`): one record per remote calendar, whose
     ``RecordLink`` names its :class:`Calendar` on the owner's person and whose
     source states that calendar's identity. Each remote calendar's events sync
-    through an ``events`` stream partitioned by its key (:meth:`events_stream`);
-    the calendar managers own every event write. Whether a calendar takes local
-    edits is its backend's ``writable`` declaration (:meth:`is_backend_writable`).
+    through the ``events`` stream its link holds as a container
+    (:meth:`events_stream`); the calendar managers own every event write. Whether a calendar takes local
+    edits is its backend's ``direction`` (:meth:`is_backend_writable`).
+
+    A publishing source (:attr:`publishes`) runs the same two streams the other
+    way: :meth:`publish` binds an existing local calendar to a remote one, and its
+    backend pushes that calendar's events out. What its purge does is its
+    backend's (``CalendarBackend.release``).
     """
+
+    objects = CalendarSourceManager()
 
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.CONNECT
 
@@ -1683,41 +1872,118 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
         backend_class = self.get_backend_class_impl()
         return backend_class(self)
 
+    @property
+    def publishes(self) -> bool:
+        """Whether this source publishes local calendars out: its backend class's ``direction`` is ``PUSH``."""
+
+        return self.get_backend_class_impl().direction == StreamDirection.PUSH
+
+    @classmethod
+    def may_publish_to(cls, remote_id: str) -> bool:
+        """Whether this deployment lets a source publish to the remote calendar ``remote_id``.
+
+        ``ANGEE_CALENDAR_PUBLISH_TARGETS`` lists the remote calendars sources may
+        write: ``None`` admits any, and a list admits only those, matched whole (a
+        test profile lists none, or its own). :meth:`publish` asks before binding,
+        and ``PublishingCalendarBackend.admit_push`` before every remote call of a push.
+        """
+
+        targets = settings.ANGEE_CALENDAR_PUBLISH_TARGETS
+        return targets is None or remote_id in frozenset(targets)
+
+    def publish(self, calendar: Calendar, remote_id: str) -> Any:
+        """Publish ``calendar`` to the remote calendar ``remote_id`` and queue the push; return the binding link.
+
+        The source's ``calendars``-stream link keyed ``remote_id`` is observed
+        targeting ``calendar`` (the remote id lives only there), and the calendar's
+        ``source`` names this source, so its events push through the events stream
+        that link holds (:meth:`events_stream`). The calendars stream is a push
+        stream: nothing ever sweeps the binding as absent. Publishing again to the
+        same remote calendar changes nothing. Refused: a source that does not
+        publish or is not connected, a remote calendar the deployment does not
+        admit (:meth:`may_publish_to`), a calendar another source mirrors or
+        publishes, a calendar published elsewhere, a remote calendar this source
+        publishes another calendar to, and one another source publishes to. Runs as
+        this source's own work, its lifecycle read from its locked row: the source's
+        row, then its vendor's (the owner of the remote calendar ids, so two
+        sources' publishes to one remote calendar bind it once), then the calendars
+        stream, then the calendar (so racing publishes of one calendar bind it once).
+        The caller authorizes it on both rows.
+        """
+
+        if not self.publishes:
+            raise ValidationError("This calendar source does not publish calendars.")
+        remote_id = remote_id.strip()
+        if not remote_id:
+            raise ValidationError({"remote_id": "Name the remote calendar to publish to."})
+        if not self.may_publish_to(remote_id):
+            raise ValidationError({"remote_id": "This deployment does not publish to that calendar."})
+        links = apps.get_model("integrate", "RecordLink").objects
+        streams = apps.get_model("integrate", "SyncStream").objects
+        with (
+            changeset(fresh=True, activity="system", origin=self, change_reason="calendar.source.publish"),
+            system_context(reason="calendar.source.publish"),
+            transaction.atomic(),
+        ):
+            source = self.lock_capability()
+            if source.lifecycle != IntegrationLifecycle.CONNECTED:
+                raise ValidationError("This calendar source is not connected.")
+            # A no-key lock serializes publishes to the vendor's remote ids, and lets sources and mounts still insert.
+            apps.get_model("integrate", "Vendor").objects.lock_if_supported(no_key=True).get(pk=source.vendor_id)
+            stream = streams.lock_current(streams.current(self, self.calendars_stream()))
+            bound = calendar.lock_subject()
+            if bound.source_id not in (None, self.pk):
+                raise ValidationError("Another calendar source already mirrors or publishes this calendar.")
+            others = links.filter(
+                stream__key=CALENDARS_STREAM,
+                stream__direction=StreamDirection.PUSH,
+                stream__integration__vendor_id=source.vendor_id,
+                external_key=remote_id,
+            )
+            if others.exclude(stream__integration_id=self.pk).exclude(target_object_id=None).exists():
+                raise ValidationError({"remote_id": "Another calendar source already publishes to that calendar."})
+            published = links.filter(stream=stream)
+            if published.filter(target_object_id=str(bound.pk)).exclude(external_key=remote_id).exists():
+                raise ValidationError("This calendar is already published to another calendar.")
+            if published.filter(external_key=remote_id).exclude(target_object_id=str(bound.pk)).exclude(
+                target_object_id=None
+            ).exists():
+                raise ValidationError({"remote_id": "This source already publishes another calendar there."})
+            link = links.observe(stream, remote_id, target=bound)
+            if bound.source_id != self.pk:
+                bound.source = self
+                bound.save(update_fields=["source", "updated_at"])
+            self.request_sync()
+        return link
+
+    @classmethod
+    def backend_class_for(cls, key: str) -> type[CalendarBackend]:
+        """Return the backend class a source's ``backend_class`` key selects."""
+
+        return cast(type[CalendarBackend], cls._meta.get_field("backend_class").resolve_class(key))
+
     @classmethod
     def is_backend_writable(cls, key: str | None) -> bool:
-        """Whether a calendar whose source has backend ``key`` takes local edits; no source (``None``) does."""
+        """Whether a calendar whose source has backend ``key`` takes local edits; no source (``None``) does.
 
-        return key is None or cls._meta.get_field("backend_class").resolve_class(key).writable
-
-    def calendar_for_partition(self, partition: str) -> Any | None:
-        """Return the calendar an ``events`` stream partition writes to, or ``None`` before it is mirrored.
-
-        The one place that resolves a partition to its container: the
-        ``calendars``-stream ``RecordLink`` whose external key is the partition
-        names the calendar. Integrate has no partition-to-container seam yet; this
-        lookup is the interim one. It relies on the calendars stream draining before
-        the events streams (``CalendarBackend.sync_parallelism``), and both go when an
-        events stream names its calendar's link (``SyncStream.container``).
+        Its backend's ``direction`` decides: a pulled calendar is a read-only replica.
         """
 
-        return (
-            apps.get_model("calendar", "Calendar")
-            .system_queryset()
-            .filter(
-                record_links__stream__integration_id=self.pk,
-                record_links__stream__key=CALENDARS_STREAM,
-                record_links__external_key=partition,
-            )
-            .first()
-        )
+        return key is None or cls.backend_class_for(key).direction != StreamDirection.PULL
+
+    def credential_blocker(self, credential: Any) -> str | None:
+        """Refuse a credential this source's backend does not use (``CalendarBackend.credential_blocker``).
+
+        Integrate admits by it on every attachment, so neither a connect, the
+        console's credential patch nor a re-attachment points a source at a
+        credential its backend would send to another vendor; the connect picker
+        shows it beside each account.
+        """
+
+        return self.backend.credential_blocker(credential)
 
     def admit_credential(self, credential: Any) -> None:
-        """Admit only a credential this source's backend uses (``CalendarBackend.admit_credential``).
-
-        Integrate asks on every attachment, so neither a connect, the console's
-        credential patch nor a re-attachment points a source at a credential its
-        backend would send to another vendor.
-        """
+        """Admit through the backend (``CalendarBackend.admit_credential``), which may lock around its rule."""
 
         self.backend.admit_credential(credential)
 
@@ -1760,12 +2026,13 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
         if self.lifecycle == IntegrationLifecycle.CONNECTED:
             self.request_sync()
 
-    def unsubscribe(self) -> None:
-        """End this subscription, its owner's verb: disconnect it now and purge it after commit.
+    def unsubscribe(self) -> str:
+        """End this subscription, its owner's verb: disconnect it now and purge it after commit; say what follows.
 
         Integrate's ``disconnect`` stops its polls (a disconnected bridge is never
         due) and commits with the request; the ``calendar.purge_source`` job then
         runs :meth:`purge`, so the request never deletes a whole replica itself.
+        Returns what the purge will do, as the backend words it (``CalendarBackend.unsubscribed``).
         """
 
         with (
@@ -1776,40 +2043,37 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
             if self.lifecycle != IntegrationLifecycle.DISCONNECTED:
                 self.disconnect()
             enqueue_task(PURGE_SOURCE_TASK, kwargs={"pk": self.pk})
+        return self.get_backend_class_impl().unsubscribed
 
     def purge(self) -> int:
-        """Purge an unsubscribed source: delete its events, archive its calendars, retire its credential.
+        """Purge an unsubscribed source through its backend (``CalendarBackend.release``); return how many events went.
 
-        Returns how many events went. Runs as the ``calendar.purge_source`` job, and
-        again from the reconciler while anything is left (:meth:`purge_unsubscribed`),
-        as this source's own work (:meth:`Calendar.takes_write`), in integrate's lock
-        order: the integration row (``lock_capability``), then the source's events
-        streams by primary key, then each calendar, then their links and events. A
-        sync page still in flight waits on its stream and then finds the source
-        disconnected (``CalendarBackend.prepare_page``), so
-        nothing it extracted re-creates an event. Each calendar's writability is read
-        once; its events' links are released in bulk (``RecordLinkManager.release_targets``)
-        and the events deleted. The feed credential is detached, and retired through
-        its owner once nothing else attaches it (``CredentialManager.retire_unattached``:
-        two subscriptions to one feed share it). The calendars stay, archived,
-        with their history and statements; deleting the source row itself needs an
-        integrate stream teardown, which does not exist yet. A source that is
-        connected again is not purged.
+        A mirroring source's events go and its calendars are archived; a publishing
+        source is unbound, every event kept. Runs as the ``calendar.purge_source``
+        job, and again from the reconciler while anything is left
+        (:meth:`purge_unsubscribed`), as this source's own work
+        (:meth:`Calendar.takes_write`), in integrate's lock order: the integration
+        row (``lock_capability``), then every stream of the source, parents before
+        their children (``SyncStreamQuerySet.in_lock_order``), then each calendar,
+        then their links and events. A sync page or a push
+        still in flight waits on its stream and then finds the source disconnected
+        (``CalendarBackend.prepare_page``, ``PublishingCalendarBackend.admit_push``),
+        so nothing it read or wrote re-creates or re-binds anything. Each calendar's
+        writability is read once. The calendars stay, with their history and
+        statements; deleting the source row itself needs an integrate stream
+        teardown, which does not exist yet. A source that is connected again is not
+        purged.
         """
 
-        links = apps.get_model("integrate", "RecordLink").objects
         streams = apps.get_model("integrate", "SyncStream")
         calendars = apps.get_model("calendar", "Calendar")
-        events = apps.get_model("calendar", "CalendarEvent")
         with (
             changeset(fresh=True, activity="system", origin=self, change_reason="calendar.source.purge"),
             system_context(reason="calendar.source.purge"),
             transaction.atomic(),
         ):
             source = self.lock_capability()
-            list(
-                streams.system_queryset(lock=("self",)).filter(integration_id=self.pk, key=EVENTS_STREAM).order_by("pk")
-            )
+            list(streams.system_queryset(lock=("self",)).filter(integration_id=self.pk).in_lock_order())
             if source.lifecycle != IntegrationLifecycle.DISCONNECTED:
                 return 0
             owned = [
@@ -1818,17 +2082,7 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
             ]
             if not all(calendar.takes_write() for calendar in owned):
                 raise ValidationError(READ_ONLY_CALENDAR)
-            links.release_targets(links.filter(stream__integration_id=self.pk, stream__key=EVENTS_STREAM))
-            _deleted, per_model = events.system_queryset().filter(calendar__in=owned).delete()
-            for calendar in owned:
-                if not calendar.is_archived:
-                    calendar.is_archived = True
-                    calendar.save(update_fields=["is_archived", "updated_at"])
-            credential = source.credential
-            if credential is not None:
-                source.attach_credential(None)
-                apps.get_model("integrate", "Credential").objects.retire_unattached(credential)
-        return per_model.get(events._meta.label, 0)
+            return source.backend.release(owned)
 
     @classmethod
     def purge_unsubscribed(cls) -> int:
@@ -1862,33 +2116,63 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
     def calendars_stream(self) -> StreamDefinition:
         """Declare the stream of the remote calendars this source serves: one record per calendar.
 
-        Like each events stream, it sweeps for absent records once per poll
-        interval (:meth:`_replica`).
+        Each record's link is a container: it holds that calendar's events stream
+        (:meth:`events_stream`). Like each events stream, a pulled one sweeps for
+        absent records once per poll interval (:meth:`_replica`); a calendar whose
+        absence is confirmed retires the events stream it holds. A publishing
+        source's is a push stream: :meth:`publish` observes its links.
         """
 
-        return self._replica(CALENDARS_STREAM)
+        return self._replica(CALENDARS_STREAM, holds_containers=True)
 
-    def events_stream(self, remote: ParsedCalendar) -> StreamDefinition:
-        """Declare the events stream of one remote calendar, partitioned by its key.
+    def events_stream(self, calendar_link: Any) -> StreamDefinition:
+        """Declare the events stream ``calendar_link`` (the calendar's ``calendars``-stream link) holds.
 
-        A pull-only record replica keyed by remote event identity. A backend that
-        takes writes makes its calendar writable; it does not change the stream.
+        A record replica keyed by remote event identity, partitioned by the
+        calendar's key and naming its link as its container, so integrate drains it
+        after the calendar is mirrored and pauses or retires it with that link. It
+        syncs the backend's way (:meth:`_replica`): a publishing backend pushes the
+        calendar's events out through it. Its mapping version is the backend's
+        (``CalendarBackend.events_mapping_version``).
         """
 
-        return self._replica(EVENTS_STREAM, partition=remote.key)
+        return self._replica(
+            EVENTS_STREAM,
+            partition=calendar_link.external_key,
+            container=calendar_link,
+            mapping_version=self.get_backend_class_impl().events_mapping_version,
+        )
 
-    def _replica(self, key: str, *, partition: str = "") -> StreamDefinition:
-        """A pull-only record replica whose removals integrate's absence sweep finds.
+    def _replica(
+        self,
+        key: str,
+        *,
+        partition: str = "",
+        container: Any = None,
+        holds_containers: bool = False,
+        mapping_version: int = 1,
+    ) -> StreamDefinition:
+        """A record replica in the backend class's ``direction``, whose pulled removals integrate's absence sweep finds.
 
-        The sweep runs at most once per poll interval: a record the source stops
-        serving is unavailable after one sweep and tombstoned after the stream's
-        absence threshold (:meth:`CalendarBackend.on_absent` applies it).
+        ``partition`` and ``container`` name an events stream's calendar (its link);
+        ``holds_containers`` marks the calendars stream.
+
+        A stream sweeps at most once per its backend's ``reconcile_interval``, else
+        once per poll interval. A pulled one's sweep finds removals: a record the
+        source stops serving is unavailable after one sweep and tombstoned after
+        the stream's absence threshold (:meth:`CalendarBackend.on_absent` applies
+        it). A push stream's is its push comparing every event, even one no version
+        shows changed (``SyncStream.sweep_due``): hourly for a publishing backend.
         """
 
+        backend = self.get_backend_class_impl()
         return StreamDefinition(
             key,
-            partition=partition,
             kind=StreamKind.RECORD_REPLICA,
-            direction=StreamDirection.PULL,
-            reconcile_interval=timedelta(seconds=self.poll_interval),
+            direction=backend.direction,
+            reconcile_interval=backend.reconcile_interval or timedelta(seconds=self.poll_interval),
+            partition=partition,
+            container=container,
+            holds_containers=holds_containers,
+            mapping_version=mapping_version,
         )

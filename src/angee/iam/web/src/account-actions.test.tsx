@@ -133,11 +133,13 @@ describe("account verbs follow the row's server projection", () => {
     const outcome = await result.current.submit?.(
       { first_name: "Ada", last_name: "Lovelace", username: "ignored" },
       { record, selectedIds: ["user-1"] },
+      { errorNotification: false },
     );
     expect(outcome).toEqual({ ok: true, message: "Account renamed." });
+    // The action form's quiet call options reach the verb, so a transport failure shows once.
     expect(mocks.rename).toHaveBeenCalledExactlyOnceWith("user-1", {
       first_name: "Ada", last_name: "Lovelace", confirmed: true, expected_revision: 4,
-    });
+    }, { errorNotification: false });
   });
 });
 

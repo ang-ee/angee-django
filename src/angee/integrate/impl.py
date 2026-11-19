@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
@@ -185,8 +185,17 @@ class BridgeImpl(IntegrationImpl):
     def on_revalidated(self, stream: Any, links: Sequence[Any]) -> None:
         """Restore native projection visibility after unchanged-row revalidation."""
 
-    def on_absent(self, stream: Any, links: Sequence[Any]) -> None:
-        """Withdraw native projection visibility when absence changes link status."""
+    def on_absent(self, stream: Any, links: Sequence[Any]) -> Mapping[Any, ApplyResult] | None:
+        """Withdraw native projection visibility when absence changes link status.
+
+        Return the applied evidence of each tombstoned link whose local projection
+        the withdrawal changed, by link primary key: the driver records it as that
+        link's applied base with the tombstone, as it records a page tombstone's
+        ``ApplyResult``, so a record that returns reads as a remote change, never as a
+        local one. ``None`` (the default) records nothing.
+        """
+
+        return None
 
     def finish_page(self, stream: Any, page: StreamPage, outcomes: Sequence[ApplyResult]) -> None:
         """Finish domain batch relationships before the page cursor commits.
@@ -198,12 +207,35 @@ class BridgeImpl(IntegrationImpl):
         """
 
     def local_changes(self, stream: Any, *, keys: frozenset[str] | None = None) -> Iterable[LocalChange]:
-        """Project only selected local identities, or all candidates when keys is None."""
+        """Project only selected local identities, or all candidates when keys is None.
+
+        The driver writes only a projection that differs from its link's base. On a
+        PUSH stream, given ``keys``, yield each selected key's current row under that
+        key with its ``target``, changed or not: a push binds the row it wrote only
+        while this keyed read, under the row's lock, still yields it under the key it
+        was written to (``streams._lock_written``). A row it no longer yields there
+        (deleted, or moved to another key) binds nothing, and its removal follows.
+
+        An adapter whose projection reads only what one exact version names yields
+        it as ``LocalChange.local_version``, read with the projection; without
+        ``keys`` it may then read only the rows changed since their link's base
+        (``RecordLinkManager.changed_since_base``), which reads every row while the
+        stream's sweep is due, so its stream declares a ``reconcile_interval``. Its
+        stream's ``mapping_version`` names the projection: raise it with any change
+        to what the projection returns for an unchanged row.
+        """
 
         raise AdapterContractError("Push adapters must project local changes.")
 
     def write_back(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
-        """Conditionally write a remote record or raise RemoteRejected."""
+        """Conditionally write a remote record or raise RemoteRejected.
+
+        ``projection`` is ``None`` for a removal: on a PUSH stream, a link whose row
+        went (released by its deletion, ``RecordLinkManager.release_pushes``) is
+        written as ``write_back(link, None)``, and a result with ``tombstone=True``
+        tombstones the link. An adapter's :meth:`local_changes` may yield a ``None``
+        projection too, for a record it removes itself.
+        """
 
         raise AdapterContractError("Push adapters must implement conditional write-back.")
 

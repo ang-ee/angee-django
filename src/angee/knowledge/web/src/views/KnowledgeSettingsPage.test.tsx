@@ -60,7 +60,7 @@ beforeEach(() => {
 
 async function submit(name = "Copy", template = "vlt_template") {
   if (!mocks.submit) throw new Error("Clone action was not registered");
-  return mocks.submit({ name }, { record: { id: template }, selectedIds: [] });
+  return mocks.submit({ name }, { record: { id: template }, selectedIds: [] }, { errorNotification: false });
 }
 
 test("failed responses and transport retries retain the same idempotency key", async () => {
@@ -82,8 +82,8 @@ test("success clears the retry identity so another clone gets a new key", async 
   render(<KnowledgeSettingsPage />);
   expect(await submit()).toEqual({ ok: true, id: "vlt_created", message: "Created" });
   await submit();
-  expect(mocks.mutation).toHaveBeenNthCalledWith(1, expect.objectContaining({ idempotency_key: "clone-key-1" }));
-  expect(mocks.mutation).toHaveBeenNthCalledWith(2, expect.objectContaining({ idempotency_key: "clone-key-2" }));
+  expect(mocks.mutation).toHaveBeenNthCalledWith(1, expect.objectContaining({ idempotency_key: "clone-key-1" }), { errorNotification: false });
+  expect(mocks.mutation).toHaveBeenNthCalledWith(2, expect.objectContaining({ idempotency_key: "clone-key-2" }), { errorNotification: false });
 });
 
 test("changing the name or template starts a new creation request", async () => {
@@ -94,7 +94,7 @@ test("changing the name or template starts a new creation request", async () => 
   expect(mocks.key).toHaveBeenCalledTimes(3);
   expect(mocks.mutation).toHaveBeenLastCalledWith({
     template: "vlt_other", name: "Changed", owned: true, idempotency_key: "clone-key-3",
-  });
+  }, { errorNotification: false });
 });
 
 test("successful clones invalidate metadata-canonical model names", () => {

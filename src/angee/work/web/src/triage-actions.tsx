@@ -68,12 +68,12 @@ export function useTriageActions(queueId: string): readonly ActionDescriptor[] {
             filters: acceptStageFilters(queueId),
           },
         ],
-        submit: async (values, context) => {
+        submit: async (values, context, options) => {
           const task = recordId(context.record, t("triage.action.failed"));
           const data = await accept({
             task,
             stage: requiredString(values.stage, t("triage.action.required", { field: t("triage.action.stage") })),
-          } satisfies AcceptTaskVariables);
+          } satisfies AcceptTaskVariables, options);
           return extractActionOutcome(data, "accept_task") ?? {
             ok: false,
             message: t("triage.action.failed"),
@@ -93,11 +93,11 @@ export function useTriageActions(queueId: string): readonly ActionDescriptor[] {
             options: declineReasonOptions,
           },
         ],
-        submit: async (values, context) => {
+        submit: async (values, context, options) => {
           const task = recordId(context.record, t("triage.action.failed"));
           return extractActionOutcome(await decline({ task,
             reason: declineReason(declineReasonOptions, values.reason),
-          }), "decline_task") ?? { ok: false, message: t("triage.action.failed") };
+          }, options), "decline_task") ?? { ok: false, message: t("triage.action.failed") };
         },
       },
       {
@@ -111,11 +111,11 @@ export function useTriageActions(queueId: string): readonly ActionDescriptor[] {
             kind: "datetime" as const,
           },
         ],
-        submit: async (values, context) => {
+        submit: async (values, context, options) => {
           const task = recordId(context.record, t("triage.action.failed"));
           return (await snooze(task, {
             until: requiredString(values.until, t("triage.action.required", { field: t("triage.action.until") })),
-          })) ?? { ok: false, message: t("triage.action.failed") };
+          }, options)) ?? { ok: false, message: t("triage.action.failed") };
         },
       },
       {
@@ -132,11 +132,11 @@ export function useTriageActions(queueId: string): readonly ActionDescriptor[] {
             filters: canonicalTaskFilters(queueId),
           },
         ],
-        submit: async (values, context) => {
+        submit: async (values, context, options) => {
           const task = recordId(context.record, t("triage.action.failed"));
           return (await duplicate(task, {
             canonical: requiredString(values.canonical, t("triage.action.required", { field: t("triage.action.canonical") })),
-          })) ?? { ok: false, message: t("triage.action.failed") };
+          }, options)) ?? { ok: false, message: t("triage.action.failed") };
         },
       },
     ],

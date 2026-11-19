@@ -205,9 +205,9 @@ class StatedRecordMixin(LinkedRecordMixin, StatementsMixin):
     class Meta:
         abstract = True
 
-    def delete_blocker(self) -> str | None:
-        """Name the refusal the statement tables' protected key enforces on every delete path."""
+    def delete_blocker(self, *, cascaded: bool = False) -> str | None:
+        """Name the refusal the statement tables' protected key enforces on every delete path, cascades included."""
 
         if self.carries_statements():
             return f"This {self._meta.verbose_name} carries source statements and is retained."
-        return cast(Any, super()).delete_blocker()
+        return cast(Any, super()).delete_blocker(cascaded=cascaded)

@@ -13,9 +13,10 @@ import { titleCase } from "../../../lib/titleCase";
 import { Chip } from "../../../ui/chip";
 import { formatJson } from "../../../widgets/json-format";
 import { ChipList } from "../../../ui/chip";
-import { dateFromUnknown, formatDate, formatDateTime, formatTime } from "../../../widgets/date-format";
+import { dateFromUnknown, formatTime } from "../../../widgets/date-format";
 import { canonicalOptionValue } from "../../../widgets/types";
 import { RecordReferenceChips } from "../../relation/RecordReference";
+import { AbsoluteTime } from "../../../fragments/AbsoluteTime";
 import { columnTone } from "../../page";
 import type { ColumnAggregate, ColumnDescriptor, PageColumnAlign } from "../../page";
 import type { GroupMeasure } from "./types";
@@ -67,16 +68,12 @@ export function cellContent<TRow extends Row>(
   const date = isDateField(field, column.field)
     ? dateFromUnknown(value)
     : null;
-  if (date) return <CompactDate value={date} />;
+  if (date) return <AbsoluteTime display="date" value={typeof value === "string" ? value : date} />;
   if (field?.kind === "scalar" && field.scalar === "Time" && typeof value === "string") {
     const time = formatTime(value);
     if (time) return <time dateTime={value} className="tabular-nums">{time}</time>;
   }
   return displayValue(value, t);
-}
-
-function CompactDate({ value }: { value: Date }): React.ReactElement {
-  return <time dateTime={value.toISOString()} title={formatDateTime(value)} className="tabular-nums">{formatDate(value)}</time>;
 }
 
 export function renderCell<TRow extends Row>(

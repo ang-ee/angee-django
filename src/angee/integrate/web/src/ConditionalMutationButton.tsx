@@ -99,7 +99,7 @@ export function ConditionalMutationButton<
     primary: variant === "primary",
     ...(confirm ? { confirm } : {}),
     ...(args
-      ? { args, submit: (values) => mutateOutcome(recordId, values) }
+      ? { args, submit: (values, _context, options) => mutateOutcome(recordId, values, options) }
       : { run: async () => { await mutate(recordId); } }),
   };
   return <RecordVerb action={action} />;

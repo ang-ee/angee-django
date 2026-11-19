@@ -157,7 +157,14 @@ export interface FormViewSaveSurface {
   loading: boolean;
   /** Native detail-query failure; cached record data remains available during refresh failures. */
   loadError: HttpError | null;
+  /** The form takes no edit now: it is read-only, or its record has not arrived. */
   formReadOnly: boolean;
+  /**
+   * The form takes edits, its record's arrival aside: an awaited record counts as
+   * taking them unless the form, its resource or its fields rule edits out, so what
+   * reserves room for an edit's controls keeps it while the record loads.
+   */
+  formTakesEdits: boolean;
   formIsDirty: boolean;
   pending: boolean;
   saveError: string | null;
@@ -370,17 +377,18 @@ export function useFormViewSave({
       ? recordToValues(record, formFields, linesSeed(seedLineRows)) : emptyValues;
   }, [acknowledgedSource, emptyValues, formFields, isCreate, linesSeed, record, seedLineRows]);
   const recordUnavailable = !isCreate && record == null;
-  const formReadOnly = React.useMemo(
-    () =>
+  const formTakesEdits = React.useMemo(
+    () => !(
       readOnly ||
-      recordUnavailable ||
-      (!isCreate && !allowsRecordPermission(record, "write", modelMetadata)) ||
-      (!isCreate && record !== null && Boolean(readOnlyWhen?.(record))) ||
+      (!isCreate && record != null && !allowsRecordPermission(record, "write", modelMetadata)) ||
+      (!isCreate && record != null && Boolean(readOnlyWhen?.(record))) ||
       (!submitOwner &&
         !Boolean(isCreate ? dataResource?.roots.create : dataResource?.roots.update)) ||
-      (formFields.length > 0 && formFields.every((field) => field.readOnly)),
-    [dataResource, formFields, isCreate, modelMetadata, readOnly, record, readOnlyWhen, recordUnavailable, submitOwner],
+      (formFields.length > 0 && formFields.every((field) => field.readOnly))
+    ),
+    [dataResource, formFields, isCreate, modelMetadata, readOnly, record, readOnlyWhen, submitOwner],
   );
+  const formReadOnly = recordUnavailable || !formTakesEdits;
   const { registerFieldValidation, validateFields } = useFieldValidation();
   const form = useForm<FormValues>({
     defaultValues: emptyValues,
@@ -861,6 +869,7 @@ export function useFormViewSave({
     loading,
     loadError,
     formReadOnly,
+    formTakesEdits,
     formIsDirty,
     pending,
     saveError,

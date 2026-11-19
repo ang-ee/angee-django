@@ -1,7 +1,6 @@
 import * as React from "react";
 import { set, useForm, useWatch, type FieldErrors } from "react-hook-form";
 import { stringValue as wireStringValue, type AuthoredMutateOptions } from "@angee/refine";
-import { format } from "date-fns";
 
 import { DialogForm } from "../../fragments/DialogForm";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
@@ -9,12 +8,13 @@ import { Button } from "../../ui/button";
 import type { DialogPlacement, DialogSize } from "../../ui/dialog";
 import { useToast } from "../../feedback";
 import { useUiT } from "../../i18n";
-import { dateFromUnknown } from "../../widgets/date-format";
+import { dateFromUnknown, formatDateTimeStorage } from "../../widgets/date-format";
 import { emptyValueForField, isStructuredPresenceField, structuredFieldErrorPaths } from "./field-values";
 import { isFieldControlVisible } from "./form-view-model";
 import { DescriptorFieldList, resolveDescriptorFields, type DescriptorField } from "./DescriptorFieldList";
 import {
-  applyFormErrors, formSubmitError, invalidFormSubmit, savedFormSubmitResult, type FormSubmitResult, type ValidationErrors,
+  SURFACE_RENDERS_FAILURE, applyFormErrors, formSubmitError, invalidFormSubmit, savedFormSubmitResult,
+  type FormSubmitResult, type ValidationErrors,
 } from "./validation-errors";
 import { useFieldValidation } from "./use-field-validation";
 import { ActionFormProvider } from "./ActionFormProvider";
@@ -44,8 +44,9 @@ export type MutationDialogParseValues<TValues> = (
  * `verbatimString` is the explicit exception for whitespace-sensitive secrets;
  * `integer` takes a label-aware translated formatter because malformed numeric
  * input is reachable user validation. `datetime` is the action-argument wire
- * boundary: it preserves the picked local wall time and adds that instant's
- * local UTC offset, so Django never receives a naive datetime.
+ * boundary: it writes the picked moment as the `datetime` widget stores it
+ * (`formatDateTimeStorage`: the local wall time with its UTC offset), so Django
+ * never receives a naive datetime.
  * @kind null
  * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
@@ -99,19 +100,26 @@ export const mutationDialogValueCodecs = {
         "MutationDialog invariant: datetime value was not a valid ISO-8601 date-time.",
       );
     }
-    const offsetMinutes = -parsed.getTimezoneOffset();
-    const offsetSign = offsetMinutes < 0 ? "-" : "+";
-    const absoluteOffset = Math.abs(offsetMinutes);
-    const offsetHours = String(Math.floor(absoluteOffset / 60)).padStart(2, "0");
-    const offsetRemainder = String(absoluteOffset % 60).padStart(2, "0");
-    return `${format(parsed, "yyyy-MM-dd'T'HH:mm:ss")}${offsetSign}${offsetHours}:${offsetRemainder}`;
+    return formatDateTimeStorage(parsed);
   },
 } as const;
 
-/** The one submission of a {@link MutationDialog}: any `onSubmit`, or an authored `mutation` the dialog runs. */
+/**
+ * The one submission of a {@link MutationDialog}: any `onSubmit`, or an authored `mutation` the dialog runs.
+ * Either is called with the {@link AuthoredMutateOptions} that turn refine's generic error
+ * notification off, to pass on to the authored call it makes: the dialog renders the failure.
+ */
 export type MutationDialogSubmission<TValues, TResult, TData = TResult> =
   | {
-      onSubmit: (values: TValues) => FormSubmitResult<TResult> | Promise<FormSubmitResult<TResult>>;
+      /**
+       * Submit the parsed values through any owner (a store binding, an action
+       * mutation), passing `options` on to the authored call it makes so the
+       * failure the dialog renders raises no toast besides.
+       */
+      onSubmit: (
+        values: TValues,
+        options?: AuthoredMutateOptions,
+      ) => FormSubmitResult<TResult> | Promise<FormSubmitResult<TResult>>;
       mutation?: never;
       mutationResult?: never;
     }
@@ -154,9 +162,13 @@ interface MutationDialogBaseProps<
   errorFallback?: string;
   /** Decode raw control state before it crosses the authored-mutation boundary. */
   parseValues: MutationDialogParseValues<TValues>;
-  /** Optional authoritative validation step that can bind errors to declared fields. */
+  /**
+   * Optional authoritative validation step that can bind errors to declared fields.
+   * It gets the submission's {@link AuthoredMutateOptions} for an authored call it makes.
+   */
   validate?: (
     values: TValues,
+    options?: AuthoredMutateOptions,
   ) => ValidationErrors | null | undefined | Promise<ValidationErrors | null | undefined>;
   onSubmitted?: (result: TResult, values: TValues) => void;
   closeOnSubmit?: boolean;
@@ -171,7 +183,8 @@ interface MutationDialogBaseProps<
  * copied dialog ceremony: reset-on-close, value state, required gating,
  * submit busy/error state, and rendering descriptor fields through the shared
  * widget registry. It reports a failure once: under the field a refusal names,
- * else in the dialog; an authored `mutation` it runs raises no toast besides.
+ * else in the dialog. Every call it makes for its caller (`validate`, `onSubmit`,
+ * `mutation`) gets the `AuthoredMutateOptions` that keep refine from toasting it besides.
  * @kind surface
  */
 export function MutationDialog<
@@ -191,25 +204,24 @@ export function MutationDialog<
 }
 
 /**
- * Run a dialog's one submission: its `onSubmit`, or its authored `mutation` with the
- * generic error notification off (the dialog renders the refusal). A mutation that
- * returns no data does not acknowledge the dialog: it fails with `fallback`.
+ * Run a dialog's one submission, its `onSubmit` or its authored `mutation`, with the
+ * generic error notification off (the dialog renders the refusal). The submission's
+ * result is awaited, so every outcome, a throw included, settles the returned promise.
+ * A mutation that resolves no data does not acknowledge the dialog: it fails with `fallback`.
  * @kind null
  * @reason Runtime infrastructure: the dialog's submission contract, shared with its test double.
  */
-export function submitMutationDialog<TValues, TResult, TData>(
+export async function submitMutationDialog<TValues, TResult, TData>(
   submission: MutationDialogSubmission<TValues, TResult, TData>,
   values: TValues,
   fallback: string,
-): FormSubmitResult<TResult> | Promise<FormSubmitResult<TResult>> {
-  if (!submission.mutation) return submission.onSubmit(values);
+): Promise<FormSubmitResult<TResult>> {
+  if (!submission.mutation) return submission.onSubmit(values, SURFACE_RENDERS_FAILURE);
   const { mutation, mutationResult } = submission;
-  return mutation(values, DIALOG_RENDERS_FAILURE).then((data) => data == null
-    ? savedFormSubmitResult<TResult>(null, fallback)
-    : mutationResult ? mutationResult(data) : { status: "ok", data: data as unknown as TResult });
+  const data = await mutation(values, SURFACE_RENDERS_FAILURE);
+  if (data == null) return savedFormSubmitResult<TResult>(null, fallback);
+  return mutationResult ? mutationResult(data) : { status: "ok", data: data as unknown as TResult };
 }
-
-const DIALOG_RENDERS_FAILURE: AuthoredMutateOptions = { errorNotification: false };
 
 function MutationDialogInstance<TValues extends Record<string, unknown>, TResult, TData>({
   open,
@@ -316,7 +328,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
     let accepted: { result: Extract<FormSubmitResult<TResult>, { status: "ok" }>; values: TValues } | undefined;
     try {
       const submittedValues = parseValues(collected);
-      const validation = await validate?.(submittedValues);
+      const validation = await validate?.(submittedValues, SURFACE_RENDERS_FAILURE);
       if (!mounted.current || session.current !== submittedSession) return;
       if (validation) {
         applyFormErrors(form, invalidFormSubmit(validation), errorOptions);

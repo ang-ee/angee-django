@@ -30,12 +30,12 @@ function useCloseCycleAction(): ActionDescriptor {
       label: t("cycle.action.close"),
       icon: "work-cycle-close",
       args: [],
-      submit: async (_values, context) => {
+      submit: async (_values, context, options) => {
         const cycle = context.record?.id;
         if (typeof cycle !== "string" || !cycle) {
           return { ok: false, message: t("cycle.action.failed") };
         }
-        return (await close(cycle)) ?? {
+        return (await close(cycle, {}, options)) ?? {
           ok: false,
           message: t("cycle.action.failed"),
         };

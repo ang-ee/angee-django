@@ -54,6 +54,7 @@ INSTALLED_APPS:
 {% if addons_profile == "full" %}
   - angee.storage_integrate
   - angee.storage_integrate_iphone
+  - angee.storage_integrate_google_drive
 {% endif %}
   - angee.integrate
   - angee.parties
@@ -67,6 +68,7 @@ INSTALLED_APPS:
   - angee.calendar
   - angee.projects_calendar
   - angee.calendar_integrate_ics
+  - angee.calendar_integrate_google
   - angee.dashboards
   # Product-management suite. Keep each web-bearing top-level addon explicit so
   # full-profile codegen sees every authored GraphQL document root.

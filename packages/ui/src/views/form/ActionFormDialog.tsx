@@ -107,8 +107,8 @@ function ActionArgsDialog({
         ? definition.resolver(values, resolverContext, options)
         : { values, errors: {} };
     },
-    submit: async (collected) => {
-      const result = await action.submit?.(serializeActionArgValues(args, collected), context);
+    submit: async (collected, options) => {
+      const result = await action.submit?.(serializeActionArgValues(args, collected), context, options);
       return result && "status" in result ? result : actionOutcomeSubmitResult(result);
     },
     onSuccess: (_values, outcome) => {

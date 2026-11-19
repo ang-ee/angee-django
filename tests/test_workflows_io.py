@@ -9,7 +9,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import DataError, OperationalError, connection, transaction
 from django.db.models.functions import Now
-from rebac import actor_context, current_actor, system_context, to_subject_ref
+from rebac import actor_context, current_actor, current_evaluator, evaluator_scope, system_context, to_subject_ref
 from rebac.actors import is_sudo
 
 from angee.base.signals import change_observed, change_published
@@ -116,6 +116,28 @@ def test_io_body_is_outside_transactions_and_scoped_to_its_actor(execution, regi
     run = WorkflowRun.objects.start(workflow, actor=actor)
     assert runner.execute(step_row(run).pk)
     assert WorkflowRun.system_queryset().get(pk=run.pk).output == {"value": 1}
+
+
+@pytest.mark.parametrize("mode", [StepMode.DATABASE, StepMode.IO], ids=["database", "io"])
+def test_a_step_body_reads_inside_one_evaluator_scope(execution, register_step, mode):
+    """A body's permission reads share a scope, as a request's do; a caller's scope is kept."""
+    actor, _ = execution
+    seen = []
+
+    class Scoped(Echo):
+        def run(self, ctx):
+            seen.append(current_evaluator())
+            return ctx.done({"value": 1})
+
+    Scoped.mode = mode
+    register_step(Scoped)
+    workflow = load_workflow(document("entry"), key=f"scoped_{mode.name.lower()}", actor=actor)
+    assert current_evaluator() is None
+    assert runner.execute(step_row(WorkflowRun.objects.start(workflow, actor=actor)).pk)
+    assert seen[0] is not None
+    with evaluator_scope() as held:
+        assert runner.execute(step_row(WorkflowRun.objects.start(workflow, actor=actor)).pk)
+    assert seen[1] is held
 
 
 def test_io_refuses_an_enclosing_transaction(execution, register_step):

@@ -20,6 +20,14 @@ describe("AbsoluteTime", () => {
     expect(screen.getByText(/Oct 20, 2026/).getAttribute("title")).toBeNull();
   });
 
+  test("reads a bare calendar day as that date in any zone, with the full date as its tooltip", () => {
+    render(<AbsoluteTime value="2026-11-20" display="date" timeZone="Pacific/Kiritimati" />);
+    const time = screen.getByText(/^Nov 20/);
+    expect(time.getAttribute("datetime")).toBe("2026-11-20");
+    // A day has no clock time: never the local midnight it parses to.
+    expect(time.getAttribute("title")).toBe("Nov 20, 2026");
+  });
+
   test("renders the fallback for an unreadable value", () => {
     render(<AbsoluteTime value={null} fallback="—" />);
     expect(screen.getByText("—")).toBeTruthy();

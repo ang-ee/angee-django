@@ -19,6 +19,7 @@ dependencies = [
     "angee-appearance-integrate==3.0.0",
     "angee-base==3.0.0",
     "angee-calendar==3.0.0",
+    "angee-calendar-integrate-google==3.0.0",
     "angee-calendar-integrate-ics==3.0.0",
     "angee-checklists==3.0.0",
     "angee-dashboards==3.0.0",
@@ -95,7 +96,7 @@ postgres = ["psycopg[binary,pool]>=3.2"]
 dev = [
     "angee-base[testing]==3.0.0",
     "daphne>=4.0",
-    "django-zed-rebac[caveats]>=0.34.1,<0.35",
+    "django-zed-rebac[caveats]>=0.35.2,<0.36",
     "faker>=30.0",
     "hypothesis>=6.100",
     "import-linter>=2.1",
@@ -138,6 +139,7 @@ angee-appearance = {workspace = true}
 angee-appearance-integrate = {workspace = true}
 angee-base = {workspace = true}
 angee-calendar = {workspace = true}
+angee-calendar-integrate-google = {workspace = true}
 angee-calendar-integrate-ics = {workspace = true}
 angee-checklists = {workspace = true}
 angee-dashboards = {workspace = true}

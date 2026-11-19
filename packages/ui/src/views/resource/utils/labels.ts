@@ -5,6 +5,7 @@ import { createAngeeI18nInstance } from "../../../runtime/i18n";
 import { modelLabelSegment } from "@angee/metadata";
 import { dedupeBy } from "../../../lib/dedupe";
 import type { FilterClauseOperator, FilterClauseField, ResourceToolbarFilterOption } from "../../../toolbars";
+import { formatDate, formatDateTime, formatTime } from "../../../widgets/date-format";
 import { Filter, type ResourceViewLookup, type ResourceViewLookupOperator, type FilterFacet } from "../resource-view-model";
 import { groupFieldLabel } from "../resource-view-list-body";
 const englishT = createAngeeI18nInstance(enUiBundle).getFixedT("en", "ui");
@@ -47,12 +48,15 @@ export function customFilterChipLabel({
   operator,
   value,
   options,
+  type,
   t = englishT,
 }: {
   fieldLabel: ReactNode;
   operator: ResourceViewLookupOperator;
   value: unknown;
   options?: FilterClauseField["options"];
+  /** The clause field's type: a date, date-time or time operand reads as the human value, never its wire form. */
+  type?: FilterClauseField["type"];
   t?: UiTranslate;
 }): ReactNode {
   if (operator === "isNull") {
@@ -60,7 +64,7 @@ export function customFilterChipLabel({
       value: t(value === false ? "search.notEmpty" : "search.empty") });
   }
   return t("search.clause", { field: labelText(fieldLabel) ?? t("search.field"),
-    operator: filterOperatorLabel(operator, t), value: filterValueLabel(value, options) });
+    operator: filterOperatorLabel(operator, t), value: filterValueLabel(value, options, type) });
 }
 
 export function filterOperatorLabel(
@@ -70,10 +74,18 @@ export function filterOperatorLabel(
   return t(`search.operator.${operator}`);
 }
 
-function filterValueLabel(value: unknown, options: FilterClauseField["options"]): string {
-  if (Array.isArray(value)) return value.map(item => filterValueLabel(item, options)).join(", ");
+/** The date owners that read a typed operand; an unreadable one keeps its raw text. */
+const TEMPORAL_VALUE_LABELS: Partial<Record<NonNullable<FilterClauseField["type"]>, (value: string) => string>> = {
+  date: (value) => formatDate(value),
+  datetime: (value) => formatDateTime(value),
+  time: (value) => formatTime(value),
+};
+
+function filterValueLabel(value: unknown, options: FilterClauseField["options"], type?: FilterClauseField["type"]): string {
+  if (Array.isArray(value)) return value.map(item => filterValueLabel(item, options, type)).join(", ");
   const raw = String(value ?? "");
-  return labelText(options?.find(option => option.value === raw)?.label) ?? raw;
+  const temporal = type ? TEMPORAL_VALUE_LABELS[type]?.(raw) : undefined;
+  return temporal || (labelText(options?.find(option => option.value === raw)?.label) ?? raw);
 }
 
 export function customFilterId(field: string, operator: ResourceViewLookupOperator): string {

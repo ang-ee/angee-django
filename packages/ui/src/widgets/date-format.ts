@@ -20,11 +20,15 @@ export type DateFormatValue = DateWidgetValue | number | undefined;
  * @reason Format utility: converts data to display or storage text.
  */
 export const DATE_STORAGE_FORMAT = "yyyy-MM-dd";
+/** A calendar day as storage, a date picker and a calendar anchor write it ({@link DATE_STORAGE_FORMAT}). */
+const STORAGE_DATE = /^\d{4}-\d{2}-\d{2}$/;
 /**
+ * A picked wall time with the browser's UTC offset ("2026-11-20T10:00:00+09:00"):
+ * an instant, which a server in any zone reads as the moment the viewer meant.
  * @kind null
  * @reason Format utility: converts data to display or storage text.
  */
-export const DATETIME_STORAGE_FORMAT = "yyyy-MM-dd'T'HH:mm";
+export const DATETIME_STORAGE_FORMAT = "yyyy-MM-dd'T'HH:mm:ssxxx";
 /**
  * @kind null
  * @reason Format utility: converts data to display or storage text.
@@ -49,12 +53,22 @@ export function dateFromValue(value: DateFormatValue): Date | null {
 /**
  * Parse any row/display value to a valid `Date`, or null for non-date values.
  * String values use ISO-8601 by design.
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
  */
 export function dateFromUnknown(value: unknown): Date | null {
   if (isDate(value) || typeof value === "number" || typeof value === "string") {
     return dateFromValue(value);
   }
   return null;
+}
+
+/** Whether a value is a calendar day in its storage form ("2026-11-20"), with no time and no offset.
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
+export function isStorageDate(value: unknown): value is string {
+  return typeof value === "string" && STORAGE_DATE.test(value);
 }
 
 /** The raw value as a stable title/string (the ISO form for a `Date`).
@@ -70,7 +84,8 @@ export function valueLabel(value: DateFormatValue): string {
 export interface HumanDateOptions {
   /** App language tag, or a date-fns locale when its distance strings are needed. */
   locale?: string | Locale;
-  /** Calendar time zone for a date label, including its current-year decision. */
+  /** Calendar time zone for a date label, including its current-year decision; one this browser does not know
+   * reads in the viewer's zone. */
   timeZone?: string;
   /** Reference date for year-sensitive or relative labels. */
   now?: Date;
@@ -84,6 +99,29 @@ function localeCode(locale?: string | Locale): string {
   return typeof locale === "string" ? locale : locale?.code ?? getHumanLocale();
 }
 
+/** Whether this browser's `Intl` knows each zone asked for, decided once per zone. */
+const knownZones = new Map<string, boolean>();
+
+/**
+ * The `timeZone` option every formatter here passes to `Intl`. An IANA name this browser's zone data lacks
+ * (one newer than its `Intl`, say) would throw a `RangeError` from the formatter, failing whatever renders it,
+ * so it reads in the viewer's zone instead and is reported once.
+ */
+function zoneOption(timeZone: string | undefined): { timeZone?: string } {
+  if (!timeZone) return {};
+  if (!knownZones.has(timeZone)) {
+    try {
+      new Intl.DateTimeFormat("en", { timeZone });
+      knownZones.set(timeZone, true);
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      knownZones.set(timeZone, false);
+      console.warn(`[angee] Unknown time zone "${timeZone}": dates read in the viewer's zone instead.`);
+    }
+  }
+  return knownZones.get(timeZone) ? { timeZone } : {};
+}
+
 /** Compact calendar date, including the year only outside the current year.
  * @kind null
  * @reason Format utility: converts data to display or storage text.
@@ -92,15 +130,16 @@ export function formatDate(value: DateFormatValue, options: HumanDateOptions = {
   const date = dateFromValue(value);
   if (!date) return "";
   const now = options.now ?? new Date();
-  const year = options.timeZone
-    ? (value: Date) => new Intl.DateTimeFormat("en", { year: "numeric", timeZone: options.timeZone }).format(value)
+  const zone = zoneOption(options.timeZone);
+  const year = zone.timeZone
+    ? (value: Date) => new Intl.DateTimeFormat("en", { year: "numeric", ...zone }).format(value)
     : (value: Date) => String(value.getFullYear());
   return new Intl.DateTimeFormat(localeCode(options.locale), {
     ...(options.weekday ? { weekday: "long" } : {}),
     month: "short",
     day: "numeric",
     ...(options.density === "full" || year(date) !== year(now) ? { year: "numeric" } : {}),
-    ...(options.timeZone ? { timeZone: options.timeZone } : {}),
+    ...zone,
   }).format(date);
 }
 
@@ -177,10 +216,9 @@ export function formatTime(value: DateFormatValue, options: HumanDateOptions = {
   const timeOfDay = timeOfDayFromValue(value);
   const date = timeOfDay ?? dateFromValue(value);
   if (!date) return "";
-  const timeZone = timeOfDay ? "UTC" : options.timeZone;
   return new Intl.DateTimeFormat(localeCode(options.locale), {
     timeStyle: "short",
-    ...(timeZone ? { timeZone } : {}),
+    ...(timeOfDay ? { timeZone: "UTC" } : zoneOption(options.timeZone)),
   }).format(date);
 }
 
@@ -194,7 +232,7 @@ export function formatMonth(value: DateFormatValue, options: HumanDateOptions = 
   return new Intl.DateTimeFormat(localeCode(options.locale), {
     month: "long",
     year: "numeric",
-    ...(options.timeZone ? { timeZone: options.timeZone } : {}),
+    ...zoneOption(options.timeZone),
   }).format(date);
 }
 
@@ -216,22 +254,28 @@ export function formatDateParts(value: DateFormatValue, options: HumanDateOption
   const date = dateFromValue(value);
   if (!date) return null;
   const locale = localeCode(options.locale);
-  const zone = options.timeZone ? { timeZone: options.timeZone } : {};
+  const zone = zoneOption(options.timeZone);
   return {
     month: new Intl.DateTimeFormat(locale, { month: "short", ...zone }).format(date),
     day: new Intl.DateTimeFormat(locale, { day: "numeric", ...zone }).format(date),
   };
 }
 
-/** The calendar day of an instant in a zone, as a sortable key and a `<time datetime>` value ("2026-09-30").
+/** The calendar day of an instant in a zone (the viewer's without one, or for one this browser does not know), as
+ * `yyyy-MM-dd` ("2026-09-30"): a sortable
+ * key, a `<time datetime>` value, or a stored all-day bound's day in the zone that owns its dates, which every
+ * browser then shows as that day.
  * @kind null
  * @reason Format utility: converts data to display or storage text.
  */
 export function calendarDay(date: Date, timeZone?: string): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    year: "numeric", month: "2-digit", day: "2-digit",
-    ...(timeZone ? { timeZone } : {}),
-  }).format(date);
+  // Built from the parts, never from a locale's own date pattern, which locale data may change.
+  const parts = new Intl.DateTimeFormat("en-US", {
+    calendar: "gregory", numberingSystem: "latn", year: "numeric", month: "2-digit", day: "2-digit",
+    ...zoneOption(timeZone),
+  }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((entry) => entry.type === type)?.value ?? "";
+  return `${part("year").padStart(4, "0")}-${part("month")}-${part("day")}`;
 }
 
 /**
@@ -257,7 +301,7 @@ export function formatDayLabel(value: DateFormatValue, options: HumanDateOptions
   if (elapsedDays > 1 && elapsedDays < 7) {
     return new Intl.DateTimeFormat(locale, {
       weekday: "long",
-      ...(options.timeZone ? { timeZone: options.timeZone } : {}),
+      ...zoneOption(options.timeZone),
     }).format(date);
   }
   return formatDate(date, { ...options, now });
@@ -274,11 +318,12 @@ export function formatDateTime(
   const date = dateFromValue(value);
   if (!date) return "";
   if (options.density === "list") return formatDate(date, options);
+  const zone = zoneOption(options.timeZone);
   return new Intl.DateTimeFormat(localeCode(options.locale), {
     dateStyle: "medium",
     // Zoned formatting historically includes seconds; local widget labels do not.
-    timeStyle: options.timeZone ? "medium" : "short",
-    ...(options.timeZone ? { timeZone: options.timeZone } : {}),
+    timeStyle: zone.timeZone ? "medium" : "short",
+    ...zone,
   }).format(date);
 }
 
@@ -294,7 +339,8 @@ export function formatTimeInput(value: DateFormatValue): string {
   return date ? format(date, TIME_INPUT_FORMAT) : "";
 }
 
-/** Format a selected calendar day for storage.
+/** Format a selected local calendar day for storage ({@link DATE_STORAGE_FORMAT}); the day an instant falls on in
+ * another zone is {@link calendarDay}'s.
  * @kind null
  * @reason Format utility: converts data to display or storage text.
  */
@@ -302,7 +348,9 @@ export function formatDateStorage(value: Date | null): string | null {
   return value ? format(value, DATE_STORAGE_FORMAT) : null;
 }
 
-/** Format a selected date-time for storage.
+/** Format a selected date-time for storage: its local wall time with the browser's offset
+ * ({@link DATETIME_STORAGE_FORMAT}), so every writer of a picked moment sends the instant meant, never a
+ * naive time the server would read in its own zone.
  * @kind null
  * @reason Format utility: converts data to display or storage text.
  */

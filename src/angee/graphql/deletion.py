@@ -21,6 +21,7 @@ from rebac import PermissionDenied, RebacMixin, current_actor, system_context
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import public_id_of
 from angee.base.permissions import require_rebac_queryset
+from angee.base.signals import starts_delete
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.contracts import DataResourceRoots, DataResourceTypeNames
 from angee.graphql.data.metadata import (
@@ -192,16 +193,16 @@ class DeletePreview:
         )
         refusals = list(dict.fromkeys(
             message
-            for row in chain(
-                [instance],
+            for row, cascaded in chain(
+                [(instance, False)],
                 (
-                    row
+                    (row, True)
                     for model, rows in sorted(collector.data.items(), key=lambda item: item[0]._meta.label_lower)
                     for row in sorted(rows, key=lambda row: row.pk)
-                    if not _is_root(instance, row)
+                    if not starts_delete(row, instance)
                 ),
             )
-            if isinstance(row, AngeeModel) and (message := row.delete_blocker())
+            if isinstance(row, AngeeModel) and (message := row.delete_blocker(cascaded=cascaded))
         ))
         groups = _PreviewRows.by_model(
             instance,
@@ -480,7 +481,7 @@ class _PreviewRows:
     ) -> _PreviewRows:
         """Return access-scoped preview rows from collector-materialized rows."""
 
-        collected = [row for row in rows if not _is_root(root, row)]
+        collected = [row for row in rows if not starts_delete(row, root)]
         if not collected:
             return cls()
         if not issubclass(model, RebacMixin):
@@ -596,9 +597,3 @@ def _order_by_pk(queryset: models.QuerySet[models.Model]) -> models.QuerySet[mod
     """Return ``queryset`` ordered by its native primary-key column."""
 
     return queryset.order_by(queryset.model._meta.pk.name)
-
-
-def _is_root(root: models.Model, row: models.Model) -> bool:
-    """Return whether ``row`` is the deletion preview target."""
-
-    return root._meta.concrete_model is row._meta.concrete_model and root.pk == row.pk

@@ -54,8 +54,11 @@ import { ConditionalMutationButton } from "./ConditionalMutationButton";
 type Declared = {
   id: string; label: React.ReactNode; placement?: string; danger: boolean; primary: boolean;
   confirm?: unknown; args?: unknown;
-  run?: () => Promise<unknown>; submit?: (values: Record<string, unknown>) => Promise<unknown>;
+  run?: () => Promise<unknown>;
+  submit?: (values: Record<string, unknown>, context: unknown, options?: { errorNotification?: false }) => Promise<unknown>;
 };
+
+const QUIET = { errorNotification: false } as const;
 
 describe("ConditionalMutationButton", () => {
   beforeEach(() => {
@@ -140,8 +143,9 @@ describe("ConditionalMutationButton", () => {
     expect(declared).toMatchObject({ id: "rename_user", args });
     expect(declared.run).toBeUndefined();
     const values = { first_name: "Morgan", expected_revision: 4 };
-    await expect(declared.submit?.(values)).resolves.toEqual({ ok: true, message: "done" });
-    expect(mocks.outcomes.get("rename_user")).toHaveBeenCalledWith("int_1", values);
+    // The action form runs it quiet (it renders the failure), and the quiet call reaches the verb.
+    await expect(declared.submit?.(values, { record: null, selectedIds: [] }, QUIET)).resolves.toEqual({ ok: true, message: "done" });
+    expect(mocks.outcomes.get("rename_user")).toHaveBeenCalledWith("int_1", values, QUIET);
     expect(mocks.actions.get("rename_user")).not.toHaveBeenCalled();
   });
 });

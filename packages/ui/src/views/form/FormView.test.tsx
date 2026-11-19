@@ -47,6 +47,7 @@ import {
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../../feedback";
+import { ControlBandProvider } from "../../layouts/ControlBand";
 import { createUiTestProviders } from "../../testing";
 import { defaultWidgets } from "../../widgets";
 import { deserializeFormSpec } from "./form-spec";
@@ -315,6 +316,39 @@ describe("FormView", () => {
     expect(await screen.findByRole("button", { name: "Reopen" })).toBeTruthy();
     expect(await screen.findByRole("button", { name: "Archive" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+  });
+
+  test("an editable record keeps its command band's layout row from load to its first edit; a read-only record's collapses", async () => {
+    const collapse = "not-has-[>div>:not([hidden]):not(:empty)]:hidden";
+    const kept = "data-layout-band:not-has-[>div>:not([hidden]):not(:empty)]:invisible";
+    const commandBand = () => screen.getByTestId("control-row").querySelector<HTMLElement>("[role=toolbar]");
+    // As a record page renders it: the form's command band claims the layout's control row.
+    function LayoutRow({ children }: { children: ReactElement }) {
+      const [host, setHost] = useState<HTMLElement | null>(null);
+      return <ControlBandProvider host={host}><div data-testid="control-row" ref={setHost} />{children}</ControlBandProvider>;
+    }
+    const renderNote = () => renderWithProviders(<LayoutRow><FormView resource="notes.Note" id="note-1">
+      <Field name="title" label="Title" title />
+    </FormView></LayoutRow>);
+
+    sdkMocks.record = { ...sdkMocks.record, permissions: ["read"] };
+    renderNote();
+    await screen.findByRole("heading", { name: "First" });
+    expect(commandBand()?.classList).toContain(collapse);
+
+    cleanup();
+    sdkMocks.record = { ...sdkMocks.record, permissions: ["read", "write"] };
+    let resolveRecord!: (value: { data: Row }) => void;
+    sdkMocks.getOne.mockImplementationOnce(() => new Promise((resolve) => { resolveRecord = resolve; }));
+    renderNote();
+    // The row is kept while the record loads, so its arrival shifts nothing either.
+    await waitFor(() => expect(commandBand()?.classList).toContain(kept));
+    expect(commandBand()?.classList).not.toContain(collapse);
+    await act(async () => resolveRecord({ data: sdkMocks.record! }));
+    await screen.findByDisplayValue("First");
+    // Save and Discard arrive with the first edit into the row already kept for them.
+    expect(commandBand()?.classList).toContain(kept);
+    expect(commandBand()?.classList).not.toContain(collapse);
   });
 
   test("hides the record delete action when its predicate does not match", async () => {

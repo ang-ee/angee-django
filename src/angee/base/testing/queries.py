@@ -12,7 +12,12 @@ from typing import Any
 
 from django.db import NotSupportedError, connection
 from sqlparse.lexer import tokenize
-from sqlparse.tokens import DML, Punctuation
+from sqlparse.tokens import DML, Comment, Punctuation, Whitespace
+
+# What stands before the parenthesis that opens a compound outer statement:
+# nothing, the end of the last CTE, or a cursor declaration's FOR. A CTE's body
+# follows AS or MATERIALIZED and its column list follows its name.
+_BEFORE_COMPOUND = (None, ")", "FOR")
 
 
 def statement_body(sql: str) -> str:
@@ -21,15 +26,31 @@ def statement_body(sql: str) -> str:
     Parentheses inside comments, literals and quoted identifiers do not alter
     nesting. Preserve the outer projection and predicates verbatim so callers
     can still assert their shape. Statements without a data verb are unchanged.
+
+    A compound outer statement whose members are parenthesised, as PostgreSQL
+    receives a Django ``union()``: ``(SELECT …) UNION ALL (SELECT …)``, is
+    returned from its first member's verb, so it is classified by that member.
     """
 
     tokens = tokenize(sql)
     depth = 0
+    # Inside the parentheses that open a compound outer statement.
+    compound = False
+    # The last token met outside every parenthesis, comments and spaces aside.
+    previous: str | None = None
     for kind, value in tokens:
-        if depth == 0 and kind is DML:
+        if kind is DML and (depth == 0 or compound):
             return value + "".join(value for _, value in tokens)
-        if kind is Punctuation:
-            depth += (value == "(") - (value == ")")
+        if kind is Punctuation and value == "(":
+            if depth == 0:
+                compound = previous in _BEFORE_COMPOUND
+            depth += 1
+        elif kind is Punctuation and value == ")":
+            depth -= 1
+            if depth == 0:
+                compound, previous = False, ")"
+        elif depth == 0 and kind not in Whitespace and kind not in Comment:
+            previous = value.upper()
     return sql
 
 

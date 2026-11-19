@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { searchForWorkspaceRoot } from "vite";
 import { defineConfig, mergeConfig, type ViteUserConfig } from "vitest/config";
@@ -70,10 +71,47 @@ const testDefaults = defineConfig({
   },
 });
 
+// A zone suite (`<owner>.zones.test.ts` or `.tsx`) pins behaviour that hangs on the process zone,
+// such as the day an instant falls on, so it also runs under these zones beside the runner's own.
+// Tokyo is ahead of UTC and Los Angeles behind it, so a day read in the wrong zone fails in one of
+// them. A process reads `TZ` once, when it starts, so each zone runs in forked processes: a worker
+// thread keeps its parent's zone whatever its `env`.
+const PINNED_TIME_ZONES = ["Asia/Tokyo", "America/Los_Angeles"] as const;
+const ZONE_SUITE = /\.zones\.test\.tsx?$/;
+const zoneSuiteIncludes = ["src/**/*.zones.test.ts", "src/**/*.zones.test.tsx"];
+
+function hasZoneSuites(root: string): boolean {
+  const src = join(root, "src");
+  return existsSync(src) && readdirSync(src, { recursive: true }).some((path) => ZONE_SUITE.test(String(path)));
+}
+
+/**
+ * A package with zone suites runs as projects of this one config: `default` runs every suite in the
+ * runner's zone, and one project per pinned zone runs the zone suites again with that `TZ`. A package
+ * without any keeps its single project, so it pays nothing.
+ */
+function withPinnedZones(config: ViteUserConfig): ViteUserConfig {
+  if (!hasZoneSuites(config.root ?? process.cwd())) return config;
+  const { test = {}, ...vite } = config;
+  return {
+    ...config,
+    test: {
+      ...test,
+      projects: [
+        { ...vite, test: { ...test, name: "default" } },
+        ...PINNED_TIME_ZONES.map((zone) => ({
+          ...vite,
+          test: { ...test, name: `TZ=${zone}`, include: zoneSuiteIncludes, pool: "forks" as const, env: { ...test.env, TZ: zone } },
+        })),
+      ],
+    },
+  };
+}
+
 export function defineAngeePackageVitestConfig(
   config: ViteUserConfig = {},
 ): ViteUserConfig {
-  return mergeConfig(testDefaults, config);
+  return withPinnedZones(mergeConfig(testDefaults, config));
 }
 
 export interface AngeeWebVitestConfig extends ViteUserConfig {
@@ -96,11 +134,11 @@ export function defineAngeeWebVitestConfig({
 }: AngeeWebVitestConfig): ViteUserConfig {
   const { extraInclude = [], ...testConfig } = test ?? {};
   const include = extraInclude.length ? extraInclude : testConfig.include;
-  return mergeConfig(
+  return withPinnedZones(mergeConfig(
     mergeConfig(testDefaults, { resolve: { alias: gqlAlias } }),
     {
       ...config,
       test: include === undefined ? testConfig : { ...testConfig, include },
     },
-  );
+  ));
 }

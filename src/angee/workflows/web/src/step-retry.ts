@@ -37,6 +37,6 @@ export function useStepRetryActions(inline = false): readonly ActionDescriptor[]
     id: "retry-duplicate", label: t("action.retry_step_accepting_duplicate"),
     primary: true, danger: true, args: acknowledgement,
     visibleWhen: (row) => row.can_retry === true && row.requires_duplicate_acknowledgement === true,
-    submit: (_values, { record }) => typeof record?.id === "string" ? retryDuplicate(record.id) : null,
+    submit: (_values, { record }, options) => typeof record?.id === "string" ? retryDuplicate(record.id, {}, options) : null,
   }];
 }

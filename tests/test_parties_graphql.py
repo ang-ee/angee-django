@@ -252,6 +252,13 @@ def test_public_resource_metadata_converts_related_parties_surfaces() -> None:
     assert folder.roots.list_name == "contact_folders"
     assert folder.roots.detail_name == "contact_folders_by_pk"
     assert folder.capabilities == ("list", "detail", "aggregate")
+    # The Folders page reads: a directory's sync creates and names each folder.
+    assert (folder.roots.create_name, folder.roots.update_name, folder.roots.delete_name) == (None, None, None)
+    assert folder.record_representation == "name"
+    directory = {field.name: field for field in folder.fields}["directory"]
+    assert (directory.kind, directory.relation_model_label) == ("relation", "parties.Directory")
+    # The address book's RecordLink targets the folder, so its record lists that source.
+    assert "integrate.RecordLink" in folder.record_edges
 
 
 def test_person_hasura_insert_and_update(db: None) -> None:
@@ -677,7 +684,9 @@ def test_statement_reference_reads_have_a_page_query_budget(
     # types read no model column; three witnesses remain, one per live scope.
     # 0.34.0 (9 -> 7): witnesses are decided and kept per arm. The platform admin's
     # ``admin->member`` arm reads no model column, so one witness serves the live scopes too.
-    with django_assert_num_queries(7):
+    # 0.35 (7 -> 8): the operation's evaluator scope reads the admin's grant profile once. The
+    # admin holds the constant arm, so no witness is saved in exchange.
+    with django_assert_num_queries(8):
         rows = _data(execute_schema(schema, query, user=admin))["party_statements"]
     assert len(rows) == row_count
 

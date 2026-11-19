@@ -1403,11 +1403,17 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   `concrete_kinds` ([projection](../../src/angee/graphql/data/metadata.py))
   instead of re-deriving inheritance.
 - **Deletion refusals have one model owner.** Override
-  [`AngeeModel.delete_blocker()`](../../src/angee/base/models/base.py) with a public-safe
-  message. [`DeletePreview`](../../src/angee/graphql/deletion.py) reports each
-  distinct refusal before deleting, without row counts or hidden identities.
-  A model overriding the hook must bind a `pre_delete` receiver enforcing that
-  same rule on every deletion path; an instance override cannot protect cascades.
+  [`AngeeModel.delete_blocker(cascaded=)`](../../src/angee/base/models/base.py) with a
+  public-safe message; `cascaded` says whether the delete started at the row or only
+  cascades to it, and the override decides for both.
+  [`DeletePreview`](../../src/angee/graphql/deletion.py) reports each distinct refusal
+  before deleting, judging its target as the start and every collected row as
+  cascaded, without row counts or hidden identities. A model overriding the hook must
+  bind a `pre_delete` receiver enforcing the hook's rule for where each row sits in the
+  delete on every deletion path, passing `cascaded=not starts_delete(instance, origin)`:
+  [`starts_delete`](../../src/angee/base/signals.py) owns that rule (the start of an
+  instance or queryset delete, else a cascade) for receivers and the preview alike; an
+  instance override cannot protect cascades.
   Receivers remain authoritative when state changes after preview and ensure
   Django collects those models rather than fast-deleting them.
   When deleting a model needs locks in a domain order (a parent before the row),
@@ -1983,7 +1989,12 @@ importing the composed model toolkit.
 native reverse relation's exclusion from automatic collection.
 Each edge declares `on_target_delete` as `CASCADE`, `PROTECT`, or `SET_NULL`; a
 model needing row-aware cleanup implements `teardown_for_target(target)` instead,
-which never blocks the target's deletion. The foundation target-delete receiver
+which never blocks the target's deletion. An edge whose owner declares rows that
+block (`blocks_target_delete`, narrowed by `live_reference_filter`) has them refuse
+first, with `ProtectedError`, as creation undo does; its teardown or policy then
+runs only while a row of it names the target, as
+[`RecordLink`](../../src/angee/integrate/models.py) keeps pulled rows and releases
+pushed ones. The foundation target-delete receiver
 invokes that one declaration for instance and queryset deletion paths, once per
 collected instance (an MTI child's deletion also collects its canonical parent, so
 a teardown is idempotent), whether the target names the edge through a reverse
@@ -2194,7 +2205,11 @@ bridge advisory lock as polling and delivery settlement.
   edits converge under the accepted record-sync design ruling. An origin
   stamp plus the returned version/hash makes a successful write-back recognizable
   on its next pull. The link checks its complete retained reflection precondition;
-  that does not replace the remote transport version fence.
+  that does not replace the remote transport version fence. A push may skip a row
+  only by the exact local version read with its projection, compared for equality
+  (`RecordLinkManager.changed_since_base`), never by a timestamp: one is stamped
+  before its commit. Its stream's sweep (`SyncStream.sweep_due`) still compares
+  every row, so what no version names converges.
 - **Applied evidence has one promoter.** Adapters return the actual mapped
   payload and dependency digest in `ApplyResult`; the driver takes the declared
   mapping version from the stream, promotes the primary link and pins the history

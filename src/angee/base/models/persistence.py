@@ -9,7 +9,7 @@ from typing import Any, ClassVar, Self
 from django.db import models
 from rebac.managers import RebacQuerySet
 
-from angee.base.querysets import row_lock_paths
+from angee.base.querysets import row_lock_paths, row_lock_queryset
 
 
 class PersistenceMixin(models.Model):
@@ -65,8 +65,7 @@ class PersistenceMixin(models.Model):
         """Lock and reload this subject through its base manager."""
 
         del members
-        model = type(self)
-        return model._base_manager.select_for_update(of=row_lock_paths(model)).get(pk=self.pk)
+        return row_lock_queryset(type(self)).get(pk=self.pk)
 
     @classmethod
     def system_queryset(

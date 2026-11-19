@@ -316,6 +316,61 @@ class ConnectedCredentialType(AngeeNode):
         return str(cast(Any, self).connected_display_name)
 
 
+@strawberry.type
+class ConnectWithAccountChoice:
+    """One of the session user's accounts a capability reads with, as its connect picker offers it."""
+
+    id: PublicID
+    display_name: str
+    blocked_reason: str | None
+    """Why the capability refuses this account (``Integration.credential_blocker``); none when it can be chosen."""
+
+
+@strawberry.interface
+class ConnectWithAccount:
+    """What connecting a capability with one of the session user's accounts asks for.
+
+    A capability's connect-facts type implements it and is built with :meth:`of`
+    from an unsaved row of the capability (``IntegrationManager.build``).
+    ``@angee/integrate``'s connect-with-account action reads it through its
+    ``ConnectWithAccountFields`` fragment, so integrate's console ``types``
+    bucket registers it: Strawberry omits a type nothing references, and a
+    host composing no implementer still validates the fragment.
+    """
+
+    oauth_client: strawberry.ID | None
+    """The enabled OAuth client another account connects through; none while the capability has none ready."""
+    oauth_scopes: list[str]
+    """The scopes an account must grant for the capability to read with it; connecting another requests them."""
+    accounts: list[ConnectWithAccountChoice]
+    """The session user's accounts the capability reads with (``Integration.connectable_credentials``).
+
+    Each says why the capability would refuse it, by the rule that refuses its
+    attachment (``Integration.credential_blocker``), so the picker lists a refused
+    account as refused instead of refusing it once picked.
+    """
+
+    @classmethod
+    def of(cls, integration: Any, user: Any, **fields: Any) -> Self:
+        """Project ``integration``'s connect facts for ``user``, beside the implementing type's own ``fields``."""
+
+        registration = integration.ready_oauth_client()
+        accounts = integration.connectable_credentials(user).select_related("external_account").order_by("pk")
+        return cls(
+            oauth_client=strawberry.ID(registration.public_id) if registration is not None else None,
+            oauth_scopes=list(integration.connection_oauth_scopes),
+            accounts=[
+                ConnectWithAccountChoice(
+                    id=PublicID(public_id_of(account)),
+                    display_name=account.connected_display_name,
+                    blocked_reason=integration.credential_blocker(account),
+                )
+                for account in accounts
+            ],
+            **fields,
+        )
+
+
 @strawberry_django.type(OAuthClient)
 class OAuthClientType(AngeeNode):
     """Admin GraphQL projection of an OAuth client registration."""
@@ -1994,6 +2049,7 @@ _CONSOLE_TYPES: list[object] = [
     CredentialType,
     ConnectedExternalAccountType,
     ConnectedCredentialType,
+    ConnectWithAccount,
     ConnectableAccount,
     OAuthStartPayload,
     ConnectAccountResult,

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { Row } from "@angee/metadata";
-import type { ActionOutcome, ListQueryFieldArgument } from "@angee/refine";
+import type { ActionOutcome, AuthoredMutateOptions, ListQueryFieldArgument } from "@angee/refine";
 import type { CrudFilter } from "@refinedev/core";
 import type { Resolver } from "react-hook-form";
 
@@ -179,10 +179,15 @@ interface ActionBinding {
    * A `null`/`undefined` outcome — the shape the
    * outcome extractors return when the response carries no envelope — is a
    * form-level failure, so a caller passes it through rather than inventing one.
+   * The surface running it renders a failure itself, so it passes `options` that
+   * turn refine's generic error notification off: hand them to the authored call
+   * (`ActionMutate`'s and `AuthoredMutate`'s last argument), and a transport failure
+   * is reported once.
    */
   submit?: (
     values: Record<string, unknown>,
     context: ActionFormContext,
+    options?: AuthoredMutateOptions,
   ) => ActionSubmitResult | Promise<ActionSubmitResult>;
 }
 
