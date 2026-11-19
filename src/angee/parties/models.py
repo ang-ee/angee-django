@@ -22,6 +22,7 @@ is a typed, directed party↔party edge whose vocabulary
 
 from __future__ import annotations
 
+import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any, ClassVar, cast
@@ -82,6 +83,9 @@ from angee.provenance.statements import (
 )
 from angee.resources.mixins import ResourceLoadMixin
 from angee.tags.models import TaggedModel
+
+_HYPHENS_AS_SPACES = str.maketrans(dict.fromkeys("-\u2010\u2011", " "))
+"""Hyphens a name may carry, read as the space they separate words with (``Party.comparable_name``)."""
 
 
 class Party(
@@ -272,6 +276,17 @@ class Party(
         if not name or name == self.PLACEHOLDER_NAME:
             return False
         return any(character.isalpha() for character in name)
+
+    @property
+    def comparable_name(self) -> str:
+        """``display_name`` as two names compare for being one person's: case, accents and hyphens aside.
+
+        "Zoë Example-Smith" and "zoe example smith" compare equal; whitespace collapses.
+        """
+
+        decomposed = unicodedata.normalize("NFKD", self.display_name or "")
+        letters = "".join(character for character in decomposed if not unicodedata.combining(character))
+        return " ".join(letters.translate(_HYPHENS_AS_SPACES).split()).casefold()
 
     @property
     def concrete_kind(self) -> RelationshipKind.PartyKind | None:

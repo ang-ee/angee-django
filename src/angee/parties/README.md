@@ -118,3 +118,12 @@ awaits a person's survivor choice. `survivor.merge` owns the changeset and redir
 pointing owners union statements, retaining collisions as superseded. Where the
 records disagree on a merge field, the merging person confirms the value kept
 (the survivor's, or the chosen override), so no moved statement outranks it.
+
+Nothing merges unattended. A person merges the certain pairs awaiting their
+review in one action, `PartyManager.merge_certain_same_as_pairs` (the
+`merge_certain_same_as_pairs` mutation and agent tool), as their own merges: both
+people, neither an account's own person, exactly the two linked to an address the
+pair cites, and names equal but for case, accents and hyphens. The older record
+survives and keeps its values as that person's choice; the merge's own permission
+and guards decide each pair, and the action returns every pair it read with its
+outcome, a bounded number per call.

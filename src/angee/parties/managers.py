@@ -20,6 +20,7 @@ from collections import defaultdict
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
+from enum import StrEnum
 from functools import partial
 from itertools import batched, chain, combinations
 from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, Self, TypedDict
@@ -817,6 +818,35 @@ class SameAsPair:
     right: Any
     normalized_value: str
     handles: tuple[Any, ...]
+
+
+class SameAsMergeOutcome(StrEnum):
+    """What :meth:`PartyManager.merge_certain_same_as_pairs` did with one pair awaiting review."""
+
+    MERGED = "merged"
+    NOT_PEOPLE = "not_people"
+    """Either party is not a person."""
+    ACCOUNT_PERSON = "account_person"
+    """Either party is a user account's own person."""
+    SHARED_ADDRESS = "shared_address"
+    """No address the pair cites links exactly these two parties."""
+    NAMES_DIFFER = "names_differ"
+    """A name is missing, or the names differ beyond case, accents and hyphens."""
+    NOT_PERMITTED = "not_permitted"
+    """The merge's own permission refused the acting person."""
+    REFUSED = "refused"
+    """The merge's guards refused it (a party kept apart, merged meanwhile, held by an addon)."""
+
+
+@dataclass(frozen=True, slots=True)
+class SameAsPairOutcome:
+    """One pair the bulk merge read, and what it did: merged into ``survivor``, or left, and why."""
+
+    left: Any
+    right: Any
+    normalized_value: str
+    outcome: SameAsMergeOutcome
+    survivor: Any = None
 
 
 class SamePersonLink(NamedTuple):
@@ -2020,6 +2050,66 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 return "already_merged"
             into.merge(records=[source.public_id])
             return "already_merged" if already_merged else "merged"
+
+    def merge_certain_same_as_pairs(self, *, actor: Any, limit: int = 50) -> list[SameAsPairOutcome]:
+        """Merge, as ``actor``'s own merges, each certain pair awaiting ``actor``'s review; return every outcome.
+
+        It reads at most ``limit`` pairs ``actor`` may review
+        (:meth:`PartyQuerySet.same_as_pairs`), so one call is bounded. A pair is
+        certain when both are people and neither is an account's own person,
+        exactly these two parties are linked to an address the pair cites
+        (:meth:`same_person_links`, the shared-sender providers consulted), and both
+        bear a real name and the names agree but for case, accents and hyphens
+        (``Party.comparable_name``); a pair someone kept apart awaits no review.
+        Each certain pair merges into the older record through ``Party.merge`` as
+        ``actor``, so the merge's own permission and guards decide, and where the
+        two differ on a merge field the survivor's value is kept and recorded as
+        ``actor``'s choice, as keeping the survivor's side on the Merge page does.
+        Nothing merges without ``actor``.
+        """
+
+        pairs = self.with_actor(actor).same_as_pairs(limit=limit)
+        if not pairs:
+            return []
+        people, _organizations = self.party_kinds(party.pk for pair in pairs for party in (pair.left, pair.right))
+        with system_context(reason="parties.merge_certain_same_as_pairs"):
+            links = self.same_person_links(
+                addresses={(handle.platform, handle.normalized_value) for pair in pairs for handle in pair.handles},
+                shared=self.shared_sender_ids(),
+            )
+        linked = {address: {link.party for link in address_links} for address, address_links in links.items()}
+        outcomes = []
+        for pair in pairs:
+            ids = {pair.left.pk, pair.right.pk}
+            if not ids <= set(people):
+                outcome = SameAsMergeOutcome.NOT_PEOPLE
+            elif any(people[pk] is not None for pk in ids):
+                outcome = SameAsMergeOutcome.ACCOUNT_PERSON
+            elif all(linked.get((handle.platform, handle.normalized_value)) != ids for handle in pair.handles):
+                outcome = SameAsMergeOutcome.SHARED_ADDRESS
+            elif not (
+                pair.left.has_real_name
+                and pair.right.has_real_name
+                and pair.left.comparable_name == pair.right.comparable_name
+            ):
+                outcome = SameAsMergeOutcome.NAMES_DIFFER
+            else:
+                survivor, merged = sorted((pair.left, pair.right), key=lambda party: (party.created_at, party.pk))
+                try:
+                    survivor = survivor.with_actor(actor).merge(records=[merged.public_id])
+                except PermissionDenied:
+                    outcome = SameAsMergeOutcome.NOT_PERMITTED
+                except ValidationError:
+                    outcome = SameAsMergeOutcome.REFUSED
+                else:
+                    outcomes.append(
+                        SameAsPairOutcome(
+                            pair.left, pair.right, pair.normalized_value, SameAsMergeOutcome.MERGED, survivor,
+                        )
+                    )
+                    continue
+            outcomes.append(SameAsPairOutcome(pair.left, pair.right, pair.normalized_value, outcome))
+        return outcomes
 
     def for_user(self, user: Any, *, adopt: Any = None) -> Any:
         """Return the :class:`Person` linked to ``user``, get-or-created on the ``user`` O2O.

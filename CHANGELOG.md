@@ -10,6 +10,18 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Parties: a person merges the certain same-person pairs awaiting their review in
+  one action, `Party.objects.merge_certain_same_as_pairs(actor=, limit=)`,
+  exposed as the `merge_certain_same_as_pairs(limit)` mutation and the agent
+  tool of the same name. A pair is certain when both are people, neither is an
+  account's own person, exactly the two are linked to an address it cites, and
+  their names are equal but for case, accents and hyphens
+  (`Party.comparable_name`). Each merges into the older record as the acting
+  person's own merge, through the merge's permission and guards, keeping the
+  survivor's values as that person's choice. It returns every pair it read with
+  its outcome (`SameAsMergeOutcome`: merged, or the reason it was left), at most
+  `limit` per call. Nothing merges without a person.
+
 - Parties: `Party.objects.propose_same_person_as_system(left, right, *, evidence,
   reason)` lets an importer propose that two parties are one person, citing the
   handle rows that link them. It elevates, so it takes a named reason. It issues no

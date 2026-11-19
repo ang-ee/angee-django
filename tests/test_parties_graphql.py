@@ -717,3 +717,38 @@ def test_merge_scalar_fields_follow_the_party_and_person_projections(db: None) -
     assert data["parent"]["merge_scalar_fields"] == list(person.merge_common_scalar_fields)
     assert data["person"]["merge_scalar_fields"] == list(person.merge_scalar_fields)
     assert set(person.merge_common_scalar_fields) < set(person.merge_scalar_fields)
+
+
+_MERGE_CERTAIN = """mutation MergeCertain {
+  merge_certain_same_as_pairs(limit: 10) { outcome normalized_value left { id } right { id } survivor { id } }
+}"""
+
+
+def test_merge_certain_same_as_pairs_merges_as_the_signed_in_person(db: None) -> None:
+    """A non-admin owner merges their certain pair through the schema; an anonymous request is refused."""
+
+    del db
+    owner = User.objects.create_user(username="certain-pair-owner")
+    with system_context(reason="test.parties.certain_pair"):
+        handle = Handle._base_manager.create(platform="email", value="zoe@example.com", created_by=owner)
+        older = Person._base_manager.create(display_name="Zoë Example", created_by=owner)
+        messaging_models.Party.objects.assert_handle(older, handle, asserted_by=owner)
+        newer = Person._base_manager.create(display_name="Zoe Example", created_by=owner)
+        messaging_models.Party.objects.propose_claimed_handle_as_system(
+            newer, handle, evidence=handle, reason="tests.claim",
+        )
+        messaging_models.Party.objects.reconcile_same_as()
+
+    anonymous = execute_schema(_schema("console"), _MERGE_CERTAIN)
+    assert [error.message for error in anonymous.errors or ()] == ["Authentication required."]
+
+    data = _data(execute_schema(_schema("console"), _MERGE_CERTAIN, user=owner))
+    assert data["merge_certain_same_as_pairs"] == [
+        {
+            "outcome": "MERGED",
+            "normalized_value": "zoe@example.com",
+            "left": {"id": older.sqid},
+            "right": {"id": newer.sqid},
+            "survivor": {"id": older.sqid},
+        }
+    ]

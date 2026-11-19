@@ -109,6 +109,22 @@ def register(server: FastMCP) -> None:
                 "field_overrides is an optional object containing only approved human scalar fields.",
             ),
             GraphQLTool(
+                operation="merge_certain_same_as_pairs",
+                name="merge_certain_same_as_pairs",
+                fields=(
+                    "outcome",
+                    "normalized_value",
+                    ("left", _PARTY_SUMMARY),
+                    ("right", _PARTY_SUMMARY),
+                    ("survivor", _PARTY_SUMMARY),
+                ),
+                limit_arg="limit",
+                description="Merge, as your own merges, every same-person pair awaiting your review that is "
+                "certain: two people, neither an account's own person, the only two linked to an address they "
+                "share, with names equal but for case, accents and hyphens. The older record survives and keeps "
+                "its values. Returns each pair read with its outcome: MERGED, or the reason it was left.",
+            ),
+            GraphQLTool(
                 operation="insert_circles_one",
                 name="create_circle",
                 fields=("sqid", "name", "description", ("parent", ("sqid", "name"))),
