@@ -96,6 +96,22 @@ def test_person_email_lookup_ignores_services_empty_keys_and_missing_accounts(db
         assert User.objects.person_for_email(email) is None
 
 
+@pytest.mark.parametrize("attrs", [{}, {"is_active": False}, {"is_staff": True}])
+def test_sign_in_addresses_answers_the_given_addresses_a_person_account_signs_in_with_in_one_query(db, attrs):
+    """Each address compares by the account key, as given; services, empty keys and strangers sign in as nobody."""
+
+    User.objects.create_user("signs-in", "Ada@EXAMPLE.COM", **attrs)
+    User.objects.create_user("service", "service@example.com", kind="service")
+    User.objects.create_user("empty")
+    given = [" ADA@example.com ", "ada@example.com", "service@example.com", "grace@example.com", "", " \t"]
+    with CaptureQueriesContext(connection) as captured:
+        assert User.objects.sign_in_addresses(given) == {" ADA@example.com ", "ada@example.com"}
+    assert len([q for q in captured if User._meta.db_table in q["sql"]]) == 1
+    with CaptureQueriesContext(connection) as captured:
+        assert User.objects.sign_in_addresses(["", " \n"]) == set()
+    assert not captured.captured_queries
+
+
 @pytest.mark.django_db(transaction=True)
 def test_ambiguous_lookup_refuses_with_code_only_and_creation_does_not_add_a_third(legacy_person_emails, iam_admin):
     for username in ("legacy-a", "legacy-b"):

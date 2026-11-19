@@ -19,7 +19,7 @@ import logging
 import re
 from collections import defaultdict
 from collections.abc import Collection, Iterable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from enum import StrEnum
 from itertools import chain, combinations, groupby, islice
@@ -70,7 +70,7 @@ from angee.base.querysets import MergeableQuerySet, by_key
 from angee.base.serialization import canonical_json
 from angee.integrate.errors import IntegrationError
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager
-from angee.integrate.states import StreamDirection
+from angee.integrate.states import LinkStatus, StreamDirection
 from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedOrganization, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
@@ -696,6 +696,43 @@ class EmailHolder(NamedTuple):
     person: Person
     basis: EmailBasis
     handle: Handle | None
+
+
+def _email_key(value: str) -> str:
+    """Return the normalized email address ``value`` (``Handle.normalize_value``), the key every lookup compares."""
+
+    handle_model = apps.get_model("parties", "Handle")
+    return cast(str, handle_model.normalize_value(handle_model.Platform.EMAIL, value))
+
+
+@dataclass
+class EmailLookup:
+    """Who email addresses name and which an account signs in with, read once for a page.
+
+    :meth:`PartyManager.lookup_emails` fills it; every key is a normalized
+    address. ``holders`` keeps :meth:`PartyManager.people_for_emails`' answers
+    for each address read (an empty list when it names nobody) and ``sign_in``
+    the addresses a person account signs in with, in any spelling. A record
+    that lands or withdraws an address marks it ``changed``, so the next lookup
+    of it reads it again. ``verdicts`` keeps each adoption verdict
+    (:meth:`PartyManager.adoption_blocker`) by person and link, so the target
+    decision and the ingest that binds the person admit them once.
+    """
+
+    holders: dict[str, list[EmailHolder]] = field(default_factory=dict)
+    sign_in: set[str] = field(default_factory=set)
+    changed: set[str] = field(default_factory=set)
+    verdicts: dict[tuple[Any, Any], str | None] = field(default_factory=dict)
+
+    def named(self, email: str) -> list[EmailHolder]:
+        """Return the people ``email`` names, on every basis, as read."""
+
+        return self.holders.get(_email_key(email), [])
+
+    def signs_in(self, emails: Iterable[str]) -> bool:
+        """Whether any of ``emails`` is an address a person account signs in with."""
+
+        return any(_email_key(email) in self.sign_in for email in emails)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1978,6 +2015,42 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 answer.append(EmailHolder(email, claimants[claim[0]], EmailBasis.CLAIM, by_pk[claim[1]]))
         return answer
 
+    def lookup_emails(self, emails: Iterable[str], *, lookup: EmailLookup | None = None) -> EmailLookup:
+        """Return ``lookup`` (new by default) knowing whom each of ``emails`` names and which an account signs in with.
+
+        Only an address it has not read, or one a record of its page changed
+        since (:attr:`EmailLookup.changed`), is read: its holders through
+        :meth:`people_for_emails`, and whether a person account signs in with it
+        in any spelling, the one given or one a handle holds
+        (``UserManager.sign_in_addresses``, iam's own comparison). Writes
+        nothing; the caller reads it under the locks of the addresses it decides
+        on.
+        """
+
+        lookup = EmailLookup() if lookup is None else lookup
+        given = [email for email in dict.fromkeys(emails) if email.strip()]
+        wanted = [email for email in given if (key := _email_key(email)) not in lookup.holders or key in lookup.changed]
+        if not wanted:
+            return lookup
+        keys = {_email_key(email) for email in wanted}
+        lookup.holders.update((key, []) for key in keys)
+        for holder in self.people_for_emails(wanted):
+            found = lookup.holders[_email_key(holder.email)]
+            if not any(row.basis == holder.basis and row.person.pk == holder.person.pk for row in found):
+                found.append(holder)
+        handle_model = apps.get_model("parties", "Handle")
+        with system_context(reason="parties.lookup_emails"):
+            spellings = {
+                *wanted,
+                *handle_model._base_manager.filter(
+                    platform=handle_model.Platform.EMAIL, normalized_value__in=keys
+                ).values_list("value", flat=True),
+            }
+        lookup.sign_in.difference_update(keys)
+        lookup.sign_in.update(_email_key(email) for email in get_user_model().objects.sign_in_addresses(spellings))
+        lookup.changed.difference_update(keys)
+        return lookup
+
     def _holders(self, handles: Sequence[Any]) -> dict[Any, tuple[Any, Any | None]]:
         """Return each handle's merge survivor and the live Person holding it, by handle pk, in bounded reads.
 
@@ -2043,85 +2116,132 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             raise ValidationError(f"A contact target must be a Party of kind {model.__name__}.")
         return child
 
-    def adoption_blocker(self, person: Person, *, link: RecordLink, through: Handle | None = None) -> str | None:
-        """Return why ``link``'s directory may not bind its record to the existing ``person``, ``None`` when it may.
+    def holding_links(self, link: RecordLink, replaces: Sequence[RecordLink] = ()) -> set[Any]:
+        """Return the keys of ``link`` and of the links it ``replaces`` whose party stays or passes to it unadmitted.
+
+        Such a link is bound and observing (neither tombstoned nor withdrawn)
+        and, for a replaced one, of ``link``'s stream: ``link`` keeps its own
+        party, and a merge at the source hands the replaced record's over. Any
+        other link's party is a candidate admitted again
+        (:meth:`adoption_blocker`), a pull-only link returning from a tombstone
+        included. A stream that writes back adopts nobody, so there ``link``
+        keeps its bound party through a tombstone.
+        """
+
+        rows = (
+            type(link)
+            .objects.sudo(reason="parties.holding_links")
+            .filter(
+                pk__in=[link.pk, *(row.pk for row in replaces)],
+                stream_id=link.stream_id,
+                target_object_id__isnull=False,
+            )
+        )
+        holding = set(rows.observing().values_list("pk", flat=True))
+        if link.target_object_id and link.stream.direction != StreamDirection.PULL:
+            holding.add(link.pk)
+        return holding
+
+    def _naming_links(self, party_ids: Iterable[Any]) -> Any:
+        """Return the links naming any of ``party_ids`` that have not withdrawn it, each with its stream.
+
+        A tombstoned link still names its party: a record that returns lands
+        there again once admitted, so no other contact of its source takes the
+        party meanwhile.
+        """
+
+        parties = apps.get_model("parties", "Party")._base_manager.filter(pk__in=list(party_ids))
+        return (
+            apps.get_model("integrate", "RecordLink")
+            .objects.sudo(reason="parties.naming_links")
+            .filter(pk__in=parties.values("record_links"))
+            .exclude(status=LinkStatus.WITHDRAWN)
+            .select_related("stream")
+        )
+
+    def adoption_blocker(
+        self,
+        person: Person,
+        *,
+        link: RecordLink,
+        parsed: ParsedContact,
+        lookup: EmailLookup | None = None,
+        replaces: Sequence[RecordLink] = (),
+    ) -> str | None:
+        """Return why ``link``'s directory may not bind its contact ``parsed`` to the existing ``person``, or ``None``.
 
         Adopting a person is an access change: the directory becomes one of their
         statement sources and its contact readers read them. Every limit must hold
-        (rulings R2 and R9): the link's stream is pull-only; the person is no
-        account's own; the address that found them (``through``, the handle a
-        lookup answered) is no account's sign-in address; the directory's owner
-        holds ``adopt`` on them (their owner or an editor: no platform-admin arm),
-        checked for that user though sync runs as system work; no other live link
-        of the directory names them, since its statements are keyed by
-        integration, not by link; and no live link of a stream that writes back
-        names them, which would publish what this source states about them. Call
-        it under the contact locks; :meth:`ingest_contact` calls it for every
-        person new to its link.
+        (rulings R2 and R9), each read from rows loaded here under the contact
+        locks the caller holds, never from the objects passed in: the link's
+        stream is pull-only; the person is live (neither trashed nor merged away)
+        and no account's own; no address the contact carries is a person
+        account's sign-in address in any spelling (``lookup.sign_in``), whichever
+        address found the person and whether or not the account has a person;
+        the directory's owner holds ``adopt`` on them (their owner or an editor:
+        no platform-admin arm), checked for that user though sync runs as system
+        work; no other contact of the directory names them, a tombstoned one
+        included, since its statements are keyed by integration, not by link
+        (the links of the records ``replaces`` folded into this one are this
+        contact's own); and no live link of a stream that writes back names them,
+        which would publish what this source states about them. ``lookup`` is
+        the page's (:meth:`lookup_emails`) and keeps each verdict, so the target
+        decision and the ingest that binds the person admit them once; without
+        one the contact's addresses are looked up here.
+        :meth:`ingest_contact` calls it for every person new to its link.
         """
 
         stream = link.stream
         if stream.direction != StreamDirection.PULL:
             return "A directory that writes back adopts nobody."
-        if person.user_id is not None:
-            return "The person is a user account's own."
-        with system_context(reason="parties.adoption_blocker"):
-            users = get_user_model().objects
-            if through is not None and users.people().filter(email=users.normalize_email(through.value)).exists():
-                return "The address is a user account's sign-in address."
+        emails = [value for value, _label, _preferred in parsed.emails]
+        lookup = self.lookup_emails(emails, lookup=lookup)
+        if (person.pk, link.pk) in lookup.verdicts:
+            return lookup.verdicts[person.pk, link.pk]
+        candidate = apps.get_model("parties", "Person")._base_manager.filter(pk=person.pk).first()
         owner = stream.integration.owner
-        candidate = apps.get_model("parties", "Person")._base_manager.get(pk=person.pk)
-        if owner is None or not candidate.with_actor(owner).has_access("adopt"):
-            return "The directory's owner may not adopt the person."
-        with system_context(reason="parties.adoption_blocker"):
-            party = apps.get_model("parties", "Party")._base_manager.filter(pk=person.pk)
-            naming = (
-                apps.get_model("integrate", "RecordLink")
-                .objects.observing()
-                .filter(pk__in=party.values("record_links"))
-                .exclude(pk=link.pk)
-                .select_related("stream")
-            )
-            streams = [row.stream for row in naming]
-        if any(other.integration_id == stream.integration_id for other in streams):
-            return "Another contact of the directory is the person."
-        if any(other.writes_back for other in streams):
-            return "A stream that writes back names the person."
-        return None
+        refusal = None
+        if candidate is None or candidate.is_trashed or candidate.merged_into_id is not None:
+            refusal = "The person is no longer live."
+        elif candidate.user_id is not None:
+            refusal = "The person is a user account's own."
+        elif lookup.signs_in(emails):
+            refusal = "An address of the contact is a user account's sign-in address."
+        elif owner is None or not candidate.with_actor(owner).has_access("adopt"):
+            refusal = "The directory's owner may not adopt the person."
+        else:
+            naming = self._naming_links([person.pk]).exclude(pk__in=[link.pk, *(row.pk for row in replaces)])
+            if any(row.stream.integration_id == stream.integration_id for row in naming):
+                refusal = "Another contact of the directory is the person."
+            elif any(row.stream.writes_back for row in naming.observing()):
+                refusal = "A stream that writes back names the person."
+        lookup.verdicts[person.pk, link.pk] = refusal
+        return refusal
 
-    def _ingest_target[M: models.Model](
-        self,
-        link: RecordLink,
-        model: type[M],
-        target: M | None,
-        *,
-        replaces: Sequence[RecordLink] = (),
-        through: Handle | None = None,
-    ) -> M | None:
-        """Return the ``model`` row the caller decided ``link`` lands on, ``None`` to mint one, once admitted.
+    def _target_is_new[M: models.Model](
+        self, link: RecordLink, model: type[M], target: M | None, *, replaces: Sequence[RecordLink] = ()
+    ) -> bool:
+        """Return whether ``target``, the ``model`` row the caller decided ``link`` lands on, needs admission.
 
         Binding a link lends its party to the directory's contact readers, so a
-        target must be a ``model`` row, and a link bound to a live row keeps it: an
-        ingest never rebinds it. A row new to the link is admitted when a link it
-        ``replaces`` names it (a merge at the source hands its person over) or, for
-        a Person, when :meth:`adoption_blocker` admits it, ``through`` being the
-        handle that found them. A link whose row is trashed names nobody
-        (:meth:`contact_people`), so its record lands on whoever the caller decided.
+        target must be a ``model`` row, and a link that holds a live row
+        (:meth:`holding_links`) keeps it: an ingest never rebinds it. Its own row,
+        or one a replaced link hands over, needs no admission; ``None`` mints
+        one. Any other row is new to the link, the row a link returning from a
+        tombstone named included, and its verb admits it or refuses. A link whose
+        row is trashed names nobody (:meth:`contact_people`).
         """
 
         if target is not None and not isinstance(target, model):
             raise ValidationError(f"A contact target must be a Party of kind {model.__name__}.")
         named = self._live_parties([link, *replaces], model)
-        live = named[link.pk]
-        if live is not None and (target is None or live.pk != target.pk):
+        holding = self.holding_links(link, replaces)
+        kept = named[link.pk] if link.pk in holding else None
+        if kept is not None and (target is None or kept.pk != target.pk):
             raise ValidationError("A bound link keeps its target; ingestion never rebinds it.")
-        if target is None or live is not None or any(row is not None and row.pk == target.pk for row in named.values()):
-            return target
-        if issubclass(model, apps.get_model("parties", "Person")):
-            blocker = self.adoption_blocker(cast("Person", target), link=link, through=through)
-            if blocker is not None:
-                raise ValidationError(blocker)
-        return target
+        return target is not None and not any(
+            (row := named[pk]) is not None and row.pk == target.pk for pk in holding
+        )
 
     def _adopted_through(self, party: Any, *, source: Any) -> Handle | None:
         """Return the handle ``source``'s identity statement on ``party`` cites: the one an adoption found them by."""
@@ -2352,7 +2472,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         replaces: Sequence[Any] = (),
         through: Handle | None = None,
         claims: Collection[str] = (),
-    ) -> None:
+    ) -> set[str]:
         """Assert the emails and phones ``link`` names for ``party``; withdraw the others it or ``replaces`` asserted.
 
         Each handle dedupes on its value and keeps the label and preference the
@@ -2365,11 +2485,22 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         ``Party.REVIEW_CONFIDENCE``, so it never resolves the handle, and the
         handle's display fields stay its holder's. ``replaces`` are the links of
         records a merge at the source folded into this one: a handle only they
-        asserted on ``party`` is withdrawn, never moved.
+        asserted on ``party`` is withdrawn, never moved. Returns the normalized
+        email addresses it stated or withdrew, whose holders may have changed.
         """
 
         handle_model = apps.get_model("parties", "Handle")
         handles = handle_model.objects
+        landed = set(
+            self.handle_statements()
+            .filter(
+                subject_id=party.pk,
+                link__in=[link, *replaces],
+                status=self.handle_statements().model.StatementStatus.ASSERTED,
+                handle__platform=handle_model.Platform.EMAIL,
+            )
+            .values_list("handle__normalized_value", flat=True)
+        )
         supported = []
         for platform, points in (("email", parsed.emails), ("phone", parsed.phones)):
             for value, label, preferred in points:
@@ -2389,31 +2520,34 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                     party, handle, asserted_by=source, link=link, evidence=[party], confidence=0.4 if claim else 1.0
                 )
                 supported.append({"subject": party, "aspect": "handle", "handle": handle})
+                if platform == handle_model.Platform.EMAIL:
+                    landed.add(normalized)
         for stating in (link, *replaces):
             party.statements.withdraw_unsupported(source, supported, aspect="handle", link=stating)
+        return landed
 
     def _contested_emails(
-        self, person: Person, parsed: ParsedContact, *, source: Any
+        self, person: Person, parsed: ParsedContact, *, source: Any, lookup: EmailLookup
     ) -> tuple[set[str], list[tuple[Person, Handle | None]]]:
         """Return the contact's emails ``source`` may only claim for ``person``, and the people they name instead.
 
-        What a contact may state about an address depends on whom the lookup
-        (:meth:`people_for_emails`, on any basis) finds by it. One that names a
+        What a contact may state about an address depends on whom ``lookup``
+        (:meth:`lookup_emails`: :meth:`people_for_emails` on any basis, and the
+        addresses a person account signs in with) finds by it. One that names a
         person other than ``person`` is theirs, unless ``person`` holds it too:
         stating it in full would move it, and what is attributed to it, away from
         them, so it is a claim for review, and each such person comes back once,
         with the handle that names them, to be proposed as ``person``'s same
-        person. One that names nobody stays a claim while ``source`` claims it on
-        ``person``: the claim itself makes a second claimant, which the lookup
-        answers with nobody. Any other address is stated in full. Values are
-        normalized email addresses (``Handle.normalize_value``).
+        person. An account's sign-in address is the account's, whether or not it
+        has a person yet, unless that person is ``person``: a claim too. One that
+        names nobody stays a claim while ``source`` claims it on ``person``: the
+        claim itself makes a second claimant, which the lookup answers with
+        nobody. Any other address is stated in full. Values are normalized email
+        addresses (``Handle.normalize_value``).
         """
 
         handle_model = apps.get_model("parties", "Handle")
         email = handle_model.Platform.EMAIL
-        answered: defaultdict[str, list[EmailHolder]] = defaultdict(list)
-        for holder in self.people_for_emails(value for value, _label, _preferred in parsed.emails):
-            answered[handle_model.normalize_value(email, holder.email)].append(holder)
         claimed = set(
             self.handle_statements()
             .filter(
@@ -2429,11 +2563,14 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         others: dict[Any, tuple[Person, Handle | None]] = {}
         for value, _label, _preferred in parsed.emails:
             normalized = handle_model.normalize_value(email, value)
-            found = answered.get(normalized, [])
+            found = lookup.named(value)
             if any(holder.basis == EmailBasis.HELD and holder.person.pk == person.pk for holder in found):
                 continue
             rivals = [holder for holder in found if holder.person.pk != person.pk]
-            if rivals or (not found and normalized in claimed):
+            account = normalized in lookup.sign_in and not any(
+                holder.basis == EmailBasis.ACCOUNT and holder.person.pk == person.pk for holder in found
+            )
+            if rivals or account or (not found and normalized in claimed):
                 claims.add(normalized)
             for holder in rivals:
                 others.setdefault(holder.person.pk, (holder.person, holder.handle))
@@ -2449,6 +2586,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         target: Person | None = None,
         replaces: Sequence[Any] = (),
         through: Handle | None = None,
+        lookup: EmailLookup | None = None,
     ) -> Any:
         """Assert one link's contact facts; preserve other sources and person preferences.
 
@@ -2456,19 +2594,22 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         source sent. ``stream`` is the link's contacts stream as the page holds it,
         so its container (the address book, whose folder belongs to the same
         directory) and integration resolve once per page. ``target`` is the person
-        the caller decided the contact is, ``None`` to mint one; a link bound to a
+        the caller decided the contact is, ``None`` to mint one; a link holding a
         live person keeps it, and a person new to the link binds only as an
-        adoption would (:meth:`_ingest_target`, :meth:`adoption_blocker`), locked
-        first. ``through`` is the handle an adoption found ``target`` by: the
-        identity statement cites it as evidence, restated on every later record,
-        and the contact's spelling of its address lands on it. On a pull-only
-        stream an email that someone else holds is only claimed, for review, and
-        each such person is proposed as the contact's same person
-        (:meth:`_contested_emails`, :meth:`propose_directory_match`), so a
-        contact never moves an address away from its holder. A link leaving a
-        trashed person withdraws what it stated on them before it binds its new
-        person, and the proposals pairing them with that person, or with whom its
-        addresses now name, with it. ``replaces`` are
+        adoption would (:meth:`_target_is_new`, :meth:`adoption_blocker`), under
+        the contact's locks, taken first. ``through`` is the handle an adoption
+        found ``target`` by: the identity statement cites it as evidence,
+        restated on every later record, and the contact's spelling of its address
+        lands on it. On a pull-only stream ``lookup`` (the page's,
+        :meth:`lookup_emails`; else one read here) says who each address names:
+        an email someone else holds, or an account signs in with, is only
+        claimed, for review, and each such person is proposed as the contact's
+        same person (:meth:`_contested_emails`, :meth:`propose_directory_match`),
+        so a contact never moves an address away from its holder; the addresses
+        it lands are marked changed in the lookup. A link leaving a person
+        withdraws what it stated on them before it binds its new person, and,
+        when the person it leaves is trashed, the proposals pairing them with
+        that person, or with whom its addresses now name. ``replaces`` are
         the links of records a merge at the source folded into this one: whatever
         they stated on the person that this record restates moves to ``link``
         (statements are keyed by source, subject and aspect), and the rest is
@@ -2490,10 +2631,15 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         parsed = self.prepare_contact(parsed)
         people = apps.get_model("parties", "Person").objects
         source = stream.integration
+        pull = stream.direction == StreamDirection.PULL
         with transaction.atomic():
-            if target is not None:
-                self.lock_contact(target, parsed=parsed)
-            target = self._ingest_target(link, people.model, target, replaces=replaces, through=through)
+            self.lock_contact(target, parsed=parsed)
+            if pull:
+                lookup = self.lookup_emails((value for value, _label, _preferred in parsed.emails), lookup=lookup)
+            if self._target_is_new(link, people.model, target, replaces=replaces) and target is not None:
+                blocker = self.adoption_blocker(target, link=link, parsed=parsed, lookup=lookup, replaces=replaces)
+                if blocker is not None:
+                    raise ValidationError(blocker)
             person = target or people.create(
                 display_name=(parsed.display_name or parsed.family_name or people.model.PLACEHOLDER_NAME),
                 created_by_id=created_by_id,
@@ -2501,8 +2647,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             parent = apps.get_model("parties", "Party")._base_manager.get(pk=person.pk)
             through = through.canonical() if through is not None else self._adopted_through(parent, source=source)
             left = link.target if link.target_object_id and link.target_object_id != str(parent.pk) else None
+            gone = left is not None and self.contact_people([link])[link.pk] is None
             if left is not None:
-                # The person the link leaves is nobody's target (trashed): what the link stated there goes first.
+                # What the link stated on the person it leaves goes first.
                 link.withdraw_statements()
             apps.get_model("integrate", "RecordLink").objects.bind_target(link, parent)
             for subject, aspect, values, evidence in (
@@ -2534,11 +2681,11 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                     evidence=[EvidenceReference.of(row) for row in evidence],
                 )
             claims, others = (
-                self._contested_emails(person, parsed, source=source)
-                if stream.direction == StreamDirection.PULL
+                self._contested_emails(person, parsed, source=source, lookup=lookup)
+                if pull and lookup is not None
                 else (set(), [])
             )
-            self._land_handles(
+            landed = self._land_handles(
                 parent,
                 parsed,
                 display_name=parsed.display_name,
@@ -2549,10 +2696,13 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 through=through,
                 claims=claims,
             )
+            if lookup is not None:
+                lookup.changed.update(landed)
             for other, handle in others:
                 self.propose_directory_match(person, other, evidence=[link, *([handle] if handle is not None else [])])
-            if left is not None:
-                # What the link proposed for the person it left is moot: its new person is, or is proposed as, them.
+            if gone:
+                # What the link proposed for the trashed person it left is moot: its new person is, or is
+                # proposed as, them. A live person it left (refused on its return) stays proposed.
                 for other in (person, *(row for row, _handle in others)):
                     self.withdraw_directory_match(left, other)
             apps.get_model("parties", "Address").objects.land_addresses(
@@ -2590,7 +2740,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         the page holds it: its integration's kind is read from the row in hand
         (``Integration.declared_concrete_model``). ``target`` is the organization
         the caller decided the record is, ``None`` to mint one; a link bound to a
-        live organization keeps it (:meth:`_ingest_target`). The
+        live organization keeps it (:meth:`_target_is_new`). The
         link is bound before the facts are stated: identity, the legal identity,
         handles and addresses, each withdrawing this link's statements it no
         longer supports. The legal identity is stated whole (an omitted field is
@@ -2607,7 +2757,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         name = parsed.display_name or parsed.legal_name
         source = stream.integration
         with transaction.atomic():
-            target = self._ingest_target(link, organizations.model, target)
+            self._target_is_new(link, organizations.model, target)
             if target is not None:
                 self.lock_contact(target, parsed=parsed)
             organization: Any = target or organizations.create(

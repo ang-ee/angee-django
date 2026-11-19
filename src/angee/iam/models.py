@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import re
 import secrets
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from copy import copy
 from datetime import timedelta
 from email.utils import parseaddr
@@ -404,12 +404,12 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
 
         return (email or "").strip().lower()
 
-    def _person_email_matches(self, email: str | None) -> UserQuerySet[UserT]:
-        key = self.normalize_email(email)
+    def _person_email_matches(self, *emails: str | None) -> UserQuerySet[UserT]:
+        keys = sorted({key for email in emails if (key := self.normalize_email(email))})
         people = self.system_context(reason="iam.person.email_lookup").people()
-        if not key:
+        if not keys:
             return people.none()
-        return people.filter(email=key)
+        return people.filter(email__in=keys)
 
     def person_for_email(self, email: str) -> UserT | None:
         """Look up one person by email, including inactive and staff accounts.
@@ -423,6 +423,22 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
         if len(matches) > 1:
             raise AmbiguousAccountEmail
         return matches[0] if matches else None
+
+    def sign_in_addresses(self, emails: Iterable[str]) -> set[str]:
+        """Return the given addresses a person account signs in with, each as given; decide nothing.
+
+        An address compares by :meth:`normalize_email`, the key
+        :meth:`person_for_email` reads, so inactive and staff accounts count
+        whether or not the account has a Person yet; a service account or an
+        empty address signs in as nobody. A system identity lookup in one query:
+        the caller gates what it reveals.
+        """
+
+        given = {email: self.normalize_email(email) for email in emails}
+        if not any(given.values()):
+            return set()
+        found = set(self._person_email_matches(*given).values_list("email", flat=True))
+        return {email for email, key in given.items() if key in found}
 
     def get_by_natural_key(self, username: str | None) -> UserT:
         """Return a user for credential checks without row-scope filtering."""
