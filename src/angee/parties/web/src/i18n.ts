@@ -207,6 +207,9 @@ export const enPartiesMessages: Record<string, string> = {
   "review.sameAs.mergeCertain": "Merge certain pairs ({count})",
   "review.sameAs.certainHeading": "{left} and {right}, both at {address}",
   "merge.selection.action": "Merge…",
+  "merge.selection.unplaceable":
+    "This view cannot tell which group each selected record is in. Merge three or more from a grouped list, or clear the grouping.",
+  "merge.selection.noGroups": "No group holds two or more selected records.",
   "duplicates.title": "Merge duplicates",
   "duplicates.description": "Each set becomes one record: the oldest survives and the others fold into it.",
   "duplicates.valueRule":
@@ -225,6 +228,9 @@ export const enPartiesMessages: Record<string, string> = {
   "duplicates.shown": "Will show",
   "duplicates.compare": "Choose on the compare page: {name}",
   "duplicates.refused": "Will not merge: {reason}",
+  "duplicates.unpaired": "Left out, with no one else selected in their group: {count}.",
+  "duplicates.blank": "Left out, in a group without a value: {count}.",
+  "duplicates.overCap": "This merges the first {count} of {total} groups; select Merge… again for the rest.",
   "duplicates.confirm": "Merge ({count})",
   "duplicates.cancel": "Cancel",
   "duplicates.done": "Done",

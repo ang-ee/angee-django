@@ -10,6 +10,17 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: a list's Merge reads the list's grouping
+  (`collection.selectedGroups`). One ticked record opens "Merge into…" and two
+  open the compare page, whatever the grouping. Three or more on an ungrouped
+  list are one set; on a grouped list, one set per group of two or more ticked
+  records with a value, never one set across groups, each headed by its group and
+  marking a member that no longer matches it; a group of one or without a value is
+  left out and the batch dialog says how many. A grouped list that cannot place a
+  ticked record offers no batch, and neither does a grouping that yields no set:
+  the verb is disabled with its reason. A batch takes the first 50 sets in the
+  list's order and the dialog says how many remain.
+
 - Grouped lists find repeated values. People group by `display_name`,
   `given_name` and `family_name`, Organizations by `display_name` and
   `legal_name`, beside their existing axes (`people_groups` and
