@@ -152,7 +152,10 @@ live in code docstrings.
   answers with a new read. An association read
   takes an id HubSpot names in its `NO_ASSOCIATIONS_FOUND` error as having no
   contacts, and refuses any other error or an id neither answered nor named, for a
-  later retry. With no object mapping a directory reads only contacts. Operator messages
+  later retry. A directory declares its object streams only once it has read its
+  contacts in full, so a first sync lands the contacts and the next the objects,
+  and no record waits for a contact HubSpot already held. With no object mapping a
+  directory reads only contacts. Operator messages
   never repeat HubSpot's message text or error category. The scripted account
   (`angee.parties_integrate_hubspot.testing.server`) builds its invented keys at
   runtime (`service_key`), so no literal in the repository has a real key's shape.

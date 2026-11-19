@@ -284,8 +284,9 @@ class ContactNotLanded(SemanticError):
     It is the stream driver's missing-dependency refusal
     (``SyncFailureKind.MISSING_DEPENDENCY``), naming the contact: the record is
     kept under its id, its link failed, and the stream's rescan reads it again on
-    its backoff, so it lands once the contact has. Nothing orders the contacts
-    stream before the others.
+    its backoff, so it lands once the contact has. Object streams begin only once
+    the directory has read its contacts in full (``HubSpotDirectoryBackend.streams``),
+    so a record waits only for a contact HubSpot gained since, or one it does not hold.
     """
 
     def __init__(self, contact_id: str) -> None:
@@ -572,10 +573,19 @@ class HubSpotDirectoryBackend(DirectoryBackend):
         Each object stream is pull-only, partitioned by its mapping's key, swept
         daily, and its mapping is that mapping's key and version, so a changed
         version replays its records once (``StreamDefinition.mapping_contributions``).
-        Without an object mapping the directory declares only what the base does.
+        Object streams are declared only once the directory has read its contacts
+        in full (a generation of its contacts stream completed its baseline), from
+        local state as the contacts stream waits for its live address book: their
+        records name contacts, so on a fresh account the first sync lands the
+        contacts and the next reads the objects, none of which waits for a contact
+        HubSpot already held. Without an object mapping the directory declares only
+        what the base does.
         """
 
         yield from super().streams(deadline=deadline)
+        streams = apps.get_model("integrate", "SyncStream").unscoped_objects
+        if not streams.filter(integration_id=self.bridge.pk, key=CONTACTS, phase=StreamPhase.DELTA).exists():
+            return
         for mapping in resolve_all_impl_classes(HubSpotObjectMapping):
             yield StreamDefinition(
                 OBJECTS,
