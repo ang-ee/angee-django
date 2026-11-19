@@ -425,7 +425,9 @@ account that writes both parties may (the party's `merge_certain` permission,
 `write & person->active_member`); a service or agent account merges nothing, and no
 agent tool offers it. A pair is certain when both are people, neither is an
 account's own person, exactly the two are linked to an address the pair cites, and
-their names are equal but for case, accents and hyphens. The older record
+both bear a real name, none of the pair's cited addresses (a record named after its
+e-mail has no name of its own), equal to the other's but for case, accents and
+hyphens. The older record
 survives and loses no value: a merge field it leaves empty takes the newer record's
 value (`Party.merge_values`), its own stands where both have one, and each kept
 value is recorded as that person's choice. The merge's own permission and guards

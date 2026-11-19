@@ -672,7 +672,8 @@ live in code docstrings.
   pair is certain when both are people, neither is an
   account's own person, exactly the two are linked to an address it cites, and
   their names are equal but for case, accents and hyphens
-  (`Party.comparable_name`). Each merges into the older record as the acting
+  (`Party.comparable_name`); a name that is one of the pair's cited addresses
+  (`Party.names_an_address`, a record named after its e-mail) is no name. Each merges into the older record as the acting
   person's own merge, through the merge's permission and guards, and loses no
   value: a merge field the survivor leaves empty takes the newer record's value
   (`Party.merge_values`), the survivor's stands where both have one, and each

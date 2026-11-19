@@ -926,7 +926,7 @@ class SameAsMergeOutcome(StrEnum):
     SHARED_ADDRESS = "shared_address"
     """No address the pair cites links exactly these two parties."""
     NAMES_DIFFER = "names_differ"
-    """A name is missing, or the names differ beyond case, accents and hyphens."""
+    """A name is missing or is a cited address, or the names differ beyond case, accents and hyphens."""
     NOT_PERMITTED = "not_permitted"
     """The account is not an active person writing both parties (``merge_certain``), or the merge refused it."""
     REFUSED = "refused"
@@ -2222,7 +2222,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         certain when both are people and neither is an account's own person,
         exactly these two parties are linked to an address the pair cites
         (:meth:`same_person_links`, the shared-sender providers consulted), and both
-        bear a real name and the names agree but for case, accents and hyphens
+        bear a real name, none of the pair's cited addresses (``Party.names_an_address``),
+        and the names agree but for case, accents and hyphens
         (``Party.comparable_name``); a pair someone kept apart awaits no review.
         A merge the database stops (an ``OperationalError``: a deadlock, a lock or
         statement timeout, a serialization failure) is reported as ``busy`` and the
@@ -2260,8 +2261,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             elif all(linked.get((handle.platform, handle.normalized_value)) != ids for handle in pair.handles):
                 outcome = SameAsMergeOutcome.SHARED_ADDRESS
             elif not (
-                pair.left.has_real_name
-                and pair.right.has_real_name
+                all(
+                    party.has_real_name and not party.names_an_address(pair.handles)
+                    for party in (pair.left, pair.right)
+                )
                 and pair.left.comparable_name == pair.right.comparable_name
             ):
                 outcome = SameAsMergeOutcome.NAMES_DIFFER

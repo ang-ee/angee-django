@@ -1067,3 +1067,21 @@ def test_a_decided_pair_with_stale_evidence_never_holds_back_a_new_proposal(db: 
     with system_context(reason="same_as nothing left"):
         assert Party.objects.reconcile_same_as(limit=1) == 0
         assert Party.same_as.kept_separate(holder, claimant) is (decide is _kept_separate)
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        pytest.param("zoe@example.com", "Zoe@Example.com", id="both-named-after-the-address"),
+        pytest.param("Zoë Example", "ZOE@example.com", id="one-named-after-the-address"),
+    ],
+)
+def test_a_name_that_is_the_cited_address_is_no_name(db: None, left: str, right: str) -> None:
+    """Two records named after their address have equal names because their addresses are equal: not certain."""
+
+    del db
+    owner = create_user("same-as-address-names")
+    older, newer, _handle = _people(owner, left, right)
+    assert _reconcile() == 1
+
+    assert _merge_certain(owner) == [("names_differ", {older.pk, newer.pk}, None)]

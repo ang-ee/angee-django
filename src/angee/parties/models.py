@@ -339,6 +339,18 @@ class Party(
             return False
         return any(character.isalpha() for character in name)
 
+    def names_an_address(self, handles: Iterable[Any]) -> bool:
+        """Whether ``display_name`` is one of these addresses, read as each one's platform normalizes it.
+
+        A party a source named after its e-mail address carries no name of its
+        own: two such records bear equal names because their addresses are equal.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        return any(
+            handle_model.normalize_value(row.platform, self.display_name) == row.normalized_value for row in handles
+        )
+
     @property
     def comparable_name(self) -> str:
         """``display_name`` as two names compare for being one person's: case, accents and hyphens aside.
