@@ -61,6 +61,13 @@ canonical Party. Its Person or Organization row reads that grant through its
 keep their own gates. The existing `reader` relation includes private Party reads; use it only
 when that wider access is intended. Both use the native record-access owner.
 
+Sharing a directory shares its contacts: `contact_reader`, granted on the
+directory row, reads the people and organizations its live links name and the
+addresses and relationships those links state ([permissions.zed](permissions.zed)).
+A tombstoned or unbound link lends nothing, private fields keep `read_private`,
+handles keep their own gates, and the grant reads nothing of the directory, its
+integration, streams, links or credential.
+
 Source admission follows RecordLinks and seeded Rule/Seed role membership.
 Sources gain no private reads. Imports supply their
 Integration and observed links; parties binds targets in the application transaction.
