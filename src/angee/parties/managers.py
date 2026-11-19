@@ -2287,10 +2287,13 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     ) -> list[DuplicateSetOutcome]:
         """Merge each confirmed set of records into its oldest member as ``actor``'s merge; return every outcome.
 
-        A set merges exactly as confirmed. In its own transaction, its members,
-        their same-person partners and every Handle any of them holds or names are
-        locked in one pass (``Party.lock_merge_records``), the set is judged again
-        under those locks (:meth:`preview_duplicates`), and a member that changed
+        A set merges exactly as confirmed. Its size and the actor's read of every
+        member are checked first, for every set in one read (:meth:`_admission`),
+        so a set the actor may not name takes no lock and is not read further.
+        Then, in its own transaction, its members, their same-person partners and
+        every Handle any of them holds or names are locked in one pass
+        (``Party.lock_merge_records``), the set is judged again under those locks
+        (:meth:`preview_duplicates`), and a member that changed
         since the person looked (merged elsewhere, trashed, kept apart from another)
         refuses the set rather than shrinking it. Then the others fold into the
         oldest in key order through ``Party.merge``, whose own permission and guards
@@ -2307,8 +2310,13 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         """
 
         party_model = apps.get_model("parties", "Party")
+        confirmed = self._confirmed_sets(sets)
+        readable = self._readable_members(actor, confirmed)
         outcomes = []
-        for ids in self._confirmed_sets(sets):
+        for ids in confirmed:
+            if refusal := self._admission(ids, readable):
+                outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.REFUSED, reason=refusal))
+                continue
             try:
                 with transaction.atomic():
                     rows = instances_from_public_ids(party_model, ids, queryset=party_model._base_manager.all())
@@ -2339,6 +2347,22 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.MERGED, survivor=kept))
         return outcomes
 
+    def _readable_members(self, actor: Any, confirmed: Sequence[tuple[str, ...]]) -> Mapping[str, Any]:
+        """The members of the sets within the size cap that ``actor`` reads, by the public id given, in one read."""
+
+        party_model = apps.get_model("parties", "Party")
+        named = {pk for ids in confirmed if len(ids) <= self.SET_MEMBERS for pk in ids}
+        return instances_from_public_ids(party_model, named, queryset=party_model._default_manager.with_actor(actor))
+
+    def _admission(self, ids: Sequence[str], readable: Mapping[str, Any]) -> str:
+        """Why a set is refused before anything else is read of it, or ``""``: its size, then the actor's read."""
+
+        if not 2 <= len(ids) <= self.SET_MEMBERS:
+            return f"Choose two to {self.SET_MEMBERS} records to merge as one."
+        if any(pk not in readable for pk in ids):
+            return "A record is gone or you may not read it."
+        return ""
+
     def _confirmed_sets(self, sets: Sequence[Sequence[str]]) -> list[tuple[str, ...]]:
         confirmed = [tuple(dict.fromkeys(str(pk) for pk in ids)) for ids in sets]
         if len(confirmed) > self.BATCH_SETS:
@@ -2352,7 +2376,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
         party_model = apps.get_model("parties", "Party")
         readable = party_model._default_manager.with_actor(actor)
-        found = instances_from_public_ids(party_model, {pk for ids in confirmed for pk in ids}, queryset=readable)
+        found = self._readable_members(actor, confirmed)
         pks = sorted({row.pk for row in found.values()})
         people, organizations = self.party_kinds(pks)
         permitted = self.batch_mergeable(actor, pks)
@@ -2374,10 +2398,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         for ids in confirmed:
             members = sorted((found[pk] for pk in ids if pk in found), key=_age)
             keys = [row.pk for row in members]
-            if not 2 <= len(ids) <= self.SET_MEMBERS:
-                reason = f"Choose two to {self.SET_MEMBERS} records to merge as one."
-            elif len(members) != len(ids):
-                reason = "A record is gone or you may not read it."
+            if admission := self._admission(ids, found):
+                reason = admission
             elif any(row.is_trashed or row.merged_into_id is not None for row in members):
                 reason = "A record is trashed or already merged into another."
             elif not (set(keys) <= people.keys() or set(keys) <= organizations):
