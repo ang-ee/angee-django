@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 27
+// @rebac_schema_revision: 28
 
 // Parties, folders and circles are grant roots: each is owned through its
 // transferable `owner` column (OwnerMixin), which an insert defaults to the row's
@@ -84,13 +84,13 @@ definition parties/person {
     permission read_granted = owner + editor + reader + party->identity_reader + party->contact_read + statement_source + admin->member
     permission read = read_granted
     permission read_private = owner + editor + reader + admin->member
-    // Field gates are per resource definition, including inherited columns.
+    // Field gates are per resource definition, including inherited columns. The
+    // nickname is identity, like the name parts: whoever reads the person reads it.
     permission read__notes = read_private
     permission read__first_met_note = read_private
     permission read__handle_count = read_private
     permission read__birthday = read_private
     permission read__anniversary = read_private
-    permission read__nickname = read_private
     permission write = owner + editor + statement_source + admin->member
     permission delete = owner + admin->member
     permission write__owner = party->transfer

@@ -325,7 +325,10 @@ Circle and spaces memberships keep plain acceptance/rejection decisions.
 Writers can share a Party's basic identity through `identity_reader` on the
 canonical Party. Its Person or Organization row reads that grant through its
 `party` link, while private fields, related subject records, handles and banking
-keep their own gates. The existing `reader` relation includes private Party reads; use it only
+keep their own gates. A person's private fields are the notes, the first-met note,
+the handle count, the birthday and the anniversary (`read_private`); the name
+parts and the nickname are identity, read by whoever reads the person, as are
+the languages and the occupation. The existing `reader` relation includes private Party reads; use it only
 when that wider access is intended. Both use the native record-access owner.
 Adding an address or relationship to a party takes write on that party
 (`create` on `parties/address` and `parties/relationship` in [permissions.zed](permissions.zed)):

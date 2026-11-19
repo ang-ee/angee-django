@@ -168,7 +168,7 @@ class PersonType(PartyType):
     additional_name: auto
     family_name: auto
     name_suffix: auto
-    nickname: str | None
+    nickname: auto
     birthday: auto
     anniversary: auto
     languages: auto

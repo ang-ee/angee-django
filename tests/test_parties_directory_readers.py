@@ -52,13 +52,14 @@ from tests.test_parties_graphql import _schema as parties_graphql_schema
 PERSON_PRIVATE: dict[str, Any] = {
     "notes": "Private notes",
     "first_met_note": "Met at a lecture",
-    "nickname": "Ada",
     "birthday": date(1990, 2, 3),
     "anniversary": date(2020, 4, 5),
 }
+NICKNAME = "Ada"
+"""A person's nickname is identity, read with the person as the name parts are."""
 ORGANIZATION_PRIVATE: dict[str, Any] = {"notes": "Private notes", "first_met_note": "Introduced by a friend"}
 PARTY_GATES = ("read__notes", "read__first_met_note", "read__handle_count")
-PERSON_GATES = (*PARTY_GATES, "read__birthday", "read__anniversary", "read__nickname")
+PERSON_GATES = (*PARTY_GATES, "read__birthday", "read__anniversary")
 SCOPED_ACTIONS = ("read", "read_private", "write", "delete")
 
 
@@ -102,7 +103,9 @@ def contacts(db: None) -> Iterator[SimpleNamespace]:
             group = Group.objects.create(name="Contact readers")
             group.add_member(str(SubjectRef(to_object_ref(member))))
 
-            person = Person.objects.create(display_name="Ada Example", created_by=owner, **PERSON_PRIVATE)
+            person = Person.objects.create(
+                display_name="Ada Example", nickname=NICKNAME, created_by=owner, **PERSON_PRIVATE
+            )
             organization = Organization.objects.create(
                 display_name="Example Ltd", created_by=owner, **ORGANIZATION_PRIVATE
             )
@@ -236,7 +239,8 @@ def test_contact_reader_lists_and_opens_linked_contacts_through_graphql(
             {
                 "id": c.person.sqid,
                 "display_name": "Ada Example",
-                **dict.fromkeys(("notes", "first_met_note", "nickname", "birthday", "anniversary")),
+                "nickname": NICKNAME,
+                **dict.fromkeys(("notes", "first_met_note", "birthday", "anniversary")),
             }
         ]
         assert data["people_by_pk"] == {
@@ -530,6 +534,28 @@ ATTACH_ADDRESS = """mutation Attach($party: ID!) {
 ATTACH_EDGE = """mutation Relate($party: ID!, $kind: ID!) {
   insert_party_relationships_one(object: {party: $party, kind: $kind, other_name: "Attached Works"}) { id }
 }"""
+
+
+def test_the_nickname_reads_with_the_person_and_notes_and_the_dates_stay_private(
+    contacts: SimpleNamespace, graphql: Any
+) -> None:
+    """A contact reader and an identity reader, neither owner nor editor, read the nickname and nothing private."""
+
+    c = contacts
+    identity_reader = get_user_model().objects.create_user(username="contacts-nickname-identity-reader")
+    with system_context(reason="tests.directory_readers.identity_reader"):
+        _grant(c.person_party, "identity_reader", identity_reader)
+    query = """query Person($id: String!) {
+      people_by_pk(id: $id) { id nickname notes first_met_note birthday anniversary }
+    }"""
+    for actor in (c.reader, identity_reader):
+        assert not _allowed(c.person, actor, "read_private"), actor.username
+        data = result_data(execute_schema(graphql, query, {"id": c.person.sqid}, user=actor))
+        assert data["people_by_pk"] == {
+            "id": c.person.sqid,
+            "nickname": NICKNAME,
+            **dict.fromkeys(("notes", "first_met_note", "birthday", "anniversary")),
+        }, actor.username
 
 
 def test_reading_a_contact_attaches_nothing_to_it(contacts: SimpleNamespace, graphql: Any) -> None:

@@ -10,6 +10,13 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: a person's nickname is identity, like the name parts:
+  whoever reads the person reads it, a directory's contact readers, identity
+  readers and thread or task readers included. `parties/person` drops
+  `read__nickname` (revision 28), and `PersonType.nickname` is a non-null
+  `String`. The notes, the first-met note, the handle count, the birthday and
+  the anniversary stay private (`read_private`). Upgrade: `rebac sync`; clients
+  regenerate the nickname's type.
 - `angee.parties`: a directory mapping refines the neutral contact before the
   ingest states it (`DirectoryMapping.refine` and `refines`, among
   `REFINABLE_FIELDS`: the name parts, the dates, the employment), so a source
