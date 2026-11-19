@@ -339,8 +339,11 @@ could not be sent as configured; it chains none of the library's text, which
 quotes the value, a credential perhaps.
 
 `IntegrationError(public_message, transient=…, retry_after=…)` owns the optional
-positive provider horizon. `RequestNotSentError` declares that connect, DNS or
-TLS handshake failed before HTTP request bytes were written and is safe to retry.
+positive provider horizon. `RequestNotSentError` declares that no HTTP request
+bytes were written; its `transient` says whether a later attempt can send it: a
+failed connect, DNS or TLS handshake can be retried safely, a request the library
+would not build (`RequestNotBuiltError`) cannot. Callers read `transient`, never
+the type.
 Failures after sending retain an uncertain transport outcome. A hint implies transience unless explicitly declared
 otherwise. Aggregate failures retain a partition's horizon even when another
 partition has a permanent refusal. `BridgeSyncError` retains stream

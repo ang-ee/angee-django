@@ -310,7 +310,9 @@ class OAuthClientProtocol:
         try:
             session.revoke_token(revoke_endpoint, token=token, token_type_hint="access_token")
         except RequestNotSentError as exc:
-            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 503) from exc
+            # One a later attempt can send is retried; one that cannot be built is best-effort too.
+            if exc.transient:
+                raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 503) from exc
         except OAuthError, httpx2.HTTPError:
             # Revocation is best-effort: a provider that rejects or omits the endpoint
             # does not block disconnect.
@@ -654,7 +656,7 @@ class _TokenRequest:
         if isinstance(exc, httpx2.HTTPStatusError):
             return self._refused(exc.response.status_code, body=_response_body(exc.response))
         if isinstance(exc, RequestNotSentError):
-            return OAuthFlowError(TOKEN_EXCHANGE_FAILED, 503)
+            return OAuthFlowError(TOKEN_EXCHANGE_FAILED, 503 if exc.transient else 400)
         if isinstance(exc, AddressNotAllowedError):
             return self._refused(400, body={"error": ENDPOINT_NOT_ALLOWED})
         if isinstance(exc, httpx2.HTTPError | ValueError):

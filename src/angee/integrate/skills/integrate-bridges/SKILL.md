@@ -45,7 +45,7 @@ source addon contributes one adapter class, its registry key and its tests. Refe
   (`src/angee/integrate/models.py`) own token material and refresh; `HttpClientMixin`/`angee.integrate.http` own outbound HTTP with the SSRF pin,
   and `HttpClient.request_model` is a vendor's typed JSON request.
 - `IntegrationError(public_message, transient=, retry_after=)` (`src/angee/integrate/errors.py`) is the only
-  exception an operator sees; `RequestNotSentError` marks safe retries.
+  exception an operator sees; `RequestNotSentError` marks a request not sent, safe to retry when `transient`.
 - `LiveSession` (`src/angee/integrate/session.py`) owns the wake loop, QR reporting and cooperative stop;
   `session_store_path` (`src/angee/integrate/live.py`) owns the store convention.
 - The stack rows for the protocol client ([Backend](../../../../../docs/stack.md#backend): the IMAPClient, neonize and telethon rows); parse with

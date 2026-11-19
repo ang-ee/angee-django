@@ -21,7 +21,7 @@ from angee.base.implementations import impl_choices
 from angee.base.testing.queries import statement_startswith
 from angee.integrate import connect
 from angee.integrate.credentials import CredentialKind
-from angee.integrate.errors import IntegrationError, RequestNotSentError
+from angee.integrate.errors import IntegrationError, RequestNotBuiltError, RequestNotSentError
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol, with_query
 from angee.integrate.oauth.errors import OAuthFlowError
@@ -283,6 +283,53 @@ def test_transport_failure_during_refresh_preserves_consent_health(forced, not_s
     assert credential.reveal() == {"access_token": "fake", "refresh_token": "fake-refresh"}
     assert credential.status == "active" and credential.refreshable
     assert not credential.is_reconnect_required
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_token_request_the_library_will_not_build_is_a_permanent_refusal():
+    """Not sent, but the same request fails the same way: the refusal reads the failure's own transience."""
+
+    with system_context(reason="test unbuildable refresh"):
+        credential = make_integration(
+            "unbuildable-refresh", kind="oauth", material={"access_token": "fake", "refresh_token": "fake-refresh"},
+        ).credential
+        credential.oauth_client.token_endpoint = "https://provider.example/token"
+        credential.oauth_client.save(update_fields=["token_endpoint"])
+
+    def refuse(request):
+        raise RequestNotBuiltError()
+
+    with (
+        mock_transport(refuse),
+        system_context(reason="test unbuildable refresh"),
+        pytest.raises(OAuthFlowError) as raised,
+    ):
+        credential.refresh_now()
+    error = raised.value
+    assert (error.code, error.http_status, error.transient) == ("token_exchange_failed", 400, False)
+
+
+@pytest.mark.parametrize(("failure", "raised"), [
+    pytest.param(RequestNotSentError(), True, id="a-revocation-not-sent-is-retried"),
+    pytest.param(RequestNotBuiltError(), False, id="one-that-cannot-be-built-is-best-effort"),
+])
+def test_revocation_not_sent_is_retried_only_when_a_later_attempt_can_send_it(failure, raised):
+    protocol = OAuthClientProtocol(OAuthClient(
+        slug="provider", display_name="Provider", client_id="client-id",
+        token_endpoint="https://provider.example/token", revoke_endpoint="https://provider.example/revoke",
+    ))
+
+    def refuse(request):
+        raise failure
+
+    with mock_transport(refuse) as requests:
+        if raised:
+            with pytest.raises(OAuthFlowError) as refused:
+                protocol.revoke_token("access-token")
+            assert (refused.value.http_status, refused.value.transient) == (503, True)
+        else:
+            protocol.revoke_token("access-token")
+    assert len(requests) == 1
 
 
 def test_provider_choices_are_contributed_through_the_native_impl_registry():
