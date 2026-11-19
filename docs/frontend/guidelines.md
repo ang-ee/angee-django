@@ -650,10 +650,12 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   [list status message](../../packages/storybook/src/stories/ListStatusMessage.stories.tsx) (story id `fragments-liststatusmessage--default`).
 - **Status → tone is owned once** by
   [`statusTone`](../../packages/ui/src/widgets/status-tones.ts). Framework defaults
-  contain only neutral vocabulary. Addons contribute product values through
-  `defineAddon({ statusTones })`; composition normalizes keys and rejects duplicate
-  claims, including claims on framework defaults. Every React surface resolves
-  tones with [`useStatusTone()`](../../packages/ui/src/widgets/use-status-tone.ts),
+  contain only neutral vocabulary. Addons declare global status tones in the
+  manifest's `statusTones` and field-scoped tones in its `vocabulary` contributions
+  (`resources.<model>.fields.<field>.tones`); composition normalizes global status
+  keys and rejects duplicate claims, including claims on framework defaults.
+  Every React surface resolves tones with
+  [`useStatusTone()`](../../packages/ui/src/widgets/use-status-tone.ts),
   which reads the current app's runtime; custom surfaces use the same hook as
   `statusBadge` and form headers.
   The pure `statusTone` resolver remains for non-React transforms with explicit

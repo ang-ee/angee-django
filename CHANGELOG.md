@@ -10,6 +10,8 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- The UX guard accepts manifest `vocabulary` field tones by structure while rejecting local tone maps and switches.
+
 - Integrate compares synchronized JSON as JSON values (`json_equal` in
   `angee.base.serialization`), never with Python's `==`. A move from `[False]`
   to `[0]` was classified unchanged, because `False == 0` in Python and
