@@ -24,9 +24,9 @@ live in code docstrings.
   `write & person->active_member`, parties schema revision 22), read on the
   party whatever manager is asked; no agent tool offers it. A set holding an
   account's own person, two kinds, a trashed or merged record or two records a
-  person kept apart refuses with its reason; a set of more than ten records or
-  one holding a record the person may not read is refused before anything is
-  read further or locked; a set merges exactly as confirmed, judged again under
+  person kept apart refuses with its reason; a set of more than ten records, one
+  holding a record the person may not read, or one the person may not merge in a
+  batch is refused before anything is read further or locked; a set merges exactly as confirmed, judged again under
   one lock pass of its members, their same-person partners and their handles; the oldest record survives and the others fold into it in
   key order; a lock conflict (deadlock, lock not granted) is that set's
   `stopped`, any other database error stops the call. A batch records no value

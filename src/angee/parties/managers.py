@@ -2287,9 +2287,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     ) -> list[DuplicateSetOutcome]:
         """Merge each confirmed set of records into its oldest member as ``actor``'s merge; return every outcome.
 
-        A set merges exactly as confirmed. Its size and the actor's read of every
-        member are checked first, for every set in one read (:meth:`_admission`),
-        so a set the actor may not name takes no lock and is not read further.
+        A set merges exactly as confirmed. Its size, the actor's read of every
+        member and the actor's batch permission (:meth:`batch_mergeable`) are
+        checked first, for every set in one batch of reads (:meth:`_admission`), so
+        a set the actor may not merge takes no lock and is not read further.
         Then, in its own transaction, its members, their same-person partners and
         every Handle any of them holds or names are locked in one pass
         (``Party.lock_merge_records``), the set is judged again under those locks
@@ -2312,9 +2313,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         party_model = apps.get_model("parties", "Party")
         confirmed = self._confirmed_sets(sets)
         readable = self._readable_members(actor, confirmed)
+        permitted = self.batch_mergeable(actor, sorted({row.pk for row in readable.values()}))
         outcomes = []
         for ids in confirmed:
-            if refusal := self._admission(ids, readable):
+            if refusal := self._admission(ids, readable, permitted):
                 outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.REFUSED, reason=refusal))
                 continue
             try:
@@ -2354,13 +2356,19 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         named = {pk for ids in confirmed if len(ids) <= self.SET_MEMBERS for pk in ids}
         return instances_from_public_ids(party_model, named, queryset=party_model._default_manager.with_actor(actor))
 
-    def _admission(self, ids: Sequence[str], readable: Mapping[str, Any]) -> str:
-        """Why a set is refused before anything else is read of it, or ``""``: its size, then the actor's read."""
+    def _admission(self, ids: Sequence[str], readable: Mapping[str, Any], permitted: Collection[Any]) -> str:
+        """Why a set is refused before it is locked or read further, or ``""``.
+
+        Its size, the actor's read of every member, then the actor's batch
+        permission on every member (``permitted``, from :meth:`batch_mergeable`).
+        """
 
         if not 2 <= len(ids) <= self.SET_MEMBERS:
             return f"Choose two to {self.SET_MEMBERS} records to merge as one."
         if any(pk not in readable for pk in ids):
             return "A record is gone or you may not read it."
+        if any(readable[pk].pk not in permitted for pk in ids):
+            return "Only an active person who may change every one of these records merges them in a batch."
         return ""
 
     def _confirmed_sets(self, sets: Sequence[Sequence[str]]) -> list[tuple[str, ...]]:
@@ -2398,7 +2406,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         for ids in confirmed:
             members = sorted((found[pk] for pk in ids if pk in found), key=_age)
             keys = [row.pk for row in members]
-            if admission := self._admission(ids, found):
+            if admission := self._admission(ids, found, permitted):
                 reason = admission
             elif any(row.is_trashed or row.merged_into_id is not None for row in members):
                 reason = "A record is trashed or already merged into another."
@@ -2406,8 +2414,6 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 reason = "Only people, or only organizations, merge together."
             elif any(people.get(pk) is not None for pk in keys):
                 reason = "An account's own person is merged by hand, on the compare page."
-            elif not set(keys) <= permitted:
-                reason = "Only an active person who may change every one of these records merges them in a batch."
             elif any((left, right) in kept_apart for left, right in combinations(sorted(keys), 2)):
                 reason = "A person kept two of these records apart."
             else:
