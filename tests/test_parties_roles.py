@@ -1,8 +1,12 @@
 """Parties' roles: a contact reader, manager and admin hold on every party what a per-record grant holds on one.
 
-The decision table runs every actor against one linked person, one person nobody
-shared, the person's own handle, the directory and the people vault. A
-directory's contact readers keep exactly what they read before roles existed.
+The decision table runs every kind of actor (each role, a manager through a group,
+the owner, a per-record editor, a directory's contact reader, a platform admin and
+nobody) against every row the roles reach: a person and their party, an
+organization, a handle, an address, a relationship, a folder, a circle and its
+membership, the people vault and a page in it, a record task about the party and
+the directory. A directory's contact readers keep exactly what they read before
+roles existed.
 """
 
 from __future__ import annotations
@@ -13,12 +17,14 @@ from typing import Any
 import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
-from rebac import PermissionDenied, actor_context, system_context
+from rebac import PermissionDenied, SubjectRef, actor_context, system_context, to_object_ref
 from rebac.roles import grant as grant_role
 
-from angee.messaging.testing.models import Circle, CircleMember, Handle, Party, Person
+from angee.messaging.testing.models import Circle, CircleMember, Directory, Folder, Handle, Party, Person
+from angee.projects.testing.models import Task
 from angee.resources.testing.models import Resource
 from tests.conftest import MarkdownPage, Page, RecordBinding, Vault
+from tests.iam_models import Group
 from tests.test_parties_directory_readers import _allowed, _grant, _scoped
 from tests.test_parties_directory_readers import contacts as contacts  # noqa: F401 -- the shared contacts world
 
@@ -27,74 +33,141 @@ ROLES = ("contact_reader", "contact_manager", "contact_admin")
 
 @pytest.fixture
 def world(contacts: SimpleNamespace) -> SimpleNamespace:
-    """The contacts world, a holder of each role, a per-record editor, a user with no role and the people vault."""
+    """The contacts world, a holder of each role (and a manager through a group), a per-record editor, a user
+    with no role, the people vault, an address-book folder, a circle with a membership and a record task."""
 
     users = get_user_model()
     c = contacts
     holders = {role: users.objects.create_user(username=f"role-{role}") for role in ROLES}
     editor = users.objects.create_user(username="role-per-record-editor")
     nobody = users.objects.create_user(username="role-nobody")
+    group_manager = users.objects.create_user(username="role-group-manager")
     with system_context(reason="tests.parties_roles.seed"):
         for role, user in holders.items():
             grant_role(actor=user, role=f"parties/role:{role}")
         _grant(c.person, "editor", editor)
         _grant(c.person_party, "editor", editor)
+        group = Group.objects.create(name="Contact managers")
+        group.add_member(str(SubjectRef(to_object_ref(group_manager))))
+        grant_role(actor=SubjectRef.of("auth/group", str(group.pk), "member"), role="parties/role:contact_manager")
+        book = Folder.objects.create(name="Book", owner=c.owner, created_by=c.owner)
+        circle = Circle.objects.create(name="Close", owner=c.owner, created_by=c.owner)
+        membership = CircleMember.objects.create(circle=circle, party=c.person_party, created_by=c.owner)
+        task = Task.objects.create(subject=c.person_party, title="About Ada", owner=c.outsider)
     Resource.objects.load_addons((apps.get_app_config("knowledge"),), tiers=[Resource.Tier.INSTALL])
     with system_context(reason="tests.parties_roles.vault"):
         vault = Vault.objects.for_resource(Vault.PEOPLE)
         folder = RecordBinding.objects.party_folder(c.unlinked, vault=vault, title="Grace Unlinked (folder)")
         note = Page.objects.create_in(vault, parent=folder, title="Grace Unlinked: notes", body="Likes jazz.")
     return SimpleNamespace(
-        **vars(c), holders=holders, editor=editor, nobody=nobody, vault=vault, folder=folder, note=note
+        **vars(c), holders=holders, editor=editor, nobody=nobody, group_manager=group_manager, vault=vault,
+        folder=folder, note=note, book=book, circle=circle, membership=membership, task=task,
     )
 
 
 def _actors(w: SimpleNamespace) -> dict[str, Any]:
     return {
-        "no role": w.nobody,
-        "contact reader": w.holders["contact_reader"],
-        "contact manager": w.holders["contact_manager"],
-        "contact admin": w.holders["contact_admin"],
+        "nobody": w.nobody,
+        "reader": w.holders["contact_reader"],
+        "manager": w.holders["contact_manager"],
+        "admin": w.holders["contact_admin"],
+        "group manager": w.group_manager,
         "owner": w.owner,
-        "per-record editor": w.editor,
-        "directory contact reader": w.reader,
-        "platform admin": w.admin,
+        "editor": w.editor,
+        "dir reader": w.reader,
+        "platform": w.admin,
     }
 
 
-# Each row: what the actor holds on the linked person, in this column order.
-COLUMNS = ("read", "read_private", "write", "trash", "transfer", "vault_read", "vault_write")
-TABLE = {
-    "no role": (False, False, False, False, False, False, False),
-    # Choice 1 (yes): a contact reader reads the private fields, as a per-record reader does.
-    "contact reader": (True, True, False, False, False, True, False),
-    # A merge needs write on both parties (Party.MERGED_PERMISSION), so a contact manager merges; trash is
-    # the row's ``delete`` and stays with the contact admin (see the report on choice 2).
-    "contact manager": (True, True, True, False, False, True, True),
-    "contact admin": (True, True, True, True, True, True, True),
-    "owner": (True, True, True, True, True, False, False),
-    "per-record editor": (True, True, True, False, False, False, False),
-    "directory contact reader": (True, False, False, False, False, False, False),
-    "platform admin": (True, True, True, True, True, True, True),
+def _rows(w: SimpleNamespace) -> dict[str, Any]:
+    return {
+        "person": w.person, "party": w.person_party, "organization": w.organization, "handle": w.own_handle,
+        "address": w.address, "relationship": w.edge, "folder": w.book, "circle": w.circle,
+        "circle member": w.membership, "vault": w.vault, "vault page": w.note, "task": w.task,
+        "directory": w.directory,
+    }
+
+
+# Who holds each action on each row, across every kind of actor: the roles, a member of a group the manager
+# role is granted to, the person's owner, a per-record editor of the person, a directory's contact reader and a
+# platform admin. Every actor not listed is denied.
+EVERY = ("reader", "manager", "admin", "group manager", "owner", "editor", "dir reader", "platform")
+ROLE_HOLDERS = ("reader", "manager", "admin", "group manager")
+WRITERS = ("manager", "admin", "group manager", "owner", "platform")
+ADMINS = ("admin", "owner", "platform")
+MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
+    "person": {
+        "read": EVERY,
+        "read_private": (*ROLE_HOLDERS, "owner", "editor", "platform"),
+        "read__notes": (*ROLE_HOLDERS, "owner", "editor", "platform"),
+        "read__birthday": (*ROLE_HOLDERS, "owner", "editor", "platform"),
+        "write": (*WRITERS, "editor"),
+        "delete": ADMINS,
+        # Adoption runs through the roles' own members, never a platform admin's reach of every role.
+        "adopt": ("manager", "admin", "group manager", "owner", "editor"),
+    },
+    "party": {
+        "read": EVERY,
+        "read_private": (*ROLE_HOLDERS, "owner", "editor", "platform"),
+        "read__notes": (*ROLE_HOLDERS, "owner", "editor", "platform"),
+        "write": (*WRITERS, "editor"),
+        "delete": ADMINS,
+        "transfer": ADMINS,
+    },
+    "organization": {
+        "read": (*ROLE_HOLDERS, "owner", "dir reader", "platform"),
+        "read_private": (*ROLE_HOLDERS, "owner", "platform"),
+        "read__notes": (*ROLE_HOLDERS, "owner", "platform"),
+        "write": WRITERS,
+        "delete": ADMINS,
+    },
+    "handle": {"read": (*ROLE_HOLDERS, "owner", "platform"), "write": WRITERS, "delete": ADMINS},
+    "address": {"read": (*ROLE_HOLDERS, "owner", "dir reader", "platform"), "write": WRITERS, "delete": ADMINS},
+    "relationship": {"read": (*ROLE_HOLDERS, "owner", "dir reader", "platform"), "write": WRITERS, "delete": ADMINS},
+    "folder": {"read": (*ROLE_HOLDERS, "owner", "platform"), "write": WRITERS, "delete": ADMINS, "transfer": ADMINS},
+    "circle": {"read": (*ROLE_HOLDERS, "owner", "platform"), "write": WRITERS, "delete": ADMINS, "transfer": ADMINS},
+    "circle member": {"read": (*ROLE_HOLDERS, "owner", "platform"), "write": WRITERS, "delete": ADMINS},
+    "vault": {
+        "read": (*ROLE_HOLDERS, "platform"),
+        "write": ("manager", "admin", "group manager", "platform"),
+        "delete": ("admin", "platform"),
+        "share": ("platform",),
+        "transfer": ("platform",),
+    },
+    # A person's note in the people vault, written by the system: the vault lends it.
+    "vault page": {
+        "read": (*ROLE_HOLDERS, "platform"),
+        "write": ("manager", "admin", "group manager", "platform"),
+        "delete": ("admin", "platform"),
+    },
+    # A record task about the party (its own owner is someone else): the party lends what a per-record grant does.
+    "task": {
+        "read": (*ROLE_HOLDERS, "owner", "editor", "platform"),
+        "write": (*WRITERS, "editor"),
+        "share": (*WRITERS, "editor"),
+        "delete": (*WRITERS, "editor"),
+        "transfer": (*WRITERS, "editor"),
+    },
+    # A contact admin reads every directory and shares who reads its contacts; changing and removing one stay with
+    # its integration's writers and platform admins, creating the row with platform admins.
+    "directory": {
+        "read": ("admin", "owner", "platform"),
+        "share": ("admin", "owner", "platform"),
+        "write": ("owner", "platform"),
+        "delete": ("owner", "platform"),
+        "create": ("platform",),
+    },
 }
 
 
-def _holds(w: SimpleNamespace, actor: Any) -> tuple[bool, ...]:
-    return (
-        _allowed(w.person, actor, "read"),
-        _allowed(w.person, actor, "read_private"),
-        _allowed(w.person, actor, "write"),
-        _allowed(w.person_party, actor, "delete"),
-        _allowed(w.person_party, actor, "transfer"),
-        _allowed(w.vault, actor, "read"),
-        _allowed(w.vault, actor, "write"),
-    )
-
-
 def test_the_decision_table_per_actor(world: SimpleNamespace) -> None:
-    w = world
-    for label, actor in _actors(w).items():
-        assert dict(zip(COLUMNS, _holds(w, actor), strict=True)) == dict(zip(COLUMNS, TABLE[label], strict=True)), label
+    """The whole decision table: each listed actor allowed, every other actor denied."""
+
+    actors, rows = _actors(world), _rows(world)
+    for name, actions in MATRIX.items():
+        for action, allowed in actions.items():
+            holders = sorted(label for label, actor in actors.items() if _allowed(rows[name], actor, action))
+            assert holders == sorted(allowed), (name, action, holders)
 
 
 def test_a_role_holder_sees_a_person_nobody_shared_with_them_and_their_pages(world: SimpleNamespace) -> None:
@@ -115,20 +188,11 @@ def test_a_role_holder_sees_a_person_nobody_shared_with_them_and_their_pages(wor
         MarkdownPage.objects.write_body(w.note, "Likes nothing.")
 
 
-def test_roles_reach_handles_addresses_relationships_and_the_review_verbs(world: SimpleNamespace) -> None:
-    """A reader reads, a manager writes (confirms, corrects, merges), an admin also deletes; nobody else."""
+def test_a_manager_keeps_people_separate_confirms_and_merges_and_a_reader_cannot(world: SimpleNamespace) -> None:
+    """The review verbs ride the party's write."""
 
     w = world
-    reader, manager, admin = (w.holders[role] for role in ROLES)
-    for row in (w.own_handle, w.address, w.edge):
-        assert _allowed(row, reader) and not _allowed(row, reader, "write"), type(row).__name__
-        assert _allowed(row, manager, "write") and not _allowed(row, manager, "delete"), type(row).__name__
-        assert _allowed(row, admin, "delete"), type(row).__name__
-        assert not _allowed(row, w.nobody), type(row).__name__
-    assert _allowed(w.person, manager, "adopt") and not _allowed(w.person, reader, "adopt")
-    # Adoption never runs through the platform admin's reach of every role.
-    assert not _allowed(w.person, w.admin, "adopt")
-
+    reader, manager = w.holders["contact_reader"], w.holders["contact_manager"]
     with system_context(reason="tests.parties_roles.merge_seed"):
         survivor = Person.objects.create(display_name="Ada Example", created_by=w.owner)
         merged = Person.objects.create(display_name="Ada E.", created_by=w.owner)
@@ -154,28 +218,39 @@ def test_a_partyless_handle_is_out_of_every_roles_reach(world: SimpleNamespace) 
     w = world
     with system_context(reason="tests.parties_roles.partyless"):
         handle = Handle.objects.create(platform="email", value="sender@example.com", created_by=w.outsider)
-        member = CircleMember.objects.create(circle=Circle.objects.create(name="Close"), party=w.unlinked)
     assert handle.party_id is None
     for role, actor in w.holders.items():
         for action in ("read", "write", "delete"):
             assert not _allowed(handle, actor, action), (role, action)
         assert not Handle.objects.with_actor(actor).filter(party__isnull=True).exists(), role
     assert _allowed(handle, w.outsider)
-    # A circle membership names its member: the roles reach it through that party.
-    assert _allowed(member, w.holders["contact_reader"]) and not _allowed(member, w.holders["contact_reader"], "write")
-    assert _allowed(member, w.holders["contact_manager"], "write")
-    assert _allowed(member, w.holders["contact_admin"], "delete")
 
 
-def test_a_contact_admin_reads_directories_and_shares_their_contacts_but_does_not_connect_or_change_them(
-    world: SimpleNamespace,
-) -> None:
+def test_a_contact_admin_grants_and_revokes_a_directory_reader_and_a_manager_cannot(world: SimpleNamespace) -> None:
+    """The directory's share, not its write: a contact admin manages who reads its contacts; a manager does not."""
+
     w = world
-    admin = w.holders["contact_admin"]
-    assert _allowed(w.directory, admin, "read") and _allowed(w.directory, admin, "share")
-    for action in ("write", "delete", "create"):
-        assert not _allowed(w.directory, admin, action), action
-    for role in ("contact_reader", "contact_manager"):
-        assert not _allowed(w.directory, w.holders[role], "read"), role
-    # The integration's own owner and the platform admin still share it.
-    assert _allowed(w.directory, w.owner, "share") and _allowed(w.directory, w.admin, "share")
+    admin, manager = w.holders["contact_admin"], w.holders["contact_manager"]
+    grantee = get_user_model().objects.create_user(username="role-directory-grantee")
+    with actor_context(admin):
+        Directory.objects.with_actor(admin).get(pk=w.directory.pk).grant_record_access("contact_reader", grantee)
+    assert _allowed(w.person, grantee) and not _allowed(w.person, grantee, "read_private")
+    with actor_context(admin):
+        Directory.objects.with_actor(admin).get(pk=w.directory.pk).revoke_record_access("contact_reader", grantee)
+    assert not _allowed(w.person, grantee)
+    with actor_context(manager), pytest.raises(PermissionDenied):
+        Directory.objects.sudo(reason="tests.parties_roles.load").get(pk=w.directory.pk).with_actor(
+            manager
+        ).grant_record_access("contact_reader", grantee)
+
+
+def test_a_merge_is_refused_to_whoever_does_not_write_both_parties(world: SimpleNamespace) -> None:
+    w = world
+    with system_context(reason="tests.parties_roles.merge_refusals"):
+        survivor = Person.objects.create(display_name="Ada Example", created_by=w.owner)
+        merged = Person.objects.create(display_name="Ada E.", created_by=w.owner)
+    for actor in (w.holders["contact_reader"], w.reader, w.nobody):
+        with actor_context(actor), pytest.raises((PermissionDenied, Person.DoesNotExist, Party.DoesNotExist)):
+            Party.objects.with_actor(actor).get(pk=survivor.pk).merge(records=[merged.public_id])
+    with system_context(reason="tests.parties_roles.merge_refusals.readback"):
+        assert Party._base_manager.get(pk=merged.pk).merged_into_id is None
