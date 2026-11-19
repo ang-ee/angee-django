@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 36
+// @rebac_schema_revision: 37
 
 // Parties, folders and circles are grant roots: each is owned through its
 // transferable `owner` column (OwnerMixin), which an insert defaults to the row's
@@ -60,11 +60,23 @@ definition parties/party {
     relation contact_reader: parties/role // rebac:const=contact_reader
     relation contact_manager: parties/role // rebac:const=contact_manager
     relation contact_admin: parties/role // rebac:const=contact_admin
+    // The person this party is, when that person is an account's own (a colleague's): `role_withheld` reads it.
+    relation account_person: parties/person // rebac:field={"path":"person","filters":{"person__user__isnull":false}}
 
     // What the roles hold on every party; a person and an organization read these through `party`.
-    permission role_admin = contact_admin->effective_member
-    permission role_manage = contact_manager->effective_member + role_admin
-    permission role_read = contact_reader->effective_member + role_manage
+    // `role_identity` is every party's identity (its `read`); the arms beyond it leave out the parties
+    // `role_withheld` names.
+    permission role_admin_any = contact_admin->effective_member
+    permission role_manage_any = contact_manager->effective_member + role_admin_any
+    permission role_identity = contact_reader->effective_member + role_manage_any
+    // Pending ruling: an account's own person is the user's, which adoption lends no directory either, so
+    // the roles read their identity and no more: no private field, handle, address, relationship, circle
+    // membership or record task of theirs, and no write, merge, share, delete or transfer. `nil` here lets
+    // the roles hold on an account's person what they hold on any other.
+    permission role_withheld = account_person->free
+    permission role_admin = role_admin_any - role_withheld
+    permission role_manage = role_manage_any - role_withheld
+    permission role_read = role_identity - role_withheld
     // Choice 1: a contact reader reads the private fields, as a per-record reader does (`role_read`);
     // `role_manage` here keeps a contact reader to identity, as `identity_reader`.
     permission role_private = role_read
@@ -87,7 +99,7 @@ definition parties/party {
     permission create = authenticated
     // Whoever reads the contacts of a directory linking this party reads its identity.
     permission contact_read = linking_directory->contact_read
-    permission read_granted = owner + editor + reader + identity_reader + contact_read + statement_source + role_read + admin->member
+    permission read_granted = owner + editor + reader + identity_reader + contact_read + statement_source + role_identity + admin->member
     permission read = read_granted
     // What a party lends the record tasks about it: its direct holders only, so
     // task access never recurses through a thread the party follows (rebac.E016).
@@ -125,9 +137,12 @@ definition parties/person {
     relation statement_role: provenance/role // rebac:const=parties_statement_source
     permission statement_source = directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin
+    // Held by everyone: it gates nothing alone. Arrow-only, through `parties/party#account_person`, so it
+    // names everyone exactly on an account's own person (projects/task's `unbound->free`).
+    permission free = authenticated
 
     permission create = authenticated
-    permission read_granted = owner + editor + reader + party->identity_reader + party->contact_read + statement_source + party->role_read + admin->member
+    permission read_granted = owner + editor + reader + party->identity_reader + party->contact_read + statement_source + party->role_identity + admin->member
     permission read = read_granted
     permission read_private = owner + editor + reader + party->role_private + admin->member
     // Field gates are per resource definition, including inherited columns. The
@@ -159,7 +174,7 @@ definition parties/organization {
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read_granted = owner + editor + reader + party->identity_reader + party->contact_read + statement_source + party->role_read + admin->member
+    permission read_granted = owner + editor + reader + party->identity_reader + party->contact_read + statement_source + party->role_identity + admin->member
     permission read = read_granted
     permission read_private = owner + editor + reader + party->role_private + admin->member
     permission read__notes = read_private

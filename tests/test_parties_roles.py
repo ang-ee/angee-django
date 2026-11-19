@@ -34,7 +34,8 @@ ROLES = ("contact_reader", "contact_manager", "contact_admin")
 @pytest.fixture
 def world(contacts: SimpleNamespace) -> SimpleNamespace:
     """The contacts world, a holder of each role (and a manager through a group), a per-record editor, a user
-    with no role, the people vault, an address-book folder, a circle with a membership and a record task."""
+    with no role, the people vault, an address-book folder, a circle with a membership, a record task and a
+    colleague's own person with a handle and a task about them."""
 
     users = get_user_model()
     c = contacts
@@ -54,6 +55,15 @@ def world(contacts: SimpleNamespace) -> SimpleNamespace:
         circle = Circle.objects.create(name="Close", owner=c.owner, created_by=c.owner)
         membership = CircleMember.objects.create(circle=circle, party=c.person_party, created_by=c.owner)
         task = Task.objects.create(subject=c.person_party, title="About Ada", owner=c.outsider)
+        # A colleague's own person, which the contacts' owner keeps, with a handle the owner asserted.
+        account = Person.objects.create(
+            display_name="Lin Colleague", created_by=c.owner, user=users.objects.create_user(username="role-colleague")
+        )
+        account_handle = Handle.objects.create(platform="phone", value="+15550199", created_by=c.owner)
+        Party.objects.assert_handle(Party.objects.get(pk=account.pk), account_handle, asserted_by=c.owner)
+        account_task = Task.objects.create(
+            subject=Party.objects.get(pk=account.pk), title="About Lin", owner=c.outsider
+        )
     Resource.objects.load_addons((apps.get_app_config("knowledge"),), tiers=[Resource.Tier.INSTALL])
     with system_context(reason="tests.parties_roles.vault"):
         vault = Vault.objects.for_resource(Vault.PEOPLE)
@@ -61,7 +71,8 @@ def world(contacts: SimpleNamespace) -> SimpleNamespace:
         note = Page.objects.create_in(vault, parent=folder, title="Grace Unlinked: notes", body="Likes jazz.")
     return SimpleNamespace(
         **vars(c), holders=holders, editor=editor, nobody=nobody, group_manager=group_manager, vault=vault,
-        folder=folder, note=note, book=book, circle=circle, membership=membership, task=task,
+        folder=folder, note=note, book=book, circle=circle, membership=membership, task=task, account=account,
+        account_handle=account_handle, account_task=account_task,
     )
 
 
@@ -84,7 +95,9 @@ def _rows(w: SimpleNamespace) -> dict[str, Any]:
         "person": w.person, "party": w.person_party, "organization": w.organization, "handle": w.own_handle,
         "address": w.address, "relationship": w.edge, "folder": w.book, "circle": w.circle,
         "circle member": w.membership, "vault": w.vault, "vault page": w.note, "task": w.task,
-        "directory": w.directory,
+        "directory": w.directory, "account person": w.account,
+        "account party": Party.objects.sudo(reason="tests.parties_roles.rows").get(pk=w.account.pk),
+        "account handle": w.account_handle, "account task": w.account_task, "account user": w.account.user,
     }
 
 
@@ -155,6 +168,29 @@ MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
         "delete": ("owner", "editor", "platform"),
         "transfer": ("owner", "editor", "platform"),
     },
+    # A colleague's own person (the contacts' owner keeps it): the roles read their identity and no more
+    # (pending ruling, parties/party#role_withheld).
+    "account person": {
+        "read": (*ROLE_HOLDERS, "owner", "platform"),
+        "read_private": ("owner", "platform"),
+        "read__birthday": ("owner", "platform"),
+        "write": ("owner", "platform"),
+        "merge_away": ("owner", "platform"),
+        "delete": ("owner", "platform"),
+    },
+    "account party": {
+        "read": (*ROLE_HOLDERS, "owner", "platform"),
+        "read_private": ("owner", "platform"),
+        "write": ("owner", "platform"),
+        "merge_away": ("owner", "platform"),
+        "share": ("owner", "platform"),
+        "delete": ("owner", "platform"),
+        "transfer": ("owner", "platform"),
+    },
+    "account handle": {"read": ("owner", "platform"), "write": ("owner", "platform"), "delete": ("owner", "platform")},
+    "account task": {"read": ("owner", "platform"), "write": ("owner", "platform")},
+    # Their identity is what pickers show: every role holder still finds the colleague.
+    "account user": {"colleague": (*ROLE_HOLDERS, "owner", "platform")},
     # A contact admin reads every directory and shares who reads its contacts; changing and removing one stay with
     # its integration's writers and platform admins, creating the row with platform admins.
     "directory": {

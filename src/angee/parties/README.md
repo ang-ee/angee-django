@@ -485,8 +485,15 @@ manager and admin the tasks' write). Parties grants
 the roles to nobody: a deployment grants membership in the Permissions Hub, which
 lists them as Contact Reader, Contact Manager and Contact Admin, or with a
 `kind = "grants"` resource row (`{resource: "parties/role:contact_manager",
-relation: member, subject: <a user's xref>}`). A directory's contact readers keep
-exactly what they read without the roles.
+relation: member, subject: <a user's xref>}`). Of an account's own person (a
+colleague's, `Person.user` set) the roles read the identity and no more:
+`parties/party#role_withheld` subtracts that person from every role arm beyond
+`role_identity`, so no role reads their private fields, handles, addresses,
+relationships, circle memberships or record tasks, or writes, merges, shares,
+deletes or transfers them; pickers still show them (pending the architect's
+ruling: the person is the user's own, which adoption lends no directory either;
+`nil` there gives an account's person the same reach as any other). A
+directory's contact readers keep exactly what they read without the roles.
 Adding an address or relationship to a party takes write on that party
 (`create` on `parties/address` and `parties/relationship` in [permissions.zed](permissions.zed)):
 the row changes the party's projection, which a two-way directory writes to its
