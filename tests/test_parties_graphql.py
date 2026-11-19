@@ -8,6 +8,8 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.base.identity import public_subject_ref
@@ -772,4 +774,53 @@ def test_a_person_lists_previews_and_merges_a_certain_pair_through_the_schema(db
     assert {row["source_kind"] for row in preview["members"][1]["statements"]} == {"RULE"}
     assert _data(execute_schema(console, _MERGE, sets, user=owner))["merge_duplicates"] == [
         {"members": [older.sqid, newer.sqid], "outcome": "MERGED", "reason": "", "survivor": {"id": older.sqid}},
+    ]
+
+
+# What the batch merge dialog selects of each set (the web fragment's ``DuplicateSetPreviews``).
+_DIALOG = """query DuplicateSetPreviews($sets: [[ID!]!]!) {
+  duplicate_set_previews(sets: $sets) {
+    outcome
+    reason
+    survivor { id }
+    members {
+      id display_name concrete_kind created_at first_met_note
+      statements { id source_kind handle { id platform value } }
+    }
+    disagreements { field values shown }
+  }
+}"""
+
+
+def test_the_dialog_read_costs_the_same_for_one_set_as_for_many_through_the_schema(db: None) -> None:
+    """The members reach the schema outside the optimizer: their kind and their statements' handles are batched."""
+
+    del db
+    owner = User.objects.create_user(username="dialog-read-owner")
+    sets = []
+    with system_context(reason="test.parties.dialog_read"):
+        for index in range(4):
+            handle = Handle._base_manager.create(platform="email", value=f"zoe{index}@example.com", created_by=owner)
+            older = Person._base_manager.create(display_name=f"Zoë Example {index}", created_by=owner)
+            messaging_models.Party.objects.assert_handle(older, handle, asserted_by=owner)
+            newer = Person._base_manager.create(display_name=f"Zoe Example {index}", created_by=owner)
+            messaging_models.Party.objects.propose_claimed_handle_as_system(
+                newer, handle, evidence=handle, reason="tests.claim",
+            )
+            sets.append([older.sqid, newer.sqid])
+    console = _schema("console")
+
+    def read(count: int) -> tuple[int, Any]:
+        with CaptureQueriesContext(connection) as queries:
+            data = _data(execute_schema(console, _DIALOG, {"sets": sets[:count]}, user=owner))
+        return len(queries.captured_queries), data["duplicate_set_previews"]
+
+    one, _previews = read(1)
+    four, previews = read(4)
+
+    assert one == four
+    first = previews[0]
+    assert [member["concrete_kind"] for member in first["members"]] == ["PERSON", "PERSON"]
+    assert [{row["handle"]["value"] for row in member["statements"]} for member in first["members"]] == [
+        {"zoe0@example.com"}, {"zoe0@example.com"},
     ]
