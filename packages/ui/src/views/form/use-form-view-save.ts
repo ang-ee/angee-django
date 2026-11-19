@@ -1,7 +1,7 @@
 import * as React from "react";
 import {
   fieldUpdatable,
-  allowsRecordPermission,
+  holdsPermission,
   useCanonicalResourceModelLabels,
   useResourceInvalidates,
   refineResourceName,
@@ -380,7 +380,11 @@ export function useFormViewSave({
   const formTakesEdits = React.useMemo(
     () => !(
       readOnly ||
-      (!isCreate && record != null && !allowsRecordPermission(record, "write", modelMetadata)) ||
+      // A form is read-only for a record that projects its permissions without
+      // `write`, whether or not the model's metadata declares the field.
+      (!isCreate && record != null
+        && (Array.isArray(record.permissions) || Boolean(modelMetadata?.fields.permissions))
+        && !holdsPermission(record, "write")) ||
       (!isCreate && record != null && Boolean(readOnlyWhen?.(record))) ||
       (!submitOwner &&
         !Boolean(isCreate ? dataResource?.roots.create : dataResource?.roots.update)) ||

@@ -3840,7 +3840,9 @@ describe("FormView", () => {
       const dialog = await screen.findByRole("dialog", { name: "Review" });
       await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
       fireEvent.click(within(dialog).getByRole("button", { name: "Record review" }));
-      await waitFor(() => expect(submit).toHaveBeenCalledWith({}, expect.objectContaining({ record: sdkMocks.record })));
+      await waitFor(() => expect(submit).toHaveBeenCalledWith(
+        {}, expect.objectContaining({ record: sdkMocks.record }), expect.objectContaining({ errorNotification: false }),
+      ));
       await waitFor(() => expect(screen.queryByRole("dialog", { name: "Review" })).toBeNull());
       await waitFor(() => expect(document.activeElement).toBe(review));
       expect(run).not.toHaveBeenCalled();
