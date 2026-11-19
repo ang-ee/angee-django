@@ -5573,6 +5573,7 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
         link names, its push links release it, and ``push_stream`` yields each
         released link's removal. A link that holds the row
         (:meth:`RecordLink.live_reference_filter`) stays bound; this never refuses.
+        It opens no transaction, so a delete with links takes no extra savepoint.
         Call inside the transaction that deletes or moves the row, holding the
         row's lock (its deletion's ``lock_for_delete``, or the lock a move took
         before changing the row): a push reflecting its write locks the row before
@@ -5995,8 +5996,9 @@ class RecordLink(
     def teardown_for_target(cls, target: models.Model) -> None:
         """Release the push links naming a deleted row (``release_pushes``); this never refuses.
 
-        Base runs it inside the deleting transaction; the deleter holds the row's
-        lock (``lock_for_delete``), else ``release_pushes`` takes it.
+        Base runs it inside the deleting transaction, which ``release_pushes``
+        requires (a direct caller opens one); the deleter holds the row's lock
+        (``lock_for_delete``), else ``release_pushes`` takes it.
         """
 
         cls.objects.release_pushes(target)

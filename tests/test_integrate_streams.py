@@ -2737,7 +2737,9 @@ def test_a_record_link_teardown_releases_push_links_only_and_never_raises(stream
         for key, direction in (("pulled", StreamDirection.PULL), ("pushed", StreamDirection.PUSH))
     )
 
-    RecordLink.teardown_for_target(person)
+    # Base runs the teardown inside the deleting transaction; a direct call opens it.
+    with transaction.atomic():
+        RecordLink.teardown_for_target(person)
 
     assert RecordLink.objects.get(pk=pulled.pk).target_object_id == str(person.pk)
     assert RecordLink.objects.get(pk=pushed.pk).target_object_id is None
