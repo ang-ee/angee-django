@@ -21,7 +21,7 @@ import binascii
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 from xml.etree import ElementTree
 from xml.sax.saxutils import escape
@@ -33,6 +33,8 @@ from django.core.exceptions import ValidationError
 from django.db.models import CharField
 from django.db.models.fields.json import KeyTextTransform
 from django.db.models.functions import Coalesce
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ValidationError as PydanticValidationError
 
 from angee.base.serialization import canonical_json_sha256
 from angee.integrate.credentials import CredentialKind
@@ -105,6 +107,32 @@ _COLLECTION_BODY = (
 )
 
 
+class ContactsPolicy(BaseModel):
+    """One address book's contacts policy, ``config["streams"]["contacts"][<book key>]``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    local_delete: Literal["conflict", "propagate"] = Field(
+        default="conflict",
+        description="A contact deleted here: hold it for a choice (conflict), or delete its card (propagate).",
+    )
+
+
+class CardDavConfig(BaseModel):
+    """A CardDAV directory's non-secret configuration, validated whenever the directory is saved."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    server_url: str = Field(
+        default="", title="Server URL", description="The CardDAV server or account URL; discovery finds the books."
+    )
+    streams: dict[Literal["contacts"], dict[str, ContactsPolicy]] = Field(
+        default_factory=dict,
+        exclude_if=lambda streams: not streams,
+        description="Each address book's contacts policy, by the book's key.",
+    )
+
+
 class CardDavError(IntegrationError):
     """A backend-composed, operator-safe CardDAV refusal."""
 
@@ -144,6 +172,8 @@ class CardDavDirectoryBackend(DirectoryBackend):
     label = "CardDAV"
     icon = "address-book"
     defaults = {"vendor": "carddav"}
+    config_model = CardDavConfig
+    config_form_spec_json_fields = True
     direction: ClassVar[StreamDirection] = StreamDirection.BIDIRECTIONAL
     response_cap: ClassVar[int] = _DAV_RESPONSE_CAP
     """The largest decoded DAV response body read; a multiget splits until each answer fits."""
@@ -188,19 +218,20 @@ class CardDavDirectoryBackend(DirectoryBackend):
     def contacts_stream(self, addressbook: Any) -> StreamDefinition:
         """Declare a book's two-way contacts stream with its deletion policy.
 
-        ``local_delete`` seeds from the directory's per-book config
-        (``config["streams"]["contacts"][<book>]``): ``conflict`` (the default)
-        holds a locally deleted contact for a choice, ``propagate`` deletes its card.
-        It is the only per-book setting; any other key is refused.
+        The policy seeds from the directory's per-book config
+        (``config["streams"]["contacts"][<book>]``, a :class:`ContactsPolicy`), which
+        saving the directory validates (:class:`CardDavConfig`). Here it reads only
+        what the policy knows: an unknown key, or a value stored before the write
+        was validated, never fails the sync; such a value reads as the default.
         """
 
         book = self.bridge.config.get("streams", {}).get(CONTACTS, {}).get(addressbook.external_key, {})
-        if set(book) - {"local_delete"}:
-            raise ValueError("Unknown Directory contacts setting.")
-        policy = {"local_delete": book.get("local_delete", "conflict")}
-        if policy["local_delete"] not in {"conflict", "propagate"}:
-            raise ValueError("Unknown Directory deletion policy.")
-        return replace(super().contacts_stream(addressbook), config=policy)
+        known = {name: book[name] for name in ContactsPolicy.model_fields if name in book}
+        try:
+            policy = ContactsPolicy.model_validate(known)
+        except PydanticValidationError:
+            policy = ContactsPolicy()
+        return replace(super().contacts_stream(addressbook), config=policy.model_dump())
 
     def discover(self) -> list[ParsedAddressbook]:
         """Resolve the account's principal → home-set → address-book collections.

@@ -653,11 +653,11 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         :meth:`_contact_target` decides its person once, the ingest admits that
         person again as the binding owner, cites the handle an adoption found them
         by, claims for review an address someone else holds and proposes them,
-        and withdraws what neither its link nor a replaced link still supports.
-        Each other person a replaced link names is proposed for the same-as
-        review as the landed person's same person
-        (``PartyManager.propose_directory_match``); adopting a person withdraws the
-        proposal pairing them with the link's previous person. A tombstone
+        withdraws what neither its link nor a replaced link still supports, and,
+        for a link leaving a trashed person, what it stated there and the
+        proposals pairing that person. Each other person a replaced link names is
+        proposed for the same-as review as the landed person's same person
+        (``PartyManager.propose_directory_match``). A tombstone
         withdraws the link's statements while the party stays. A two-way stream's
         applied base is the person's projection; a
         pull-only stream's is the source's own (none for a tombstone), the side its
@@ -687,7 +687,6 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
                 stream.links.filter(external_key__in=order).exclude(pk=link.pk),
                 key=lambda row: order.index(row.external_key),
             )
-            previous = link.target
             parties.lock_contact(*(row.target for row in (link, *replaced)), parsed=parsed)
             target, through, passed_over = self._contact_target(stream, link, replaced, parsed)
             target = parties.ingest_contact(
@@ -699,9 +698,6 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
                 through=through,
                 created_by_id=self.bridge.owner_id,
             )
-            if through is not None and previous is not None and previous.pk != target.pk:
-                # Adopting the person a refusal once proposed as the previous person's answers that proposal.
-                parties.withdraw_directory_match(previous, target)
             for other, tie in passed_over:
                 parties.propose_directory_match(target, other, evidence=[link, *([tie] if tie is not None else [])])
         if stream.direction == StreamDirection.PULL:

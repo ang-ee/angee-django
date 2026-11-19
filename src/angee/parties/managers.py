@@ -1305,11 +1305,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     def propose_directory_match(self, person: Any, other: Any, *, evidence: Sequence[Any]) -> Any | None:
         """Propose, as the ``directory_match`` rule, that a directory's ``person`` and ``other`` are one person.
 
-        A directory proposes it for each person its decision of a contact's target
-        passed over (``DirectoryBackend.apply_record``): an existing person a limit
-        refused the contact's adoption of, or the person of another record the source
-        merged into it. ``evidence`` names what ties them (the contact's link, then
-        the handle its email found ``other`` by, or the merged record's link). The
+        A directory proposes it for each other person a contact's address names
+        (:meth:`ingest_contact`: a person a limit refused the contact's adoption of,
+        or one a collision leaves holding the address) and for the person of
+        another record the source merged into it (``DirectoryBackend.apply_record``).
+        ``evidence`` names what ties them (the contact's link, then the handle its
+        email found ``other`` by, or the merged record's link). The
         pair joins the same-as review (:meth:`PartyQuerySet.same_as_pairs`), where a
         person merges or dismisses it. A pair kept separate is not proposed again,
         and proposing an unchanged pair again changes nothing (``StatementManager.set``).
@@ -1337,8 +1338,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         """Withdraw the ``directory_match`` rule's proposal that ``person`` and ``other`` are one person.
 
         Called when the proposal is moot: the two are merged (``Party.merge_fields``),
-        or the contact whose link moved off ``person`` adopts ``other``
-        (``DirectoryBackend.apply_record``). Returns how many statements it withdrew.
+        or the contact whose link left ``person`` lands on ``other`` or proposes its
+        new person as ``other`` (:meth:`ingest_contact`). Returns how many
+        statements it withdrew.
         """
 
         party = apps.get_model("parties", "Party")
@@ -2463,7 +2465,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         stream an email that someone else holds is only claimed, for review, and
         each such person is proposed as the contact's same person
         (:meth:`_contested_emails`, :meth:`propose_directory_match`), so a
-        contact never moves an address away from its holder. ``replaces`` are
+        contact never moves an address away from its holder. A link leaving a
+        trashed person withdraws what it stated on them before it binds its new
+        person, and the proposals pairing them with that person, or with whom its
+        addresses now name, with it. ``replaces`` are
         the links of records a merge at the source folded into this one: whatever
         they stated on the person that this record restates moves to ``link``
         (statements are keyed by source, subject and aspect), and the rest is
@@ -2495,6 +2500,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             )
             parent = apps.get_model("parties", "Party")._base_manager.get(pk=person.pk)
             through = through.canonical() if through is not None else self._adopted_through(parent, source=source)
+            left = link.target if link.target_object_id and link.target_object_id != str(parent.pk) else None
+            if left is not None:
+                # The person the link leaves is nobody's target (trashed): what the link stated there goes first.
+                link.withdraw_statements()
             apps.get_model("integrate", "RecordLink").objects.bind_target(link, parent)
             for subject, aspect, values, evidence in (
                 (
@@ -2542,6 +2551,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             )
             for other, handle in others:
                 self.propose_directory_match(person, other, evidence=[link, *([handle] if handle is not None else [])])
+            if left is not None:
+                # What the link proposed for the person it left is moot: its new person is, or is proposed as, them.
+                for other in (person, *(row for row, _handle in others)):
+                    self.withdraw_directory_match(left, other)
             apps.get_model("parties", "Address").objects.land_addresses(
                 person,
                 parsed.addresses,
