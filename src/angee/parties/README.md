@@ -49,15 +49,25 @@ tombstones its link. A two-way stream compares the person's own projection and
 keeps a vanished contact's statements.
 
 One function decides a contact's target (`DirectoryBackend._contact_target`),
-once, under the contact locks: its own link's person, then a replaced link's,
-then, on a pull-only stream, an existing person one of its emails names
-(`PartyManager.people_for_emails`, the preferred email first). That person is
-adopted only when every limit holds: they are no account's own person, the
-directory's owner already has `write` on them (checked for that user, though
-sync runs as system work), and no other live link of the same integration names
-them. Otherwise the contact mints its own person; a two-way directory never
-adopts. The handle an adoption found the person by is the link's
-`adopted_through` metadata. Each person the decision passes over (a candidate
+once, under the page's and the contact's locks: its own link's person, then a
+replaced link's, then, on a pull-only stream, an existing person one of its
+emails names (`PartyManager.people_for_emails`, the preferred email first). A
+page reads who its unlinked contacts' emails name once, and locks every spelling
+of its contacts' addresses, the people they name and the parties its links name
+before any record decides (`DirectoryBackend.prepare_page`). Adoption is an
+access change, so the binding owner admits it: `PartyManager.adoption_blocker`
+refuses unless the stream is pull-only, the person is no account's own, the
+address that found them is no account's sign-in address, the directory's owner
+holds `adopt` on them (their owner or an editor, with no platform-admin arm,
+since every directory's owner is a platform admin; checked for that user though
+sync runs as system work), no other live link of the directory names them, and no
+live link of a stream that writes back names them. `ingest_contact` asks it for
+every person new to its link that no replaced link names, so neither a vendor's
+own `apply_record` nor another caller binds past it. Otherwise the contact mints
+its own person; a two-way directory never adopts. The handle an adoption found
+the person by is the evidence of the directory's identity statement on them,
+restated on every later record, and the contact's spelling of that address lands
+on the same handle row. Each person the decision passes over (a candidate
 a limit refused, or another person a replaced record was linked to) is proposed
 as the landed person's same person by parties' `directory_match` rule
 (`PartyManager.propose_directory_match`), citing the contact's link and the

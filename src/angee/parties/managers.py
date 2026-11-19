@@ -23,7 +23,7 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime
 from enum import StrEnum
 from itertools import chain, combinations, groupby, islice
-from typing import TYPE_CHECKING, Any, NamedTuple, Self, TypedDict
+from typing import TYPE_CHECKING, Any, NamedTuple, Self, TypedDict, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -68,6 +68,7 @@ from angee.base.querysets import MergeableQuerySet, by_key
 from angee.base.serialization import canonical_json
 from angee.integrate.errors import IntegrationError
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager
+from angee.integrate.states import StreamDirection
 from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedOrganization, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
@@ -2036,21 +2037,124 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             raise ValidationError(f"A contact target must be a Party of kind {model.__name__}.")
         return child
 
-    def _ingest_target[M: models.Model](self, link: RecordLink, model: type[M], target: M | None) -> M | None:
-        """Return the ``model`` row the caller decided ``link`` lands on, ``None`` to mint one; ingest decides nothing.
+    def adoption_blocker(self, person: Person, *, link: RecordLink, through: Handle | None = None) -> str | None:
+        """Return why ``link``'s directory may not bind its record to the existing ``person``, ``None`` when it may.
+
+        Adopting a person is an access change: the directory becomes one of their
+        statement sources and its contact readers read them. Every limit must hold
+        (rulings R2 and R9): the link's stream is pull-only; the person is no
+        account's own; the address that found them (``through``, the handle a
+        lookup answered) is no account's sign-in address; the directory's owner
+        holds ``adopt`` on them (their owner or an editor: no platform-admin arm),
+        checked for that user though sync runs as system work; no other live link
+        of the directory names them, since its statements are keyed by
+        integration, not by link; and no live link of a stream that writes back
+        names them, which would publish what this source states about them. Call
+        it under the contact locks; :meth:`ingest_contact` calls it for every
+        person new to its link.
+        """
+
+        stream = link.stream
+        if stream.direction != StreamDirection.PULL:
+            return "A directory that writes back adopts nobody."
+        if person.user_id is not None:
+            return "The person is a user account's own."
+        with system_context(reason="parties.adoption_blocker"):
+            users = get_user_model().objects
+            if through is not None and users.people().filter(email=users.normalize_email(through.value)).exists():
+                return "The address is a user account's sign-in address."
+        owner = stream.integration.owner
+        candidate = apps.get_model("parties", "Person")._base_manager.get(pk=person.pk)
+        if owner is None or not candidate.with_actor(owner).has_access("adopt"):
+            return "The directory's owner may not adopt the person."
+        with system_context(reason="parties.adoption_blocker"):
+            party = apps.get_model("parties", "Party")._base_manager.filter(pk=person.pk)
+            naming = (
+                apps.get_model("integrate", "RecordLink")
+                .objects.observing()
+                .filter(pk__in=party.values("record_links"))
+                .exclude(pk=link.pk)
+                .select_related("stream")
+            )
+            streams = [row.stream for row in naming]
+        if any(other.integration_id == stream.integration_id for other in streams):
+            return "Another contact of the directory is the person."
+        if any(other.writes_back for other in streams):
+            return "A stream that writes back names the person."
+        return None
+
+    def _ingest_target[M: models.Model](
+        self,
+        link: RecordLink,
+        model: type[M],
+        target: M | None,
+        *,
+        replaces: Sequence[RecordLink] = (),
+        through: Handle | None = None,
+    ) -> M | None:
+        """Return the ``model`` row the caller decided ``link`` lands on, ``None`` to mint one, once admitted.
 
         Binding a link lends its party to the directory's contact readers, so a
         target must be a ``model`` row, and a link bound to a live row keeps it: an
-        ingest never rebinds it. A link whose row is trashed names nobody
+        ingest never rebinds it. A row new to the link is admitted when a link it
+        ``replaces`` names it (a merge at the source hands its person over) or, for
+        a Person, when :meth:`adoption_blocker` admits it, ``through`` being the
+        handle that found them. A link whose row is trashed names nobody
         (:meth:`contact_people`), so its record lands on whoever the caller decided.
         """
 
         if target is not None and not isinstance(target, model):
             raise ValidationError(f"A contact target must be a Party of kind {model.__name__}.")
-        live = self._live_parties([link], model)[link.pk]
+        named = self._live_parties([link, *replaces], model)
+        live = named[link.pk]
         if live is not None and (target is None or live.pk != target.pk):
             raise ValidationError("A bound link keeps its target; ingestion never rebinds it.")
+        if target is None or live is not None or any(row is not None and row.pk == target.pk for row in named.values()):
+            return target
+        if issubclass(model, apps.get_model("parties", "Person")):
+            blocker = self.adoption_blocker(cast("Person", target), link=link, through=through)
+            if blocker is not None:
+                raise ValidationError(blocker)
         return target
+
+    def _adopted_through(self, party: Any, *, source: Any) -> Handle | None:
+        """Return the handle ``source``'s identity statement on ``party`` cites: the one an adoption found them by."""
+
+        handle_model = apps.get_model("parties", "Handle")
+        stated = (
+            party.statements.model._base_manager.filter(
+                subject_id=party.pk, aspect="identity", asserted_by=str(to_subject_ref(source)), superseded__isnull=True
+            )
+            .values_list("evidence", flat=True)
+            .first()
+        )
+        ids = [
+            ref.id
+            for ref in (EvidenceReference.model_validate(value) for value in stated or ())
+            if ref.model.lower() == handle_model._meta.label_lower
+        ]
+        found = instances_from_public_ids(handle_model, ids[:1], queryset=handle_model._base_manager.all())
+        return cast("Handle", found[ids[0]].canonical()) if ids and ids[0] in found else None
+
+    def contact_handle_ids(self, contacts: Iterable[ParsedContact | ParsedOrganization]) -> set[Any]:
+        """Return the handles the contacts' emails and phones name, every spelling of each (by normalized value).
+
+        The upsert path keys on the exact value, so two spellings of one address
+        can be two rows; a lock of an address's identities covers them all.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        values: defaultdict[str, set[str]] = defaultdict(set)
+        for contact in contacts:
+            for platform, points in (("email", contact.emails), ("phone", contact.phones)):
+                values[platform].update(handle_model.normalize_value(platform, item[0]) for item in points)
+        if not any(values.values()):
+            return set()
+        spelled = Q(pk__in=[])
+        for platform, normalized in values.items():
+            spelled |= Q(platform=platform, normalized_value__in=sorted(normalized))
+        with system_context(reason="parties.contact_handles"):
+            return set(handle_model.objects.filter(spelled).values_list("pk", flat=True))
 
     def lock_contact(
         self,
@@ -2060,14 +2164,14 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         """Lock the mapped contact aggregates of ``parties`` before a caller rechecks or lands one.
 
         Follow the shared Handle, Party, PartyStatement order (the handles the
-        parties' statements and ``parsed`` name first) before locking each Person,
-        Organization or Party row given and its mapped collections. The parent row
-        lock also fences inserts through its foreign keys while the page
-        transaction is open. ``None`` entries are skipped.
+        parties' statements and ``parsed`` name first, every spelling of each:
+        :meth:`contact_handle_ids`) before locking each Person, Organization or
+        Party row given and its mapped collections. The parent row lock also
+        fences inserts through its foreign keys while the page transaction is
+        open. ``None`` entries are skipped.
         """
 
         associations = apps.get_model("parties", "Party").objects
-        handles = apps.get_model("parties", "Handle").objects
         rows = sorted((party for party in parties if party is not None), key=lambda row: row.pk)
         ids = [row.pk for row in rows]
         handle_ids = (
@@ -2076,12 +2180,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             else set()
         )
         if parsed is not None:
-            handle_ids.update(
-                handles.filter(
-                    Q(platform="email", value__in=[item[0] for item in parsed.emails])
-                    | Q(platform="phone", value__in=[item[0] for item in parsed.phones])
-                ).values_list("pk", flat=True)
-            )
+            handle_ids.update(self.contact_handle_ids([parsed]))
         associations.lock_identity_rows(party_ids=ids, handle_ids=handle_ids)
         if not rows:
             return
@@ -2245,20 +2344,30 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         link: Any,
         created_by_id: Any,
         replaces: Sequence[Any] = (),
+        through: Handle | None = None,
     ) -> None:
         """Assert the emails and phones ``link`` names for ``party``; withdraw the others it or ``replaces`` asserted.
 
         Each handle dedupes on its value and keeps the label and preference the
         source gives it, and the name the source gives its party (``display_name``;
         a blank one keeps the handle's); the Party row is the assertion's evidence.
+        An email spelling ``through``'s address lands on that handle, the one an
+        adoption found ``party`` by, never on a second row of another spelling.
         ``replaces`` are the links of records a merge at the source folded into
         this one: a handle only they asserted on ``party`` is withdrawn, never moved.
         """
 
-        handles = apps.get_model("parties", "Handle").objects
+        handle_model = apps.get_model("parties", "Handle")
+        handles = handle_model.objects
         supported = []
         for platform, points in (("email", parsed.emails), ("phone", parsed.phones)):
             for value, label, preferred in points:
+                if (
+                    through is not None
+                    and platform == through.platform
+                    and handle_model.normalize_value(platform, value) == through.normalized_value
+                ):
+                    value = through.value
                 handle = handles.upsert(
                     platform=platform,
                     value=value,
@@ -2287,6 +2396,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         link: Any,
         target: Person | None = None,
         replaces: Sequence[Any] = (),
+        through: Handle | None = None,
     ) -> Any:
         """Assert one link's contact facts; preserve other sources and person preferences.
 
@@ -2295,14 +2405,19 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         so its container (the address book, whose folder belongs to the same
         directory) and integration resolve once per page. ``target`` is the person
         the caller decided the contact is, ``None`` to mint one; a link bound to a
-        live person keeps it (:meth:`_ingest_target`). ``replaces`` are the links of
-        records a merge at the source folded into this one: whatever they stated
-        on the person that this record restates moves to ``link`` (statements are
-        keyed by source, subject and aspect), and the rest is withdrawn with this
-        link's own unsupported handles, addresses and employers. Addresses land
-        through :meth:`AddressManager.land_addresses` and the employer through
-        :meth:`RelationshipManager.land_employment`; removed members withdraw only
-        this source's statements instead of deleting rows.
+        live person keeps it, and a person new to the link binds only as an
+        adoption would (:meth:`_ingest_target`, :meth:`adoption_blocker`), locked
+        first. ``through`` is the handle an adoption found ``target`` by: the
+        identity statement cites it as evidence, restated on every later record,
+        and the contact's spelling of its address lands on it. ``replaces`` are
+        the links of records a merge at the source folded into this one: whatever
+        they stated on the person that this record restates moves to ``link``
+        (statements are keyed by source, subject and aspect), and the rest is
+        withdrawn with this link's own unsupported handles, addresses and
+        employers. Addresses land through :meth:`AddressManager.land_addresses`
+        and the employer through :meth:`RelationshipManager.land_employment`;
+        removed members withdraw only this source's statements instead of
+        deleting rows.
         """
         container = stream.container if stream.container_id is not None else None
         folder = container.target if container is not None else None
@@ -2317,34 +2432,44 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         people = apps.get_model("parties", "Person").objects
         source = stream.integration
         with transaction.atomic():
-            target = self._ingest_target(link, people.model, target)
             if target is not None:
                 self.lock_contact(target, parsed=parsed)
+            target = self._ingest_target(link, people.model, target, replaces=replaces, through=through)
             person = target or people.create(
                 display_name=(parsed.display_name or parsed.family_name or people.model.PLACEHOLDER_NAME),
                 created_by_id=created_by_id,
             )
             parent = apps.get_model("parties", "Party")._base_manager.get(pk=person.pk)
+            through = through.canonical() if through is not None else self._adopted_through(parent, source=source)
             apps.get_model("integrate", "RecordLink").objects.bind_target(link, parent)
-            for subject, aspect, values in (
+            for subject, aspect, values, evidence in (
                 (
                     parent,
                     "identity",
                     {"display_name": (parsed.display_name or parsed.family_name or people.model.PLACEHOLDER_NAME)},
+                    [through] if through is not None else [],
                 ),
                 (
                     parent,
                     "contact",
                     {"notes": parsed.notes, "avatar": self.resolve_contact_photo(parsed.photo)},
+                    [],
                 ),
                 (
                     person,
                     "name",
                     {name: getattr(parsed, name) for name in person.statements.model.statement_aspects["name"].fields},
+                    [],
                 ),
-                (person, "dates", {"birthday": parsed.birthday, "anniversary": parsed.anniversary}),
+                (person, "dates", {"birthday": parsed.birthday, "anniversary": parsed.anniversary}, []),
             ):
-                subject.statements.set(aspect=aspect, values=values, asserted_by=source, link=link)
+                subject.statements.set(
+                    aspect=aspect,
+                    values=values,
+                    asserted_by=source,
+                    link=link,
+                    evidence=[EvidenceReference.of(row) for row in evidence],
+                )
             self._land_handles(
                 parent,
                 parsed,
@@ -2353,6 +2478,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 link=link,
                 created_by_id=created_by_id,
                 replaces=replaces,
+                through=through,
             )
             apps.get_model("parties", "Address").objects.land_addresses(
                 person,

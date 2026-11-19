@@ -106,12 +106,27 @@ live in code docstrings.
 
 - A pull-only directory adopts an existing person (rulings R2 and R9): a contact
   with no person of its own or of a record it replaced lands on the first person
-  its emails name (`people_for_emails`, preferred email first) who is no
-  account's own person, whom the directory's owner already writes (a real
-  permission check for that user), and whom no other live link of the same
-  integration names; otherwise it mints its own. A two-way directory, CardDAV
-  included, never adopts. The link's `adopted_through` metadata
-  (`angee.parties.backends.ADOPTED_THROUGH`) names the handle the person was found by.
+  its emails name (`people_for_emails`, preferred email first) whose adoption
+  `PartyManager.adoption_blocker` admits; otherwise it mints its own. A two-way
+  directory, CardDAV included, never adopts. The rule sits on the binding owner:
+  `ingest_contact` refuses a person new to its link that no replaced link names
+  unless the rule admits them, so a vendor overriding `apply_record`, or any other
+  caller, binds nobody past it. It admits a person only when the stream is
+  pull-only, the person is no account's own, the address that found them is no
+  account's sign-in address, the directory's owner holds the new `adopt`
+  permission on `parties/person` (owner or editor, no platform-admin arm: every
+  directory's owner is a platform admin, so `write` admitted everyone), no other
+  live link of the directory names them, and no live link of a stream that writes
+  back names them. A pull-only contacts page locks every spelling of its contacts'
+  addresses (by normalized value), the people they name and the parties its
+  links name before any record decides (`DirectoryBackend.prepare_page`), and
+  each record checks admission again under those locks. The handle that found the
+  person is the evidence of the directory's identity statement
+  (`ingest_contact(..., through=handle)`), restated on later records, and the
+  contact's spelling of that address lands on that handle row. The link's
+  `adopted_through` metadata and `angee.parties.backends.ADOPTED_THROUGH` are
+  removed: the driver replaces link metadata wholesale. Schema revision 25:
+  `rebac sync` after compose.
 
 - A directory proposes for the same-as review each person its decision of a
   contact's target passed over: a candidate an adoption limit refused, and the
