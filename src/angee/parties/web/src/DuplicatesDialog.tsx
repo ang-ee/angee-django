@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import {
-  Alert, Button, Chip, Dialog, ErrorBanner, LoadingPanel, NavLink, RowsListView, defaultWidgets, optionLabel,
+  Alert, Button, Checkbox, Chip, Dialog, ErrorBanner, LoadingPanel, NavLink, RowsListView, defaultWidgets, optionLabel,
   useEnumOptions, useRouteHref, type ListColumn,
 } from "@angee/ui";
 
@@ -37,7 +37,11 @@ export interface DuplicatesDialogProps {
   sets: readonly DuplicateSetInput[];
   /** The Review page's certain pairs: each set is re-checked as still certain when merged. */
   certain?: boolean;
-  /** Lines about the sets around these ones, such as how the next batch is reached. */
+  /**
+   * Lines about the sets around these ones: how the next batch is reached (the
+   * Review page's certain pairs, a selection over the batch cap) and what a list
+   * selection left out (records with no one to merge with, groups without a value).
+   */
   notes?: readonly string[];
   onClose: (merged: boolean) => void;
 }
@@ -45,9 +49,12 @@ export interface DuplicatesDialogProps {
 /**
  * The batch merge's one dialog. It lists each set with what tells its records
  * apart (addresses, sources, dates), which record survives and why, and the fields
- * they disagree on with the value that will show; one confirm merges exactly the
- * listed sets and the dialog then shows each set's outcome. The server judges and
- * merges (`duplicate_set_previews`, `merge_duplicates`); the dialog only shows.
+ * they disagree on with the value that will show. Each set that may merge has its
+ * own Include toggle, off until the person ticks it when the set carries a
+ * warning (its records disagree, or one no longer matches its group); one confirm
+ * merges exactly the included sets and the dialog then shows each set's outcome.
+ * The server judges and merges (`duplicate_set_previews`, `merge_duplicates`); the
+ * dialog only shows.
  */
 export function DuplicatesDialog({ sets: opened, certain = false, notes = [], onClose }: DuplicatesDialogProps): React.ReactElement {
   const t = usePartiesT();
@@ -66,11 +73,17 @@ export function DuplicatesDialog({ sets: opened, certain = false, notes = [], on
   const [merge, mergeState] = useAuthoredMutation(MergeDuplicates, { invalidateModels: PARTY_MERGE_INVALIDATES });
   const live = preview.data?.duplicate_set_previews ?? [];
   const previews = result?.shown ?? live;
-  const mergeable = live.filter((row) => row.outcome == null);
+  // The person's ticks by set; an untouched set follows its warnings.
+  const [ticks, setTicks] = React.useState<ReadonlyMap<number, boolean>>(new Map());
+  const included = (index: number): boolean => {
+    const row = live[index];
+    return row?.outcome == null && (ticks.get(index) ?? !warned(row, sets[index]?.grouping));
+  };
+  const sending = live.filter((_row, index) => included(index));
   const merged = result ? [...result.outcomes.values()].some((row) => row.outcome === "MERGED") : false;
 
   const submit = React.useCallback(async () => {
-    const sent = mergeable;
+    const sent = sending;
     const response = await merge({ sets: sent.map((row) => row.members.map((member) => member.id)), certain });
     const answered = response?.merge_duplicates;
     if (!answered) return;
@@ -81,7 +94,7 @@ export function DuplicatesDialog({ sets: opened, certain = false, notes = [], on
       if (outcome) outcomes.set(row, outcome);
     });
     setResult({ shown: live, outcomes });
-  }, [certain, live, merge, mergeable]);
+  }, [certain, live, merge, sending]);
 
   return (
     <Dialog.Root open onOpenChange={(open) => { if (!open && !mergeState.fetching) onClose(merged); }}>
@@ -105,6 +118,11 @@ export function DuplicatesDialog({ sets: opened, certain = false, notes = [], on
                 heading={sets[index]?.heading}
                 grouping={sets[index]?.grouping}
                 outcome={result?.outcomes.get(row)}
+                include={result || row.outcome != null ? undefined : {
+                  checked: included(index),
+                  onChange: (checked) => setTicks((current) => new Map(current).set(index, checked)),
+                }}
+                left={result !== null && row.outcome == null && !result.outcomes.has(row)}
               />
             ))}
           </Dialog.Body>
@@ -120,10 +138,10 @@ export function DuplicatesDialog({ sets: opened, certain = false, notes = [], on
                   type="button"
                   variant="primary"
                   pending={mergeState.fetching}
-                  disabled={mergeable.length === 0 || mergeState.fetching || preview.isFetching}
+                  disabled={sending.length === 0 || mergeState.fetching || preview.isFetching}
                   onClick={() => void submit()}
                 >
-                  {t("duplicates.confirm", { count: mergeable.length })}
+                  {t("duplicates.confirm", { count: sending.length })}
                 </Button>
               </>
             )}
@@ -139,13 +157,20 @@ function DuplicateSetSection({
   heading,
   grouping,
   outcome,
+  include,
+  left = false,
 }: {
   preview: DuplicateSetPreview;
   heading?: string;
   grouping?: DuplicateSetInput["grouping"];
   outcome?: DuplicateSetOutcome;
+  /** The set's Include toggle, while it may merge and nothing has been sent. */
+  include?: { checked: boolean; onChange: (checked: boolean) => void };
+  /** The person left this set out of the merge that was sent. */
+  left?: boolean;
 }): React.ReactElement {
   const t = usePartiesT();
+  const includeId = React.useId();
   const routeHref = useRouteHref();
   const sources = useEnumOptions("parties.PartyStatement", "source_kind", { casing: "upper" });
   const survivorId = preview.survivor?.id ?? null;
@@ -197,6 +222,15 @@ function DuplicateSetSection({
   return (
     <section className="space-y-2 rounded-6 border border-border-subtle p-3">
       {heading ? <h3 className="text-13 font-semibold text-fg">{heading}</h3> : null}
+      {include ? (
+        <div className="flex flex-wrap items-center gap-2 text-13">
+          <Checkbox id={includeId} aria-label={t("duplicates.include")} checked={include.checked}
+            onCheckedChange={(checked) => include.onChange(checked === true)} />
+          <label htmlFor={includeId} className="font-medium text-fg">{t("duplicates.include")}</label>
+          {warned(preview, grouping) ? <span className="text-fg-muted">{t("duplicates.includeWarned")}</span> : null}
+        </div>
+      ) : null}
+      {left ? <Alert tone="info">{t("duplicates.outcome.left")}</Alert> : null}
       {outcome ? <OutcomeLine outcome={outcome} /> : null}
       {!outcome && preview.outcome ? <Alert tone="warning">{t("duplicates.refused", { reason: preview.reason })}</Alert> : null}
       {!outcome && survivorId ? <p className="text-13 text-fg-muted">{t("duplicates.survivorRule")}</p> : null}
@@ -240,6 +274,11 @@ function OutcomeLine({ outcome }: { outcome: DuplicateSetOutcome }): React.React
 /** Every address a source states for a member, the one it holds included, once each. */
 function memberAddresses(member: DuplicateSetMember): string[] {
   return [...new Set(member.statements.flatMap((statement) => (statement.handle ? [statement.handle.value] : [])))];
+}
+
+/** Whether a set carries a warning the person should look at before merging it: its records disagree, or one moved. */
+function warned(preview: DuplicateSetPreview | undefined, grouping: DuplicateSetInput["grouping"]): boolean {
+  return preview !== undefined && (preview.disagreements.length > 0 || movedMembers(preview, grouping).size > 0);
 }
 
 /**

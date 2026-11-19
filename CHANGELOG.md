@@ -112,7 +112,10 @@ live in code docstrings.
   and gives each of its lists its own pager (the claims list embedded in its
   section, the pairs under their cards); "Merge certain pairs (50 of 180)" names
   the batch and the dialog says the next batch follows; the overview counts every
-  pair instead of a capped read.
+  pair instead of a capped read. In the dialog each set that may merge has its
+  own Include toggle, off by default when the set carries a warning (a
+  disagreement, a member that no longer matches its group), and the mutation
+  sends only the included sets.
 
 - Parties: a handle's holder is always the projection of a statement. A holder
   written onto the row with no statement behind it lost its address the moment

@@ -200,7 +200,7 @@ export const enPartiesMessages: Record<string, string> = {
   "review.sameAs.mergeCertain": "Merge certain pairs ({count} of {total})",
   "review.sameAs.pagerUnit": "pairs",
   "duplicates.nextBatch":
-    "These are {count} of the {total} certain pairs. When this dialog closes, Merge certain pairs offers the next ones, until the last.",
+    "These are {count} of the {total} certain pairs. When this dialog closes, Merge certain pairs offers the next ones, until the last; a pair left out here comes back after the last batch.",
   "review.sameAs.certainHeading": "{left} and {right}, both at {address}",
   "merge.selection.action": "Merge…",
   "duplicates.title": "Merge duplicates",
@@ -221,6 +221,9 @@ export const enPartiesMessages: Record<string, string> = {
   "duplicates.shown": "Will show",
   "duplicates.compare": "Choose on the compare page: {name}",
   "duplicates.refused": "Will not merge: {reason}",
+  "duplicates.include": "Include in this merge",
+  "duplicates.includeWarned": "Not included until you tick it: these records disagree, or one no longer matches its group.",
+  "duplicates.outcome.left": "Left out of this merge.",
   "duplicates.confirm": "Merge ({count})",
   "duplicates.cancel": "Cancel",
   "duplicates.done": "Done",
