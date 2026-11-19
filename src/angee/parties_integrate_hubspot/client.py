@@ -326,25 +326,29 @@ class HubSpotBatchRead:
 
 
 class HubSpotClient:
-    """One HubSpot account's CRM, read with the authorization headers its caller supplies.
+    """One HubSpot account's CRM, read through its caller's HTTP client with the authorization headers it supplies.
 
-    The caller owns the credential: it passes the credential's own authorization
-    headers, and the key itself to :meth:`token_info`, the one request that carries
-    it in a body. Each method sends only the requests its docstring names; nothing
-    is cached between calls.
+    The caller owns the connection and the credential: it passes its integrate
+    ``HttpClient`` (a backend's ``HttpClientMixin.http``), the credential's own
+    authorization headers, and the key itself to :meth:`token_info`, the one
+    request that carries it in a body. Each method sends only the requests its
+    docstring names; nothing is cached between calls. Every read names its object
+    type by HubSpot's plural (``contacts``); the type's modified property is the
+    one fact a type needs here, and :data:`_MODIFIED_PROPERTY` states it for
+    contacts, the one type read yet. Companies come next.
     """
 
-    def __init__(self, headers: Mapping[str, str], *, usual_key: bool = True) -> None:
-        """Bind the authorization headers every request carries.
+    def __init__(self, http: HttpClient, headers: Mapping[str, str], *, usual_key: bool = True) -> None:
+        """Bind the HTTP client every request is sent through and the authorization headers it carries.
 
         ``usual_key`` states whether the caller's key has a service key's usual
         shape (:data:`SERVICE_KEY_SHAPE`); a rejection of one that does not says to
         check it (:meth:`HubSpotError.of`).
         """
 
+        self.http = http
         self.headers = dict(headers)
         self.usual_key = usual_key
-        self.http = HttpClient()
 
     def token_info(self, token_key: str) -> HubSpotTokenInfo:
         """Introspect ``token_key``: the hub it belongs to.
@@ -363,18 +367,16 @@ class HubSpotClient:
 
         return self._request(HubSpotAccount, "GET", f"/account-info/{API_VERSION}/details")
 
-    def list_page(
-        self, object_type: str, *, after: str, limit: int, properties: Sequence[str], archived: bool = False
-    ) -> HubSpotPage:
-        """Return one page of ``object_type``'s records in id order, starting at the record ``after`` names.
+    def list_page(self, object_type: str, *, after: str, limit: int, properties: Sequence[str]) -> HubSpotPage:
+        """Return one page of ``object_type``'s live records in id order, starting at the record ``after`` names.
 
         ``properties`` and the type's modified time come back, besides HubSpot's
-        defaults. ``archived`` lists the soft-deleted records instead of the live ones.
+        defaults.
         """
 
         query = {
             "limit": str(limit),
-            "archived": "true" if archived else "false",
+            "archived": "false",
             "properties": ",".join(_requested(object_type, properties)),
         }
         if after:
@@ -452,9 +454,8 @@ class HubSpotClient:
             answer = self._request(
                 _HubSpotBatchAnswer, "POST", path, payload=payload, scopes=(get_read_scope(object_type),)
             )
-            if failed := next((error for error in answer.errors if error.category != _NOT_FOUND), None):
-                stated = f" ({failed.category})" if failed.category else ""
-                raise HubSpotError(f"HubSpot could not read some records{stated}.", transient=True)
+            if any(error.category != _NOT_FOUND for error in answer.errors):
+                raise HubSpotError("HubSpot could not read some records.", transient=True)
             found.extend(answer.results)
             gone.update(key for error in answer.errors for key in error.ids)
         answered = {record.id for record in found}

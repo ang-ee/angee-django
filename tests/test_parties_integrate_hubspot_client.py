@@ -5,11 +5,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import httpx2
 import pytest
 
+from angee.integrate.http import HttpClient
 from angee.integrate.testing.http import request_fields
 from angee.parties_integrate_hubspot.client import (
     EPOCH,
@@ -30,6 +32,7 @@ from angee.parties_integrate_hubspot.testing.server import (
     VENDOR_TEXT,
     HubSpotServer,
     error_response,
+    service_key,
 )
 from angee.parties_integrate_hubspot.testing.server import hubspot_server as hubspot_server
 
@@ -38,9 +41,38 @@ NAMES = ("firstname", "lastname", "email")
 CONTACTS_READ = "crm.objects.contacts.read"
 
 
+OTHER_KEY = service_key("f")
+"""A key of the usual shape that the scripted account does not accept."""
+
+
 @pytest.fixture
 def client() -> HubSpotClient:
-    return HubSpotClient({"Authorization": f"Bearer {TOKEN}"})
+    return HubSpotClient(HttpClient(), {"Authorization": f"Bearer {TOKEN}"})
+
+
+def test_the_client_sends_through_the_http_client_its_caller_owns(hubspot_server: HubSpotServer) -> None:
+    http = HttpClient()
+    client = HubSpotClient(http, {"Authorization": f"Bearer {TOKEN}"})
+
+    client.account()
+
+    assert client.http is http
+    assert len(hubspot_server.requests) == 1
+
+
+def test_no_file_of_the_addon_or_its_tests_holds_a_literal_of_a_service_keys_shape() -> None:
+    """Invented keys are built at runtime (``service_key``), so a secret scanner on a public remote finds none."""
+
+    root = Path(__file__).resolve().parents[1]
+    addon = root / "src" / "angee" / "parties_integrate_hubspot"
+    files = [*addon.rglob("*"), *(root / "tests").glob("test_parties_integrate_hubspot_*.py")]
+    texts = {".py", ".ts", ".tsx", ".md", ".json", ".yaml", ".toml"}
+    shaped = [
+        str(path.relative_to(root))
+        for path in files
+        if path.is_file() and path.suffix in texts and SERVICE_KEY_SHAPE.search(path.read_text(encoding="utf-8"))
+    ]
+    assert shaped == []
 
 
 def contact(server: HubSpotServer, number: int) -> str:
@@ -96,20 +128,6 @@ def test_a_page_states_hubspots_time_from_its_answers_date_header(
     for stated in ("", "not a date", "Thu, 19 Nov 2026 03:10:31 -0000"):
         hubspot_server.queue(httpx2.Response(200, json={"results": []}, headers={"Date": stated}))
         assert client.list_page("contacts", after="", limit=10, properties=()).sent_at is None
-
-
-def test_an_archived_listing_returns_only_soft_deleted_records(
-    hubspot_server: HubSpotServer, client: HubSpotClient
-) -> None:
-    kept, archived = contact(hubspot_server, 1), contact(hubspot_server, 2)
-    hubspot_server.archive("contacts", archived, at=MODIFIED + timedelta(days=1))
-
-    live = client.list_page("contacts", after="", limit=10, properties=())
-    gone = client.list_page("contacts", after="", limit=10, properties=(), archived=True)
-
-    assert [record.id for record in live.results] == [kept]
-    assert [record.id for record in gone.results] == [archived]
-    assert hubspot_server.requests[1].url.params["archived"] == "true"
 
 
 def test_record_ids_seek_strictly_past_an_id_in_numeric_order(
@@ -283,10 +301,8 @@ def test_a_record_hubspot_failed_to_read_is_a_transient_refusal_and_never_missin
     with pytest.raises(HubSpotError) as refusal:
         client.batch_read("contacts", [kept, failing, "999"], ())
 
-    assert (refusal.value.public_message, refusal.value.transient) == (
-        "HubSpot could not read some records (VALIDATION_ERROR).",
-        True,
-    )
+    assert (refusal.value.public_message, refusal.value.transient) == ("HubSpot could not read some records.", True)
+    assert "VALIDATION_ERROR" not in refusal.value.public_message
     assert VENDOR_TEXT not in refusal.value.public_message
 
 
@@ -296,7 +312,7 @@ def test_token_info_states_the_hub_the_key_belongs_to(hubspot_server: HubSpotSer
     assert info.hub_id == HUB_ID
     assert request_fields(hubspot_server.requests[0]) == {"tokenKey": TOKEN}
     with pytest.raises(HubSpotError) as rejected:
-        client.token_info("pat-na1-ffffffff-ffff-4fff-8fff-ffffffffffff")
+        client.token_info(OTHER_KEY)
     assert (rejected.value.status, rejected.value.transient) == (401, False)
 
 
@@ -465,7 +481,7 @@ def test_a_missing_scope_names_the_scope_the_request_needed(
 
 
 def test_a_rejected_bearer_is_a_permanent_refusal(hubspot_server: HubSpotServer) -> None:
-    stranger = HubSpotClient({"Authorization": "Bearer pat-na1-ffffffff-ffff-4fff-8fff-ffffffffffff"})
+    stranger = HubSpotClient(HttpClient(), {"Authorization": f"Bearer {OTHER_KEY}"})
 
     with pytest.raises(HubSpotError) as refusal:
         stranger.list_page("contacts", after="", limit=10, properties=())
@@ -475,7 +491,7 @@ def test_a_rejected_bearer_is_a_permanent_refusal(hubspot_server: HubSpotServer)
 
 
 def test_a_rejected_key_of_an_unusual_shape_adds_the_hint_and_nothing_else_does(hubspot_server: HubSpotServer) -> None:
-    unusual = HubSpotClient({"Authorization": f"Bearer {TOKEN}7"}, usual_key=False)
+    unusual = HubSpotClient(HttpClient(), {"Authorization": f"Bearer {TOKEN}7"}, usual_key=False)
 
     with pytest.raises(HubSpotError) as refusal:
         unusual.list_page("contacts", after="", limit=10, properties=())
@@ -483,7 +499,7 @@ def test_a_rejected_key_of_an_unusual_shape_adds_the_hint_and_nothing_else_does(
 
     hubspot_server.scopes = set()
     with pytest.raises(HubSpotError) as missing:
-        HubSpotClient({"Authorization": f"Bearer {TOKEN}"}, usual_key=False).list_page(
+        HubSpotClient(HttpClient(), {"Authorization": f"Bearer {TOKEN}"}, usual_key=False).list_page(
             "contacts", after="", limit=10, properties=()
         )
     assert CHECK_THE_KEY not in missing.value.public_message
@@ -493,7 +509,7 @@ def test_a_rejected_key_of_an_unusual_shape_adds_the_hint_and_nothing_else_does(
     ("key", "usual"),
     [
         pytest.param(TOKEN, True, id="the-scripted-key"),
-        pytest.param("pat-eu1-0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", True, id="another-region"),
+        pytest.param(service_key("a", region="eu1"), True, id="another-region"),
         pytest.param(f"{TOKEN}7", False, id="a-stray-digit"),
         pytest.param(TOKEN[:-1], False, id="a-missing-digit"),
         pytest.param(f" {TOKEN}", False, id="a-leading-space"),

@@ -10,6 +10,7 @@ import pytest
 from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
+from angee.integrate.http import HttpClient
 from angee.integrate.states import StreamPhase
 from angee.integrate.testing.http import request_fields
 from angee.parties.backends import ParsedAddress, ParsedContact
@@ -25,7 +26,7 @@ HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 
 @pytest.fixture
 def client() -> HubSpotClient:
-    return HubSpotClient(HEADERS)
+    return HubSpotClient(HttpClient(), HEADERS)
 
 
 def run_pass(
@@ -47,7 +48,7 @@ def run_pass(
     """
 
     server.clock = now
-    client = HubSpotClient(HEADERS)
+    client = HubSpotClient(HttpClient(), HEADERS)
     cursor = cursor.begin(phase)
     read: list[str] = []
     while True:

@@ -27,7 +27,7 @@ from angee.jobs.celery import app as celery_app
 from angee.messaging.testing.models import Directory
 from angee.parties import schema as parties_schema
 from angee.parties_integrate_hubspot import schema as hubspot_schema
-from angee.parties_integrate_hubspot.testing.server import HUB_ID, TOKEN, HubSpotServer, serve
+from angee.parties_integrate_hubspot.testing.server import HUB_ID, TOKEN, HubSpotServer, serve, service_key
 from angee.resources.testing.models import Resource
 from tests.conftest import Credential, Vendor, addon_schema, create_platform_admin
 
@@ -155,7 +155,7 @@ def test_a_caller_who_is_no_platform_admin_is_refused_before_anything_is_tested_
 @pytest.mark.parametrize(
     ("token", "message"),
     [
-        pytest.param("pat-na1-ffffffff-ffff-4fff-8fff-ffffffffffff", REJECTED, id="a-key-of-the-usual-shape"),
+        pytest.param(service_key("f"), REJECTED, id="a-key-of-the-usual-shape"),
         pytest.param(f"{TOKEN}7", f"{REJECTED} {CHECK_THE_KEY}", id="a-stray-digit"),
     ],
 )

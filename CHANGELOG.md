@@ -51,7 +51,8 @@ live in code docstrings.
 - New addon `angee.parties_integrate_hubspot` (`angee-parties-integrate-hubspot`)
   registers the `hubspot` directory backend: one HubSpot account's contacts read
   one way into parties over HubSpot's `2026-09` REST paths, with no HubSpot SDK.
-  Its requests are integrate's pinned request (`HttpClient.request`), whose
+  Its requests are integrate's pinned request (`HttpClient.request`), sent
+  through the backend's own client (`HubSpotClient(http, headers)`), whose
   refusal rule (`HttpRefusal`) it shares; it adds a 423 as transient (at least two seconds), a
   429 without `Retry-After` waits for its policy's window (ten seconds, or an
   hour for the daily limit, which its message names), and HubSpot's rejection of
@@ -92,7 +93,10 @@ live in code docstrings.
   which HubSpot leaves out, reaches the mapping as not sent. `parse_string`,
   `parse_options`, `parse_number`, `parse_bool`, `parse_datetime` and
   `parse_date` (`angee.parties_integrate_hubspot.client`) read HubSpot's string
-  values by property type for mapping authors.
+  values by property type for mapping authors. Operator messages never repeat
+  HubSpot's message text or error category. The scripted account
+  (`angee.parties_integrate_hubspot.testing.server`) builds its invented keys at
+  runtime (`service_key`), so no literal in the repository has a real key's shape.
 
 - Sharing a directory shares its contacts. `parties/directory` has a stored,
   grantable `contact_reader` relation (shared through the record-access surface

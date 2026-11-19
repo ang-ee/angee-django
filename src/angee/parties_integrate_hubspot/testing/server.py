@@ -23,7 +23,18 @@ import pytest
 from angee.integrate.testing.http import mock_transport
 from angee.parties_integrate_hubspot.client import API_VERSION
 
-TOKEN = "pat-na1-00000000-0000-4000-8000-000000000000"
+
+def service_key(fill: str, *, region: str = "na1") -> str:
+    """Return an invented service key of a real one's usual shape, ``pat-<region>-<uuid>``, made of ``fill``.
+
+    The key is put together from its parts when called, so no literal in the
+    repository has the shape a secret scanner looks for.
+    """
+
+    return "-".join(("pat", region, fill * 8, fill * 4, "4" + fill * 3, "8" + fill * 3, fill * 12))
+
+
+TOKEN = service_key("0")
 """The invented service key the scripted account accepts."""
 HUB_ID = 1234567
 """The scripted account's hub (portal) id."""
@@ -97,8 +108,9 @@ class HubSpotServer:
     every property a record was given. A read answers each requested property the
     account defines, ``None`` when the record states none, and leaves out a name
     it does not define, as HubSpot ignores one. The account answers token
-    introspection, account details, list pages (by id, ``archived`` lists the
-    soft-deleted), searches (with their ``total``) and batch reads (207 with one
+    introspection, account details, list pages of live records (by id; it refuses
+    an archived listing, which no client asks for), searches (with their
+    ``total``) and batch reads (207 with one
     error per category, naming its ids in ``context.ids``, and ``numErrors``). A
     search takes ``EQ`` and ``GT`` filters on the modified time (epoch
     milliseconds) or the record id, requires every filter of its one group, and
@@ -179,7 +191,7 @@ class HubSpotServer:
         self._stamp(object_type, record_id, modified, lag)
 
     def archive(self, object_type: str, record_id: str, *, at: datetime) -> None:
-        """Soft-delete one record: it leaves lists, searches and batch reads, and lists as archived."""
+        """Soft-delete one record: it leaves lists, searches and batch reads."""
 
         self.records[object_type][record_id]["archived_at"] = at
         self.clock = max(self.clock, at)
@@ -311,18 +323,10 @@ class HubSpotServer:
 
     def _list(self, object_type: str, query: Mapping[str, str]) -> httpx2.Response:
         limit = int(query.get("limit", "10"))
-        if limit > _LIST_PAGE_MAX:
+        if limit > _LIST_PAGE_MAX or query.get("archived") == "true":
             return error_response(400, category="VALIDATION_ERROR")
-        archived = query.get("archived") == "true"
         start = int(query["after"]) if query.get("after") else None
-        keys = sorted(
-            (
-                key
-                for key, record in self.records[object_type].items()
-                if (record["archived_at"] is not None) == archived and (start is None or int(key) >= start)
-            ),
-            key=int,
-        )
+        keys = sorted((key for key in self._live(object_type) if start is None or int(key) >= start), key=int)
         names = [name for name in query.get("properties", "").split(",") if name]
         body: dict[str, Any] = {"results": [self._resource(object_type, key, names) for key in keys[:limit]]}
         if len(keys) > limit:

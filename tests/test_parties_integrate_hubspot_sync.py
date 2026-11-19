@@ -31,15 +31,22 @@ from angee.messaging.testing.models import Directory, Handle, Party, Person, Rel
 from angee.parties.backends import CONTACTS, ParsedContact
 from angee.parties_integrate_hubspot.backends import OVERLAP, HubSpotDirectoryBackend
 from angee.parties_integrate_hubspot.client import EPOCH, HubSpotError
-from angee.parties_integrate_hubspot.testing.server import HUB_ID, TOKEN, HubSpotServer, error_response, serve
+from angee.parties_integrate_hubspot.testing.server import (
+    HUB_ID,
+    TOKEN,
+    HubSpotServer,
+    error_response,
+    serve,
+    service_key,
+)
 from tests.conftest import Credential, make_integration
 from tests.stream_adapters import applied_history
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
 CONTACTS_READ = "crm.objects.contacts.read"
-OTHER_KEY = "pat-na1-ffffffff-ffff-4fff-8fff-ffffffffffff"
-SECOND_KEY = "pat-na1-11111111-1111-4111-8111-111111111111"
+OTHER_KEY = service_key("f")
+SECOND_KEY = service_key("1")
 OTHER_HUB_ID = 9876543
 CONNECTED = "Connected to HubSpot: the service key reads this account's contacts."
 REJECTED = "HubSpot rejected the access token. Enter a valid HubSpot service key."

@@ -454,7 +454,7 @@ class HubSpotDirectoryBackend(DirectoryBackend):
         return str(contact.get("display_name") or "") or super().source_label(link)
 
     def _client(self, credential: Any) -> HubSpotClient:
-        """Return a client that sends ``credential``'s own authorization headers.
+        """Return a client that sends ``credential``'s own authorization headers through this backend's ``http``.
 
         The client also learns whether the key has a service key's usual shape, so
         a rejection of one that does not says to check it (:data:`SERVICE_KEY_SHAPE`).
@@ -463,7 +463,7 @@ class HubSpotDirectoryBackend(DirectoryBackend):
         if credential is None:
             raise HubSpotError("Attach a HubSpot service key to this directory.")
         usual = SERVICE_KEY_SHAPE.fullmatch(credential.secret_value()) is not None
-        return HubSpotClient(credential.auth_headers(), usual_key=usual)
+        return HubSpotClient(self.http, credential.auth_headers(), usual_key=usual)
 
     def _payload(self, record: HubSpotObject, mapped: Sequence[str]) -> dict[str, Any]:
         """Return one contact's payload; a merge's survivor names the records it replaced, in HubSpot's order.

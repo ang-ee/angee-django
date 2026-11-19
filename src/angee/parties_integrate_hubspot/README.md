@@ -45,7 +45,8 @@ addon's web fragment adds "HubSpot account" to the Connect menu
 in a masked field and sends the key as entered. Its `connect_hubspot_directory`
 mutation calls `Directory.objects.connect`, which tests the key with HubSpot
 before it saves the credential and the directory, so a rejected key saves
-nothing and shows HubSpot's refusal. Each directory gets a credential of its own.
+nothing and shows the message for HubSpot's refusal. Each directory gets a
+credential of its own.
 Discovery then learns the account, and the first sync follows.
 
 A sync after a baseline searches for contacts changed since the last one, and
@@ -62,10 +63,16 @@ request (`HttpClient.request`), with no HubSpot SDK;
 HubSpot's own cases: a 423 is transient, a rate limit without `Retry-After`
 waits for the window of the policy HubSpot names, and the daily limit says so.
 When HubSpot rejects a key that lacks a service key's usual shape, the message
-says to check it for extra or missing characters; the shape never refuses a key
-before HubSpot sees it. `HubSpotDirectoryBackend` composes the parties directory base,
-`HubSpotClient` takes the authorization headers its caller gives it and never
-reads a credential, `HubSpotCursor` holds a stream's position inside a baseline
+says to check it for extra or missing characters. The shape itself refuses no
+key. Before HubSpot sees a key, admission refuses an empty one, which has nothing
+to send, and integrate's HTTP client refuses to send one a request header cannot
+carry, such as a key holding a line break. Operator messages are the addon's and
+integrate's own words: none repeats HubSpot's message or its error category. The
+only facts from HubSpot they state are an answer's HTTP status and, when
+discovery refuses a key of another account, the two account ids.
+`HubSpotDirectoryBackend` composes the parties directory base, `HubSpotClient`
+sends through the backend's HTTP client with the authorization headers the
+backend gives it and never reads a credential, `HubSpotCursor` holds a stream's position inside a baseline
 or delta pass, and `contact_from_properties` maps HubSpot's standard contact
 properties onto the parties neutral contact. Their docstrings own the contracts.
 
