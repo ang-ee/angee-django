@@ -7,8 +7,6 @@ import {
   relationValueId,
   useActionOutcomeMutation,
   useAuthoredResourceMutation,
-  useActionResultRun,
-  useRecordChromeActionOutcome,
   useRecordChromeContext,
   useRecordChromeActionMutation,
   useDescriptorRowActions,
@@ -19,7 +17,7 @@ import {
 import * as React from "react";
 import { TASK_MODEL, offersTaskAction } from "@angee/projects";
 
-import { AcceptTaskDocument, DeclineTaskDocument, WakeTaskDocument } from "./documents";
+import { AcceptTaskDocument, DeclineTaskDocument } from "./documents";
 import { useTaskContext } from "./context";
 import { useWorkT } from "./i18n";
 import { STAGE_MODEL } from "./resources";
@@ -166,17 +164,14 @@ export function TriageRecordActions(): React.ReactElement | null {
   const stage = taskContext.data?.project_tasks_by_pk?.stage ?? record?.stage;
   const [start, startState] = useRecordChromeActionMutation<ActionFieldName>("start_task");
   const [returnToTriage, returnState] = useRecordChromeActionMutation<ActionFieldName>("return_task_to_triage");
-  const [wake, wakeState] = useRecordChromeActionOutcome({
-    document: WakeTaskDocument, resultField: "wake_task", idArgument: "task",
-  });
-  const settle = useActionResultRun();
+  const [wake, wakeState] = useRecordChromeActionMutation<ActionFieldName>("wake_task", { idArgument: "task" });
   const wakeAction: ActionDescriptor = {
-    id: "work-wake-task", label: t("triage.action.wake"), permission: "write",
-    primary: true, placement: "menu", disabled: wakeState.fetching,
-    visibleWhen: (row) => row.snoozed_at != null && typeof row.revision === "number",
+    id: "work-wake-task", label: t("triage.action.wake"),
+    placement: "menu", disabled: wakeState.fetching,
+    visibleWhen: (row) => offersTaskAction(row, "wake") && typeof row.revision === "number",
     run: async () => {
       if (typeof record?.revision !== "number") return;
-      await settle(() => wake(context.recordId, { expected_revision: record.revision }));
+      await wake(context.recordId, { expected_revision: record.revision });
     },
   };
   if (!record || context.formReadOnly) return null;

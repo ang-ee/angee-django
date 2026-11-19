@@ -245,8 +245,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **Eligible ActionResult mutations are derived, not authored.** Codegen in
   the shared `@angee/app` generator derives mutations with at least one
   argument when every argument is required (non-null without a default), or
-  when `id: ID!` is the sole required argument and all others are optional or
-  defaulted. Other shapes stay authored. Generated documents preserve the
+  when one `ID!` argument (whatever its name) is the sole required argument and
+  all others are optional or defaulted. Other shapes stay authored. Generated documents preserve the
   schema's argument types and defaults. Call
   `useActionMutation<ActionFieldName>("field")` from `@angee/ui` in headless
   rendered-view code, or

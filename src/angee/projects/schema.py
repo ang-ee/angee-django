@@ -61,7 +61,7 @@ Folder = apps.get_model("storage", "Folder")
 Party = apps.get_model("parties", "Party")
 User = get_user_model()
 
-_PROJECT_PERMISSIONS = ("write", "share", "delete")
+_PROJECT_PERMISSIONS = ("write", "share", "delete", "transfer")
 _TASK_PERMISSIONS = (*_PROJECT_PERMISSIONS, "narrow", "widen", "comment")
 strawberry.enum(ProjectSetupState)
 

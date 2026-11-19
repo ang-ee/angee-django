@@ -1,11 +1,5 @@
 import { graphql } from "@angee/gql/console";
 
-export const ConvertNeedToTaskDocument = graphql(`
-  mutation IntakeConvertNeedToTask($need: ID!, $queue: ID!) {
-    convert_need_to_task(need: $need, queue: $queue) { ok message id code validation_errors }
-  }
-`);
-
 export const CaptureNeedDocument = graphql(`
   mutation IntakeCaptureNeed(
     $target: NeedTargetInput!

@@ -5,6 +5,7 @@
 import { createNamespaceT } from "@angee/ui/i18n";
 
 export const enStorageMessages: Record<string, string> = {
+  "file.changeVisibility": "Change visibility",
   "record.loading": "Loading attached files",
   "record.loadingDrives": "Loading upload destinations",
   "record.empty": "No files attached",

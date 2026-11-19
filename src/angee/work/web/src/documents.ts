@@ -1,11 +1,5 @@
 import { graphql } from "@angee/gql/console";
 
-export const WakeTaskDocument = graphql(`
-  mutation WorkWakeTask($task: ID!, $expected_revision: Int) {
-    wake_task(task: $task, expected_revision: $expected_revision) { ok message id code validation_errors }
-  }
-`);
-
 export const ProjectManagerRosterDocument = graphql(`
   query WorkProjectManagers($project: ID!) {
     project_manager_roster(project: $project) {

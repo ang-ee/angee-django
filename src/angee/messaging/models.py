@@ -89,6 +89,7 @@ from angee.messaging.constants import DELIVERY_TASK_EXPIRES
 from angee.messaging.delivery import queue_message_delivery
 from angee.messaging.managers import (
     ChannelManager,
+    DeliveryReconciliationBusy,
     FragmentManager,
     MessageEdgeManager,
     MessageManager,
@@ -1318,6 +1319,28 @@ class Message(
         return (self.is_trashed and not self.delivery_needs_reconciliation) or bool(
             self.local_metadata.get("delivery_conflict")
         )
+
+    def delivery_resolution_error(self, *, retry: bool) -> ValidationError | None:
+        """The retained row's admission for an operator retry or acknowledgement.
+
+        The locked mutation and the viewer's delivery-actions projection use
+        this predicate. Authorization and observed-revision checks stay with
+        their respective owners.
+        """
+
+        if (
+            self.status == self.MessageStatus.UNCERTAIN and self.scheduled_at is None
+            and self.delivery_lease_until is not None and self.delivery_lease_until > timezone.now()
+        ):
+            return DeliveryReconciliationBusy()
+        allowed = (
+            (self.MessageStatus.UNCERTAIN, self.MessageStatus.FAILED) if retry else (self.MessageStatus.UNCERTAIN,)
+        )
+        if self.status not in allowed or self.delivery_blocked:
+            return ValidationError(
+                "Retry requires a retained failed or uncertain delivery; acknowledgement requires uncertainty."
+            )
+        return None
 
     @property
     def delivery_held(self) -> bool:

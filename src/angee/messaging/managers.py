@@ -3405,14 +3405,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         with transaction.atomic():
             row = self.with_actor(actor).with_action("send_held").lock_if_supported().get(pk=message.pk)
             row.require_revision(expected_revision)
-            if (row.status == "uncertain" and row.scheduled_at is None
-                    and row.delivery_lease_until is not None and row.delivery_lease_until > timezone.now()):
-                raise DeliveryReconciliationBusy()
-            allowed = ("uncertain", "failed") if retry else ("uncertain",)
-            if row.status not in allowed or row.delivery_blocked:
-                raise ValidationError(
-                    "Retry requires a retained failed or uncertain delivery; acknowledgement requires uncertainty."
-                )
+            if error := row.delivery_resolution_error(retry=retry):
+                raise error
             with system_context(reason="messaging.delivery.acknowledge"):
                 row.acknowledged_by_id = actor_user_id(to_subject_ref(actor))
                 if retry:

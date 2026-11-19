@@ -18,6 +18,7 @@ import { ProjectsPage } from "./views/ProjectsPage";
 import { TasksPage } from "./views/TasksPage";
 
 // Keep the real declarations/parsers; only transport hooks and the page mount are replaced.
+const transfer = vi.hoisted(() => vi.fn());
 const mounted = vi.hoisted(() => ({ props: null as ResourceListProps | null, list: null as ListViewProps | null }));
 vi.mock("@angee/ui", async () => {
   const actual = await vi.importActual<typeof import("@angee/ui")>("@angee/ui");
@@ -27,7 +28,7 @@ vi.mock("@angee/ui", async () => {
     ListView: (props: ListViewProps) => { mounted.list = props; return null; },
     useEnumOptions: () => [],
     useActionResultMutation: () => [vi.fn(), {}],
-    useActionOutcomeMutation: () => [vi.fn(), {}],
+    useActionOutcomeMutation: (field: string) => [field === "transfer_project_ownership" ? transfer : vi.fn(), {}],
     useRecordActionMutation: () => [vi.fn(), {}],
     useAuthoredResourceMutation: () => [vi.fn(), {}],
     useActionResultRun: () => vi.fn(),
@@ -100,7 +101,7 @@ describe("composable standard project and task declarations", () => {
       "is_template", "created_from_template",
     ]);
     expect(parsePageActions(props.children).map(({ id }) => id))
-      .toEqual(["pause", "resume", "complete", "drop", "create-from-template"]);
+      .toEqual(["transfer-ownership", "pause", "resume", "complete", "drop", "create-from-template"]);
     expect(props.returning).toContain("permissions");
     const actions = parsePageActions(props.children);
     expect(actions.find(({ id }) => id === "pause")?.visibleWhen?.({ status: "OPEN" })).toBe(true);
@@ -247,7 +248,7 @@ describe("composable standard project and task declarations", () => {
     const props = result.current.props;
     expect(parsePageFields(props.children).find(({ name }) => name === "current_milestone")?.status).toBe(true);
     expect(parsePageActions(props.children).map(({ id }) => id))
-      .toEqual(["pause", "resume", "complete", "drop", "create-from-template"]);
+      .toEqual(["transfer-ownership", "pause", "resume", "complete", "drop", "create-from-template"]);
   });
 
   test("TasksPage mounts the exported task declarations and its default filter", () => {
@@ -261,4 +262,19 @@ describe("composable standard project and task declarations", () => {
     expect(mountedDeclaration<ListProps>(List).defaultGroup).toEqual({ field: "project" });
     expect(parsePageFields(result.current.props.children).find(({ name }) => name === "title")?.title).toBe(true);
   });
+});
+
+
+test("Project transfer uses the actor-scoped user relation picker, permits clearing, and submits the record id", async () => {
+  const { result } = renderHook(useProjectFormDeclaration);
+  const props = propsOf<FormProps>(result.current);
+  const action = parsePageActions(props.children).find(({ id }) => id === "transfer-ownership")!;
+  expect(action).toMatchObject({ placement: "menu", permission: "transfer" });
+  expect(action.args).toEqual([expect.objectContaining({ name: "owner", argKind: "relation", resource: "iam.User", optional: true })]);
+  expect(props.returning).toContain("owner.id");
+  const context = { record: { id: "prj_1", owner: { id: "usr_old" } }, selectedIds: ["prj_1"] };
+  await action.submit?.({ owner: "usr_new" }, context);
+  expect(transfer).toHaveBeenLastCalledWith("prj_1", { owner: "usr_new" });
+  await action.submit?.({ owner: "" }, context);
+  expect(transfer).toHaveBeenLastCalledWith("prj_1", { owner: null });
 });

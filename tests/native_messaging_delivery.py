@@ -123,6 +123,68 @@ class DeliveryFixtures(TransactionTestCase):
         return delivery.run_message_delivery(message._meta.label_lower, message.pk, message.external_id)
 
 
+class DeliveryActionAdmission(DeliveryFixtures):
+    """The row projection and revision-checked mutations agree on delivery admission."""
+
+    def execute(self, document, values, actor=None):
+        actor = actor or self.operator
+        with actor_context(actor):
+            result = GraphQLSchemas.from_discovery().build("console").execute_sync(
+                document, variable_values=values,
+                context_value=SimpleNamespace(request=SimpleNamespace(user=actor)),
+            )
+        self.assertIsNone(result.errors, result.errors)
+        return result.data
+
+    def test_projection_and_mutation_agree_for_retention_conflicts_leases_and_status(self):
+        future = timezone.now() + timedelta(hours=1)
+        past = timezone.now() - timedelta(hours=1)
+        cases = (
+            ({"status": "failed"}, {"retry"}),
+            ({"status": "sent"}, set()),
+            ({"status": "uncertain"}, {"retry", "acknowledge"}),
+            ({"status": "failed", "is_trashed": True}, set()),
+            ({"status": "uncertain", "is_trashed": True, "delivery_possibly_accepted": True}, {"retry", "acknowledge"}),
+            ({"status": "uncertain", "metadata": {"local": {"delivery_conflict": "other"}}}, set()),
+            ({"status": "uncertain", "delivery_lease_until": future}, set()),
+            ({"status": "uncertain", "delivery_lease_until": past}, {"retry", "acknowledge"}),
+            ({"status": "uncertain", "delivery_lease_until": future, "scheduled_at": future}, {"retry", "acknowledge"}),
+        )
+        query = """query($id: String!) { messages_by_pk(id: $id) { delivery_actions revision } }"""
+        for index, (values, offered) in enumerate(cases):
+            for verb, field in (("retry", "retry_message_delivery"), ("acknowledge", "acknowledge_message_delivery")):
+                with self.subTest(index=index, verb=verb):
+                    row = self.outbound(external_id=f"admission-{index}-{verb}")
+                    with system_context(reason="delivery admission fixture"):
+                        Message.objects.filter(pk=row.pk).update(**values)
+                        row.refresh_from_db()
+                    projected = self.execute(query, {"id": row.public_id})["messages_by_pk"]
+                    self.assertEqual(set(projected["delivery_actions"]), offered)
+                    result = self.execute(
+                        f"mutation($id: ID!, $revision: Int!) {{ "
+                        f"{field}(id: $id, expected_revision: $revision) {{ ok }} }}",
+                        {"id": row.public_id, "revision": row.revision},
+                    )
+                    self.assertEqual(result[field]["ok"], verb in offered)
+
+    def test_reader_gets_no_delivery_verbs_and_list_cost_does_not_grow_per_row(self):
+        self.outbound(status="uncertain", external_id="admission-first")
+        query = """{ messages { id delivery_actions } }"""
+        rows = self.execute(query, {}, self.agent)["messages"]
+        self.assertTrue(rows)
+        self.assertTrue(all(row["delivery_actions"] == [] for row in rows))
+        self.execute(query, {})
+        with CaptureQueriesContext(connection) as queries:
+            one = self.execute(query, {})["messages"]
+        single_count = len(queries)
+        for index in range(3):
+            self.outbound(status="failed", external_id=f"admission-extra-{index}")
+        with CaptureQueriesContext(connection) as queries:
+            many = self.execute(query, {})["messages"]
+        self.assertEqual(len(many), len(one) + 3)
+        self.assertEqual(len(queries), single_count)
+
+
 class FakeFeedBackend(FeedBackend):
     """A deterministic provider exercising the public publication and lookup hooks."""
 

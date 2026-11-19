@@ -6,21 +6,20 @@ import { ActionFormDialog, type ListViewProps } from "@angee/ui";
 import { RuntimeFixture, storySchema } from "@angee/storybook/testing";
 
 import { RecordNeedsPane } from "./RecordNeedsPane";
-import { ConvertNeedToTaskDocument } from "./documents";
 
 const mutation = vi.hoisted(() => ({ convert: vi.fn(), options: vi.fn() }));
 vi.mock("@angee/ui", async () => ({
   ...await vi.importActual<typeof import("@angee/ui")>("@angee/ui"),
   useResourceRecordHrefLookup: () => () => undefined,
-  useAuthoredResourceMutation: (document: unknown, options: unknown) => {
-    mutation.options(document, options);
+  useActionOutcomeMutation: (field: string, options: unknown) => {
+    mutation.options(field, options);
     return [mutation.convert, { fetching: false }];
   },
 }));
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mutation.convert.mockResolvedValue({ convert_need_to_task: { ok: true, message: "Converted.", id: "tsk_new" } });
+  mutation.convert.mockResolvedValue({ ok: true, message: "Converted.", id: "tsk_new" });
 });
 
 test("Convert to task appears only for writable unconverted needs and collects a queue for the selected row", async () => {
@@ -44,8 +43,8 @@ test("Convert to task appears only for writable unconverted needs and collects a
   if (!React.isValidElement<React.ComponentProps<typeof ActionFormDialog>>(dialog)) throw new Error("Expected the action dialog");
   expect(dialog.props.action.args).toEqual([{ name: "queue", label: "Queue", argKind: "relation", resource: "work.Queue" }]);
   await dialog.props.action.submit?.({ queue: "que_1" }, dialog.props.context);
-  expect(mutation.convert).toHaveBeenCalledWith({ need: "need_1", queue: "que_1" });
-  expect(mutation.options).toHaveBeenCalledWith(ConvertNeedToTaskDocument, expect.objectContaining({
-    invalidateModels: ["intake.Need", "projects.Task"],
+  expect(mutation.convert).toHaveBeenCalledWith("need_1", { queue: "que_1" });
+  expect(mutation.options).toHaveBeenCalledWith("convert_need_to_task", expect.objectContaining({
+    idArgument: "need", invalidateModels: ["intake.Need", "projects.Task"],
   }));
 });

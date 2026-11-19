@@ -3,17 +3,15 @@ import {
   NavLink,
   useResourceRecordHrefLookup,
   mutationDialogValueCodecs,
-  useAuthoredResourceMutation,
+  useActionOutcomeMutation,
   useDescriptorRowActions,
   type ListColumn,
   type StringIdRow,
 } from "@angee/ui";
-import { extractActionOutcome } from "@angee/refine";
 import { TASK_MODEL } from "@angee/projects";
 import * as React from "react";
 
 import { CaptureNeedAction } from "./CaptureNeedAction";
-import { ConvertNeedToTaskDocument } from "./documents";
 import { useIntakeT } from "./i18n";
 import { MESSAGE_MODEL, NEED_MODEL } from "./resources";
 
@@ -39,10 +37,9 @@ export function RecordNeedsPane({
 }: RecordNeedsPaneProps): React.ReactElement {
   const t = useIntakeT();
   const recordHref = useResourceRecordHrefLookup();
-  const [convert, convertState] = useAuthoredResourceMutation(ConvertNeedToTaskDocument, {
-    errorNotification: false,
+  const [convert, convertState] = useActionOutcomeMutation("convert_need_to_task", {
+    idArgument: "need",
     invalidateModels: [NEED_MODEL, TASK_MODEL],
-    shouldInvalidate: (data) => data?.convert_need_to_task.ok === true,
   });
   const actions = useDescriptorRowActions<NeedRow>([{
     id: "convert-need-to-task",
@@ -52,10 +49,10 @@ export function RecordNeedsPane({
     disabled: convertState.fetching,
     visibleWhen: (record) => record.task === null,
     args: [{ name: "queue", label: t("needs.queue"), argKind: "relation", resource: "work.Queue" }],
-    submit: async (values, context) => extractActionOutcome(await convert({
-      need: mutationDialogValueCodecs.requiredString(context.record?.id, "need"),
-      queue: mutationDialogValueCodecs.requiredString(values.queue, "queue"),
-    }), "convert_need_to_task"),
+    submit: (values, context) => convert(
+      mutationDialogValueCodecs.requiredString(context.record?.id, "need"),
+      { queue: mutationDialogValueCodecs.requiredString(values.queue, "queue") },
+    ),
   }]);
   const columns = React.useMemo<readonly ListColumn<NeedRow>[]>(
     () => [

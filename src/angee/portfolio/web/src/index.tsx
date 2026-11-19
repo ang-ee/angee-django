@@ -78,9 +78,7 @@ const portfolio = defineBaseAddon({
   containers: {
     [`${PROJECT_MODEL}#actions-menu`]: {
       "portfolio.promote-project": {
-        permission: "write",
         requires: "portfolio.Product#create",
-        requiredFields: ["permissions"],
         content: <PromoteProjectAction />,
       },
     },

@@ -8,9 +8,10 @@ describe("portfolio addon manifest", () => {
     expect(() => expectValidBaseAddon(portfolio)).not.toThrow();
   });
 
-  test("promotion requires product creation admission and the project's write permission", () => {
-    expect(portfolio.containers?.["projects.Project#actions-menu"]).toMatchObject({
-      "portfolio.promote-project": { permission: "write", requires: "portfolio.Product#create", requiredFields: ["permissions"] },
-    });
+  test("promotion adds only product creation admission at the container", () => {
+    const contribution = portfolio.containers?.["projects.Project#actions-menu"]?.["portfolio.promote-project"];
+    expect(contribution).toMatchObject({ requires: "portfolio.Product#create" });
+    expect(contribution).not.toHaveProperty("permission");
+    expect(contribution).not.toHaveProperty("requiredFields");
   });
 });

@@ -1431,10 +1431,9 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         if actor is None:
             raise PermissionDenied("File visibility requires an acting user.")
         with transaction.atomic():
-            locked = type(self).system_queryset(lock=("self",)).select_related("drive").get(pk=self.pk)
-            resource = locked.drive if visibility == FileVisibility.INHERITED else locked
-            permission = "share" if visibility == FileVisibility.INHERITED else "write"
-            if not resource.with_actor(actor).has_access(permission):
+            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+            permission = "inherit_visibility" if visibility == FileVisibility.INHERITED else "write"
+            if not locked.with_actor(actor).has_access(permission):
                 raise PermissionDenied("You cannot change file visibility.")
             if locked.visibility != visibility:
                 locked.visibility = visibility

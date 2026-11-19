@@ -145,7 +145,7 @@ test.each([
   { label: "Dismiss", mutation: "dismiss_membership" },
 ])("$label reviews only a writable suggested membership and sends that row's id", async ({ label, mutation }) => {
   const { requests } = renderGroupTab("roster");
-  for (const name of ["Ada Lovelace", "Dismissed member", "Read-only suggestion"]) {
+  for (const name of ["Ada Lovelace", "Read-only suggestion"]) {
     const row = await membershipRow(name);
     expect(within(row).queryByRole("button", { name: label })).toBeNull();
     expect(within(row).queryByRole("button", { name: "Actions" })).toBeNull();
@@ -154,9 +154,7 @@ test.each([
   if (label === "Dismiss") {
     fireEvent.click(within(suggestion).getByRole("button", { name: "Actions" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: label }));
-    const confirmation = await screen.findByRole("alertdialog");
-    expect(requests.some(({ fields }) => fields.includes(mutation))).toBe(false);
-    fireEvent.click(within(confirmation).getByRole("button", { name: label }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   } else {
     fireEvent.click(within(suggestion).getByRole("button", { name: label }));
   }
@@ -221,4 +219,15 @@ test("the threads tab opens the group's first conversation, follows the picked o
   await waitFor(() => expect(transcript()).toBe("thr_3"));
   showGroup("grp_empty");
   expect((await screen.findAllByText("No group conversations in this space yet.")).length).toBeGreaterThan(0);
+});
+
+
+test("Confirm restores a writable dismissed membership", async () => {
+  const { requests } = renderGroupTab("roster");
+  const row = await membershipRow("Dismissed member");
+  expect(within(row).queryByRole("button", { name: "Actions" })).toBeNull();
+  fireEvent.click(within(row).getByRole("button", { name: "Confirm" }));
+  await waitFor(() => expect(requests.find(({ fields }) => fields.includes("confirm_membership"))?.variables)
+    .toEqual({ id: "mem_dismissed" }));
+  expect(await screen.findByText("Membership confirmed")).toBeTruthy();
 });

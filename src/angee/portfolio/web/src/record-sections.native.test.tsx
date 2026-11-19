@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { fireEvent, render, screen } from "@testing-library/react";
 import { expect, test } from "vitest";
+import { operationDocuments } from "@angee/gql/console/actions";
 import { RecordChromeProvider } from "@angee/ui";
 import { RuntimeFixture, storySchema, testDataResource, type GraphQLWireRequest } from "@angee/storybook/testing";
 
@@ -15,7 +16,7 @@ function renderPromotion({ record, readOnly = false }: { record: Record<string, 
     testDataResource("projects.Project", { roots: { list: "projects", detail: "projects_by_pk" } }),
     testDataResource("portfolio.Product", { roots: { list: "portfolio_products", detail: "portfolio_products_by_pk" } }),
   ] } } } };
-  render(<RuntimeFixture activeSchema="console" schemas={schemas}>
+  render(<RuntimeFixture activeSchema="console" schemas={schemas} operationDocuments={{ console: operationDocuments }}>
     <RecordChromeProvider value={{ resource: "projects.Project", canonicalResource: "projects.Project", dataProviderName: "console",
       recordId: record ? "prj_1" : "", record, formReadOnly: readOnly }}>
       <PromoteProjectAction />

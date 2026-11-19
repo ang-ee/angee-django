@@ -6,6 +6,7 @@
 import { createNamespaceT } from "@angee/ui/i18n";
 
 export const enMessagingMessages: Record<string, string> = {
+  "messages.retryFailedDeliveryConfirm": "Retry this failed delivery?",
   "messages.retryDelivery": "Retry delivery",
   "messages.retryDeliveryConfirm": "The provider may already have accepted this message. Retrying can send it again. Retry delivery?",
   "messages.markAsSent": "Mark as sent",

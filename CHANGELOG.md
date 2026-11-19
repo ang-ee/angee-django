@@ -10,6 +10,14 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Authored row actions declare `toast.successTitle` and `toast.failureTitle`
+  separately; `toast.description` remains the fallback failure reason. Callers
+  migrate from the former shared `toast.title` so successful and refused verbs
+  report the right outcome.
+- Message delivery recovery controls consume `delivery_actions`, projected from
+  the same retained-state admission check as Retry and Mark as sent. Task Wake
+  joins `task_actions`. Project and Task permissions now expose `transfer`;
+  files expose `inherit_visibility = drive->share` for the existing widening rule.
 - Record verbs, Delete, Archive and Trash are supplied by the shared views
   instead of each page.
   - **Toolbar.** Explicit placement wins; `primary` implies the toolbar. On a

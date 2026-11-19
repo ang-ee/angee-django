@@ -1,12 +1,12 @@
 import { createNamespaceT } from "@angee/ui/i18n";
 
 export const enSpacesMessages: Record<string, string> = {
+  "group.roster.removed": "Membership removed",
   "group.roster.confirm": "Confirm",
   "group.roster.confirmed": "Membership confirmed",
   "group.roster.confirmError": "Could not confirm membership.",
   "group.roster.dismiss": "Dismiss",
   "group.roster.dismissed": "Membership dismissed",
-  "group.roster.dismissConfirm": "Dismiss this suggested membership? It will not grant access to this space.",
   "group.roster.dismissError": "Could not dismiss membership.",
   "group.parent": "Parent space",
   "group.details": "Details",

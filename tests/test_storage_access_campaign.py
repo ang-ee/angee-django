@@ -134,6 +134,8 @@ def test_the_policy_decides_every_storage_permission(drive: Any) -> None:
             (inherited, "read", "viewer", "outsider"),
             (inherited, "write", "editor", "viewer"),
             (inherited, "share", "editor", "viewer"),
+            (inherited, "inherit_visibility", "alice editor admin", "viewer outsider"),
+            (record, "inherit_visibility", "alice editor admin", "named viewer"),
             (inherited, "transfer", "alice admin", "editor"),
             (inherited, "write__owner", "alice", "editor"),
             (inherited, "delete", "alice editor", "viewer"),
@@ -526,6 +528,15 @@ def test_file_owner_cannot_widen_without_drive_share_and_drive_editor_can_grant(
         row.grant_record_access("viewer", recipient)
     with actor_context(drive.alice):
         drive.with_actor(drive.alice).revoke_record_access("editor", editor)
+    assert not row.with_actor(editor).has_access("inherit_visibility")
+    assert row.with_actor(drive.alice).has_access("inherit_visibility")
+    schema = addon_schema(storage_schema.schemas, "public")
+    with actor_context(editor):
+        projected = result_data(execute_schema(schema, """
+            query($id: String!) { files_by_pk(id: $id) { permissions } }
+        """, {"id": row.sqid}, user=editor))["files_by_pk"]["permissions"]
+    assert "write" in projected
+    assert "inherit_visibility" not in projected
     with actor_context(editor), pytest.raises(PermissionDenied):
         row.with_actor(editor).set_visibility(FileVisibility.INHERITED)
     with actor_context(drive.alice):

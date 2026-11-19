@@ -47,7 +47,7 @@ async function openVerbs(): Promise<void> {
 test("Wake ends the open task's observed hold through the record menu", async () => {
   const requests = renderActions({ record: queued({
     stage: { category: "TRIAGE" }, started_triage_at: "2026-11-01T10:00:00Z", triaged_at: null,
-    snoozed_at: "2026-11-02T10:00:00Z", revision: 4, permissions: ["write"],
+    task_actions: ["wake"], revision: 4,
   }) });
   await openVerbs();
   fireEvent.click(await screen.findByRole("menuitem", { name: "Wake" }));
@@ -57,12 +57,11 @@ test("Wake ends the open task's observed hold through the record menu", async ()
 });
 
 test.each([
-  { snoozed_at: null, revision: 4, permissions: ["write"] },
-  { snoozed_at: "2026-11-02T10:00:00Z", revision: 4, permissions: [] },
-  { snoozed_at: "2026-11-02T10:00:00Z", permissions: ["write"] },
-])("Wake is absent for an unheld, unauthorized or unversioned task: %j", async (overrides) => {
-  renderActions({ record: queued({ stage: { category: "TRIAGE" }, started_triage_at: "2026-11-01T10:00:00Z", triaged_at: null, ...overrides }) });
-  await openVerbs();
+  { task_actions: [], snoozed_at: "2026-11-02T10:00:00Z", revision: 4, permissions: ["write"] },
+  { task_actions: ["wake"] },
+])("Wake requires the projected verb and an observed revision: %j", async (overrides) => {
+  renderActions({ record: queued({ ...overrides }) });
+  if (screen.queryByRole("button", { name: "Actions" })) await openVerbs();
   expect(screen.queryByRole("menuitem", { name: "Wake" })).toBeNull();
 });
 

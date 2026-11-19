@@ -138,3 +138,28 @@ class RecordTaskGraphQLTests(WorkCase):
         self.assertFalse(scheduled.errors, scheduled.errors)
         self.assertFalse(scheduled.data["schedule_record_task"]["ok"])
         self.assertIn("Task may target only", scheduled.data["schedule_record_task"]["message"])
+
+    def test_transfer_permissions_are_projected_and_project_transfer_retains_attribution(self):
+        query = """query($id: String!) { projects_by_pk(id: $id) { permissions owner { id } } }"""
+        values = {"id": self.record_row.sqid}
+        own = self.graphql(query, values, bucket="console")["projects_by_pk"]
+        reader = self.graphql(query, values, user=self.reader, bucket="console")["projects_by_pk"]
+        self.assertIn("transfer", own["permissions"])
+        self.assertNotIn("transfer", reader["permissions"])
+        task = self.task()
+        task_row = self.graphql(
+            """query($id: String!) { project_tasks_by_pk(id: $id) { permissions } }""",
+            {"id": task.sqid}, bucket="console",
+        )["project_tasks_by_pk"]
+        self.assertIn("transfer", task_row["permissions"])
+        created_by = self.record_row.created_by_id
+        mutation = """mutation($id: ID!, $owner: ID) {
+            transfer_project_ownership(id: $id, owner: $owner) { ok }
+        }"""
+        refused = self.graphql(mutation, {**values, "owner": self.reader.sqid}, user=self.reader, bucket="console")
+        self.assertFalse(refused["transfer_project_ownership"]["ok"])
+        accepted = self.graphql(mutation, {**values, "owner": self.reader.sqid}, bucket="console")
+        self.assertTrue(accepted["transfer_project_ownership"]["ok"])
+        self.record_row.refresh_from_db()
+        self.assertEqual(self.record_row.owner_id, self.reader.pk)
+        self.assertEqual(self.record_row.created_by_id, created_by)

@@ -37,7 +37,7 @@ from angee.graphql.actions import (
     authorized_permission_target,
     resolve_action_target,
 )
-from angee.graphql.capabilities import held_permissions, permissions_field
+from angee.graphql.capabilities import PermissionsExtension, held_permissions, permissions_field
 from angee.graphql.data.hasura import (
     AngeeHasuraWriteBackend,
     SortAlias,
@@ -360,6 +360,21 @@ class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
         """Project the same held predicate used by delivery verbs and filters."""
 
         return cast(Any, self).is_held
+
+    @strawberry_django.field(
+        only=["status", "scheduled_at", "delivery_lease_until", "is_trashed", "delivery_possibly_accepted", "metadata"],
+        extensions=[PermissionsExtension(("send_held",))],
+    )
+    def delivery_actions(self) -> list[str]:
+        """Operator verbs admitted by the same retained-state check as their locked mutation."""
+
+        row = cast(Any, self)
+        if "send_held" not in held_permissions(row, ("send_held",)):
+            return []
+        return [
+            action for action in ("retry", "acknowledge")
+            if row.delivery_resolution_error(retry=action == "retry") is None
+        ]
 
     platform: auto
     direction: auto
