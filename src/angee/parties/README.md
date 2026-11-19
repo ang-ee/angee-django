@@ -491,7 +491,7 @@ colleague's, `Person.user` set) the roles read the identity and no more:
 `parties/party#role_withheld` subtracts that person from every role arm beyond
 `role_identity`, so no role reads their private fields, handles, addresses,
 relationships, circle memberships or record tasks, or writes, merges, shares,
-deletes or transfers them; pickers still show them (pending the architect's
+deletes, transfers or adopts them; pickers still show them (pending the architect's
 ruling: the person is the user's own, which adoption lends no directory either;
 `nil` there gives an account's person the same reach as any other). A
 directory's contact readers keep exactly what they read without the roles.

@@ -202,6 +202,8 @@ MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
         "write": ("owner", "platform"),
         "merge_away": ("owner", "platform"),
         "delete": ("owner", "platform"),
+        # The roles lend no adoption of an account's own person, which adoption refuses anyway.
+        "adopt": ("owner",),
     },
     "account party": {
         "read": (*ROLE_HOLDERS, "owner", "platform"),
