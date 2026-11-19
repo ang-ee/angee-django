@@ -276,16 +276,22 @@ REFINABLE_FIELDS = (
     "organization",
     "title",
     "role",
+    "emails",
+    "phones",
 )
 """The neutral contact's fields a mapping may refine (:attr:`DirectoryMapping.refines`).
 
-Each is a plain value the ingest states in the ordinary way: the name parts,
-the dates, the employment. Not the display name, which names the person and
-the handles the contact lands, nor the notes, a source's free text, whose home
-is a page. Never the emails, phones or addresses, which decide the contact's
-handles, its claims, the people proposed as its same person and the page's
-locks, nor the photo, media the base stores before the record is built.
+Each is a value the ingest states in the ordinary way: the name parts, the
+dates, the employment, and of the emails and phones only the preferred flag of
+an address the source sent (:data:`POINT_FIELDS`), which the ingest keeps on the
+address's handle; their values, labels and order decide the contact's handles,
+its claims, the people proposed as its same person and the page's locks, and
+stay the source's. Not the display name, which names the person and the handles
+the contact lands, nor the notes, a source's free text, whose home is a page,
+nor the addresses or the photo, media the base stores before the record is built.
 """
+POINT_FIELDS = ("emails", "phones")
+"""The contact's ``(value, label, is_preferred)`` collections, of which a refinement sets only ``is_preferred``."""
 
 
 class DirectoryMapping(ImplBase):
@@ -299,8 +305,10 @@ class DirectoryMapping(ImplBase):
     own, declared with its columns on a donor of ``parties.Person`` (its
     precedence decides against the person's own values), or parties' own
     (``Person.MAPPED_ASPECTS``: languages, occupation); or write through other
-    owners' verbs in :meth:`apply_record` (tags, a handle's preferred mark),
-    which it declares nothing for. The consumer registers it under its
+    owners' verbs in :meth:`apply_record` (tags, the preferred mark of a handle
+    the contact does not bring), which it declares nothing for. The preferred
+    mark of the contact's own email or phone is a refinement of its flag. The
+    consumer registers it under its
     ``key`` from its
     ``autoconfig.py``: ``"ANGEE_DIRECTORY_MAPPING_CLASSES.<key>": "<dotted.path>"``.
     ``backend`` is the registry key of the directory backend whose contacts it
@@ -381,8 +389,9 @@ class DirectoryMapping(ImplBase):
 
         For a donor's group ``"example"``: ``person.statements_for("example").set(aspect="example",
         values=values, asserted_by=link.asserting_source(), link=link)``. Tags go through
-        ``TagAssignment.objects.attach``; a handle's preferred mark through ``Handle.objects.upsert(...,
-        is_preferred=True)``. The default writes nothing, for a mapping that only refines.
+        ``TagAssignment.objects.attach``; the preferred mark of a handle the contact does not bring (a
+        messenger's) through ``Handle.objects.upsert(..., is_preferred=True)``. The default writes nothing, for a
+        mapping that only refines.
         """
 
         del person, values, link
@@ -1094,7 +1103,10 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
 
 
 def _refined(mapping: DirectoryMapping, contact: ParsedContact, values: Mapping[str, Any]) -> ParsedContact:
-    """Return ``mapping``'s refinement of ``contact``; a field it sets that it does not declare fails the extract."""
+    """Return ``mapping``'s refinement of ``contact``; a field it sets that it does not declare fails the extract.
+
+    So does any change of an email or phone but its preferred flag (:data:`POINT_FIELDS`).
+    """
 
     refined = mapping.refine(contact, values)
     changed = {name for name in CONTACT_FIELDS if getattr(refined, name) != getattr(contact, name)}
@@ -1103,6 +1115,12 @@ def _refined(mapping: DirectoryMapping, contact: ParsedContact, values: Mapping[
             f"Directory mapping {mapping.key!r} refined the contact fields {undeclared!r}, which it does not declare: "
             "declare them in its refines."
         )
+    for name in sorted(changed.intersection(POINT_FIELDS)):
+        if [point[:2] for point in getattr(refined, name)] != [point[:2] for point in getattr(contact, name)]:
+            raise ImproperlyConfigured(
+                f"Directory mapping {mapping.key!r} changed the contact's {name} beyond their preferred flags; a "
+                "mapping sets only the preferred flag of an address the source sent."
+            )
     return refined
 
 

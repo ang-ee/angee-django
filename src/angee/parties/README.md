@@ -88,18 +88,18 @@ belongs in a group the ingest states (a house's name for a person is the
 contact's `nickname`) is no statement of the mapping's: the mapping refines the
 neutral contact from its projection before the base keeps it
 (`DirectoryMapping.refine`, the fields it declares as `refines`, among
-`REFINABLE_FIELDS`: the name parts, the dates and the employment, never the
-display name, notes, addresses or photo), so the refined field is compared,
-versioned and stated by the ingest like the source's own, a person's own value
-still wins by rank, and removing the mapping replays the contact, whose
-ingest then states the source's own value. A mapping may also write through
+`REFINABLE_FIELDS`: the name parts, the dates, the employment, and the
+preferred flag of an email or phone the source sent, never its value, label or
+order, nor the display name, notes, addresses or photo), so the refined field
+is compared, versioned and stated by the ingest like the source's own, a
+person's own value still wins by rank, and removing the mapping replays the
+contact, whose ingest then states the source's own value. The preferred mark of
+the channel a contact chose is such a refinement when the contact brings that
+address (R20), so the ingest writes it once. A mapping may also write through
 other owners' verbs in its `apply_record`, declaring nothing for them: tags
-(`TagAssignment.objects.attach`) and a handle's preferred mark
-(`Handle.objects.upsert(..., is_preferred=True)`). Neither is taken back when
-the mapping or the link goes, except that the ingest keeps an address the
-contact itself lands as preferred as its source says: a mark the mapping set on
-it holds while the mapping applies, and the source's own preference returns on
-the replay once the mapping is gone. On every
+(`TagAssignment.objects.attach`) and the preferred mark of a handle the contact
+does not bring, a messenger's (`Handle.objects.upsert(..., is_preferred=True)`).
+Neither is taken back when the mapping or the link goes. On every
 pull-only record the base first withdraws what the link states in a person group
 that neither the ingest nor a registered mapping states, so a mapping removed
 from the registry has its statements withdrawn on its replay, and nothing else on

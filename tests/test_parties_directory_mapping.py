@@ -202,11 +202,11 @@ class ElsewhereRefiningMapping(HouseNameMapping):
     backend = "elsewhere"
 
 
-class EmailRefiningMapping(HouseNameMapping):
-    """Would refine the contact's addresses, which are no mapping's to refine."""
+class PhotoRefiningMapping(HouseNameMapping):
+    """Would refine the contact's photo, which is no mapping's to refine."""
 
-    key = "email_refining"
-    refines = ("emails",)
+    key = "photo_refining"
+    refines = ("photo",)
 
 
 class UndeclaredRefinementMapping(HouseNameMapping):
@@ -219,23 +219,43 @@ class UndeclaredRefinementMapping(HouseNameMapping):
 class FlagsMapping(DirectoryMapping):
     """Plain tags from a source's multi-select field, and the preferred mark on the channel the contact chose.
 
-    Neither is a statement group, so it declares none; it writes through the owners' own verbs.
+    Neither is a statement group, so it declares none. The mark on the contact's own email or phone is a
+    refinement of the contact, stated by the ingest; on a handle the contact does not bring (a WhatsApp
+    handle) and the tags, it writes through the owners' own verbs.
     """
 
     key = "flags"
     backend = PullDirectoryBackend.key
     fields = ("flags", "channel")
+    refines = ("emails", "phones")
 
     def project(self, row: Mapping[str, Any]) -> dict[str, Any]:
         flags = sorted({flag.strip() for flag in str(row.get("flags") or "").split(";") if flag.strip()})
-        channel = {"text": Handle.Platform.PHONE, "whatsapp": Handle.Platform.WHATSAPP}.get(str(row.get("channel")))
-        return {"tags": flags, "preferred": str(channel or "")}
+        channels = {"email": "emails", "text": "phones", "whatsapp": Handle.Platform.WHATSAPP}
+        return {"tags": flags, "preferred": str(channels.get(str(row.get("channel"))) or "")}
+
+    def refine(self, contact: ParsedContact, values: Mapping[str, Any]) -> ParsedContact:
+        points = values["preferred"]
+        if points not in ("emails", "phones") or not getattr(contact, points):
+            return contact
+        (value, label, _preferred), *rest = getattr(contact, points)
+        return replace(contact, **{points: ((value, label, True), *rest)})
 
     def apply_record(self, person: Any, values: Mapping[str, Any], *, link: Any) -> None:
         tags = [str(tag.sqid) for tag in Tag.objects.filter(name__in=values["tags"])]
         TagAssignment.objects.attach("parties/party", str(person.sqid), tags)
-        for handle in Handle.objects.filter(party=person.pk, platform=values["preferred"]).order_by("pk"):
-            Handle.objects.upsert(platform=handle.platform, value=handle.value, is_preferred=True)
+        if values["preferred"] == Handle.Platform.WHATSAPP:
+            for handle in Handle.objects.filter(party=person.pk, platform=Handle.Platform.WHATSAPP).order_by("pk"):
+                Handle.objects.upsert(platform=handle.platform, value=handle.value, is_preferred=True)
+
+
+class AddressAddingMapping(FlagsMapping):
+    """Would add an address to the contact while marking one preferred: a refinement sets only the flag."""
+
+    key = "address_adding"
+
+    def refine(self, contact: ParsedContact, values: Mapping[str, Any]) -> ParsedContact:
+        return replace(contact, phones=(*contact.phones, ("+14155550199", "", True)))
 
 
 class ProfileMapping(DirectoryMapping):
@@ -595,30 +615,45 @@ def test_a_mapping_declaring_no_group_tags_and_marks_preferred_and_a_rerun_chang
     assert whatsapp.is_preferred is True
 
 
-def test_a_preferred_mark_on_an_address_the_contact_lands_is_the_sources_own_once_the_mapping_goes(
+def test_a_preferred_mark_on_the_contacts_own_phone_is_stated_by_the_ingest_and_goes_with_the_mapping(
     pull: Pull, settings: Any
 ) -> None:
-    """The ingest keeps a landed address's preference as its source gives it; the mapping's mark follows it."""
+    """The refined flag lands with the phone, a changed record writes the handle no more, and removal restores it."""
 
     pull.source.put("ada", replace(_ADA, phones=(("+14155550123", "cell", False),)), fields={"channel": "text"})
-    _register(settings, FlagsMapping)
+    assert _checked(settings, FlagsMapping) == []
     pull.reopen()
     pull.sync()
-    phone = Handle.objects.get(platform=Handle.Platform.PHONE, party=pull.link("ada").target_object_id)
+    ada = pull.link("ada")
+    phone = Handle.objects.get(platform=Handle.Platform.PHONE, party=ada.target_object_id)
     assert phone.is_preferred is True
+    assert ada.source_payload["contact"]["phones"] == [["+14155550123", "cell", True]]
 
+    marks = Handle.history.filter(id=phone.pk).count()
     pull.source.put("ada", replace(_ADA, phones=(("+14155550123", "cell", False),), notes="Moved"), fields={
         "channel": "text"
     })
     assert pull.sync().count == 1
     phone.refresh_from_db()
     assert phone.is_preferred is True
+    assert Handle.history.filter(id=phone.pk).count() == marks
 
     _register(settings)
     pull.reopen()
     pull.sync()
     phone.refresh_from_db()
     assert phone.is_preferred is False
+
+
+def test_a_refinement_of_the_contacts_addresses_sets_only_a_preferred_flag(pull: Pull, settings: Any) -> None:
+    """Adding, removing or relabelling an address is the source's alone: such a refinement fails the extract."""
+
+    pull.source.put("ada", replace(_ADA, phones=(("+14155550123", "cell", False),)), fields={"channel": "text"})
+    _register(settings, AddressAddingMapping)
+    pull.reopen()
+
+    with pytest.raises(ImproperlyConfigured, match="preferred"):
+        pull.sync()
 
 
 @pytest.mark.usefixtures("adoption")
@@ -865,7 +900,7 @@ def test_a_mapping_of_a_backend_that_writes_back_or_of_no_backend_fails_the_syst
     assert ids(UndeclaredMapping) == []
     assert ids(UnknownGroupMapping) == ["parties.E003"]
     # A mapping refines only the contact fields open to it, and no two mappings of one backend refine one field.
-    assert ids(EmailRefiningMapping) == ["parties.E005"]
+    assert ids(PhotoRefiningMapping) == ["parties.E005"]
     assert ids(HouseNameMapping, AnotherHouseNameMapping) == ["parties.E006"]
     assert ids(HouseNameMapping, ElsewhereRefiningMapping) == ["parties.E001"]
     # The contact ingest's own groups are its; a mapping stating one would overwrite the ingest's statement.

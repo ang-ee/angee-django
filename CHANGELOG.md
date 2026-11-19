@@ -10,6 +10,12 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: a directory mapping's refinement may set the preferred flag
+  of an email or phone the source sent (`REFINABLE_FIELDS` gains `emails` and
+  `phones`, `POINT_FIELDS`); a refinement changing an address's value, label or
+  order fails the extract. The mark on the contact's own address is then stated
+  by the ingest once and goes with the mapping; a handle the contact does not
+  bring keeps `Handle.objects.upsert(..., is_preferred=True)`.
 - `angee.parties`: a person's nickname is identity, like the name parts:
   whoever reads the person reads it, a directory's contact readers, identity
   readers and thread or task readers included. `parties/person` drops
