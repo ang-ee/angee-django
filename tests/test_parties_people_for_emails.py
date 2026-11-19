@@ -72,6 +72,16 @@ def test_an_account_answers_its_own_person(owner: Any) -> None:
     ]
 
 
+def test_an_account_without_a_person_answers_nobody_and_the_lookup_creates_none(owner: Any) -> None:
+    """The verb reads and never writes: a caller that needs the account's person asks for it itself."""
+
+    get_user_model().objects.create_user(username="grace-account", email="grace@example.com")
+    people = Person._base_manager.count()
+
+    assert _answer("grace@example.com") == []
+    assert Person._base_manager.count() == people
+
+
 def test_one_claimant_answers_a_held_by_nobody_address_and_two_answer_nobody(owner: Any) -> None:
     """A claim below the review threshold resolves no handle; its one claimant is the answer, two decide nothing."""
 

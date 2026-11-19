@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 from typing import Any
 
@@ -9,10 +10,11 @@ import httpx2
 import pytest
 import vobject
 from django.apps import apps
+from django.contrib.auth import get_user_model
 from django.core import checks
-from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.core.exceptions import ValidationError
 from django.db import connection
-from rebac import system_context
+from rebac import PermissionDenied, system_context
 
 from angee.graphql.testing.documents import execute_schema
 from angee.integrate.errors import IntegrationError
@@ -167,11 +169,72 @@ def test_the_carddav_vendor_is_seeded_before_any_directory_and_adopted_by_slug()
 
 
 def test_connecting_before_the_vendor_is_seeded_says_to_load_resources_and_keeps_nothing() -> None:
+    """An operator-readable refusal, reaching the connect form, that says what to load."""
+
     admin = parties_graphql._platform_admin("carddav-unseeded-admin")
-    with pytest.raises(ImproperlyConfigured, match=r"Vendor slug 'carddav'.*Run `manage\.py resources load`"):
+    with pytest.raises(ValidationError, match=r"vendor is not loaded.*`manage\.py resources load`"):
         _connect(admin)
     with system_context(reason="test.parties.carddav.unseeded"):
         assert not Credential._base_manager.exists() and not Directory._base_manager.exists()
+
+
+def test_a_caller_who_may_not_create_a_directory_is_refused_before_the_connection_test(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _load_vendor()
+    monkeypatch.setattr(CardDavDirectoryBackend, "test_connection", lambda backend: pytest.fail("tested"))
+    with system_context(reason="test.parties.carddav.member"):
+        member = get_user_model().objects.create_user(username="carddav-member", email="member@example.com")
+    with pytest.raises(PermissionDenied):
+        _connect(member)
+    with system_context(reason="test.parties.carddav.member.verify"):
+        assert not Credential._base_manager.exists() and not Directory._base_manager.exists()
+
+
+def test_a_second_connection_of_one_name_is_refused_and_the_first_keeps_its_own_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each directory gets a credential of its own: a name already serving another integration is refused."""
+
+    _load_vendor()
+    monkeypatch.setattr(CardDavDirectoryBackend, "test_connection", lambda backend: "Connected.")
+    admin = parties_graphql._platform_admin("carddav-twice-admin")
+    first = _connect(admin)
+
+    with pytest.raises(ValidationError, match="already connected under that name"):
+        _connect(admin, material={"username": "grace@example.com", "password": "another-password"})
+
+    with system_context(reason="test.parties.carddav.twice.verify"):
+        assert list(Directory._base_manager.values_list("pk", flat=True)) == [first.pk]
+        credential = Credential._base_manager.get()
+        assert credential.reveal() == {"username": "ada@example.com", "password": "carddav-password"}
+    assert _connect(admin, display_name="Grace Contacts").credential_id != first.credential_id
+
+
+def test_a_first_sync_that_cannot_be_queued_is_logged_and_the_connected_directory_stays(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The first sync is requested once the rows commit; a failure to queue it is logged, never raised."""
+
+    _load_vendor()
+    monkeypatch.setattr(CardDavDirectoryBackend, "test_connection", lambda backend: "Connected.")
+    queued: list[bool] = []
+
+    def refuse(directory: Any, **kwargs: Any) -> Any:
+        queued.append(connection.in_atomic_block)
+        raise RuntimeError("The task broker is down.")
+
+    monkeypatch.setattr(Directory, "request_sync", refuse)
+    admin = parties_graphql._platform_admin("carddav-unqueued-admin")
+
+    with caplog.at_level(logging.WARNING, logger="angee.parties.managers"):
+        directory = _connect(admin)
+
+    assert queued == [False]
+    assert "first sync" in caplog.text
+    with system_context(reason="test.parties.carddav.unqueued.verify"):
+        assert Directory._base_manager.filter(pk=directory.pk).exists()
+        assert Credential._base_manager.filter(pk=directory.credential_id).exists()
 
 
 def test_a_refused_connection_test_writes_no_rows(

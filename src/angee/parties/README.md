@@ -22,12 +22,16 @@ decides which way contacts sync, pull-only unless it declares otherwise.
 `DirectoryBackend.credential_blocker` is the one rule integrate raises on every
 attachment and the connect picker shows beside each account.
 Connecting a directory is one verb, `Directory.objects.connect`, which a vendor's
-connect mutation calls: it builds the credential and the directory unsaved, has
+connect mutation calls: it checks that its owner may create a directory, builds
+the credential and the directory unsaved, refuses a credential name already
+serving another integration (each directory gets a credential of its own), has
 the backend admit the credential and test the connection outside any
 transaction, refuses with the backend's own message before anything is saved,
-then creates both atomically, claims the address the account signs in as
-(`DirectoryBackend.account_address`) as the owner's own handle, and requests the
-first sync. Each vendor's row is a master resource adopted by slug.
+then creates both atomically and claims the address the account signs in as
+(`DirectoryBackend.account_address`) as the owner's own handle. The first sync is
+requested once that commits; a failure to queue it is logged. Each vendor's row
+is a master resource adopted by slug, and connecting before it is loaded is a
+refusal that says to load resources.
 The [CardDAV backend](../parties_integrate_carddav/backend.py) syncs two-way and
 builds its own records: a card's `UID` is its key and its href rides in the
 link's metadata, and wire properties outside the projection stay in RecordLink
@@ -115,7 +119,8 @@ person holds it, the one person a current contact claim proposes it for),
 comparing handles by their normalized value. A trashed person, an organization
 and a merged-away row are nobody's answer, and a holder that is no live person
 does not stop the claims: a person minted earlier for an organization's address
-is found again by their claim. It
+is found again by their claim. An account names only its existing person: the
+lookup writes nothing. It
 decides nothing: directory adoption, the connections import (which shares its
 holding rule) and an importer in another addon each apply their own policy, and
 only a `HELD` answer holds the address.

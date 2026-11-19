@@ -114,3 +114,28 @@ def test_a_reimport_of_a_handle_an_organization_holds_lands_on_the_imports_earli
 
         assert second.pk == first.pk
         assert Person.objects.count() == 2  # The importer's own person and the friend.
+
+
+def test_a_reimport_whose_earlier_person_is_trashed_mints_a_new_one(db, monkeypatch):
+    """A trashed person is nobody's: the import's fallback to its earlier run's person passes over them."""
+
+    del db
+    monkeypatch.setattr(ManualChannelBackend, "source_kind", SourceKind.IMPORT)
+    with system_context(reason="parties.connection.trashed"):
+        user = get_user_model().objects.create_user(username="connection-trashed-importer")
+        channel = make_integration("connection-trashed", model=Channel, backend_class="manual")
+        RelationshipKind.objects.get_or_create(slug="acquaintance", defaults={"name": "Acquaintance"})
+        stream = current_stream(channel, "connections", kind=StreamKind.RECORD_REPLICA)
+        link = RecordLink.objects.observe(stream, "friend:11")
+        parsed = ParsedConnection(handle=ParsedHandle(platform="facebook", value="Friend", display_name="Friend"))
+        (first,) = Party.objects.ingest_connections(
+            [(parsed, link)], created_by_id=user.pk, asserted_by=channel.integration_ptr,
+        )
+        first.trash(reason="Removed by its holder")
+
+        (second,) = Party.objects.ingest_connections(
+            [(parsed, link)], created_by_id=user.pk, asserted_by=channel.integration_ptr,
+        )
+
+        assert second.pk != first.pk
+        assert not Person._base_manager.get(pk=second.pk).is_trashed

@@ -149,6 +149,23 @@ live in code docstrings.
   projects only applied handle statements, so a claim would drop the address from
   the card, and what a two-way card publishes is open with the architect.
 
+- `people_for_emails` reads and never writes: on the account basis it answers an
+  account's existing person only. It used to create a person for every matched
+  account that had none (`for_user`); a caller that needs the account's person
+  asks `PartyManager.for_user` itself. `EmailHolder.person` and `.handle` are
+  typed as `Person` and `Handle | None`. The connections import's fallback (the
+  person its earlier run linked) passes over a trashed person, so such a
+  re-import mints a new one.
+
+- `Directory.objects.connect` checks that its owner may create a directory
+  before anything else. Each connected directory gets a credential of its own: a
+  credential name (`<backend label> — <display name>`) already serving another
+  integration of the owner's is refused, where a second connection of one display
+  name used to update the first one's credential. A backend whose vendor row is
+  not loaded is a `ValidationError` that says to run `manage.py resources load`
+  (it was an `ImproperlyConfigured`). The first sync is requested after the
+  transaction commits, and a failure to queue it is logged instead of raised.
+
 - A directory proposes for the same-as review each person its decision of a
   contact's target passed over: a candidate an adoption limit refused, and the
   other people the records a source merge replaced were linked to. The new
