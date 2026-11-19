@@ -9,8 +9,16 @@ import { createUiTestProviders } from "@angee/ui/testing";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  merge: vi.fn(), invalidate: vi.fn(), previews: [] as readonly unknown[], variables: [] as unknown[],
-  selection: undefined as unknown,
+  merge: vi.fn(), invalidate: vi.fn(), invalidateResource: vi.fn(), previews: [] as readonly unknown[],
+  variables: [] as unknown[], selection: undefined as unknown,
+}));
+vi.mock("@angee/metadata", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/metadata")>()),
+  useResourceInvalidates: (models: readonly string[]) => models.map((resource) => ({ resource, invalidates: ["resourceAll"] })),
+}));
+vi.mock("@refinedev/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@refinedev/core")>()),
+  useInvalidate: () => mocks.invalidateResource,
 }));
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
@@ -26,6 +34,7 @@ vi.mock("@angee/refine", async (importOriginal) => ({
 }));
 
 import { DuplicatesDialog, type DuplicateSetInput } from "./DuplicatesDialog";
+import { PARTY_MERGE_RESOURCES } from "./documents";
 import { enPartiesMessages } from "./i18n";
 import parties from "./index";
 
@@ -33,6 +42,7 @@ const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://parti
 beforeEach(() => {
   mocks.merge.mockReset();
   mocks.invalidate.mockReset();
+  mocks.invalidateResource.mockReset();
   mocks.previews = PREVIEWS;
   mocks.variables = [];
   mocks.selection = undefined;
@@ -379,6 +389,9 @@ describe("the batch merge dialog", () => {
       expect(mocks.merge.mock.calls.map(([variables]) => (variables as { sets: string[][] }).sets.map((ids) => ids[0])))
         .toEqual([["p0", "p1", "p2", "p3", "p4"], ["p5", "p6", "p7", "p8", "p9"], ["p10", "p11"]]);
       expect(mocks.invalidate).toHaveBeenCalledTimes(1);
+      // The resource lists behind (a list's rows and its total) refresh once too, each merged resource once.
+      expect(mocks.invalidateResource.mock.calls.map(([params]) => (params as { resource: string }).resource))
+        .toEqual([...PARTY_MERGE_RESOURCES]);
     });
 
     test("Stop ends the run after the chunk in flight and shows the rest as left out", async () => {

@@ -1630,19 +1630,22 @@ importers:
       '@angee/integrate':
         specifier: workspace:*
         version: link:../../integrate/web
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
       '@angee/refine':
         specifier: workspace:*
         version: link:../../../../packages/refine
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../packages/ui
+      '@refinedev/core':
+        specifier: ^5.0.12
+        version: 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       lucide-react:
         specifier: ^1.21.0
         version: 1.70.0(@types/react@19.3.0)(react@19.3.1)
     devDependencies:
-      '@angee/metadata':
-        specifier: workspace:*
-        version: link:../../../../packages/metadata
       '@tanstack/react-router':
         specifier: ^1.170.41
         version: 1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1)

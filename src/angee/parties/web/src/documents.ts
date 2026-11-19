@@ -33,19 +33,29 @@ export const PARTY_STATEMENT_DECISION_INVALIDATES = [
   "parties.Organization",
 ] as const;
 
-export const PARTY_MERGE_INVALIDATES = [
+/**
+ * The models a party merge moves that are exposed as resources: their resource
+ * lists (rows and totals) refresh through the metadata owner's resource
+ * invalidations (`useResourceInvalidates`), which authored invalidation does not reach.
+ */
+export const PARTY_MERGE_RESOURCES = [
   "parties.Party",
   "parties.Person",
   "parties.Organization",
   "parties.Handle",
   "parties.PartyStatement",
-  "parties.PersonStatement",
-  "parties.OrganizationStatement",
   "parties.Address",
-  "parties.AddressStatement",
-  "parties.RelationshipStatement",
   "parties.CircleMember",
   "parties.Relationship",
+] as const;
+
+/** Every model a party merge moves: the resources, and the statement models only authored reads read. */
+export const PARTY_MERGE_INVALIDATES = [
+  ...PARTY_MERGE_RESOURCES,
+  "parties.PersonStatement",
+  "parties.OrganizationStatement",
+  "parties.AddressStatement",
+  "parties.RelationshipStatement",
   "parties.PartySameAsPairStatement",
 ] as const;
 

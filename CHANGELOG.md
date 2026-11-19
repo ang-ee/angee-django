@@ -945,7 +945,12 @@ live in code docstrings.
   (`MERGE_CHUNK`), each set's outcome showing as its chunk answers; Stop ends
   the run after the chunk in flight, a failed request ends it with what
   answered kept, closing mid-run asks first and sends nothing more, and the
-  models are invalidated once, when the run ends. On the server each request's
+  models are invalidated once, when the run ends: the authored reads and the
+  resource lists of the merge's resource models (`PARTY_MERGE_RESOURCES`, rows
+  and totals, through `useResourceInvalidates`), which authored invalidation
+  does not reach, so a list's heading count no longer keeps its pre-merge total
+  until a reload; the compare page's merge and keep-apart refresh the same
+  resource lists. On the server each request's
   sets merge with their per-row changes muted (`mute_changes`), and once its
   last set is done each record of a merged set is published once, as its
   concrete row, so a chunk is one change for every viewer of those pages; a

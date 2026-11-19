@@ -1,5 +1,7 @@
 import * as React from "react";
+import { useResourceInvalidates } from "@angee/metadata";
 import { useAuthoredMutation, useAuthoredQuery, useInvalidateAuthoredModels } from "@angee/refine";
+import { useInvalidate } from "@refinedev/core";
 import {
   Alert, Button, Checkbox, Chip, Dialog, ErrorBanner, LoadingPanel, NavLink, RowsListView, defaultWidgets, optionLabel,
   useEnumOptions, useRouteHref, type ListColumn,
@@ -9,6 +11,7 @@ import {
   DuplicateSetPreviews,
   MergeDuplicates,
   PARTY_MERGE_INVALIDATES,
+  PARTY_MERGE_RESOURCES,
   SelectionDuplicateSets,
   type DuplicateSetMember,
   type DuplicateSetOutcome,
@@ -127,6 +130,8 @@ export function DuplicatesDialog({
   });
   const [merge] = useAuthoredMutation(MergeDuplicates);
   const invalidate = useInvalidateAuthoredModels();
+  const invalidateResource = useInvalidate();
+  const resourceInvalidations = useResourceInvalidates(PARTY_MERGE_RESOURCES);
   const stopping = React.useRef(false);
   const mounted = React.useRef(true);
   // Leaving the page mid-run sends nothing more: the chunk in flight answers and the run ends there.
@@ -206,10 +211,12 @@ export function DuplicatesDialog({
       outcomes = next;
       if (mounted.current) setRun({ shown: live, queue, outcomes, status: "running" });
     }
-    // Once, when the run ends or stops: the pages behind read the merges' result together.
+    // Once, when the run ends or stops: the pages behind read the merges' result together, their authored reads and
+    // their resource lists (rows and totals) alike.
     invalidate(PARTY_MERGE_INVALIDATES);
+    for (const params of resourceInvalidations) void invalidateResource(params);
     if (mounted.current) setRun({ shown: live, queue, outcomes, status });
-  }, [certain, groupings, invalidate, live, merge, sending]);
+  }, [certain, groupings, invalidate, invalidateResource, live, merge, resourceInvalidations, sending]);
   const close = (): void => {
     if (running) setClosing(true);
     else onClose(merged);
