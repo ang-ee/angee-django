@@ -24,6 +24,7 @@ from django.db import transaction
 from django.db.models import Count, Prefetch
 from django.utils.text import capfirst
 from django.utils.translation import gettext as _
+from django.views.decorators.debug import sensitive_variables
 from rebac import PermissionDenied, check_new, generic_target, system_context, to_subject_ref
 from rebac.resources import model_resource_type
 from strawberry import auto
@@ -246,6 +247,18 @@ class CredentialType(AngeeNode):
     created_at: auto
     updated_at: auto
 
+    @strawberry_django.field(only=["kind"])
+    def editable_fields(self) -> list[str]:
+        """Project the credential owner's manually editable metadata."""
+
+        return cast(list[str], cast(Any, self).editable_fields)
+
+    @strawberry_django.field(only=["kind"])
+    def replacement_fields(self) -> list[str]:
+        """Project the kind handler's replacement inputs without reading any material."""
+
+        return cast(list[str], cast(Any, self).replacement_fields)
+
     @strawberry_django.field(only=["oauth_client"])
     def oauth_client(self) -> CredentialOAuthClientType | None:
         """Return a public-safe projection of the OAuth client (``None`` for local kinds)."""
@@ -385,18 +398,9 @@ class ExternalAccountInput:
 
 
 @strawberry.input
-class CredentialInput:
-    """Admin-write fields for a provider-less credential (OAuth ones arrive via connect).
+class CredentialMaterialInput:
+    """Write-only material; the credential kind's handler selects and validates its inputs."""
 
-    ``kind`` discriminates the material: ``static_token`` reads ``api_key``,
-    ``ssh_key`` reads ``private_key``, ``basic_auth`` reads ``username`` +
-    ``password``, ``app_keys`` reads ``app_id`` + ``app_secret``, ``jwt_bearer``
-    reads the provider's JSON ``key_file``. ``user`` defaults to the calling admin.
-    """
-
-    name: str
-    kind: str
-    user: PublicID | None = None
     api_key: str = ""
     private_key: str = ""
     username: str = ""
@@ -404,6 +408,15 @@ class CredentialInput:
     app_id: str = ""
     app_secret: str = ""
     key_file: str = ""
+
+
+@strawberry.input
+class CredentialInput(CredentialMaterialInput):
+    """Create a local credential; ``user`` defaults to the calling administrator."""
+
+    name: str
+    kind: str
+    user: PublicID | None = None
 
 
 @strawberry.type
@@ -669,6 +682,18 @@ _EXTERNAL_ACCOUNT_RESOURCE = hasura_model_resource(
     field_id_decode={"oauth_client": public_pk_decoder(OAuthClient)},
     get_queryset=_console_external_accounts,
 )
+
+
+class CredentialWriteBackend(AngeeHasuraWriteBackend):
+    """Keep exchange-owned metadata out of manual updates; native writes retain their gates."""
+
+    def _update_row(self, info: strawberry.Info, instance: Any, data: dict[str, Any]) -> Any:
+        """Validate the credential's metadata ownership before the inherited field-gated save."""
+
+        instance.validate_details(data)
+        return super()._update_row(info, instance, data)
+
+
 _CREDENTIAL_RESOURCE = hasura_model_resource(
     CredentialType,
     model=Credential,
@@ -688,7 +713,8 @@ _CREDENTIAL_RESOURCE = hasura_model_resource(
     groupable=["kind", "status", "last_refresh_status"],
     insert=False,
     delete=False,
-    updatable=["status"],
+    updatable=["status", "name", "expires_at"],
+    write_backend=CredentialWriteBackend(Credential),
     field_id_decode={
         "oauth_client": public_pk_decoder(OAuthClient),
         "external_account": public_pk_decoder(ExternalAccount),
@@ -955,6 +981,18 @@ class IntegrateExternalAccountMutation:
 @strawberry.type
 class IntegrateCredentialMutation:
     """Admin CRUD for credentials; create mints provider-less kinds (OAuth arrives via connect)."""
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    @action_guard("Replacing the credential secret failed.", camel_case_keys=False)
+    @sensitive_variables("data")
+    def replace_credential_secret(
+        self, info: strawberry.Info, id: PublicID, data: CredentialMaterialInput, confirmed: bool,
+    ) -> ActionResult:
+        """Replace a non-OAuth credential's material without disclosing it or changing its bindings."""
+
+        credential = authorized_action_target(info, Credential, id, "write")
+        credential.replace_secret(strawberry.asdict(data), confirmed=confirmed)
+        return ActionResult(ok=True, message="Credential secret replaced.")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def reveal_oauth_client_secret(self, id: PublicID) -> RevealedCredentialSecret:

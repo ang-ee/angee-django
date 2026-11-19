@@ -66,7 +66,7 @@ read (the issue verbs excepted), checks its own Zed permission on `auth/user`
 `issue_sign_in_link`; admin by default)
 and refuses protected accounts: the actor's own, staff, superusers and effective
 members of `iam/protected:main#member`. Issue and reset return the username with
-a one-time secret, shown only in a read-only `usePrompt` reveal with a copy
+a one-time secret, shown only in the shared `useSecretReveal` prompt with a copy
 control; nothing reaches a record or query cache. Controls read the row's
 `account_actions` projection, which batches the verbs' own conditions.
 
@@ -99,6 +99,28 @@ definition iam/protected {
     permission member = manager->effective_member
 }
 ```
+
+## Chosen passwords
+
+The user menu's **Change password** form calls `change_password` in the same
+session schema as preferences. `User.change_password` acts only on its actor's
+own account, requires a usable current password, rejects an unchanged password
+and runs Django's configured password validators. The mutation has no user id.
+Django's `update_session_auth_hash` keeps the current session signed in and
+rotates its key; other sessions lose their valid password hash. Link-only and
+OIDC-only accounts receive a readable refusal and keep their sign-in method.
+
+The user record's **Set password** action submits a chosen password through
+`update_users_by_pk` and `User.update_account`, with the observed revision,
+Django validation and hashing. Its `set_password` eligibility uses `write` and
+`write__password`; protected accounts, including the administrator's own, also
+require `administer`. This differs deliberately from the random-password verbs,
+which refuse protected accounts. Service principals remain passwordless.
+
+Both forms use password inputs and transient mutation handling. Confirmation of
+the self-service new password is checked locally; it is never sent to the server.
+The new mutations return no password, and neither the form's record nor the
+database stores a plaintext password.
 
 ## Sign-in links
 

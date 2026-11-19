@@ -16,7 +16,7 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.contrib.auth import get_user_model
+from django.contrib.auth import get_user_model, update_session_auth_hash
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.models import AnonymousUser
@@ -1004,6 +1004,17 @@ class IAMMutation:
 
         auth_logout(get_request(info))
         return True
+
+    @strawberry.mutation
+    @action_guard("Changing the password failed.", camel_case_keys=False)
+    @sensitive_variables("current_password", "new_password")
+    def change_password(self, info: strawberry.Info, current_password: str, new_password: str) -> ActionResult:
+        """Change the signed-in user's own password and keep this session signed in; takes no target id."""
+
+        user = session_user(info)
+        user.change_password(current_password=current_password, new_password=new_password)
+        update_session_auth_hash(get_request(info), user)
+        return ActionResult(ok=True, message="Password changed.")
 
     @strawberry.mutation
     def update_preferences(

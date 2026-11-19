@@ -1,9 +1,12 @@
 import * as React from "react";
 import type { ActionFieldName } from "@angee/gql/console/actions";
+import { actionDocuments as publicActions } from "@angee/gql/public/actions";
 import type { Row } from "@angee/metadata";
-import { useAuthoredMutation } from "@angee/refine";
+import { extractActionOutcome, useAuthoredMutation } from "@angee/refine";
 import {
   RecordActionBar,
+  invalidFormSubmit,
+  useAuthoredResourceMutation,
   useActionOutcomeMutation,
   useActionResultMutation,
   useRecordAction,
@@ -13,13 +16,13 @@ import {
   type ActionDescriptor,
 } from "@angee/ui";
 
-import { IamIssueUserPassword, IamResetUserPassword } from "./documents";
+import { IamIssueUserPassword, IamResetUserPassword, IamSetUserPassword } from "./documents";
 import { useIamT } from "./i18n";
 
 const USER_MODEL = "iam.User";
 
-/** Account verbs the server projects per user row, spelled as their Zed permissions. */
-export type UserAccountAction = "set_active" | "rename" | "reset_password" | "issue_password" | "issue_sign_in_link";
+/** Account controls the server projects per user row, including the administrative password update. */
+export type UserAccountAction = "set_active" | "rename" | "reset_password" | "issue_password" | "issue_sign_in_link" | "set_password";
 
 /** Fields every account verb reads from the open user record. */
 export const ACCOUNT_ACTION_FIELDS = ["account_actions", "revision", "username"] as const;
@@ -33,6 +36,52 @@ export function offersAccountAction(record: Row, action: UserAccountAction): boo
 /** The revision the open record was read at, sent so a stale account write is refused. */
 function expectedRevision(record: Row | null): number {
   return Number(record?.revision);
+}
+
+/** Change the signed-in user's password; confirmation remains solely in the shared action form. */
+export function useChangePasswordAction(): ActionDescriptor {
+  const t = useIamT();
+  const [changePassword] = useAuthoredMutation(publicActions.change_password, {
+    dataProviderName: "public", transient: true, errorNotification: false,
+  });
+  return {
+    id: "change-password", label: t("password.change"),
+    args: [
+      { name: "current_password", label: t("password.current"), widget: "password" },
+      { name: "new_password", label: t("password.new"), widget: "password" },
+      { name: "confirmation", label: t("password.confirm"), widget: "password" },
+    ],
+    submit: async (values) => {
+      if (values.new_password !== values.confirmation) {
+        return invalidFormSubmit({ fieldErrors: { confirmation: [t("password.mismatch")] }, formErrors: [] });
+      }
+      return extractActionOutcome(await changePassword({
+        current_password: values.current_password, new_password: values.new_password,
+      }), "change_password");
+    },
+  };
+}
+
+/** Set a chosen password through the existing users update, including its observed revision. */
+export function useSetPasswordAction(): ActionDescriptor {
+  const t = useIamT();
+  const [setPassword] = useAuthoredResourceMutation(IamSetUserPassword, {
+    dataProviderName: "console", transient: true, errorNotification: false, invalidateModels: [USER_MODEL],
+  });
+  return {
+    id: "set-password", label: t("users.setPassword"),
+    args: [{ name: "password", label: t("password.new"), widget: "password" }],
+    visibleWhen: (record) => offersAccountAction(record, "set_password"),
+    submit: async (values, context) => {
+      const result = await setPassword({
+        id: String(context.record?.id ?? ""), password: String(values.password ?? ""),
+        expectedRevision: expectedRevision(context.record),
+      });
+      return result?.update_users_by_pk
+        ? { ok: true, message: t("users.setPassword.done") }
+        : { ok: false, message: t("users.setPassword.error") };
+    },
+  };
 }
 
 interface SignInDetails {
@@ -185,5 +234,11 @@ export function IssueSignInLinkRecordAction(): React.ReactElement | null {
 /** `iam.User#actions-menu` child: reset the open account's password. */
 export function ResetPasswordRecordAction(): React.ReactElement | null {
   const action = useResetPasswordAction();
+  return <AccountActionBar actions={[action]} />;
+}
+
+/** `iam.User#actions-menu` child: set a chosen password through the administrative update. */
+export function SetPasswordRecordAction(): React.ReactElement | null {
+  const action = useSetPasswordAction();
   return <AccountActionBar actions={[action]} />;
 }

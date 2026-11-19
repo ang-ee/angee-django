@@ -42,6 +42,7 @@ from django.db import connection, models, transaction
 from django.db.models import OuterRef, Prefetch, Q, Subquery
 from django.db.models.functions import JSONObject
 from django.utils import timezone
+from django.views.decorators.debug import sensitive_variables
 from django_compose.models import Composable
 from rebac import (
     PermissionDenied,
@@ -1555,6 +1556,41 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
 
         return CredentialKind(self.kind).handler
 
+    @property
+    def editable_fields(self) -> list[str]:
+        """Metadata operators own; OAuth's name and expiry belong to its exchange."""
+
+        return [] if self.kind == CredentialKind.OAUTH else ["name", "expires_at"]
+
+    @property
+    def replacement_fields(self) -> list[str]:
+        """Write-only inputs for manual secret replacement; OAuth uses its connection flow."""
+
+        return [] if self.kind == CredentialKind.OAUTH else list(self.handler.input_material_fields())
+
+    def validate_details(self, changes: Mapping[str, Any]) -> None:
+        """Refuse manual edits of exchange-owned metadata before the native resource update."""
+
+        if refused := (changes.keys() & {"name", "expires_at"}) - set(self.editable_fields):
+            raise ValidationError({field: "OAuth manages this field; reconnect the account instead."
+                                   for field in sorted(refused)})
+
+    @sensitive_variables("material")
+    def replace_secret(self, material: Mapping[str, Any], *, confirmed: bool) -> None:
+        """Confirm a non-OAuth manual replacement, preserving write gates and kind validation.
+
+        The console additionally requires its platform-admin permission. Other
+        capability owners continue to compose ``replace_material`` after their
+        own admission, such as the IMAP connection's credential edit.
+        """
+
+        self.require_access("write")
+        if confirmed is not True:
+            raise ValidationError({"confirmed": "Confirm replacing this credential's secret."})
+        if not self.replacement_fields:
+            raise ValidationError("OAuth secrets are managed by the connection flow; reconnect the account instead.")
+        self.replace_material({field: material.get(field, "") for field in self.replacement_fields})
+
     def reveal(self) -> dict[str, Any]:
         """Decode this row's decrypted JSON material."""
 
@@ -1600,6 +1636,7 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
                 row.save(update_fields=updated)
             self.refresh_from_db(fields=updated)
 
+    @sensitive_variables("material", "replacement")
     def replace_material(self, material: Mapping[str, Any]) -> None:
         """Re-enter this credential's secret(s) under the kind handler's validation.
 

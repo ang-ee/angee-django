@@ -58,7 +58,7 @@ describe("UsersPage", () => {
     const { form } = declarations();
     const fields = parsePageFields(form.children);
     expect(fields.map((field) => field.name)).toContain("revision");
-    expect(fields.find((field) => field.name === "password")?.createOnly).toBe(true);
+    expect(fields.find((field) => field.name === "password")).toMatchObject({ createOnly: true, widget: "password" });
     expect(parsePageActions(form.children)).toEqual([]);
   });
 });

@@ -186,7 +186,7 @@ def test_every_account_verb_refuses_protected_accounts(db):
         )
         assert target.protected_against(admin)
     actions = _actions(_schema("console"), admin)
-    assert all(actions[target.username] == [] for target in targets)
+    assert all(actions[target.username] == ["set_password"] for target in targets)
 
 
 def test_set_user_active_round_trip_controls_sign_in(iam_admin):
@@ -299,11 +299,12 @@ def test_account_actions_project_each_verbs_permission_and_eligibility(db):
     schema = _schema("console")
 
     seen_by_admin = _actions(schema, admin)
-    assert seen_by_admin["with-password"] == ["set_active", "rename", "reset_password"]
-    assert seen_by_admin["without-password"] == ["set_active", "rename", "issue_password"]
-    assert seen_by_admin["inactive-person"] == ["set_active", "rename"]
-    for protected in ("projection-admin", "projection-manager", "staff-person", "service-account"):
-        assert seen_by_admin[protected] == []
+    assert seen_by_admin["with-password"] == ["set_active", "rename", "reset_password", "set_password"]
+    assert seen_by_admin["without-password"] == ["set_active", "rename", "issue_password", "set_password"]
+    assert seen_by_admin["inactive-person"] == ["set_active", "rename", "set_password"]
+    for protected in ("projection-admin", "projection-manager", "staff-person"):
+        assert seen_by_admin[protected] == ["set_password"]
+    assert seen_by_admin["service-account"] == []
     seen_by_manager = _actions(schema, manager)
     assert seen_by_manager["with-password"] == ["set_active", "rename", "reset_password"]
     assert seen_by_manager["projection-admin"] == []

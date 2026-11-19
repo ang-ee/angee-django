@@ -7,6 +7,16 @@ import { createNamespaceT } from "@angee/ui/i18n";
 // The addon that owns a vendor owns its connect label; this addon supplies
 // optional generic defaults and the shared authorization dialog copy.
 export const enIntegrateMessages: Record<string, string> = {
+  "credentials.action.replaceSecret": "Replace secret",
+  "credentials.replace.confirmTitle": "Replace this credential's secret?",
+  "credentials.replace.confirmBody": "Attached integrations will use the new material. Cached tokens will be discarded.",
+  "credentials.material.api_key": "API token",
+  "credentials.material.username": "Username",
+  "credentials.material.password": "Password",
+  "credentials.material.app_id": "Application ID",
+  "credentials.material.app_secret": "Application secret",
+  "credentials.material.private_key": "Private key",
+  "credentials.material.key_file": "Key file (JSON)",
   "connect.action": "Connect",
   "connect.reconnect": "Reconnect",
   "connect.connected": "Connection saved",

@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 
 import { render } from "@testing-library/react";
-import type { ActionContext, ActionDescriptor, FormSubmit, RecordActionRunner, UseRecordActionOptions } from "@angee/ui";
+import type { ActionContext, ActionDescriptor, FieldDescriptor, FormSubmit, RecordActionRunner, UseRecordActionOptions } from "@angee/ui";
+import { actionDocuments } from "@angee/gql/console/actions";
 import * as React from "react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -12,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   reveal: vi.fn(async () => undefined),
   useAuthoredMutation: vi.fn(),
   createCredential: vi.fn(),
+  replaceSecret: vi.fn(),
   useAuthoredResourceMutation: vi.fn(),
   createSubmit: undefined as FormSubmit | undefined,
   useRecordAction: vi.fn<(run: RecordActionRunner, options?: UseRecordActionOptions) => void>(),
@@ -59,8 +61,9 @@ describe("credentialCreateForm", () => {
     mocks.actions = [];
     mocks.createSubmit = undefined;
     mocks.createCredential.mockReset().mockResolvedValue({ create_credential: { id: "credential-1" } });
-    mocks.useAuthoredResourceMutation.mockReset().mockReturnValue([
-      mocks.createCredential, { fetching: false, error: null },
+    mocks.replaceSecret.mockReset().mockResolvedValue({ replace_credential_secret: { ok: true, message: "Replaced." } });
+    mocks.useAuthoredResourceMutation.mockReset().mockImplementation((document) => [
+      document === IntegrateCreateCredential ? mocks.createCredential : mocks.replaceSecret, { fetching: false, error: null },
     ]);
     mocks.revealCredential.mockClear();
     mocks.useRecordAction.mockClear();
@@ -90,6 +93,49 @@ describe("credentialCreateForm", () => {
     expect(fields.get("private_key")?.showWhen?.({ kind: "static_token" })).toBe(false);
     expect(fields.get("key_file")?.showWhen?.({ kind: "jwt_bearer" })).toBe(true);
     expect(fields.get("key_file")?.showWhen?.({ kind: "ssh_key" })).toBe(false);
+  });
+
+  test("edits name and expiry only when the saved credential projects them as editable", () => {
+    const Component = credentialCreateForm.Component;
+    render(<Component resource={credentialCreateForm.resource} id="credential-1" />);
+    for (const name of ["name", "expires_at"]) {
+      const field = mocks.fields.find((field) => field.name === name) as unknown as FieldDescriptor;
+      expect(field.resolve?.({ id: "credential-1", editable_fields: ["name", "expires_at"] })).toMatchObject({ name, readOnly: false });
+      expect(field.resolve?.({ id: "credential-1", editable_fields: [] })).toMatchObject({ name, readOnly: true });
+      expect(field.resolve?.({ id: "credential-1" })).toMatchObject({ name, readOnly: true });
+    }
+    expect(mocks.fields).toContainEqual(expect.objectContaining({ name: "editable_fields", hidden: true, readOnly: true }));
+  });
+
+  test.each([
+    ["api_key"], ["username", "password"], ["app_id", "app_secret"], ["private_key"], ["key_file"],
+  ])("replaces only the server-projected material fields (%j), with confirmation and transient inputs", async (...names) => {
+    const Component = credentialCreateForm.Component;
+    render(<Component resource={credentialCreateForm.resource} id="credential-1" />);
+    const action = mocks.actions.find(({ id }) => id === "replace-secret")!;
+    const record = { id: "credential-1", replacement_fields: names };
+    expect(action).toMatchObject({ placement: "menu", danger: true, confirm: { danger: true } });
+    expect(action.visibleWhen?.(record)).toBe(true);
+    expect(action.visibleWhen?.({ id: "oauth", replacement_fields: [] })).toBe(false);
+    const args = typeof action.args === "function" ? action.args({ record, selectedIds: [record.id] }) : action.args;
+    expect(Array.isArray(args) ? args.map(({ name, widget }) => [name, widget]) : []).toEqual(names.map((name) => [name, "password"]));
+    const material = Object.fromEntries(names.map((name) => [name, `entered-${name}`]));
+    expect(await action.submit?.({ ...material, unexpected: "discarded" }, { record, selectedIds: [record.id] }))
+      .toEqual({ ok: true, message: "Replaced." });
+    expect(mocks.replaceSecret).toHaveBeenCalledExactlyOnceWith({ id: record.id, confirmed: true, data: material });
+    expect(mocks.useAuthoredResourceMutation).toHaveBeenCalledWith(actionDocuments.replace_credential_secret,
+      expect.objectContaining({ transient: true, errorNotification: false, invalidateModels: ["integrate.Credential"] }));
+  });
+
+  test("preserves the handler's field refusal in the replacement form", async () => {
+    mocks.replaceSecret.mockResolvedValue({ replace_credential_secret: {
+      ok: false, message: "Password required.", validation_errors: { password: ["Required."] },
+    } });
+    const Component = credentialCreateForm.Component;
+    render(<Component resource={credentialCreateForm.resource} id="credential-1" />);
+    const action = mocks.actions.find(({ id }) => id === "replace-secret")!;
+    expect(await action.submit?.({}, { record: { id: "credential-1", replacement_fields: ["username", "password"] }, selectedIds: [] }))
+      .toMatchObject({ ok: false, validationErrors: { password: ["Required."] } });
   });
 
   test("reveals a transient secret in a copyable read-only prompt without refreshing", async () => {

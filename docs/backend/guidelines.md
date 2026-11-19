@@ -783,13 +783,17 @@ data through REBAC, never a queryset bypass.
   `rename`, `issue_password`, `issue_sign_in_link` and `reset_password` lock
   the row, check their own Zed permission, the expected revision and the shared
   `User.account_action_blockers`, then write elevated; the `account_actions`
-  projection batches the same conditions. Every verb refuses a protected
+  projection batches the same conditions. These verbs refuse a protected
   account: staff, superusers, the actor's own and effective members of
   `iam/protected:main#member`. A consumer marks an elevated role by unioning it
   into that permission from its fragment, never by mirroring holders; see
   [`tests/extcontrib`](../../tests/extcontrib/permissions.extends.zed). Generic
   updates pass `write` and `write__<field>` gates on changed fields only;
-  protected accounts additionally need `administer`.
+  protected accounts additionally need `administer`. IAM's **Set password**
+  control projects those update gates and submits through that same update
+  owner. Its **Change password** self-service verb verifies the actor's current
+  password and keeps only the requesting session's auth hash current; see the
+  [IAM password contract](../../src/angee/iam/README.md#chosen-passwords).
 - **Read derived facts from their owner.** Native live ORM backing exposes
   user kind/activity, roster roles and selected tools without tuple mirrors.
   Platform administration is an ordinary `angee/role:admin#member` grant to a
