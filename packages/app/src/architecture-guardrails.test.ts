@@ -688,6 +688,45 @@ describe("React architecture guardrails", () => {
     expect(uxGuardViolations("src/fixture/web/src/View.tsx", text)).toEqual([]);
   });
 
+  test.each(["defineBaseAddon", "defineAddon"])("UX ontology guard accepts %s vocabulary field tones", (define) => {
+    const text = `
+      import { ${define} } from "@angee/app";
+      export default ${define}({
+        id: "notes",
+        vocabulary: [{
+          app: "notes",
+          resources: {
+            "notes.Note": { fields: { status: { tones: { DRAFT: "neutral", DONE: "success" } } } },
+          },
+        }],
+      });
+    `;
+    expect(uxGuardViolations("src/fixture/web/src/View.tsx", text)).toEqual([]);
+  });
+
+  test.each([
+    'const tones = { draft: "neutral", done: "success" };',
+    'const tones: Record<Status, Tone> = { [Status.Draft]: "neutral", [Status.Done]: "success" };',
+    'function tone(status: Status) { switch (status) { case "draft": return "neutral"; default: return "success"; } }',
+  ])("UX ontology guard rejects local tone mapping: %s", (text) => {
+    const file = "src/fixture/web/src/View.tsx";
+    const hits = uxGuardViolations(file, text);
+    expect(hits).toHaveLength(1);
+    expect(formatUxGuardViolation(hits[0]!, file)).toBe(
+      `${file}:1 local-tone-map: maps status values to tones locally — compose statusTones or vocabulary field tones in the addon manifest + statusTone / StatusBadge`,
+    );
+  });
+
+  test.each([
+    'defineBaseAddon({ settings: { tones: { DRAFT: "neutral", DONE: "success" } } });',
+    'defineBaseAddon({ settings: { resources: { "notes.Note": { fields: { status: { tones: { DRAFT: "neutral", DONE: "success" } } } } } } });',
+    'function View() { const config = { vocabulary: [{ resources: { "notes.Note": { fields: { status: { tones: { DRAFT: "neutral", DONE: "success" } } } } } }] }; return null; }',
+  ])("UX ontology guard rejects tones outside the manifest vocabulary seam: %s", (text) => {
+    expect(uxGuardViolations("src/fixture/web/src/index.tsx", text)).toMatchObject([
+      { rule: "local-tone-map", detail: "maps status values to tones locally" },
+    ]);
+  });
+
   test(
     "addon web sources compose @angee/ui owners (UX component ontology)",
     () => {
