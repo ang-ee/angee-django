@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 
 import * as React from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { GetListParams } from "@refinedev/core";
-import { ResourceQuery, schemaFieldMetadataFromDataResources, type Row } from "@angee/metadata";
+import { ResourceQuery, schemaFieldMetadataFromDataResources, type GroupSpec, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { OperationDocumentsProvider } from "@angee/refine";
 import { afterEach, expect, test, vi } from "vitest";
@@ -238,6 +238,264 @@ test("the rendered ListView displays a failed root group query instead of empty 
   expect(getList).not.toHaveBeenCalled();
 });
 
+
+const taskContract = ResourceQuery.forRows({ fields: {
+  id: { scalar: "ID" }, title: { scalar: "String" }, status: { scalar: "String" },
+  owner: { scalar: "String" }, kind: { scalar: "String" },
+} }).contract;
+for (const field of ["status", "owner", "kind"]) {
+  taskContract.axes[field]!.server = { input: field, key: field };
+  taskContract.axes[field]!.drill = { kind: "value", field, valueKey: field, nullMode: "isNull", valueMap: [] };
+}
+const taskResource = testDataResource("notes.Task", {
+  roots: { groups: "tasks_groups", aggregate: "tasks_aggregate" }, typeNames: { filter: "TaskBoolExp", order: "TaskOrderBy" },
+  query: taskContract, recordRepresentation: "title",
+  fields: ["id", "title", "status", "owner", "kind"].map((name) => ({ name, kind: "scalar", scalar: "String", readable: true,
+    aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false })),
+});
+const tasks: readonly Row[] = [
+  { id: "t1", title: "Task 1", status: "active", owner: "Ada", kind: "Same" },
+  { id: "t2", title: "Task 2", status: "active", owner: "Bo", kind: "Same" },
+  { id: "t3", title: "Task 3", status: "closed", owner: "Ada", kind: "Other" },
+  { id: "t4", title: "Task 4", status: null, owner: "Ada", kind: "Other" },
+  { id: "t5", title: "Task 5", status: "", owner: "Ada", kind: "Other" },
+];
+/** The few Hasura predicates the grouped list sends: equality, inequality, null tests, conjunction. */
+function matchesWhere(row: Row, where: Record<string, unknown> | undefined): boolean {
+  return Object.entries(where ?? {}).every(([key, condition]) => key === "_and"
+    ? (condition as Record<string, unknown>[]).every((branch) => matchesWhere(row, branch))
+    : Object.entries(condition as Record<string, unknown>).every(([operator, operand]) =>
+      operator === "_eq" ? row[key] === operand
+        : operator === "_neq" ? row[key] !== operand
+          : operator === "_is_null" ? (row[key] == null) === operand : false));
+}
+
+/** A rendered grouped Task list whose page's bulk actions record the selectedGroups they receive. */
+function selectedGroupsFixture(initialState: Record<string, unknown>, {
+  stale, columns = [{ field: "title", header: "Title" }],
+}: {
+  /** A stale page: the server also lists this row in another group. */
+  stale?: { id: string; group: string };
+  columns?: readonly { field: string; header: string; aggregate?: "count" }[];
+} = {}) {
+  const records = tasks.map((row) => ({ ...row }));
+  const seen: unknown[] = [];
+  const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
+    const variables = meta!.gqlVariables as {
+      group_by?: { field: string }[]; where?: Record<string, unknown>; having?: { count_gt: number }; rows_limit?: number;
+    };
+    const rows = records.filter((row) => matchesWhere(row, variables.where));
+    if (!variables.group_by) return { data: { tasks_aggregate: { aggregate: { count: rows.length } } } };
+    const field = variables.group_by[0]!.field;
+    // Server order: values ascending, the null group last.
+    const keys = [...new Set(rows.map((row) => row[field] as string | null))]
+      .sort((left, right) => left === null ? 1 : right === null ? -1 : left.localeCompare(right));
+    const buckets = keys.map((key) => {
+      const members = rows.filter((row) => row[field] === key);
+      const extra = stale?.group === key ? records.filter((row) => row.id === stale.id) : [];
+      return { key: { [field]: key }, aggregate: { count: members.length + extra.length },
+        rows: [...members, ...extra].slice(0, variables.rows_limit ?? 0) };
+    }).filter((bucket) => bucket.aggregate.count > (variables.having?.count_gt ?? 0));
+    return { data: { tasks_groups: buckets, totalCount: buckets.length } };
+  });
+  const getList = vi.fn(async () => ({ data: records, total: records.length }));
+  let view!: ResourceViewContextValue;
+  let rerender!: () => void;
+  function Probe() { view = useResourceView(); return null; }
+  function Page() {
+    const [, setTick] = React.useState(0);
+    rerender = () => setTick((tick) => tick + 1);
+    return (
+      <ResourceViewProvider resource={taskResource.modelLabel} scope="local" initialState={initialState}>
+        <Probe />
+        <ListView resource={taskResource.modelLabel} columns={columns} scope="inherit"
+          bulkActions={(_ids, _clear, collection) => { seen.push(collection.selectedGroups); return null; }} />
+      </ResourceViewProvider>
+    );
+  }
+  render(
+    <Provider resources={[taskResource]} apiUrl="test://selected-groups" dataProvider={{ custom, getList }}
+      queryClientConfig={{ defaultOptions: { queries: { retry: false } } }}>
+      <OperationDocumentsProvider documents={{ console: {
+        groups: { "notes.Task": "query Groups { tasks_groups { key } totalCount }" },
+        aggregates: { "notes.Task": "query Aggregate { tasks_aggregate { aggregate { count } } }" },
+      } }}>
+        <ToastProvider><Page /></ToastProvider>
+      </OperationDocumentsProvider>
+    </Provider>,
+  );
+  const client = clients.at(-1)!;
+  const select = async (title: string) => {
+    const row = (await screen.findByText(title)).closest("tr")!;
+    fireEvent.click(within(row).getByRole("checkbox", { name: "Select row" }));
+  };
+  return {
+    select, custom, seen,
+    get view() { return view; },
+    get selectedGroups() { return seen.at(-1); },
+    rerender: () => act(() => rerender()),
+    /** Change a record on the server and let the live list refetch. */
+    update: async (id: string, patch: Partial<Row>) => {
+      Object.assign(records.find((row) => row.id === id)!, patch);
+      await act(async () => { await client.invalidateQueries(); });
+    },
+  };
+}
+
+const status = (key: string | null, label: string, ids: string[]) => ({ field: "status", key, label, parents: [], ids });
+
+test("a flat list offers no group split to its bulk actions", async () => {
+  const f = selectedGroupsFixture({});
+  await f.select("Task 1");
+  await waitFor(() => expect(f.view.state.rowSelection).toEqual({ t1: true }));
+  expect(f.selectedGroups).toBeUndefined();
+});
+
+test("a grouped selection splits by group key in display order and keeps a row's group after its page unloads", async () => {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status" }] });
+  for (const title of ["Task 3", "Task 4", "Task 5", "Task 1"]) await f.select(title);
+  // The key is the stored value and the label what the header shows: null and "" stay two groups.
+  await waitFor(() => expect(f.selectedGroups).toEqual([
+    status("", "Blank", ["t5"]), status("active", "active", ["t1"]),
+    status("closed", "closed", ["t3"]), status(null, "No value", ["t4"]),
+  ]));
+  // Collapsing "active" unloads its rows; the selected row keeps the group it was selected in.
+  fireEvent.click(screen.getByRole("button", { name: "active" }));
+  await waitFor(() => expect(screen.queryByText("Task 1")).toBeNull());
+  await f.select("Task 3");
+  await waitFor(() => expect(f.selectedGroups).toEqual([
+    status("", "Blank", ["t5"]), status("active", "active", ["t1"]), status(null, "No value", ["t4"]),
+  ]));
+});
+
+test("a nested grouping keeps same-label inner groups under different parents apart", async () => {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "owner" }, { field: "kind" }] });
+  // Nested groups open on demand: one "Same" under Ada, one under Bo.
+  await waitFor(() => expect(screen.getAllByRole("button", { name: "Same" })).toHaveLength(2));
+  for (const inner of screen.getAllByRole("button", { name: "Same" })) fireEvent.click(inner);
+  await f.select("Task 2");
+  await f.select("Task 1");
+  await waitFor(() => expect(f.selectedGroups).toEqual([
+    { field: "kind", key: "Same", label: "Same", parents: [{ field: "owner", key: "Ada", label: "Ada" }], ids: ["t1"] },
+    { field: "kind", key: "Same", label: "Same", parents: [{ field: "owner", key: "Bo", label: "Bo" }], ids: ["t2"] },
+  ]));
+});
+
+test("a grouped selection holding an id no group placed offers no split rather than a partial one", async () => {
+  // A programmatic selection holds the id without its row or group.
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status" }], selectedIds: ["t3"] });
+  await f.select("Task 1");
+  await waitFor(() => expect(f.view.state.rowSelection).toEqual({ t3: true, t1: true }));
+  expect(f.selectedGroups).toBeNull();
+});
+
+test("a selected row the live list now shows in another group offers no split", async () => {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status" }] });
+  await f.select("Task 1");
+  await f.select("Task 2");
+  await waitFor(() => expect(f.selectedGroups).toEqual([status("active", "active", ["t1", "t2"])]));
+  // Task 2 is renamed elsewhere; the refetch shows it under "closed", still selected.
+  await f.update("t2", { status: "closed" });
+  await waitFor(() => expect(f.selectedGroups).toBeNull());
+  expect(f.view.state.rowSelection).toEqual({ t1: true, t2: true });
+});
+
+test("a row shown under two groups at once cannot be placed", async () => {
+  // A stale page of "closed" still lists Task 1 beside the fresh "active" page.
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status" }] }, { stale: { id: "t1", group: "closed" } });
+  await waitFor(() => expect(screen.getAllByText("Task 1")).toHaveLength(2));
+  fireEvent.click(within(screen.getAllByText("Task 1")[0]!.closest("tr")!).getByRole("checkbox", { name: "Select row" }));
+  await waitFor(() => expect(f.view.state.rowSelection).toEqual({ t1: true }));
+  expect(f.selectedGroups).toBeNull();
+});
+
+test("a group header's checkbox and select-all capture each row's own group", async () => {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status" }] });
+  fireEvent.click(await screen.findByRole("checkbox", { name: "Select the loaded rows in active" }));
+  await waitFor(() => expect(f.selectedGroups).toEqual([status("active", "active", ["t1", "t2"])]));
+  fireEvent.click(screen.getByRole("checkbox", { name: "Select all loaded rows" }));
+  await waitFor(() => expect(f.selectedGroups).toEqual([
+    status("", "Blank", ["t5"]), status("active", "active", ["t1", "t2"]),
+    status("closed", "closed", ["t3"]), status(null, "No value", ["t4"]),
+  ]));
+});
+
+test("a grouped board card captures its record's group", async () => {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status" }], view: "board" });
+  fireEvent.click(await screen.findByRole("checkbox", { name: "Select Task 3" }));
+  await waitFor(() => expect(f.selectedGroups).toEqual([status("closed", "closed", ["t3"])]));
+});
+
+test("the split checks the captured levels against the rendered ones and the surface's placement", async () => {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status" }] });
+  await f.select("Task 1");
+  await waitFor(() => expect(f.selectedGroups).toEqual([status("active", "active", ["t1"])]));
+  const none = new Map();
+  expect(f.view.selectedGroups([{ field: "status" }], none)).toEqual([status("active", "active", ["t1"])]);
+  // A level's `repeated` is part of its spec, as are its granularity and the level order.
+  expect(f.view.selectedGroups([{ field: "status", repeated: true }], none)).toBeNull();
+  expect(f.view.selectedGroups([{ field: "status", granularity: "month" }], none)).toBeNull();
+  // A surface that places no rows (a lane board under the same field, browser grouping) offers no split.
+  expect(f.view.selectedGroups([{ field: "status" }], null)).toBeNull();
+});
+
+test("selectedGroups keeps its identity across re-renders while the selection is unchanged", async () => {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status" }] });
+  await f.select("Task 3");
+  await waitFor(() => expect(f.selectedGroups).toEqual([status("closed", "closed", ["t3"])]));
+  const split = f.selectedGroups;
+  const calls = f.seen.length;
+  f.rerender();
+  await waitFor(() => expect(f.seen.length).toBeGreaterThan(calls));
+  expect(f.selectedGroups).toBe(split);
+});
+
+test("a repeated grouping lists no footer total, which a flat aggregate cannot narrow to its groups", async () => {
+  const columns = [{ field: "title", header: "Title" }, { field: "id", header: "Tasks", aggregate: "count" as const }];
+  const totals = (f: ReturnType<typeof selectedGroupsFixture>) =>
+    f.custom.mock.calls.filter(([request]) => !(request.meta?.gqlVariables as { group_by?: unknown }).group_by);
+  const plain = selectedGroupsFixture({ groupStack: [{ field: "status" }] }, { columns });
+  await waitFor(() => expect(totals(plain).length).toBeGreaterThan(0));
+  cleanup();
+  const repeated = selectedGroupsFixture({ groupStack: [{ field: "status", repeated: true }] }, { columns });
+  // Only "active" holds more than one record.
+  await waitFor(() => expect(screen.getByRole("button", { name: "active" })).toBeTruthy());
+  expect(screen.queryByRole("button", { name: "closed" })).toBeNull();
+  expect(totals(repeated)).toEqual([]);
+});
+
+test("the selection clears when a level's axis, granularity, repeated values or order changes", () => {
+  let view!: ResourceViewContextValue;
+  function Probe() { view = useResourceView(); return null; }
+  render(<ResourceViewProvider scope="local" initialState={{ groupStack: [{ field: "owner" }, { field: "kind" }] }}><Probe /></ResourceViewProvider>);
+  const stacks: GroupSpec[][] = [
+    [{ field: "kind" }, { field: "owner" }],
+    [{ field: "kind", repeated: true }, { field: "owner" }],
+    [{ field: "created", granularity: "month" }],
+    [{ field: "created", granularity: "year" }],
+    [{ field: "status" }],
+  ];
+  for (const groupStack of stacks) {
+    act(() => view.toggleSelectedId("t1", true));
+    expect(view.state.rowSelection).toEqual({ t1: true });
+    act(() => view.setGroupStack(groupStack));
+    expect(view.state.rowSelection).toEqual({});
+  }
+});
+
+test("a client-row-model list refuses a repeated level it would group in the browser", async () => {
+  const clientResource = { ...taskResource, rowModel: "client" as const };
+  render(
+    <Provider resources={[clientResource]} apiUrl="test://client-repeated" dataProvider={{ getList: vi.fn(async () => ({ data: [...tasks], total: tasks.length })) }}
+      queryClientConfig={{ defaultOptions: { queries: { retry: false } } }}>
+      <ToastProvider>
+        <ListView resource={clientResource.modelLabel} columns={[{ field: "title", header: "Title" }]} scope="local"
+          defaultGroup={{ field: "status", repeated: true }} />
+      </ToastProvider>
+    </Provider>,
+  );
+  expect(await screen.findByText(/cannot list only repeated values/)).toBeTruthy();
+});
 
 test("an unbound ambient view reports invalid sorting before the list can request rows", async () => {
   const getList = vi.fn(async () => ({ data: [], total: 0 }));

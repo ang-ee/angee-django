@@ -80,3 +80,31 @@ export const SheetSurface: Story = {
     />
   ),
 };
+
+/** A verb that cannot run for this selection says why in its tooltip and stays focusable. */
+export const DisabledVerb: Story = {
+  args: {
+    count: 3,
+    summary: "People selected",
+  },
+  render: ({ count, position, summary, surface }) => (
+    <SelectionBar
+      count={count}
+      position={position}
+      surface={surface}
+      summary={summary}
+      actions={
+        <>
+          <SelectionBar.Action surface={surface} disabledReason="Select two people to compare them.">
+            <Glyph name="users" />
+            Merge…
+          </SelectionBar.Action>
+          <SelectionBar.Action surface={surface}>
+            <Glyph name="archive" />
+            Archive
+          </SelectionBar.Action>
+        </>
+      }
+    />
+  ),
+};

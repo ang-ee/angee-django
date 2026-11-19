@@ -10,6 +10,28 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Grouped lists find repeated values. People group by `display_name`,
+  `given_name` and `family_name`, Organizations by `display_name` and
+  `legal_name`, beside their existing axes (`people_groups` and
+  `organizations_groups` gain those group-by values). A group level's
+  `repeated` (`GroupSpec`, "Repeated values only", `?group=display_name:repeated`)
+  makes the server group read keep only groups of more than one record the actor
+  reads (`having: {count_gt: 1}`) and leave out the records with no value (null,
+  and blank text), so counts and group pages are the repeated groups'; an axis
+  whose drill cannot tell its empty group apart refuses it, as does a list that
+  groups without the native server read (client row model, authored `source`,
+  `RowsListView`), and a repeated grouping shows no footer totals.
+  `ResourceQuery.toGroupRead` assembles a level's read; `groupAxisId` and
+  `groupSpecsFrom` (`@angee/metadata`) own a level's axis identity and the stack
+  decoder. A page's `bulkActions` receives `collection.selectedGroups`: absent
+  on an ungrouped list, `null` when a selected row cannot be placed (selected
+  without its group, loaded now under another group or several, or on a surface
+  that places no rows: browser grouping, lane boards), else the selection split
+  by its innermost groups with their parents; a hint the server never trusts.
+  `Button` and `SelectionBarAction` take a `disabledReason`: the verb's tooltip
+  and accessible description, focusable while disabled; the record action bar's
+  band verbs compose it.
+
 - `angee.parties`: one owner proposes same-person pairs. A pull-only
   directory's contact that may only claim an address another live party is
   linked to proposes them through `Party.objects.propose_same_person_as_system`

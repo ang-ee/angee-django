@@ -34,6 +34,8 @@ import { PAGE_SIZE_OPTIONS } from "../page-size";
 import { EMPTY_SELECTED_IDS } from "../resource-view-codecs";
 import { ResourceViewUtilities } from "../resource-view-utilities";
 import { PaneListBody } from "./pane-list-body";
+import { placedRecords } from "../resource-view-grouped-model";
+import { useValueStable } from "../../../lib/use-value-stable";
 interface ListViewContentProps<TRow extends Row> {
   source?: ListViewProps<TRow>["source"];
   textFilterField?: string | null;
@@ -145,6 +147,8 @@ export function ListViewContent<TRow extends Row = Row>({
     search: searchDeclaration,
     inferOptions: !source,
     serverGrouping: !clientRowModel,
+    // Only the native server group read applies it; an authored source's groups document owns its own variables.
+    appliesRepeated: serverGroupedMode && !source,
     columns: resolvedColumns,
     rows: surface.rows,
     modelMetadata,
@@ -262,11 +266,18 @@ export function ListViewContent<TRow extends Row = Row>({
     pagerMaxPageSize: clientRowModel ? undefined : MAX_PAGE_SIZE,
   };
 
+  // Only the server-grouped surface (list or board) places its loaded rows in groups.
+  const groupedItems = surface.kind === "grouped" ? surface.groupedItems : null;
+  const placed = React.useMemo(() => groupedItems && placedRecords(groupedItems), [groupedItems]);
+  // Value-stable, so a bulk action's memo or effect re-runs only when the split changes.
+  const selectedGroups = useValueStable(React.useMemo(() => resourceView.selectedGroups(effectiveGroupStack, placed),
+    [resourceView.selectedGroups, effectiveGroupStack, placed]));
   const domainBulkActions = selectable && selectedIds.size > 0
     ? bulkActions?.(selectedIds, resourceView.clearSelectedIds, {
       filter: surface.mergedFilter,
       // Scope snapshots are shared Rows; narrow to the declared row type (see bulkActions).
       selectedRows: resourceView.selectedRows as readonly TRow[],
+      selectedGroups,
     }) : null;
   const genericSelection = !source && modelMetadata ? {
     modelMetadata,

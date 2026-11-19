@@ -27,6 +27,7 @@ import {
 import type { UiTranslate } from "../../i18n";
 import { errorFromUnknown } from "../../data/errors";
 import type { CollectionGroupRequest } from "./collection-source";
+import type { SelectionGroupPath } from "./resource-view-types";
 
 /** Default size of a server-grouped bucket's first page; a source may declare its own. */
 const GROUPED_LEAF_PAGE_SIZE = 20;
@@ -128,6 +129,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
     bucket: AggregateBucket,
     depth: number,
     groups: GroupedQueryResult,
+    groupPath: SelectionGroupPath,
   ): GroupedListPager => {
     const pagination = paginationByScope[bucketKey];
     const leafPageSize = pagination?.pageSize ?? declaredLeafPageSize;
@@ -196,6 +198,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
           itemKey: `${bucketKey}:${row.id}`,
           row,
           nav,
+          groupPath,
         });
       }
     }
@@ -212,14 +215,13 @@ export function buildGroupedRenderModel<TRow extends Row>(
   const walkLevel = (
     depth: number,
     parentFilter: ResourceViewFilter | undefined,
+    parentPath: SelectionGroupPath,
   ): GroupedListPager | undefined => {
     const axisGroup = groupStack[depth];
     if (!axisGroup) return;
     if (!resourceQuery)
       throw new Error("Resource metadata is required for server grouping.");
     const axis = resourceQuery.group(axisGroup);
-    const projection = axis.groupBy();
-    const levelWhere = resourceQuery.toWhere(parentFilter);
     const levelScopeKey = stableSerialize({
       axis: axis.spec,
       filter: parentFilter ?? null,
@@ -231,9 +233,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
       depth === 0 ? rootPage : (pagination?.pageIndex ?? 0) + 1;
     const isLeafLevel = depth === groupStack.length - 1;
     const query: GroupByRequestOptions = {
-      dimensions: projection.dimensions,
-      ...(projection.orderBy ? { orderBy: projection.orderBy } : {}),
-      ...(levelWhere !== undefined ? { where: levelWhere } : {}),
+      ...resourceQuery.toGroupRead(axis, parentFilter),
       measures: queryMeasures,
       page: storedPage,
       pageSize: levelPageSize,
@@ -299,7 +299,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
       return pager;
     }
 
-    for (const bucket of result.buckets) {
+    for (const [index, bucket] of result.buckets.entries()) {
       const bucketFilter = axis.drill(bucket);
       const expandable = bucketFilter !== undefined;
       const bucketKey = stableSerialize({
@@ -331,14 +331,22 @@ export function buildGroupedRenderModel<TRow extends Row>(
       items.push(header);
       if (!expanded || bucketFilter === undefined) continue;
       const cumulativeFilter = Filter.combine(parentFilter ?? {}, bucketFilter);
+      const identity = axis.bucketIdentity(bucket);
+      const groupPath: SelectionGroupPath = [...parentPath, {
+        group: axis.spec,
+        key: identity === null ? null : String(identity),
+        label,
+        position: (storedPage - 1) * levelPageSize + index,
+        bucketKey,
+      }];
       header.pager = isLeafLevel
-        ? emitLeaf(bucketKey, cumulativeFilter, bucket, depth, result)
-        : walkLevel(depth + 1, cumulativeFilter);
+        ? emitLeaf(bucketKey, cumulativeFilter, bucket, depth, result, groupPath)
+        : walkLevel(depth + 1, cumulativeFilter, groupPath);
     }
     return pager;
   };
 
-  walkLevel(0, baseFilter);
+  walkLevel(0, baseFilter, []);
   return { groupScopes, leafScopes, leafKeys, carriedLeaves, items, rootResult };
 }
 
@@ -361,6 +369,29 @@ function bucketLabel(
     query,
   );
   return label ?? allRecordsLabel;
+}
+
+/**
+ * Where the render shows each loaded record: its group path, or null when it shows
+ * the record under more than one path (a stale page of one group beside a fresh page
+ * of another), which places it nowhere.
+ */
+export function placedRecords<TRow extends Row>(
+  items: readonly GroupedListItem<TRow>[],
+): ReadonlyMap<string, SelectionGroupPath | null> {
+  const placed = new Map<string, SelectionGroupPath | null>();
+  for (const item of items) {
+    if (item.kind !== "record") continue;
+    const seen = placed.get(item.row.id);
+    placed.set(item.row.id, seen === undefined || (seen !== null && groupPathId(seen) === groupPathId(item.groupPath))
+      ? item.groupPath : null);
+  }
+  return placed;
+}
+
+/** A path's identity: each level's axis spec and group key. */
+export function groupPathId(path: SelectionGroupPath): string {
+  return stableSerialize(path.map(({ group, key }) => [group, key]));
 }
 
 export function groupScopesEqual(

@@ -8,6 +8,7 @@ import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import { CountBadge } from "./count-badge";
 import { Spinner, type SpinnerSize } from "./spinner";
+import { Tooltip } from "./tooltip";
 import { interactiveSurfaceVariants } from "./widget-control";
 
 /**
@@ -84,6 +85,12 @@ export type ButtonProps = Omit<
     pressed?: boolean;
     /** A count riding on the button's corner (needs you, unread); nothing when 0. */
     badge?: number;
+    /**
+     * Why the verb cannot run; a reason disables it (null, false and "" are no
+     * reason). The reason is the button's tooltip and its accessible description,
+     * and the button stays focusable so keyboard users reach it.
+     */
+    disabledReason?: React.ReactNode;
   };
 
 /**
@@ -103,12 +110,18 @@ export const Button = React.forwardRef<HTMLElement, ButtonProps>(function Button
     className,
     children,
     disabled,
+    disabledReason,
+    focusableWhenDisabled,
     nativeButton,
     render,
+    "aria-describedby": describedBy,
     ...props
   },
   ref,
 ) {
+  const reasonId = React.useId();
+  const reason = disabledReason === null || disabledReason === undefined || disabledReason === false || disabledReason === ""
+    ? null : disabledReason;
   const child = asChild
     ? (React.Children.only(children) as React.ReactElement<Record<string, unknown>>)
     : undefined;
@@ -116,7 +129,7 @@ export const Button = React.forwardRef<HTMLElement, ButtonProps>(function Button
   const buttonContent =
     isLoading && loadingText !== undefined ? loadingText : children;
 
-  return (
+  const button = (
     <BaseButton
       ref={ref}
       className={cn(
@@ -128,7 +141,9 @@ export const Button = React.forwardRef<HTMLElement, ButtonProps>(function Button
       data-pending={pending ? "" : undefined}
       aria-pressed={pressed}
       aria-busy={isLoading || undefined}
-      disabled={disabled || isLoading}
+      aria-describedby={reason === null ? describedBy : [describedBy, reasonId].filter(Boolean).join(" ")}
+      disabled={disabled || isLoading || reason !== null}
+      focusableWhenDisabled={focusableWhenDisabled || reason !== null}
       nativeButton={asChild ? (nativeButton ?? false) : nativeButton}
       render={asChild ? child : render}
       {...props}
@@ -149,6 +164,13 @@ export const Button = React.forwardRef<HTMLElement, ButtonProps>(function Button
         </>
       )}
     </BaseButton>
+  );
+  if (reason === null) return button;
+  return (
+    <>
+      <Tooltip label={reason} side="bottom">{button}</Tooltip>
+      <span id={reasonId} hidden>{reason}</span>
+    </>
   );
 });
 

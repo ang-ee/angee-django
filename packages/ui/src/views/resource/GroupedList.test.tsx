@@ -168,6 +168,7 @@ function GroupedRecordHarness({ selectable, expanded = true, onSetExpanded = () 
     ...(expanded ? [{
       kind: "record" as const, itemKey: "january:r1", row,
       nav: { filter: undefined, order: undefined, page: 1, pageSize: 20, rows: [], total: 1, fetching: false },
+      groupPath: [{ group: { field: "month" }, key: "January", label: "January", position: 0, bucketKey: "january" }],
     }] : []),
   ];
   const rowVirtualizer = useVirtualizer({

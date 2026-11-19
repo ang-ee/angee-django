@@ -4,7 +4,6 @@ import { useMutation } from "@tanstack/react-query";
 
 import { Button } from "../../ui/button";
 import { DropdownMenu } from "../../ui/dropdown-menu";
-import { Tooltip } from "../../ui/tooltip";
 import { Glyph } from "../../chrome/Glyph";
 import { errorMessage, useConfirm, usePrompt, useToast } from "../../feedback";
 import { ActionFormDialog } from "./ActionFormDialog";
@@ -249,19 +248,16 @@ export function RecordActionBar({
         {contributedVerbs}
         {formDialog}
       </> : <>
-        {toolbarActions.map((action) => { const reason = disabledReason(action); return (
-          // A band verb's disabled reason is its tooltip: the verb stays focusable while
-          // disabled so keyboard users reach the reason too.
-          <Tooltip key={action.id} label={reason} side="bottom">
-            <Button type="button" size="sm"
-              variant={action.danger ? "danger" : action === primaryAction ? "primary" : "secondary"}
-              disabled={disabled(action)} focusableWhenDisabled={Boolean(reason)}
-              loading={pendingId === action.id} onClick={() => void runAction(action)}>
-              {action.icon ? <Glyph name={action.icon} /> : null}
-              {action.label}
-            </Button>
-          </Tooltip>
-        ); })}
+        {toolbarActions.map((action) => (
+          // A band verb's disabled reason is its tooltip and description (`Button`).
+          <Button key={action.id} type="button" size="sm"
+            variant={action.danger ? "danger" : action === primaryAction ? "primary" : "secondary"}
+            disabled={disabled(action)} disabledReason={disabledReason(action)}
+            loading={pendingId === action.id} onClick={() => void runAction(action)}>
+            {action.icon ? <Glyph name={action.icon} /> : null}
+            {action.label}
+          </Button>
+        ))}
         {contributedVerbs}
         {actionMenu}
         {formAction && !formAction.fromMenu ? formDialog : null}

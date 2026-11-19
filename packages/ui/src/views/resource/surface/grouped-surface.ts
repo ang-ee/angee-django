@@ -117,12 +117,16 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     () => (source ? undefined : query.toWhere(mergedFilter)),
     [source, query, mergedFilter],
   );
+  // A flat aggregate cannot apply a repeated level's HAVING, so its total would count
+  // every record while the groups list only the repeated ones: no footer total then.
+  const footerTotal = !source && rowGroupStack.length > 0 && measures.length > 0
+    && !rowGroupStack.some((level) => level.repeated);
   const grandTotal = useAngeeAggregate(aggregateOperation.target, {
     relatedModels,
     document: aggregateOperation.document,
     where,
     measures: queryMeasures,
-    enabled: !source && rowGroupStack.length > 0 && measures.length > 0,
+    enabled: footerTotal,
   });
 
   // Expansion belongs to the active grouping axis. Root buckets discovered in
@@ -475,8 +479,8 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   const refetch = React.useCallback(() => {
     for (const result of groupByResults.values()) result.refetch();
     for (const result of requestedLeafResults.values()) result.refetch();
-    if (measures.length > 0) grandTotal.refetch();
-  }, [groupByResults, requestedLeafResults, measures.length, grandTotal.refetch]);
+    if (footerTotal) grandTotal.refetch();
+  }, [groupByResults, requestedLeafResults, footerTotal, grandTotal.refetch]);
   const list = React.useMemo<ResourceListResult>(
     () => ({
       ...listResultFromPageState({
@@ -518,7 +522,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     requestedFields,
     mergedFilter,
     sortOrder,
-    footerAggregate: grandTotal.aggregate,
+    footerAggregate: footerTotal ? grandTotal.aggregate : null,
     measures: queryMeasures,
     setScopePage,
     setScopePageSize,

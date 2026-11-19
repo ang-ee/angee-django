@@ -108,7 +108,7 @@ export {
   type RefineResourceOptions,
 } from "./resources";
 
-export { ResourceQuery, GroupAxis, QueryParseError, type QueryFilter, type FilterRecord, type FilterValue, type FilterPrimitive, type GroupBucket, type GroupProjection, type LocalQueryField } from "./query.js";
+export { ResourceQuery, GroupAxis, QueryParseError, groupAxisId, groupSpecsFrom, type QueryFilter, type FilterRecord, type FilterValue, type FilterPrimitive, type GroupBucket, type GroupProjection, type GroupRead, type LocalQueryField } from "./query.js";
 export { FILTER_OPERATORS, GroupSpecSchema, GroupSpecsSchema, DataResourceQuerySchema, type FilterOperator, type DataResourceQuery, type QueryField, type QueryAxis, type QueryDrill, type QueryExtraction, type GroupSpec, type QuerySort } from "./query-schema.js";
 
 export { Filter, isQueryFilter, type FilterFacet } from "./filter.js";

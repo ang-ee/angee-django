@@ -16,7 +16,7 @@ import type { CardFrame } from "../../../ui/card";
 import { withResourceViewScope, useResourceViewMaybe, type ResourceViewContextValue } from "../resource-view-context";
 import { ResourceViewArchiveScopeContext, useArchiveScopeFilter } from "../surface/archive-scope";
 import { useRecordChromeContextMaybe } from "../record-chrome-context";
-import { DEFAULT_TEXT_FILTER_FIELD, Filter, isBuiltInResourceViewKind } from "../resource-view-model";
+import { DEFAULT_TEXT_FILTER_FIELD, Filter, isBuiltInResourceViewKind, resourceViewKindCapabilities } from "../resource-view-model";
 import { ResourceViewKindsProvider, useOfferedResourceViewKinds, useResourceViewKindContent } from "../resource-view-kinds";
 import { ContributedViewSurface } from "./contributed-view-surface";
 import { GanttCollectionSurface } from "../../gantt/gantt-collection-surface";
@@ -115,15 +115,18 @@ function ValidatedListViewBody<TRow extends Row>(
       const defaults = declaredGroupDefaults(props.defaultGroup, props.defaultGroups);
       query.groupsFrom(defaults.groupStack);
       for (const stack of Object.values(defaults.groupStacks)) query.groupsFrom(stack);
-      error = validateResourceViewState(
-        props.resourceView.state,
-        query,
-      ).queryError;
-      query.toWhere(props.resourceView.baseFilter, props.resourceView.state.filter);
+      const { view } = props.resourceView.state;
       const group =
-        (props.resourceView.state.view === "board" || props.resourceView.state.view === "gantt") && props.laneSource
+        (view === "board" || view === "gantt") && props.laneSource
           ? { field: props.laneSource.field }
           : null;
+      const serverGroups = !isClientRowModel(metadata?.resource) && (view === "list" || (view === "board" && !props.laneSource));
+      error = validateResourceViewState(props.resourceView.state, query, {
+        // Lanes and a kind that never groups leave the stored stack unrendered; only
+        // the native server group read applies `repeated` to it.
+        appliesRepeated: Boolean(group) || !resourceViewKindCapabilities(view).grouping || (serverGroups && !props.source),
+      }).queryError;
+      query.toWhere(props.resourceView.baseFilter, props.resourceView.state.filter);
       if (group) query.group(group);
       const groups = query.groupsFrom(props.resourceView.state.groupStack);
       if (
@@ -134,16 +137,9 @@ function ValidatedListViewBody<TRow extends Row>(
           `This collection supports at most ${props.maxGroupDepth} grouping levels.`,
         );
       }
-      const effectiveGroups =
-        (props.resourceView.state.view === "board" || props.resourceView.state.view === "gantt") && props.laneSource && group
-          ? [group]
-          : groups;
+      const effectiveGroups = group ? [group] : groups;
       if (effectiveGroups.length > 0) {
-        if (
-          !isClientRowModel(metadata?.resource) &&
-          (props.resourceView.state.view === "list" ||
-            (props.resourceView.state.view === "board" && !props.laneSource))
-        ) {
+        if (serverGroups) {
           query.toGroupBy(effectiveGroups);
         } else {
           query.selection(effectiveGroups);
