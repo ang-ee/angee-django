@@ -476,7 +476,9 @@ and shares who reads its contacts (`parties/directory#share`). Connecting,
 changing and removing a directory stay with its integration's writers and
 platform admins. Each choice a deployment's architect may flip is one line in
 `parties/party`: `role_private` (whether a contact reader reads private fields)
-and `role_delete` (whether a contact manager trashes, and with it deletes), and
+and `role_delete` (whether a contact manager trashes, and with it deletes, a
+party, person or organization; the dependent rows, folders and circles stay with
+the contact admin through `role_admin` and their own constants), and
 the four pending rulings named here, `role_write_as_subject`,
 `role_merge_away`, `role_share` and `role_withheld`. A role holder also reads the record tasks about every party
 (`read_as_subject`) and sees people with an account in pickers, but writes,

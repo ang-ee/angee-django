@@ -142,6 +142,8 @@ MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
         # Merging away retires to the trash: through the roles, the contact admin's (pending ruling).
         "merge_away": (*ADMINS, "editor"),
         "delete": ADMINS,
+        # The person's owner column moves with its party's transfer.
+        "write__owner": ADMINS,
         # Adoption runs through the roles' own members, never a platform admin's reach of every role.
         "adopt": ("manager", "admin", "group manager", "owner", "editor"),
     },
@@ -163,6 +165,9 @@ MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
         "write": WRITERS,
         "merge_away": ADMINS,
         "delete": ADMINS,
+        # An organization's owner column moves with its party's transfer; a read grant on it is the party's share.
+        "write__owner": ADMINS,
+        "share": (),
     },
     "handle": {"read": (*ROLE_HOLDERS, "owner", "platform"), "write": WRITERS, "share": ADMINS, "delete": ADMINS},
     "address": {"read": (*ROLE_HOLDERS, "owner", "dir reader", "platform"), "write": WRITERS, "delete": ADMINS},
@@ -202,6 +207,7 @@ MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
         "write": ("owner", "platform"),
         "merge_away": ("owner", "platform"),
         "delete": ("owner", "platform"),
+        "write__owner": ("owner", "platform"),
         # The roles lend no adoption of an account's own person, which adoption refuses anyway.
         "adopt": ("owner",),
     },

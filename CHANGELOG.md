@@ -24,7 +24,8 @@ live in code docstrings.
   (`parties/directory#share`, which now manages `contact_reader`), and
   connecting a directory stays with platform admins. Each choice is one line in
   `parties/party`: `role_private` (a contact reader reads private fields: yes),
-  `role_delete` (a contact manager trashes, which is `delete`: no), and, pending
+  `role_delete` (a contact manager trashes a party, person or organization,
+  which is `delete`: no), and, pending
   the architect's ruling, `role_write_as_subject`, `role_merge_away`,
   `role_share` and `role_withheld`. Revision 38 on its branch.
   `angee.knowledge`: the people vault takes the roles by install grant rows on
