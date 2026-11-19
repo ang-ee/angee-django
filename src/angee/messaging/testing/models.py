@@ -5,6 +5,10 @@ collected. Register this connected model graph from conftest, before Django
 creates the test database, without depending on a test module's import order.
 """
 
+from typing import Any, cast
+
+from django.db import models
+
 from angee.intake.models import ChannelIntake
 from angee.integrate.testing.integration import Integration
 from angee.messaging.models import Channel as AbstractChannel
@@ -34,12 +38,15 @@ from angee.parties.models import Relationship as AbstractRelationship
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
 from angee.posts.models import MessagePublic, ThreadPublic
 from angee.projects.models import ThreadProjects
+from angee.provenance.statements import Aspect, SourceKind, StatementRecords
 from angee.spaces.models import ChannelSpace, ThreadSpace
 from angee.spaces.testing import models as spaces_models  # noqa: F401 -- register Thread's group relation target
 
 
 class Directory(AbstractDirectory, Integration):
     """Concrete contacts directory (Integration child) used by messaging tests."""
+
+    rebac_grantable = AbstractDirectory.rebac_grantable
 
     class Meta(AbstractDirectory.Meta):
         """Django model options for the canonical test directory."""
@@ -76,8 +83,36 @@ class Party(AbstractParty):
         rebac_resource_type = "parties/party"
 
 
-class Person(AbstractPerson, Party):
-    """Concrete identity required by party-keyed messaging followers."""
+class PersonFavourites(models.Model):
+    """A consumer donor's own person columns and their statement groups, composed into the test person.
+
+    Directory mappings (``angee.parties.backends.DirectoryMapping``) state them
+    from a source's fields; a person's own statement outranks the directory's.
+    """
+
+    favourite_colour = models.CharField(max_length=40, blank=True, default="")
+    favourite_number = models.IntegerField(null=True, blank=True)
+    # A donor's declaration, read by the subject's own (``StatementRecords.aspects_for``). Composed here
+    # by hand, not through ``extends``, so the composition typing plugin never sees it: name its type.
+    statements: Any = StatementRecords(
+        aspects={
+            "colour": Aspect(
+                fields=("favourite_colour",),
+                precedence=cast(tuple[SourceKind, ...], (SourceKind.PERSON, SourceKind.DIRECTORY)),
+            ),
+            "number": Aspect(
+                fields=("favourite_number",),
+                precedence=cast(tuple[SourceKind, ...], (SourceKind.PERSON, SourceKind.DIRECTORY)),
+            ),
+        },
+    )
+
+    class Meta:
+        abstract = True
+
+
+class Person(PersonFavourites, AbstractPerson, Party):
+    """Concrete identity required by party-keyed messaging followers, with a consumer donor's columns."""
 
     class Meta(AbstractPerson.Meta):
         """Django model options for the canonical test person."""

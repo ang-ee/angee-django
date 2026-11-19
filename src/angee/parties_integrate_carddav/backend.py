@@ -18,10 +18,10 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Callable, Sequence
-from dataclasses import replace
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import date, datetime
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 from xml.etree import ElementTree
 from xml.sax.saxutils import escape
@@ -30,15 +30,31 @@ import vobject
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.db.models import CharField
+from django.db.models.fields.json import KeyTextTransform
+from django.db.models.functions import Coalesce
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ValidationError as PydanticValidationError
 
 from angee.base.serialization import canonical_json_sha256
+from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import RedirectOriginError, ResponseTooLargeError, same_origin
-from angee.integrate.states import LinkStatus
-from angee.integrate.streams import CursorInvalid, RecordChange, RemoteRejected, StreamPage, WriteBackResult
+from angee.integrate.states import LinkStatus, StreamDefinition, StreamDirection
+from angee.integrate.streams import (
+    CursorInvalid,
+    RecordChange,
+    RemoteRejected,
+    SemanticError,
+    StreamPage,
+    WriteBackResult,
+)
 from angee.parties.backends import (
+    ADDRESSBOOKS,
+    CONTACTS,
     SET_FIELDS,
     DirectoryBackend,
+    DirectoryConfig,
     ParsedAddress,
     ParsedAddressbook,
     ParsedContact,
@@ -92,6 +108,56 @@ _COLLECTION_BODY = (
 )
 
 
+class ContactsPolicy(BaseModel):
+    """One address book's contacts policy, ``config["streams"]["contacts"][<book key>]``.
+
+    It keeps keys it does not know, as :class:`CardDavConfig` does; its reader
+    ignores them (:meth:`CardDavDirectoryBackend.contacts_stream`).
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    local_delete: Literal["conflict", "propagate"] = Field(
+        default="conflict",
+        description="A contact deleted here: hold it for a choice (conflict), or delete its card (propagate).",
+    )
+
+
+class CardDavStreams(BaseModel):
+    """A CardDAV directory's per-stream policies, ``config["streams"]``; it keeps streams it does not know."""
+
+    model_config = ConfigDict(extra="allow")
+
+    contacts: dict[str, ContactsPolicy] = Field(
+        default_factory=dict,
+        exclude_if=lambda contacts: not contacts,
+        description="Each address book's contacts policy, by the book's key.",
+    )
+
+
+class CardDavConfig(DirectoryConfig):
+    """A CardDAV directory's non-secret configuration, beside the directory's own (:class:`DirectoryConfig`).
+
+    Validated strictly where a person edits it: ``Directory.objects.connect``
+    refuses a key the model does not know. Every save validates the keys it
+    knows and keeps the rest, at every level, so a directory carrying a key
+    another version knows saves unchanged; a known key with an invalid value is
+    refused, and so is turning adoption on, since CardDAV writes back. A reader
+    ignores what it does not know.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    server_url: str = Field(
+        default="", title="Server URL", description="The CardDAV server or account URL; discovery finds the books."
+    )
+    streams: CardDavStreams = Field(
+        default_factory=CardDavStreams,
+        exclude_if=lambda streams: not (streams.contacts or streams.model_extra),
+        description="Each stream's policies, by the stream's key.",
+    )
+
+
 class CardDavError(IntegrationError):
     """A backend-composed, operator-safe CardDAV refusal."""
 
@@ -100,34 +166,57 @@ class CardDavResponseTooLargeError(CardDavError):
     """A DAV response exceeded the limit; its message is safe for operator telemetry."""
 
 
+@dataclass(frozen=True)
+class ParsedCard(ParsedContact):
+    """One vCard resource: the neutral contact and the wire facts CardDAV keeps beside it.
+
+    ``uid`` is the card's ``UID`` (its href when the server omits one), which
+    becomes the contact's external key; ``href`` is the resource URL and ``etag``
+    the version every conditional write fences on. ``raw_vcard`` is the card
+    without ``PHOTO``, the template a write patches so unmapped properties (an
+    ``ORG`` unit, extensions) survive. The base reads none of them.
+    """
+
+    uid: str = ""
+    etag: str = ""
+    href: str = ""
+    raw_vcard: str = ""
+
+
 class CardDavDirectoryBackend(DirectoryBackend):
-    """Discovers a CardDAV account's address books and fetches each one's vCards.
+    """Discovers a CardDAV account's address books and fetches each one's vCards, two-way.
 
     ``config["server_url"]`` is the account/server URL; discovery finds the
     collections, so the operator never pastes an exact collection URL. The
-    directory's Basic-auth credential authenticates.
+    directory's Basic-auth credential authenticates. A contact's external key is
+    its card's ``UID`` and its href rides in the link's metadata, so this backend
+    builds its own records (:meth:`_record_changes`) and reads identities by href.
     """
 
     key = "carddav"
     label = "CardDAV"
     icon = "address-book"
     defaults = {"vendor": "carddav"}
-    supports_identity_reads: ClassVar[bool] = True
+    config_model = CardDavConfig
+    config_form_spec_json_fields = True
+    direction: ClassVar[StreamDirection] = StreamDirection.BIDIRECTIONAL
     response_cap: ClassVar[int] = _DAV_RESPONSE_CAP
     """The largest decoded DAV response body read; a multiget splits until each answer fits."""
 
     # --- discovery (DirectoryBackend contract) ---
 
-    def probe(self) -> None:
-        """Run discovery once to validate the URL + credentials before persisting.
+    def test_connection(self) -> str:
+        """Run discovery once, the operator's connection test and the connect flow's check before saving.
 
         Raises :class:`CardDavError` if the server URL is missing, unreachable, or
-        rejects the credentials — so the connect mutation fails fast instead of
-        saving a directory whose first sync would silently error. An empty (but
-        reachable, authenticated) account is allowed.
+        rejects the credentials, so the connect mutation never saves a directory
+        whose first sync would fail. An empty (but reachable, authenticated)
+        account passes. The message names the server by host name and port only,
+        never by a URL part that can carry credentials.
         """
 
-        if not self._base_url():
+        base = self._base_url()
+        if not base:
             raise CardDavError("A CardDAV server URL is required.")
         try:
             self.discover()
@@ -135,6 +224,38 @@ class CardDavDirectoryBackend(DirectoryBackend):
             raise
         except Exception as error:  # noqa: BLE001 — surface any transport/SSRF failure as a connect error.
             raise CardDavError("Could not connect to the CardDAV server.") from error
+        parts = urlsplit(base)
+        return f"Connected to {parts.hostname}{f':{parts.port}' if parts.port else ''}."
+
+    def credential_blocker(self, credential: Any) -> str | None:
+        """Refuse anything but Basic-auth material, the username and password this backend signs in with."""
+
+        if credential.kind == CredentialKind.BASIC_AUTH:
+            return None
+        return "A CardDAV directory signs in with a username and password."
+
+    def account_address(self) -> str:
+        """Return the Basic-auth username: the account's own login address."""
+
+        credential = self.bridge.credential
+        return str(credential.reveal().get("username", "")).strip() if credential is not None else ""
+
+    def contacts_stream(self, addressbook: Any) -> StreamDefinition:
+        """Declare a book's two-way contacts stream with its deletion policy.
+
+        The policy seeds from the directory's per-book config
+        (``config["streams"]["contacts"][<book>]``, a :class:`ContactsPolicy`), which
+        saving the directory validates (:class:`CardDavConfig`). Here it reads only
+        what the policy knows (it ignores unknown keys): a value stored before the
+        write was validated never fails the sync, and reads as the default.
+        """
+
+        book = self.bridge.config.get("streams", {}).get(CONTACTS, {}).get(addressbook.external_key, {})
+        try:
+            policy = ContactsPolicy.model_validate(book, extra="ignore")
+        except PydanticValidationError:
+            policy = ContactsPolicy()
+        return replace(super().contacts_stream(addressbook), config=policy.model_dump())
 
     def discover(self) -> list[ParsedAddressbook]:
         """Resolve the account's principal → home-set → address-book collections.
@@ -224,9 +345,15 @@ class CardDavDirectoryBackend(DirectoryBackend):
                 next_cursor["ctag"] = next_ctag
         return StreamPage(changes, next_cursor, exhausted=not remaining and not more)
 
-    def read_contacts(self, stream: Any, keys: Sequence[str]) -> list[RecordChange]:
-        """Read bound identities or new inventory hrefs through the same mapper."""
+    def read_keys(self, stream: Any, keys: Sequence[str]) -> Iterable[RecordChange]:
+        """Read address books through the base; contacts by href, bound identities or new inventory hrefs alike.
 
+        A contact's records come from the same mapper as a page's
+        (:meth:`_record_changes`), which keeps each requested key.
+        """
+
+        if stream.key == ADDRESSBOOKS:
+            return super().read_keys(stream, keys)
         if not keys:
             return []
         bindings = {link.external_key: link.source_href for link in self._links(stream)}
@@ -239,7 +366,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
             contacts.update(self._multiget(stream.partition, hrefs[start : start + _MULTIGET_CHUNK]))
         return self._record_changes(stream, contacts, requested_keys=requested)
 
-    def enumerate_keys(self, stream: Any, *, after: str | None = None) -> list[str]:
+    def contact_keys(self, stream: Any, *, after: str | None) -> list[str]:
         """Seek exclusively by href over every depth-one inventory member.
 
         Known hrefs keep their keys. New hrefs are identities before their UIDs
@@ -265,7 +392,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
             raise CardDavError("A CardDAV record link must belong to a stream.")
         if link.status == LinkStatus.TOMBSTONE:
             raise RemoteRejected("remote_deleted")
-        source = self._source_payload(link)
+        source = dict(link.source_payload)
         # Unchanged revalidation can relocate a card without a new revision.
         href = link.metadata.get("href") or source.get("href")
         if not href:
@@ -325,7 +452,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
             {"href": href, "raw_vcard": parsed.raw_vcard, "contact": observed},
         )
 
-    def _resolve_photo(self, contact: ParsedContact, *, collection: str) -> ParsedContact:
+    def _resolve_photo(self, contact: ParsedCard, *, collection: str) -> ParsedCard:
         """Bound PHOTO downloads to public addresses on the collection's origin."""
 
         photo = contact.photo
@@ -345,6 +472,134 @@ class CardDavDirectoryBackend(DirectoryBackend):
         if not response.is_success or not response.content:
             raise CardDavError("The vCard photo could not be retrieved.")
         return replace(contact, photo=ParsedPhoto(data=response.content, mime=photo.mime or "application/octet-stream"))
+
+    # --- identity: resource hrefs onto contact keys ---
+
+    def _links(self, stream: Any) -> tuple[Any, ...]:
+        """Read the latest retained locators directly from their owning links."""
+
+        return tuple(
+            apps.get_model("integrate", "RecordLink")
+            .objects.filter(stream=stream)
+            .annotate(
+                source_href=Coalesce(
+                    KeyTextTransform("href", "metadata"),
+                    KeyTextTransform("href", "source_payload"),
+                    output_field=CharField(),
+                )
+            )
+            .order_by("pk")
+        )
+
+    def _record_changes(
+        self,
+        stream: Any,
+        contacts: Mapping[str, ParsedCard | RecordChange | None],
+        *,
+        requested_keys: Mapping[str, str] | None = None,
+    ) -> list[RecordChange]:
+        """Bind fetched cards by href, preserving identities assigned before parsing.
+
+        Identity reads supply href-to-key bindings, including unlinked hrefs and
+        their tombstones. A parsed UID remains metadata on those identities. Each
+        record retains ``{"href", "raw_vcard", "contact"}``, hashes the contact
+        projection and carries the card's ETag as its remote version; the base binds
+        the linked people (``DirectoryBackend.local_states``).
+        """
+
+        if not contacts:
+            return []
+        links = self._links(stream)
+        by_href = {link.source_href: link for link in links if link.source_href}
+        occupied = {link.external_key: link.source_href for link in links}
+        identities = {link.metadata.get("uid", link.external_key): link.source_href for link in links}
+        records: dict[str, RecordChange] = {}
+        for href, parsed in sorted(contacts.items()):
+            prior = by_href.get(href)
+            if prior is None and isinstance(parsed, ParsedCard) and requested_keys is None:
+                owner = identities.get(parsed.uid)
+                if owner is not None and owner in contacts and contacts[owner] is None:
+                    prior = by_href.get(owner)
+            if parsed is None and prior is None and requested_keys is None:
+                continue
+            if requested_keys is not None:
+                key = requested_keys[href]
+            elif prior is not None:
+                key = prior.external_key
+            else:
+                key = parsed.uid if isinstance(parsed, ParsedCard) else href
+            if parsed is None and prior is not None and occupied.get(key) != href:
+                continue  # The same batch already relocated this UID.
+            metadata = {**(prior.metadata if prior is not None else {}), "href": href}
+            moved = False
+            if isinstance(parsed, ParsedCard):
+                owner = identities.get(parsed.uid)
+                duplicate = owner and owner != href and not (owner in contacts and contacts[owner] is None)
+                key_owner = occupied.get(key)
+                moved = (
+                    key_owner is not None
+                    and key_owner in contacts
+                    and contacts[key_owner] is None
+                    and (key == parsed.uid or (prior is not None and prior.metadata.get("uid") == parsed.uid))
+                )
+                if duplicate or (key_owner not in (None, href) and not moved):
+                    if requested_keys is None:
+                        key = prior.external_key if prior is not None else href
+                    parsed = RecordChange(
+                        key,
+                        {"href": href, "error": "duplicate_vcard_uid"},
+                        canonical_json_sha256({"href": href, "error": "duplicate_vcard_uid"}),
+                    )
+                else:
+                    metadata["uid"] = parsed.uid
+                    identities[parsed.uid] = href
+            if moved and isinstance(parsed, ParsedCard):
+                occupied[key] = href
+            key = self._claim_key(key, href, occupied=occupied)
+            if isinstance(parsed, RecordChange):
+                record = replace(
+                    parsed, external_key=key, metadata=metadata, failure=SemanticError(parsed.source_payload["error"])
+                )
+            elif parsed is None:
+                record = RecordChange(key, {"href": href}, "", tombstone=True, metadata=metadata)
+            else:
+                observed = contact_projection(parsed)
+                record = RecordChange(
+                    key,
+                    {"href": href, "raw_vcard": parsed.raw_vcard, "contact": observed},
+                    canonical_json_sha256(observed),
+                    mapped_payload=observed,
+                    remote_version=parsed.etag,
+                    metadata=metadata,
+                )
+            # A live UID observation supersedes its old locator's tombstone.
+            records[key] = record
+        states = self.local_states(stream, records, links=links)
+        return [
+            replace(
+                record,
+                target=states[record.external_key][0],
+                projection=states[record.external_key][1],
+            )
+            for record in records.values()
+        ]
+
+    def _claim_key(self, key: str, href: str, *, occupied: dict[str, str | None]) -> str:
+        """Reserve a locator without overwriting a UID that happens to equal it."""
+
+        while key in occupied and occupied[key] not in (None, href):
+            key = f"href:{key}"
+        occupied[key] = href
+        return key
+
+    def _href_for_key(self, key: str, *, bindings: Mapping[str, str | None]) -> str:
+        """Resolve retained locators or decode a not-yet-observed inventory key."""
+
+        if href := bindings.get(key):
+            return href
+        while key.startswith("href:"):
+            key = key.removeprefix("href:")
+        return key
 
     # --- transport ---
 
@@ -438,11 +693,11 @@ class CardDavDirectoryBackend(DirectoryBackend):
                 continue
             books.append(
                 ParsedAddressbook(
-                    href=urljoin(home, href),
+                    key=urljoin(home, href),
                     name=_text(resp, ".//d:displayname") or "Contacts",
                 )
             )
-        return sorted(books, key=lambda book: book.href)
+        return sorted(books, key=lambda book: book.key)
 
     def _collection_state(self, collection: str) -> tuple[str, str]:
         """Capture optional collection markers before listing to replay concurrent edits."""
@@ -537,7 +792,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
         self,
         collection: str,
         hrefs: list[str],
-    ) -> dict[str, ParsedContact | RecordChange | None]:
+    ) -> dict[str, ParsedCard | RecordChange | None]:
         """Split oversized responses and quarantine oversized or invalid single cards."""
 
         if not hrefs:
@@ -560,7 +815,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
                 }
             href = hrefs[0]
             return {href: _quarantined(href, {"href": href, "error": "vcard_response_too_large"})}
-        contacts: dict[str, ParsedContact | RecordChange | None] = {}
+        contacts: dict[str, ParsedCard | RecordChange | None] = {}
         for resp in _xml(response.content).findall("d:response", _NS):
             href = urljoin(collection, _href(resp))
             if href not in hrefs or href in contacts:
@@ -803,11 +1058,12 @@ def _status(response_el: Any) -> int:
     return int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
 
 
-def _parse_vcard(card: Any, *, etag: str, href: str, raw: str) -> ParsedContact:
-    """Map one parsed vCard into a neutral :class:`ParsedContact`.
+def _parse_vcard(card: Any, *, etag: str, href: str, raw: str) -> ParsedCard:
+    """Map one parsed vCard into a :class:`ParsedCard`: the neutral contact and its wire facts.
 
     ``uid`` falls back to the resource ``href`` when the server omits ``UID``.
-    PHOTO bytes travel separately and never enter the retained wire template.
+    PHOTO bytes travel separately and never enter the retained wire template. An
+    ``ORG`` unit (a department) is not mapped; the retained card keeps it.
     """
 
     name = card.getChildValue("n", vobject.vcard.Name())
@@ -815,7 +1071,7 @@ def _parse_vcard(card: Any, *, etag: str, href: str, raw: str) -> ParsedContact:
     photo = _parse_photo(next(iter(card.contents.get("photo", ())), None))
     if card.contents.pop("photo", None):
         raw = card.serialize().replace("\r\n", "\n").strip()
-    return ParsedContact(
+    return ParsedCard(
         uid=_prop(card, "uid") or href,
         etag=etag,
         href=href,
@@ -827,10 +1083,8 @@ def _parse_vcard(card: Any, *, etag: str, href: str, raw: str) -> ParsedContact:
         name_suffix=str(name.suffix or ""),
         nickname=_prop(card, "nickname"),
         notes=_prop(card, "note"),
-        # vCard ORG is structured "Org;Unit;…" — the first part is the org, the
-        # second its department.
+        # vCard ORG is structured "Org;Unit;…": the first part is the organization.
         organization=str(org_values[0]) if org_values else "",
-        department=str(org_values[1]) if len(org_values) > 1 else "",
         title=_prop(card, "title"),
         role=_prop(card, "role"),
         birthday=_parse_date(_prop(card, "bday")),

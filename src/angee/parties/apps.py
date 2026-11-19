@@ -38,7 +38,9 @@ class PartiesConfig(AppConfig):
         super().ready()
         # App population phase 1 imports AppConfig before the models exist; defer.
         from angee.parties import signals
+        from angee.parties.checks import check_directory_mappings
 
         checks.register(check_settings, checks.Tags.models)
+        checks.register(check_directory_mappings, checks.Tags.models)
 
         signals.connect()

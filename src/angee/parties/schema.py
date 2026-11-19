@@ -169,9 +169,11 @@ class PersonType(PartyType):
     additional_name: auto
     family_name: auto
     name_suffix: auto
-    nickname: str | None
+    nickname: auto
     birthday: auto
     anniversary: auto
+    languages: auto
+    occupation: auto
 
     @strawberry_django.field(only=["id"])
     def circle_names(self) -> list[str]:
@@ -681,6 +683,8 @@ _PERSON_RESOURCE = hasura_model_resource(
         "nickname",
         "birthday",
         "anniversary",
+        "languages",
+        "occupation",
         *_PERSON_EXTENSION_INSERT_FIELDS,
     ],
     updatable=[
@@ -694,6 +698,8 @@ _PERSON_RESOURCE = hasura_model_resource(
         "nickname",
         "birthday",
         "anniversary",
+        "languages",
+        "occupation",
         *_PERSON_EXTENSION_UPDATE_FIELDS,
     ],
     delete=False,

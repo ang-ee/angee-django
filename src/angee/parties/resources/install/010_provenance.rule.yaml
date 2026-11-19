@@ -14,3 +14,8 @@
   key: parties.same_as
 - xref: stored_holder
   key: parties.stored_holder
+# A directory's contact found an existing person it did not take (a limit refused
+# the adoption, or a record the source merged into it was another person's): it
+# proposes the two as one person for the same-as review.
+- xref: directory_match
+  key: parties.directory_match
