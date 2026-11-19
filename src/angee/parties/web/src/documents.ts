@@ -201,6 +201,7 @@ export const PartyMergeComparison = graphql(`
       name_suffix
       nickname
       birthday
+      anniversary
     }
     right_person: people_by_pk(id: $right) {
       id
@@ -212,6 +213,7 @@ export const PartyMergeComparison = graphql(`
       name_suffix
       nickname
       birthday
+      anniversary
     }
   }
 `);

@@ -203,6 +203,7 @@ class Party(
         "name_suffix",
         "nickname",
         "birthday",
+        "anniversary",
     )
 
     class Meta:
@@ -313,11 +314,28 @@ class Party(
 
     @property
     def merge_scalar_fields(self) -> tuple[str, ...]:
-        """Scalar merge choices this party's native subtype admits; a person adds its name parts and birthday."""
+        """Scalar merge choices this party's native subtype admits; a person adds its name parts and dates."""
 
         if self.concrete_kind == "person":
             return self._merge_scalar_fields + self._person_merge_scalar_fields
         return self._merge_scalar_fields
+
+    def merge_values(self, merged: Sequence[Any]) -> dict[str, Any]:
+        """The merge choices that keep every value: ``merged``'s value of each merge scalar this survivor leaves empty.
+
+        Where both records carry a value, the survivor's stands. Passed as
+        ``field_overrides``, each is kept and recorded as the merging person's choice
+        (:meth:`keep_merge_fields`). Read without writing.
+        """
+
+        survivor = most_derived_concrete(self)
+        values: dict[str, Any] = {}
+        for row in merged:
+            other = most_derived_concrete(row)
+            for name in sorted(set(self.merge_scalar_fields).intersection(row.merge_scalar_fields)):
+                if values.get(name, getattr(survivor, name)) in (None, "") and getattr(other, name) not in (None, ""):
+                    values[name] = getattr(other, name)
+        return values
 
     def keep_merge_fields(self, source: Party, field_overrides: Any) -> None:
         """Keep this survivor's merge scalars against ``source``: each chosen override, else its own value.

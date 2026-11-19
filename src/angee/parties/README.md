@@ -124,6 +124,9 @@ review in one action, `PartyManager.merge_certain_same_as_pairs` (the
 `merge_certain_same_as_pairs` mutation and agent tool), as their own merges: both
 people, neither an account's own person, exactly the two linked to an address the
 pair cites, and names equal but for case, accents and hyphens. The older record
-survives and keeps its values as that person's choice; the merge's own permission
-and guards decide each pair, and the action returns every pair it read with its
-outcome, a bounded number per call.
+survives and loses no value: a merge field it leaves empty takes the newer record's
+value (`Party.merge_values`), its own stands where both have one, and each kept
+value is recorded as that person's choice. The merge's own permission and guards
+decide each pair, and the action returns every pair it read with its outcome, a
+bounded number per call. A person's `anniversary` is a merge choice like their
+birthday; a party's `avatar` is not one yet.

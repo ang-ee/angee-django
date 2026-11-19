@@ -2062,10 +2062,11 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         bear a real name and the names agree but for case, accents and hyphens
         (``Party.comparable_name``); a pair someone kept apart awaits no review.
         Each certain pair merges into the older record through ``Party.merge`` as
-        ``actor``, so the merge's own permission and guards decide, and where the
-        two differ on a merge field the survivor's value is kept and recorded as
-        ``actor``'s choice, as keeping the survivor's side on the Merge page does.
-        Nothing merges without ``actor``.
+        ``actor``, so the merge's own permission and guards decide. It loses no
+        value: a merge field the survivor leaves empty takes the newer record's
+        value (``Party.merge_values``), the survivor's stands where both have one,
+        and each kept value is recorded as ``actor``'s choice, as choosing those
+        sides on the Merge page does. Nothing merges without ``actor``.
         """
 
         pairs = self.with_actor(actor).same_as_pairs(limit=limit)
@@ -2096,7 +2097,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             else:
                 survivor, merged = sorted((pair.left, pair.right), key=lambda party: (party.created_at, party.pk))
                 try:
-                    survivor = survivor.with_actor(actor).merge(records=[merged.public_id])
+                    survivor = survivor.with_actor(actor).merge(
+                        records=[merged.public_id], field_overrides=survivor.merge_values([merged]),
+                    )
                 except PermissionDenied:
                     outcome = SameAsMergeOutcome.NOT_PERMITTED
                 except ValidationError:

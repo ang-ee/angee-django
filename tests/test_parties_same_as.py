@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Any
 
 import pytest
@@ -70,7 +70,7 @@ def test_merge_scalar_fields_admit_person_choices_only_between_people(db: None) 
         person = Person.objects.create(display_name="Person")
         assert party.merge_scalar_fields == ("display_name", "notes", "first_met_note")
         assert set(party.merge_scalar_fields) < set(person.merge_scalar_fields)
-        assert "birthday" in person.merge_scalar_fields
+        assert {"birthday", "anniversary"} <= set(person.merge_scalar_fields)
         with pytest.raises(ValidationError, match="Unsupported merge field"):
             party.keep_merge_fields(person, {"birthday": "2000-01-01"})
 
@@ -851,3 +851,30 @@ def test_one_call_merges_a_bounded_number_of_pairs(db: None) -> None:
     assert _merge_certain(owner, limit=1) == [("merged", {first[0].pk, first[1].pk}, first[0].pk)]
     assert _merge_certain(owner, limit=1) == [("merged", {second[0].pk, second[1].pk}, second[0].pk)]
     assert _merge_certain(owner) == []
+
+
+def test_a_certain_merge_loses_no_value_the_survivor_leaves_empty(db: None) -> None:
+    """The newer record fills each merge field the older leaves empty; where both have a value, the older's stands."""
+
+    del db
+    owner = create_user("same-as-certain-fill")
+    older, newer, _handle = _people(owner, "Zoë Example", "Zoe Example")
+    with system_context(reason="same_as values on the two records"):
+        Person._base_manager.filter(pk=older.pk).update(nickname="Zo")
+        Person._base_manager.filter(pk=newer.pk).update(
+            nickname="Zozo", given_name="Zoe", notes="Met at the gallery",
+            birthday=date(1990, 2, 3), anniversary=date(2015, 6, 7),
+        )
+    assert _reconcile() == 1
+
+    assert _merge_certain(owner) == [("merged", {older.pk, newer.pk}, older.pk)]
+
+    with system_context(reason="same_as fill readback"):
+        survivor = Person._base_manager.get(pk=older.pk)
+        for statements in survivor.statement_managers():
+            statements.resolve()
+        survivor.refresh_from_db()
+    assert (
+        survivor.display_name, survivor.nickname, survivor.given_name, survivor.notes, survivor.birthday,
+        survivor.anniversary,
+    ) == ("Zoë Example", "Zo", "Zoe", "Met at the gallery", date(1990, 2, 3), date(2015, 6, 7))
