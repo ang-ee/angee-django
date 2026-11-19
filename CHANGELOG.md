@@ -10,6 +10,26 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.integrate`: a stream's mapping can be composed from several declarers.
+  `StreamDefinition.mapping_contributions` declares one
+  `MappingContribution(key, version, sequence=...)` per part; integrate orders
+  the parts by sequence, then key, and `SyncStream.mapping_contributions` retains
+  the ordered `[key, version]` list a generation ran (read through
+  `SyncStream.retained_contributions`). Any change of that list (a part added,
+  removed, exchanged, reordered or re-versioned) opens one baseline under a
+  version above the retained one, above every version the stream's records were
+  applied with and at least the parts' sum, so each record replays once and a
+  composed version never lowers. A renumbering that keeps the order changes
+  nothing. A plain `mapping_version` keeps its rule, rollback included; declared
+  on a stream that composed, it reads as one part under the empty key. A
+  declaration with contributions leaves `mapping_version` at its default, and a
+  malformed declaration is refused with `ValidationError`.
+  Upgrade: a host runs `makemigrations integrate` for the `mapping_contributions`
+  column (one `AddField`, `JSONField(default=list, blank=True)`), then `migrate`.
+  Existing streams hold the empty list and keep their generation, cursor and
+  version; nothing is read again until a stream first declares contributions,
+  which replays its records once.
+
 - The UX guard accepts manifest `vocabulary` field tones by structure while rejecting local tone maps and switches.
 
 - Integrate compares synchronized JSON as JSON values (`json_equal` in
