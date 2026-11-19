@@ -197,26 +197,55 @@ contacts stream's guarantees: a baseline walk, a delta on the type's own
 modified property (`hs_lastmodifieddate`; contacts alone use
 `lastmodifieddate`) that keeps HubSpot's clock and reaches back for the search
 index, equal-time drains, and a daily absence sweep where only HubSpot's word
-makes a record gone. Every read asks HubSpot for the mapping's properties, and,
-when it names `contacts`, one association read per page asks for each record's
-associated contacts. A directory with no object mapping reads only contacts.
+makes a record gone (a batch read naming it not found, or a merge's survivor
+naming it among its `hs_merged_object_ids`, which deals and notes carry as
+contacts do). Every read asks HubSpot for the mapping's properties, and, when it
+names `contacts`, one association read per page asks for each record's
+associated contacts; a record HubSpot names as having none has none, and one it
+neither answers nor names fails the read, to be tried again. A directory with no
+object mapping reads only contacts.
 
-`apply_record` receives a `HubSpotObjectRecord`: `id`, `properties` (the
-mapping's properties as HubSpot sent them, nullable strings for the `parse_*`
-helpers; one the account does not define is absent) and `contacts` (associated
-contact ids, in id order). `record.person(contact_id)` is the person that contact
+A mapping may project what it keeps. While extracting, `project(record)` receives
+the record with its properties as HubSpot sent them and returns the JSON values
+to keep; only those and the contact ids are kept on the record's link, in its
+history without limit, and compared, so a change the projection hides applies
+nothing. The default keeps the requested properties as sent. A notes mapping
+that must not keep each note's body keeps its digest instead:
+
+```python
+import hashlib
+
+class ExampleNoteMapping(HubSpotObjectMapping):
+    key = "example_notes"
+    object_type = "notes"
+    properties = ("hs_note_body", "hs_timestamp")
+
+    def project(self, record):             # record.properties: as HubSpot sent them
+        body = parse_string(record.properties.get("hs_note_body"))
+        digest = hashlib.sha256(body.encode()).hexdigest()
+        return {"body_sha256": digest, "at": record.properties.get("hs_timestamp")}
+
+    def apply_record(self, record, *, link):   # record.properties: what project returned
+        ...
+```
+
+`apply_record` receives a `HubSpotObjectRecord`: `id`, `properties` (what the
+projection kept: by default the mapping's properties as HubSpot sent them,
+nullable strings for the `parse_*` helpers, one the account does not define
+absent) and `contacts` (associated contact ids, in id order). It sees no more of
+the record than the projection kept. `record.person(contact_id)` is the person that contact
 landed on in this directory, or `None` until it has; raising
 `ContactNotLanded(contact_id)` makes the record wait and be read again on the
 stream's backoff, so it lands once the contact has, whichever stream ran first.
 Whatever the mapping states, it states through `link` as the integration
-(`link.asserting_source()`). A `ValueError` refuses that record alone, naming the
-mapping and never the value, while its page lands; any other error fails the
-page. A changed record applies again; a change of a property the mapping does not
-name applies nothing. Raising or lowering `version` replays every record once.
-When HubSpot says the record is gone, on a read of it or after two absence
-sweeps, `withdraw_record(link)` runs. The record as HubSpot sent it is kept on its
-link and in the link's history, so a mapping asks for no property that must not
-enter the system. A service key reads deals with `crm.objects.deals.read`.
+(`link.asserting_source()`). A `ValueError` from `project` or `apply_record`
+refuses that record alone, naming the mapping and never the value, while its
+page lands; any other error fails the page. A record whose kept values or
+contacts changed applies again; a change of a property the mapping does not name,
+or one its projection hides, applies nothing. Raising or lowering `version`
+replays every record once. When HubSpot says the record is gone, on a read of it
+or after two absence sweeps, `withdraw_record(link)` runs. A service key reads
+deals with `crm.objects.deals.read`.
 
 ## Tests
 

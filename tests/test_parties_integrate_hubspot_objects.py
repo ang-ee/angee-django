@@ -10,6 +10,7 @@ with that stream in place of the contacts stream.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Iterator
 from dataclasses import replace
@@ -24,6 +25,7 @@ from rebac import to_subject_ref
 from angee.integrate.states import LinkStatus, StreamPhase, SyncFailureKind
 from angee.integrate.streams import begin_stream_cycle, open_stream
 from angee.integrate.testing.integration import Integration
+from angee.integrate.testing.models import RecordLink
 from angee.messaging.testing.models import Person
 from angee.parties.backends import MAPPING_REFUSED
 from angee.parties_integrate_hubspot.backends import (
@@ -85,11 +87,50 @@ class RevisedDealMapping(DealMapping):
 
 
 class NoteMapping(HubSpotObjectMapping):
-    """Reads notes' bodies and no contacts, and only records what it was handed."""
+    """Reads notes' bodies and no contacts, keeps them as sent (no projection), and only records what it was handed."""
 
     key = "example_notes"
     object_type = "notes"
     properties = ("hs_note_body",)
+
+    def apply_record(self, record: HubSpotObjectRecord, *, link: Any) -> Any:
+        RECEIVED.append((record, str(link.asserting_source())))
+        return None
+
+    def withdraw_record(self, link: Any) -> None:
+        GONE.append(link.external_key)
+        super().withdraw_record(link)
+
+
+def _digest(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+class DigestNoteMapping(HubSpotObjectMapping):
+    """Keeps a digest of a note's body in place of the body, and drops the note's time it also reads."""
+
+    key = "example_note_digests"
+    object_type = "notes"
+    properties = ("hs_note_body", "hs_timestamp")
+
+    def project(self, record: HubSpotObjectRecord) -> dict[str, Any]:
+        return {"body": _digest(parse_string(record.properties.get("hs_note_body")))}
+
+    def apply_record(self, record: HubSpotObjectRecord, *, link: Any) -> Any:
+        RECEIVED.append((record, str(link.asserting_source())))
+        return None
+
+
+class ProjectedAmountMapping(HubSpotObjectMapping):
+    """Projects a deal's amount as a number, which ``parse_number`` refuses with ``ValueError`` when it is none."""
+
+    key = "example_projected_amounts"
+    object_type = "deals"
+    properties = ("amount",)
+
+    def project(self, record: HubSpotObjectRecord) -> dict[str, Any]:
+        number = parse_number(record.properties.get("amount"))
+        return {"amount": None if number is None else str(number)}
 
     def apply_record(self, record: HubSpotObjectRecord, *, link: Any) -> Any:
         RECEIVED.append((record, str(link.asserting_source())))
@@ -448,6 +489,99 @@ def test_a_record_its_mapping_cannot_read_or_hubspot_states_unreadably_is_refuse
     assert (by_words.code, by_words.details["mapping"]) == (MAPPING_REFUSED, AmountMapping.key)
     assert "seven" not in json.dumps(by_words.model_dump(mode="json"), default=str)
     assert by_odd.code == "unreadable_record"
+
+
+def test_a_note_hubspot_merges_away_is_gone_on_hubspots_word_and_its_survivor_lands_under_its_own_id(
+    hubspot: HubSpot, settings: Any
+) -> None:
+    """Notes carry ``hs_merged_object_ids`` as deals do, and their stream reads it the same way: in the batch read."""
+
+    _register(settings, NoteMapping)
+    first, second = (
+        hubspot.server.add("notes", {"hs_note_body": body}, modified=ago(days=1)) for body in ("A", "B")
+    )
+    notes = _objects(hubspot, NoteMapping)
+    assert [page.count for page in notes.drain()] == [2]
+
+    survivor = hubspot.server.merge("notes", first, second, modified=timezone.now())
+    (gone,) = hubspot.backend.read_keys(notes.stream, [first])
+    assert (gone.external_key, gone.tombstone) == (first, True)
+    assert sum(page.count for page in notes.drain()) == 1
+    assert notes.link(survivor).status == LinkStatus.CURRENT
+
+    assert [notes.sweep(), notes.sweep()] == [2, 2]
+    assert sorted(GONE) == sorted((first, second))
+
+
+SECRET = "A remark the link must not keep."
+NOTED_AT = "2025-07-04T08:30:00Z"
+
+
+def _retained(link: Any) -> str:
+    """Everything kept of a link, its row and every snapshot of its history, as text."""
+
+    history: Any = RecordLink.history
+    rows = [*RecordLink.objects.filter(pk=link.pk).values(), *history.filter(id=link.pk).values()]
+    return json.dumps(rows, default=str)
+
+
+def test_a_projection_is_what_the_mapping_is_handed_and_all_its_link_keeps_and_compares(
+    hubspot: HubSpot, settings: Any
+) -> None:
+    """The default keeps the properties as sent (the landing test above); this projection keeps a digest alone."""
+
+    _register(settings, DigestNoteMapping)
+    note = hubspot.server.add("notes", {"hs_note_body": SECRET, "hs_timestamp": NOTED_AT}, modified=ago(days=1))
+    notes = _objects(hubspot, DigestNoteMapping)
+
+    assert [page.count for page in notes.drain()] == [1]
+    (read,) = hubspot.backend.read_keys(notes.stream, [note])
+
+    kept = {"properties": {"body": _digest(SECRET)}, "contacts": []}
+    ((record, _source),) = RECEIVED
+    link = notes.link(note)
+    assert dict(record.properties) == kept["properties"]
+    assert (link.source_payload, link.applied_base.mapped_payload, read.mapped_payload) == (kept, kept, kept)
+    assert read.source_hash == link.source_hash
+    retained = _retained(link)
+    assert [text for text in (SECRET, NOTED_AT, "hs_note_body", "hs_timestamp") if text in retained] == []
+
+
+def test_a_change_the_projection_hides_applies_nothing_and_one_it_shows_replays(
+    hubspot: HubSpot, settings: Any
+) -> None:
+    _register(settings, DigestNoteMapping)
+    note = hubspot.server.add("notes", {"hs_note_body": SECRET, "hs_timestamp": NOTED_AT}, modified=ago(days=1))
+    notes = _objects(hubspot, DigestNoteMapping)
+    assert [page.count for page in notes.drain()] == [1]
+    RECEIVED.clear()
+
+    hubspot.server.update("notes", note, {"hs_timestamp": "2025-07-05T09:00:00Z"}, modified=timezone.now())
+    assert [page.count for page in notes.drain()] == [0]
+    assert RECEIVED == []
+
+    hubspot.server.update("notes", note, {"hs_note_body": "Another remark."}, modified=timezone.now())
+    assert [page.count for page in notes.drain()] == [1]
+    ((record, _source),) = RECEIVED
+    assert dict(record.properties) == {"body": _digest("Another remark.")}
+
+
+def test_a_projection_that_cannot_read_a_value_refuses_that_record_alone_and_keeps_nothing_of_it(
+    hubspot: HubSpot, settings: Any
+) -> None:
+    _register(settings, ProjectedAmountMapping)
+    hubspot.server.scopes.add(DEALS_READ)
+    words, _twelve = (
+        hubspot.server.add("deals", {"amount": amount}, modified=ago(days=1)) for amount in ("seven", "12")
+    )
+    amounts = _objects(hubspot, ProjectedAmountMapping)
+
+    assert [page.count for page in amounts.drain()] == [1]
+
+    assert [dict(record.properties) for record, _source in RECEIVED] == [{"amount": "12"}]
+    (refusal,) = amounts.link(words).failures()
+    assert (refusal.code, refusal.details["mapping"]) == (MAPPING_REFUSED, ProjectedAmountMapping.key)
+    assert "seven" not in _retained(amounts.link(words))
 
 
 def test_object_mappings_pass_the_startup_check_and_a_key_is_registered_once(settings: Any) -> None:

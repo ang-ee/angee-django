@@ -282,7 +282,13 @@ live in code docstrings.
   `ContactNotLanded` makes a record wait for its contact on the driver's
   missing-dependency refusal; `withdraw_record` runs when HubSpot says the record
   is gone; its `version` is the stream's mapping, so a change replays every record
-  once. With no object mapping a directory reads only contacts. Operator messages
+  once. An optional `project(record)` turns the record as HubSpot sent it into the
+  values the link keeps and compares (by default the requested properties as
+  sent), and `apply_record` receives those, so a note's body can be kept as its
+  digest and a change the projection hides applies nothing. An association read
+  takes an id HubSpot names in its `NO_ASSOCIATIONS_FOUND` error as having no
+  contacts, and refuses any other error or an id neither answered nor named, for a
+  later retry. With no object mapping a directory reads only contacts. Operator messages
   never repeat HubSpot's message text or error category. The scripted account
   (`angee.parties_integrate_hubspot.testing.server`) builds its invented keys at
   runtime (`service_key`), so no literal in the repository has a real key's shape.

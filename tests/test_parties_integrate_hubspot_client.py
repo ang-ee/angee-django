@@ -410,6 +410,23 @@ def test_a_search_of_another_object_type_reads_it_on_that_types_own_modified_pro
     }
 
 
+@pytest.mark.parametrize("object_type", ["deals", "notes"])
+def test_deals_and_notes_state_their_merged_ids_and_their_own_modified_property(
+    hubspot_server: HubSpotServer, client: HubSpotClient, object_type: str
+) -> None:
+    """A real account defines ``hs_merged_object_ids`` on both, unset until a merge, and no ``lastmodifieddate``."""
+
+    hubspot_server.scopes.add(DEALS_READ)
+    hubspot_server.add(object_type, modified=MODIFIED)
+
+    (record,) = client.list_page(object_type, after="", limit=10, properties=("hs_merged_object_ids",)).results
+    searched = client.search_modified(object_type, since=EPOCH, limit=10, properties=("lastmodifieddate",))
+
+    assert record.properties["hs_merged_object_ids"] is None
+    assert (record.modified_at(object_type), searched.total) == (MODIFIED, 1)
+    assert "lastmodifieddate" not in searched.results[0].properties
+
+
 def test_associations_follow_each_records_own_paging_and_one_without_any_has_none(
     hubspot_server: HubSpotServer, client: HubSpotClient
 ) -> None:
@@ -442,20 +459,80 @@ def test_association_ids_go_in_batches_of_hubspots_limit(hubspot_server: HubSpot
     assert [len(request_fields(request)["inputs"]) for request in hubspot_server.requests] == [1000, 1]
 
 
-def test_an_id_an_association_answer_leaves_unanswered_without_stating_an_error_is_a_transient_refusal(
-    hubspot_server: HubSpotServer, client: HubSpotClient
+def no_associations(*ids: str, sub_category: str = "crm.associations.NO_ASSOCIATIONS_FOUND") -> dict[str, Any]:
+    """HubSpot's error for ids an association read found nothing for, as a real account states it."""
+
+    return {
+        "status": "error",
+        "category": "OBJECT_NOT_FOUND",
+        "subCategory": sub_category,
+        "context": {"fromObjectId": list(ids), "fromObjectType": ["0-3"], "toObjectType": ["0-1"]},
+        "message": VENDOR_TEXT,
+    }
+
+
+@pytest.mark.parametrize(
+    ("errors", "refusal"),
+    [
+        pytest.param([no_associations("101")], None, id="named-has-none"),
+        pytest.param([], "HubSpot did not answer for some records.", id="omitted"),
+        pytest.param([no_associations("999")], "HubSpot did not answer for some records.", id="another-id-named"),
+        pytest.param(
+            [{**no_associations(), "context": {}}], "HubSpot did not answer for some records.", id="naming-no-id"
+        ),
+        pytest.param(
+            [no_associations("101", sub_category="crm.associations.SOMETHING_ELSE")],
+            "HubSpot could not read some records.",
+            id="another-error",
+        ),
+    ],
+)
+def test_only_an_id_hubspot_names_in_its_no_associations_error_has_none_and_any_other_is_a_transient_refusal(
+    hubspot_server: HubSpotServer, client: HubSpotClient, errors: list[dict[str, Any]], refusal: str | None
 ) -> None:
-    """A record is never read without contacts HubSpot did not state: only a partial answer says some have none."""
+    """A record is never read without contacts HubSpot did not state; that error says nothing about the record."""
 
-    hubspot_server.queue(httpx2.Response(200, json={"status": "COMPLETE", "results": []}))
+    answer = {"status": "COMPLETE", "results": [], "errors": errors, "numErrors": len(errors)}
+    hubspot_server.queue(httpx2.Response(207 if errors else 200, json=answer))
 
-    with pytest.raises(HubSpotError) as unanswered:
+    if refusal is None:
+        assert client.associations("deals", "contacts", ["101"]) == {"101": ()}
+        return
+    with pytest.raises(HubSpotError) as refused:
         client.associations("deals", "contacts", ["101"])
+    assert (refused.value.public_message, refused.value.transient) == (refusal, True)
 
-    assert (unanswered.value.public_message, unanswered.value.transient) == (
-        "HubSpot did not answer for some records.",
-        True,
+
+def test_the_scripted_account_answers_an_association_read_in_hubspots_own_shape(
+    hubspot_server: HubSpotServer,
+) -> None:
+    """A real account's 207: a string ``from.id``, an integer ``toObjectId``, and the error naming its ids."""
+
+    hubspot_server.scopes.add(DEALS_READ)
+    ada = contact(hubspot_server, 1)
+    party, alone = deal(hubspot_server, "Party"), deal(hubspot_server, "Alone")
+    hubspot_server.associate("deals", party, "contacts", ada)
+
+    response = HttpClient().request(
+        "POST",
+        "https://api.hubapi.com/crm/associations/2026-09/deals/contacts/batch/read",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json={"inputs": [{"id": party}, {"id": alone}]},
     )
+
+    answer = response.json()
+    assert (response.status_code, set(answer)) == (
+        207,
+        {"status", "results", "errors", "numErrors", "startedAt", "completedAt"},
+    )
+    ((result,), (error,)) = answer["results"], answer["errors"]
+    assert (result["from"], [target["toObjectId"] for target in result["to"]]) == ({"id": party}, [int(ada)])
+    assert (error["category"], error["subCategory"], error["context"]["fromObjectId"]) == (
+        "OBJECT_NOT_FOUND",
+        "crm.associations.NO_ASSOCIATIONS_FOUND",
+        [alone],
+    )
+    assert {"fromObjectType", "toObjectType"} <= set(error["context"]) and {"message", "status"} <= set(error)
 
 
 def test_an_association_read_needs_the_read_scope_of_both_object_types(

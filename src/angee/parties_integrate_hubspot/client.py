@@ -79,6 +79,8 @@ _LOCKED_WAIT = timedelta(seconds=2)
 _RATE_LIMIT_WAITS = {"TEN_SECONDLY_ROLLING": timedelta(seconds=10), "DAILY": timedelta(hours=1)}
 _HOST_NAME = re.compile(r"[A-Za-z0-9.-]+")
 _UNANSWERED = "HubSpot did not answer for some records."
+_UNREAD = "HubSpot could not read some records."
+_NO_ASSOCIATIONS = "crm.associations.NO_ASSOCIATIONS_FOUND"
 
 
 def _modified_property(object_type: str) -> str:
@@ -311,19 +313,31 @@ class _HubSpotErrorContext(_HubSpotModel):
     model_config = ConfigDict(coerce_numbers_to_str=True)
 
     ids: tuple[str, ...] = ()
+    from_object_id: tuple[str, ...] = ()
 
 
 class _HubSpotBatchError(_HubSpotModel):
-    """One error a partial (207) batch answer states for some of its records, naming them in its context."""
+    """One error a partial (207) batch answer states for some of its records, naming them in its context.
+
+    A batch read names them in ``context.ids``, an association read in
+    ``context.fromObjectId``.
+    """
 
     category: str | None = None
+    sub_category: str | None = None
     context: _HubSpotErrorContext | None = None
 
     @property
     def ids(self) -> tuple[str, ...]:
-        """Return the record ids the error names."""
+        """Return the record ids a batch read's error names."""
 
         return self.context.ids if self.context is not None else ()
+
+    @property
+    def from_ids(self) -> tuple[str, ...]:
+        """Return the record ids an association read's error names."""
+
+        return self.context.from_object_id if self.context is not None else ()
 
 
 class _HubSpotBatchAnswer(_HubSpotRecords):
@@ -493,7 +507,7 @@ class HubSpotClient:
             }
             answer = self._request(_HubSpotBatchAnswer, "POST", path, payload=payload, scopes=_read_scopes(object_type))
             if any(error.category != _NOT_FOUND for error in answer.errors):
-                raise HubSpotError("HubSpot could not read some records.", transient=True)
+                raise HubSpotError(_UNREAD, transient=True)
             found.extend(answer.results)
             gone.update(key for error in answer.errors for key in error.ids)
         answered = {record.id for record in found}
@@ -507,10 +521,11 @@ class HubSpotClient:
 
         A result with more associations names its own following position, sent
         back with its id alone until that record's are exhausted. HubSpot answers
-        207 when some ids have none, so an id an answer stating errors leaves out
-        has none; an id an answer leaves out without stating any is a transient
-        :class:`HubSpotError`, so a record is never read without associations
-        HubSpot did not state.
+        207 when some ids have none, naming them in its ``NO_ASSOCIATIONS_FOUND``
+        error's ``context.fromObjectId``: such an id has none, which says nothing
+        about whether the record itself exists. Any other error, and an id neither
+        answered nor named, is a transient :class:`HubSpotError`, so a record is
+        never read without associations HubSpot did not state.
         """
 
         path = f"/crm/associations/{API_VERSION}/{from_type}/{to_type}/batch/read"
@@ -522,8 +537,11 @@ class HubSpotClient:
             while inputs:
                 payload = {"inputs": inputs}
                 answer = self._request(_HubSpotAssociationAnswer, "POST", path, payload=payload, scopes=scopes)
+                if any(error.sub_category != _NO_ASSOCIATIONS for error in answer.errors):
+                    raise HubSpotError(_UNREAD, transient=True)
                 sent = {item["id"]: item.get("after", "") for item in inputs}
-                if not answer.errors and set(sent) - {result.from_.id for result in answer.results}:
+                named = {key for error in answer.errors for key in error.from_ids}
+                if set(sent) - {result.from_.id for result in answer.results} - named:
                     raise HubSpotError(_UNANSWERED, transient=True)
                 inputs = []
                 for result in answer.results:

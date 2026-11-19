@@ -81,7 +81,9 @@ _STANDARD_PROPERTIES = {
             "closedate",
         }
     ),
-    "notes": frozenset({"hs_object_id", "hs_createdate", "hs_lastmodifieddate", "hs_timestamp", "hs_note_body"}),
+    "notes": frozenset(
+        {"hs_object_id", "hs_createdate", "hs_lastmodifieddate", "hs_merged_object_ids", "hs_timestamp", "hs_note_body"}
+    ),
 }
 _READ_SCOPE = {
     "contacts": "crm.objects.contacts.read",
@@ -94,6 +96,7 @@ _ASSOCIATION_TYPE = {
     ("notes", "contacts"): 202,
     ("contacts", "notes"): 201,
 }
+_OBJECT_TYPE_ID = {"contacts": "0-1", "deals": "0-3", "notes": "0-46"}
 _RECORD_ID = "hs_object_id"
 _SEARCH_OPERATORS = {"EQ": operator.eq, "GT": operator.gt}
 _LIST_PAGE_MAX = 100
@@ -149,11 +152,14 @@ class HubSpotServer:
 
     ``associate`` links two records both ways, as a HubSpot association does. An
     association batch read takes at most 1,000 ids and answers each id with
-    associations by its targets (``toObjectId`` an integer), at most
-    ``association_page_size`` per result, a result with more naming its own
-    following position; it answers 207 when some ids have none, stating one error
-    that names no id, and leaves those ids out of its results. Deleting a record
-    removes its associations.
+    associations as ``{"from": {"id": <string>}, "to": [{"toObjectId": <integer>,
+    "associationTypes": [...]}]}``, at most ``association_page_size`` per result, a
+    result with more naming its own following position. When some ids have none it
+    answers 207, leaves them out of ``results`` and names them in one error's
+    ``context.fromObjectId`` (category ``OBJECT_NOT_FOUND``, subcategory
+    ``crm.associations.NO_ASSOCIATIONS_FOUND``), with ``numErrors``, ``startedAt``
+    and ``completedAt``, as a real account does. Deleting a record removes its
+    associations.
 
     ``clock`` is HubSpot's time, which every answer states in its ``Date`` header
     (to the second, as HTTP dates are), queued answers included. It starts at the
@@ -469,12 +475,12 @@ class HubSpotServer:
             return error_response(400, category="VALIDATION_ERROR")
         linked, size = self.associations.get((from_type, to_type), {}), self.association_page_size
         kind = {"category": "HUBSPOT_DEFINED", "typeId": _ASSOCIATION_TYPE.get((from_type, to_type)), "label": None}
-        results, without = [], 0
+        results, without = [], []
         for item in inputs:
             key, offset = str(item["id"]), int(item.get("after") or 0)
             targets = linked.get(key, [])
             if not targets:
-                without += 1
+                without.append(key)
                 continue
             page = targets[offset : offset + size]
             result: dict[str, Any] = {
@@ -484,9 +490,21 @@ class HubSpotServer:
             if offset + size < len(targets):
                 result["paging"] = {"next": {"after": str(offset + size)}}
             results.append(result)
-        answer: dict[str, Any] = {"status": "COMPLETE", "results": results}
+        now = _iso(self.clock)
+        answer: dict[str, Any] = {"status": "COMPLETE", "results": results, "startedAt": now, "completedAt": now}
         if without:
-            error = {"status": "error", "category": "NO_ASSOCIATIONS_FOUND", "message": VENDOR_TEXT}
+            context = {
+                "fromObjectId": without,
+                "fromObjectType": [_OBJECT_TYPE_ID[from_type]],
+                "toObjectType": [_OBJECT_TYPE_ID[to_type]],
+            }
+            error = {
+                "status": "error",
+                "category": "OBJECT_NOT_FOUND",
+                "subCategory": "crm.associations.NO_ASSOCIATIONS_FOUND",
+                "context": context,
+                "message": VENDOR_TEXT,
+            }
             answer |= {"numErrors": 1, "errors": [error]}
         return httpx2.Response(207 if without else 200, json=answer)
 
