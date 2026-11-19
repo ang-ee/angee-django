@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import threading
 import time
 from collections.abc import Iterator
@@ -63,6 +64,7 @@ from angee.integrate.oauth.providers import GenericOAuth2
 from angee.integrate.testing.http import mock_transport, request_fields
 from angee.integrate.testing.oidc import KEY_ID, OidcProvider, signing_key
 from angee.messaging.testing.models import Handle as PartiesHandle
+from angee.messaging.testing.models import Party as PartiesParty
 from tests.conftest import Credential, ExternalAccount, OAuthClient, SchemaAddon
 from tests.test_parties_graphql import Person as PartiesPerson
 
@@ -1353,6 +1355,44 @@ def test_complete_login_does_not_claim_an_unverified_email(db: None) -> None:
     assert completion.user.pk == user.pk
     with system_context(reason="test unverified email stays unclaimed"):
         assert not PartiesHandle.objects.filter(value="unverified@example.com").exists()
+
+
+def test_complete_login_with_a_provider_address_another_party_holds_signs_in_and_leaves_a_claim(
+    db: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Sign-in settles nobody's address: the user's person only claims it, for review, and nothing logs an error."""
+
+    del db
+    user = get_user_model().objects.create_user(username="claiming-login", email="claiming-account@example.com")
+    stranger = get_user_model().objects.create_user(username="contact-owner", email="contact-owner@example.com")
+    with system_context(reason="test oidc held provider address"):
+        holder = PartiesPerson.objects.create(display_name="Held Example", created_by=stranger)
+        handle = PartiesHandle.objects.upsert(platform="email", value="held@example.com", created_by_id=stranger.pk)
+        rule = PartiesParty.objects.rule_source("source_sender")
+        PartiesParty.objects.assert_handle(holder, handle, asserted_by=rule)
+    oauth_client = _oauth_client(slug="held-provider-address")
+    ExternalAccount.objects.link(oauth_client, "sub-held", owner=user)
+    state_token, record = oauth_state.issue(oauth_client, "https://app.example/callback")
+    provider = OidcProvider(id_claims={
+        "sub": "sub-held", "email": "held@example.com", "email_verified": True, "nonce": record.nonce,
+    })
+
+    with mock_transport(provider):
+        completion = identity.complete_login(
+            oauth_client, code="code", state_token=state_token, redirect_uri="https://app.example/callback",
+        )
+
+    assert completion.user.pk == user.pk
+    assert not [entry for entry in caplog.records if entry.levelno >= logging.ERROR]
+    with system_context(reason="test oidc held provider address verify"):
+        handle.refresh_from_db()
+        assert (handle.party_id, handle.controller_id) == (holder.pk, None)
+        person = PartiesPerson.objects.for_user(user)
+        claim = PartiesParty.statements.filter(subject_id=person.pk, handle=handle).current().get()
+        assert (claim.status, claim.source_kind, claim.confidence) == (
+            "asserted", "person", PartiesParty.CLAIM_CONFIDENCE
+        )
 
 
 def test_complete_login_contains_parties_bookkeeping_failure(

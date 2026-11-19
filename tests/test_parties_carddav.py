@@ -269,6 +269,33 @@ def test_connecting_refuses_a_setting_its_backend_does_not_know_before_the_conne
         assert not Credential._base_manager.exists() and not Directory._base_manager.exists()
 
 
+def test_connecting_with_an_account_address_someone_else_holds_connects_and_leaves_a_claim(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The connection is valid; the owner's person only claims the account address, for review.
+
+    The address is another account's sign-in address and that account has no
+    person yet, so nobody may take it.
+    """
+
+    _load_vendor()
+    monkeypatch.setattr(CardDavDirectoryBackend, "test_connection", lambda backend: "Connected.")
+    with system_context(reason="test.parties.carddav.held.account"):
+        get_user_model().objects.create_user(username="carddav-colleague", email="ada@example.com")
+    admin = parties_graphql._platform_admin("carddav-held-admin")
+
+    directory = _connect(admin)
+
+    assert not [entry for entry in caplog.records if entry.levelno >= logging.ERROR]
+    with system_context(reason="test.parties.carddav.held.verify"):
+        assert Directory._base_manager.filter(pk=directory.pk).exists()
+        handle = Handle._base_manager.get(platform="email", value="ada@example.com")
+        assert (handle.party_id, handle.controller_id) == (None, None)
+        person = Person.objects.for_user(admin)
+        claim = Party.statements.filter(subject_id=person.pk, handle=handle).current().get()
+        assert (claim.status, claim.source_kind, claim.confidence) == ("asserted", "person", Party.CLAIM_CONFIDENCE)
+
+
 def test_an_unknown_backend_is_refused_as_itself(monkeypatch: pytest.MonkeyPatch) -> None:
     """The backend is resolved before anything else, never inside the handling of another error."""
 

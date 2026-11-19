@@ -10,6 +10,19 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: taking control of an address never refuses.
+  `HandleManager.claim_control`, which OIDC login, `Directory.objects.connect`
+  and the attribution of a user's own messages (`HandleManager.for_user`) call,
+  states the address for the user's person as a claim for review at
+  `Party.CLAIM_CONFIDENCE` where someone holds it whom the user may not take it
+  from (`PartyManager.holding_blocker`), and leaves control and the holding as
+  they are. A login whose provider address another party holds signs in and
+  logs no error, and a connect whose account address another party holds
+  connects; both raised the holding rule's refusal since it moved to the handle's
+  resolution. Neither contested path (another controller, another holder)
+  rewrites the handle's display fields any more. The holding rule itself still
+  refuses a person's winning stance.
+
 - `angee.parties`, `angee.parties_integrate_carddav`, `angee.iam`: smaller
   findings of the third adoption review. A directory's configuration is
   validated strictly where a person edits it, `Directory.objects.connect`

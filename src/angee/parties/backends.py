@@ -398,7 +398,8 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
 
         ``Directory.objects.connect`` claims it as the directory owner's own
         handle (``HandleManager.claim_control``), so the owner's own login is never
-        mistaken for one of the contacts the directory syncs.
+        mistaken for one of the contacts the directory syncs; an address someone
+        else holds is only claimed for review, and the connection stands.
         """
 
         return ""

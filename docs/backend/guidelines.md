@@ -917,8 +917,9 @@ data through REBAC, never a queryset bypass.
   - A model's own system verb folding a duplicate (no actor to authorize) calls
     the system entry [`MergeableMixin.fold`](../../src/angee/base/models/merge.py),
     which joins the open changeset and runs the same hooks under a system
-    boundary. Before core row locks, both entries call `lock_for_merge()`
-    so a domain can acquire its earlier lock class. Querysets use
+    boundary. Before core row locks, both entries call `lock_merge_records()`
+    (by default each record's `lock_for_merge()`; a domain whose earlier locks
+    span the batch overrides it) so a domain can acquire its earlier lock class. Querysets use
     `redirect_group(survivor)` for the survivor plus its flattened one-hop
     redirects.
 - Native REBAC `create`/`insert` evaluates the unsaved candidate's field- and

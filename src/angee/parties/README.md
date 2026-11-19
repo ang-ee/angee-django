@@ -167,7 +167,11 @@ them (`PartyManager.holding_blocker`): each live party any spelling of it
 resolves to, a lapsed holder, and an account's person when it is an account's
 sign-in address. An account takes its own sign-in address whoever holds it, and
 nobody may while the account has no person. The refusal is one message whoever
-holds the address. A claim lends the directory's contact
+holds the address. Taking control itself never refuses: signing in (OIDC),
+connecting a directory and attributing a user's own message all call
+`claim_control`, which, where the rule would refuse, states the address for the
+user's person as a claim for review at `Party.CLAIM_CONFIDENCE` and leaves control
+and the holding as they are. A claim lends the directory's contact
 readers nothing of the holder's handle (`stating_directory` reads current claims
 at `Party.REVIEW_CONFIDENCE` or above). A refused or colliding contact therefore
 never moves an address, and what is attributed to it, away from its holder. A

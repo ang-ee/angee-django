@@ -1660,19 +1660,36 @@ def test_confirming_a_claim_of_an_accounts_sign_in_address_needs_write_on_the_ac
     assert _held_by("ada@example.com") is None
 
 
-def test_taking_control_of_an_address_needs_write_on_its_holder_unless_it_is_the_accounts_sign_in_address(
+def test_taking_control_of_an_address_someone_else_holds_leaves_a_claim_unless_it_is_the_accounts_sign_in_address(
     pull: Pull,
 ) -> None:
-    """Taking control states the address as the taker's own person's: it moves the address like a confirmation."""
+    """Taking control would move the address like a confirmation; held by someone the taker cannot write, it is a claim.
+
+    Control and the holding stay as they were, and nothing is refused: the
+    claim waits for review. The holding rule itself still refuses the taker's
+    winning stance. An address nobody else holds, and the account's own
+    sign-in address, are taken as before.
+    """
 
     person, handle = _existing(_user("someone-else"))
     taker = get_user_model().objects.create_user(username="taker", email="taker@example.com")
+    with system_context(reason="tests.directory_claim.taker"):
+        taker_person = Person.objects.for_user(taker)
 
-    with pytest.raises(PermissionDenied, match=_HOLDING_REFUSAL):
-        Handle.objects.claim_control(taker, platform="email", value="ada@example.com")
+    assert Handle.objects.claim_control(taker, platform="email", value="ada@example.com").pk == handle.pk
 
     handle.refresh_from_db()
     assert (handle.party_id, handle.controller_id) == (person.pk, None)
+    assert _claim_confidences(taker_person.pk, "ada@example.com") == []  # a person's claim, not a directory's
+    claim = Party.statements.filter(subject_id=taker_person.pk, handle=handle).current().get()
+    assert (claim.status, claim.source_kind, claim.confidence) == ("asserted", "person", Party.CLAIM_CONFIDENCE)
+    assert claim.pk in Party.objects.handle_statements().to_review().values_list("pk", flat=True)
+    with pytest.raises(PermissionDenied, match=_HOLDING_REFUSAL):
+        Party.objects.assert_handle(taker_person, handle, asserted_by=taker, confidence=1.0)
+    # An address nobody else holds is taken as before.
+    free = Handle.objects.claim_control(taker, platform="email", value="taker@elsewhere.example")
+    free.refresh_from_db()
+    assert (free.party_id, free.controller_id) == (taker_person.pk, taker.pk)
     # An account's sign-in address is its own: the account takes it whoever holds it.
     account = get_user_model().objects.create_user(username="ada-signin", email="ada@example.com")
     Handle.objects.claim_control(account, platform="email", value="ada@example.com")
