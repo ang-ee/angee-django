@@ -1,0 +1,9 @@
+# The CardDAV vendor (master tier). Model inferred from the `integrate.vendor`
+# filename; adopted by slug, so a pre-existing `carddav` row (one an earlier
+# connect created) is linked instead of duplicated. Every CardDAV directory names
+# it (the backend's `vendor` default), so it exists before any is connected.
+- xref: carddav
+  slug: carddav
+  display_name: CardDAV
+  website_url: https://www.rfc-editor.org/rfc/rfc6352
+  icon: address-book

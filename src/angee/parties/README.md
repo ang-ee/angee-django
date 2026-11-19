@@ -19,6 +19,13 @@ base turns them into records, compares the shared contact projection on both
 sides and applies each through the ingest owners. The backend's `direction`
 decides which way contacts sync, pull-only unless it declares otherwise.
 `Directory` forwards its connection test and credential admission to the backend.
+Connecting a directory is one verb, `Directory.objects.connect`, which a vendor's
+connect mutation calls: it builds the credential and the directory unsaved, has
+the backend admit the credential and test the connection outside any
+transaction, refuses with the backend's own message before anything is saved,
+then creates both atomically, claims the address the account signs in as
+(`DirectoryBackend.account_address`) as the owner's own handle, and requests the
+first sync. Each vendor's row is a master resource adopted by slug.
 The [CardDAV backend](../parties_integrate_carddav/backend.py) syncs two-way and
 builds its own records: a card's `UID` is its key and its href rides in the
 link's metadata, and wire properties outside the projection stay in RecordLink

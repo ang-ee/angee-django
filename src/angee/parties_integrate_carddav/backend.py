@@ -178,6 +178,12 @@ class CardDavDirectoryBackend(DirectoryBackend):
         if credential.kind != CredentialKind.BASIC_AUTH:
             raise ValidationError({"credential": "A CardDAV directory signs in with a username and password."})
 
+    def account_address(self) -> str:
+        """Return the Basic-auth username: the account's own login address."""
+
+        credential = self.bridge.credential
+        return str(credential.reveal().get("username", "")).strip() if credential is not None else ""
+
     def contacts_stream(self, addressbook: Any) -> StreamDefinition:
         """Declare a book's two-way contacts stream with its deletion policy.
 

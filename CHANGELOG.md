@@ -62,6 +62,19 @@ live in code docstrings.
   credentials, names its server by host name and port in its connection message,
   and refuses a per-book contacts setting other than `local_delete`.
 
+- Connecting a directory is one verb, `Directory.objects.connect(owner, *,
+  backend_class, display_name, credential_kind, material, config=None)`
+  (`DirectoryManager`): the backend admits the unsaved credential and tests the
+  connection outside any transaction, a refusal is a `ValidationError` with the
+  backend's own operator message and nothing is saved, then the credential and
+  the directory are created atomically, the address the account signs in as
+  (`DirectoryBackend.account_address`, new, `""` by default) becomes the owner's
+  own handle, and the first sync is requested. CardDAV's connect mutation keeps
+  its GraphQL contract and calls it (its `connect.py` is gone); a refused
+  connection test now reaches the client as a `VALIDATION` error carrying the
+  server's refusal instead of `INTERNAL`. The `carddav` vendor is a master
+  resource adopted by slug: load resources before connecting the first one.
+
 - A pull-only directory adopts an existing person (rulings R2 and R9): a contact
   with no person of its own or of a record it replaced lands on the first person
   its emails name (`people_for_emails`, preferred email first) who is no

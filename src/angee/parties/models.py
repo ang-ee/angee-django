@@ -63,6 +63,7 @@ from angee.parties.fields import CountryCodeField
 from angee.parties.managers import (
     VISIBLE_CIRCLE_MEMBERS,
     CircleManager,
+    DirectoryManager,
     FolderManager,
     HandleManager,
     PartyManager,
@@ -1630,12 +1631,16 @@ class Directory(Bridge, inherits="integrate.Integration"):
     that backend needs to reach its source (CardDAV's server URL). The backend tests
     the connection (:meth:`test_connection`), admits the credential it uses
     (:meth:`admit_credential`) and declares which way the contacts sync
-    (``DirectoryBackend.direction``). The inherited ``Bridge.sync()`` drives the
-    backend streams; the parties managers own the contact projection and ingest path.
+    (``DirectoryBackend.direction``); every vendor connects through
+    ``Directory.objects.connect`` (:class:`DirectoryManager`). The inherited
+    ``Bridge.sync()`` drives the backend streams; the parties managers own the
+    contact projection and ingest path.
     """
 
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.CONNECT
     rebac_grantable = {"contact_reader": "write"}
+
+    objects = DirectoryManager()
 
     @property
     def source_kind(self) -> SourceKind:

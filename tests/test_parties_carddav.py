@@ -8,8 +8,9 @@ from typing import Any
 import httpx2
 import pytest
 import vobject
+from django.apps import apps
 from django.core import checks
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection
 from rebac import system_context
 
@@ -31,6 +32,7 @@ from angee.parties_integrate_carddav.backend import (
     _parse_date,
     _parse_vcard,
 )
+from angee.resources.testing.models import Resource
 from tests import test_parties_graphql as parties_graphql
 from tests.conftest import Credential, Integration, Vendor, addon_schema
 
@@ -145,17 +147,45 @@ def test_photo_download_is_capped_and_uses_the_collection_origin(settings: Any) 
     assert resolved.photo == ParsedPhoto(data=b"photo", mime="image/jpeg")
 
 
+def _load_vendor() -> Any:
+    """Load the addon's master tier, its ``carddav`` vendor, as provisioning does."""
+
+    return Resource.objects.load_addons(
+        (apps.get_app_config("parties_integrate_carddav"),), tiers=[Resource.Tier.MASTER], allow_non_dev=True
+    )
+
+
+def test_the_carddav_vendor_is_seeded_before_any_directory_and_adopted_by_slug() -> None:
+    with system_context(reason="test.parties.carddav.vendor"):
+        Vendor.objects.create(slug="carddav", display_name="carddav")
+    _load_vendor()
+    _load_vendor()
+    with system_context(reason="test.parties.carddav.vendor"):
+        assert list(Vendor.objects.values_list("slug", "display_name", "icon")) == [
+            ("carddav", "CardDAV", "address-book")
+        ]
+
+
+def test_connecting_before_the_vendor_is_seeded_says_to_load_resources_and_keeps_nothing() -> None:
+    admin = parties_graphql._platform_admin("carddav-unseeded-admin")
+    with pytest.raises(ImproperlyConfigured, match=r"Vendor slug 'carddav'.*Run `manage\.py resources load`"):
+        _connect(admin)
+    with system_context(reason="test.parties.carddav.unseeded"):
+        assert not Credential._base_manager.exists() and not Directory._base_manager.exists()
+
+
 def test_a_refused_connection_test_writes_no_rows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A refused connection test runs before any transaction and leaves no partial rows."""
+    """The backend's refusal runs before any transaction and reaches the operator as its own message."""
 
+    _load_vendor()
     test_atomic_states: list[bool] = []
 
     def refuse(backend: CardDavDirectoryBackend) -> str:
         del backend
         test_atomic_states.append(connection.in_atomic_block)
-        raise CardDavError("CardDAV connection refused")
+        raise CardDavError("CardDAV PROPFIND returned HTTP 401.")
 
     monkeypatch.setattr(CardDavDirectoryBackend, "test_connection", refuse)
     admin = parties_graphql._platform_admin("carddav-test-failure-admin")
@@ -163,19 +193,33 @@ def test_a_refused_connection_test_writes_no_rows(
     result = _connect_carddav(admin)
 
     assert result.errors is not None
-    assert result.errors[0].message == "An unexpected error occurred."
-    assert result.errors[0].extensions == {"code": "INTERNAL"}
+    assert result.errors[0].extensions["code"] == "VALIDATION"
+    assert result.errors[0].extensions["formErrors"] == ["CardDAV PROPFIND returned HTTP 401."]
     assert test_atomic_states == [False]
     with system_context(reason="test.parties.carddav.test_failure.verify"):
-        for model in (Credential, Vendor, Integration, Directory, Handle, Party, Person, Party.statements.model):
+        for model in (Credential, Integration, Directory, Handle, Party, Person, Party.statements.model):
             assert not model._base_manager.exists(), model._meta.label
+        assert Vendor.objects.count() == 1
+
+
+def test_a_credential_the_backend_refuses_is_refused_before_the_connection_test(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _load_vendor()
+    monkeypatch.setattr(CardDavDirectoryBackend, "test_connection", lambda backend: pytest.fail("tested"))
+    admin = parties_graphql._platform_admin("carddav-token-admin")
+    with pytest.raises(ValidationError, match="username and password"):
+        _connect(admin, credential_kind="static_token", material={"api_key": "secret"})
+    with system_context(reason="test.parties.carddav.token.verify"):
+        assert not Credential._base_manager.exists() and not Directory._base_manager.exists()
 
 
 def test_a_passed_connection_test_commits_every_owned_row_atomically(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A passed connection test precedes one complete atomic write phase."""
+    """A passed connection test precedes one complete atomic write phase, which queues the first sync."""
 
+    _load_vendor()
     test_atomic_states: list[bool] = []
     write_atomic_states: list[bool] = []
 
@@ -226,6 +270,8 @@ def test_a_passed_connection_test_commits_every_owned_row_atomically(
             "password": "carddav-password",
         }
         assert (vendor.slug, vendor.display_name) == ("carddav", "CardDAV")
+        assert directory.vendor_id == vendor.pk
+        assert directory.sync_stage == Directory.SyncStage.QUEUED
         assert integration.credential_id == credential.pk
         assert integration.owner_id == admin.pk
         assert directory.backend_class == "carddav"
@@ -267,6 +313,19 @@ def test_carddav_admits_only_basic_auth_credentials(kind: str, admitted: bool) -
     else:
         with pytest.raises(ValidationError, match="username and password"):
             directory.admit_credential(credential)
+
+
+def _connect(admin: Any, **overrides: Any) -> Any:
+    """Connect one stable account through the parties verb, as a vendor's connect mutation does."""
+
+    values = {
+        "backend_class": "carddav",
+        "display_name": "Ada Contacts",
+        "credential_kind": "basic_auth",
+        "material": {"username": "ada@example.com", "password": "carddav-password"},
+        "config": {"server_url": "https://dav.example.com/"},
+    }
+    return Directory.objects.connect(admin, **{**values, **overrides})
 
 
 def _connect_carddav(admin: Any) -> Any:
