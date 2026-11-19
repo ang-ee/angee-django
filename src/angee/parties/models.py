@@ -503,6 +503,32 @@ class Party(
         memberships = prefetched(self, VISIBLE_CIRCLE_MEMBERS, hint)
         return list(dict.fromkeys(membership.circle.name for membership in memberships))
 
+    def confirm_statement(self, *, aspect: str, values: Mapping[str, Any], **members: Any) -> Any:
+        """Write the acting person's preferred statement; a handle another live party holds needs write on it too.
+
+        A confirmed handle statement outranks every source, so confirming one
+        (a claim's accept in the review queue, an identity review's confirm)
+        moves the handle, and what is attributed to it, off its live holder to
+        this party. Under the handle's identity locks, a holder other than this
+        party must be writable by the acting person, as this party is by the
+        statement write the confirmation itself takes.
+        """
+
+        if aspect == "handle" and (actor := instance_actor(self)) is not None:
+            handle = members["handle"]
+            handle_id = handle.pk if isinstance(handle, models.Model) else handle
+            parties = apps.get_model("parties", "Party")
+            with transaction.atomic():
+                handles, _locked = parties.objects.lock_identity_rows(party_ids=(self.pk,), handle_ids=(handle_id,))
+                holder_id = handles[handle_id].party_id if handle_id in handles else None
+                holder = None
+                if holder_id is not None and holder_id != self.pk:
+                    holder = parties._base_manager.filter(pk=holder_id, is_trashed=False).first()
+                if holder is not None and not holder.with_actor(actor).has_access("write"):
+                    raise PermissionDenied("Confirming this address needs write on the person who holds the address.")
+                return super().confirm_statement(aspect=aspect, values=values, **members)
+        return super().confirm_statement(aspect=aspect, values=values, **members)
+
     def apply_pair(self, *, aspect: str, other: Any, statement: Any | None) -> None:
         """Identity survivorship selects a pending decision; merge chooses the survivor."""
 

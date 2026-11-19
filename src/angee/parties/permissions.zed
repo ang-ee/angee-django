@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 25
+// @rebac_schema_revision: 26
 
 // Parties, folders and circles are grant roots: each is owned through its
 // transferable `owner` column (OwnerMixin), which an insert defaults to the row's
@@ -18,7 +18,8 @@
 // two-way directory writes it to the remote card), so creating one takes write
 // on that party, evaluated on the unsaved row; reading the party lends none. A
 // directory's contact readers also read the handles, addresses and
-// relationships its own live links state, never another source's.
+// relationships its own live links state, never another source's, and never a
+// handle its link only claims for review.
 
 // Other addons' records (a followed thread, a filed task) may contribute identity
 // read arms. Private fields and private uses of a party require read_private,
@@ -127,8 +128,10 @@ definition parties/handle {
     relation reader: auth/user | auth/group#member
     // Person assertions retain their typed members' own read admission.
     relation directory: integrate/integration // rebac:field=party__record_links__stream__integration
-    // A directory whose live link (bound, not tombstoned) asserts this handle in a current claim.
-    relation stating_directory: parties/directory // rebac:field={"path":"partystatement__link__stream__integration__directory","filters":{"partystatement__status":"asserted","partystatement__superseded__isnull":true,"partystatement__link__target_object_id__isnull":false,"partystatement__link__tombstoned_at__isnull":true}}
+    // A directory whose live link (bound, not tombstoned) asserts this handle in a current claim at
+    // Party.REVIEW_CONFIDENCE (0.5) or above: a claim for review states the address as another holder's, and
+    // lends the directory's contact readers nothing of that holder's handle.
+    relation stating_directory: parties/directory // rebac:field={"path":"partystatement__link__stream__integration__directory","filters":{"partystatement__status":"asserted","partystatement__superseded__isnull":true,"partystatement__confidence__gte":0.5,"partystatement__link__target_object_id__isnull":false,"partystatement__link__tombstoned_at__isnull":true}}
     relation statement_role: provenance/role // rebac:const=parties_statement_source
     permission statement_source = directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin

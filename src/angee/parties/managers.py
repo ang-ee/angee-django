@@ -2539,10 +2539,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         them, so it is a claim for review, and each such person comes back once,
         with the handle that names them, to be proposed as ``person``'s same
         person. An account's sign-in address is the account's, whether or not it
-        has a person yet, unless that person is ``person``: a claim too. One that
-        names nobody stays a claim while ``source`` claims it on ``person``: the
-        claim itself makes a second claimant, which the lookup answers with
-        nobody. Any other address is stated in full. Values are normalized email
+        has a person yet, unless that person is ``person``: a claim too. One
+        ``source`` already claims on ``person`` stays a claim until ``person``
+        holds it through another statement or a person confirms the claim (either
+        makes ``person`` its holder), so no lapse of its holder (trashed, or its
+        statement withdrawn) and no second claimant turns the claim into a
+        holding. Any other address is stated in full. Values are normalized email
         addresses (``Handle.normalize_value``).
         """
 
@@ -2570,7 +2572,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             account = normalized in lookup.sign_in and not any(
                 holder.basis == EmailBasis.ACCOUNT and holder.person.pk == person.pk for holder in found
             )
-            if rivals or account or (not found and normalized in claimed):
+            if rivals or account or normalized in claimed:
                 claims.add(normalized)
             for holder in rivals:
                 others.setdefault(holder.person.pk, (holder.person, holder.handle))
