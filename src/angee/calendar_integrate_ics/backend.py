@@ -92,7 +92,7 @@ from angee.calendar.backends import (
 from angee.calendar.choices import AttendeeResponse, AttendeeRole, EventStatus, EventTransparency, EventVisibility
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
-from angee.integrate.http import DownloadResult, OutboundBudget
+from angee.integrate.http import DownloadResult, HttpRefusal, OutboundBudget
 from angee.integrate.net import AddressNotAllowedError, AddressResolutionError, is_unsafe_address, parse_http_url
 from angee.integrate.states import StreamPhase
 from angee.integrate.streams import StreamPage
@@ -305,8 +305,8 @@ class IcsCalendarBackend(CalendarBackend):
     def _fetch(self, validators: Mapping[str, Any]) -> DownloadResult:
         """GET the feed from a public address within :data:`_FEED_BUDGET`, conditionally on ``validators``.
 
-        A 304 to a conditional request returns as is; a 429 or 5xx is a transient
-        refusal that keeps the server's ``Retry-After``.
+        A 304 to a conditional request returns as is; any other status but a
+        success is the feed's refusal, classified by integrate's ``HttpRefusal``.
         """
 
         headers = {"Accept": "text/calendar, */*;q=0.1"}
@@ -324,16 +324,12 @@ class IcsCalendarBackend(CalendarBackend):
             raise IcsError("The calendar feed host could not be found.") from error
         if result is None:
             raise IcsError("The calendar feed could not be read within its size, time and redirect limits.")
-        status = result.status_code
-        if status == 304 and len(headers) > 1:
+        if (result.status_code == 304 and len(headers) > 1) or 200 <= result.status_code < 300:
             return result
-        if status == 429 or status >= 500:
-            raise IcsError(
-                f"The calendar feed returned HTTP {status}.", transient=True, retry_after=_retry_after(result.headers)
-            )
-        if not 200 <= status < 300:
-            raise IcsError(f"The calendar feed returned HTTP {status}.")
-        return result
+        refusal = HttpRefusal.of(result)
+        raise IcsError(
+            refusal.message("The calendar feed"), transient=refusal.transient, retry_after=refusal.retry_after
+        )
 
     # --- snapshot ---
 
@@ -781,10 +777,3 @@ def _sequence(component: Any) -> int:
 
     text = _text(component, "SEQUENCE")
     return int(text) if text.isdecimal() else 0
-
-
-def _retry_after(headers: Mapping[str, str]) -> timedelta | None:
-    """Return a bounded ``Retry-After`` horizon in seconds, when the feed gives one."""
-
-    hint = headers.get("retry-after", "")
-    return timedelta(seconds=int(hint)) if hint.isdecimal() and 0 < int(hint) <= 86400 else None

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable, Sequence
-from datetime import datetime, timedelta
+from datetime import datetime
 from time import monotonic
 from typing import Any, ClassVar, Literal, cast
 from uuid import UUID
@@ -12,14 +11,14 @@ from uuid import UUID
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 from rebac import actor_context
 
 from angee.base.serialization import canonical_json_sha256
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.errors import IntegrationError
-from angee.integrate.http import HttpClientMixin, retry_after
+from angee.integrate.http import HttpClientMixin, HttpRefusal
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.states import StreamDefinition, StreamKind, SyncFailureKind
 from angee.integrate.streams import ApplyResult, CursorInvalid, RecordChange, SemanticError, StreamPage
@@ -151,19 +150,19 @@ class NotionCursor(BaseModel):
 
 
 class NotionResponseError(IntegrationError):
-    """A provider status with a safe message, never the provider's response body."""
+    """A Notion refusal composed from the facts of its answer (``status``, ``None`` without one), never its body."""
 
-    def __init__(self, status: int, *, retry_after: timedelta | None = None) -> None:
-        self.status = status
-        messages = {
+    def __init__(self, refusal: HttpRefusal) -> None:
+        self.status = refusal.status
+        messages: dict[int | None, str] = {
             401: "Notion rejected this credential. Reconnect Notion or check that the API token has not been revoked.",
             403: "The Notion connection needs read-content capability and access to the source pages.",
             404: "The Notion page is unavailable or is no longer shared with this connection.",
         }
         super().__init__(
-            messages.get(status, f"Notion request failed (HTTP {status})."),
-            transient=status == 429 or status >= 500,
-            retry_after=retry_after,
+            messages.get(refusal.status) or refusal.message("Notion"),
+            transient=refusal.transient,
+            retry_after=refusal.retry_after,
         )
 
 
@@ -194,24 +193,14 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
             raise IntegrationError("Connect Notion or attach a Notion API token credential.")
         if not credential.secret_value():
             raise IntegrationError("The Notion credential has no token.")
-        response = self.http.request(
+        return self.http.request_model(
             "GET" if payload is None else "POST",
             f"https://api.notion.com/v1/{path}",
-            headers={
-                **credential.auth_headers(),
-                "Notion-Version": "2026-03-11",
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            },
-            body=None if payload is None else json.dumps(payload).encode(),
-            max_bytes=8 * 1024 * 1024,
+            headers={**credential.auth_headers(), "Notion-Version": "2026-03-11"},
+            payload=payload,
+            model=model,
+            error=NotionResponseError,
         )
-        if not response.is_success:
-            raise NotionResponseError(response.status_code, retry_after=retry_after(response))
-        try:
-            return model.model_validate_json(response.content)
-        except ValidationError as error:
-            raise IntegrationError("Notion returned an invalid response.") from error
 
     def probe(self, credential: Any) -> NotionUser:
         """Authenticate using the same transport and error policy as synchronization."""

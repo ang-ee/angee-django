@@ -164,8 +164,9 @@ def test_raw_artifact_download_enforces_the_native_decoded_byte_limit():
         return httpx2.Response(200, json={"encoding": "none", "content": ""})
     backend = gh.GitHubBackend(_integration())
     backend.max_file_bytes = 8
-    with mock_transport(respond), pytest.raises(ResponseTooLargeError):
+    with mock_transport(respond), pytest.raises(gh.GitHubApiError, match="oversized") as refused:
         backend.cat_file(SimpleNamespace(name="acme/widgets"), ref="a" * 40, path="dist/addon.whl")
+    assert isinstance(refused.value.__cause__, ResponseTooLargeError) and not refused.value.transient
 
 
 def test_search_repos_projects_candidates() -> None:

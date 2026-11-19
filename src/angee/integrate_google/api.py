@@ -8,12 +8,13 @@ owns what all Google JSON APIs share:
   expiry and a minting credential (``jwt_bearer``) mints for the client's scopes;
 - a token Google rejects (``401``) is renewed once through ``Credential.refresh_now``
   and the request sent again;
-- the transport: ``angee.integrate.http.HttpClient`` (SSRF-pinned, byte-capped), a
-  transport failure or an oversized answer being a transient refusal;
+- the transport: ``angee.integrate.http.HttpClient`` (SSRF-pinned, byte-capped), whose
+  ``HttpRefusal`` classifies a transport failure, an oversized or unreadable answer and
+  a refused status;
 - Google's error envelope (``{"error": {"errors": [{"reason": ...}]}}``) and the
-  refusals that reach a whole account (:meth:`GoogleApi.refusal`): a rate limit or an
-  outage is transient, with ``Retry-After`` read by integrate's HTTP owner; a token
-  Google no longer accepts, or one without the API's grant, asks for a reconnect.
+  refusals that reach a whole account (:meth:`GoogleApi.refusal`): a rate limit (a
+  ``403`` naming one too) or an outage is transient and waits for its ``Retry-After``;
+  a token Google no longer accepts, or one without the API's grant, asks for a reconnect.
 
 A client keeps only its API's own vocabulary: its resources, and the refusals that
 reach one record (a file, an event). Every message names the API (``service``).
@@ -29,10 +30,7 @@ from typing import Any
 import httpx2
 
 from angee.integrate.errors import IntegrationError
-from angee.integrate.http import HttpClient, ResponseTooLargeError, retry_after
-
-JSON_MAX_BYTES = 8 * 1024 * 1024
-"""The largest JSON answer a Google API call reads."""
+from angee.integrate.http import JSON_MAX_BYTES, HttpClient, HttpRefusal
 
 _ERROR_BODY_MAX_BYTES = 16 * 1024
 _RATE_LIMIT_REASONS = frozenset({"rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded"})
@@ -100,49 +98,47 @@ class GoogleApi:
         return response
 
     def json(self, response: httpx2.Response) -> dict[str, Any]:
-        """Return a successful response's JSON object; an unreadable one is a transient refusal."""
+        """Return a successful response's JSON object; an unreadable one is the API's refusal."""
 
         try:
             data = response.json()
         except ValueError as error:
-            raise self.error(f"{self.service} returned an unreadable response.", transient=True) from error
+            raise self._refused(HttpRefusal("unreadable")) from error
         if not isinstance(data, dict):
-            raise self.error(f"{self.service} returned an unreadable response.", transient=True)
+            raise self._refused(HttpRefusal("unreadable"))
         return data
 
     def refusal(self, response: httpx2.Response, body: bytes | None = None) -> GoogleApiError | None:
         """Return the refusal of a failed response that reaches the whole account, or ``None``.
 
         ``body`` is the response's content, or a bounded read of a streamed one
-        (:func:`bounded_body`). A rate limit or an outage is transient; a rejected
-        token or a missing grant asks for a reconnect. Anything else is the
-        request's own, for the client to name.
+        (:func:`bounded_body`). A rate limit (a ``403`` whose reason names one too)
+        or an outage is transient; a rejected token or a missing grant asks for a
+        reconnect. Anything else is the request's own, for the client to name.
         """
 
-        status = response.status_code
+        refused = HttpRefusal.of(response, body)
         reason = error_reason(response.content if body is None else body)
-        if status == 429 or (status == 403 and reason in _RATE_LIMIT_REASONS):
+        if refused.status == 429 or (refused.status == 403 and reason in _RATE_LIMIT_REASONS):
             return self.error(
                 f"{self.service} is rate limiting this account; try the sync again later.",
                 transient=True,
-                retry_after=retry_after(response),
+                retry_after=refused.retry_after,
             )
-        if status == 401:
+        if refused.status == 401:
             return self.error(f"{self.service} no longer accepts this account; reconnect the Google account.")
-        if status == 403 and reason in _GRANT_REFUSALS:
+        if refused.status == 403 and reason in _GRANT_REFUSALS:
             return self.error(
                 f"This Google account has not granted {self.grant} access; reconnect it with {self.grant} access."
             )
-        if status >= 500:
-            return self.error(f"{self.service} is temporarily unavailable.", transient=True)
-        return None
+        return self._refused(refused) if refused.transient else None
 
     def raise_for_status(self, response: httpx2.Response, body: bytes | None = None) -> None:
         """Raise the account-wide refusal of a failed response, else the API's generic refusal."""
 
         if response.is_success:
             return
-        raise self.refusal(response, body) or self.error(f"{self.service} refused the request.")
+        raise self.refusal(response, body) or self._refused(HttpRefusal.of(response, body))
 
     def headers(self) -> dict[str, str]:
         """Return a fresh authorization for the next request."""
@@ -153,16 +149,16 @@ class GoogleApi:
     def _send(
         self, method: str, url: str, *, body: Any, headers: Mapping[str, str] | None, max_bytes: int
     ) -> httpx2.Response:
-        """Send once; a transport failure or an oversized answer is a transient refusal."""
+        """Send once; a transport failure or an oversized answer is the API's refusal."""
 
         content = None if body is None else json.dumps(body).encode()
         sent = {**self.headers(), **(headers or {}), **({"Content-Type": "application/json"} if content else {})}
-        try:
-            return self.http.request(method, url, headers=sent, body=content, max_bytes=max_bytes)
-        except httpx2.TransportError as error:
-            raise self.error(f"{self.service} could not be reached.", transient=True) from error
-        except ResponseTooLargeError as error:
-            raise self.error(f"{self.service} returned an oversized response.", transient=True) from error
+        return self.http.request(method, url, headers=sent, body=content, max_bytes=max_bytes, error=self._refused)
+
+    def _refused(self, refusal: HttpRefusal) -> GoogleApiError:
+        """Return the API's refusal composed from ``refusal``'s facts alone."""
+
+        return self.error(refusal.message(self.service), transient=refusal.transient, retry_after=refusal.retry_after)
 
     def _renew(self) -> bool:
         """Renew a token Google rejected, once, through the credential owner; whether a retry may help."""

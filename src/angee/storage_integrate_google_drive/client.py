@@ -218,7 +218,7 @@ class GoogleDriveClient:
             raise account
         if response.status_code == 416 or error_reason(body) in _FILE_REFUSALS or per_file:
             raise DriveFileError(f"Google Drive refused this file ({error_reason(body) or response.status_code}).")
-        raise GoogleDriveError("Google Drive refused the request.")
+        self.api.raise_for_status(response, body)
 
 
 class _MediaStream(io.RawIOBase):
