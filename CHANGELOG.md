@@ -268,7 +268,21 @@ live in code docstrings.
   `parse_options`, `parse_number`, `parse_bool`, `parse_datetime` and
   `parse_date` (`angee.parties_integrate_hubspot.client`) read HubSpot's string
   values by property type for mapping authors; each raises `ValueError` for a
-  value not of its type, which refuses that contact alone. Operator messages
+  value not of its type, which refuses that contact alone. A consumer reads
+  another HubSpot object type (deals, notes) as plain records with a
+  `HubSpotObjectMapping` registered under
+  `ANGEE_HUBSPOT_OBJECT_MAPPING_CLASSES.<key>` and checked at startup: each adds
+  one pull-only stream (`objects`, partitioned by the key) with the contacts
+  stream's pass, sweep and per-record refusals, on the type's own modified
+  property (`hs_lastmodifieddate`), asking for exactly the mapping's properties
+  and, when it names `contacts`, each record's associated contacts in one
+  association read per page (`HubSpotClient.associations`). Its `apply_record`
+  receives a `HubSpotObjectRecord` (id, properties as sent, contact ids, and
+  `person(contact_id)`) and states through the record's link as the integration;
+  `ContactNotLanded` makes a record wait for its contact on the driver's
+  missing-dependency refusal; `withdraw_record` runs when HubSpot says the record
+  is gone; its `version` is the stream's mapping, so a change replays every record
+  once. With no object mapping a directory reads only contacts. Operator messages
   never repeat HubSpot's message text or error category. The scripted account
   (`angee.parties_integrate_hubspot.testing.server`) builds its invented keys at
   runtime (`service_key`), so no literal in the repository has a real key's shape.

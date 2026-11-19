@@ -1,12 +1,14 @@
-"""HubSpot contacts into the parties directory: the backend, its sync cursor and the neutral contact.
+"""HubSpot contacts into the parties directory, and other HubSpot objects for consumers' mappings.
 
 :class:`HubSpotDirectoryBackend` reads one HubSpot account's contacts one way,
 into one address book, through the directory base: it turns HubSpot records into
-the base's payloads, and the base builds and applies the records.
+the base's payloads, and the base builds and applies the records. Beside them it
+reads one more stream per consumer's :class:`HubSpotObjectMapping`, whose records
+(:class:`HubSpotObjectRecord`) the mapping lands itself.
 
-A HubSpot pass is a baseline or a delta. The stream owns which
-(``SyncStream.phase``, a ``StreamPhase``) and passes it in to open a pass;
-:class:`HubSpotCursor` carries only the position inside a pass, the
+A HubSpot pass, of contacts or of another type, is a baseline or a delta. The
+stream owns which (``SyncStream.phase``, a ``StreamPhase``) and passes it in to
+open a pass; :class:`HubSpotCursor` carries only the position inside a pass, the
 modified-time watermark and whether the stream has caught up with it. It sends
 the request its position names (:meth:`HubSpotCursor.fetch`) and decides the
 next one from the answer (:meth:`HubSpotCursor.advance`). Every time it keeps is
@@ -37,18 +39,36 @@ the parties neutral contact.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from time import monotonic
 from typing import Any, ClassVar
 
+from django.apps import apps
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from angee.base.implementations import ImplBase, resolve_all_impl_classes, resolve_impl_class
+from angee.base.serialization import canonical_json_sha256
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.discovery import ConnectionDiscovery
-from angee.integrate.states import StreamPhase
-from angee.integrate.streams import CursorInvalid, StreamPage
-from angee.parties.backends import CONTACTS, DirectoryBackend, ParsedAddress, ParsedAddressbook, ParsedContact
+from angee.integrate.states import (
+    LinkStatus,
+    MappingContribution,
+    StreamDefinition,
+    StreamKind,
+    StreamPhase,
+    SyncFailureKind,
+)
+from angee.integrate.streams import ApplyResult, CursorInvalid, RecordChange, SemanticError, StreamPage
+from angee.parties.backends import (
+    CONTACTS,
+    MAPPING_REFUSED,
+    DirectoryBackend,
+    ParsedAddress,
+    ParsedAddressbook,
+    ParsedContact,
+)
 from angee.parties_integrate_hubspot.client import (
     EPOCH,
     LIST_PAGE_LIMIT,
@@ -90,7 +110,10 @@ CONTACT_PROPERTIES = (
 )
 """The standard HubSpot contact properties :func:`contact_from_properties` reads."""
 
-_OBJECT_TYPE = "contacts"
+OBJECTS = "objects"
+"""The stream of one :class:`HubSpotObjectMapping`'s records; its partition is the mapping's key."""
+
+_CONTACT_TYPE = "contacts"
 _READ_PROPERTIES = (*CONTACT_PROPERTIES, MERGED_PROPERTY)
 _BOOK = ParsedAddressbook(key="contacts", name="HubSpot contacts")
 
@@ -255,6 +278,124 @@ def contact_from_properties(properties: Mapping[str, str | None]) -> ParsedConta
     )
 
 
+class ContactNotLanded(SemanticError):
+    """A mapping's refusal of a record whose contact this directory has not landed yet: the record waits.
+
+    It is the stream driver's missing-dependency refusal
+    (``SyncFailureKind.MISSING_DEPENDENCY``), naming the contact: the record is
+    kept under its id, its link failed, and the stream's rescan reads it again on
+    its backoff, so it lands once the contact has. Nothing orders the contacts
+    stream before the others.
+    """
+
+    def __init__(self, contact_id: str) -> None:
+        super().__init__(
+            "contact_not_landed", details={"contact": contact_id}, kind=SyncFailureKind.MISSING_DEPENDENCY
+        )
+
+
+@dataclass(frozen=True)
+class HubSpotObjectRecord:
+    """One HubSpot record of another object type as its mapping receives it, neutral of what it means.
+
+    ``id`` is HubSpot's record id, its link's external key. ``properties`` holds
+    HubSpot's values of the mapping's properties as it sent them, each a nullable
+    string (read them with the ``parse_*`` functions of
+    ``angee.parties_integrate_hubspot.client``); a property the account does not
+    define is absent. ``contacts`` names the contacts HubSpot associates with it,
+    in id order, when the mapping asks for them (:attr:`HubSpotObjectMapping.contacts`).
+    """
+
+    id: str
+    properties: Mapping[str, str | None]
+    contacts: tuple[str, ...]
+    directory: Any = field(repr=False, compare=False)
+    """The HubSpot directory the record was read for."""
+
+    def person(self, contact_id: str) -> Any | None:
+        """Return the person this directory's contact ``contact_id`` landed on, ``None`` until it has.
+
+        A contact lands when the directory's contacts stream binds its link to a
+        person (``PartyManager.contact_people``: a trashed person is nobody's);
+        one not read yet, refused or gone has landed nowhere. A mapping that needs
+        the person raises :class:`ContactNotLanded` to wait for it. The person is
+        read as committed, not locked; the verb that writes on it takes its locks.
+        """
+
+        links = apps.get_model("integrate", "RecordLink").objects.filter(
+            stream__integration_id=self.directory.pk, stream__key=CONTACTS, external_key=contact_id
+        )
+        link = links.observing().first()
+        return None if link is None else apps.get_model("parties", "Party").objects.contact_people([link])[link.pk]
+
+
+class HubSpotObjectMapping(ImplBase):
+    """Read the records of another HubSpot object type for a consumer addon, which decides what they mean.
+
+    The consumer registers its mapping under the mapping's ``key`` from its
+    ``autoconfig.py``: ``"ANGEE_HUBSPOT_OBJECT_MAPPING_CLASSES.<key>": "<dotted.path>"``,
+    checked at startup (``check_object_mappings``). Every HubSpot directory then
+    reads one more stream, :data:`OBJECTS` partitioned by the key, pull-only, of
+    ``object_type``'s records: HubSpot's plural of any type its list, search and
+    batch-read endpoints serve (``deals``, ``notes``), never ``contacts``, which a
+    directory reads itself and a ``DirectoryMapping`` maps. Every read asks HubSpot
+    for ``properties`` and nothing more besides the bookkeeping the pass needs, and,
+    when ``contacts`` is set, for each record's associated contact ids. The stream
+    keeps the contacts stream's guarantees: a baseline walk, a delta on the type's
+    own modified property that reaches back by the overlap on HubSpot's clock,
+    equal-time drains, a daily absence sweep where only HubSpot's word makes a
+    record gone, and per-record refusals. ``version`` is the stream's mapping:
+    changing it replays every record once. The record, its properties as HubSpot
+    sent them and its contact ids, is kept on its link and in the link's history,
+    so a mapping asks for no property that must not enter the system.
+
+    :meth:`apply_record` lands one record inside the page transaction, database
+    work only, and runs again whenever the record or the mapping changes; a change
+    of a property it does not name applies nothing. Whatever it states, it states
+    through ``link`` as the integration (``link.asserting_source()``), so
+    :meth:`withdraw_record` can withdraw it. A record whose contact has not landed
+    raises :class:`ContactNotLanded` and waits. A ``ValueError`` refuses that record
+    alone (``MAPPING_REFUSED``, naming the mapping, never the value), the rest of
+    its page lands, and the rescan retries it; any other error is a bug and fails
+    the page.
+    """
+
+    registry_setting = "ANGEE_HUBSPOT_OBJECT_MAPPING_CLASSES"
+
+    object_type: ClassVar[str] = ""
+    """HubSpot's plural name of the object type this mapping reads (``deals``)."""
+    properties: ClassVar[tuple[str, ...]] = ()
+    """The properties of ``object_type`` to request, by HubSpot's internal names."""
+    contacts: ClassVar[bool] = False
+    """Whether each record names the contacts HubSpot associates with it."""
+    version: ClassVar[int] = 1
+    """This mapping's version; change it when :meth:`apply_record` changes what it states."""
+
+    def apply_record(self, record: HubSpotObjectRecord, *, link: Any) -> Any:
+        """Land ``record`` through its ``link``; return the row its link then holds, or ``None`` to bind none.
+
+        A returned row is the record's own, a row of the consumer's, which the
+        link holds (and keeps from deletion) as long as the link lasts; ``None``
+        leaves the link's binding as it is. Never return the person a contact
+        landed on: the contact's link holds it, and a gone record's statements
+        would move to that link (:meth:`withdraw_record`).
+        """
+
+        raise NotImplementedError("HubSpotObjectMapping subclasses must implement apply_record().")
+
+    def withdraw_record(self, link: Any) -> None:
+        """The record is gone at the source: withdraw what it stated through ``link``.
+
+        Called once HubSpot says so, on a read of the record or after the absence
+        sweeps. The default withdraws what the link asserts
+        (``RecordLink.withdraw_statements``, which moves it instead to another live
+        link of the integration holding the same row). Survivorship keeps a value
+        nobody states any more, unsupported; the link keeps holding its row.
+        """
+
+        link.withdraw_statements()
+
+
 class HubSpotDirectoryBackend(DirectoryBackend):
     """One HubSpot account's contacts, read one way into one address book of a directory.
 
@@ -275,6 +416,11 @@ class HubSpotDirectoryBackend(DirectoryBackend):
     values of them to the base with each contact (``DirectoryBackend.observe``).
     HubSpot leaves a property the account does not define out of its answer, so a
     mapping receives it as not sent and the sync goes on.
+
+    A consumer's :class:`HubSpotObjectMapping` adds a stream of its own
+    (:meth:`streams`): this backend routes the :data:`OBJECTS` key through its
+    extract, identity reads, key walk, apply and absence hooks, and every other key
+    to the base, so a directory without an object mapping reads only contacts.
     """
 
     key = "hubspot"
@@ -311,7 +457,7 @@ class HubSpotDirectoryBackend(DirectoryBackend):
         bridge = self.bridge
         credential = bridge.fresh_credential() if bridge.pk is not None else bridge.credential
         super().test_connection()
-        self._client(credential).list_page(_OBJECT_TYPE, after="", limit=1, properties=())
+        self._client(credential).list_page(_CONTACT_TYPE, after="", limit=1, properties=())
         return "Connected to HubSpot: the service key reads this account's contacts."
 
     def discover_connection(self, credential: Any) -> ConnectionDiscovery:
@@ -356,50 +502,136 @@ class HubSpotDirectoryBackend(DirectoryBackend):
 
         return [_BOOK]
 
+    def streams(self, *, deadline: float | None = None) -> Iterator[StreamDefinition]:
+        """Declare the directory's address book and contacts, then one :data:`OBJECTS` stream per object mapping.
+
+        Each object stream is pull-only, partitioned by its mapping's key, swept
+        daily, and its mapping is that mapping's key and version, so a changed
+        version replays its records once (``StreamDefinition.mapping_contributions``).
+        Without an object mapping the directory declares only what the base does.
+        """
+
+        yield from super().streams(deadline=deadline)
+        for mapping in resolve_all_impl_classes(HubSpotObjectMapping):
+            yield StreamDefinition(
+                OBJECTS,
+                partition=mapping.key,
+                kind=StreamKind.RECORD_REPLICA,
+                reconcile_interval=timedelta(days=1),
+                mapping_contributions=(MappingContribution(mapping.key, mapping.version, sequence=0),),
+            )
+
+    def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
+        """Read the next page of an object stream's pass (:meth:`_read_pass`); the base reads every other stream.
+
+        When the mapping asks for contacts, one association read follows the
+        page's records, within HubSpot's batch limit.
+        """
+
+        if stream.key != OBJECTS:
+            return super().extract(stream, page_bound, deadline=deadline)
+        mapping = self._object_mapping(stream)
+        client = self._client(self.bridge.fresh_credential())
+        records, cursor = self._read_pass(
+            client,
+            stream,
+            page_bound,
+            object_type=mapping.object_type,
+            properties=mapping.properties,
+            deadline=deadline,
+        )
+        changes = self._object_changes(stream, self._object_payloads(client, mapping, records))
+        return StreamPage(changes, cursor.model_dump(mode="json"), exhausted=not cursor.is_open)
+
+    def read_keys(self, stream: Any, keys: Sequence[str]) -> Iterable[RecordChange]:
+        """Read an object stream's ``keys`` in HubSpot's batch read, gone only on HubSpot's word; the base reads others.
+
+        ``HubSpotClient.batch_read`` decides which ids are gone; the rest are read
+        with their associated contacts when the mapping asks for them.
+        """
+
+        if stream.key != OBJECTS:
+            return super().read_keys(stream, keys)
+        mapping = self._object_mapping(stream)
+        client = self._client(self.bridge.fresh_credential())
+        answer = client.batch_read(mapping.object_type, keys, mapping.properties)
+        found = {record.id: record for record in answer.found}
+        live = {key: found[key] for key in keys if key not in answer.missing}
+        payloads = self._object_payloads(client, mapping, live)
+        return self._object_changes(stream, {key: payloads.get(key) for key in keys})
+
+    def enumerate_keys(self, stream: Any, *, after: str | None = None) -> Iterable[str]:
+        """Walk an object stream's live record ids past ``after`` (:meth:`_live_ids`); the base walks contacts."""
+
+        if stream.key != OBJECTS:
+            return super().enumerate_keys(stream, after=after)
+        return self._live_ids(stream, self._object_mapping(stream).object_type, after=after)
+
+    def apply_record(self, stream: Any, record: RecordChange) -> ApplyResult:
+        """Land an object stream's record through its mapping; the base applies every other stream's.
+
+        A record gone at the source reaches :meth:`HubSpotObjectMapping.withdraw_record`.
+        Any other is handed to :meth:`HubSpotObjectMapping.apply_record` as a
+        :class:`HubSpotObjectRecord`, and its link holds the row the mapping
+        returns. The mapping's ``ValueError`` refuses the record alone
+        (``MAPPING_REFUSED``, naming the mapping).
+        """
+
+        if stream.key != OBJECTS:
+            return super().apply_record(stream, record)
+        mapping = self._object_mapping(stream)
+        link = stream.links.get(external_key=record.external_key)
+        if record.tombstone:
+            mapping.withdraw_record(link)
+            return ApplyResult(mapped_payload=None)
+        payload = record.mapped_payload
+        neutral = HubSpotObjectRecord(
+            record.external_key, payload["properties"], tuple(payload["contacts"]), directory=self.bridge
+        )
+        try:
+            target = mapping.apply_record(neutral, link=link)
+        except ValueError as error:
+            raise SemanticError(MAPPING_REFUSED, details={"mapping": mapping.key}) from error
+        if target is None:
+            # An explicit ``None`` target would withdraw the link: a record on no row of its own binds nothing.
+            return ApplyResult(mapped_payload=payload)
+        return ApplyResult(target=target, mapped_payload=payload)
+
+    def on_absent(self, stream: Any, links: Sequence[Any]) -> dict[Any, ApplyResult] | None:
+        """Hand each object record the absence sweeps found gone to its mapping's gone hook; the base handles others.
+
+        An unavailable record keeps what it stated until the absence threshold
+        tombstones its link. Each withdrawal is the link's evidence, so a record
+        that returns applies again.
+        """
+
+        if stream.key != OBJECTS:
+            return super().on_absent(stream, links)
+        mapping = self._object_mapping(stream)
+        gone = [link for link in links if link.status == LinkStatus.TOMBSTONE]
+        for link in gone:
+            mapping.withdraw_record(link)
+        return {link.pk: ApplyResult(mapped_payload=None) for link in gone}
+
     def extract_contacts(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
         """Read the next contacts of the stream's pass, at most ``page_bound`` records, as one page.
 
-        The stream's phase opens a baseline or a delta (:class:`HubSpotCursor`); a
-        stored cursor that cannot be read starts a new baseline (``CursorInvalid``).
-        Requests follow one another until the page is full or the pass is done.
-        Once one has answered, none starts after ``deadline``, and a transient
-        refusal ends the page with what was read, its cursor where the refused
-        request would have gone on; the next page meets the refusal. A merge's
-        survivor is one record (``DirectoryBackend.record_changes``). A record
-        HubSpot states unreadably is that record's refusal, under its id; one
-        without a usable id cannot be a record, and is logged and skipped.
+        :meth:`_read_pass` reads them; a merge's survivor is one record
+        (``DirectoryBackend.record_changes``).
         """
 
         client = self._client(self.bridge.fresh_credential())
-        try:
-            cursor = HubSpotCursor.model_validate(stream.cursor)
-        except ValidationError:
-            raise CursorInvalid() from None
-        cursor = cursor.begin(stream.phase)
         mapped = self.mapped_fields()
-        properties = _read_properties(mapped)
-        payloads: dict[str, Mapping[str, Any] | None] = {}
-        room, answered, unkeyed = page_bound, False, 0
-        while room > 0 and (cursor.is_open or not answered):
-            if answered and deadline is not None and monotonic() >= deadline:
-                break
-            try:
-                page = cursor.fetch(client, _OBJECT_TYPE, limit=room, properties=properties)
-            except HubSpotError as error:
-                if answered and error.transient:
-                    break
-                raise
-            answered, unkeyed = True, unkeyed + page.unkeyed
-            payloads.update((record.id, self._payload(record, mapped)) for record in page.results)
-            cursor = cursor.advance(page, object_type=_OBJECT_TYPE)
-            room -= len(page.results)
-        if unkeyed:
-            noun = "contact" if unkeyed == 1 else "contacts"
-            logger.warning(
-                "HubSpot directory %s skipped %d %s without a usable record id.", self.bridge.pk, unkeyed, noun
-            )
-        records = self.record_changes(stream, payloads)
-        return StreamPage(records, cursor.model_dump(mode="json"), exhausted=not cursor.is_open)
+        records, cursor = self._read_pass(
+            client,
+            stream,
+            page_bound,
+            object_type=_CONTACT_TYPE,
+            properties=_read_properties(mapped),
+            deadline=deadline,
+        )
+        changes = self.record_changes(stream, {key: self._payload(record, mapped) for key, record in records.items()})
+        return StreamPage(changes, cursor.model_dump(mode="json"), exhausted=not cursor.is_open)
 
     def read_contacts(self, stream: Any, keys: Sequence[str]) -> Mapping[str, Mapping[str, Any] | None]:
         """Read ``keys`` in HubSpot's batch read; an id is gone only on HubSpot's word (``HubSpotClient.batch_read``).
@@ -412,31 +644,145 @@ class HubSpotDirectoryBackend(DirectoryBackend):
         del stream
         mapped = self.mapped_fields()
         client = self._client(self.bridge.fresh_credential())
-        answer = client.batch_read(_OBJECT_TYPE, keys, _read_properties(mapped))
+        answer = client.batch_read(_CONTACT_TYPE, keys, _read_properties(mapped))
         found = {record.id: record for record in answer.found}
         return {key: None if key in answer.missing else self._payload(found[key], mapped) for key in keys}
 
     def contact_keys(self, stream: Any, *, after: str | None) -> Iterator[str]:
-        """Walk the account's live contact ids past ``after``; an archived or deleted contact is not among them.
+        """Walk the account's live contact ids past ``after`` (:meth:`_live_ids`)."""
 
-        A walk from the start that lists no contact while the stream holds live
+        return self._live_ids(stream, _CONTACT_TYPE, after=after)
+
+    def _read_pass(
+        self,
+        client: HubSpotClient,
+        stream: Any,
+        page_bound: int,
+        *,
+        object_type: str,
+        properties: Sequence[str],
+        deadline: float | None,
+    ) -> tuple[dict[str, HubSpotObject], HubSpotCursor]:
+        """Read the next records of ``object_type`` in the stream's pass, at most ``page_bound``, by id; and the cursor.
+
+        The stream's phase opens a baseline or a delta (:class:`HubSpotCursor`); a
+        stored cursor that cannot be read starts a new baseline (``CursorInvalid``).
+        Requests follow one another until the page is full or the pass is done.
+        Once one has answered, none starts after ``deadline``, and a transient
+        refusal ends the page with what was read, its cursor where the refused
+        request would have gone on; the next page meets the refusal. A record read
+        twice is kept as last read. A record HubSpot states unreadably is kept by
+        its id, to be that record's refusal; one without a usable id cannot be a
+        record, and is logged and skipped.
+        """
+
+        try:
+            cursor = HubSpotCursor.model_validate(stream.cursor)
+        except ValidationError:
+            raise CursorInvalid() from None
+        cursor = cursor.begin(stream.phase)
+        records: dict[str, HubSpotObject] = {}
+        room, answered, unkeyed = page_bound, False, 0
+        while room > 0 and (cursor.is_open or not answered):
+            if answered and deadline is not None and monotonic() >= deadline:
+                break
+            try:
+                page = cursor.fetch(client, object_type, limit=room, properties=properties)
+            except HubSpotError as error:
+                if answered and error.transient:
+                    break
+                raise
+            answered, unkeyed = True, unkeyed + page.unkeyed
+            records.update((record.id, record) for record in page.results)
+            cursor = cursor.advance(page, object_type=object_type)
+            room -= len(page.results)
+        if unkeyed:
+            noun = "contact" if object_type == _CONTACT_TYPE else f"{object_type} record"
+            logger.warning(
+                "HubSpot directory %s skipped %d %s%s without a usable record id.",
+                self.bridge.pk,
+                unkeyed,
+                noun,
+                "" if unkeyed == 1 else "s",
+            )
+        return records, cursor
+
+    def _live_ids(self, stream: Any, object_type: str, *, after: str | None) -> Iterator[str]:
+        """Walk the account's live ``object_type`` ids past ``after``; an archived or deleted record is not among them.
+
+        A walk from the start that lists no record while the stream holds live
         links is believed only when HubSpot's search counts none either; otherwise
         it is a transient refusal and the sweep tries again. A walk cut short
-        part-way cannot be told from a complete one: the contacts it misses wait
+        part-way cannot be told from a complete one: the records it misses wait
         for the absence threshold, two sweeps.
         """
 
         client = self._client(self.bridge.fresh_credential())
-        keys = client.record_ids(_OBJECT_TYPE, after=after)
+        keys = client.record_ids(object_type, after=after)
         first = next(keys, None)
         if first is None and after is None and stream.links.observing().exists():
-            if client.search_modified(_OBJECT_TYPE, since=EPOCH, limit=1, properties=()).total != 0:
+            if client.search_modified(object_type, since=EPOCH, limit=1, properties=()).total != 0:
                 raise HubSpotError(
-                    "HubSpot listed no contacts, but its search still counts some; retrying later.", transient=True
+                    f"HubSpot listed no {object_type}, but its search still counts some; retrying later.",
+                    transient=True,
                 )
         if first is not None:
             yield first
             yield from keys
+
+    def _object_mapping(self, stream: Any) -> HubSpotObjectMapping:
+        """Return the registered mapping an object stream reads for: the one its partition names."""
+
+        return resolve_impl_class(HubSpotObjectMapping, stream.partition)()
+
+    def _object_payloads(
+        self, client: HubSpotClient, mapping: HubSpotObjectMapping, records: Mapping[str, HubSpotObject]
+    ) -> dict[str, dict[str, Any]]:
+        """Return each record's payload: the mapping's properties as HubSpot sent them and its contacts in id order.
+
+        The associated contacts are read in one association read when the mapping
+        asks for them. A record HubSpot stated unreadably is the error payload the
+        driver quarantines under its id.
+        """
+
+        readable = [key for key, record in records.items() if not record.unreadable]
+        associated: dict[str, tuple[str, ...]] = {}
+        if mapping.contacts and readable:
+            associated = client.associations(mapping.object_type, _CONTACT_TYPE, readable)
+        payloads: dict[str, dict[str, Any]] = {}
+        for key, record in records.items():
+            if record.unreadable:
+                payloads[key] = {"error": "unreadable_record"}
+                continue
+            stated = record.properties
+            payloads[key] = {
+                "properties": {name: stated[name] for name in mapping.properties if name in stated},
+                "contacts": sorted(associated.get(key, ()), key=int),
+            }
+        return payloads
+
+    def _object_changes(self, stream: Any, payloads: Mapping[str, Mapping[str, Any] | None]) -> list[RecordChange]:
+        """Turn an object stream's payloads, keyed by record id, into one record each; ``None`` is a tombstone.
+
+        The local side of each comparison is what this source last applied (the
+        link's applied base), as on every pull-only stream, so an unchanged record
+        applies nothing. A payload carrying ``error`` is that record's refusal.
+        """
+
+        links = stream.links.filter(external_key__in=list(payloads)).with_sync_evidence()
+        applied = {link.external_key: link.applied_base.mapped_payload for link in links if link.applied_base_id}
+        changes = []
+        for key, payload in payloads.items():
+            base = applied.get(key)
+            if payload is None:
+                changes.append(RecordChange(key, {}, "", tombstone=True, projection=base))
+            elif "error" in payload:
+                failure = SemanticError(payload["error"])
+                changes.append(RecordChange(key, dict(payload), canonical_json_sha256(payload), failure=failure))
+            else:
+                digest = canonical_json_sha256(payload)
+                changes.append(RecordChange(key, dict(payload), digest, mapped_payload=dict(payload), projection=base))
+        return changes
 
     def source_url(self, link: Any) -> str | None:
         """Return a contact's page in the account's HubSpot web app, once discovery has learned the account."""

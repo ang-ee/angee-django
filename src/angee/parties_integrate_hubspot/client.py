@@ -51,6 +51,8 @@ SEARCH_PAGE_LIMIT = 200
 """The most records one search page returns."""
 BATCH_READ_LIMIT = 100
 """The most ids one batch read takes."""
+ASSOCIATION_BATCH_LIMIT = 1_000
+"""The most ids one association batch read takes."""
 
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 """HubSpot's timestamps count milliseconds from here."""
@@ -68,19 +70,35 @@ a hint to HubSpot's rejection of one that lacks it (:meth:`HubSpotError.of`).
 MERGED_PROPERTY = "hs_merged_object_ids"
 """The property in which a merge's surviving record names the records it replaced, joined with ``;``."""
 
-_MODIFIED_PROPERTY = {"contacts": "lastmodifieddate"}
+_CONTACTS = "contacts"
 _RECORD_ID = "hs_object_id"
 _NOT_FOUND = "OBJECT_NOT_FOUND"
+_READ_SCOPED = frozenset({"contacts", "companies", "deals"})
 _REQUEST_TIMEOUT_SECONDS = 30
 _LOCKED_WAIT = timedelta(seconds=2)
 _RATE_LIMIT_WAITS = {"TEN_SECONDLY_ROLLING": timedelta(seconds=10), "DAILY": timedelta(hours=1)}
 _HOST_NAME = re.compile(r"[A-Za-z0-9.-]+")
+_UNANSWERED = "HubSpot did not answer for some records."
 
 
-def get_read_scope(object_type: str) -> str:
-    """Return the scope a service key needs to read records of a standard ``object_type``."""
+def _modified_property(object_type: str) -> str:
+    """Return the property in which a record of ``object_type`` states its last change.
 
-    return f"crm.objects.{object_type}.read"
+    ``lastmodifieddate`` for contacts, which ``hs_lastmodifieddate`` finds nothing
+    on, and ``hs_lastmodifieddate`` for every other type.
+    """
+
+    return "lastmodifieddate" if object_type == _CONTACTS else "hs_lastmodifieddate"
+
+
+def _read_scopes(object_type: str) -> tuple[str, ...]:
+    """Return the scope a service key needs to read ``object_type``, where HubSpot names one; else none.
+
+    HubSpot names ``crm.objects.<type>.read`` for contacts, companies and deals;
+    a refusal for any other type names no scope rather than guess one.
+    """
+
+    return (f"crm.objects.{object_type}.read",) if object_type in _READ_SCOPED else ()
 
 
 class HubSpotError(IntegrationError):
@@ -196,7 +214,7 @@ class HubSpotObject(_HubSpotKey):
         """Return the record's last-modified time, or ``None`` when it was not read or cannot be parsed."""
 
         try:
-            return parse_datetime(self.properties.get(_MODIFIED_PROPERTY[object_type]))
+            return parse_datetime(self.properties.get(_modified_property(object_type)))
         except ValueError:
             return None
 
@@ -312,6 +330,27 @@ class _HubSpotBatchAnswer(_HubSpotRecords):
     errors: tuple[_HubSpotBatchError, ...] = ()
 
 
+class _HubSpotAssociated(_HubSpotModel):
+    """One record an association links to, by its id, which HubSpot states as a number."""
+
+    model_config = ConfigDict(coerce_numbers_to_str=True)
+
+    to_object_id: str = Field(pattern=r"^[0-9]+$")
+
+
+class _HubSpotAssociations(_HubSpotModel):
+    """One requested record's associations, and its own position when more follow."""
+
+    from_: _HubSpotKey = Field(alias="from")
+    to: tuple[_HubSpotAssociated, ...] = ()
+    paging: HubSpotPaging | None = None
+
+
+class _HubSpotAssociationAnswer(_HubSpotModel):
+    results: tuple[_HubSpotAssociations, ...] = ()
+    errors: tuple[_HubSpotBatchError, ...] = ()
+
+
 @dataclass(frozen=True, slots=True)
 class HubSpotBatchRead:
     """The records a batch read found, and the requested ids HubSpot says it has no record under.
@@ -333,9 +372,10 @@ class HubSpotClient:
     authorization headers, and the key itself to :meth:`token_info`, the one
     request that carries it in a body. Each method sends only the requests its
     docstring names; nothing is cached between calls. Every read names its object
-    type by HubSpot's plural (``contacts``); the type's modified property is the
-    one fact a type needs here, and :data:`_MODIFIED_PROPERTY` states it for
-    contacts, the one type read yet. Companies come next.
+    type by HubSpot's plural (``contacts``, ``deals``, ``notes``), and one surface
+    serves every type: the type's modified property (:func:`_modified_property`)
+    and the read scope a refusal names (:func:`_read_scopes`) are the only facts a
+    type needs here.
     """
 
     def __init__(self, http: HttpClient, headers: Mapping[str, str], *, usual_key: bool = True) -> None:
@@ -382,7 +422,7 @@ class HubSpotClient:
         if after:
             query["after"] = after
         path = f"/crm/objects/{API_VERSION}/{object_type}"
-        return self._request(HubSpotPage, "GET", path, query=query, scopes=(get_read_scope(object_type),))
+        return self._request(HubSpotPage, "GET", path, query=query, scopes=_read_scopes(object_type))
 
     def record_ids(self, object_type: str, *, after: str | None = None, limit: int = LIST_PAGE_LIMIT) -> Iterator[str]:
         """Yield the ids of ``object_type``'s live records strictly after ``after``, in HubSpot's id order.
@@ -413,7 +453,7 @@ class HubSpotClient:
         HubSpot does not state how it orders records that share one modified time.
         """
 
-        modified = _MODIFIED_PROPERTY[object_type]
+        modified = _modified_property(object_type)
         changed = {"propertyName": modified, "operator": "GT", "value": str(_epoch_ms(since))}
         return self._search(object_type, [changed], sort=modified, limit=limit, properties=properties)
 
@@ -425,7 +465,7 @@ class HubSpotClient:
         Only records with an id above ``after`` are returned, every one when it is ``""``.
         """
 
-        modified = _MODIFIED_PROPERTY[object_type]
+        modified = _modified_property(object_type)
         filters = [{"propertyName": modified, "operator": "EQ", "value": str(_epoch_ms(moment))}]
         if after:
             filters.append({"propertyName": _RECORD_ID, "operator": "GT", "value": after})
@@ -451,9 +491,7 @@ class HubSpotClient:
                 "properties": list(dict.fromkeys((*properties, MERGED_PROPERTY))),
                 "propertiesWithHistory": [],
             }
-            answer = self._request(
-                _HubSpotBatchAnswer, "POST", path, payload=payload, scopes=(get_read_scope(object_type),)
-            )
+            answer = self._request(_HubSpotBatchAnswer, "POST", path, payload=payload, scopes=_read_scopes(object_type))
             if any(error.category != _NOT_FOUND for error in answer.errors):
                 raise HubSpotError("HubSpot could not read some records.", transient=True)
             found.extend(answer.results)
@@ -461,8 +499,42 @@ class HubSpotClient:
         answered = {record.id for record in found}
         gone.update(key for record in found for key in record.merged_ids())
         if any(key not in answered and key not in gone for key in requested):
-            raise HubSpotError("HubSpot did not answer for some records.", transient=True)
+            raise HubSpotError(_UNANSWERED, transient=True)
         return HubSpotBatchRead(found=tuple(found), missing=tuple(key for key in requested if key not in answered))
+
+    def associations(self, from_type: str, to_type: str, ids: Sequence[str]) -> dict[str, tuple[str, ...]]:
+        """Return the ids of the ``to_type`` records HubSpot associates with each of ``ids``, in batches of 1,000.
+
+        A result with more associations names its own following position, sent
+        back with its id alone until that record's are exhausted. HubSpot answers
+        207 when some ids have none, so an id an answer stating errors leaves out
+        has none; an id an answer leaves out without stating any is a transient
+        :class:`HubSpotError`, so a record is never read without associations
+        HubSpot did not state.
+        """
+
+        path = f"/crm/associations/{API_VERSION}/{from_type}/{to_type}/batch/read"
+        scopes = (*_read_scopes(from_type), *_read_scopes(to_type))
+        requested = tuple(dict.fromkeys(ids))
+        found: dict[str, dict[str, None]] = {key: {} for key in requested}
+        for chunk in batched(requested, ASSOCIATION_BATCH_LIMIT):
+            inputs: list[dict[str, str]] = [{"id": key} for key in chunk]
+            while inputs:
+                payload = {"inputs": inputs}
+                answer = self._request(_HubSpotAssociationAnswer, "POST", path, payload=payload, scopes=scopes)
+                sent = {item["id"]: item.get("after", "") for item in inputs}
+                if not answer.errors and set(sent) - {result.from_.id for result in answer.results}:
+                    raise HubSpotError(_UNANSWERED, transient=True)
+                inputs = []
+                for result in answer.results:
+                    key = result.from_.id
+                    found.setdefault(key, {}).update(dict.fromkeys(target.to_object_id for target in result.to))
+                    following = result.paging.next.after if result.paging and result.paging.next else ""
+                    if following and following == sent.get(key):
+                        raise HubSpotError("HubSpot did not advance an association listing.")
+                    if following:
+                        inputs.append({"id": key, "after": following})
+        return {key: tuple(found[key]) for key in requested}
 
     def _search(
         self, object_type: str, filters: list[dict[str, str]], *, sort: str, limit: int, properties: Sequence[str]
@@ -482,7 +554,7 @@ class HubSpotClient:
             "limit": limit,
         }
         path = f"/crm/objects/{API_VERSION}/{object_type}/search"
-        return self._request(HubSpotPage, "POST", path, payload=payload, scopes=(get_read_scope(object_type),))
+        return self._request(HubSpotPage, "POST", path, payload=payload, scopes=_read_scopes(object_type))
 
     def _request[T: BaseModel](
         self,
@@ -526,7 +598,7 @@ class HubSpotClient:
 def _requested(object_type: str, properties: Sequence[str]) -> list[str]:
     """Return ``properties`` with ``object_type``'s modified property, which every read needs."""
 
-    return list(dict.fromkeys((*properties, _MODIFIED_PROPERTY[object_type])))
+    return list(dict.fromkeys((*properties, _modified_property(object_type))))
 
 
 def _epoch_ms(moment: datetime) -> int:

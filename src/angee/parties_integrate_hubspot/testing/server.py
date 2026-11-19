@@ -44,7 +44,8 @@ VENDOR_TEXT = "Vendor text that must not reach an operator."
 """The ``message`` every scripted error states, which a client must never repeat."""
 
 _HOST = "https://api.hubapi.com"
-_MODIFIED_PROPERTY = {"contacts": "lastmodifieddate"}
+_MODIFIED_PROPERTY = {"contacts": "lastmodifieddate", "deals": "hs_lastmodifieddate", "notes": "hs_lastmodifieddate"}
+_CREATED_PROPERTY = {"contacts": "createdate", "deals": "createdate", "notes": "hs_createdate"}
 _STANDARD_PROPERTIES = {
     "contacts": frozenset(
         {
@@ -66,14 +67,39 @@ _STANDARD_PROPERTIES = {
             "zip",
             "country",
         }
-    )
+    ),
+    "deals": frozenset(
+        {
+            "hs_object_id",
+            "createdate",
+            "hs_lastmodifieddate",
+            "hs_merged_object_ids",
+            "dealname",
+            "dealstage",
+            "pipeline",
+            "amount",
+            "closedate",
+        }
+    ),
+    "notes": frozenset({"hs_object_id", "hs_createdate", "hs_lastmodifieddate", "hs_timestamp", "hs_note_body"}),
 }
-_READ_SCOPE = {"contacts": "crm.objects.contacts.read"}
+_READ_SCOPE = {
+    "contacts": "crm.objects.contacts.read",
+    "deals": "crm.objects.deals.read",
+    "notes": "crm.objects.contacts.read",
+}
+_ASSOCIATION_TYPE = {
+    ("deals", "contacts"): 3,
+    ("contacts", "deals"): 4,
+    ("notes", "contacts"): 202,
+    ("contacts", "notes"): 201,
+}
 _RECORD_ID = "hs_object_id"
 _SEARCH_OPERATORS = {"EQ": operator.eq, "GT": operator.gt}
 _LIST_PAGE_MAX = 100
 _SEARCH_PAGE_MAX = 200
 _BATCH_READ_MAX = 100
+_ASSOCIATION_BATCH_MAX = 1_000
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
@@ -101,23 +127,33 @@ def error_response(
 class HubSpotServer:
     """One HubSpot account in memory, which ``serve`` makes every outbound request reach.
 
-    ``records`` maps each object type (``contacts``) to its records by numeric id;
-    ``add``, ``update``, ``archive``, ``delete`` and ``merge`` change them as HubSpot
-    would, stamping the type's modified property. ``properties`` names the
-    properties the account defines for each type: HubSpot's standard ones, and
-    every property a record was given. A read answers each requested property the
-    account defines, ``None`` when the record states none, and leaves out a name
-    it does not define, as HubSpot ignores one. The account answers token
-    introspection, account details, list pages of live records (by id; it refuses
-    an archived listing, which no client asks for), searches (with their
-    ``total``) and batch reads (207 with one
-    error per category, naming its ids in ``context.ids``, and ``numErrors``). A
-    search takes ``EQ`` and ``GT`` filters on the modified time (epoch
-    milliseconds) or the record id, requires every filter of its one group, and
-    sorts ascending on one of them; HubSpot states no order for records with one
-    sort value, so the account puts the higher id first. It answers a query's
-    first page only and refuses an offset or any other shape. It refuses a wrong
-    bearer with 401 and a missing read scope with 403 ``MISSING_SCOPES``.
+    ``records`` maps each object type (``contacts``, ``deals``, ``notes``) to its
+    records by numeric id; ``add``, ``update``, ``archive``, ``delete`` and ``merge``
+    change them as HubSpot would, stamping the type's modified property
+    (``lastmodifieddate`` for contacts, ``hs_lastmodifieddate`` for the others).
+    ``properties`` names the properties the account defines for each type:
+    HubSpot's standard ones, and every property a record was given. A read
+    answers each requested property the account defines, ``None`` when the record
+    states none, and leaves out a name it does not define, as HubSpot ignores one.
+    The account answers token introspection, account details, list pages of live
+    records (by id; it refuses an archived listing, which no client asks for),
+    searches (with their ``total``) and batch reads (207 with one error per
+    category, naming its ids in ``context.ids``, and ``numErrors``). A search takes
+    ``EQ`` and ``GT`` filters on the modified time (epoch milliseconds) or the
+    record id, requires every filter of its one group, and sorts ascending on one
+    of them; HubSpot states no order for records with one sort value, so the
+    account puts the higher id first. It answers a query's first page only and
+    refuses an offset or any other shape. It refuses a wrong bearer with 401 and a
+    missing read scope with 403 ``MISSING_SCOPES``; a note is read under the
+    contacts read scope, and an association read needs both types' scopes.
+
+    ``associate`` links two records both ways, as a HubSpot association does. An
+    association batch read takes at most 1,000 ids and answers each id with
+    associations by its targets (``toObjectId`` an integer), at most
+    ``association_page_size`` per result, a result with more naming its own
+    following position; it answers 207 when some ids have none, stating one error
+    that names no id, and leaves those ids out of its results. Deleting a record
+    removes its associations.
 
     ``clock`` is HubSpot's time, which every answer states in its ``Date`` header
     (to the second, as HTTP dates are), queued answers included. It starts at the
@@ -145,6 +181,8 @@ class HubSpotServer:
         self.records: dict[str, dict[str, dict[str, Any]]] = {object_type: {} for object_type in _MODIFIED_PROPERTY}
         self.properties = {object_type: set(names) for object_type, names in _STANDARD_PROPERTIES.items()}
         self.merged: dict[str, dict[str, str]] = {object_type: {} for object_type in _MODIFIED_PROPERTY}
+        self.associations: dict[tuple[str, str], dict[str, list[str]]] = {}
+        self.association_page_size = 500
         self.resolves_merged = True
         self.clock = _EPOCH
         self.read_errors: dict[str, str] = {}
@@ -168,7 +206,11 @@ class HubSpotServer:
         self._next_id = max(self._next_id, int(record_id) + 1)
         self.properties[object_type].update(properties or {})
         self.records[object_type][record_id] = {
-            "properties": {**(properties or {}), "hs_object_id": record_id, "createdate": _iso(created)},
+            "properties": {
+                **(properties or {}),
+                "hs_object_id": record_id,
+                _CREATED_PROPERTY[object_type]: _iso(created),
+            },
             "created": created,
             "archived_at": None,
         }
@@ -200,12 +242,20 @@ class HubSpotServer:
         """Delete one record permanently: it leaves every listing, search and batch read, archived ones too."""
 
         del self.records[object_type][record_id]
+        for (from_type, to_type), linked in self.associations.items():
+            if from_type == object_type:
+                linked.pop(record_id, None)
+            if to_type == object_type:
+                for targets in linked.values():
+                    if record_id in targets:
+                        targets.remove(record_id)
 
     def merge(self, object_type: str, primary: str, *others: str, modified: datetime) -> str:
         """Merge records as HubSpot does and return the new record's id.
 
         The new record takes ``primary``'s properties and names every merged id in
-        ``hs_merged_object_ids``; the merged records leave the account.
+        ``hs_merged_object_ids``; the merged records leave the account, with their
+        associations (HubSpot carries those to the survivor, which no test here needs).
         """
 
         merged = (primary, *others)
@@ -217,6 +267,14 @@ class HubSpotServer:
         )
         self.merged[object_type].update(dict.fromkeys(merged, survivor))
         return survivor
+
+    def associate(self, from_type: str, from_id: str, to_type: str, to_id: str) -> None:
+        """Associate two records, which HubSpot reads from either side."""
+
+        for one, key, other, target in ((from_type, from_id, to_type, to_id), (to_type, to_id, from_type, from_id)):
+            targets = self.associations.setdefault((one, other), {}).setdefault(key, [])
+            if target not in targets:
+                targets.append(target)
 
     def queue(self, *answers: httpx2.Response | BaseException | None) -> None:
         """Answer the next requests with ``answers``, in order, before any routing; ``None`` lets one through."""
@@ -256,6 +314,8 @@ class HubSpotServer:
                 return self._scoped(object_type) or self._search(object_type, body)
             case "POST", ["crm", "objects", version, object_type, "batch", "read"] if version == API_VERSION:
                 return self._scoped(object_type) or self._batch_read(object_type, body)
+            case "POST", ["crm", "associations", version, source, target, "batch", "read"] if version == API_VERSION:
+                return self._scoped(source, target) or self._associations(source, target, body)
         return httpx2.Response(404, json={"status": "error", "category": "OBJECT_NOT_FOUND"})
 
     def _stamp(self, object_type: str, record_id: str, modified: datetime, lag: timedelta) -> None:
@@ -267,17 +327,17 @@ class HubSpotServer:
     def _live(self, object_type: str) -> dict[str, dict[str, Any]]:
         return {key: record for key, record in self.records[object_type].items() if record["archived_at"] is None}
 
-    def _scoped(self, object_type: str) -> httpx2.Response | None:
-        if object_type not in self.records:
+    def _scoped(self, *object_types: str) -> httpx2.Response | None:
+        if any(object_type not in self.records for object_type in object_types):
             return httpx2.Response(404, json={"status": "error", "category": "OBJECT_NOT_FOUND"})
-        if _READ_SCOPE[object_type] in self.scopes:
+        if all(_READ_SCOPE[object_type] in self.scopes for object_type in object_types):
             return None
         return error_response(403, category="MISSING_SCOPES")
 
     def _resource(self, object_type: str, record_id: str, names: Iterable[str]) -> dict[str, Any]:
         record = self.records[object_type][record_id]
         stated = record["properties"]
-        defaults = ("hs_object_id", "createdate", _MODIFIED_PROPERTY[object_type])
+        defaults = ("hs_object_id", _CREATED_PROPERTY[object_type], _MODIFIED_PROPERTY[object_type])
         defined = self.properties[object_type]
         data = {
             "id": record_id,
@@ -402,6 +462,33 @@ class HubSpotServer:
                 ],
             }
         return httpx2.Response(207 if errors else 200, json=result)
+
+    def _associations(self, from_type: str, to_type: str, body: Mapping[str, Any]) -> httpx2.Response:
+        inputs = body.get("inputs", ())
+        if len(inputs) > _ASSOCIATION_BATCH_MAX:
+            return error_response(400, category="VALIDATION_ERROR")
+        linked, size = self.associations.get((from_type, to_type), {}), self.association_page_size
+        kind = {"category": "HUBSPOT_DEFINED", "typeId": _ASSOCIATION_TYPE.get((from_type, to_type)), "label": None}
+        results, without = [], 0
+        for item in inputs:
+            key, offset = str(item["id"]), int(item.get("after") or 0)
+            targets = linked.get(key, [])
+            if not targets:
+                without += 1
+                continue
+            page = targets[offset : offset + size]
+            result: dict[str, Any] = {
+                "from": {"id": key},
+                "to": [{"toObjectId": int(target), "associationTypes": [kind]} for target in page],
+            }
+            if offset + size < len(targets):
+                result["paging"] = {"next": {"after": str(offset + size)}}
+            results.append(result)
+        answer: dict[str, Any] = {"status": "COMPLETE", "results": results}
+        if without:
+            error = {"status": "error", "category": "NO_ASSOCIATIONS_FOUND", "message": VENDOR_TEXT}
+            answer |= {"numErrors": 1, "errors": [error]}
+        return httpx2.Response(207 if without else 200, json=answer)
 
 
 @contextmanager

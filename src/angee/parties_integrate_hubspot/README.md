@@ -7,7 +7,9 @@ holding every contact. Each contact lands as a person with its names, emails,
 phones, employer and postal address, and HubSpot's later edits follow on each
 sync. A job title lands only beside a company, because parties keeps a title on
 the employment. A person's own edits outrank HubSpot's. A contact HubSpot merges
-lands on the person of a record it replaced.
+lands on the person of a record it replaced. Other HubSpot objects, deals and notes among
+them, are read only for a consumer addon that maps them
+([Mapping another HubSpot object](#mapping-another-hubspot-object)).
 
 A contact HubSpot archives, deletes or merges away leaves HubSpot's list of
 contact ids, which the daily absence sweep walks: the first sweep that misses it
@@ -147,10 +149,80 @@ reaches `project` as not sent (absent from `row`, where an unset one is `None`)
 and the sync goes on: a mapped column that stays empty means the property's
 internal name needs checking in HubSpot.
 
+## Mapping another HubSpot object
+
+What an account's other objects mean is its owner's business: one account keeps
+sales deals, another relabels deals as something else entirely. So the addon
+reads another object type as plain records, and a consumer addon decides what
+they mean with a `HubSpotObjectMapping` (`angee.parties_integrate_hubspot.backends`,
+whose docstring owns the contract), registered under its key from the
+consumer's `autoconfig.py`:
+
+```python
+from angee.parties_integrate_hubspot.backends import ContactNotLanded, HubSpotObjectMapping
+from angee.parties_integrate_hubspot.client import parse_string
+
+
+class ExampleDealMapping(HubSpotObjectMapping):
+    key = "example_deals"
+    object_type = "deals"                  # HubSpot's plural: deals, notes, ...; never contacts
+    properties = ("dealname", "dealstage")
+    contacts = True                        # each record names its associated contact ids
+    version = 1
+
+    def apply_record(self, record, *, link):
+        if not record.contacts:
+            return None
+        person = record.person(record.contacts[0])
+        if person is None:                 # that contact has not landed yet
+            raise ContactNotLanded(record.contacts[0])
+        person.statements_for("example").set(
+            aspect="example",
+            values={"stage": parse_string(record.properties.get("dealstage"))},
+            asserted_by=link.asserting_source(),
+            link=link,
+        )
+        return None                        # or the consumer's own row, which the link then holds
+
+    # withdraw_record(self, link) runs once the record is gone at HubSpot; the default withdraws
+    # what the link stated. Override it when the mapping keeps more than statements.
+
+
+# autoconfig.py
+SETTINGS = {"ANGEE_HUBSPOT_OBJECT_MAPPING_CLASSES.example_deals": "example.deals.mappings.ExampleDealMapping"}
+```
+
+Each mapping is one more stream of every HubSpot directory, pull-only, with the
+contacts stream's guarantees: a baseline walk, a delta on the type's own
+modified property (`hs_lastmodifieddate`; contacts alone use
+`lastmodifieddate`) that keeps HubSpot's clock and reaches back for the search
+index, equal-time drains, and a daily absence sweep where only HubSpot's word
+makes a record gone. Every read asks HubSpot for the mapping's properties, and,
+when it names `contacts`, one association read per page asks for each record's
+associated contacts. A directory with no object mapping reads only contacts.
+
+`apply_record` receives a `HubSpotObjectRecord`: `id`, `properties` (the
+mapping's properties as HubSpot sent them, nullable strings for the `parse_*`
+helpers; one the account does not define is absent) and `contacts` (associated
+contact ids, in id order). `record.person(contact_id)` is the person that contact
+landed on in this directory, or `None` until it has; raising
+`ContactNotLanded(contact_id)` makes the record wait and be read again on the
+stream's backoff, so it lands once the contact has, whichever stream ran first.
+Whatever the mapping states, it states through `link` as the integration
+(`link.asserting_source()`). A `ValueError` refuses that record alone, naming the
+mapping and never the value, while its page lands; any other error fails the
+page. A changed record applies again; a change of a property the mapping does not
+name applies nothing. Raising or lowering `version` replays every record once.
+When HubSpot says the record is gone, on a read of it or after two absence
+sweeps, `withdraw_record(link)` runs. The record as HubSpot sent it is kept on its
+link and in the link's history, so a mapping asks for no property that must not
+enter the system. A service key reads deals with `crm.objects.deals.read`.
+
 ## Tests
 
 `angee.parties_integrate_hubspot.testing.server` ships `HubSpotServer`, an
 in-memory HubSpot account behind `angee.integrate.testing.http.mock_transport`.
-Use it with `serve(server)` or the `hubspot_server` fixture, and script records,
-merges, deletions, HubSpot's clock (each answer's `Date`), index lag, refusals
-and per-record read errors on it. Nothing calls the real HubSpot API.
+Use it with `serve(server)` or the `hubspot_server` fixture, and script contacts,
+deals, notes and their associations, merges, deletions, HubSpot's clock (each
+answer's `Date`), index lag, refusals and per-record read errors on it. Nothing
+calls the real HubSpot API.

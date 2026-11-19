@@ -39,6 +39,7 @@ from angee.parties_integrate_hubspot.testing.server import hubspot_server as hub
 MODIFIED = datetime(2026, 11, 2, 12, 0, tzinfo=UTC)
 NAMES = ("firstname", "lastname", "email")
 CONTACTS_READ = "crm.objects.contacts.read"
+DEALS_READ = "crm.objects.deals.read"
 
 
 OTHER_KEY = service_key("f")
@@ -379,7 +380,96 @@ def test_a_search_at_one_modified_time_reads_its_records_above_an_id_in_id_order
     ]
 
 
-REJECTED = "HubSpot rejected this service key: enter a valid one."
+def deal(server: HubSpotServer, name: str, *, minutes: int = 0) -> str:
+    """Add an invented deal named ``name``, modified ``minutes`` after :data:`MODIFIED`."""
+
+    return server.add("deals", {"dealname": name}, modified=MODIFIED + timedelta(minutes=minutes))
+
+
+def test_a_search_of_another_object_type_reads_it_on_that_types_own_modified_property(
+    hubspot_server: HubSpotServer, client: HubSpotClient
+) -> None:
+    """Every type but contacts states its last change in ``hs_lastmodifieddate``."""
+
+    hubspot_server.scopes.add(DEALS_READ)
+    deal(hubspot_server, "Early", minutes=1)
+    late = deal(hubspot_server, "Late", minutes=30)
+    since = MODIFIED + timedelta(minutes=10)
+
+    page = client.search_modified("deals", since=since, limit=10, properties=("dealname",))
+
+    assert [record.id for record in page.results] == [late]
+    assert page.results[0].modified_at("deals") == MODIFIED + timedelta(minutes=30)
+    assert request_fields(hubspot_server.requests[0]) == {
+        "filterGroups": [
+            {"filters": [{"propertyName": "hs_lastmodifieddate", "operator": "GT", "value": epoch_ms(since)}]}
+        ],
+        "sorts": [{"propertyName": "hs_lastmodifieddate", "direction": "ASCENDING"}],
+        "properties": ["dealname", "hs_lastmodifieddate"],
+        "limit": 10,
+    }
+
+
+def test_associations_follow_each_records_own_paging_and_one_without_any_has_none(
+    hubspot_server: HubSpotServer, client: HubSpotClient
+) -> None:
+    """A result with more associations names its own position, sent back with its id alone; HubSpot answers 207."""
+
+    hubspot_server.scopes.add(DEALS_READ)
+    hubspot_server.association_page_size = 2
+    ada, grace, alan = (contact(hubspot_server, number) for number in range(3))
+    party, dinner, alone = (deal(hubspot_server, name) for name in ("Party", "Dinner", "Alone"))
+    for person in (ada, grace, alan):
+        hubspot_server.associate("deals", party, "contacts", person)
+    hubspot_server.associate("deals", dinner, "contacts", grace)
+
+    found = client.associations("deals", "contacts", [party, dinner, alone, party])
+
+    assert found == {party: (ada, grace, alan), dinner: (grace,), alone: ()}
+    path = "/crm/associations/2026-09/deals/contacts/batch/read"
+    assert [(request.url.path, request_fields(request)) for request in hubspot_server.requests] == [
+        (path, {"inputs": [{"id": party}, {"id": dinner}, {"id": alone}]}),
+        (path, {"inputs": [{"id": party, "after": "2"}]}),
+    ]
+
+
+def test_association_ids_go_in_batches_of_hubspots_limit(hubspot_server: HubSpotServer, client: HubSpotClient) -> None:
+    hubspot_server.scopes.add(DEALS_READ)
+
+    found = client.associations("deals", "contacts", [str(number) for number in range(1001, 2002)])
+
+    assert set(found.values()) == {()}
+    assert [len(request_fields(request)["inputs"]) for request in hubspot_server.requests] == [1000, 1]
+
+
+def test_an_id_an_association_answer_leaves_unanswered_without_stating_an_error_is_a_transient_refusal(
+    hubspot_server: HubSpotServer, client: HubSpotClient
+) -> None:
+    """A record is never read without contacts HubSpot did not state: only a partial answer says some have none."""
+
+    hubspot_server.queue(httpx2.Response(200, json={"status": "COMPLETE", "results": []}))
+
+    with pytest.raises(HubSpotError) as unanswered:
+        client.associations("deals", "contacts", ["101"])
+
+    assert (unanswered.value.public_message, unanswered.value.transient) == (
+        "HubSpot did not answer for some records.",
+        True,
+    )
+
+
+def test_an_association_read_needs_the_read_scope_of_both_object_types(
+    hubspot_server: HubSpotServer, client: HubSpotClient
+) -> None:
+    with pytest.raises(HubSpotError) as refusal:
+        client.associations("deals", "contacts", ["101"])
+
+    assert refusal.value.public_message == (
+        f"The HubSpot service key is missing a scope this connection needs: {DEALS_READ}, {CONTACTS_READ}."
+    )
+
+
+REJECTED ="HubSpot rejected this service key: enter a valid one."
 CHECK_THE_KEY = "This key lacks a service key's usual shape: check it for extra or missing characters."
 RATE_LIMITED = "HubSpot is rate limiting requests (HTTP 429)."
 DAILY_LIMIT = "This HubSpot account has used its daily API request limit."
