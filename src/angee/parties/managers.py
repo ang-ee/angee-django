@@ -1980,15 +1980,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         values = {email: handle_model.normalize_value(handle_model.Platform.EMAIL, email) for email in given}
         addresses = {email: users.normalize_email(email) for email in given}
         live = person_model._base_manager.filter(is_trashed=False, merged_into__isnull=True)
+        account_people = self.account_people(given)
         with system_context(reason="parties.people_for_emails"):
-            accounts: defaultdict[str, list[Any]] = defaultdict(list)
-            for user in users.people().filter(email__in=set(addresses.values())):
-                accounts[user.email].append(user)
-            owners = {address: found[0] for address, found in accounts.items() if len(found) == 1}
-            account_people = {
-                person.user_id: person
-                for person in live.filter(user_id__in=[user.pk for user in owners.values()])
-            }
             known = list(
                 handle_model._base_manager.filter(
                     platform=handle_model.Platform.EMAIL, normalized_value__in=set(values.values())
@@ -2015,8 +2008,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         answer = []
         for email in given:
             holding = held.get(values[email], (None, None))
-            owner = owners.get(addresses[email])
-            if owner is not None and (person := account_people.get(owner.pk)) is not None:
+            if (person := account_people.get(addresses[email])) is not None:
                 own_handle = holding[0] if holding[1] is not None and holding[1].pk == person.pk else None
                 answer.append(EmailHolder(email, person, EmailBasis.ACCOUNT, own_handle))
             if holding[1] is not None:
@@ -2024,6 +2016,28 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             elif (claim := claimed.get(values[email])) is not None and claim[0] in claimants:
                 answer.append(EmailHolder(email, claimants[claim[0]], EmailBasis.CLAIM, by_pk[claim[1]]))
         return answer
+
+    def account_people(self, emails: Iterable[str]) -> dict[str, Person]:
+        """Return the live Person of the one person account each address signs in with, by the account's address.
+
+        The rule :meth:`people_for_emails` answers ``ACCOUNT`` by
+        (``UserManager.person_for_email``'s: an address two accounts share names
+        nobody, and an account without a Person names nobody). Keys are the
+        accounts' own normalized addresses (``UserManager.normalize_email``). A
+        system identity read in two queries; the caller gates what it reveals.
+        """
+
+        users = get_user_model().objects
+        addresses = {users.normalize_email(email) for email in emails} - {""}
+        if not addresses:
+            return {}
+        live = apps.get_model("parties", "Person")._base_manager.filter(is_trashed=False, merged_into__isnull=True)
+        with system_context(reason="parties.account_people"):
+            accounts: defaultdict[str, list[Any]] = defaultdict(list)
+            for user in users.people().filter(email__in=addresses):
+                accounts[user.email].append(user)
+            owners = {found[0].pk: address for address, found in accounts.items() if len(found) == 1}
+            return {owners[person.user_id]: person for person in live.filter(user_id__in=list(owners))}
 
     def lookup_emails(self, emails: Iterable[str], *, lookup: EmailLookup | None = None) -> EmailLookup:
         """Return ``lookup`` (new by default) knowing whom each of ``emails`` names and which an account signs in with.
@@ -2421,6 +2435,22 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             for model in apps.get_model("parties", owner).statement_models()
         }
         withdrawn = sum(model.objects.withdraw(source, link=link) for model in tables)
+        if lookup is not None:
+            lookup.changed.update(stated)
+        return withdrawn
+
+    def withdraw_contact(self, link: RecordLink, *, lookup: EmailLookup | None = None) -> int:
+        """Withdraw what a contact's ``link`` states as its record leaves the source, the party kept.
+
+        A tombstone's withdrawal (``RecordLink.withdraw_statements``: what
+        another observing link of the source evidences moves there). The email
+        addresses it stated are marked changed in ``lookup``, as landing them
+        does, so a later record of the page reads their holders again. Returns
+        how many it withdrew.
+        """
+
+        stated = self._stated_emails(link)
+        withdrawn = link.withdraw_statements()
         if lookup is not None:
             lookup.changed.update(stated)
         return withdrawn

@@ -269,12 +269,19 @@ class Party(
         owner.lock_identity_rows(party_ids=(self.pk,), handle_ids=handle_ids)
         return super().lock_subject(members)
 
-    def lock_for_merge(self) -> None:
-        """Lock this party's Handles before the shared merge owner locks Parties."""
+    @classmethod
+    def lock_merge_records(cls, records: Sequence[Any]) -> None:
+        """Lock every merge participant's Handles, then the participants, in one call, before the merge's own locks.
+
+        The order a directory page and mail ingestion take (handles, then
+        parties): one participant's handles locked after another participant
+        could deadlock with them.
+        """
 
         owner = apps.get_model("parties", "Party").objects
-        handle_ids = owner.handle_statements().filter(subject_id=self.pk).values_list("handle_id", flat=True)
-        owner.lock_identity_rows(party_ids=(self.pk,), handle_ids=handle_ids)
+        ids = sorted({row.pk for row in records})
+        handle_ids = owner.handle_statements().filter(subject_id__in=ids).values_list("handle_id", flat=True)
+        owner.lock_identity_rows(party_ids=ids, handle_ids=handle_ids)
 
     def __str__(self) -> str:
         """Return the party's display name for Django displays."""

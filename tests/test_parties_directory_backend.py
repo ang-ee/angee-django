@@ -1294,6 +1294,177 @@ def test_a_page_holds_every_handle_its_linked_people_carry_before_any_record_app
         contender.result(timeout=10)
 
 
+def _page_holds_while(pull: Pull, contend: Any) -> Any:
+    """Prepare a page in a transaction, prove ``contend`` waits on a lock it holds, then commit; return its result."""
+
+    page = pull.backend.extract_contacts(pull.stream, 100)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with system_context(reason="tests.directory_page.holder"), transaction.atomic():
+            pull.backend.prepare_page(pull.stream, page)
+            contender, pid = submit(pool, contend)
+            wait_for_lock(pid, contender)
+        return contender.result(timeout=10)
+
+
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required.")
+def test_mail_landing_on_a_pages_address_waits_for_the_page(pull: Pull) -> None:
+    """Mail ingestion locks a handle, then its party: it queues on the page's handle and lands after it."""
+
+    person, handle = _existing(pull.directory.owner)
+
+    def land_mail() -> Any:
+        with system_context(reason="tests.directory_page.mail"):
+            return Party.objects.assert_handle(person, handle, asserted_by=Party.objects.rule_source("source_sender"))
+
+    assert _page_holds_while(pull, land_mail) is not None
+
+
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required.")
+def test_a_merge_of_a_pages_person_waits_for_the_page(pull: Pull) -> None:
+    """The merge locks every handle of its people first, so it queues on the page's handle, never holding a person."""
+
+    owner = pull.directory.owner
+    kept, _handle = _existing(owner)
+    merged, _other = _existing(owner, email="ada@work.example")
+
+    def merge() -> Any:
+        with actor_context(owner):
+            return Party.objects.get(pk=kept.pk).with_actor(owner).merge(records=[merged.public_id])
+
+    assert _page_holds_while(pull, merge).pk == kept.pk
+    assert Party._base_manager.get(pk=merged.pk).merged_into_id == kept.pk
+
+
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required.")
+def test_a_confirmation_of_a_pages_address_waits_for_the_page(pull: Pull) -> None:
+    owner = pull.directory.owner
+    claimant = Person.objects.create(display_name="Ada (claimed)", created_by=owner)
+    handle = Handle.objects.upsert(platform="email", value="ada@example.com", created_by_id=owner.pk)
+    claim = Party.objects.assert_handle(
+        claimant, handle, asserted_by=Party.objects.rule_source("display_name"), confidence=0.4
+    )
+
+    def confirm() -> Any:
+        with actor_context(owner):
+            return claim.with_actor(owner).confirm()
+
+    assert _page_holds_while(pull, confirm).is_confirmed
+
+
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required.")
+def test_an_account_adopting_a_pages_candidate_waits_for_the_page(pull: Pull) -> None:
+    """``for_user(adopt=)`` locks the person row with its party row, which the page holds, so no verdict goes stale."""
+
+    person, _handle = _existing(pull.directory.owner)
+    account = get_user_model().objects.create_user(username="ada-account")
+
+    def adopt() -> Any:
+        with system_context(reason="tests.directory_page.account"):
+            return Person.objects.for_user(account, adopt=person)
+
+    assert _page_holds_while(pull, adopt).user_id == account.pk
+
+
+def _page_locks(pull: Pull, monkeypatch: pytest.MonkeyPatch) -> list[tuple[set[Any], set[Any]]]:
+    """Extract one page and prepare it, recording each identity lock call's parties and handles."""
+
+    page = pull.backend.extract_contacts(pull.stream, 100)
+    locked: list[tuple[set[Any], set[Any]]] = []
+    lock = Party.objects.lock_identity_rows
+
+    def spy(**kwargs: Any) -> Any:
+        locked.append((set(kwargs["party_ids"]), set(kwargs["handle_ids"])))
+        return lock(**kwargs)
+
+    monkeypatch.setattr(Party.objects, "lock_identity_rows", spy)
+    with transaction.atomic():
+        pull.backend.prepare_page(pull.stream, page)
+    return locked
+
+
+def _handle_ids(party_id: Any) -> set[Any]:
+    return set(Party.objects.handle_statements().filter(subject_id=party_id).values_list("handle_id", flat=True))
+
+
+def test_a_page_locks_the_people_its_tombstones_name_in_its_one_lock_call(
+    pull: Pull, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tombstone's withdrawal locks its person: the page holds them, and their handles, before any record applies."""
+
+    pull.sync()
+    grace = int(pull.link("grace").target_object_id)
+    del pull.source.contacts["grace"]
+    pull.source.deleted.add("grace")
+
+    (parties, handles), *_rest = _page_locks(pull, monkeypatch)
+
+    assert grace in parties
+    assert _handle_ids(grace) <= handles
+
+
+def test_a_page_locks_the_person_of_an_account_its_address_names_in_its_one_lock_call(
+    pull: Pull, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The account's person holds none of the page's addresses, yet is proposed: the page locks them, handles too."""
+
+    person = _refused_account_basis(pull)
+    owner_id = pull.directory.owner_id
+    other = Handle.objects.upsert(platform="email", value="ada@elsewhere.example", created_by_id=owner_id)
+    Party.objects.assert_handle(person, other, asserted_by=Party.objects.rule_source("source_sender"))
+
+    (parties, handles), *_rest = _page_locks(pull, monkeypatch)
+
+    assert person.pk in parties
+    assert other.pk in handles
+
+
+def test_a_merge_locks_every_handle_of_its_people_before_any_of_them(
+    pull: Pull, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A page locks handles, then people: a merge holding a person while it waits for a handle could deadlock it."""
+
+    owner = pull.directory.owner
+    kept, kept_handle = _existing(owner, email="ada@example.com")
+    merged, merged_handle = _existing(owner, email="ada@work.example")
+    locked: list[tuple[set[Any], set[Any]]] = []
+    lock = Party.objects.lock_identity_rows
+
+    def spy(**kwargs: Any) -> Any:
+        locked.append((set(kwargs["party_ids"]), set(kwargs["handle_ids"])))
+        return lock(**kwargs)
+
+    monkeypatch.setattr(Party.objects, "lock_identity_rows", spy)
+    Party.objects.get(pk=kept.pk).with_actor(owner).merge(records=[Party.objects.get(pk=merged.pk).public_id])
+
+    parties, handles = locked[0]
+    assert {kept.pk, merged.pk} <= parties
+    assert {kept_handle.pk, merged_handle.pk} <= handles
+
+
+def test_a_tombstone_earlier_in_a_page_frees_its_address_for_a_later_contact_of_the_page(
+    pull: Pull, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tombstone withdraws the only statement holding the address; the new contact then holds it in full."""
+
+    pull.sync()
+    del pull.source.contacts["grace"]
+    pull.source.deleted.add("grace")
+    pull.source.put("grace-again", _GRACE)
+    extract = pull.backend.extract_contacts
+
+    def tombstones_first(stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
+        page = extract(stream, page_bound, deadline=deadline)
+        return replace(page, records=sorted(page.records, key=lambda record: not record.tombstone))
+
+    monkeypatch.setattr(pull.backend, "extract_contacts", tombstones_first)
+
+    assert pull.sync().count == 2
+
+    again = pull.link("grace-again").target_object_id
+    assert _held_by("grace@example.com") == int(again)
+    assert _claim_confidences(again, "grace@example.com") == [1.0]
+
+
 def _claim(pull: Pull, key: str, address: str) -> Any:
     """The directory's current claim of ``address`` on the contact's person."""
 

@@ -10,6 +10,23 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: locks and stale reads. `DirectoryBackend.prepare_page`'s one
+  lock call also takes the people its tombstones' links name and the person of
+  an account a page address signs in with (the new
+  `PartyManager.account_people(emails)`, the account rule `people_for_emails`
+  already answered by), with their handles, which a tombstone's withdrawal and a
+  proposal with such a person used to lock after the page's parties. A party
+  merge locks every participant's handles, then the participants, in one call
+  (`Party.lock_merge_records`, the base's own hook; `Party.lock_for_merge`, which
+  locked one participant's handles after another participant, is deleted). A
+  tombstone's withdrawal marks the addresses it stated changed in the page's
+  lookup (the new `PartyManager.withdraw_contact`), so a later contact of the
+  page with that address no longer claims an address nobody holds. The
+  PostgreSQL lane runs the directory backend's lock tests by node (a page
+  against mail ingestion, a merge, a confirmation and an account's adoption);
+  the module's strict expected failure (open decision O15) would read as a skip
+  in that lane's zero-skip gate.
+
 - `angee.parties`: the confirm rule is keyed on the address, at the owner of the
   effect. Every person's stance that wins a handle for a party (a confirmation,
   taking control with `HandleManager.claim_control`, a confirmation a history
