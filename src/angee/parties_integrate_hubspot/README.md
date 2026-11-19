@@ -23,9 +23,12 @@ separate messages. The addon ships no connect action yet; until it does, a host
 creates the credential and a `Directory` with `backend_class="hubspot"` that
 attaches it.
 
-The backend speaks HubSpot's date-versioned REST API through integrate's shared
-HTTP client, with no HubSpot SDK; [the stack guide](../../../docs/stack.md#backend)
-records why. `HubSpotDirectoryBackend` composes the parties directory base,
+The backend speaks HubSpot's date-versioned REST API through integrate's typed
+request (`HttpClient.request_model`), with no HubSpot SDK;
+[the stack guide](../../../docs/stack.md#backend) records why. Integrate's
+`HttpRefusal` classifies every refused request, and `HubSpotError` adds only
+HubSpot's own cases: a 423 is transient, and a rate limit without `Retry-After`
+waits for the window of the policy HubSpot names. `HubSpotDirectoryBackend` composes the parties directory base,
 `HubSpotClient` takes the authorization headers its caller gives it and never
 reads a credential, `HubSpotCursor` holds a stream's position inside a baseline
 or delta pass, and `contact_from_properties` maps HubSpot's standard contact

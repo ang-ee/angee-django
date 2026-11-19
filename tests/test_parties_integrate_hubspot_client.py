@@ -254,7 +254,10 @@ def test_a_search_at_one_modified_time_reads_its_records_above_an_id_in_id_order
     ]
 
 
-UNAVAILABLE = "HubSpot is temporarily unavailable."
+def unavailable(status: int) -> str:
+    """Return integrate's operator message for a transient refused answer of HubSpot's."""
+
+    return f"HubSpot is temporarily unavailable (HTTP {status})."
 
 
 @pytest.mark.parametrize(
@@ -268,7 +271,7 @@ UNAVAILABLE = "HubSpot is temporarily unavailable."
             "HubSpot rejected the access token. Enter a valid HubSpot service key.",
             id="401-token-rejected",
         ),
-        pytest.param(403, {}, False, None, "HubSpot refused this request for the service key.", id="403-refused"),
+        pytest.param(403, {}, False, None, "HubSpot refused the request (HTTP 403).", id="403-refused"),
         pytest.param(423, {}, True, timedelta(seconds=2), None, id="423-waits-two-seconds"),
         pytest.param(423, {"headers": {"Retry-After": "1"}}, True, timedelta(seconds=2), None, id="423-short-hint"),
         pytest.param(423, {"headers": {"Retry-After": "7"}}, True, timedelta(seconds=7), None, id="423-longer-hint"),
@@ -293,11 +296,16 @@ UNAVAILABLE = "HubSpot is temporarily unavailable."
             id="429-daily-retry-after",
         ),
         *(
-            pytest.param(status, {}, True, None, UNAVAILABLE, id=f"{status}-transient")
+            pytest.param(status, {}, True, None, unavailable(status), id=f"{status}-transient")
             for status in (500, 501, 502, 503, 504, 521, 523, 524, 599)
         ),
         pytest.param(
-            503, {"headers": {"Retry-After": "120"}}, True, timedelta(minutes=2), UNAVAILABLE, id="503-retry-after"
+            503,
+            {"headers": {"Retry-After": "120"}},
+            True,
+            timedelta(minutes=2),
+            unavailable(503),
+            id="503-retry-after",
         ),
         pytest.param(
             400,
@@ -352,16 +360,39 @@ def test_a_rejected_bearer_is_a_permanent_refusal(hubspot_server: HubSpotServer)
     assert (refusal.value.status, refusal.value.transient) == (401, False)
 
 
-def test_an_unreachable_host_and_an_oversized_answer_are_transient(
-    hubspot_server: HubSpotServer, client: HubSpotClient
+@pytest.mark.parametrize(
+    ("answer", "message", "transient"),
+    [
+        pytest.param(
+            httpx2.ConnectError("connection refused"), "HubSpot could not be reached.", True, id="unreachable"
+        ),
+        pytest.param(
+            httpx2.Response(200, content=b"{}", headers={"content-length": str(9 * 1024 * 1024)}),
+            "HubSpot returned an oversized response.",
+            False,
+            id="oversized-is-permanent",
+        ),
+        pytest.param(
+            httpx2.Response(200, headers={"Content-Encoding": "gzip"}, stream=httpx2.ByteStream(b"not gzip")),
+            "HubSpot returned an unreadable response.",
+            False,
+            id="undecodable-is-permanent",
+        ),
+    ],
+)
+def test_a_request_without_a_usable_answer_follows_integrates_rule(
+    hubspot_server: HubSpotServer,
+    client: HubSpotClient,
+    answer: httpx2.Response | Exception,
+    message: str,
+    transient: bool,
 ) -> None:
-    oversized = httpx2.Response(200, content=b"{}", headers={"content-length": str(9 * 1024 * 1024)})
-    hubspot_server.queue(httpx2.ConnectError("connection refused"), oversized)
+    hubspot_server.queue(answer)
 
-    for message in ("HubSpot could not be reached.", "HubSpot returned an oversized response."):
-        with pytest.raises(HubSpotError) as refusal:
-            client.account()
-        assert (refusal.value.public_message, refusal.value.status, refusal.value.transient) == (message, None, True)
+    with pytest.raises(HubSpotError) as refusal:
+        client.account()
+
+    assert (refusal.value.public_message, refusal.value.status, refusal.value.transient) == (message, None, transient)
 
 
 def test_an_answer_that_fails_validation_is_a_permanent_vendor_error(

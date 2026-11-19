@@ -1,18 +1,16 @@
 """HubSpot's CRM REST API at the date-versioned ``2026-09`` paths, over integrate's HTTP owner.
 
-The one owner of the HubSpot wire protocol for this addon. Requests go through
-``angee.integrate.http.HttpClient`` (SSRF-pinned, byte-capped) with the
-authorization headers the caller supplies; the client never reads a credential.
-Every answer is validated into a pydantic model that ignores the fields it does
-not name, so a new HubSpot field never breaks a sync and a missing required one
-is a :class:`HubSpotError`. No HubSpot client library is involved.
+The one owner of the HubSpot wire protocol for this addon. Every request is
+integrate's typed request (``HttpClient.request_model``: SSRF-pinned,
+byte-capped) with the authorization headers the caller supplies; the client never
+reads a credential. Every answer is validated into a pydantic model that ignores
+the fields it does not name, so a new HubSpot field never breaks a sync and a
+missing required one is a :class:`HubSpotError`. No HubSpot client library is
+involved.
 
-A refusal becomes a :class:`HubSpotError` composed from facts: the status,
-HubSpot's error ``category`` and rate-limit ``policyName``, and the scopes the
-request needed, never HubSpot's message text. :func:`_retry_policy` is the status
-table that decides which refusals a later attempt can outlive and how long to
-wait. A failure to reach HubSpot, and an oversized answer, are transient; an
-answer this client cannot read is permanent.
+Integrate's ``HttpRefusal`` classifies whatever brings a request no usable
+answer, and :meth:`HubSpotError.of` turns it into HubSpot's error, adding only
+what is HubSpot's own (its docstring lists it) and never HubSpot's message text.
 
 HubSpot states every property value as a nullable string; the ``parse_*``
 functions turn one into a Python value by property type. Which property states
@@ -22,21 +20,19 @@ knows it.
 
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from itertools import batched
 from typing import Any, Self
 from urllib.parse import urlencode
 
-import httpx2
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
-from angee.integrate.errors import IntegrationError, RequestNotSentError
-from angee.integrate.http import HttpClient, ResponseTooLargeError, retry_after
+from angee.integrate.errors import IntegrationError
+from angee.integrate.http import HttpClient, HttpRefusal
 
 HUBSPOT_API = "https://api.hubapi.com"
 API_VERSION = "2026-09"
@@ -58,7 +54,6 @@ MISSING_SCOPES = "MISSING_SCOPES"
 _MODIFIED_PROPERTY = {"contacts": "lastmodifieddate"}
 _RECORD_ID = "hs_object_id"
 _NOT_FOUND = "OBJECT_NOT_FOUND"
-_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
 _REQUEST_TIMEOUT_SECONDS = 30
 _LOCKED_WAIT = timedelta(seconds=2)
 _RATE_LIMIT_WAITS = {"TEN_SECONDLY_ROLLING": timedelta(seconds=10), "DAILY": timedelta(hours=1)}
@@ -80,46 +75,40 @@ class HubSpotError(IntegrationError):
     refused answer (:data:`MISSING_SCOPES`, say), else ``None``.
     """
 
-    def __init__(
-        self,
-        public_message: str,
-        *,
-        status: int | None = None,
-        category: str | None = None,
-        transient: bool | None = None,
-        retry_after: timedelta | None = None,
-    ) -> None:
-        """Record the refusal's status and category beside integrate's transience and wait."""
-
-        super().__init__(public_message, transient=transient, retry_after=retry_after)
-        self.status = status
-        self.category = category
+    status: int | None = None
+    category: str | None = None
 
     @classmethod
-    def from_response(cls, response: httpx2.Response, *, scopes: Sequence[str] = ()) -> HubSpotError:
-        """Compose the refusal ``response`` states; ``scopes`` are what the request needed."""
+    def of(cls, refusal: HttpRefusal, *, scopes: Sequence[str] = ()) -> HubSpotError:
+        """Return HubSpot's error for ``refusal``; ``scopes`` are what the request needed.
 
-        body = _error_body(response)
-        transient, wait = _retry_policy(response, body)
-        status = response.status_code
-        if status == 403 and body.category == MISSING_SCOPES:
-            needed = ", ".join(scopes) or "the scope this request needs"
-            message = f"The HubSpot service key is missing a scope this connection needs: {needed}."
-        elif status == 401:
-            message = "HubSpot rejected the access token. Enter a valid HubSpot service key."
-        elif status == 403:
-            message = "HubSpot refused this request for the service key."
-        elif status == 423:
-            message = "HubSpot has locked these records for a moment."
-        elif status == 429 and body.policy_name == "DAILY":
-            message = "This HubSpot account has used its daily API request limit."
-        elif status == 429:
-            message = "HubSpot is rate limiting this account."
-        elif transient:
-            message = "HubSpot is temporarily unavailable."
+        HubSpot's own cases: a 423 (records locked for a moment) is transient and
+        waits at least two seconds; a 429 without ``Retry-After`` waits for the
+        window of the rate-limit policy its body names (ten seconds, or an hour for
+        the daily limit); a rejected key, and a missing scope naming ``scopes``,
+        are worded for the operator. ``HttpRefusal`` decides and words the rest.
+        """
+
+        try:
+            facts = _HubSpotErrorBody.model_validate(refusal.body or {})
+        except ValidationError:
+            facts = _HubSpotErrorBody()
+        if refusal.status == 423:
+            wait = max(refusal.retry_after or _LOCKED_WAIT, _LOCKED_WAIT)
+            error = cls("HubSpot has locked these records for a moment.", transient=True, retry_after=wait)
         else:
-            message = f"HubSpot refused the request (HTTP {status})."
-        return cls(message, status=status, category=body.category, transient=transient, retry_after=wait)
+            if refusal.status == 429 and refusal.retry_after is None:
+                policy = _RATE_LIMIT_WAITS.get(facts.policy_name or "", _RATE_LIMIT_WAITS["TEN_SECONDLY_ROLLING"])
+                refusal = replace(refusal, retry_after=policy)
+            message = None
+            if refusal.status == 401:
+                message = "HubSpot rejected the access token. Enter a valid HubSpot service key."
+            elif refusal.status == 403 and facts.category == MISSING_SCOPES:
+                needed = ", ".join(scopes) or "the scope this request needs"
+                message = f"The HubSpot service key is missing a scope this connection needs: {needed}."
+            error = refusal.as_error(cls, "HubSpot", public_message=message)
+        error.status, error.category = refusal.status, facts.category
+        return error
 
 
 class _HubSpotModel(BaseModel):
@@ -131,7 +120,7 @@ class _HubSpotModel(BaseModel):
 
 
 class _HubSpotErrorBody(_HubSpotModel):
-    """The facts of a HubSpot error answer a refusal is composed from."""
+    """The facts of a HubSpot error answer a refusal is composed from; a body of another shape states none."""
 
     category: str | None = None
     policy_name: str | None = None
@@ -409,67 +398,23 @@ class HubSpotClient:
         payload: Mapping[str, Any] | None = None,
         scopes: Sequence[str] = (),
     ) -> T:
-        """Send one request and validate its answer into ``model``; any refusal is a :class:`HubSpotError`."""
+        """Send one typed request with ``payload`` as its JSON body; any refusal is a :class:`HubSpotError`."""
 
-        url = f"{HUBSPOT_API}{path}" + (f"?{urlencode(query)}" if query else "")
-        headers = {**self.headers, "Accept": "application/json"}
-        if payload is not None:
-            headers["Content-Type"] = "application/json"
-        try:
-            response = self.http.request(
-                method,
-                url,
-                headers=headers,
-                body=None if payload is None else json.dumps(payload).encode(),
-                max_bytes=_RESPONSE_MAX_BYTES,
-                timeout=_REQUEST_TIMEOUT_SECONDS,
-            )
-        except (httpx2.TransportError, RequestNotSentError) as error:
-            raise HubSpotError("HubSpot could not be reached.", transient=True) from error
-        except ResponseTooLargeError as error:
-            raise HubSpotError("HubSpot returned an oversized response.", transient=True) from error
-        if not response.is_success:
-            raise HubSpotError.from_response(response, scopes=scopes)
-        try:
-            return model.model_validate_json(response.content)
-        except ValidationError as error:
-            raise HubSpotError("HubSpot returned a response this connection cannot read.") from error
+        return self.http.request_model(
+            method,
+            f"{HUBSPOT_API}{path}" + (f"?{urlencode(query)}" if query else ""),
+            headers=self.headers,
+            json=payload,
+            model=model,
+            timeout=_REQUEST_TIMEOUT_SECONDS,
+            error=lambda refusal: HubSpotError.of(refusal, scopes=scopes),
+        )
 
 
 def _requested(object_type: str, properties: Sequence[str]) -> list[str]:
     """Return ``properties`` with ``object_type``'s modified property, which every read needs."""
 
     return list(dict.fromkeys((*properties, _MODIFIED_PROPERTY[object_type])))
-
-
-def _retry_policy(response: httpx2.Response, body: _HubSpotErrorBody) -> tuple[bool, timedelta | None]:
-    """HubSpot's status table: whether a later attempt can outlive a refusal, and the wait before it.
-
-    423, 429 and every 5xx are transient; every other refusal is permanent. 423
-    waits at least two seconds. 429 waits for ``Retry-After`` when HubSpot sends
-    it, else for its rate-limit policy's window (ten seconds, or an hour for the
-    daily limit). A 5xx waits for ``Retry-After`` when sent.
-    """
-
-    status = response.status_code
-    if status not in (423, 429) and status < 500:
-        return False, None
-    hinted = retry_after(response)
-    if status == 423:
-        return True, max(hinted or _LOCKED_WAIT, _LOCKED_WAIT)
-    if status == 429:
-        policy = _RATE_LIMIT_WAITS.get(body.policy_name or "", _RATE_LIMIT_WAITS["TEN_SECONDLY_ROLLING"])
-        return True, hinted or policy
-    return True, hinted
-
-
-def _error_body(response: httpx2.Response) -> _HubSpotErrorBody:
-    """Read the facts of a refusal's body; an unreadable body states none."""
-
-    try:
-        return _HubSpotErrorBody.model_validate_json(response.content)
-    except ValidationError:
-        return _HubSpotErrorBody()
 
 
 def _epoch_ms(moment: datetime) -> int:

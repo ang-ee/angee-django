@@ -44,9 +44,9 @@ OTHER_HUB_ID = 9876543
 CONNECTED = "Connected to HubSpot: the service key reads this account's contacts."
 REJECTED = "HubSpot rejected the access token. Enter a valid HubSpot service key."
 MISSING_SCOPE = f"The HubSpot service key is missing a scope this connection needs: {CONTACTS_READ}."
-UNREADABLE = "HubSpot returned a response this connection cannot read."
-UNAVAILABLE = "HubSpot is temporarily unavailable."
-RATE_LIMITED = "HubSpot is rate limiting this account."
+UNREADABLE = "HubSpot returned an unreadable response."
+UNAVAILABLE = "HubSpot is temporarily unavailable (HTTP 503)."
+RATE_LIMITED = "HubSpot is rate limiting requests (HTTP 429)."
 
 ADA = {
     "firstname": "Ada",
@@ -488,7 +488,7 @@ def test_an_identity_read_answers_a_missing_contact_as_gone_and_fails_on_any_oth
         ),
         pytest.param(
             lambda server: server.queue(error_response(429, policy_name="DAILY")),
-            "This HubSpot account has used its daily API request limit.",
+            RATE_LIMITED,
             True,
             timedelta(hours=1),
             id="429-daily",
