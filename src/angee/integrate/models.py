@@ -2747,6 +2747,9 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         In the same transaction an integration running on the previous owner's
         credential is detached from it and disconnected, and the account binding
         is released, so that account no longer constrains Connect nor hints it.
+        The release runs on the locked capability row (:meth:`lock_capability`),
+        not on this instance: an owner transferring their own integration lost
+        write with the row, and the actor pinned here would outrank the system context.
         """
 
         previous_owner_id = self.owner_id
@@ -2754,7 +2757,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             super().transfer_ownership(user)
             if self.owner_id != previous_owner_id:
                 with system_context(reason="integrate.integration.transfer.release_connection"):
-                    target = self.concrete_capability()
+                    target = self.lock_capability()
                     credential = target.load_connection_credential()
                     if credential is not None and credential.user_id == previous_owner_id:
                         target.attach_connection(None)

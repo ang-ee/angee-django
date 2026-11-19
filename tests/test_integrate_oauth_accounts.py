@@ -200,14 +200,20 @@ def test_the_binding_survives_detach_and_follows_the_identity_across_clients_of_
     assert refused.value.code == ACCOUNT_SWITCH_REFUSED
 
 
-def test_ownership_transfer_hands_the_recipient_an_unbound_integration() -> None:
-    bridge, client = _bridge("binding-transfer")
+@pytest.mark.parametrize("transferor", ["admin", "owner", "owner-on-the-parent-row"])
+def test_ownership_transfer_hands_the_recipient_an_unbound_integration(transferor: str) -> None:
+    bridge, client = _bridge(f"binding-transfer-{transferor}")
     first = _connect(client, bridge.owner, "account-one")
     bridge.attach_credential(first.credential)
-    admin = create_platform_admin("binding-transfer-admin")
-    recipient = create_user("binding-transfer-recipient")
+    # An owner loses write the moment the row is the recipient's; releasing their connection must not need it.
+    actor = create_platform_admin("binding-transfer-admin") if transferor == "admin" else bridge.owner
+    recipient = create_user(f"binding-transfer-{transferor}-recipient")
+    row: Integration = bridge
+    if transferor == "owner-on-the-parent-row":
+        with system_context(reason="test parent-addressed transfer"):
+            row = Integration.objects.get(pk=bridge.pk)
 
-    bridge.with_actor(admin).transfer_ownership(recipient)
+    row.with_actor(actor).transfer_ownership(recipient)
 
     bridge.refresh_from_db()
     # The integration no longer runs on the previous owner's grant, nor is bound to their account.

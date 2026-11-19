@@ -37,6 +37,13 @@ live in code docstrings.
   `jwt_bearer` credential's stored signing fields are not its input field
   (`key_file`), so `update_material` still accepts them.
 
+- `angee.integrate`: an owner can transfer their own integration.
+  `Integration.transfer_ownership` released the previous owner's connection on
+  an instance still pinned to that owner, who lost write with the row, and a
+  pinned actor outranks the system context, so an owner's transfer of an
+  integration running on their own credential was refused. The release now runs
+  on the locked capability row (`Integration.lock_capability`).
+
 - The UX guard accepts manifest `vocabulary` field tones by structure while rejecting local tone maps and switches.
 
 - Integrate compares synchronized JSON as JSON values (`json_equal` in
