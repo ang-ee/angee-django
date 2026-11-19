@@ -226,6 +226,7 @@ export const enPartiesMessages: Record<string, string> = {
   "duplicates.addresses": "Addresses",
   "duplicates.sources": "Sources",
   "duplicates.disagree": "These records disagree",
+  "duplicates.gains": "The survivor also gains: {fields}.",
   "duplicates.field": "Field",
   "duplicates.shown": "Will show",
   "duplicates.compare": "Choose on the compare page: {name}",

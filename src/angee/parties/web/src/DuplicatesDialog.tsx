@@ -261,6 +261,12 @@ function DuplicateSetSection({
       {outcome ? <OutcomeLine outcome={outcome} /> : null}
       {!outcome && preview.outcome ? <Alert tone="warning">{t("duplicates.refused", { reason: preview.reason })}</Alert> : null}
       {!outcome && survivorId ? <p className="text-13 text-fg-muted">{t("duplicates.survivorRule")}</p> : null}
+      {/* The fills are no warning: the survivor takes each field only one record states, and nothing is lost. */}
+      {!outcome && preview.fills.length > 0 ? (
+        <p className="text-13 text-fg-muted">
+          {t("duplicates.gains", { fields: preview.fills.map((row) => t(`merge.field.${row.field}`)).join(", ") })}
+        </p>
+      ) : null}
       <RowsListView<DuplicateSetMember> rows={members} columns={memberColumns} scope="local" presentation="embedded" />
       {disagreementRows.length > 0 && !outcome ? (
         <div className="space-y-2">

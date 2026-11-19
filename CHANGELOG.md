@@ -929,7 +929,8 @@ live in code docstrings.
   state at least two different values for; a field one value is stated for,
   the rest empty, is a fill (`DuplicateSetPreview.fills`, the same
   `MergeFieldValues` rows), which the merge gives the survivor and which warns
-  nobody. The group-match mark reads either list, so a member whose grouping
+  nobody; the dialog names a set's fills in one line, "The survivor also gains:
+  …", by their merge field labels. The group-match mark reads either list, so a member whose grouping
   value was cleared since the selection still no longer matches its group; when
   every member moved to the same new value nothing differs and nothing is
   marked. Each set that may merge carries a `digest`

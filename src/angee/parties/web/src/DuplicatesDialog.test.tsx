@@ -278,4 +278,30 @@ describe("the batch merge dialog", () => {
     expect(set!.getAttribute("aria-checked")).toBe("true");
     expect(screen.queryByText(message("duplicates.moved"))).toBeNull();
   });
+
+  test("a set with fills says what the survivor also gains and starts ticked; a set without says nothing", async () => {
+    mocks.previews = [
+      {
+        ...PREVIEWS[2]!,
+        fills: [
+          { field: "nickname", values: [null, "Jo"], shown: "Jo" },
+          { field: "birthday", values: ["1990-01-02", null], shown: "1990-01-02" },
+        ],
+      },
+      {
+        outcome: null, reason: "", digest: "digest-mary", survivor: { id: "mary" }, disagreements: [], fills: [],
+        members: [
+          member("mary", "Mary Example", "mary@example.test", "2020-06-01T00:00:00Z"),
+          member("mary-2", "Mary Example", "mary@example.test", "2020-07-01T00:00:00Z"),
+        ],
+      },
+    ];
+    renderDialog(vi.fn(), [{ members: ["joan", "joan-2"] }, { members: ["mary", "mary-2"] }]);
+
+    const fields = [enPartiesMessages["merge.field.nickname"]!, enPartiesMessages["merge.field.birthday"]!].join(", ");
+    expect(await screen.findByText(message("duplicates.gains", { fields }))).toBeTruthy();
+    expect(screen.getAllByText(/^The survivor also gains/)).toHaveLength(1);
+    expect(screen.getAllByRole("checkbox").map((box) => box.getAttribute("aria-checked"))).toEqual(["true", "true"]);
+  });
 });
+
