@@ -5,6 +5,7 @@ export const enSpacesMessages: Record<string, string> = {
   "group.details": "Details",
   "group.visibility": "Visibility",
   "group.makePublic": "Make public",
+  "group.makePublicConfirmBody": "This widens who can read this space. Make it public?",
   "group.makePrivate": "Make private",
   "group.tabs.roster": "Roster",
   "group.tabs.threads": "Threads",

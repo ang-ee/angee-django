@@ -46,6 +46,8 @@ export function ImplementationsPage(): ReactElement {
   return (
     <ListView<ImplementationRow>
       resource="platform.Implementation"
+      // Implementation metadata is read-only and has no selection actions.
+      selectable={false}
       columns={columns}
       fields={["key", "addon_id"]}
       groupOptions={groups}

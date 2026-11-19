@@ -74,7 +74,6 @@ export function useAgentLifecycleActions(): React.ReactElement[] {
       id="provision"
       label={t("provisioning.provision")}
       icon="plus"
-      placement="toolbar"
       primary
       visibleWhen={eligible("can_provision")}
       run={provision}
@@ -84,7 +83,6 @@ export function useAgentLifecycleActions(): React.ReactElement[] {
       id="adopt"
       label={t("provisioning.adopt")}
       icon="link"
-      placement="toolbar"
       primary
       confirm={(record) => conflictConfirm(t, "adopt", record)}
       visibleWhen={eligible("can_adopt")}
@@ -95,7 +93,7 @@ export function useAgentLifecycleActions(): React.ReactElement[] {
       id="replace"
       label={t("provisioning.replace")}
       icon="refresh"
-      placement="toolbar"
+      placement="menu"
       danger
       confirm={(record) => conflictConfirm(t, "replace", record)}
       visibleWhen={eligible("can_replace")}
@@ -104,6 +102,7 @@ export function useAgentLifecycleActions(): React.ReactElement[] {
     <Action
       key="reprovision"
       id="reprovision"
+      placement="toolbar"
       label={t("provisioning.reprovision")}
       icon="refresh"
       confirm={{ title: t("provisioning.reprovisionTitle"), body: t("provisioning.reprovisionBody") }}

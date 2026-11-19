@@ -10,7 +10,8 @@ export function TiesPage(): React.ReactElement {
   const t = useNexusT();
   return (
     <ResourceList resource={MODEL} placement="inline" routed hideCreate>
-      <List resource={MODEL}>
+      {/* Derived pair analytics have no removal or selection actions. */}
+      <List resource={MODEL} selectable={false}>
         <Column field="party_a.display_name" header={t("ties.partyA")} />
         <Column field="party_b.display_name" header={t("ties.partyB")} />
         <Column field="a_to_b_count" header={t("ties.aToB")} />

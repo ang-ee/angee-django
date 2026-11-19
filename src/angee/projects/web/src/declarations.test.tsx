@@ -110,6 +110,27 @@ describe("composable standard project and task declarations", () => {
     expect(fromTemplate?.visibleWhen?.({ is_template: false })).toBe(false);
   });
 
+  test.each([
+    ["OPEN", ["pause", "complete", "drop"], "complete"],
+    ["PAUSED", ["resume", "complete", "drop"], "resume"],
+    ["DROPPED", ["resume"], "resume"],
+    ["DONE", [], undefined],
+  ])("project %s keeps the next lifecycle verb primary", (status, expected, primary) => {
+    const { result } = renderHook(useProjectFormDeclaration);
+    const actions = parsePageActions(propsOf<FormProps>(result.current).children);
+    const visible = actions.filter((action) => action.visibleWhen?.({ status, is_template: false }));
+    expect(visible.map(({ id }) => id)).toEqual(expected);
+    expect(visible.find((action) => action.primary)?.id).toBe(primary);
+    expect(actions.find(({ id }) => id === "pause")?.placement).toBe("menu");
+  });
+
+  test.each(["OPEN", "PAUSED", "DROPPED", "DONE"])("a %s template offers only Create from template", (status) => {
+    const { result } = renderHook(useProjectFormDeclaration);
+    const actions = parsePageActions(propsOf<FormProps>(result.current).children);
+    expect(actions.filter((action) => action.visibleWhen?.({ status, is_template: true })))
+      .toEqual([expect.objectContaining({ id: "create-from-template", primary: true })]);
+  });
+
   test("exports task list intent and keeps operational ordering out of the default form", () => {
     const { result: list } = renderHook(useTaskListDeclaration);
     const listProps = propsOf<ListProps>(list.current);
@@ -133,7 +154,7 @@ describe("composable standard project and task declarations", () => {
     expect(projectProps.contextLine).toBe(line);
     expect(parsePageGroups(projectProps.children).map(({ label }) => label)).toEqual(["Planning", "Description"]);
     expect(parsePageActions(projectProps.children).map(({ id }) => id)).toEqual(["complete"]);
-    expect(parsePageActions(projectProps.children)[0]).toMatchObject({ label: "Complete", permission: "write" });
+    expect(parsePageActions(projectProps.children)[0]).toMatchObject({ label: "Complete", permission: "write", primary: true });
     expect(parsePageFields(projectProps.children).map(({ name }) => name)).toEqual([
       "title", "revision", "status", "current_milestone", "lead", "tags", "start_date", "target_date", "body",
     ]);
@@ -143,7 +164,7 @@ describe("composable standard project and task declarations", () => {
     expect(taskProps.contextLine).toBe(line);
     expect(parsePageGroups(taskProps.children).map(({ label }) => label)).toEqual(["Assignment", "Description"]);
     expect(parsePageActions(taskProps.children).map(({ id }) => id)).toEqual(["complete"]);
-    expect(parsePageActions(taskProps.children)[0]).toMatchObject({ label: "Complete", permission: "write" });
+    expect(parsePageActions(taskProps.children)[0]).toMatchObject({ label: "Complete", permission: "write", primary: true });
     expect(parsePageFields(taskProps.children).map(({ name }) => name)).toContain("revision");
   });
 
@@ -163,6 +184,10 @@ describe("composable standard project and task declarations", () => {
     expect(visible("reopen", { status: "DROPPED", task_actions: ["reopen"] })).toBe(true);
     // Admission alone does not offer a verb that would not act.
     expect(visible("reopen", { status: "OPEN", task_actions: ["reopen"] })).toBe(false);
+    expect(actions.find(({ id }) => id === "complete")?.primary).toBe(true);
+    expect(actions.find(({ id }) => id === "reopen")?.primary).toBe(true);
+    expect(actions.find(({ id }) => id === "promote")?.placement).toBe("menu");
+    expect(actions.find(({ id }) => id === "reset-due")?.placement).toBe("menu");
   });
 
   test("a route can select task columns and status while keeping the shared form", () => {

@@ -9,6 +9,8 @@ export function GrantsPage(): ReactElement {
   const rowActions = useRoleGrantActions();
   return <ListView<IAMGrant>
     resource="iam.Grant"
+    // Grants are revoked per row; no action consumes a selection.
+    selectable={false}
     columns={columns}
     rowActions={rowActions}
     defaultGroup={{ field: "namespace" }}

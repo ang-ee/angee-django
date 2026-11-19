@@ -112,6 +112,8 @@ export function ResourcesPage(): ReactElement {
   return (
     <ListView<ResourceLedgerResourceRow>
       resource="resources.Resource"
+      // The import ledger is read-only and has no selection actions.
+      selectable={false}
       columns={columns(t)}
       // Render-only reads (see the frontend guidelines' undeclared-field rule).
       fields={["target_id", "source_path"]}

@@ -89,20 +89,20 @@ export function useProjectFormDeclaration(
   const verbs = selection.verbs ?? ["pause", "resume", "complete", "drop", "createFromTemplate"];
   const standardActions = <>
     {verbs.includes("pause") ? <Action
-      id="pause" label={t("project.action.pause")} permission="write"
-      icon="archive" run={pauseProject} visibleWhen={(record) => recordStatus(record) === "open"} /> : null}
+      id="pause" placement="menu" label={t("project.action.pause")} permission="write"
+      icon="archive" run={pauseProject} visibleWhen={(record) => record.is_template !== true && recordStatus(record) === "open"} /> : null}
     {verbs.includes("resume") ? <Action
-      id="resume" label={t("project.action.resume")} permission="write"
+      id="resume" primary label={t("project.action.resume")} permission="write"
       icon="activity" run={resumeProject}
-      visibleWhen={(record) => ["paused", "dropped"].includes(recordStatus(record))} /> : null}
+      visibleWhen={(record) => record.is_template !== true && ["paused", "dropped"].includes(recordStatus(record))} /> : null}
     {verbs.includes("complete") ? <Action
-      id="complete" placement="toolbar" label={t("project.action.complete")} permission="write"
+      id="complete" primary label={t("project.action.complete")} permission="write"
       icon="check" run={completeProject} visibleWhen={isActiveProject} /> : null}
     {verbs.includes("drop") ? <Action
       id="drop" label={t("project.action.drop")} permission="write"
       icon="circle-x" danger run={dropProject} visibleWhen={isActiveProject} /> : null}
     {verbs.includes("createFromTemplate") ? <Action
-      id="create-from-template" placement="toolbar" label={t("project.action.createFromTemplate")}
+      id="create-from-template" primary label={t("project.action.createFromTemplate")}
       icon="projects" run={createProject} visibleWhen={(record) => record.is_template === true} /> : null}
   </>;
   return (
@@ -143,9 +143,9 @@ export function useProjectFormDeclaration(
   );
 }
 
-function isActiveProject(record: { status?: unknown }): boolean {
+function isActiveProject(record: { status?: unknown; is_template?: unknown }): boolean {
   const status = recordStatus(record);
-  return status === "open" || status === "paused";
+  return record.is_template !== true && (status === "open" || status === "paused");
 }
 
 interface MilestoneRow extends StringIdRow {

@@ -61,6 +61,7 @@ export function KnowledgeSettingsPage(): ReactElement {
           <Field name="accent" />
           <Action
             id="create-from-template"
+            placement="menu"
             label={t("vault.clone")}
             icon="copy"
             args={[{ name: "name", label: t("vault.cloneName"), widget: "text" }]}

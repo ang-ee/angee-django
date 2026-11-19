@@ -81,6 +81,7 @@ export const enIntegrateMessages: Record<string, string> = {
   "webhooks.filters": "Filters",
   "webhooks.sendTest": "Send test event",
   "webhooks.rotateSecret": "Rotate secret",
+  "webhooks.rotateConfirmBody": "This replaces the signing secret. Update your receivers with the new secret so they can verify future deliveries.",
   "webhooks.rotateFailed": "Could not rotate the signing secret.",
   "webhooks.newSecretTitle": "New signing secret",
   "webhooks.newSecretBody": "Copy this now — it is shown only once.",

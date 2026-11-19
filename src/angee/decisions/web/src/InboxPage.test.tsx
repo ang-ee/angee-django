@@ -54,6 +54,7 @@ test("queries the open inbox and links the loaded decision", async () => {
   });
   expect(screen.getByRole("link", { name: "Open Review" }).getAttribute("href")).toMatch(/^\/decisions\/decision-1\?recordNav=/);
   expect(screen.queryByRole("button", { name: /New Decision/ })).toBeNull();
+  expect(screen.queryByRole("checkbox", { name: /Select/ })).toBeNull();
 });
 
 test("the native filter box edits personal predicates and preserves unrelated search", async () => {
