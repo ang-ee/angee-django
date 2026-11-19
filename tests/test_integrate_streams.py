@@ -67,6 +67,7 @@ from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.backends import ChannelBackend, ParsedMessage, ParsedPart
 from angee.messaging.testing.models import Channel, Message
 from tests.conftest import current_stream, make_integration
+from tests.integrate_fixtures import ConnectionBridge
 from tests.stream_adapters import applied_history, failure_state
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -2892,3 +2893,127 @@ def test_keeping_the_remote_of_a_push_stream_accepts_its_version_until_the_next_
     adapter.candidates = (LocalChange("one", {"n": 2}),)
     assert push_stream(stream, adapter).count == 1
     assert adapter.written[-1] == ("one", {"n": 2}, "v2")
+
+
+# While an integration awaits discovery (a re-entered secret, an attach), no run
+# writes to its remote or commits to its streams and links.
+
+_DISCOVERY_PENDING = "Connection discovery must finish before syncing."
+
+
+@pytest.fixture
+def discovered_bridge(db: None) -> Iterator[ConnectionBridge]:
+    """A bridge whose capability learns its account at discovery, with that discovery settled."""
+
+    with system_context(reason="test stream work on discovered facts"):
+        bridge = make_integration("stream-discovered", model=ConnectionBridge)
+        assert bridge.finish_discovery(credential_pk=bridge.credential_id, generation=bridge.discovery_generation)
+        yield bridge
+
+
+def _two_way(bridge: Any, *keys: str) -> SyncStream:
+    """Open a two-way replica past its baseline, with one applied link per key."""
+
+    stream = current_stream(
+        bridge, "contacts", kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.BIDIRECTIONAL
+    )
+    for key in keys:
+        link = RecordLink.objects.observe(stream, key)
+        RecordLink.objects.promote(link, source_payload={}, source_hash="base", mapped_payload={}, remote_version="v1")
+    SyncStream.objects.advance(stream, {}, exhausted=True)
+    return stream
+
+
+def test_a_push_writes_and_reflects_nothing_while_discovery_is_pending(discovered_bridge: ConnectionBridge) -> None:
+    stream = _two_way(discovered_bridge, "one")
+    adapter = MemoryAdapter(candidates=(LocalChange("one", {"n": 1}), LocalChange("new", {"n": 2})))
+    discovered_bridge.await_discovery()
+
+    with pytest.raises(IntegrationError, match=_DISCOVERY_PENDING) as refused:
+        push_stream(stream, adapter)
+
+    assert refused.value.transient and adapter.written == []
+    link = RecordLink.objects.with_sync_evidence().get(stream=stream, external_key="one")
+    assert (link.remote_version, link.applied_base.source_hash) == ("v1", "base")
+    assert not RecordLink.objects.filter(stream=stream, external_key="new").exists()
+
+
+def test_a_two_way_page_sends_no_write_back_while_discovery_is_pending(discovered_bridge: ConnectionBridge) -> None:
+    stream = _two_way(discovered_bridge, "one")
+    local_edit = RecordChange("one", {}, "base", "v1", mapped_payload={}, projection={"value": "local"})
+    adapter = MemoryAdapter(pages=[StreamPage((local_edit,), {"offset": 1})])
+    discovered_bridge.await_discovery()
+
+    with pytest.raises(IntegrationError, match=_DISCOVERY_PENDING):
+        advance_stream(stream, adapter)
+
+    stream.refresh_from_db()
+    assert adapter.written == [] and stream.cursor == {}
+
+
+@pytest.mark.parametrize("keep", ["remote", "local"])
+def test_a_conflict_choice_is_refused_while_discovery_is_pending(
+    discovered_bridge: ConnectionBridge, monkeypatch: pytest.MonkeyPatch, keep: str
+) -> None:
+    stream = _two_way(discovered_bridge, "one")
+    link = RecordLink.objects.get(stream=stream, external_key="one")
+    failure = link.record_failure(kind=SyncFailureKind.CONFLICT, code="both_changed", source_hash="base")
+    remote = RecordChange("one", {"name": "remote"}, "remote", "v2", mapped_payload={"name": "remote"})
+    adapter = ReadKeysAdapter(remote={"one": remote}, candidates=(LocalChange("one", {"name": "local"}),))
+    monkeypatch.setattr(ConnectionBridge, "capability_impl", property(lambda self: adapter))
+    retained = RecordLink.objects.get(pk=link.pk).inbound
+    discovered_bridge.await_discovery()
+
+    with pytest.raises(IntegrationError, match=_DISCOVERY_PENDING):
+        failure.resolve_conflict(keep=keep)
+
+    assert adapter.reads == [] and adapter.written == []
+    assert RecordLink.objects.get(pk=link.pk).inbound == retained
+
+
+@pytest.mark.parametrize("phase", ["enumerate", "roots"])
+def test_a_sweep_commits_no_phase_absence_or_withdrawal_while_discovery_is_pending(
+    discovered_bridge: ConnectionBridge, phase: str
+) -> None:
+    stream = current_stream(
+        discovered_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, reconcile_interval=timedelta(0),
+        absence_threshold=1,
+    )
+    observed = RecordLink.objects.observe(stream, "gone")
+    # Every link predates this sweep: an empty enumeration moves it on, the absence pass finds "gone".
+    state = {"started_at": (timezone.now() + timedelta(hours=1)).isoformat(), "phase": phase, "after": None}
+    SyncStream.objects.filter(pk=stream.pk).update(reconcile_state=state)
+    withdrawn: list[str] = []
+
+    class WithdrawingAdapter(MemoryAdapter):
+        def on_absent(self, stream: Any, links: Sequence[Any]) -> None:
+            withdrawn.extend(link.external_key for link in links)
+
+    discovered_bridge.await_discovery()
+
+    with pytest.raises(IntegrationError, match=_DISCOVERY_PENDING):
+        reconcile_stream(stream, WithdrawingAdapter())
+
+    stream.refresh_from_db()
+    link = RecordLink.objects.get(pk=observed.pk)
+    assert stream.reconcile_state == state
+    assert (link.status, link.absence_count, withdrawn) == (observed.status, 0, [])
+
+
+@pytest.mark.parametrize("trigger", ["invalid_cursor", "page_flag", "stream_flag"])
+def test_no_answer_resets_a_stream_while_discovery_is_pending(
+    discovered_bridge: ConnectionBridge, trigger: str
+) -> None:
+    stream = current_stream(discovered_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+    adapter = MemoryAdapter(
+        pages=[CursorInvalid() if trigger == "invalid_cursor" else StreamPage((), {}, resync_required=True)]
+    )
+    if trigger == "stream_flag":
+        SyncStream.objects.filter(pk=stream.pk).update(resync_required=True)
+    discovered_bridge.await_discovery()
+
+    with pytest.raises(IntegrationError, match=_DISCOVERY_PENDING):
+        advance_stream(stream, adapter)
+
+    generations = SyncStream.objects.filter(integration_id=discovered_bridge.pk).values_list("pk", "generation")
+    assert list(generations) == [(stream.pk, stream.generation)]

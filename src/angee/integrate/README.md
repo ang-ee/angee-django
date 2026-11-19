@@ -323,17 +323,23 @@ an existing session cooperatively releases the advisory lock. It leaves sync
 stages and retained workflow runs intact. `discovery_ready` / `ready_for_work()`
 are the shared admission rule; generation zero preserves existing integrations
 until their next attachment or Resume. There is no separate polling repair scan.
-A run already admitted stops at its next page: inside each page transaction,
-after the stream lock and before any write, the driver asks the stream's
-integration `require_discovery_ready()`. A secret re-entered or a credential
-attached since admission leaves discovery pending, so that page commits nothing
-(a transient `IntegrationError`), earlier pages and their cursor stay, and the
-next run waits for discovery. While a run holds the sync lock discovery cannot
-settle, so readiness stands for the generation the run was admitted under. Known
-limits: a multi-partition workflow step runs without the sync lock, so a
-discovery that settles between a page's extraction and its commit lets that page
-commit; and an attach on a capability that requires no discovery settles at once
-and does not stop a run.
+A run already admitted stops once discovery is pending. Every commit to a stream
+or its links takes the stream lock (`SyncStreamManager.lock_current`): a page, a
+push's reflection, a sweep's phase and absences, a retained failure, a conflict
+decision. There the stream's integration, read with the stream, is asked
+`require_discovery_ready()`. The driver asks again, on the integration as stored,
+before each remote write (a two-way page's write-back, each push candidate,
+`RecordLink.resolve_conflict`) and each reset (`reset_stream`). A secret
+re-entered or a credential attached since admission leaves discovery pending, so
+the run sends nothing and commits nothing it read (a transient
+`IntegrationError`); earlier pages and their cursor stay, and the next run waits
+for discovery. Operator actions on a stream's retained failures wait for it too.
+Discovery's own apply writes no stream. While a run holds the sync lock discovery
+cannot settle, so readiness stands for the generation the run was admitted under.
+Two limits still hold: a multi-partition workflow step runs without the sync
+lock, so a discovery that succeeds between a page's extraction and its commit
+lets that page commit; and an attach on a capability that requires no discovery
+settles at once and does not stop a run.
 
 `IntegrationError(public_message, transient=…, retry_after=…)` owns the optional
 positive provider horizon. `RequestNotSentError` declares that connect, DNS or

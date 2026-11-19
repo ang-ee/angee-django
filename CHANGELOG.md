@@ -44,17 +44,22 @@ live in code docstrings.
   integration running on their own credential was refused. The release now runs
   on the locked capability row (`Integration.lock_capability`).
 
-- `angee.integrate`: a sync run already in flight stops at its next page once a
-  secret is re-entered or a credential attached. Admission was fenced, but a run
-  admitted before the change read the fresh credential page by page and finished
-  on facts discovered from the old one. Each page transaction now asks the
-  stream's integration `Integration.require_discovery_ready()` after the stream
-  lock and before any write; a pending discovery refuses the page with a
-  transient `IntegrationError`, earlier pages and their cursor stay, and the
-  next run waits for discovery. Known limits: a multi-partition workflow step
-  runs without the sync lock, so a discovery that settles between a page's
-  extraction and its commit lets that page commit; an attach on a capability
-  that requires no discovery does not stop a run.
+- `angee.integrate`: a sync run already in flight sends and commits nothing once
+  a secret is re-entered or a credential attached. Admission was fenced, but a
+  run admitted before the change read the fresh credential and went on with the
+  facts discovered from the old one. Every commit to a stream or its links passes
+  `SyncStreamManager.lock_current` (a page, a push's reflection, a sweep, an
+  absence, a retained failure, a conflict decision), which now asks the stream's
+  integration `Integration.require_discovery_ready()`; the driver asks again on
+  the stored row before each remote write (a two-way page's write-back, each push
+  candidate, `RecordLink.resolve_conflict`) and each reset (`reset_stream`, which
+  `begin_stream_cycle` now resets through). A pending discovery refuses with a
+  transient `IntegrationError`; earlier pages and their cursor stay, and the next
+  run waits for discovery. An operator's resolve or retry of a retained failure
+  and a calendar publish wait for discovery too. Known limits: a multi-partition
+  workflow step runs without the sync lock, so a discovery that succeeds between a
+  page's extraction and its commit lets that page commit; an attach on a
+  capability that requires no discovery does not stop a run.
 
 - The UX guard accepts manifest `vocabulary` field tones by structure while rejecting local tone maps and switches.
 

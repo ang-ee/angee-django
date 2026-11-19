@@ -3358,13 +3358,15 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     def require_discovery_ready(self) -> None:
         """Stop work already admitted, transiently, once :attr:`discovery_ready` no longer holds.
 
-        The stream driver asks the integration it reads from inside each page
-        transaction, before anything of the page is written: a secret re-entered
-        or a credential attached since the run was admitted leaves discovery
-        pending, so the page, read on facts discovery has not confirmed, commits
-        nothing, and the next run waits for discovery. The row is read, never
-        locked, there: a page holds its stream lock, and epoch changes lock the
-        integration before the stream.
+        A secret re-entered or a credential attached since a run was admitted
+        leaves discovery pending, so what the run read is on facts discovery has
+        not confirmed. Every stream commit asks it under the stream lock
+        (:meth:`SyncStreamManager.lock_current`), and the stream driver asks it
+        on a freshly read row before each remote write and each reset, and
+        conflict resolution before it reads: the run commits and sends nothing,
+        and the next one waits for discovery. The row is read, never locked:
+        a page holds its stream lock, and epoch changes lock the integration
+        before the stream.
         """
 
         if not self.discovery_ready:
@@ -4951,12 +4953,18 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
 
         The stream row lock is shared with epoch changes. A stale extracted
         page must fail before any domain records or cursor state are applied.
+        Every commit to a stream or its links passes here (a page, a push's
+        reflection, a sweep, an absence, a conflict decision, a retained
+        failure), so here too it stops, transiently, while the stream's
+        integration awaits discovery (:meth:`Integration.require_discovery_ready`).
+        The integration is read with the stream in one statement, never locked:
+        epoch changes lock it before the stream.
         """
 
         if not connection.in_atomic_block:
             raise RuntimeError("Locking a stream requires the page transaction.")
         with system_context(reason="integrate.stream.lock_current"):
-            locked = self.filter(pk=stream.pk).lock_if_supported().get()
+            locked = self.filter(pk=stream.pk).select_related("integration").lock_if_supported().get()
             if self.filter(
                 integration_id=locked.integration_id,
                 key=locked.key,
@@ -4966,6 +4974,7 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 raise RuntimeError("The extracted page belongs to a superseded stream generation.")
             if fenced_to is not None and not json_equal(locked.operation_fence, fenced_to.operation_fence):
                 raise RuntimeError("Stream state changed during external work; retry the operation.")
+            locked.integration.require_discovery_ready()
             return locked
 
     def current(
@@ -6296,6 +6305,8 @@ class RecordLink(
             if not row.is_open:
                 return row
             stream = link.stream
+            # Neither choice reads or writes the remote while the integration awaits discovery.
+            stream.integration.require_discovery_ready()
             if stream.state != StreamState.OPEN:
                 raise ValidationError(
                     "Conflicts resolve on an open stream: resync a closed one; a retired one reopens when its"

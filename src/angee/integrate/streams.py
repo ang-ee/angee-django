@@ -347,13 +347,27 @@ def _quarantine(stream: Any, record: Any, error: SemanticError, *, link: Any = N
     )
 
 
+def _require_discovery_ready(stream: Any) -> None:
+    """Refuse a remote write or a reset, transiently, while the stream's integration awaits discovery.
+
+    The driver asks before each one, outside the page transaction, on the
+    integration as it is stored now (``Integration.require_discovery_ready``);
+    every commit is also refused under the stream lock (``SyncStreamManager.lock_current``).
+    """
+
+    stream.refresh_from_db(fields=["integration"])
+    stream.integration.require_discovery_ready()
+
+
 def reset_stream(stream: Any, *, cursor: dict[str, Any]) -> PageResult:
     """Supersede an epoch and seed its replacement through the stream manager.
 
     A retired generation whose container is gone is not superseded
     (``bump_generation`` returns it), so its page reports exhausted, not reset.
+    No stream resets while its integration awaits discovery.
     """
     cursor = _validated_cursor(cursor)
+    _require_discovery_ready(stream)
     manager = type(stream).objects
     successor = manager.bump_generation(stream, cursor=cursor)
     if successor.pk == stream.pk:
@@ -570,6 +584,7 @@ def _apply_page(
     written: dict[str, tuple[dict[str, Any], WriteBackResult | SemanticError]] = {}
     held: set[str] = set()
     if evidence_rows is not None and stream.writes_back:
+        _require_discovery_ready(stream)
         evidence = {link.external_key: link for link in evidence_rows}
         held = {key for key, link in evidence.items() if link.write_holds}
         for record in page.records:
@@ -605,7 +620,6 @@ def _apply_page(
     with changeset(fresh=True, activity="pull", origin=stream), transaction.atomic():
         current_changeset(record=True)
         locked = type(stream).objects.lock_current(stream, fenced_to=stream)
-        locked.integration.require_discovery_ready()
         adapter.prepare_page(locked, page)
         evidence = (
             {}
@@ -813,7 +827,8 @@ def push_stream(
     candidates too, their removal (:func:`push_candidates`). While the stream's
     sweep is due (``SyncStream.sweep_due``) the push compares every local row; a
     push stream's push that ran through every candidate completes that sweep, which
-    no absence pass does for it (``SyncStream.save_reconcile``).
+    no absence pass does for it (``SyncStream.save_reconcile``). No candidate is
+    written while the stream's integration awaits discovery.
     """
 
     if connection.in_atomic_block:
@@ -834,6 +849,7 @@ def push_stream(
         for candidate, link in push_candidates(stream, adapter, external_keys, settle=True):
             if (limit := sync_deadline()) is not None and monotonic() >= limit:
                 return PageResult(stream, count, failure_ids=tuple(failures))
+            _require_discovery_ready(stream)
             candidates.add(candidate.external_key)
             if link is None:
                 link, revision = links.observe(stream, candidate.external_key), None
@@ -1160,7 +1176,7 @@ def begin_stream_cycle(
         identity_reads = adapter is not None and adapter.supports_identity_reads
         stream.refresh_from_db()
         if stream.resync_required:
-            stream = manager.bump_generation(stream)
+            stream = reset_stream(stream, cursor={}).stream
         with transaction.atomic():
             stream = manager.lock_current(stream)
             if not stream.accepts_rescan():
