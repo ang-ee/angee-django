@@ -389,16 +389,16 @@ live in code docstrings.
   claim one handle row by itself stays open. Load the install tier before a
   directory's next sync, since the rule is looked up by key.
 
-- A person's merge of a proposed pair keeps a pull-only directory's limits
-  (default pending ruling O16). A survivor takes every link of the records merged
-  into it, so writing both people is the deliberate, one-pair override of the
-  `adopt` permission only: `Party.validate_merge` refuses
-  (`PartyManager.directory_merge_blocker`) a merge that would bring together, from
-  different records, two contacts of one pull-only directory, a pull-only
-  directory's contact and a user account's own person, or such a contact and a
-  person a stream that writes back names, each with an operator message that
-  says what to do instead. Before, merging a refused pair left the directory's
-  link on the person its limits had refused.
+- A person's merge never sets two live contacts of one pull-only directory on
+  one person (default pending ruling O16). A survivor takes every link of the
+  records merged into it, and two bound, live links of one pull-only directory
+  from different records would put two records the source keeps separate on one
+  person, whose statements overwrite each other on every sync:
+  `Party.validate_merge` refuses it (`PartyManager.directory_merge_blocker`) with
+  a message that says to merge or remove one of them at the source. A tombstoned
+  or withdrawn link does not count. Any other merge of people the merging person
+  writes goes through, an account's own person and a person a two-way card names
+  included.
 
 - `PartyManager.people_for_emails(emails)` answers who email addresses name: per
   address, in the caller's preference order, an `EmailHolder(email, person,

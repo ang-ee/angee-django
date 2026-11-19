@@ -562,7 +562,7 @@ class Party(
         for row in merged:
             if self.same_as.kept_separate(self, row):
                 raise ValidationError("These parties have been marked to stay separate.")
-        # The survivor takes every merged record's links: the merge keeps a pull-only directory's limits.
+        # The survivor takes every merged record's links: never two live contacts of one pull-only directory.
         if refusal := apps.get_model("parties", "Party").objects.directory_merge_blocker(self, merged):
             raise ValidationError(refusal)
 
