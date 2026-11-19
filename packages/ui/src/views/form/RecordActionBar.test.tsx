@@ -472,7 +472,14 @@ describe("RecordActionBar", () => {
     fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel task" }));
     await waitFor(() => expect(run).toHaveBeenCalledOnce());
     await waitFor(() => expect(screen.getByRole("button", { name: "Cancel task" }).getAttribute("aria-busy")).toBe("true"));
-    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Cancel task" }).disabled).toBe(true);
+    // The pending verb stays focusable (not natively disabled) and cannot run twice.
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    const pending = screen.getByRole<HTMLButtonElement>("button", { name: "Cancel task" });
+    expect(pending.disabled).toBe(false);
+    expect(pending.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(pending);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(run).toHaveBeenCalledOnce();
     await act(async () => { finish("Pending task closed."); });
     expect(await screen.findByText("Pending task closed.")).toBeTruthy();
     expect(screen.getByRole<HTMLButtonElement>("button", { name: "Cancel task" }).disabled).toBe(false);

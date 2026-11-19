@@ -70,7 +70,8 @@ live in code docstrings.
   `collection.selectedGroups`, the only read of the split: absent on an ungrouped
   list, `null` when a selected row cannot be placed (selected without its group,
   shown now under another group or several, missing from a page that listed it or
-  its groups and shows again, or loading; or on a surface that places no rows:
+  its groups and shows again, or on such a page before its first answer, a page
+  that refetches keeping its last one; or on a surface that places no rows:
   browser grouping, lane boards), else the selection split by its innermost groups
   with their parents; a hint the server never trusts.
   `Button` and `SelectionBarAction` take a `disabledReason`: the verb's tooltip

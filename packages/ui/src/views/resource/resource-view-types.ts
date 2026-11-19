@@ -163,17 +163,36 @@ export interface SelectedGroupLevel {
   label: string;
 }
 
+/** The collection a page's `bulkActions` receives, its third argument. */
+type BulkCollection<TRow extends Row> = Parameters<NonNullable<ListViewProps<TRow>["bulkActions"]>>[2];
+
 /**
  * What a list surface hands `bulkActions`: the public collection with the split
- * stated. Every surface builds this type, so one that groups cannot leave the split
- * out and read as "not grouped"; the public member stays optional so a caller that
- * builds a collection by hand (a consumer's test) need not name it.
+ * stated. `renderBulkActions` takes it, so a surface that groups cannot leave the
+ * split out and read as "not grouped"; the public member stays optional so a caller
+ * that builds a collection by hand (a consumer's test) need not name it.
  */
-export type PlacedBulkCollection<TRow> = {
-  filter: QueryFilter;
-  selectedRows: readonly TRow[];
-  selectedGroups: readonly SelectedGroup[] | null | undefined;
-};
+export type PlacedBulkCollection<TRow extends Row> = BulkCollection<TRow>
+  & { selectedGroups: BulkCollection<TRow>["selectedGroups"] };
+
+/**
+ * The one call of a page's `bulkActions`, made only over a selection: the surface
+ * states the split and the scope's selection supplies its ids' snapshots and clear.
+ */
+export function renderBulkActions<TRow extends Row>(
+  bulkActions: ListViewProps<TRow>["bulkActions"],
+  selectedIds: ReadonlySet<string>,
+  selection: { selectedRows: readonly Row[]; clearSelectedIds: () => void },
+  collection: Omit<PlacedBulkCollection<TRow>, "selectedRows">,
+): ReactNode {
+  if (selectedIds.size === 0) return null;
+  const placed: PlacedBulkCollection<TRow> = {
+    ...collection,
+    // Scope snapshots are shared Rows; narrow to the declared row type (see bulkActions).
+    selectedRows: selection.selectedRows as readonly TRow[],
+  };
+  return bulkActions?.(selectedIds, selection.clearSelectedIds, placed);
+}
 
 /** The selected rows of one innermost group (`bulkActions` → `selectedGroups`). */
 export interface SelectedGroup extends SelectedGroupLevel {
@@ -435,14 +454,15 @@ export interface ListViewProps<TRow extends Row = Row> {
    * selectedGroups is the selection split by the grouping the list renders, in
    * three states; never an empty array, since without a selection the bulk actions
    * do not render. Absent or undefined: the list is not grouped (a gallery never
-   * groups); a list surface always states it (`PlacedBulkCollection`), a collection
+   * groups); a list surface always states it (`renderBulkActions`), a collection
    * built by hand may leave it out.
    * null: it is grouped but at least one selected id cannot be placed, so no split
    * is offered, never a partial one: the id was selected while the list was flat or
    * grouped otherwise, or by a select-all that holds ids without rows; it shows now
    * under another group than the one it was selected in, or under more than one; a
-   * page that listed it, or listed one of its groups, shows again without it or is
-   * still loading; or the surface never places rows (a client-grouped list, a lane
+   * page that listed it, or listed one of its groups, shows again without it, with
+   * no answer yet, or failed (a page that refetches keeps its last answer until the
+   * refetch settles); or the surface never places rows (a client-grouped list, a lane
    * board, whose every selected card yields null, and `RowsListView`; pane lists do
    * not select). Otherwise one entry per innermost group holding a selected row,
    * every selected id in exactly one entry: a row the list shows in the group it

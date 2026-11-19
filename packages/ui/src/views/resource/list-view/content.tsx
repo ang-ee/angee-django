@@ -14,7 +14,7 @@ import { type GroupedResourceViewSurface, type ResourceViewSurface } from "../re
 import { GroupedListBody } from "../GroupedList";
 import { FlatListBody, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures, type FlatListBodyProps, type GroupMeasure } from "../resource-view-list-body";
 import { ResourceListFrame } from "../ResourceListFrame";
-import { listChromeState, type BoardCardSpec, type CardActionContext, type ListEmptyContent, type ListViewProps, type PlacedBulkCollection } from "../resource-view-types";
+import { listChromeState, renderBulkActions, type BoardCardSpec, type CardActionContext, type ListEmptyContent, type ListViewProps } from "../resource-view-types";
 import { DeclaredBoardCardBody, DefaultBoardCardBody } from "../board/cards";
 import { columnsWithMetadataDefaults } from "../model-metadata-defaults";
 import { createLabelForResource } from "../resource-view-utils";
@@ -280,13 +280,8 @@ export function ListViewContent<TRow extends Row = Row>({
     ? selectedGroupsOf(selectedIds, effectiveGroupStack,
       groupedItems && shown ? { places: placement.places, items: groupedItems, shown } : null)
     : undefined, [splitsSelection, selectedIds, placement.places, effectiveGroupStack, groupedItems, shown]));
-  const domainBulkActions = splitsSelection
-    ? bulkActions?.(selectedIds, resourceView.clearSelectedIds, {
-      filter: surface.mergedFilter,
-      // Scope snapshots are shared Rows; narrow to the declared row type (see bulkActions).
-      selectedRows: resourceView.selectedRows as readonly TRow[],
-      selectedGroups,
-    } satisfies PlacedBulkCollection<TRow>) : null;
+  const domainBulkActions = renderBulkActions(bulkActions, selectedIds, resourceView,
+    { filter: surface.mergedFilter, selectedGroups });
   const genericSelection = !source && modelMetadata ? {
     modelMetadata,
     selectedRows: resourceView.selectedRows,

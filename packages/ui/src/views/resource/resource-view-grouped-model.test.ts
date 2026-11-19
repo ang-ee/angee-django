@@ -433,3 +433,14 @@ test("only the leaf group level asks the groups read to carry rows", () => {
   expect(expanded.groupScopes[0]!.leafPageSize).toBeUndefined();
   expect(expanded.groupScopes[1]).toMatchObject({ leafPageSize: 20, query: { rows: { limit: 20 } } });
 });
+
+test("a page of groups lists what it last settled with while it refetches; one that never settled is unknown", () => {
+  const { rootKey, bucketKey } = rootFixture();
+  const pages = (overrides: Partial<UseAngeeGroupByResult>) => [...buildGroupedRenderModel<Row>(
+    new Map([[rootKey, result([{ key: { status: "ACTIVE" }, count: 4 }], overrides)]]), EMPTY_LEAVES, EMPTY_ROWS, params(),
+  ).shown.pages.values()];
+  expect(pages({ fetching: true, updatedAt: 1 })).toEqual([new Set([bucketKey])]);
+  // Groups a read shows before it first settles are not its own.
+  expect(pages({ fetching: true, updatedAt: null })).toEqual([null]);
+  expect(pages({ updatedAt: 1, error: new Error("Group query unavailable") })).toEqual([null]);
+});

@@ -252,6 +252,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
                 summary: result.data?.summary,
                 fetching: result.fetching,
                 error: result.error,
+                updatedAt: result.updatedAt,
                 refetch: result.refetch,
               },
             ]),

@@ -360,18 +360,24 @@ function selectedGroupsFixture(initialState: Record<string, unknown>, {
     const row = (await screen.findByText(title)).closest("tr")!;
     fireEvent.click(within(row).getByRole("checkbox", { name: "Select row" }));
   };
+  /** Change a record on the server without telling the list. */
+  const edit = (id: string, patch: Partial<Row>) => { Object.assign(records.find((row) => row.id === id)!, patch); };
   return {
-    select, custom, seen,
+    select, custom, seen, edit,
     get view() { return view; },
     get selectedGroups() { return seen.at(-1); },
+    /** The list's read of its root groups is in flight (the frame's `aria-busy`). */
+    get fetching() { return document.querySelector("[data-resource-presentation]")?.getAttribute("aria-busy") === "true"; },
     rerender: () => act(() => rerender()),
     /** Change a record on the server and let the live list refetch. */
     update: async (id: string, patch: Partial<Row>) => {
-      Object.assign(records.find((row) => row.id === id)!, patch);
+      edit(id, patch);
       await act(async () => { await client.invalidateQueries(); });
     },
     /** Start the live list's refetch without waiting for it. */
     refetch: () => act(() => { void client.invalidateQueries(); }),
+    /** Drop what the list's reads hold, so each page loads as for the first time. */
+    reset: () => act(() => { void client.resetQueries(); }),
     hold,
   };
 }
@@ -483,17 +489,53 @@ test("a nested selection whose parent group left its settled page offers no spli
   expect(f.selectedGroups).toBeNull();
 });
 
-test("while a page the split rests on refetches, there is no split", async () => {
+test("a refetch that changes nothing keeps the split, the same array, throughout", async () => {
   const f = selectedGroupsFixture({ groupStack: [{ field: "status" }] });
   await f.select("Task 1");
   await f.select("Task 2");
   await waitFor(() => expect(f.selectedGroups).toEqual([status("active", "active", ["t1", "t2"])]));
+  const split = f.selectedGroups;
+  const from = f.seen.length;
   const release = f.hold();
   f.refetch();
-  await waitFor(() => expect(f.selectedGroups).toBeNull());
-  expect(screen.getByText("Task 1")).toBeTruthy();
+  await waitFor(() => expect(f.fetching).toBe(true));
+  const during = f.seen.length;
   await release();
+  await waitFor(() => expect(f.fetching).toBe(false));
+  expect(during).toBeGreaterThan(from);
+  expect(f.seen.length).toBeGreaterThan(during);
+  for (const seen of f.seen.slice(from)) expect(seen).toBe(split);
+});
+
+test("a refetch that moves a selected row out keeps the last split in flight and offers none once it settles", async () => {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status" }] });
+  await f.select("Task 1");
+  await f.select("Task 2");
   await waitFor(() => expect(f.selectedGroups).toEqual([status("active", "active", ["t1", "t2"])]));
+  const split = f.selectedGroups;
+  const from = f.seen.length;
+  f.edit("t2", { status: "closed" });
+  const release = f.hold();
+  f.refetch();
+  await waitFor(() => expect(f.fetching).toBe(true));
+  expect(f.seen.length).toBeGreaterThan(from);
+  for (const seen of f.seen.slice(from)) expect(seen).toBe(split);
+  await release();
+  await waitFor(() => expect(f.selectedGroups).toBeNull());
+  expect(f.view.state.rowSelection).toEqual({ t1: true, t2: true });
+});
+
+test("a page of groups that lists a selected row's group and loads for the first time offers no split until it settles", async () => {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status" }] });
+  await f.select("Task 1");
+  await waitFor(() => expect(f.selectedGroups).toEqual([status("active", "active", ["t1"])]));
+  // The reads start over: the page of groups that lists "active" has never settled.
+  const release = f.hold();
+  f.reset();
+  await waitFor(() => expect(f.selectedGroups).toBeNull());
+  expect(f.fetching).toBe(true);
+  await release();
+  await waitFor(() => expect(f.selectedGroups).toEqual([status("active", "active", ["t1"])]));
 });
 
 test("collapsing a group or paging within it keeps the group a row was selected in", async () => {

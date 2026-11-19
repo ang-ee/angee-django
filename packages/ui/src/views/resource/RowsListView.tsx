@@ -34,6 +34,7 @@ import { ResourceListFrame } from "./ResourceListFrame";
 import { columnsWithMetadataDefaults } from "./model-metadata-defaults";
 import {
   listChromeState,
+  renderBulkActions,
   type CardRenderer,
   type ListSearchDeclaration,
   type ListEmptyContent,
@@ -41,7 +42,6 @@ import {
   type ResourceTableHeaderVisibility,
   type ResourceTableLayout,
   type ListViewProps,
-  type PlacedBulkCollection,
 } from "./resource-view-types";
 import { useResourceSearch } from "./search/use-resource-search";
 import { useSearchCatalog } from "./search/catalog";
@@ -274,15 +274,11 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
           ? {
               count: selectedIds.size,
               onClear: resourceView.clearSelectedIds,
-              actions: selectedIds.size > 0
-                ? bulkActions?.(selectedIds, resourceView.clearSelectedIds, {
-                  filter: surface.mergedFilter,
-                  // Scope snapshots are shared Rows; narrow to the declared row type (see bulkActions).
-                  selectedRows: resourceView.selectedRows as readonly TRow[],
-                  // Rows grouped in the browser are never placed: a grouped list reports null.
-                  selectedGroups: selectedGroupsOf(selectedIds, effectiveGroupStack, null),
-                } satisfies PlacedBulkCollection<TRow>)
-                : undefined,
+              actions: renderBulkActions(bulkActions, selectedIds, resourceView, {
+                filter: surface.mergedFilter,
+                // Rows grouped in the browser are never placed: a grouped list reports null.
+                selectedGroups: selectedGroupsOf(selectedIds, effectiveGroupStack, null),
+              }),
             }
           : undefined
       }
