@@ -444,12 +444,16 @@ whole-resource poll reads a permanent answer again on its next run, a pager
 shrinks its page, and one record's oversized or unreadable answer is that
 record's refusal, quarantined while the page of results continues. The vendor's
 `error=` factory turns the refusal into its `IntegrationError` with
-`HttpRefusal.as_error(error, service, *, public_message=None, retry_after=None)`,
+`HttpRefusal.as_error(error, service, *, public_message=None, transient=None, retry_after=None)`,
 whose default message names the service and nothing the answer said. The vendor
-states its own cases through that hand-off: its words as `public_message`, and
-a wait its error body names as `retry_after`, used instead of the answer's
-`Retry-After`. It builds the error of a status it adds as transient by hand. A
-refusal keeps the failure that stopped its request: its `cause` tells a request
+states its own cases through that hand-off, reading their signals from the
+refusal's `status`, `body` and `headers`: its words as `public_message`, a
+refusing status it knows a later attempt outlives (a rate limit answered with a
+403) as `transient=True`, and a wait its body or headers name as `retry_after`,
+used instead of the answer's `Retry-After` and implying transience. The
+refusal's `headers` are a read-only copy of the answer's without the credential
+and cookie headers, and neither its `repr` nor any owner message shows a header
+value. A refusal keeps the failure that stopped its request: its `cause` tells a request
 `not_sent` from one `unreachable` after it may have been sent. A request the
 HTTP library will not build, a header value it cannot encode or will not send,
 is `not_sent` and permanent (`RequestNotBuiltError`), worded as a request that

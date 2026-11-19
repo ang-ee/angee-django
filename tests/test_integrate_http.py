@@ -675,14 +675,12 @@ class _VendorError(IntegrationError):
 
 
 def _vendor_error(refusal: HttpRefusal) -> _VendorError:
-    """The vendor's one factory: its own transient 423 and wait, its own words for a 401, else the shared hand-off."""
+    """The vendor's one factory, through the one hand-off: its own words for a 401, its own wait for a 423 (which
+    makes that status transient), the refusal's facts otherwise."""
 
-    if refusal.status == 423:
-        wait = refusal.retry_after or timedelta(seconds=2)
-        error = _VendorError(refusal.public_message("Example API"), transient=True, retry_after=wait)
-    else:
-        own = "Example API rejected this credential." if refusal.status == 401 else None
-        error = refusal.as_error(_VendorError, "Example API", public_message=own)
+    own = "Example API rejected this credential." if refusal.status == 401 else None
+    wait = (refusal.retry_after or timedelta(seconds=2)) if refusal.status == 423 else None
+    error = refusal.as_error(_VendorError, "Example API", public_message=own, retry_after=wait)
     error.refusal = refusal
     return error
 
@@ -975,6 +973,48 @@ def _texts(error: BaseException) -> Iterator[str]:
         yield str(link)
         yield repr(link)
         link = link.__cause__ or link.__context__
+
+
+def test_a_refusal_keeps_the_answers_headers_for_its_vendor_but_no_credential_and_never_shows_them() -> None:
+    """A vendor reads its rate-limit headers from the refusal; cookies and credentials are not kept, and no header
+    value reaches the refusal's ``repr`` or the vendor's error."""
+
+    cookie = f"session={_KEY}"
+    answer = httpx2.Response(403, json={}, headers={
+        "X-RateLimit-Remaining": "0", "Set-Cookie": cookie, "Authorization": f"Bearer {_KEY}",
+    })
+    with mock_transport(lambda request: answer), pytest.raises(_VendorError) as refused:
+        HttpClient().request_model("GET", URL, error=_vendor_error)
+
+    refusal = refused.value.refusal
+    assert refusal.headers.get("x-ratelimit-remaining") == "0"
+    assert "set-cookie" not in refusal.headers and "authorization" not in refusal.headers
+    assert "x-ratelimit" not in repr(refusal).lower()
+    assert not [text for text in _texts(refused.value) if _KEY in text or "X-RateLimit" in text]
+    # A copy: nothing a reader does to it reaches the answer.
+    assert answer.headers.get("set-cookie") == cookie
+
+
+@pytest.mark.parametrize(
+    ("status", "transient", "retry_after", "expected"),
+    [
+        pytest.param(403, True, None, (True, None), id="a-vendors-own-transient-refusal"),
+        pytest.param(403, None, timedelta(minutes=10), (True, timedelta(minutes=10)), id="its-wait-implies-transience"),
+        pytest.param(501, False, None, (False, None), id="a-vendor-may-call-a-status-permanent"),
+    ],
+)
+def test_the_hand_off_states_a_vendors_own_transience_and_wait(
+    status: int, transient: bool | None, retry_after: timedelta | None, expected: tuple[bool, timedelta | None],
+) -> None:
+    """The vendor's keywords replace the refusal's facts; a wait it states implies transience."""
+
+    refusal = HttpRefusal.of(httpx2.Response(status))
+    error = refusal.as_error(
+        _VendorError, "Example API", public_message="Example API is busy.",
+        transient=transient, retry_after=retry_after,
+    )
+
+    assert (error.transient, error.retry_after, str(error)) == (*expected, "Example API is busy.")
 
 
 @pytest.mark.parametrize(

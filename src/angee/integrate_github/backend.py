@@ -15,15 +15,17 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 from django.http import HttpRequest
+from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, Field
 
 from angee.integrate.errors import IntegrationError
-from angee.integrate.http import JSON_MAX_BYTES, HttpRefusal
+from angee.integrate.http import JSON_MAX_BYTES, RETRY_AFTER_LIMIT, HttpRefusal
 from angee.integrate_vcs.backend import RepoDescriptor, TreeEntry, VCSBackend
 
 if TYPE_CHECKING:
@@ -44,12 +46,36 @@ class GitHubApiError(IntegrationError):
 
 
 def _error_for(path: str) -> Callable[[HttpRefusal], Exception]:
-    """Return the error a refusal about ``path`` becomes: a 404 is ``FileNotFoundError``, else a GitHubApiError."""
+    """Return the error a refusal about ``path`` becomes: a 404 is ``FileNotFoundError``, else a GitHubApiError.
+
+    GitHub answers an exhausted rate limit with a 403 or a 429 that states no requests remain
+    (``x-ratelimit-remaining: 0``) until ``x-ratelimit-reset``, or that names a ``Retry-After``: a transient
+    refusal that waits for the ``Retry-After``, else for the reset. A 403 naming neither is GitHub's refusal.
+    """
 
     def error(refusal: HttpRefusal) -> Exception:
-        return FileNotFoundError(path) if refusal.status == 404 else refusal.as_error(GitHubApiError, "GitHub")
+        if refusal.status == 404:
+            return FileNotFoundError(path)
+        if refusal.status in (403, 429) and (
+            refusal.retry_after is not None or refusal.headers.get("x-ratelimit-remaining") == "0"
+        ):
+            return refusal.as_error(
+                GitHubApiError, "GitHub", public_message=f"GitHub is rate limiting requests (HTTP {refusal.status}).",
+                transient=True, retry_after=refusal.retry_after or _until_reset(refusal.headers),
+            )
+        return refusal.as_error(GitHubApiError, "GitHub")
 
     return error
+
+
+def _until_reset(headers: Mapping[str, str]) -> timedelta | None:
+    """Return the wait until GitHub's rate-limit window resets (``x-ratelimit-reset``, UTC epoch seconds), or None."""
+
+    try:
+        delay = datetime.fromtimestamp(int(headers.get("x-ratelimit-reset", "")), UTC) - timezone.now()
+    except (ValueError, OverflowError, OSError):
+        return None
+    return delay if timedelta(0) < delay <= RETRY_AFTER_LIMIT else None
 
 
 class GitHubBackend(VCSBackend):
