@@ -10,6 +10,14 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Parties: two people selected in the people list (or two organizations in theirs)
+  offer Merge… in the selection bar, which opens the existing compare-and-merge
+  page for that pair; one, or more than two, show it disabled with the reason. The
+  merge page's Cancel and Keep separate now go back to where the comparison was
+  opened (a list, a person, the review queue, in whichever app mounts the list)
+  instead of always to the review queue, which stays the fallback for a
+  comparison opened directly.
+
 - The UX guard accepts manifest `vocabulary` field tones by structure while rejecting local tone maps and switches.
 
 - Integrate compares synchronized JSON as JSON values (`json_equal` in
