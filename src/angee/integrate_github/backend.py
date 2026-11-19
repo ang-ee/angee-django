@@ -43,15 +43,13 @@ class GitHubApiError(IntegrationError):
     """A GitHub refusal whose message the backend composed from facts, never from GitHub's answer."""
 
 
-def _refused(path: str) -> Callable[[HttpRefusal], Exception]:
-    """Return how a refused answer about ``path`` is raised: a 404 is ``FileNotFoundError``, else a GitHubApiError."""
+def _error_for(path: str) -> Callable[[HttpRefusal], Exception]:
+    """Return the error a refusal about ``path`` becomes: a 404 is ``FileNotFoundError``, else a GitHubApiError."""
 
-    def refused(refusal: HttpRefusal) -> Exception:
-        if refusal.status == 404:
-            return FileNotFoundError(path)
-        return GitHubApiError(refusal.message("GitHub"), transient=refusal.transient, retry_after=refusal.retry_after)
+    def error(refusal: HttpRefusal) -> Exception:
+        return FileNotFoundError(path) if refusal.status == 404 else refusal.as_error(GitHubApiError, "GitHub")
 
-    return refused
+    return error
 
 
 class GitHubBackend(VCSBackend):
@@ -134,14 +132,14 @@ class GitHubBackend(VCSBackend):
         if payload.get("encoding") != "none":
             raise GitHubApiError("GitHub returned an unsupported file encoding")
         headers = {**self._headers(), "Accept": "application/vnd.github.raw+json"}
-        refused = _refused(path)
+        error = _error_for(path)
         response = self.http.request(
             "GET", f"{self.api_base}{endpoint}", headers=headers,
             allow_private=self.api_base != DEFAULT_API_BASE.rstrip("/"),
-            same_origin_redirects=3, max_bytes=self.max_file_bytes, timeout=HTTP_TIMEOUT_SECONDS, error=refused,
+            same_origin_redirects=3, max_bytes=self.max_file_bytes, timeout=HTTP_TIMEOUT_SECONDS, error=error,
         )
         if not response.is_success:
-            raise refused(HttpRefusal.of(response))
+            raise error(HttpRefusal.of(response))
         return response.content
 
     def rev_parse(self, repository: Any, ref: str) -> str:
@@ -201,7 +199,7 @@ class GitHubBackend(VCSBackend):
         return self.http.request_model(
             "GET", f"{self.api_base}{path}", headers=self._headers(),
             allow_private=self.api_base != DEFAULT_API_BASE.rstrip("/"),
-            max_bytes=max_bytes, timeout=HTTP_TIMEOUT_SECONDS, error=_refused(path),
+            max_bytes=max_bytes, timeout=HTTP_TIMEOUT_SECONDS, error=_error_for(path),
         )
 
     @staticmethod
