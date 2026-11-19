@@ -1769,6 +1769,7 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
 
         return canonical_json(dict(material))
 
+    @sensitive_variables("changes", "material")
     def update_material(self, **changes: Any) -> None:
         """Merge encrypted material changes under a row lock; ``None`` deletes.
 
@@ -1786,27 +1787,11 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         discover again.
         """
 
-        def transient(handler: CredentialKindHandler) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
-            if secret := sorted(changes.keys() & set(handler.secret_material_fields())):
-                raise ValueError(f"Re-enter {', '.join(secret)} through replace_material(), not update_material().")
-            return changes, {}
-
-        self._merge_material(transient)
-
-    def _merge_material(
-        self, merge: Callable[[CredentialKindHandler], tuple[Mapping[str, Any], Mapping[str, Any]]],
-    ) -> None:
-        """Merge what ``merge`` makes of the locked row's kind handler, in one locked save.
-
-        ``merge`` returns the material changes (``None`` deletes a key) and the
-        row fields to set beside them. It reads the handler of the row as locked,
-        never this instance's, whose kind a concurrent writer may have changed.
-        """
-
         with system_context(reason="integrate.credential.material"):
             with transaction.atomic():
                 row: Credential = type(self).objects.lock_if_supported().get(pk=self.pk)
-                changes, fields = merge(row.handler)
+                if secret := sorted(changes.keys() & set(row.handler.secret_material_fields())):
+                    raise ValueError(f"Re-enter {', '.join(secret)} through replace_material(), not update_material().")
                 material = dict(row.reveal())
                 for key, value in changes.items():
                     if value is None:
@@ -1815,11 +1800,8 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
                         material[key] = value
                 # EncryptedField's descriptor is not modeled by django-stubs.
                 row.material = self.encode_material(material)
-                for name, value in fields.items():
-                    setattr(row, name, value)
-                updated = ["material", *fields, "updated_at"]
-                row.save(update_fields=updated)
-            self.refresh_from_db(fields=[*updated, "kind"])
+                row.save(update_fields=["material", "updated_at"])
+            self.refresh_from_db(fields=["material", "updated_at", "kind"])
 
     @sensitive_variables("material", "replacement")
     def replace_material(self, material: Mapping[str, Any]) -> None:
@@ -1849,6 +1831,7 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
                 updated = ["material", *assigned, "updated_at"]
                 row.save(update_fields=updated)
             self.refresh_from_db(fields=[*updated, "kind"])
+
     def auth_headers(self, *, scopes: Collection[str] = ()) -> dict[str, str]:
         """Return authorization headers through the kind handler.
 
