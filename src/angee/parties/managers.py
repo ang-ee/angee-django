@@ -1346,9 +1346,18 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         return [str(to_subject_ref(rule)) for rule in rules.order_by("pk")]
 
     def same_person_links(
-        self, *, addresses: Collection[tuple[str, str]] | None = None, shared: Collection[Any] = ()
+        self,
+        *,
+        addresses: Collection[tuple[str, str]] | None = None,
+        shared: Collection[Any] = (),
+        every_address: bool = False,
     ) -> dict[tuple[str, str], list[SamePersonLink]]:
         """Each address two to :attr:`SHARED_ADDRESS_LIMIT` live parties are linked to, with its links.
+
+        With ``every_address`` (and ``addresses``), every requested address any
+        live party is linked to, whatever their number: who is linked to an
+        address, for a source deciding whether it may only claim it
+        (:meth:`_contested_addresses`); a shared one is still no pair.
 
         A link is a holding or a standing statement (asserted, current, a value, not
         dismissed by a person), whatever its confidence, by a source that states its
@@ -1416,7 +1425,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         candidates = set(
             links.values("handle__platform", "handle__normalized_value")
             .annotate(parties=Count("subject_id", distinct=True))
-            .filter(parties__gte=2, parties__lte=self.SHARED_ADDRESS_LIMIT)
+            .filter(**({} if every_address else {"parties__gte": 2, "parties__lte": self.SHARED_ADDRESS_LIMIT}))
             .values_list("handle__platform", "handle__normalized_value")
         )
         held = list(bare.values_list("platform", "normalized_value", "party_id", "pk"))
@@ -1448,7 +1457,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         return {
             address: address_links
             for address, address_links in sorted(found.items())
-            if 2 <= len({link.party for link in address_links}) <= self.SHARED_ADDRESS_LIMIT
+            if every_address or 2 <= len({link.party for link in address_links}) <= self.SHARED_ADDRESS_LIMIT
         }
 
     @staticmethod
@@ -1931,20 +1940,21 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     def propose_directory_match(self, person: Any, other: Any, *, evidence: Sequence[Any]) -> Any | None:
         """Propose, as the ``directory_match`` rule, that a directory's ``person`` and ``other`` are one person.
 
-        A directory proposes it for each other person a contact's address names,
-        whoever holds, claims or signs in with it, whether or not the directory
-        adopts (:meth:`ingest_contact`, the one call site for an address), and for
-        the person of another record the source merged into it
-        (``DirectoryBackend.apply_record``).
-        ``evidence`` names what ties them (the contact's link, then the handle its
-        email found ``other`` by, or the merged record's link). The
-        pair joins the same-as review (:meth:`PartyQuerySet.same_as_pairs`), where a
-        person merges or dismisses it. A pair kept separate is not proposed again,
-        and proposing an unchanged pair again changes nothing (``StatementManager.set``).
-        The ``same_as`` rule's reconciler withdraws only its own rule's pairs
-        (:meth:`reconcile_same_as`), so it leaves these, which no shared handle row
-        supports, standing. Returns the rule's statement, ``None`` when nothing is
-        proposed.
+        Only for what no address links, which the one same-person verb
+        (:meth:`propose_same_person_as_system`) cannot cite and its job would
+        withdraw as unsupported: the person of another record the source merged
+        into the contact (``DirectoryBackend.apply_record``), and an account whose
+        sign-in address the contact states while no handle of theirs carries it
+        (:meth:`ingest_contact`). A pair two people's links to one address tie is
+        the verb's. ``evidence`` names what ties them (the contact's link, then
+        the merged record's link). The pair joins the same-as review
+        (:meth:`PartyQuerySet.same_as_pairs`), where a person merges or dismisses
+        it. A pair kept separate is not proposed again, and proposing an unchanged
+        pair again changes nothing (``StatementManager.set``). The ``same_as``
+        rule's reconciler withdraws only its own rule's pairs
+        (:meth:`reconcile_same_as`), so it leaves these standing; the rule's
+        earlier proposals of an address pair stay reviewable as they are. Returns
+        the rule's statement, ``None`` when nothing is proposed.
         """
 
         party = apps.get_model("parties", "Party")
@@ -3552,7 +3562,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         created_by_id: Any,
         replaces: Sequence[Any] = (),
         through: Handle | None = None,
-        claims: Collection[str] = (),
+        claims: Collection[tuple[str, str]] = (),
     ) -> set[str]:
         """Assert the emails and phones ``link`` names for ``party``; withdraw the others it or ``replaces`` asserted.
 
@@ -3561,8 +3571,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         a blank one keeps the handle's); the Party row is the assertion's evidence.
         An email spelling ``through``'s address lands on that handle, the one an
         adoption found ``party`` by, never on a second row of another spelling.
-        An email whose normalized value is in ``claims`` is someone else's
-        (:meth:`_contested_emails`): it is stated as a claim for review, below
+        An email or phone whose ``(platform, normalized value)`` is in ``claims``
+        is someone else's (:meth:`_contested_addresses`): it is stated as a claim for review, below
         ``Party.REVIEW_CONFIDENCE``, so it never resolves the handle, and the
         handle's display fields stay its holder's. ``replaces`` are the links of
         records a merge at the source folded into this one: a handle only they
@@ -3588,7 +3598,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 normalized = handle_model.normalize_value(platform, value)
                 if through is not None and platform == through.platform and normalized == through.normalized_value:
                     value = through.value
-                claim = platform == handle_model.Platform.EMAIL and normalized in claims
+                claim = (platform, normalized) in claims
                 shown = {} if claim else {"display_name": display_name, "label": label, "is_preferred": preferred}
                 handle = handles.upsert(platform=platform, value=value, created_by_id=created_by_id, **shown)
                 mapped = {} if claim else {"label": label, "is_preferred": preferred}
@@ -3608,12 +3618,20 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             party.statements.withdraw_unsupported(source, supported, aspect="handle", link=stating)
         return landed
 
-    def _contested_emails(
+    def _contested_addresses(
         self, person: Person, parsed: ParsedContact, *, source: Any, lookup: EmailLookup
-    ) -> tuple[set[str], list[tuple[Person, Handle | None]]]:
-        """Return the contact's emails ``source`` may only claim for ``person``, and the people they name instead.
+    ) -> tuple[set[tuple[str, str]], list[tuple[Any, Handle | None]]]:
+        """Return the contact's addresses ``source`` may only claim for ``person``, and the parties they name instead.
 
-        What a contact may state about an address depends on whom ``lookup``
+        Claims are ``(platform, normalized value)`` pairs. A phone number names one
+        account as an email does (``Handle.identifies_account``): one another live
+        party is linked to (:meth:`same_person_links` with ``every_address``: a
+        holding, or a standing statement by a source that states its own record)
+        is theirs unless ``person`` holds it, so it is a claim and each such party
+        comes back with its handle; a number four or more parties are linked to
+        is still only claimed, and pairs nobody.
+
+        What a contact may state about an email depends on whom ``lookup``
         (:meth:`lookup_emails`: :meth:`people_for_emails` on any basis, and the
         addresses a person account signs in with) finds by it. One that names a
         person other than ``person`` is theirs, unless ``person`` holds it too:
@@ -3628,12 +3646,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         until ``person`` holds it through another statement or a person confirms
         the claim (either makes ``person`` its holder), so no lapse of its holder
         (trashed, or its statement withdrawn) and no second claimant turns the
-        claim into a holding. Any other address is stated in full. Values are
-        normalized email addresses (``Handle.normalize_value``).
+        claim into a holding; the same holds for a number. Any other address is
+        stated in full. Values are normalized (``Handle.normalize_value``).
         """
 
         handle_model = apps.get_model("parties", "Handle")
-        email = handle_model.Platform.EMAIL
+        email, phone = handle_model.Platform.EMAIL, handle_model.Platform.PHONE
         claimed = set(
             self.handle_statements()
             .filter(
@@ -3641,12 +3659,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 asserted_by=str(to_subject_ref(source)),
                 status=self.handle_statements().model.StatementStatus.ASSERTED,
                 confidence__lt=self.model.REVIEW_CONFIDENCE,
-                handle__platform=email,
+                handle__platform__in=(email, phone),
             )
-            .values_list("handle__normalized_value", flat=True)
+            .values_list("handle__platform", "handle__normalized_value")
         )
-        claims: set[str] = set()
-        others: dict[Any, tuple[Person, Handle | None]] = {}
+        claims: set[tuple[str, str]] = set()
+        others: dict[Any, tuple[Any, Handle | None]] = {}
         for value, _label, _preferred in parsed.emails:
             normalized = handle_model.normalize_value(email, value)
             found = lookup.named(value)
@@ -3656,10 +3674,38 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             account = normalized in lookup.sign_in and not any(
                 holder.basis == EmailBasis.ACCOUNT and holder.person.pk == person.pk for holder in found
             )
-            if rivals or account or lookup.lapsed.get(normalized) or normalized in claimed:
-                claims.add(normalized)
+            if rivals or account or lookup.lapsed.get(normalized) or (email, normalized) in claimed:
+                claims.add((email, normalized))
             for holder in rivals:
                 others.setdefault(holder.person.pk, (holder.person, holder.handle))
+        numbers = {(phone, handle_model.normalize_value(phone, value)) for value, _label, _preferred in parsed.phones}
+        numbers = {address for address in numbers if address[1]}
+        if numbers:
+            linked = self.same_person_links(addresses=numbers, every_address=True)
+            held = set(
+                handle_model._base_manager.filter(
+                    platform=phone,
+                    normalized_value__in=sorted(value for _platform, value in numbers),
+                    party_id=person.pk,
+                ).values_list("platform", "normalized_value")
+            )
+            rivals_by_address = {
+                address: [link for link in links if link.party != person.pk] for address, links in linked.items()
+            }
+            parties = apps.get_model("parties", "Party")._base_manager.in_bulk(
+                sorted({link.party for links in rivals_by_address.values() for link in links})
+            )
+            handles = handle_model._base_manager.in_bulk(
+                sorted({link.handle for links in rivals_by_address.values() for link in links})
+            )
+            for address in sorted(numbers):
+                linked_others = rivals_by_address.get(address, [])
+                if address in held:
+                    continue
+                if linked_others or address in claimed:
+                    claims.add(address)
+                for link in linked_others:
+                    others.setdefault(link.party, (parties[link.party], handles[link.handle]))
         return claims, list(others.values())
 
     def ingest_contact(
@@ -3693,8 +3739,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         who each address names: an email another person is linked to (holds it,
         claims it, keeps it as a lapsed holder, or signs in with it) is only
         claimed, for review, and each such live person is proposed here as the
-        contact's same person, the directory's one proposal for an address
-        (:meth:`_contested_emails`, :meth:`propose_directory_match`), so a
+        contact's same person (:meth:`_contested_addresses`; a phone number
+        another live party is linked to likewise): through the one
+        same-person verb, citing the handle that names them
+        (:meth:`propose_same_person_as_system`, once the page commits), or, for an
+        account's sign-in address no handle of theirs carries, which links no
+        one to it, through :meth:`propose_directory_match`; so a
         contact never moves an address away from anyone; the addresses it lands
         are marked changed in the lookup. A link leaving a person
         withdraws what it stated on them before it binds its new person (the
@@ -3784,7 +3834,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 # What the link withdrew from the person it left may have been all that held an address.
                 lookup = self.lookup_emails((value for value, _label, _preferred in parsed.emails), lookup=lookup)
             claims, others = (
-                self._contested_emails(person, parsed, source=source, lookup=lookup)
+                self._contested_addresses(person, parsed, source=source, lookup=lookup)
                 if pull and lookup is not None
                 else (set(), [])
             )
@@ -3802,7 +3852,14 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             if lookup is not None:
                 lookup.changed.update(landed)
             for other, handle in others:
-                self.propose_directory_match(person, other, evidence=[link, *([handle] if handle is not None else [])])
+                if handle is not None:
+                    # Linked to one address: the same-person verb proposes the pair once this page commits.
+                    self.propose_same_person_as_system(
+                        person, other, evidence=[handle], reason="parties.directory.contact_claim"
+                    )
+                else:
+                    # An account's sign-in address that no handle of theirs carries links no one to it.
+                    self.propose_directory_match(person, other, evidence=[link])
             if gone:
                 # What the link proposed for the trashed person it left is moot: its new person is, or is
                 # proposed as, them. A live person it left (refused on its return) stays proposed.

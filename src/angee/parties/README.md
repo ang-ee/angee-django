@@ -189,7 +189,7 @@ birthday clears the person's.
 
 What a pull-only contact may state about an address, whether or not its
 directory adopts, depends on whom the lookup finds by it
-(`PartyManager._contested_emails`): an address it answers with a
+(`PartyManager._contested_addresses`): an address it answers with a
 person other than the contact's own, who does not hold it too, is someone else's,
 and so is an address a person account signs in with, whether or not the account
 has a person, so the contact states it as a claim for review (below the confidence at which a
@@ -224,16 +224,20 @@ so a claim would drop the address from the card and write that back to the
 server, and what a two-way card publishes about a person other sources state is
 open with the architect.
 
-Each person the contact's addresses name instead (whoever holds, claims or signs
-in with one, an adoption candidate a limit refused included; the ingest's one
-proposal call site) and each other person a replaced record was linked to (the
-directory base's `apply_record`) is proposed as the landed person's same
-person by parties' `directory_match` rule
-(`PartyManager.propose_directory_match`), citing the contact's link and the
-handle or the replaced link, and joins the same-as review. A pair kept separate
-is not proposed again; merging the two withdraws the proposal. The `same_as`
-rule's reconciler withdraws only its own rule's pairs, so it leaves these
-standing, though no shared handle row supports them.
+Each person the contact's addresses name instead (whoever holds or claims one,
+an adoption candidate a limit refused included) is proposed as the landed
+person's same person through the one same-person verb,
+`Party.objects.propose_same_person_as_system`, citing the handle that names them,
+once the page commits: the pair is the one the pairing job would find, two
+parties linked to one address. What no address links is proposed by parties'
+`directory_match` rule (`PartyManager.propose_directory_match`), citing the
+contact's link and the replaced link: each other person a replaced record was
+linked to (a merge at the source, the directory base's `apply_record`), and an
+account whose sign-in address the contact states while no handle of theirs
+carries it. Both join the same-as review. A pair kept separate is not proposed
+again; merging the two withdraws the directory's proposal. The `same_as` rule's
+reconciler withdraws only its own rule's pairs, so it leaves the directory's
+standing, and the rule's earlier proposals of address pairs stay reviewable.
 
 The survivor of a merge takes every link of the merged person, so a person who
 writes both may merge any pair, an account's own person or a person a two-way

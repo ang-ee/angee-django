@@ -10,6 +10,30 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: one owner proposes same-person pairs. A pull-only
+  directory's contact that may only claim an address another live party is
+  linked to proposes them through `Party.objects.propose_same_person_as_system`
+  (reason `parties.directory.contact_claim`), citing the handle that links them,
+  once the page commits, instead of through the directory's own rule. The
+  `parties.directory_match` rule stays for what no address links, which the
+  verb cannot cite and its job would withdraw: the people of the records a merge
+  at the source replaced, and an account whose sign-in address no handle of
+  theirs carries. Its earlier proposals of address pairs stay in review as they
+  are, the pairing job states no second proposal beside one, and merging the two
+  withdraws it. A contact's phone number another live party is linked to is now
+  only claimed, like an email (`PartyManager._contested_addresses`, through the
+  pairing's read `same_person_links(addresses=, every_address=True)`): before, it
+  was stated in full and its holder moved to the contact's person. A number four
+  or more parties are linked to is still only claimed and pairs nobody. Changes
+  in what is proposed: a pair of a person later trashed or merged leaves the
+  review at once and is withdrawn by the next pairing run; two records of one
+  directory that share an address, and a party linked only by a name
+  suggester's claim, are no longer proposed. Upgrade: no migration, resource or
+  permission change. A number a directory already took this way keeps its holder
+  until a person merges or decides the pair, or the number is restated: an
+  unchanged record is not applied again, and a changed one finds the contact's
+  person holding the number and states it in full again.
+
 - `angee.parties`: the read of a directory's contacts is a stored grant alone.
   `parties/directory#contact_read` is `contact_reader` (revision 31); the
   integration owner's column arm is gone, because a column arm is never folded
