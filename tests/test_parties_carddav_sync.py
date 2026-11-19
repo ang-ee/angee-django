@@ -2859,15 +2859,25 @@ def test_a_directory_tests_its_connection_by_discovery_and_reports_the_servers_r
     assert refused.value.public_message == "CardDAV PROPFIND returned HTTP 401."
 
 
-def test_a_per_book_contacts_setting_other_than_local_delete_is_refused(replica: Replica) -> None:
-    """The book's stream takes ``local_delete`` alone; an unknown key is refused instead of riding into its config."""
+def test_a_per_book_contacts_setting_is_refused_when_written_and_an_unknown_one_ignored_when_read(
+    replica: Replica,
+) -> None:
+    """Saving the directory refuses a per-book key other than ``local_delete``; a book's stream reads that key alone.
+
+    A setting stored before the write was validated never fails the sync: the
+    stream ignores what is not a known policy key.
+    """
 
     book = RecordLink.objects.get(stream=replica.addressbooks, external_key=_BOOK)
     replica.directory.config["streams"] = {"contacts": {_BOOK: {"local_delete": "propagate"}}}
+    with system_context(reason="test CardDAV per-book setting"):
+        replica.directory.save()
     assert replica.backend.contacts_stream(book).config == {"local_delete": "propagate"}
+
     replica.directory.config["streams"]["contacts"][_BOOK]["remote_delete"] = "retain"
-    with pytest.raises(ValueError, match="Unknown Directory contacts setting"):
-        replica.backend.contacts_stream(book)
+    with system_context(reason="test CardDAV per-book setting"), pytest.raises(ValidationError):
+        replica.directory.save()
+    assert replica.backend.contacts_stream(book).config == {"local_delete": "propagate"}
 
 
 def test_an_empty_listing_confirms_no_address_book_absence(replica: Replica) -> None:

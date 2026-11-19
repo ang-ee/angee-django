@@ -78,8 +78,13 @@ live in code docstrings.
   party, `target=None` included. `DirectoryBackend._local_states` is public as
   `local_states`, the binding seam for a backend that builds its own records, and
   `lock_contact` takes several parties. CardDAV admits only Basic-auth
-  credentials, names its server by host name and port in its connection message,
-  and refuses a per-book contacts setting other than `local_delete`.
+  credentials and names its server by host name and port in its connection
+  message. Its configuration is a typed config model (`CardDavConfig`:
+  `server_url`, and per address book a `ContactsPolicy` whose only key is
+  `local_delete`), so saving a directory refuses an unknown key; a book's stream
+  reads only what the policy knows, so a stored setting the write never validated
+  no longer fails the sync (it did since the seam change). The directory's config
+  form shows the server URL and the book policies through the JSON control.
 
 - Connecting a directory is one verb, `Directory.objects.connect(owner, *,
   backend_class, display_name, credential_kind, material, config=None)`
@@ -89,7 +94,8 @@ live in code docstrings.
   the directory are created atomically, the address the account signs in as
   (`DirectoryBackend.account_address`, new, `""` by default) becomes the owner's
   own handle, and the first sync is requested. CardDAV's connect mutation keeps
-  its GraphQL contract and calls it (its `connect.py` is gone); a refused
+  its GraphQL contract and calls it (its `connect.py` is gone), so connecting a
+  CardDAV account now queues its first sync, which it did not before; a refused
   connection test now reaches the client as a `VALIDATION` error carrying the
   server's refusal instead of `INTERNAL`. The `carddav` vendor is a master
   resource adopted by slug: load resources before connecting the first one.
@@ -165,6 +171,15 @@ live in code docstrings.
   not loaded is a `ValidationError` that says to run `manage.py resources load`
   (it was an `ImproperlyConfigured`). The first sync is requested after the
   transaction commits, and a failure to queue it is logged instead of raised.
+
+- A contact whose person was trashed lands on a new person, and its link now
+  withdraws what it stated on the trashed person before it binds the new one
+  (`RecordLink.withdraw_statements`), with the `directory_match` proposals pairing
+  the trashed person with the new person or with whom the contact's addresses
+  name. Before, those statements stayed asserted on the trashed person, and so
+  did the pair a refused adoption had proposed for it. The binding owner
+  (`ingest_contact`) does this on every rebinding, so the backend no longer
+  withdraws a refused adoption's pair itself.
 
 - A directory proposes for the same-as review each person its decision of a
   contact's target passed over: a candidate an adoption limit refused, and the

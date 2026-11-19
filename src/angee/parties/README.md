@@ -35,7 +35,9 @@ refusal that says to load resources.
 The [CardDAV backend](../parties_integrate_carddav/backend.py) syncs two-way and
 builds its own records: a card's `UID` is its key and its href rides in the
 link's metadata, and wire properties outside the projection stay in RecordLink
-history and survive conditional writes.
+history and survive conditional writes. Its configuration is a typed config
+model, validated whenever the directory is saved; a book's stream reads only the
+policy keys it knows.
 
 On a pull-only stream the local side of each comparison is what the source last
 applied, and the source's own projection becomes the applied base, as on the
@@ -96,13 +98,15 @@ person a replaced record was linked to is proposed as the landed person's same
 person by parties' `directory_match` rule
 (`PartyManager.propose_directory_match`), citing the contact's link and the
 handle or the replaced link, and joins the same-as review. A pair kept separate
-is not proposed again; merging the two, or the contact later adopting the
-person it was refused, withdraws the proposal. The `same_as` rule's reconciler
-withdraws only its own rule's pairs, so it leaves these standing, though no
-shared handle row supports them. A trashed person is nobody's target
-(`PartyManager.contact_people`), so its record lands on a new person. The ingest
-verbs decide nothing: they land on the target they are given or mint one, and
-refuse to move a link off a live party.
+is not proposed again; merging the two withdraws the proposal. The `same_as`
+rule's reconciler withdraws only its own rule's pairs, so it leaves these
+standing, though no shared handle row supports them. A trashed person is
+nobody's target (`PartyManager.contact_people`), so its record lands on a new
+person or adopts one; the link first withdraws what it stated on the trashed
+person, and the proposals pairing the trashed person with the new one, or with
+whom the contact's addresses name, are withdrawn with it. The ingest verbs
+decide nothing: they land on the target they are given (admitted as above) or
+mint one, and refuse to move a link off a live party.
 
 [PartyManager.ingest_contact](managers.py) asserts directory facts; Address and
 Relationship keep their own identities and statements. Missing members withdraw

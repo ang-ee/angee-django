@@ -469,6 +469,93 @@ def test_a_trashed_person_is_nobodys_target_and_the_record_mints_another(pull: P
     assert Person.objects.get(pk=link.target_object_id).notes == "Still at the source."
 
 
+def test_a_record_rebinding_off_a_trashed_person_withdraws_what_its_link_stated_there(pull: Pull) -> None:
+    """The link's statements on the person it leaves are withdrawn before it binds the new one."""
+
+    pull.sync()
+    link = pull.link("ada")
+    trashed = Person.objects.get(pk=link.target_object_id)
+    assert _asserted(trashed.pk, link).exists()
+    trashed.trash(reason="Removed by its holder")
+    pull.source.put("ada", replace(_ADA, notes="Still at the source."))
+
+    assert pull.sync().count == 1
+
+    link.refresh_from_db()
+    assert link.target_object_id not in (None, str(trashed.pk))
+    assert not _asserted(trashed.pk, link).exists()
+    assert not Person.statements.filter(subject_id=trashed.pk, link=link, status="asserted").current().exists()
+    assert _asserted(int(link.target_object_id), link).exists()
+
+
+def test_a_record_minting_again_after_its_person_is_trashed_withdraws_the_pair_the_old_one_had(pull: Pull) -> None:
+    """The limit still refuses the existing person: the new mint is proposed as them and the trashed one is not."""
+
+    person = _refused_account_holder(pull)
+    pull.sync()
+    first = Person.objects.get(pk=pull.link("ada").target_object_id)
+    first.trash(reason="Removed by its holder")
+    pull.source.put("ada", replace(_ADA, notes="Still at the source."))
+
+    assert pull.sync().count == 1
+
+    second = pull.link("ada").target_object_id
+    assert second not in (str(first.pk), str(person.pk))
+    assert sorted((sorted(pair), status) for pair, status, _evidence in _proposals()) == sorted(
+        [(sorted({str(first.pk), str(person.pk)}), "withdrawn"), (sorted({second, str(person.pk)}), "asserted")]
+    )
+
+
+def test_a_contact_adopts_the_one_person_a_claim_proposes_its_address_for(pull: Pull) -> None:
+    """Nobody holds the address; the one claimant, whom the owner owns, is adopted and then holds it."""
+
+    claimant = Person.objects.create(display_name="Ada (claimed)", created_by=pull.directory.owner)
+    handle = Handle.objects.upsert(platform="email", value="ada@example.com", created_by_id=pull.directory.owner_id)
+    Party.objects.assert_handle(claimant, handle, asserted_by=Party.objects.rule_source("display_name"), confidence=0.4)
+    assert _held_by("ada@example.com") is None
+
+    pull.sync()
+
+    assert pull.link("ada").target_object_id == str(claimant.pk)
+    assert _held_by("ada@example.com") == claimant.pk
+    assert _identity_evidence(claimant.pk) == _refs(handle)
+    assert _proposals() == []
+
+
+def test_a_contact_adopts_a_later_candidate_when_the_first_is_refused_and_only_claims_the_firsts_address(
+    pull: Pull,
+) -> None:
+    """Candidates are tried in the contact's preference order; the refused one keeps their address and is proposed."""
+
+    refused, refused_handle = _existing(_user("someone-else"), email="ada@example.com")
+    adopted, adopted_handle = _existing(pull.directory.owner, email="ada@work.example")
+    emails = (("ada@example.com", "home", True), ("ada@work.example", "work", False))
+    pull.source.put("ada", replace(_ADA, emails=emails))
+
+    pull.sync()
+
+    ada = pull.link("ada")
+    assert ada.target_object_id == str(adopted.pk)
+    assert (_held_by("ada@example.com"), _held_by("ada@work.example")) == (refused.pk, adopted.pk)
+    assert _claim_confidences(adopted.pk, "ada@example.com") == [0.4]
+    assert _identity_evidence(adopted.pk) == _refs(adopted_handle)
+    assert _proposals() == [(frozenset({str(adopted.pk), str(refused.pk)}), "asserted", _refs(ada, refused_handle))]
+
+
+def test_a_merge_whose_replaced_record_is_bound_to_an_organization_quarantines_the_record(pull: Pull) -> None:
+    """A contacts link naming an organization is no person's: the survivor's record is refused, and states nothing."""
+
+    company = Organization.objects.create(display_name="Example Ltd", created_by=pull.directory.owner)
+    RecordLink.objects.observe(pull.stream, "acme", target=Party._base_manager.get(pk=company.pk))
+    pull.source.put("merged", replace(_ADA, emails=(("merged@example.com", "work", True),)), replaces=("acme",))
+
+    result = pull.sync()
+
+    assert len(result.failure_ids) == 1
+    assert pull.link("merged").target_object_id is None
+    assert not Party.statements.filter(subject_id=company.pk, asserted_by=str(pull.link("merged").asserted_by))
+
+
 def test_a_persons_edit_holds_its_whole_aspect_against_a_later_source_edit(pull: Pull) -> None:
     """Resolution is per aspect: a person's name holds every name field, so a source's family name waits behind it.
 
@@ -724,6 +811,15 @@ def _refused_write_back(pull: Pull) -> Any:
     return person
 
 
+def _refused_other_stream(pull: Pull) -> Any:
+    """A live link of this directory's other address book already names the person."""
+
+    person = _existing(pull.directory.owner)[0]
+    other = current_stream(pull.directory, CONTACTS, "other-book", kind=StreamKind.RECORD_REPLICA)
+    RecordLink.objects.observe(other, "ada-elsewhere", target=Party._base_manager.get(pk=person.pk))
+    return person
+
+
 @pytest.mark.parametrize(
     "refusal",
     [
@@ -733,6 +829,7 @@ def _refused_write_back(pull: Pull) -> Any:
         _refused_linked,
         _refused_admin_owner,
         _refused_write_back,
+        _refused_other_stream,
     ],
 )
 def test_a_contact_mints_its_own_person_when_an_adoption_limit_refuses_the_one_its_email_names(
