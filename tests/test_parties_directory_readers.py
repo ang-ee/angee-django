@@ -1,10 +1,11 @@
 """A directory's contact readers read the contacts it links, and nothing else.
 
-``parties/directory#contact_reader`` lends identity read on the parties the
-directory's live links name, and read on the addresses and relationships those
-links state in a current claim. Private fields, writes, handles and everything of
-the directory itself (its integration, streams, links and credential) stay with
-their own gates.
+``parties/directory#read_contacts`` (the ``contact_reader`` grantees and the
+integration's owner) lends identity read on the parties the directory's live
+links name, and read on the handles, addresses and relationships those links
+state in a current claim. Private fields, writes, handles only another source
+asserted and everything of the directory itself (its integration, streams, links
+and credential) stay with their own gates.
 """
 
 from __future__ import annotations
@@ -17,7 +18,16 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.test import override_settings
-from rebac import RelationshipTuple, SubjectRef, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac import (
+    PermissionDenied,
+    RelationshipTuple,
+    SubjectRef,
+    actor_context,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
 from rebac.backends import backend
 from rebac.models import active_relationship_model
 
@@ -34,6 +44,7 @@ from angee.messaging.testing.models import (
     Relationship,
     RelationshipKind,
 )
+from angee.parties.models import Directory as AbstractDirectory
 from tests.conftest import create_platform_admin, current_stream, make_integration
 from tests.iam_models import Group
 from tests.test_parties_graphql import _schema as parties_graphql_schema
@@ -166,13 +177,12 @@ def test_contact_readers_read_linked_identity_without_private_fields_or_writes(c
     for row, gates in ((c.person, PERSON_GATES), (c.person_party, PARTY_GATES), (c.organization, PARTY_GATES)):
         cases.append((row, "read", managers | contact_readers))
         cases += [(row, action, managers) for action in ("read_private", *gates, "write", "delete")]
-    for row in (c.address, c.edge):
+    for row in (c.address, c.edge, c.stated_handle):
         cases.append((row, "read", managers | contact_readers))
         cases += [(row, action, managers) for action in ("write", "delete")]
     cases += [
         (c.unlinked, "read", managers),
-        # Handles keep their own gates: no relation reaches a handle from the statements asserting it.
-        (c.stated_handle, "read", managers),
+        # A handle only the owner asserted keeps its own gates on the same shared person.
         (c.own_handle, "read", managers),
     ]
     for row, action, expected in cases:
@@ -183,7 +193,8 @@ def test_contact_readers_read_linked_identity_without_private_fields_or_writes(c
             if action in SCOPED_ACTIONS:
                 assert _scoped(row, actor, action) is allowed, label
     # Every reach above is backed by live rows: the grants on the directory are the only tuples.
-    for resource_type in ("parties/party", "parties/person", "parties/organization", "parties/address"):
+    for kind in ("party", "person", "organization", "address", "handle"):
+        resource_type = f"parties/{kind}"
         assert not active_relationship_model().objects.filter(resource_type=resource_type).exists()
 
 
@@ -236,7 +247,7 @@ def test_contact_reader_lists_and_opens_linked_contacts_through_graphql(
         ]
         assert data["addresses"] == [{"id": c.address.sqid, "street": "1 Example Street"}]
         assert data["party_relationships"] == [{"id": c.edge.sqid, "title": "Engineer"}]
-        assert data["handles"] == []
+        assert data["handles"] == [{"id": c.stated_handle.sqid}]
         assert data["directories"] == []
     owner = result_data(execute_schema(graphql, query, {"id": c.person.sqid}, user=c.owner))
     assert owner["people_by_pk"]["notes"] == PERSON_PRIVATE["notes"]
@@ -244,6 +255,7 @@ def test_contact_reader_lists_and_opens_linked_contacts_through_graphql(
     for actor in (c.outsider, c.integration_reader):
         data = result_data(execute_schema(graphql, query, {"id": c.person.sqid}, user=actor))
         assert data["people"] == data["organizations"] == data["addresses"] == data["party_relationships"] == []
+        assert data["handles"] == []
         assert data["people_by_pk"] is None
     denied = execute_schema(
         graphql,
@@ -268,17 +280,23 @@ def test_a_person_linked_by_two_directories_reads_through_either_until_its_link_
     with system_context(reason="tests.directory_readers.second_directory"):
         other_stream = current_stream(c.other, "contacts", kind=StreamKind.RECORD_REPLICA)
         other_link = RecordLink.objects.observe(other_stream, "ada-elsewhere", target=c.person)
+        other_handle = Handle.objects.create(platform="email", value="ada@elsewhere.example", created_by=c.owner)
+        Party.objects.assert_handle(c.person_party, other_handle, asserted_by=c.other.integration_ptr, link=other_link)
         _grant(c.other, "contact_reader", other_reader)
     for actor in (c.reader, other_reader):
         for row in (c.person, c.person_party):
             assert _allowed(row, actor) and _scoped(row, actor), (type(row).__name__, actor.username)
-    # The second directory stated no address, edge or handle of the shared person.
+    # Each directory lends the handle it asserted, and only that one.
+    assert _allowed(other_handle, other_reader) and _scoped(other_handle, other_reader)
+    assert not _allowed(other_handle, c.reader) and not _scoped(other_handle, c.reader)
+    # The second directory stated no address, edge or other handle of the shared person.
     for row in (c.address, c.edge, c.stated_handle, c.own_handle, c.organization):
         assert not _allowed(row, other_reader), type(row).__name__
     with system_context(reason="tests.directory_readers.second_tombstone"):
         RecordLink.objects.tombstone(other_link)
-    for row in (c.person, c.person_party):
+    for row in (c.person, c.person_party, other_handle):
         assert not _allowed(row, other_reader) and not _scoped(row, other_reader), type(row).__name__
+    for row in (c.person, c.person_party, c.stated_handle):
         assert _allowed(row, c.reader) and _scoped(row, c.reader), type(row).__name__
 
 
@@ -299,8 +317,11 @@ def test_a_removed_link_lends_nothing(contacts: SimpleNamespace, removal: str) -
         else:
             RecordLink.objects.tombstone(c.person_link)
         assert c.address.statements.model._base_manager.filter(link=c.person_link, status="asserted").exists()
+        assert c.person_party.statements.model._base_manager.filter(
+            link=c.person_link, handle=c.stated_handle, status="asserted"
+        ).exists()
     for actor in (c.reader, c.member):
-        for row in (c.person, c.person_party, c.address, c.edge):
+        for row in (c.person, c.person_party, c.address, c.edge, c.stated_handle):
             assert not _allowed(row, actor), (removal, type(row).__name__, actor.username)
             assert not _scoped(row, actor), (removal, type(row).__name__, actor.username)
         assert _allowed(c.organization, actor), "The organization's own link still lends it"
@@ -315,4 +336,48 @@ def test_a_withdrawn_claim_stops_lending_its_row_while_the_link_lends_the_person
     with system_context(reason="tests.directory_readers.withdraw_address"):
         c.address.statements.withdraw(c.source, link=c.person_link)
     assert not _allowed(c.address, c.reader) and not _scoped(c.address, c.reader)
-    assert _allowed(c.edge, c.reader) and _allowed(c.person, c.reader)
+    assert _allowed(c.edge, c.reader) and _allowed(c.person, c.reader) and _allowed(c.stated_handle, c.reader)
+    with system_context(reason="tests.directory_readers.withdraw_handle"):
+        c.person_party.statements.withdraw_unsupported(c.source, [], aspect="handle", link=c.person_link)
+    assert not _allowed(c.stated_handle, c.reader) and not _scoped(c.stated_handle, c.reader)
+    assert _allowed(c.person, c.reader) and _allowed(c.edge, c.reader)
+
+
+def test_a_transferred_directory_lends_its_contacts_to_the_new_owner(contacts: SimpleNamespace) -> None:
+    """The integration's owner reads the contacts it synced before, without private fields or writes."""
+
+    c = contacts
+    successor = get_user_model().objects.create_user(username="contacts-successor")
+    with actor_context(c.admin):
+        Directory.objects.with_actor(c.admin).get(pk=c.directory.pk).transfer_ownership(successor)
+    assert _allowed(c.directory, successor, "write")
+    for row in (c.person, c.person_party, c.organization, c.address, c.edge, c.stated_handle):
+        assert _allowed(row, successor) and _scoped(row, successor), type(row).__name__
+        for action in ("write", "delete"):
+            assert not _allowed(row, successor, action), (type(row).__name__, action)
+    for row in (c.person, c.person_party, c.organization):
+        assert not _allowed(row, successor, "read_private"), type(row).__name__
+    # The handle only the former owner asserted, and a person no link names, stay theirs.
+    for row in (c.own_handle, c.unlinked):
+        assert not _allowed(row, successor) and _allowed(row, c.owner), type(row).__name__
+
+
+def test_the_share_surface_grants_contact_reader_under_the_directory_write(
+    contacts: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The directory declares ``contact_reader`` grantable; its writers share it, a contact reader cannot."""
+
+    c = contacts
+    monkeypatch.setattr(Directory, "rebac_grantable", AbstractDirectory.rebac_grantable)
+    assert Directory.get_rebac_grantable() == {"contact_reader": "write"}
+    assert not Directory._check_rebac_grantable()
+    grantee = get_user_model().objects.create_user(username="contacts-shared")
+    with actor_context(c.owner):
+        Directory.objects.with_actor(c.owner).get(pk=c.directory.pk).grant_record_access("contact_reader", grantee)
+        shared = Directory.objects.with_actor(c.owner).get(pk=c.directory.pk).direct_record_access()
+    assert ("contact_reader", to_subject_ref(grantee)) in {(access.relation, access.subject) for access in shared}
+    assert _allowed(c.person, grantee) and _allowed(c.stated_handle, grantee)
+    with actor_context(c.reader), pytest.raises(PermissionDenied):
+        Directory.objects.sudo(reason="tests.directory_readers.load").get(pk=c.directory.pk).with_actor(
+            c.reader
+        ).grant_record_access("contact_reader", c.outsider)

@@ -783,8 +783,10 @@ class StatementLinkMixin(models.Model):
 class Aspect:
     """One field group and its optional typed membership identity.
 
-    ``member`` reuses a canonical field name or maps names to new Django fields.
-    Shared members reuse one field. ``allow_fill`` fills missing winner values.
+    ``member`` reuses a canonical field name or maps names to new Django fields;
+    a mapped foreign key keeps the reverse name it declares
+    (:meth:`StatementRecords.copy_fields`). Shared members reuse one field.
+    ``allow_fill`` fills missing winner values.
     Value fields keep their subject names; :meth:`column` names their statement
     column.
     """
@@ -1754,8 +1756,23 @@ class StatementRecords(HistoricalRecords):
         ]
 
     def copy_fields(self, model: Any) -> dict[str, models.Field]:
-        """Copy each statement column, a value field under its aspect's column name."""
+        """Copy each statement column, a value field under its aspect's column name.
 
+        simple-history rebuilds every copied foreign key with ``related_name="+"``,
+        so a copy of a subject field never takes the accessor that field holds. A
+        member an aspect maps to a new foreign key has no subject field: it keeps
+        the ``related_name`` it declares (Django formats ``%(class)s`` with the
+        statement model), and its target reaches the statements naming it. One
+        that declares none, and the statement table's own history, get none.
+        """
+
+        reverse_names = {
+            name: field.remote_field.related_name
+            for aspect in self.aspects_for(model).values()
+            if isinstance(aspect, Aspect) and isinstance(aspect.member, Mapping)
+            for name, field in aspect.member.items()
+            if isinstance(field, models.ForeignKey) and field.remote_field.related_name
+        }
         columns = self.value_columns(model)
         fields = {}
         for name, field in super().copy_fields(model).items():
@@ -1772,6 +1789,8 @@ class StatementRecords(HistoricalRecords):
                 field.remote_field.on_delete = models.PROTECT
                 field.remote_field.parent_link = False
                 field.db_constraint = True
+                if name in reverse_names:
+                    field.remote_field.related_name = reverse_names[name]
         return fields
 
     def get_extra_fields(self, model: Any, fields: Any) -> dict[str, Any]:
