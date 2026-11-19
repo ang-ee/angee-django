@@ -21,11 +21,13 @@ from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime
+from enum import StrEnum
 from itertools import chain, combinations, groupby, islice
 from typing import TYPE_CHECKING, Any, NamedTuple, Self, TypedDict
 
 from django.apps import apps
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.prefetch import GenericPrefetch
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
@@ -663,6 +665,33 @@ class PartyStatementQuerySet[StatementT: PartyStatementMixin](StatementQuerySet[
                 | Q(source_kind__in=(SourceKind.DIRECTORY, SourceKind.PERSON)),
             )
         )
+
+class EmailBasis(StrEnum):
+    """How :meth:`PartyManager.people_for_emails` found a person for an email address."""
+
+    ACCOUNT = "account"
+    """The user account with that address is the person's: they are its own Person."""
+    HELD = "held"
+    """The person holds the address: it is their resolved email handle."""
+    CLAIM = "claim"
+    """The one person a current asserted contact claim proposes the address for; nobody holds it as theirs yet."""
+
+
+class EmailHolder(NamedTuple):
+    """One person an email address names, and the basis it names them by.
+
+    ``handle`` is the email handle that ties the address to the person: the one
+    they hold, or the one claimed for them; for an account, the one its person
+    holds, else ``None``. Only a ``HELD`` holder holds the address; a caller
+    states more about a person found otherwise.
+    """
+
+    email: str
+    """The address as the caller gave it."""
+    person: Any
+    basis: EmailBasis
+    handle: Any | None
+
 
 @dataclass(frozen=True, slots=True)
 class SameAsPair:
@@ -1772,11 +1801,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             person.refresh_from_db()
             return person
 
-    @staticmethod
-    def _connection_person(handle: Any, *, display_name: str, asserted_by: Any, created_by_id: Any) -> Any:
+    def _connection_person(self, handle: Any, *, display_name: str, asserted_by: Any, created_by_id: Any) -> Any:
         """Return the handle's Person; identity statements own subsequent names.
 
-        The handle's party when it has one; otherwise the party an earlier run of the
+        The person who holds the handle, by the holding rule :meth:`people_for_emails`
+        answers with (:meth:`_holders`: through merge survivors, never an
+        organization or a trashed person); otherwise the party an earlier run of the
         same import linked it to, since a claim awaiting review, or one the person
         dismissed, resolves nothing; a re-import therefore never mints a second person.
         An existing name is never overwritten: it may be user-curated, and export
@@ -1784,7 +1814,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         """
 
         person_model = apps.get_model("parties", "Person")
-        party_id = handle.party_id or (
+        held = self._holders([handle]).get(handle.pk)
+        if held is not None and held[1] is not None:
+            return held[1]
+        party_id = (
             apps.get_model("parties", "PartyStatement")
             ._base_manager.filter(handle=handle, aspect="handle", asserted_by=str(to_subject_ref(asserted_by)))
             .order_by("pk")
@@ -1799,6 +1832,115 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             display_name=display_name or person_model.PLACEHOLDER_NAME,
             created_by_id=created_by_id,
         )
+
+    def people_for_emails(self, emails: Iterable[str]) -> list[EmailHolder]:
+        """Return the people the given email addresses name, each with the basis it names them by; decide nothing.
+
+        ``emails`` come in the caller's preference order, and so does the answer: per
+        address, at most one person on each basis, in this order (:class:`EmailBasis`):
+
+        1. ``ACCOUNT``: the user account with that address is its user's Person
+           (``UserManager.person_for_email``'s rule: an address two accounts share
+           names nobody);
+        2. ``HELD``: the first email handle of the address that has a party names
+           the person holding it, through merge survivors;
+        3. ``CLAIM``: when nobody holds the address, the one person a current
+           asserted contact claim proposes a handle of it for; two claimants name
+           nobody.
+
+        Handles compare by ``Handle.normalized_value``, so another spelling of the
+        address is the same address whichever row its exact value made (the account
+        compares by the account's own normalization). A trashed person, an
+        organization and a merged-away row are nobody's answer. One person may come
+        under several bases, and an address two people share (a family's) names
+        them both: each caller applies its own policy, and only a ``HELD`` holder
+        holds the address. Any batch reads in a bounded number of queries. This is
+        a system identity lookup: the caller gates what it reveals.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        person_model = apps.get_model("parties", "Person")
+        users = get_user_model().objects
+        given = [email for email in dict.fromkeys(emails) if email.strip()]
+        if not given:
+            return []
+        values = {email: handle_model.normalize_value(handle_model.Platform.EMAIL, email) for email in given}
+        addresses = {email: users.normalize_email(email) for email in given}
+        live = person_model._base_manager.filter(is_trashed=False, merged_into__isnull=True)
+        with system_context(reason="parties.people_for_emails"):
+            accounts: defaultdict[str, list[Any]] = defaultdict(list)
+            for user in users.people().filter(email__in=set(addresses.values())):
+                accounts[user.email].append(user)
+            owners = {address: found[0] for address, found in accounts.items() if len(found) == 1}
+            own = {
+                person.user_id: person
+                for person in person_model._base_manager.filter(user_id__in=[user.pk for user in owners.values()])
+            }
+            for user in owners.values():
+                if user.pk not in own:
+                    own[user.pk] = self.for_user(user)
+            account_people = {
+                pk: person for pk, person in own.items() if not person.is_trashed and person.merged_into_id is None
+            }
+            known = list(
+                handle_model._base_manager.filter(
+                    platform=handle_model.Platform.EMAIL, normalized_value__in=set(values.values())
+                ).order_by("pk")
+            )
+            holders = self._holders(known)
+            held: dict[str, tuple[Any, Any | None]] = {}
+            for handle in known:
+                if handle.pk in holders:
+                    held.setdefault(handle.normalized_value, holders[handle.pk])
+            statements = self.handle_statements()
+            claims: defaultdict[str, dict[Any, Any]] = defaultdict(dict)
+            for value, subject_id, handle_id in (
+                statements.filter(handle__in=known, subject__in=live.values("pk"))
+                .members()
+                .filter(status=statements.model.StatementStatus.ASSERTED, snak=statements.model.StatementSnak.VALUE)
+                .order_by("handle_id")
+                .values_list("handle__normalized_value", "subject_id", "handle_id")
+            ):
+                claims[value].setdefault(subject_id, handle_id)
+            claimed = {value: next(iter(found.items())) for value, found in claims.items() if len(found) == 1}
+            claimants = live.in_bulk([subject_id for subject_id, _handle_id in claimed.values()])
+        by_pk = {handle.pk: handle for handle in known}
+        answer = []
+        for email in given:
+            holding = held.get(values[email], (None, None))
+            owner = owners.get(addresses[email])
+            if owner is not None and (person := account_people.get(owner.pk)) is not None:
+                own_handle = holding[0] if holding[1] is not None and holding[1].pk == person.pk else None
+                answer.append(EmailHolder(email, person, EmailBasis.ACCOUNT, own_handle))
+            if holding[1] is not None:
+                answer.append(EmailHolder(email, holding[1], EmailBasis.HELD, holding[0]))
+            elif (claim := claimed.get(values[email])) is not None and claim[0] in claimants:
+                answer.append(EmailHolder(email, claimants[claim[0]], EmailBasis.CLAIM, by_pk[claim[1]]))
+        return answer
+
+    def _holders(self, handles: Sequence[Any]) -> dict[Any, tuple[Any, Any | None]]:
+        """Return each handle's merge survivor and the live Person holding it, by handle pk, in bounded reads.
+
+        The survivor's party is followed to its own survivor; a party that is no
+        Person, or a trashed one, holds nothing (``None``). A handle whose survivor
+        has no party is absent.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        person_model = apps.get_model("parties", "Person")
+        loaded = {handle.pk: handle for handle in handles}
+        redirects = handle_model.canonical_ids([handle.pk for handle in handles if handle.merged_into_id is not None])
+        loaded.update(handle_model._base_manager.in_bulk(set(redirects.values()) - set(loaded)))
+        survivors = {handle.pk: loaded[redirects.get(handle.pk, handle.pk)] for handle in handles}
+        parties = apps.get_model("parties", "Party").canonical_ids(
+            {survivor.party_id for survivor in survivors.values() if survivor.party_id is not None}
+        )
+        people = person_model._base_manager.filter(is_trashed=False).in_bulk(set(parties.values()))
+        return {
+            pk: (survivor, people.get(parties.get(survivor.party_id)))
+            for pk, survivor in survivors.items()
+            if survivor.party_id is not None
+        }
 
     def contact_person(self, link: RecordLink) -> Person | None:
         """Resolve a contact through its native generic target and Person relation."""
