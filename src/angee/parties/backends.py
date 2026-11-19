@@ -25,14 +25,11 @@ from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.states import LinkStatus, StreamDefinition, StreamDirection, StreamKind, StreamPhase
 from angee.integrate.streams import ApplyResult, LocalChange, RecordChange, SemanticError, StreamPage
-from angee.provenance.evidence import EvidenceReference
 
 ADDRESSBOOKS = "addressbooks"
 """The stream whose records are a directory's address books; each targets its folder."""
 CONTACTS = "contacts"
 """One address book's contacts; its stream's container is the book's link."""
-ADOPTED_THROUGH = "adopted_through"
-"""A contact link's metadata key: the ``EvidenceReference`` of the handle its record adopted an existing person by."""
 
 
 @dataclass(frozen=True)
@@ -200,6 +197,12 @@ def contact_from_projection(projection: Mapping[str, Any]) -> ParsedContact:
     return ParsedContact(**values)
 
 
+def _preferred(contact: ParsedContact) -> list[str]:
+    """Return the contact's email addresses as the source spells them, its preferred ones first."""
+
+    return [value for value, _label, _preferred in sorted(contact.emails, key=lambda email: not email[2])]
+
+
 @dataclass(frozen=True)
 class ParsedOrganization:
     """One organization parsed from a directory source, neutral of the wire format.
@@ -263,6 +266,11 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
 
     supports_identity_reads: ClassVar[bool] = True
     """Both streams re-read identities (:meth:`read_keys`), so a retried or swept record reads its source."""
+
+    def __init__(self, integration: Any) -> None:
+        super().__init__(integration)
+        self._page_holders: dict[str, list[Any]] = {}
+        """Who each email of the page in application names (:meth:`prepare_page`), read under its locks."""
 
     def test_connection(self) -> str:
         """Prove this backend reaches its source; return the operator message.
@@ -549,6 +557,51 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             states[key] = person, projections.get(person.pk) if person is not None else None
         return states
 
+    def prepare_page(self, stream: Any, page: StreamPage) -> None:
+        """Lock a pull-only contacts page's identities once, before any of its records decides its person.
+
+        Who each unlinked contact's emails name is read once for the page
+        (``PartyManager.people_for_emails``, kept for :meth:`_contact_target`): a
+        contact is unlinked while neither its own link nor a link it replaces
+        names a live party. Then, in parties' one identity order
+        (``PartyManager.lock_identity_rows``), the page locks every spelling of its
+        contacts' addresses (``PartyManager.contact_handle_ids``) and the people
+        those handles' statements name, the people the lookup names and the
+        parties the page's links name. Two address books of one directory syncing
+        at once therefore serialize on a person both could adopt, and each record
+        checks its candidates' admission again under these locks. A two-way
+        stream adopts nobody and an address-book page names no person: they lock
+        nothing here.
+        """
+
+        self._page_holders = {}
+        if stream.key != CONTACTS or stream.direction != StreamDirection.PULL:
+            return
+        records = [
+            record
+            for record in page.records
+            if not record.tombstone and record.failure is None and "contact" in record.source_payload
+        ]
+        contacts = {
+            record.external_key: contact_from_projection(record.source_payload["contact"]) for record in records
+        }
+        named = {
+            record.external_key: [record.external_key, *record.source_payload.get("replaces", ())] for record in records
+        }
+        links = stream.links.filter(external_key__in={key for keys in named.values() for key in keys})
+        targets = dict(links.exclude(target_object_id__isnull=True).values_list("external_key", "target_object_id"))
+        parties = apps.get_model("parties", "Party")
+        rows = parties._base_manager.filter(pk__in=set(targets.values()))
+        live = {str(pk) for pk in rows.filter(is_trashed=False).values_list("pk", flat=True)}
+        unlinked = [key for key, keys in named.items() if not any(targets.get(each) in live for each in keys)]
+        holders = parties.objects.people_for_emails(email for key in unlinked for email in _preferred(contacts[key]))
+        for holder in holders:
+            self._page_holders.setdefault(holder.email, []).append(holder)
+        parties.objects.lock_identity_rows(
+            party_ids={*rows.values_list("pk", flat=True), *(holder.person.pk for holder in holders)},
+            handle_ids=parties.objects.contact_handle_ids(contacts.values()),
+        )
+
     def _contact_target(
         self, stream: Any, link: Any, replaced: Sequence[Any], parsed: ParsedContact | None = None
     ) -> tuple[Any | None, Any | None, list[tuple[Any, Any | None]]]:
@@ -557,15 +610,16 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         The one place a contact's target is decided, in order: its own link's
         person; then, for a merge at the source, the person of the first link it
         ``replaced``, in the source's order; then, for ``parsed`` on a pull-only
-        stream, an existing person one of its emails names
-        (``PartyManager.people_for_emails``, the preferred email first), the first
-        :meth:`_adoptable` admits. A trashed person is nobody's target
-        (``PartyManager.contact_people``), and a two-way stream never adopts. The
-        people passed over, each with what ties them to the contact, are every
-        other person a replaced link names (with that link) and every person an
-        adoption limit refused (with the handle their email found them by, if
-        any); :meth:`apply_record` proposes each as the target's same person. Call
-        it once, under the contact locks (:meth:`apply_record`).
+        stream, an existing person one of its emails names, the preferred email
+        first (the page's lookup, :meth:`prepare_page`), the first whose
+        adoption parties admits (``PartyManager.adoption_blocker``). A trashed
+        person is nobody's target (``PartyManager.contact_people``), and a
+        two-way stream never adopts. The people passed over, each with what ties
+        them to the contact, are every other person a replaced link names (with
+        that link) and every person an adoption limit refused (with the handle
+        their email found them by, if any); :meth:`apply_record` proposes each as
+        the target's same person. Call it once, under the page's and the
+        contact's locks (:meth:`apply_record`).
         """
 
         parties = apps.get_model("parties", "Party").objects
@@ -580,44 +634,15 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             return target, None, list(others.values())
         if parsed is None or stream.direction != StreamDirection.PULL:
             return None, None, []
-        emails = [value for value, _label, _preferred in sorted(parsed.emails, key=lambda email: not email[2])]
         tried: set[Any] = set()
         refused: list[tuple[Any, Any | None]] = []
-        for holder in parties.people_for_emails(emails):
+        for holder in (holder for email in _preferred(parsed) for holder in self._page_holders.get(email, ())):
             if holder.person.pk not in tried:
                 tried.add(holder.person.pk)
-                if self._adoptable(holder, link):
+                if parties.adoption_blocker(holder.person, link=link, through=holder.handle) is None:
                     return holder.person, holder.handle, refused
                 refused.append((holder.person, holder.handle))
         return None, None, refused
-
-    def _adoptable(self, holder: Any, link: Any) -> bool:
-        """Whether this directory adopts the existing person an email names (rulings R2 and R9).
-
-        Every limit must hold. The person is no account's own (the account basis
-        names only such a person). The directory's owner already has
-        ``write`` on them, evaluated for that user although sync runs as system
-        work, since adopting makes this source a statement source of the person. No
-        other live link of this integration names them: its statements are keyed
-        by integration, not by link, so two records would share and overwrite them.
-        The caller adopts only on a pull-only stream.
-        """
-
-        person = holder.person
-        if person.user_id is not None:
-            return False
-        owner = self.bridge.owner
-        candidate = apps.get_model("parties", "Person")._base_manager.get(pk=person.pk)
-        if owner is None or not candidate.with_actor(owner).has_access("write"):
-            return False
-        others = (
-            apps.get_model("integrate", "RecordLink")
-            .objects.filter(stream__integration_id=self.bridge.pk)
-            .observing()
-            .exclude(pk=link.pk)
-        )
-        parties = apps.get_model("parties", "Party")._base_manager
-        return not parties.filter(pk=person.pk, record_links__pk__in=others.values("pk")).exists()
 
     def apply_record(self, stream: Any, record: RecordChange) -> ApplyResult:
         """Revalidate under domain locks, then use the single folder or contact ingest verb.
@@ -626,8 +651,10 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         statement while the folder stays. A contact lands through
         ``PartyManager.ingest_contact`` from its payload's ``contact`` projection:
         the people its own link and the links it replaces name, and its handles,
-        are locked first, then :meth:`_contact_target` decides its person once, and
-        the ingest withdraws what neither its link nor a replaced link still
+        are locked first (beside the page's locks, :meth:`prepare_page`), then
+        :meth:`_contact_target` decides its person once, the ingest admits that
+        person again as the binding owner, cites the handle an adoption found them
+        by, and withdraws what neither its link nor a replaced link still
         supports. Each person that decision passed over is proposed for the
         same-as review as the landed person's same person
         (``PartyManager.propose_directory_match``); adopting a person withdraws the
@@ -663,21 +690,19 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             )
             previous = link.target
             parties.lock_contact(*(row.target for row in (link, *replaced)), parsed=parsed)
-            target, adopted, passed_over = self._contact_target(stream, link, replaced, parsed)
+            target, through, passed_over = self._contact_target(stream, link, replaced, parsed)
             target = parties.ingest_contact(
                 parsed,
                 stream=stream,
                 link=link,
                 replaces=replaced,
                 target=target,
+                through=through,
                 created_by_id=self.bridge.owner_id,
             )
-            if adopted is not None:
-                evidence = EvidenceReference.of(adopted).model_dump(mode="json")
-                links.observe(stream, link.external_key, metadata={**link.metadata, ADOPTED_THROUGH: evidence})
-                if previous is not None and previous.pk != target.pk:
-                    # Adopting the person a refusal once proposed as the previous person's answers that proposal.
-                    parties.withdraw_directory_match(previous, target)
+            if through is not None and previous is not None and previous.pk != target.pk:
+                # Adopting the person a refusal once proposed as the previous person's answers that proposal.
+                parties.withdraw_directory_match(previous, target)
             for other, tie in passed_over:
                 parties.propose_directory_match(target, other, evidence=[link, *([tie] if tie is not None else [])])
         if stream.direction == StreamDirection.PULL:
