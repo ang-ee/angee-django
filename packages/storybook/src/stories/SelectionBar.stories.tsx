@@ -82,7 +82,7 @@ export const SheetSurface: Story = {
 };
 
 /** A verb that cannot run for this selection says why in its tooltip and stays focusable. */
-export const DisabledVerb: Story = {
+export const WithDisabledVerb: Story = {
   args: {
     count: 3,
     summary: "People selected",
