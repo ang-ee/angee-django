@@ -384,6 +384,18 @@ class DirectoryMapping(ImplBase):
         del values
         return contact
 
+    def applied(self, link: Any) -> dict[str, Any]:
+        """Return this mapping's projection when ``link`` last applied, ``{}`` when it applied none.
+
+        Read in :meth:`apply_record`, before the driver promotes the record, it is
+        what the mapping last stated or wrote through the link: the text it last
+        wrote into a page, say, which a page writer compares with the page.
+        """
+
+        base = link.applied_base
+        mapped = base.mapped_payload if base is not None else None
+        return dict(((mapped or {}).get(MAPPINGS) or {}).get(self.key) or {})
+
     def apply_record(self, person: Any, values: Mapping[str, Any], *, link: Any) -> None:
         """State ``values`` (:meth:`project`'s result) on ``person`` through ``link``, or write through other owners.
 

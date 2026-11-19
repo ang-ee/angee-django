@@ -15,6 +15,7 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
+from django.apps import apps
 from django.core.checks import Error
 from django.core.exceptions import ImproperlyConfigured
 
@@ -24,7 +25,9 @@ from angee.integrate.testing.models import RecordLink
 from angee.messaging.testing.models import Handle, Party, Person
 from angee.parties.backends import MAPPINGS, DirectoryMapping, ParsedContact
 from angee.parties.checks import check_directory_mappings
+from angee.resources.testing.models import Resource
 from angee.tags.testing.models import Tag, TagAssignment
+from tests.conftest import MarkdownPage, RecordBinding, Vault
 from tests.stream_adapters import applied_history
 from tests.test_parties_directory_backend import (
     _ADA,
@@ -256,6 +259,27 @@ class AddressAddingMapping(FlagsMapping):
 
     def refine(self, contact: ParsedContact, values: Mapping[str, Any]) -> ParsedContact:
         return replace(contact, phones=(*contact.phones, ("+14155550199", "", True)))
+
+
+class RememberMapping(DirectoryMapping):
+    """A source's free text about a person, written as a note in their folder of the people vault."""
+
+    key = "remember"
+    backend = PullDirectoryBackend.key
+    fields = ("remember",)
+
+    def project(self, row: Mapping[str, Any]) -> dict[str, Any]:
+        return {"remember": str(row.get("remember") or "")}
+
+    def apply_record(self, person: Any, values: Mapping[str, Any], *, link: Any) -> None:
+        RecordBinding.objects.write_sourced_page(
+            person,
+            vault=Vault.objects.for_resource(Vault.PEOPLE),
+            folder_title=f"{person.display_name} ({person.sqid})",
+            title=f"Remember: {person.sqid}",
+            body=values["remember"],
+            written=self.applied(link).get("remember"),
+        )
 
 
 class ProfileMapping(DirectoryMapping):
@@ -654,6 +678,48 @@ def test_a_refinement_of_the_contacts_addresses_sets_only_a_preferred_flag(pull:
 
     with pytest.raises(ImproperlyConfigured, match="preferred"):
         pull.sync()
+
+
+def test_a_mapping_writes_a_sourced_note_that_follows_the_source_until_a_person_edits_it(
+    pull: Pull, settings: Any
+) -> None:
+    """The link remembers what the mapping last wrote; an edited note keeps its text and the newer one below."""
+
+    Resource.objects.load_addons((apps.get_app_config("knowledge"),), tiers=[Resource.Tier.INSTALL])
+    pull.source.fields["ada"] = {"remember": "Prefers tea."}
+    assert _checked(settings, RememberMapping) == []
+    pull.reopen()
+    pull.sync()
+    person = _person(pull, "ada")
+
+    def note() -> Any:
+        return MarkdownPage.objects.get(title=f"Remember: {person.sqid}")
+
+    assert note().body == "Prefers tea."
+    revisions = MarkdownPage.history.filter(id=note().pk).count()
+    pull.source.changed.update(pull.source.contacts)
+    assert pull.sync().count == 0
+    pull.source.put("ada", replace(_ADA, notes="Moved"), fields={"remember": "Prefers tea."})
+    assert pull.sync().count == 1
+    assert MarkdownPage.history.filter(id=note().pk).count() == revisions
+
+    pull.source.put("ada", _ADA, fields={"remember": "Prefers green tea."})
+    pull.sync()
+    assert note().body == "Prefers green tea."
+
+    MarkdownPage.objects.write_body(note(), "Prefers green tea. Ask about the garden.")
+    pull.source.put("ada", _ADA, fields={"remember": "Prefers coffee."})
+    assert pull.sync().count == 1
+    assert note().body.startswith("Prefers green tea. Ask about the garden.")
+    assert "> Prefers coffee." in note().body
+    history = RecordLink.history.filter(id=pull.link("ada").pk).values_list("source_payload", flat=True)
+    assert any(payload[MAPPINGS]["remember"]["remember"] == "Prefers coffee." for payload in history if payload)
+
+    # The note stays when the mapping goes.
+    _register(settings)
+    pull.reopen()
+    pull.sync()
+    assert note().body.startswith("Prefers green tea. Ask about the garden.")
 
 
 @pytest.mark.usefixtures("adoption")

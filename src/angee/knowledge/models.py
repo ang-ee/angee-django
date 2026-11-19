@@ -653,6 +653,18 @@ class Page(
 
 
 
+class SourcedWrite(StrEnum):
+    """What :meth:`RecordBindingManager.write_sourced_page` did with a source's text."""
+
+    WRITTEN = "written"
+    UNCHANGED = "unchanged"
+    EDITED = "edited"
+
+
+SOURCED_TEXT_MARKER = "Newer text from the source, not written over this page's edits:"
+"""The line that introduces a source's newer text appended below a person's edit of a sourced page."""
+
+
 class RecordBindingQuerySet[BindingT: RecordBinding](AngeeHistoryQuerySet[BindingT]):
     """Binding selections that keep the selected population and its actor."""
 
@@ -732,6 +744,38 @@ class RecordBindingManager[BindingT: RecordBinding](_RecordBindingManagerBase[Bi
             if readable is None:
                 raise PermissionDenied("The folder is not readable.")
             return readable
+
+    def write_sourced_page(
+        self, party: models.Model, *, vault: Vault, folder_title: str, title: str, body: str, written: str | None
+    ) -> SourcedWrite:
+        """Write a source's text ``body`` as ``party``'s note ``title`` in its folder, never over a person's edit.
+
+        ``written`` is the text this source last wrote there, ``None`` for none
+        (a directory mapping reads it from its link: ``DirectoryMapping.applied``).
+        The same text again, or an empty first one, writes nothing, not even the
+        folder (``UNCHANGED``). Otherwise the folder (:meth:`party_folder`) and the
+        note (``PageManager.subpage``) are found or made. A note that still holds
+        ``written`` (an empty one when there is none) takes ``body``, compare-and-set
+        on the hash it holds (``WRITTEN``). A note a person has edited since keeps
+        their text, and the newer text is appended below it under a marker, quoted,
+        so it is neither applied over theirs nor lost (``EDITED``); the source's
+        record history keeps it too. A concurrent edit refuses the write
+        (``StaleBodyError``). An import calls it as system work.
+        """
+
+        if body == (written or ""):
+            return SourcedWrite.UNCHANGED
+        pages = self.model._meta.apps.get_model("knowledge", "Page").objects
+        bodies = self.model._meta.apps.get_model("knowledge", "MarkdownPage").objects
+        with transaction.atomic():
+            note = pages.subpage(self.party_folder(party, vault=vault, title=folder_title), title=title)
+            markdown = bodies.get(pk=note.pk)
+            if markdown.body_hash == markdown.hash_body(written or ""):
+                bodies.write_body(markdown, body, expected_hash=markdown.body_hash)
+                return SourcedWrite.WRITTEN
+            quoted = "\n".join(f"> {line}" if line else ">" for line in body.splitlines())
+            bodies.append(markdown, f"{SOURCED_TEXT_MARKER}\n\n{quoted}", expected_hash=markdown.body_hash)
+            return SourcedWrite.EDITED
 
     def create_note(
         self, *, target: models.Model, vault: Vault, body: str,

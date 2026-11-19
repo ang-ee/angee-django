@@ -71,7 +71,20 @@ binding's (write on the page and on the party); an import, in a system context,
 makes them as system work (`PageManager.create_in` without an actor). A page's
 title is unique in its vault, so a caller names a folder and a note uniquely,
 with the person's public id for instance. After a merge the survivor holds both
-folders: the oldest is its folder, no third is made, and nothing is lost. The Pages group shows only on
+folders: the oldest is its folder, no third is made, and nothing is lost.
+
+An importer writes a source's text about a person with
+`RecordBindingManager.write_sourced_page`, passing the text it last wrote there
+(a directory mapping reads it from its link with `DirectoryMapping.applied`).
+The same text writes nothing. A changed text replaces a note that still holds
+what the source last wrote, compare-and-set on its body hash. A note a person
+has edited since is never written over: the newer text is appended below their
+text, quoted under the line "Newer text from the source, not written over this
+page's edits:", for them to take or leave, and the source's record history
+keeps it too. A note stays when the mapping or the link goes. Integrate's
+record conflicts are not used for this: on a pull-only stream a conflict
+resolves only by keeping the source's side, whose re-application would find the
+edit again, and it would mark the person's whole contact failed. The Pages group shows only on
 record views of declared types (their resource metadata lists
 `knowledge.RecordBinding` in `recordEdges`), and `record_knowledge_can_bind`
 offers binding only on a declared type the actor can write.

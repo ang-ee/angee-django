@@ -122,3 +122,50 @@ def test_after_a_merge_the_survivor_keeps_both_folders_and_its_folder_is_the_old
         assert RecordBinding.objects.party_folder(survivor, vault=vault, title="Another title").pk == older.pk
         assert Page.objects.get(pk=kept.pk).parent_id == older.pk
     assert _folders(survivor) == [older.pk, newer.pk]
+
+
+def test_a_sourced_note_is_written_once_updated_while_untouched_and_never_written_over_an_edit(db: None) -> None:
+    """The four cases: a new text, the same text, a changed text on an untouched note, and on an edited one."""
+
+    vault = _people_vault()
+    owner, editor = create_user("people-sourced-owner"), create_user("people-sourced-editor")
+    person = _person(owner)
+    _grant(vault, "editor", editor)
+
+    def write(body: str, written: str | None) -> str:
+        with system_context(reason="tests.knowledge.import"):
+            return RecordBinding.objects.write_sourced_page(
+                person, vault=vault, folder_title="Ada Example (folder)", title="Ada Example: remember",
+                body=body, written=written,
+            )
+
+    def note() -> Any:
+        with system_context(reason="tests.knowledge.sourced.readback"):
+            return MarkdownPage.objects.filter(title="Ada Example: remember").first()
+
+    # An empty first text writes nothing at all, not even the folder.
+    assert write("", None) == "unchanged"
+    assert note() is None and _folders(person) == []
+
+    assert write("Prefers tea.", None) == "written"
+    written = note()
+    assert written.body == "Prefers tea." and written.parent_id == _folders(person)[0]
+    revisions = MarkdownPage.history.filter(id=written.pk).count()
+
+    # The same text again writes nothing.
+    assert write("Prefers tea.", "Prefers tea.") == "unchanged"
+    assert MarkdownPage.history.filter(id=written.pk).count() == revisions
+
+    # A changed text updates a note nobody edited since the source wrote it.
+    assert write("Prefers green tea.", "Prefers tea.") == "written"
+    assert note().body == "Prefers green tea."
+
+    # A person's edit is never written over: the newer text lands below it, marked, for them to take or leave.
+    with actor_context(editor):
+        MarkdownPage.objects.write_body(note(), "Prefers green tea. Ask about the garden.")
+    assert write("Prefers coffee.\nNo sugar.", "Prefers green tea.") == "edited"
+    body = note().body
+    assert body.startswith("Prefers green tea. Ask about the garden.")
+    assert "> Prefers coffee.\n> No sugar." in body
+    assert write("Prefers coffee.\nNo sugar.", "Prefers coffee.\nNo sugar.") == "unchanged"
+    assert note().body == body

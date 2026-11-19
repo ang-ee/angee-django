@@ -10,6 +10,14 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.knowledge`: a source's text about a person, as a note in their folder:
+  `RecordBindingManager.write_sourced_page(party, vault=, folder_title=,
+  title=, body=, written=)` writes nothing for the same text, replaces a note
+  that still holds what the source last wrote (compare-and-set on its hash),
+  and appends the newer text, quoted under a marker line, below a person's
+  edit, never over it (`SourcedWrite`). `angee.parties`:
+  `DirectoryMapping.applied(link)` returns what the mapping's projection was
+  when the link last applied, which a mapping passes as `written`.
 - `angee.knowledge`: one vault for people. Knowledge's install tier provisions
   `Vault.PEOPLE` (`knowledge.vault_people`), unowned and administered by
   platform admins and knowledge's vault roles; a deployment grants it with a

@@ -99,7 +99,11 @@ address (R20), so the ingest writes it once. A mapping may also write through
 other owners' verbs in its `apply_record`, declaring nothing for them: tags
 (`TagAssignment.objects.attach`) and the preferred mark of a handle the contact
 does not bring, a messenger's (`Handle.objects.upsert(..., is_preferred=True)`).
-Neither is taken back when the mapping or the link goes. On every
+Neither is taken back when the mapping or the link goes. A mapping that writes
+a person's text into their folder of the people vault reads what it last wrote
+from its link (`DirectoryMapping.applied`, the projection the link last applied)
+and hands it to knowledge's page writer, which never writes over a person's
+edit; the page stays when the mapping goes. On every
 pull-only record the base first withdraws what the link states in a person group
 that neither the ingest nor a registered mapping states, so a mapping removed
 from the registry has its statements withdrawn on its replay, and nothing else on
