@@ -190,6 +190,42 @@ def contact_from_projection(projection: Mapping[str, Any]) -> ParsedContact:
     return ParsedContact(**values)
 
 
+@dataclass(frozen=True)
+class ParsedOrganization:
+    """One organization parsed from a directory source, neutral of the wire format.
+
+    The organization counterpart of :class:`ParsedContact`, landed by
+    ``PartyManager.ingest_organization``; its link owns the source identity.
+    ``legal_name`` and ``domain`` are its legal identity, stated together.
+    Emails/phones are ``(value, label, is_preferred)`` triples.
+    """
+
+    display_name: str = ""
+    legal_name: str = ""
+    domain: str = ""
+    emails: tuple[tuple[str, str, bool], ...] = ()
+    phones: tuple[tuple[str, str, bool], ...] = ()
+    addresses: tuple[ParsedAddress, ...] = ()
+
+
+def organization_projection(organization: ParsedOrganization) -> dict[str, Any]:
+    """Return the JSON comparison shape of a source organization, as :func:`contact_projection` does a contact's.
+
+    Its contact points and addresses compare exactly as a contact's do, so that
+    projection orders them.
+    """
+
+    points = contact_projection(
+        ParsedContact(emails=organization.emails, phones=organization.phones, addresses=organization.addresses)
+    )
+    return {
+        "display_name": organization.display_name,
+        "legal_name": organization.legal_name,
+        "domain": organization.domain,
+        **{name: points[name] for name in (*SET_FIELDS, "addresses")},
+    }
+
+
 class DirectoryBackend(BridgeImpl, HttpClientMixin):
     """An address-book stream, and one contacts replica per address book mapped through Party.ingest_contact.
 

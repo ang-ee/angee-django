@@ -1,8 +1,9 @@
 """Managers that own the directory-sync write path for parties.
 
-A directory backend parses a source into neutral ``ParsedContact`` rows; these
-managers turn one into a ``Party`` (a ``Person``) and its ``Handle`` /
-``PartyStatement`` / ``Address`` rows. A contact is keyed by its source UID within
+A directory backend parses a source into neutral ``ParsedContact`` and
+``ParsedOrganization`` rows; these managers turn one into a ``Party`` (a
+``Person`` or an ``Organization``) and its ``Handle`` / ``PartyStatement`` /
+``Address`` / ``Relationship`` rows. A contact is keyed by its source UID within
 its observed RecordLink identity, handles dedupe on
 ``(platform, value)``, and ``handle_count`` plus the resolved ``Handle.party`` are
 maintained here in the same transaction — so every directory source shares one
@@ -18,14 +19,14 @@ import logging
 import re
 from collections import defaultdict
 from collections.abc import Iterable
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from itertools import chain, combinations, groupby, islice
 from typing import TYPE_CHECKING, Any, NamedTuple, Self, TypedDict
 
 from django.apps import apps
 from django.conf import settings
-from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
 from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Prefetch, Q, Subquery, TextField, Value, When
 from django.db.models.functions import Coalesce, NullIf
@@ -41,6 +42,7 @@ from rebac import (
 from rebac.actors import is_sudo, to_subject_ref
 
 from angee.base.hooks import resolve_hooks
+from angee.base.lineage import concrete_child
 from angee.base.models.hierarchy import HierarchyQuerySet
 from angee.base.models.identity import instances_from_public_ids
 from angee.base.models.trash import ArchiveQuerySet
@@ -48,7 +50,7 @@ from angee.base.pagination import clamp_page_size
 from angee.base.permissions import actor_user_id, reader_queryset
 from angee.base.querysets import MergeableQuerySet, by_key
 from angee.base.serialization import canonical_json
-from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedPhoto
+from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedOrganization, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
@@ -68,7 +70,7 @@ if TYPE_CHECKING:
     from angee.integrate.models import RecordLink
     from angee.parties.connections import ParsedConnection
     from angee.parties.mixins import PartyStatementMixin
-    from angee.parties.models import Circle, Folder, Handle, Party, Person, Relationship
+    from angee.parties.models import Circle, Folder, Handle, Organization, Party, Person, Relationship
 
 logger = logging.getLogger(__name__)
 
@@ -1736,15 +1738,15 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 link=link,
                 evidence=handle,
             )
+            employer = parsed.organization.strip()
             relationships.land_employment(
                 person,
-                organization=parsed.organization,
-                title=parsed.title,
+                [Employment(employer, parsed.title)] if employer else [],
                 kinds=kinds,
                 created_by_id=created_by_id,
                 asserted_by=asserted_by,
                 link=link,
-                evidence=handle,
+                evidence=[handle],
             )
             parent.statements.set(
                 aspect="identity",
@@ -1787,38 +1789,43 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     def contact_person(self, link: RecordLink) -> Person | None:
         """Resolve a contact through its native generic target and Person relation."""
 
+        return self._linked_party(link, apps.get_model("parties", "Person"))
+
+    @staticmethod
+    def _linked_party(link: RecordLink, model: Any) -> Any | None:
+        """Resolve ``link``'s Party target to its ``model`` child (Person or Organization); ``None`` while unbound."""
+
         target = link.target
         if target is None:
             if link.target_content_type_id is not None or link.target_object_id:
                 raise ValidationError("The contact's linked target no longer exists.")
             return None
         if not isinstance(target, apps.get_model("parties", "Party")):
-            raise ValidationError("A contact target must be a Party with a Person child.")
-        if isinstance(target, apps.get_model("parties", "Person")):
-            return target
-        try:
-            return target.person
-        except ObjectDoesNotExist as error:
-            raise ValidationError("A contact target must have a Person child.") from error
+            raise ValidationError(f"A contact target must be a Party with a {model.__name__} child.")
+        child = concrete_child(target, model)
+        if child is None:
+            raise ValidationError(f"A contact target must have a {model.__name__} child.")
+        return child
 
     def lock_contact(
         self,
-        person: Any | None,
+        party: Any | None,
         *,
-        parsed: ParsedContact | None = None,
+        parsed: ParsedContact | ParsedOrganization | None = None,
     ) -> None:
         """Lock the mapped contact aggregate before a caller rechecks its base.
 
         Follow the shared Handle, Party, PartyStatement order before locking the
-        Person child and its mapped collections. The parent row lock also fences
-        inserts through its foreign keys while the page transaction is open.
+        Person or Organization child ``party`` is and its mapped collections. The
+        parent row lock also fences inserts through its foreign keys while the
+        page transaction is open.
         """
 
         associations = apps.get_model("parties", "Party").objects
         handles = apps.get_model("parties", "Handle").objects
         handle_ids = (
-            set(associations.handle_statements().filter(subject_id=person.pk).values_list("handle_id", flat=True))
-            if person is not None
+            set(associations.handle_statements().filter(subject_id=party.pk).values_list("handle_id", flat=True))
+            if party is not None
             else set()
         )
         if parsed is not None:
@@ -1829,24 +1836,17 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 ).values_list("pk", flat=True)
             )
         associations.lock_identity_rows(
-            party_ids=(person.pk,) if person is not None else (),
+            party_ids=(party.pk,) if party is not None else (),
             handle_ids=handle_ids,
         )
-        if person is None:
+        if party is None:
             return
         employee = apps.get_model("parties", "RelationshipKind").employee()
-        list(
-            apps.get_model("parties", "Person")
-            .objects.filter(
-                pk=person.pk,
-            )
-            .order_by("pk")
-            .lock_if_supported()
-        )
+        list(type(party).objects.filter(pk=party.pk).order_by("pk").lock_if_supported())
         list(
             apps.get_model("parties", "Address")
             .objects.filter(
-                party_id=person.pk,
+                party_id=party.pk,
             )
             .order_by("pk")
             .lock_if_supported()
@@ -1854,9 +1854,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         list(
             apps.get_model("parties", "Relationship")
             .objects.filter(
-                party_id=person.pk,
+                party_id=party.pk,
                 kind=employee,
-                other_party__isnull=True,
             )
             .order_by("pk")
             .lock_if_supported()
@@ -1999,6 +1998,43 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             raise ValidationError("The prepared contact photo is no longer available.")
         return avatar
 
+    def _land_handles(
+        self,
+        party: Any,
+        parsed: ParsedContact | ParsedOrganization,
+        *,
+        source: Any,
+        link: Any,
+        created_by_id: Any,
+    ) -> None:
+        """Assert the emails and phones ``link`` names for ``party``; withdraw the link's others.
+
+        Each handle dedupes on its value and keeps the label and preference the
+        source gives it; the Party row is the assertion's evidence.
+        """
+
+        handles = apps.get_model("parties", "Handle").objects
+        supported = []
+        for platform, points in (("email", parsed.emails), ("phone", parsed.phones)):
+            for value, label, preferred in points:
+                handle = handles.upsert(
+                    platform=platform,
+                    value=value,
+                    created_by_id=created_by_id,
+                    display_name=parsed.display_name,
+                    label=label,
+                    is_preferred=preferred,
+                )
+                mapped = {"label": label, "is_preferred": preferred}
+                dirty = [name for name, value in mapped.items() if getattr(handle, name) != value]
+                if dirty:
+                    for name in dirty:
+                        setattr(handle, name, mapped[name])
+                    handle.save(update_fields=(*dirty, "updated_at"))
+                self.assert_handle(party, handle, asserted_by=source, link=link, evidence=[party])
+                supported.append({"subject": party, "aspect": "handle", "handle": handle})
+        party.statements.withdraw_unsupported(source, supported, aspect="handle", link=link)
+
     def ingest_contact(
         self,
         parsed: ParsedContact,
@@ -2013,11 +2049,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         The link owns stable source identity, transport version and lossless bytes.
         ``stream`` is the link's contacts stream as the page holds it, so its
         container (the address book, whose folder belongs to the same directory)
-        and integration resolve once per page. Addresses are matched by their
-        normalized identity (``AddressManager.identity_key``), repeated equal
-        addresses included, so a respelled card address updates its row and keeps
-        what the card does not carry; removed members withdraw only this source's
-        statements instead of deleting rows.
+        and integration resolve once per page. Addresses land through
+        :meth:`AddressManager.land_addresses` and the employer through
+        :meth:`RelationshipManager.land_employment`; removed members withdraw only
+        this source's statements instead of deleting rows.
         """
         if not parsed.uid:
             return None
@@ -2034,9 +2069,6 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             raise ValidationError("The contact does not match the observed link identity.")
         parsed = self.prepare_contact(parsed)
         people = apps.get_model("parties", "Person").objects
-        handles = apps.get_model("parties", "Handle").objects
-        addresses = apps.get_model("parties", "Address")
-        relationships = apps.get_model("parties", "Relationship")
         source = stream.integration
         with transaction.atomic():
             linked_person = self.contact_person(link)
@@ -2068,75 +2100,67 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 (person, "dates", {"birthday": parsed.birthday, "anniversary": parsed.anniversary}),
             ):
                 subject.statements.set(aspect=aspect, values=values, asserted_by=source, link=link)
-            supported_handles = []
-            for platform, points in (("email", parsed.emails), ("phone", parsed.phones)):
-                for value, label, preferred in points:
-                    handle = handles.upsert(
-                        platform=platform,
-                        value=value,
-                        created_by_id=created_by_id,
-                        display_name=parsed.display_name,
-                        label=label,
-                        is_preferred=preferred,
-                    )
-                    mapped = {"label": label, "is_preferred": preferred}
-                    dirty = [name for name, value in mapped.items() if getattr(handle, name) != value]
-                    if dirty:
-                        for name in dirty:
-                            setattr(handle, name, mapped[name])
-                        handle.save(update_fields=(*dirty, "updated_at"))
-                    self.assert_handle(parent, handle, asserted_by=source, link=link, evidence=[parent])
-                    supported_handles.append({"subject": parent, "aspect": "handle", "handle": handle})
-            parent.statements.withdraw_unsupported(source, supported_handles, aspect="handle", link=link)
-            supported_addresses: list[Any] = []
-            stored = list(addresses._base_manager.filter(party_id=person.pk).order_by("pk"))
-            for parsed_address in parsed.addresses:
-                values = asdict(parsed_address)
-                key = addresses.objects.identity_key(values)
-                address = next(
-                    (
-                        row
-                        for row in stored
-                        if row.pk not in supported_addresses
-                        and addresses.objects.identity_key(
-                            {name: getattr(row, name) for name in addresses.objects.components}
-                        )
-                        == key
-                    ),
-                    None,
-                )
-                if address is None:
-                    address = addresses.objects.create(party_id=person.pk, created_by_id=created_by_id, **values)
-                address.statements.set(aspect="address", values=values, asserted_by=source, link=link)
-                supported_addresses.append(address.pk)
-            removed = addresses.statements.filter(link=link).exclude(subject_id__in=supported_addresses)
-            addresses.statements.withdraw(source, list(removed.values_list("subject_id", flat=True)), link=link)
-            employee = apps.get_model("parties", "RelationshipKind").employee()
-            if employee is None:
-                raise ValidationError("CardDAV employment sync requires the employee RelationshipKind master row.")
-            previous = relationships.statements.filter(link=link, subject__party_id=person.pk, subject__kind=employee)
-            edge = relationships._base_manager.filter(pk__in=previous.values("subject_id")).order_by("pk").first()
-            if parsed.organization:
-                if edge is None:
-                    edge = relationships.objects.create(
-                        party_id=person.pk, kind=employee, other_name=parsed.organization, created_by_id=created_by_id
-                    )
-                edge.statements.set(
-                    aspect="relationship",
-                    asserted_by=source,
-                    link=link,
-                    values={
-                        "other_name": parsed.organization,
-                        "title": parsed.title,
-                        "notes": parsed.role,
-                        "started_at": None,
-                        "ended_at": None,
-                    },
-                )
-            elif edge is not None:
-                edge.statements.withdraw(source, link=link)
+            self._land_handles(parent, parsed, source=source, link=link, created_by_id=created_by_id)
+            apps.get_model("parties", "Address").objects.land_addresses(
+                person, parsed.addresses, asserted_by=source, link=link, created_by_id=created_by_id
+            )
+            apps.get_model("parties", "Relationship").objects.land_employment(
+                person,
+                [Employment(parsed.organization, parsed.title, parsed.role)] if parsed.organization else [],
+                created_by_id=created_by_id,
+                asserted_by=source,
+                link=link,
+            )
             person.refresh_from_db()
             return person
+
+    def ingest_organization(
+        self,
+        parsed: ParsedOrganization,
+        *,
+        stream: Any,
+        link: Any,
+        created_by_id: Any,
+        target: Organization | None = None,
+    ) -> Any:
+        """Assert one link's organization facts; preserve other sources and person decisions.
+
+        The organization counterpart of :meth:`ingest_contact`, for a directory
+        stream whose records are organizations. A link with no target mints a new
+        Organization; matching an existing one is not decided here. The link is
+        bound before the facts are stated: identity, the whole legal identity (an
+        omitted field is stated empty, so legal name and domain move together),
+        handles and addresses, each withdrawing this link's statements it no
+        longer supports.
+        """
+
+        directories = apps.get_model("parties", "Directory")
+        if link.stream_id != stream.pk or not directories._base_manager.filter(pk=stream.integration_id).exists():
+            raise ValidationError("Organization ingestion requires a link of its directory's stream.")
+        organizations = apps.get_model("parties", "Organization").objects
+        name = parsed.display_name or parsed.legal_name or organizations.model.PLACEHOLDER_NAME
+        source = stream.integration
+        with transaction.atomic():
+            target = target or self._linked_party(link, organizations.model)
+            if target is not None:
+                self.lock_contact(target, parsed=parsed)
+            organization: Any = target or organizations.create(display_name=name, created_by_id=created_by_id)
+            parent = apps.get_model("parties", "Party")._base_manager.get(pk=organization.pk)
+            apps.get_model("integrate", "RecordLink").objects.bind_target(link, parent)
+            parent.statements.set(aspect="identity", values={"display_name": name}, asserted_by=source, link=link)
+            legal = organization.statements.model.statement_aspects["legal_identity"].fields
+            organization.statements.set(
+                aspect="legal_identity",
+                values={field: getattr(parsed, field) for field in legal},
+                asserted_by=source,
+                link=link,
+            )
+            self._land_handles(parent, parsed, source=source, link=link, created_by_id=created_by_id)
+            apps.get_model("parties", "Address").objects.land_addresses(
+                organization, parsed.addresses, asserted_by=source, link=link, created_by_id=created_by_id
+            )
+            organization.refresh_from_db()
+            return organization
 
 
 def _user_display_name(user: Any) -> str:
@@ -2146,6 +2170,19 @@ def _user_display_name(user: Any) -> str:
         if text := (candidate or "").strip():
             return text
     return str(user.pk)
+
+
+class Employment(NamedTuple):
+    """One employer a source names for a person, as :meth:`RelationshipManager.land_employment` lands it.
+
+    ``employer`` is the counterparty: a tracked Organization, or the free-text
+    name of one that is not tracked (``Relationship.other_name``). ``title`` and
+    ``notes`` are the edge's own (a vCard ``TITLE`` and ``ROLE``).
+    """
+
+    employer: Organization | str
+    title: str = ""
+    notes: str = ""
 
 
 class RelationshipManager[RelationshipT: Relationship](StatementSubjectManager[RelationshipT]):
@@ -2203,45 +2240,86 @@ class RelationshipManager[RelationshipT: Relationship](StatementSubjectManager[R
     def land_employment(
         self,
         person: Any,
+        employers: Iterable[Employment],
         *,
-        organization: str,
-        title: str,
-        kinds: dict[Any, Any],
         created_by_id: Any,
         asserted_by: Any,
         link: Any,
-        evidence: Any,
+        evidence: Iterable[Any] = (),
+        kinds: dict[Any, Any] | None = None,
     ) -> None:
-        """Land the free-text employee relationship shape when an employer is named."""
+        """State the employers ``link`` names for ``person``; withdraw the link's edges it no longer names.
 
-        organization = str(organization or "").strip()
-        if not organization:
-            return
+        An organization is the edge's tracked counterparty, one edge per pair
+        (``uq_relationship_edge``) that every source naming it states. A free-text
+        name is a value of the link's own edge, not its identity: a name the link
+        already states keeps its edge, a new name renames in place an edge whose
+        name the link no longer states, and only then is an edge created, so a
+        source keeps one edge per employer it names. A dropped employer loses only
+        this link's statement; rows are never deleted. ``evidence`` names the
+        records supporting the claims; ``kinds`` caches the employee kind across a
+        batch.
+        """
+
+        employers = list(employers)
+        kinds = {} if kinds is None else kinds
         if "employee" not in kinds:
             kinds["employee"] = self.model._meta.get_field("kind").related_model.employee()
         kind = kinds["employee"]
         if kind is None:
-            raise ValidationError("The employee RelationshipKind master row is required.")
-        edge, _ = self.get_or_create(
-            party=person,
-            other_party=None,
-            other_name=organization,
-            kind=kind,
-            defaults={"created_by_id": created_by_id},
+            if employers:
+                raise ValidationError("Employment requires the employee RelationshipKind master row.")
+            return  # Without the kind no employment edge exists to withdraw.
+        if any(not employment.employer for employment in employers):
+            raise ValidationError("An employer is an organization or a non-empty name.")
+        stated = dict(
+            self.model.statements.current()
+            .filter(link=link, subject__party_id=person.pk, subject__kind=kind)
+            .values_list("subject_id", "other_name")
         )
-        edge.statements.set(
-            aspect="relationship",
-            asserted_by=asserted_by,
-            link=link,
-            evidence=[EvidenceReference.of(evidence)],
-            values={
-                "other_name": organization,
-                "title": str(title or ""),
-                "notes": "",
-                "started_at": None,
-                "ended_at": None,
-            },
-        )
+        edges = self.model._base_manager.in_bulk(list(stated))
+        landed: dict[int, Any] = {}
+        for index, employment in enumerate(employers):
+            organization = employment.employer
+            if not isinstance(organization, str):
+                landed[index] = self.model._base_manager.filter(
+                    party_id=person.pk, other_party_id=organization.pk, kind=kind
+                ).first() or self.create(
+                    party_id=person.pk, other_party=organization, kind=kind, created_by_id=created_by_id
+                )
+        # A free-text name takes an edge the link stated by name: its own first, then one to rename in place.
+        claimed = {edge.pk for edge in landed.values()}
+        pool = [edges[pk] for pk in sorted(edges) if stated[pk] and pk not in claimed]
+        names = {employment.employer for employment in employers if isinstance(employment.employer, str)}
+        own: dict[str | None, Any] = {}
+        for edge in pool:
+            own.setdefault(stated[edge.pk], edge)
+        spare = [edge for edge in pool if stated[edge.pk] not in names or own[stated[edge.pk]] is not edge]
+        for index, employment in enumerate(employers):
+            name = employment.employer
+            if isinstance(name, str):
+                landed[index] = (
+                    own.pop(name, None)
+                    or (spare.pop(0) if spare else None)
+                    or self.create(party_id=person.pk, kind=kind, other_name=name, created_by_id=created_by_id)
+                )
+        refs = [EvidenceReference.of(row) for row in evidence]
+        for index, employment in enumerate(employers):
+            landed[index].statements.set(
+                aspect="relationship",
+                asserted_by=asserted_by,
+                link=link,
+                evidence=refs,
+                values={
+                    "other_name": employment.employer if isinstance(employment.employer, str) else "",
+                    "title": employment.title,
+                    "notes": employment.notes,
+                    "started_at": None,
+                    "ended_at": None,
+                },
+            )
+        if dropped := sorted(set(edges) - {edge.pk for edge in landed.values()}):
+            self.model.statements.withdraw(asserted_by, dropped, link=link)
 
 
 class FolderManager[FolderT: Folder](AngeeHistoryManager[FolderT]):
