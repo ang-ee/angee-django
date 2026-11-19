@@ -398,13 +398,13 @@ ROW_SIZES = (2, 6)
 # web-only change against 592,189 KiB on main. The gate admits that one block over a ceiling.
 PLANNER_BLOCK_KIB = 8 * 1024
 PLANNER_BUDGETS = {
-    "person": (18, 351),  # 358,410 KiB
-    "projects": (9, 106),  # 107,697 KiB
+    "person": (18, 1),  # 358,410 KiB
+    "projects": (9, 1),  # 107,697 KiB
     # The member's inbox selection reads plan the merged policy's non-admin id sets, the
     # largest remaining planner cost.
-    "selected": (23, 710),  # 726,987 KiB
-    "connections": (14, 396),  # 405,106 KiB
-    "related": (18, 492),  # 503,779 KiB
+    "selected": (23, 1),  # 726,987 KiB
+    "connections": (14, 1),  # 405,106 KiB
+    "related": (18, 1),  # 503,779 KiB
 }
 
 
