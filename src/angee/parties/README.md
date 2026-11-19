@@ -174,7 +174,8 @@ only a `HELD` answer holds the address.
 
 [PartyManager.ingest_organization](managers.py) lands a `ParsedOrganization`
 from a directory stream the same way: it binds the link, mints an Organization
-for an unbound link (matching an existing one is not decided yet), and states the
+for an unbound link and, until matching an existing one is ruled, refuses an
+existing organization new to its link, under the record's locks; it states the
 identity, the whole legal identity (legal name and domain together, or withdrawn
 when the source carries neither), handles and addresses;
 `organization_projection` is its comparison shape, over the stored form

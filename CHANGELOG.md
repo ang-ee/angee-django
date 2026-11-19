@@ -35,6 +35,16 @@ live in code docstrings.
   `UserManager.sign_in_addresses(emails)` answers which given addresses a person
   account signs in with, by the key `person_for_email` reads, in one query.
 
+- `angee.parties`: organizations take no existing target yet.
+  `PartyManager.ingest_organization` takes the record's locks (the passed
+  organization and every spelling of its handles) before it decides, and refuses
+  an existing organization new to its link with a `ValidationError`, where it
+  used to bind any organization it was handed, unadmitted, before locking, and
+  state its addresses in full there. A link keeps its own organization, and an
+  unbound one mints. Matching an existing organization, and its admission rule,
+  come with the organizations stream (open decision O9). No caller outside the
+  tests passes one today; no vendor stream lands organizations yet.
+
 - `angee.parties`: a claim stays a claim. An address a pull-only directory
   already claims on its contact's person is claimed again on every record until
   that person holds it through another statement or a person confirms the claim;
