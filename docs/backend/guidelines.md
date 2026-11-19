@@ -1295,9 +1295,15 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   `is_trashed`, subtracted outside any recursive arm (see
   [knowledge pages](../../src/angee/knowledge/permissions.zed)). The shared
   [`trash_record` / `restore_record`](../../src/angee/graphql/trash.py) verbs
-  check the row's `delete`; metadata marks the flag `trashable` only on the
-  model that stores it (`TrashMixin.stores_trash()`). A multi-table child's
-  inherited flag is addressed through its parent by the shared verbs.
+  accept a multi-table child's type and act on the same primary key through
+  the model storing the flag (`TrashMixin.trash_model()`), checking that
+  model's `delete` permission and `trash_targets()` scope.
+  [`hasura_model_resource`](../../src/angee/graphql/data/hasura.py) exposes
+  each composed mixin's flag without an addon node declaration and marks it
+  `trashable` or `archivable`, including inherited flags. The archive flag is
+  filterable; flag writes remain the resource's explicit decision, and read
+  gates are never bypassed. A removable record's removal action is Move to
+  trash when its model is trashable and Delete otherwise.
   A domain authority that is not `delete` (record-chatter moderation, the host's
   declared `ThreadedModelMixin.thread_moderate_access`, default `write`, beside
   `thread_read_access` and `thread_post_access`) keeps its own

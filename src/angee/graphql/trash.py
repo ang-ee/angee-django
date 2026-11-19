@@ -20,8 +20,9 @@ TRASH_PERMISSION = "delete"
 class TrashMutation:
     """Trash and restore verbs for every model composing ``TrashMixin``.
 
-    The record's ``delete`` permission authorizes both. Its Zed decides who
-    still reads a trashed record, so restoring re-grants nothing.
+    The model storing the trash flag authorizes both through ``delete``, even
+    for a multi-table child's target type. Its Zed decides who still reads a
+    trashed record, so restoring re-grants nothing.
     """
 
     @strawberry.mutation
@@ -60,13 +61,13 @@ def trash_target(info: strawberry.Info, target_type: str, target_id: PublicID, *
     if not confirm:
         raise ValidationError({"confirm": "Confirm the change to apply it."})
     model = model_for_resource_type(target_type)
-    if model is None or not issubclass(model, TrashMixin) or not model.stores_trash():
+    if model is None or not issubclass(model, TrashMixin):
         raise ValidationError({"target_type": f"Records of type {target_type!r} cannot be trashed."})
     return cast(
         TrashMixin,
         authorized_permission_target(
             info,
-            cast(Any, model),
+            cast(Any, model.trash_model()),
             target_id,
             TRASH_PERMISSION,
             narrow=lambda rows: cast(TrashQuerySet[Any], rows).trash_targets(),
