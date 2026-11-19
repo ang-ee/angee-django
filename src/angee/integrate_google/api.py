@@ -119,17 +119,14 @@ class GoogleApi:
 
         reason = error_reason(refusal.body)
         if refusal.status == 429 or (refusal.status == 403 and reason in _RATE_LIMIT_REASONS):
-            return self.error(
-                f"{self.service} is rate limiting this account; try the sync again later.",
-                transient=True,
-                retry_after=refusal.retry_after,
-            )
+            message = f"{self.service} is rate limiting this account; try the sync again later."
+            return refusal.as_error(self.error, self.service, public_message=message, transient=True)
         if refusal.status == 401:
-            return self.error(f"{self.service} no longer accepts this account; reconnect the Google account.")
+            message = f"{self.service} no longer accepts this account; reconnect the Google account."
+            return refusal.as_error(self.error, self.service, public_message=message)
         if refusal.status == 403 and reason in _GRANT_REASONS:
-            return self.error(
-                f"This Google account has not granted {self.grant} access; reconnect it with {self.grant} access."
-            )
+            message = f"This Google account has not granted {self.grant} access; reconnect it with {self.grant} access."
+            return refusal.as_error(self.error, self.service, public_message=message)
         return refusal.as_error(self.error, self.service) if refusal.transient else None
 
     def raise_for_status(self, response: httpx2.Response, body: bytes | None = None) -> None:

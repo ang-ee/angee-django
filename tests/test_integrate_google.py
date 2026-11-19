@@ -297,6 +297,19 @@ def test_the_google_transport_names_account_refusals_and_asks_for_the_clients_sc
         api.raise_for_status(own)
 
 
+@pytest.mark.parametrize("headers", [{}, {"Retry-After": "30"}], ids=["no-wait", "its-retry-after"])
+def test_a_rate_limit_google_answers_with_a_403_is_transient_through_the_hand_off(headers: dict[str, str]) -> None:
+    """Google names its rate limit in a 403's reason: the hand-off states it transient, the answer's wait kept."""
+
+    api = GoogleApi(_MintingKey(), service="Google Calendar", grant="Calendar")
+    answer = httpx2.Response(403, json={"error": {"errors": [{"reason": "userRateLimitExceeded"}]}}, headers=headers)
+    rate = api.account_error(HttpRefusal.of(answer))
+
+    assert rate is not None and rate.transient
+    assert rate.retry_after == (timedelta(seconds=30) if headers else None)
+    assert str(rate) == "Google Calendar is rate limiting this account; try the sync again later."
+
+
 @pytest.mark.parametrize(("answer", "transient", "wait", "message"), [
     pytest.param(
         httpx2.Response(200, content=b" " * (JSON_MAX_BYTES + 1)), False, None,
