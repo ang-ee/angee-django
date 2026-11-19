@@ -285,6 +285,16 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
 
         del credential
 
+    def account_address(self) -> str:
+        """Return the address the connected account signs in as, ``""`` for none (the base's answer).
+
+        ``Directory.objects.connect`` claims it as the directory owner's own
+        handle (``HandleManager.claim_control``), so the owner's own login is never
+        mistaken for one of the contacts the directory syncs.
+        """
+
+        return ""
+
     def discover(self) -> list[ParsedAddressbook]:
         """Return every address-book collection the source exposes."""
 

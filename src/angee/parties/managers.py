@@ -66,6 +66,8 @@ from angee.base.pagination import clamp_page_size
 from angee.base.permissions import actor_user_id, reader_queryset
 from angee.base.querysets import MergeableQuerySet, by_key
 from angee.base.serialization import canonical_json
+from angee.integrate.errors import IntegrationError
+from angee.integrate.models import IntegrationLifecycle, IntegrationManager
 from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedOrganization, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
@@ -86,7 +88,7 @@ if TYPE_CHECKING:
     from angee.integrate.models import RecordLink
     from angee.parties.connections import ParsedConnection
     from angee.parties.mixins import PartyStatementMixin
-    from angee.parties.models import Circle, Folder, Handle, Organization, Party, Person, Relationship
+    from angee.parties.models import Circle, Directory, Folder, Handle, Organization, Party, Person, Relationship
 
 logger = logging.getLogger(__name__)
 
@@ -2586,3 +2588,67 @@ class FolderManager[FolderT: Folder](AngeeHistoryManager[FolderT]):
                 apps.get_model("integrate", "RecordLink").objects.bind_target(link, folder)
             folder.statements.set(aspect="identity", values={"name": name}, asserted_by=integration, link=link)
             return folder
+
+
+class DirectoryManager[DirectoryT: Directory](IntegrationManager[DirectoryT]):
+    """Connect directories: the one sequence every vendor's connect verb runs."""
+
+    def connect(
+        self,
+        owner: Any,
+        *,
+        backend_class: str,
+        display_name: str,
+        credential_kind: str,
+        material: dict[str, Any],
+        config: dict[str, Any] | None = None,
+    ) -> DirectoryT:
+        """Connect ``owner``'s account at a contact source, tested before anything is saved, and queue its first sync.
+
+        The credential (``credential_kind`` and its secret ``material``) and a
+        directory of ``backend_class`` with its non-secret ``config`` are built
+        unsaved first; the backend admits the credential and tests the connection
+        (``DirectoryBackend.test_connection``) outside any transaction, and its
+        refusal is a ``ValidationError`` carrying the backend's own operator
+        message, so a directory that could never sync is never saved. Then one
+        transaction, as system work, creates the credential and the directory (its
+        vendor is the backend's seeded one, ``IntegrationManager.build``), claims
+        the address the account signs in as as the owner's own handle
+        (``DirectoryBackend.account_address``) and requests the first sync. A
+        vendor's connect mutation calls this; it has no GraphQL of its own.
+        """
+
+        credentials = apps.get_model("integrate", "Credential").objects
+        fields = {
+            "backend_class": backend_class,
+            "owner": owner,
+            "display_name": display_name,
+            "config": dict(config or {}),
+            "lifecycle": IntegrationLifecycle.CONNECTED,
+            "created_by_id": owner.pk,
+        }
+        candidate = self.build(**fields)
+        name = f"{candidate.get_backend_class_impl().label} — {display_name}"
+        unsaved = credentials.prepare_local_credential(owner, kind=credential_kind, name=name, material=material)
+        candidate.attach_connection(unsaved)
+        try:
+            candidate.test_connection()
+        except IntegrationError as error:
+            raise ValidationError(error.public_message) from error
+        with system_context(reason="parties.directory.connect"), transaction.atomic():
+            credential = credentials.create_local_credential(owner, kind=credential_kind, name=name, material=material)
+            directory = self.build(**fields)
+            directory.attach_connection(credential)
+            directory.save()
+            if address := directory.backend.account_address():
+                handles = apps.get_model("parties", "Handle").objects
+                handles.claim_control(
+                    owner,
+                    platform=handles.model.Platform.for_value(address),
+                    value=address,
+                    asserted_by=owner,
+                    evidence=[directory],
+                    display_name=display_name,
+                )
+            directory.request_sync()
+        return directory
