@@ -314,6 +314,20 @@ live in code docstrings.
   OAuth's included, ask for an unencoded answer, and `is_transient_status`
   reads only 500–599 as server errors.
 
+- The CardDAV directory's requests compose that rule too
+  (`HttpClient.request(error=)` and `HttpRefusal.as_error`). A transport
+  failure, a 429 or a 5xx is now transient and waits for `Retry-After`; before,
+  a refused answer reached the operator as a permanent "CardDAV <method>
+  returned HTTP n." and a transport failure as a raw error. Integrate words every
+  other refusal, and a multistatus httpx2 cannot decode is a permanent unreadable
+  answer. CardDAV keeps only its own answers: a 412, or a 403 to a write, sets
+  that card aside; a cursor's 404, or a 403 naming `DAV:valid-sync-token`,
+  restarts the stream; a success over its byte cap splits a multiget, and a
+  listing over it says to use smaller address books. A tokenless book's listing
+  refused only for now stays transient instead of reading as a book with no
+  complete ETag listing, and a vCard photo's refusal keeps its words and takes
+  integrate's transience.
+
 - Addons require django-compose 0.1.0.dev13, whose snapshot digest covers each
   addon's resolved path. A host that changes its sync from `--no-editable` to
   editable, or moves a source checkout, now recomposes on `compose --if-stale`;

@@ -530,6 +530,34 @@ def test_tokenless_collection_without_complete_etag_inventory_reports_a_safe_err
     assert not contact_links().exists()
 
 
+def test_a_tokenless_listing_the_server_cannot_answer_for_now_keeps_integrates_transient_refusal(
+    replica: Replica,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only a refusal no later attempt outlives reads as an incomplete inventory; an outage waits and retries."""
+
+    replica.server.has_sync_token = False
+    original = replica.server.handle_request
+
+    def unavailable(request: httpx2.Request) -> httpx2.Response:
+        if request.headers["depth"] == "1":
+            return httpx2.Response(503, headers={"Retry-After": "30"})
+        return original(request)
+
+    monkeypatch.setattr(replica.server, "handle_request", unavailable)
+    with pytest.raises(CardDavError) as refused:
+        replica.pull()
+
+    assert (refused.value.public_message, refused.value.transient, refused.value.retry_after) == (
+        "CardDAV is temporarily unavailable (HTTP 503).",
+        True,
+        timedelta(seconds=30),
+    )
+    replica.stream.refresh_from_db()
+    assert replica.stream.cursor == {}
+    assert not contact_links().exists()
+
+
 @pytest.mark.parametrize("reset_before_baseline", [False, True])
 def test_baseline_adopts_existing_contacts_across_pages_without_write_back(
     replica: Replica, reset_before_baseline: bool
@@ -1800,10 +1828,11 @@ def test_oversized_dav_response_preserves_committed_sync_state(
         "handle_request",
         lambda request: httpx2.Response(207, headers=headers, stream=OversizedStream()),
     )
-    with pytest.raises(CardDavError, match="byte limit") as refused:
+    with pytest.raises(CardDavError, match="oversized response") as refused:
         replica.pull()
 
     assert isinstance(refused.value.__cause__, ResponseTooLargeError)
+    assert not refused.value.transient
     assert reads == (0 if declared_length else _DAV_RESPONSE_CAP // 65536 + 1)
     assert closed
     replica.stream.refresh_from_db()
@@ -1812,7 +1841,7 @@ def test_oversized_dav_response_preserves_committed_sync_state(
     assert person.notes == "Original"
     assert applied_history().filter(id=link.pk).count() == revisions
     replica.directory.record_sync_error(refused.value, now=timezone.now())
-    assert replica.directory.sync_error == "CardDAV response exceeds the byte limit."
+    assert replica.directory.sync_error == "CardDAV returned an oversized response."
 
 
 def test_discovery_falls_back_after_oversized_principal_response(
@@ -2856,7 +2885,7 @@ def test_a_directory_tests_its_connection_by_discovery_and_reports_the_servers_r
     monkeypatch.setattr(replica.server, "handle_request", refuse)
     with pytest.raises(CardDavError) as refused:
         replica.directory.test_connection()
-    assert refused.value.public_message == "CardDAV PROPFIND returned HTTP 401."
+    assert (refused.value.public_message, refused.value.transient) == ("CardDAV refused the request (HTTP 401).", False)
 
 
 def test_a_per_book_contacts_setting_is_refused_when_written_and_an_unknown_one_ignored_when_read(

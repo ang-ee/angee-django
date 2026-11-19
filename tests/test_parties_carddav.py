@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import httpx2
@@ -28,6 +28,7 @@ from angee.parties_integrate_carddav.apps import check_expat_version
 from angee.parties_integrate_carddav.backend import (
     CardDavDirectoryBackend,
     CardDavError,
+    ParsedCard,
     ParsedContact,
     ParsedPhoto,
     _parse_data_uri,
@@ -121,12 +122,84 @@ def test_native_httpx2_multistatus_and_case_insensitive_redirect() -> None:
     assert [str(request.url) for request in requests] == ["https://dav.example/root", "https://dav.example/addressbooks/"]
 
 
-def test_http_refusal_is_an_integration_error_without_vendor_payloads() -> None:
-    refusal = mock_transport(lambda request: httpx2.Response(503, content=b"secret=private"))
-    with refusal, pytest.raises(CardDavError) as refused:
+def _unreachable(request: httpx2.Request) -> httpx2.Response:
+    raise httpx2.ConnectError("secret=private", request=request)
+
+
+@pytest.mark.parametrize(
+    ("answer", "message", "transient", "wait"),
+    [
+        pytest.param(
+            lambda request: httpx2.Response(503, content=b"secret=private", headers={"Retry-After": "30"}),
+            "CardDAV is temporarily unavailable (HTTP 503).",
+            True,
+            timedelta(seconds=30),
+            id="outage-waits",
+        ),
+        pytest.param(
+            lambda request: httpx2.Response(429, content=b"secret=private"),
+            "CardDAV is rate limiting requests (HTTP 429).",
+            True,
+            None,
+            id="rate-limit",
+        ),
+        pytest.param(
+            lambda request: httpx2.Response(401, content=b"secret=private"),
+            "CardDAV refused the request (HTTP 401).",
+            False,
+            None,
+            id="refusal",
+        ),
+        pytest.param(_unreachable, "CardDAV could not be reached.", True, None, id="unreachable"),
+        pytest.param(
+            lambda request: httpx2.Response(207, content=b"secret=private", headers={"Content-Encoding": "gzip"}),
+            "CardDAV returned an unreadable response.",
+            False,
+            None,
+            id="undecodable-multistatus",
+        ),
+    ],
+)
+def test_a_dav_refusal_is_classified_by_integrates_rule_and_never_repeats_the_server(
+    answer: Any, message: str, transient: bool, wait: timedelta | None
+) -> None:
+    with mock_transport(answer), pytest.raises(CardDavError) as refused:
         _backend_with_http(HttpClient())._request("PROPFIND", "https://dav.example/books/", "")
+
     assert isinstance(refused.value, IntegrationError)
-    assert refused.value.public_message == "CardDAV PROPFIND returned HTTP 503."
+    assert (refused.value.public_message, refused.value.transient, refused.value.retry_after) == (
+        message,
+        transient,
+        wait,
+    )
+
+
+@pytest.mark.parametrize(
+    ("answer", "transient", "wait"),
+    [
+        pytest.param(
+            lambda request: httpx2.Response(503, headers={"Retry-After": "30"}),
+            True,
+            timedelta(seconds=30),
+            id="outage-waits",
+        ),
+        pytest.param(lambda request: httpx2.Response(404), False, None, id="missing"),
+        pytest.param(_unreachable, True, None, id="unreachable"),
+    ],
+)
+def test_a_photo_refusal_is_the_photo_error_classified_by_integrates_rule(
+    answer: Any, transient: bool, wait: timedelta | None
+) -> None:
+    contact = ParsedCard(photo=ParsedPhoto(uri="https://dav.example/books/photo.jpg", mime="image/jpeg"))
+
+    with mock_transport(answer), pytest.raises(CardDavError) as refused:
+        _backend_with_http(HttpClient())._resolve_photo(contact, collection="https://dav.example/books/")
+
+    assert (refused.value.public_message, refused.value.transient, refused.value.retry_after) == (
+        "The vCard photo could not be retrieved.",
+        transient,
+        wait,
+    )
 
 
 def test_photo_download_is_capped_and_uses_the_collection_origin(settings: Any) -> None:
