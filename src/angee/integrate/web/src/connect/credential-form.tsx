@@ -97,7 +97,7 @@ export function CredentialForm({
           <Field
             name="api_key"
             label={t("credentials.create.apiToken")}
-            widget="text"
+            widget="password"
             kind="string"
             placeholder={t("credentials.create.apiTokenPlaceholder")}
             showWhen={(values) => values.kind === "static_token"}

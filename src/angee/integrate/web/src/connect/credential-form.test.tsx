@@ -48,6 +48,7 @@ import { IntegrateCreateCredential, IntegrateRevealCredential } from "./document
 
 interface FieldLike {
   name: string;
+  widget?: string;
   options?: ReadonlyArray<{ value: string; label: string }>;
   showWhen?: (values: Record<string, unknown>) => boolean;
 }
@@ -84,6 +85,8 @@ describe("credentialCreateForm", () => {
     ]);
     expect(fields.get("api_key")?.showWhen?.({ kind: "static_token" })).toBe(true);
     expect(fields.get("api_key")?.showWhen?.({ kind: "ssh_key" })).toBe(false);
+    // A static token is a secret: it is entered masked, as every other secret is.
+    expect(fields.get("api_key")?.widget).toBe("password");
     expect(fields.get("private_key")?.showWhen?.({ kind: "ssh_key" })).toBe(true);
     expect(fields.get("private_key")?.showWhen?.({ kind: "static_token" })).toBe(false);
     expect(fields.get("key_file")?.showWhen?.({ kind: "jwt_bearer" })).toBe(true);
