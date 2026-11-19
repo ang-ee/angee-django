@@ -41,10 +41,9 @@ export function requestedFieldPaths<TRow extends Row>(
       : null;
   const query = queryForColumns(columns, modelMetadata, groups);
   const paths = new Set<string>([query.contract.identity.field]);
-  const archiveFlag = archiveFlagField(modelMetadata?.resource);
-  if (archiveFlag) paths.add(archiveFlag);
-  const trashFlag = trashFlagField(modelMetadata?.resource);
-  if (trashFlag) paths.add(trashFlag);
+  for (const flag of [archiveFlagField(modelMetadata?.resource), trashFlagField(modelMetadata?.resource)]) {
+    for (const path of (flag ? query.fields[flag]?.row?.paths : undefined) ?? []) paths.add(path);
+  }
   const addSelections = (
     field: string,
     explicit?: readonly string[],

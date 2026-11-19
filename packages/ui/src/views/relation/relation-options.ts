@@ -1,5 +1,6 @@
 import * as React from "react";
 import {
+  QueryParseError,
   ResourceQuery,
   modelFieldForPath,
   refineResourceName,
@@ -8,6 +9,7 @@ import {
   unarchivedFilter,
   useModelMetadata,
   useSchemaFieldMetadata,
+  type QueryFilter,
   type Row,
 } from "@angee/metadata";
 import {
@@ -88,6 +90,8 @@ export interface RelationOptionsResult {
 
 export interface RelationPickerOptionsConfig
   extends Omit<RelationOptionsConfig, "enabled" | "searchText" | "page"> {
+  /** Read the full catalogue, including archived rows, when choosing a filter value. */
+  catalogue?: boolean;
   value?: string | null;
   /** Folded selected row supplied by a parent record read, when available. */
   selectedOption?: RelationOption;
@@ -221,26 +225,36 @@ export function useRelationPickerOptions(
   );
 }
 
-/** Collection search shared by the single and multi pickers. Identity and
- * catalogue reads continue to use the unscoped relation reader. */
+/** Collection search shared by the single and multi pickers. Catalogue searches
+ * and conditions the query contract cannot decode retain their unscoped reads.
+ * @owner RelationFieldWidget
+ */
 export function useRelationPickerSearch(
   relation: RelationFieldInfo | null,
-  config: RelationOptionsConfig = {},
+  config: RelationOptionsConfig & Pick<RelationPickerOptionsConfig, "catalogue"> = {},
 ): RelationOptionsResult {
   const resource = useModelMetadata(relation?.resource ?? "")?.resource;
-  const { filters, where } = config;
+  const { catalogue = false, ...options } = config;
+  const { filters, where } = options;
   const scopedWhere = React.useMemo(() => {
+    if (catalogue) return where;
     const empty = {};
     const defaultFilter = unarchivedFilter(resource, empty, filters);
     // Preserve raw conditions when metadata or a native predicate disables scope.
     if (!resource || defaultFilter === empty) return where;
     const query = ResourceQuery.from(resource);
     if (!where) return query.toWhere(defaultFilter);
-    const filter = query.fromWhere(where);
+    let filter: QueryFilter;
+    try {
+      filter = query.fromWhere(where);
+    } catch (error) {
+      if (error instanceof QueryParseError) return where;
+      throw error;
+    }
     const scoped = unarchivedFilter(resource, filter, filters);
     return scoped === filter ? where : query.toWhere(scoped);
-  }, [resource, filters, where]);
-  return useRelationOptions(relation, { ...config, where: scopedWhere });
+  }, [catalogue, resource, filters, where]);
+  return useRelationOptions(relation, { ...options, where: scopedWhere });
 }
 
 /** Search executable text fields on the server, otherwise labels in the loaded page.

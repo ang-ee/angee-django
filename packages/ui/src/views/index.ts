@@ -408,6 +408,7 @@ export {
 export {
   useRelationOptions,
   useRelationPickerOptions,
+  useRelationPickerSearch,
   useRelationSelectedOption,
   relationSelectedOption,
   type RelationOptionsConfig,

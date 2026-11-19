@@ -1,11 +1,13 @@
 // @vitest-environment happy-dom
 import type { ReactNode } from "react";
-import { cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
-import { ResourceQuery, schemaFieldMetadataFromDataResources, type DataResourceMetadata, type QueryFilter } from "@angee/metadata";
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
+import { ModelMetadataProvider, ResourceQuery, schemaFieldMetadataFromDataResources, type DataResourceMetadata, type QueryFilter } from "@angee/metadata";
+import { RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
-import { AppRuntimeProvider, createAngeeI18nInstance } from "../../../runtime";
-import { ResourceViewProvider, useResourceView } from "../resource-view-context";
+import { AppRuntimeProvider, createAngeeI18nInstance, type RuntimeUserPreferences, type RuntimeUserPreferencesPatch } from "../../../runtime";
+import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "../resource-view-context";
+import { readResourceViewFavoritesSlice } from "../resource-view-favorites";
 import { useResourceViewQueryFacts } from "../surface/table-state";
 import { useSearchCatalog, type UseSearchCatalogInput } from "./catalog";
 import { SearchBox } from "./SearchBox";
@@ -75,6 +77,50 @@ test("a page's equivalent archive predicate keeps its id and label with no dupli
 test("the archive option joins existing contributions and keeps their predicate precedence", () => {
   const contributed = { id: "retired", label: "Retired records", filter: { is_archived: { exact: true } } };
   expect(catalog(record, { contributedFilterOptions: [contributed] }).filters).toEqual([contributed]);
+});
+
+test("the implicit archive predicate stays out of chips, URL state and persisted favorites", async () => {
+  const metadata = schemaFieldMetadataFromDataResources([record]);
+  const modelMetadata = metadata.labels[record.modelLabel]!;
+  let view!: ResourceViewContextValue;
+  let facts!: ReturnType<typeof useResourceViewQueryFacts>;
+  let search!: ReturnType<typeof useResourceSearch>;
+  let preferences: RuntimeUserPreferences = {};
+  const patchPreferences = vi.fn(async (patch: RuntimeUserPreferencesPatch) => { preferences = patch(preferences); });
+  function Content() {
+    view = useResourceView();
+    facts = useResourceViewQueryFacts({ columns: [], modelMetadata, resourceView: view });
+    const catalog = useSearchCatalog({ columns: [], rows: [], modelMetadata, resourceView: view });
+    search = useResourceSearch({ resourceView: view, catalog });
+    return <SearchBox search={search} />;
+  }
+  const root = createRootRoute();
+  const route = createRoute({ getParentRoute: () => root, path: "/", validateSearch: (search) => search,
+    component: () => <ResourceViewProvider resource={record.modelLabel}><Content /></ResourceViewProvider> });
+  const router = createRouter({ routeTree: root.addChildren([route]), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  render(<ModelMetadataProvider metadata={metadata}><AppRuntimeProvider runtime={{
+    userPreferences: { available: true, preferences, patchPreferences },
+  }}><RouterProvider router={router} /></AppRuntimeProvider></ModelMetadataProvider>);
+
+  await waitFor(() => expect(facts?.mergedFilter).toEqual({ is_archived: { exact: false } }));
+  expect(view.state.filter).toEqual({});
+  expect(view.queryDirty).toBe(false);
+  expect(search.active).toEqual([]);
+  expect(within(screen.getByRole("toolbar", { name: "Active search" })).queryAllByRole("button")).toEqual([]);
+  act(() => view.setPage(2));
+  await waitFor(() => expect(router.state.location.search).toMatchObject({ page: 2 }));
+  expect(JSON.stringify(router.state.location.search)).not.toContain("is_archived");
+  expect(view.state.filter).toEqual({});
+  expect(search.active).toEqual([]);
+  expect(view.saveFavorite).toBeDefined();
+  act(() => view.saveFavorite!("My records"));
+  await waitFor(() => expect(patchPreferences).toHaveBeenCalled());
+  const favorites = readResourceViewFavoritesSlice(preferences).document.models[record.modelLabel];
+  expect(favorites).toHaveLength(1);
+  expect(favorites?.[0]).toMatchObject({ label: "My records" });
+  expect(favorites?.[0]?.filter).toBeUndefined();
+  expect(JSON.stringify(preferences)).not.toContain("is_archived");
+  expect(facts.mergedFilter).toEqual({ is_archived: { exact: false } });
 });
 
 test("selecting Archived renders the localized chip and clearing it restores the default collection scope", async () => {

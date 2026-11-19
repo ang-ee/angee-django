@@ -15,7 +15,9 @@ import { requestedFieldPaths } from "./resource-view-codecs";
 test("archivable rows carry their flag beside identity without a declared column", () => {
   const resource = testDataResource("example.Record", {
     fields: [field("name", "scalar"), field("retired", "scalar", { scalar: "Boolean", archivable: true })],
-    query: testResourceQuery({ identity: { field: "public_key" }, fields: { name: testQueryField("name") } }),
+    query: testResourceQuery({ identity: { field: "public_key" }, fields: {
+      name: testQueryField("name"), retired: testQueryField("retired", { scalar: "Boolean" }),
+    } }),
   });
   const model = schemaFieldMetadataFromDataResources([resource]).labels[resource.modelLabel]!;
   expect(requestedFieldPaths([{ field: "name" }], undefined, model)).toEqual(["public_key", "retired", "name"]);
@@ -25,7 +27,9 @@ test("archivable rows carry their flag beside identity without a declared column
 test("trashable rows carry their flag without a declared column or duplicate selections", () => {
   const resource = testDataResource("example.Record", {
     fields: [field("name", "scalar"), field("removed", "scalar", { scalar: "Boolean", trashable: true })],
-    query: testResourceQuery({ identity: { field: "public_key" }, fields: { name: testQueryField("name") } }),
+    query: testResourceQuery({ identity: { field: "public_key" }, fields: {
+      name: testQueryField("name"), removed: testQueryField("removed", { scalar: "Boolean" }),
+    } }),
   });
   const model = schemaFieldMetadataFromDataResources([resource]).labels[resource.modelLabel]!;
   expect(requestedFieldPaths([{ field: "name" }], undefined, model)).toEqual(["public_key", "removed", "name"]);
@@ -39,9 +43,36 @@ test("archive and trash flags are independent metadata facts, not inferred field
       field("removed", "scalar", { scalar: "Boolean", trashable: true }),
       field("is_trashed", "scalar", { scalar: "Boolean" }),
     ],
+    query: testResourceQuery({ fields: {
+      retired: testQueryField("retired", { scalar: "Boolean" }),
+      removed: testQueryField("removed", { scalar: "Boolean" }),
+    } }),
   });
   const model = schemaFieldMetadataFromDataResources([resource]).labels[resource.modelLabel]!;
   expect(requestedFieldPaths([], undefined, model)).toEqual(["id", "retired", "removed"]);
+});
+
+test.each(["archivable", "trashable"] as const)("an unreadable %s flag is never implicitly selected", (facet) => {
+  const resource = testDataResource("example.Record", {
+    fields: [field("flag", "scalar", { scalar: "Boolean", [facet]: true, readable: false })],
+    query: testResourceQuery({ fields: { flag: testQueryField("flag", { scalar: "Boolean", row: null }) } }),
+  });
+  for (const candidate of [resource, { ...resource, query: testResourceQuery() }]) {
+    const model = schemaFieldMetadataFromDataResources([candidate]).labels[candidate.modelLabel]!;
+    expect(requestedFieldPaths([], undefined, model)).toEqual(["id"]);
+  }
+});
+
+test("archive and trash selections use their declared row paths", () => {
+  const resource = testDataResource("example.Record", {
+    fields: [field("retired", "scalar", { archivable: true }), field("removed", "scalar", { trashable: true })],
+    query: testResourceQuery({ fields: {
+      retired: testQueryField("archived_value", { scalar: "Boolean" }),
+      removed: testQueryField("trashed_value", { scalar: "Boolean" }),
+    } }),
+  });
+  const model = schemaFieldMetadataFromDataResources([resource]).labels[resource.modelLabel]!;
+  expect(requestedFieldPaths([], undefined, model)).toEqual(["id", "archived_value", "trashed_value"]);
 });
 
 test("selects native relation representation leaves for resolved sublines", () => {

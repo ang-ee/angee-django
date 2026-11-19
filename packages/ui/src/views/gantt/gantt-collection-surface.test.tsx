@@ -13,6 +13,7 @@ import { ganttResources, ganttLane, ganttLanes, ganttRecord, ganttMarker, schedu
 import type { GanttViewSpec } from "../resource/resource-view-types";
 import { ListView } from "../resource/ListView";
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "../resource/resource-view-context";
+import { RecordChromeProvider } from "../resource/record-chrome-context";
 import type { GanttViewProps } from "./GanttView";
 import { mergeGanttI18n } from "./gantt-i18n";
 import { calendarDateToAnchor } from "../calendar/calendar-view-controls";
@@ -34,10 +35,14 @@ const { Provider, dataProvider, clearClients } = createUiTestProviders({
 beforeEach(() => { drawing.props = null; });
 afterEach(() => { cleanup(); clearClients(); vi.useRealTimers(); });
 
+const savedRecord = { resource: ganttLane.modelLabel, canonicalResource: ganttLane.modelLabel,
+  recordId: "lane-a", record: ganttLanes[0]!, dataProviderName: "console", formReadOnly: false };
+
 function renderCollection(options: {
   rows?: Row[]; total?: number; page?: number; pageSize?: number; strict?: boolean; anchor?: string;
   resources?: readonly DataResourceMetadata[];
   embedded?: boolean;
+  savedRecord?: boolean;
   getList?: (params: Partial<GetListParams>) => Promise<{ data: Row[]; total: number }>;
   onRowClick?: (row: Row) => void;
   rowHref?: (row: Row) => string;
@@ -60,10 +65,11 @@ function renderCollection(options: {
         ...options.gantt }}
       laneSource={{ field: "lane" }} onRowClick={options.onRowClick} rowHref={options.rowHref} />;
   }
+  const collection = <ResourceViewProvider resource={ganttRecord.modelLabel} scope="local" initialState={{
+    view: "gantt", anchor: options.anchor ?? "2026-09-01", page: options.page ?? 1, pageSize: options.pageSize ?? 10,
+  }}><Collection /></ResourceViewProvider>;
   const view = render(<RouterContextProvider router={router}><Provider navigate={options.navigate} resources={options.resources ?? ganttResources} dataProvider={{ getList }}>
-    <ResourceViewProvider resource={ganttRecord.modelLabel} scope="local" initialState={{
-      view: "gantt", anchor: options.anchor ?? "2026-09-01", page: options.page ?? 1, pageSize: options.pageSize ?? 10,
-    }}><Collection /></ResourceViewProvider>
+    {options.savedRecord ? <RecordChromeProvider value={savedRecord}>{collection}</RecordChromeProvider> : collection}
   </Provider></RouterContextProvider>, { reactStrictMode: options.strict ?? false });
   return { ...view, getList, state: () => state, barRequests: () => getList.mock.calls.filter(([params]) => params.resource === "schedules") };
 }
@@ -79,8 +85,12 @@ function archivable(resource: DataResourceMetadata): DataResourceMetadata {
   };
 }
 
-test.each([false, true])("Gantt bars and markers share archive scope, with embedded exemption=%s", async (embedded) => {
-  const f = renderCollection({ embedded,
+test.each([
+  { embedded: false, savedRecord: false },
+  { embedded: true, savedRecord: false },
+  { embedded: true, savedRecord: true },
+])("Gantt bars and markers share archive scope: embedded=$embedded savedRecord=$savedRecord", async (context) => {
+  const f = renderCollection({ ...context,
     resources: [archivable(ganttRecord), archivable(ganttLane), archivable(ganttMarker)],
     gantt: { markers: { resource: ganttMarker.modelLabel, lane: "lane", date: "due" } },
     getList: async ({ resource }) => ({
@@ -95,7 +105,7 @@ test.each([false, true])("Gantt bars and markers share archive scope, with embed
       expect(request.meta?.gqlVariables?.where).toBeUndefined();
     } else {
       const where = JSON.stringify(request.meta?.gqlVariables?.where);
-      expect(where.includes('"is_archived":{"_eq":false}')).toBe(!embedded);
+      expect(where.includes('"is_archived":{"_eq":false}')).toBe(!context.savedRecord);
       expect(where).toContain("lane-a");
     }
   }
@@ -113,24 +123,25 @@ test("a marker's authored archive filter overrides its default scope", async () 
   expect(where).not.toContain('"is_archived":{"_eq":false}');
 });
 
-test.each(["default", "explicit", "embedded"] as const)("linked Gantt bars use their own resource's %s archive scope", async (mode) => {
+test.each(["default", "explicit", "embedded", "related"] as const)("linked Gantt bars use their own resource's %s archive scope", async (mode) => {
   const getList = vi.fn(async ({ resource }: Partial<GetListParams>) => ({
     data: resource === "lanes" ? ganttLanes : [scheduledRecord], total: resource === "lanes" ? 2 : 1,
   }));
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
-  render(<RouterContextProvider router={router}><Provider resources={[ganttLane, archivable(ganttRecord)]} dataProvider={{ getList }}>
-    <ResourceViewProvider resource={ganttLane.modelLabel} scope="local" initialState={{ view: "gantt", anchor: "2026-09-01" }}>
+  const collection = <ResourceViewProvider resource={ganttLane.modelLabel} scope="local" initialState={{ view: "gantt", anchor: "2026-09-01" }}>
       <ListView resource={ganttLane.modelLabel} columns={[{ field: "name" }]} scope="inherit"
-        presentation={mode === "embedded" ? "embedded" : "page"}
+        presentation={mode === "embedded" || mode === "related" ? "embedded" : "page"}
         gantt={{ start: "start", end: "end", linked: { resource: ganttRecord.modelLabel, lane: "lane",
           filter: mode === "explicit" ? { is_archived: true } : undefined } }} />
-    </ResourceViewProvider>
+    </ResourceViewProvider>;
+  render(<RouterContextProvider router={router}><Provider resources={[ganttLane, archivable(ganttRecord)]} dataProvider={{ getList }}>
+    {mode === "related" ? <RecordChromeProvider value={savedRecord}>{collection}</RecordChromeProvider> : collection}
   </Provider></RouterContextProvider>);
   await waitFor(() => expect(drawing.props?.events).toHaveLength(1));
   const where = JSON.stringify(getList.mock.calls.find(([request]) => request.resource === "schedules")?.[0].meta?.gqlVariables?.where);
   expect(where).toContain("lane-a");
   expect(where).toContain("lane-b");
-  if (mode === "embedded") expect(where).not.toContain("is_archived");
+  if (mode === "related") expect(where).not.toContain("is_archived");
   else {
     expect(where).toContain(`"is_archived":{"_eq":${mode === "explicit"}}`);
     expect(where).not.toContain(`"is_archived":{"_eq":${mode !== "explicit"}}`);

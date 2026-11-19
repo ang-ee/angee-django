@@ -7,6 +7,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import type { AggregateBucket } from "@angee/refine";
 
 import { useDashboardWidgetData } from "./data";
+import { ResourceViewArchiveScopeContext } from "../views/resource/surface/archive-scope";
 import type { WidgetSpec } from "./headless";
 
 const state = vi.hoisted(() => ({
@@ -163,5 +164,22 @@ test.each(["source", "page"] as const)("a dashboard %s filter can request archiv
   expect(state.list).toHaveBeenLastCalledWith(expect.objectContaining({ scope: expect.objectContaining({ filter }) }));
   expect(state.aggregateOptions).toHaveBeenLastCalledWith(expect.objectContaining({
     where: { _not: { is_archived: { _eq: false } } },
+  }));
+});
+
+test.each(["rows", "value", "series"] as const)("dashboard %s retains the saved-record collection exemption", (shape) => {
+  state.resource = archiveResource;
+  const widget: WidgetSpec = { ...spec, data: { shape, source: {
+    resource: archiveResource.modelLabel, groups: shape === "series" ? [{ field: "name" }] : [],
+  } } };
+  const { result } = renderHook(() => useDashboardWidgetData(widget), {
+    wrapper: ({ children }) => <ResourceViewArchiveScopeContext.Provider value={false}>{children}</ResourceViewArchiveScopeContext.Provider>,
+  });
+  expect(result.current.error).toBeNull();
+  for (const adapter of [state.aggregateOptions, state.groupOptions]) {
+    expect(adapter).toHaveBeenLastCalledWith(expect.objectContaining({ where: {} }));
+  }
+  if (shape === "rows") expect(state.list).toHaveBeenLastCalledWith(expect.objectContaining({
+    scope: expect.objectContaining({ filter: {} }),
   }));
 });

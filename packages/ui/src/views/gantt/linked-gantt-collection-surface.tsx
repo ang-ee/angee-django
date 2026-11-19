@@ -9,6 +9,7 @@ import { useStatusTone } from "../../widgets/use-status-tone";
 import { relationValueId } from "../../widgets/types";
 import { errorFromUnknown } from "../../data/errors";
 import { ResourceListFrame } from "../resource/ResourceListFrame";
+import { ResourceViewArchiveScopeContext } from "../resource/surface/archive-scope";
 import { useResourceSearch } from "../resource/search/use-resource-search";
 import { useSearchCatalog, type UseSearchCatalogInput } from "../resource/search/catalog";
 import type { ResourceToolbarProps } from "../../toolbars";
@@ -37,6 +38,7 @@ export function LinkedGanttCollectionSurface<TRow extends Row>({
   toolbarActions, className, presentation, toolbarWrap, maxGroupDepth, onRowClick, rowHref, selectable,
 }: LinkedGanttCollectionSurfaceProps<TRow>) {
   const t = useUiT();
+  const archiveScope = React.useContext(ResourceViewArchiveScopeContext);
   const navigate = useNavigate();
   const navigateInApp = useInAppNavigator();
   const resolveTone = useStatusTone();
@@ -57,7 +59,7 @@ export function LinkedGanttCollectionSurface<TRow extends Row>({
     return field.row.paths;
   }, [gantt.current, laneQuery]);
   const laneFields = useValueStable([...(surfaceProps.fields ?? []), laneLabel, ...currentPaths, ...(gantt.lane?.fields ?? [])]);
-  const laneFacts = useResourceViewQueryFacts({ embedded: surfaceProps.embedded, columns, fields: laneFields, filter: surfaceProps.filter, order: surfaceProps.order, resourceView, modelMetadata });
+  const laneFacts = useResourceViewQueryFacts({ columns, fields: laneFields, order: surfaceProps.order, resourceView, modelMetadata });
   const pageSize = Math.min(MAX_PAGE_SIZE, resourceView.state.pagination.pageSize);
   const scope = React.useMemo(() => ({ filter: laneFacts.mergedFilter, order: laneFacts.sortOrder,
     page: resourceView.state.pagination.pageIndex + 1, pageSize }),
@@ -74,13 +76,13 @@ export function LinkedGanttCollectionSurface<TRow extends Row>({
       const filter = ganttLaneFilter(barQuery, linked.lane, laneIds, linked.filter);
       return {
         fields: [barQuery.contract.identity.field, gantt.start, gantt.end, barLabel, ...(gantt.tone ? [gantt.tone] : []), ...barQuery.selection([{ field: linked.lane }])],
-        filter: surfaceProps.embedded ? filter : unarchivedFilter(barResource, filter),
+        filter: archiveScope ? unarchivedFilter(barResource, filter) : filter,
         error: null,
       };
     } catch (cause) {
       return { fields: [], filter: undefined, error: errorFromUnknown(cause) };
     }
-  }, [barQuery, barResource, laneQuery, linked, gantt.start, gantt.end, gantt.tone, barLabel, laneIds, laneResource?.modelLabel, surfaceProps.embedded]);
+  }, [barQuery, barResource, laneQuery, linked, gantt.start, gantt.end, gantt.tone, barLabel, laneIds, laneResource?.modelLabel, archiveScope]);
   const barFields = useValueStable(barSource.fields);
   const bars = useGanttRecords({ resource: barResource, fields: barFields, filter: barSource.filter,
     enabled: Boolean(barResource && laneIds.length && !barSource.error) });

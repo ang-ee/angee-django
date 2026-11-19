@@ -1,12 +1,13 @@
 // @vitest-environment happy-dom
 
-import { ResourceQuery } from "@angee/metadata";
-import { testDataResource } from "@angee/metadata/testing";
+import { QueryParseError, ResourceQuery, schemaFieldMetadataFromDataResources } from "@angee/metadata";
+import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import type { GetListParams, GetOneParams } from "@refinedev/core";
-import { act, cleanup, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { createUiTestProviders } from "../../testing";
 import { RelationMultiFieldWidget } from "./RelationMultiFieldWidget";
+import { relationFilterFields } from "./relation-filter";
 import {
   useRelationOptions, useRelationPickerOptions, useRelationPickerSearch, useRelationSelectedOptions,
   type RelationOptionsConfig,
@@ -28,6 +29,49 @@ const { Provider, clearClients } = createUiTestProviders({
   queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } },
 });
 afterEach(() => { cleanup(); clearClients(); });
+
+test("an undecodable caller condition passes through without breaking an archivable picker", async () => {
+  const where = { _and: [{ name: { _eq: "Archived" } }, { server_only: { _eq: "ready" } }] };
+  expect(() => ResourceQuery.from(resource).fromWhere(where)).toThrow(QueryParseError);
+  const getList = vi.fn(async (_request: GetListParams) => ({ data: [{ id: "archived", name: "Archived" }], total: 1 }));
+  const { result } = renderHook(() => useRelationPickerSearch(relation, { where }), {
+    wrapper: ({ children }) => <Provider dataProvider={{ getList }}>{children}</Provider>,
+  });
+  await waitFor(() => expect(result.current.options).toEqual([{ value: "archived", label: "Archived" }]));
+  expect(getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where).toEqual(where);
+});
+
+test.each([false, true])("picker catalogue=%s chooses whether archived options are offered", async (catalogue) => {
+  const getList = vi.fn(async ({ meta }: GetListParams) => ({
+    data: meta?.gqlVariables?.where ? [{ id: "active", name: "Active" }] : [{ id: "archived", name: "Archived" }], total: 1,
+  }));
+  const { result } = renderHook(() => useRelationPickerOptions(relation, { catalogue }), {
+    wrapper: ({ children }) => <Provider dataProvider={{ getList }}>{children}</Provider>,
+  });
+  act(() => result.current.onOpenChange(true));
+  await waitFor(() => expect(result.current.options).toEqual(catalogue
+    ? [{ value: "archived", label: "Archived" }] : [{ value: "active", label: "Active" }]));
+  expect(getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where).toEqual(catalogue
+    ? undefined : { is_archived: { _eq: false } });
+});
+
+test("the filter editor can choose an archived related record from the catalogue", async () => {
+  const parent = testDataResource("example.Parent", { query: testResourceQuery({ fields: {
+    option: testQueryField("option.id", { kind: "relation", scalar: "ID",
+      relation: { model: resource.modelLabel, identityPath: "option.id", labelPath: "option.name" } }),
+  } }) });
+  const fields = relationFilterFields(ResourceQuery.from(parent), null, schemaFieldMetadataFromDataResources([resource]));
+  const getList = vi.fn(async (_request: GetListParams) => ({ data: [{ id: "archived", name: "Archived" }], total: 1 }));
+  const onValueChange = vi.fn();
+  render(<Provider dataProvider={{ getList }}>{fields[0]!.renderValue!({
+    value: "", onValueChange, readOnly: false, "aria-label": "Filter value", "aria-invalid": false,
+  })}</Provider>);
+  fireEvent.click(screen.getByRole("combobox", { name: "Filter value" }));
+  const option = await screen.findByRole("option", { name: "Archived" });
+  fireEvent.click(option);
+  expect(onValueChange).toHaveBeenCalledWith("archived");
+  expect(getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where).toBeUndefined();
+});
 
 test("picker search hides archives while its selected identity still resolves and stays labelled", async () => {
   const getList = vi.fn(async (_request: GetListParams) => ({ data: [{ id: "active", name: "Active" }], total: 1 }));

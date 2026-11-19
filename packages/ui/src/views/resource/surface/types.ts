@@ -49,8 +49,6 @@ export interface ListViewNavigationScope {
 }
 
 export interface UseResourceViewSurfaceProps<TRow extends Row = Row> {
-  /** Internal projection of the list's presentation; related rows retain archives. */
-  embedded?: boolean;
   resource: string;
   relatedModels?: readonly string[];
   source?: CollectionSource<TRow>;

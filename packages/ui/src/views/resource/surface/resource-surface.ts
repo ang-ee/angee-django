@@ -11,7 +11,6 @@ import type { ResourceViewSurface, UseResourceViewSurfaceProps } from "./types";
 import { useCollectionQueryBatch } from "../collection-source";
 import { EMPTY_ARRAY } from "./types";
 export function useResourceViewSurface<TRow extends Row = Row>({
-  embedded,
   source,
   relatedModels,
   columns,
@@ -27,7 +26,6 @@ export function useResourceViewSurface<TRow extends Row = Row>({
 }: UseResourceViewSurfaceProps<TRow>): ResourceViewSurface<TRow> {
   const { requestedFields, mergedFilter, sortOrder } =
     useResourceViewQueryFacts({
-      embedded,
       columns,
       fields,
       filter,

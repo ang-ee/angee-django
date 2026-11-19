@@ -12,6 +12,7 @@ import { useValueStable } from "../../lib/use-value-stable";
 import { useStatusTone } from "../../widgets/use-status-tone";
 import { useRelationOptions } from "../relation/relation-options";
 import { ResourceListFrame } from "../resource/ResourceListFrame";
+import { ResourceViewArchiveScopeContext } from "../resource/surface/archive-scope";
 import { useResourceSearch } from "../resource/search/use-resource-search";
 import { useSearchCatalog, type UseSearchCatalogInput } from "../resource/search/catalog";
 import type { ResourceToolbarProps } from "../../toolbars";
@@ -44,6 +45,7 @@ export function GanttCollectionSurface<TRow extends Row>({
   onCreate, createLabel, toolbarActions, className, presentation, toolbarWrap, maxGroupDepth, onRowClick, rowHref,
 }: GanttCollectionSurfaceProps<TRow>) {
   const t = useUiT();
+  const archiveScope = React.useContext(ResourceViewArchiveScopeContext);
   const navigate = useNavigate();
   const navigateInApp = useInAppNavigator();
   const resolveTone = useStatusTone();
@@ -73,7 +75,6 @@ export function GanttCollectionSurface<TRow extends Row>({
   const label = labelField ?? dataResource?.recordRepresentation ?? "id";
   const fields = useValueStable([...(surfaceProps.fields ?? []), startField, endField, label, ...(toneField ? [toneField] : [])]);
   const facts = useResourceViewQueryFacts({
-    embedded: surfaceProps.embedded,
     columns, fields, filter: surfaceProps.filter, order: surfaceProps.order,
     resourceView, modelMetadata: metadata, laneSource, groupStack,
   });
@@ -111,14 +112,14 @@ export function GanttCollectionSurface<TRow extends Row>({
       const filter = ganttLaneFilter(markerQuery, markerSpec.lane, lanes.map((lane) => lane.value), markerSpec.filter);
       return {
         fields: ["id", markerSpec.date, label, ...(markerSpec.tone ? [markerSpec.tone] : []), ...markerQuery.selection([{ field: markerSpec.lane }])],
-        filter: surfaceProps.embedded ? filter : unarchivedFilter(markerMetadata.resource, filter),
+        filter: archiveScope ? unarchivedFilter(markerMetadata.resource, filter) : filter,
         order: markerQuery.fields.id?.sort ? { id: "ASC" as const } : undefined,
         error: null,
       };
     } catch (cause) {
       return { fields: [], filter: undefined, order: undefined, error: errorFromUnknown(cause) };
     }
-  }, [markerSpec, markerMetadata, laneSource.relation.resource, lanes, surfaceProps.embedded]);
+  }, [markerSpec, markerMetadata, laneSource.relation.resource, lanes, archiveScope]);
   const markerFields = useValueStable(markerSource.fields);
   const markers = useGanttRecords({
     resource: markerMetadata?.resource ?? null, fields: markerFields, filter: markerSource.filter, order: markerSource.order,
