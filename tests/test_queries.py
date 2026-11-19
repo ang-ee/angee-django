@@ -30,6 +30,61 @@ def test_statement_body_keeps_transaction_control():
     assert statement_body("BEGIN") == "BEGIN"
 
 
+COMPOUND = '(SELECT "rows"."id" FROM "rows" GROUP BY 1) UNION ALL (SELECT "other"."id" FROM "other")'
+
+
+@pytest.mark.parametrize("prefix", [
+    "",
+    'WITH RECURSIVE ids AS (SELECT "other"."id" FROM "other") ',
+    # A CTE whose own body is a parenthesised compound, then one with a column list.
+    'WITH RECURSIVE "sets" AS ((SELECT 1) UNION (SELECT 2)), "sample" ("x") AS MATERIALIZED (SELECT 3 LIMIT 5) ',
+    'WITH "sample" AS NOT MATERIALIZED (SELECT 3) /* ) (SELECT */ ',
+    'DECLARE "_django_curs_1" NO SCROLL CURSOR WITH HOLD FOR ',
+    'DECLARE "_django_curs_1" NO SCROLL CURSOR WITH HOLD FOR WITH ids AS (SELECT 1) ',
+])
+def test_a_parenthesised_compound_statement_is_classified_by_its_first_member(prefix):
+    """PostgreSQL receives a Django ``union()`` with each member in parentheses. No data verb
+    stands outside them, and the statement was returned whole and counted as no read."""
+
+    sql = prefix + COMPOUND
+    assert statement_body(sql) == COMPOUND[1:]
+    assert statement_startswith(sql, "SELECT ")
+    assert statement_startswith(sql, 'SELECT "rows".')
+    assert not statement_startswith(sql, 'SELECT "other".')
+    assert not statement_startswith(sql, ("INSERT", "UPDATE", "DELETE"))
+
+
+def test_a_compound_statement_nested_in_parentheses_is_classified_by_its_first_member():
+    sql = 'WITH ids AS (SELECT 1) ((SELECT "rows"."id" FROM "rows") UNION (SELECT 2)) UNION ALL (SELECT 3)'
+    assert statement_startswith(sql, 'SELECT "rows".')
+
+
+@pytest.mark.parametrize("sql", [
+    'EXPLAIN (ANALYZE, FORMAT JSON) SELECT "rows"."id" FROM "rows"',
+    'WITH "sample" ("x") AS (SELECT 3) SELECT "rows"."id" FROM "rows" WHERE "rows"."id" IN (SELECT 1)',
+    'SELECT "rows"."id" FROM "rows" UNION ALL SELECT "other"."id" FROM "other"',
+])
+def test_parentheses_that_open_no_statement_leave_the_outer_verb(sql):
+    assert statement_body(sql).startswith('SELECT "rows"."id" FROM "rows"')
+
+
+@pytest.mark.parametrize("sql", ["VALUES (1), (2)", "(VALUES (1)) UNION ALL (VALUES (2))", 'SET search_path TO "x"'])
+def test_statements_without_a_data_verb_stay_whole(sql):
+    assert statement_body(sql) == sql
+
+
+@pytest.mark.django_db
+def test_a_django_combined_query_is_one_read_on_every_vendor():
+    """SQLite sends the members bare and PostgreSQL in parentheses: both are one SELECT."""
+
+    generation = SchemaGeneration.objects.all()
+    with CaptureQueriesContext(connection) as queries:
+        list(generation.values_list("pk").union(generation.values_list("pk"), all=True))
+    [query] = queries
+    assert statement_startswith(query["sql"], "SELECT ")
+    assert connection.vendor != "postgresql" or query["sql"].startswith("(SELECT ")
+
+
 def test_statement_body_handles_large_permission_plans():
     body = 'SELECT "rows"."id" FROM "rows"'
     cte = " UNION ALL ".join("SELECT 1" for _ in range(2500))

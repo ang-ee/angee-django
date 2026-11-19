@@ -684,7 +684,9 @@ def test_statement_reference_reads_have_a_page_query_budget(
     # types read no model column; three witnesses remain, one per live scope.
     # 0.34.0 (9 -> 7): witnesses are decided and kept per arm. The platform admin's
     # ``admin->member`` arm reads no model column, so one witness serves the live scopes too.
-    with django_assert_num_queries(7):
+    # 0.35 (7 -> 8): the operation's evaluator scope reads the admin's grant profile once. The
+    # admin holds the constant arm, so no witness is saved in exchange.
+    with django_assert_num_queries(8):
         rows = _data(execute_schema(schema, query, user=admin))["party_statements"]
     assert len(rows) == row_count
 
