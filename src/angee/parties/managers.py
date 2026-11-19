@@ -2741,8 +2741,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         stream whose records are organizations. ``stream`` is the link's stream as
         the page holds it: its integration's kind is read from the row in hand
         (``Integration.declared_concrete_model``). ``target`` is the organization
-        the caller decided the record is, ``None`` to mint one; a link bound to a
-        live organization keeps it (:meth:`_target_is_new`). The
+        the caller decided the record is, ``None`` to mint one; a link holding a
+        live organization keeps it (:meth:`_target_is_new`). Until matching an
+        existing organization is ruled, any other organization is refused: binding
+        one would lend it to the directory's contact readers and make the source
+        one of its statement sources with no admission rule. The record's locks
+        are taken before that decision, as a contact's are. The
         link is bound before the facts are stated: identity, the legal identity,
         handles and addresses, each withdrawing this link's statements it no
         longer supports. The legal identity is stated whole (an omitted field is
@@ -2759,9 +2763,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         name = parsed.display_name or parsed.legal_name
         source = stream.integration
         with transaction.atomic():
-            self._target_is_new(link, organizations.model, target)
-            if target is not None:
-                self.lock_contact(target, parsed=parsed)
+            self.lock_contact(target, parsed=parsed)
+            if self._target_is_new(link, organizations.model, target):
+                raise ValidationError("Organizations are not matched yet: a record binds its own or a new one.")
             organization: Any = target or organizations.create(
                 display_name=name or organizations.model.PLACEHOLDER_NAME, created_by_id=created_by_id
             )

@@ -265,11 +265,42 @@ def test_a_passed_target_is_an_organization_and_never_rebinds_a_link(source: Sim
         assert RecordLink.objects.get(pk=bound.pk).target_object_id == str(landed.pk)
         assert RecordLink.objects.get(pk=person_link.pk).target_object_id == str(person.pk)
         assert not Organization.statements.model._base_manager.filter(link__in=[person_link, unbound]).exists()
-    # The link's own target is accepted, and an unbound link binds the organization passed.
+    # The link's own target is accepted; an existing organization new to its link is not (no matching is ruled).
     assert _ingest(source, bound, EXAMPLE, target=landed).pk == landed.pk
-    assert _ingest(source, unbound, EXAMPLE, target=other).pk == other.pk
+    with pytest.raises(ValidationError, match="not matched"):
+        _ingest(source, unbound, EXAMPLE, target=other)
     with system_context(reason="tests.organizations.read"):
-        assert RecordLink.objects.get(pk=unbound.pk).target_object_id == str(other.pk)
+        assert RecordLink.objects.get(pk=unbound.pk).target_object_id is None
+
+
+def test_an_existing_organization_new_to_its_link_is_refused_under_the_contact_locks(
+    source: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Until organization matching is ruled, a record binds only the organization its link holds or one it mints.
+
+    The ingest locks the passed organization and the record's handles before it
+    decides, as a contact's does, so the refusal reads the locked rows.
+    """
+
+    with system_context(reason="tests.organizations.existing"):
+        existing = Organization.objects.create(display_name="Example Ltd", created_by=source.owner)
+        link = RecordLink.objects.observe(source.organizations, "company-existing")
+    locked: list[set[Any]] = []
+    lock = Party.objects.lock_contact
+
+    def spy(*parties: Any, **kwargs: Any) -> Any:
+        locked.append({party.pk for party in parties if party is not None})
+        return lock(*parties, **kwargs)
+
+    monkeypatch.setattr(Party.objects, "lock_contact", spy)
+
+    with pytest.raises(ValidationError, match="not matched"):
+        _ingest(source, link, EXAMPLE, target=existing)
+
+    assert locked == [{existing.pk}]
+    with system_context(reason="tests.organizations.read"):
+        assert RecordLink.objects.get(pk=link.pk).target_object_id is None
+        assert not Organization.statements.model._base_manager.filter(subject_id=existing.pk).exists()
 
 
 def test_an_organization_named_only_legally_names_its_handles_so(source: SimpleNamespace) -> None:
