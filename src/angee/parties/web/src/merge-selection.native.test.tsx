@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
+import { RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter, retainSearchParams } from "@tanstack/react-router";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { AppRuntimeProvider, ToastProvider, aliasRouteHref, createRouteHref, pageChildren, pageElementProps, type ListProps } from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
@@ -40,14 +40,15 @@ const mountedRouteHref = aliasRouteHref(
 );
 
 /** The selection bar's Merge for `ids` on the mounted people list, which a scope search narrows. */
-function renderMountedSelection(ids: readonly string[]) {
-  const root = createRootRoute();
+function renderMountedSelection(ids: readonly string[], search = "peopleScope=UNASSIGNED") {
+  // The app's root keeps `?app=` across links and redirects, as `createApp` declares it.
+  const root = createRootRoute({ search: { middlewares: [retainSearchParams(["app"])] } });
   const router = createRouter({
     routeTree: root.addChildren([
       createRoute({ getParentRoute: () => root, path: MOUNTED_PEOPLE, component: () => <MergeSelectionAction ids={new Set(ids)} /> }),
       createRoute({ getParentRoute: () => root, path: MERGE_PATH, component: () => <div>Comparison</div> }),
     ]),
-    history: createMemoryHistory({ initialEntries: [`${MOUNTED_PEOPLE}?peopleScope=UNASSIGNED`] }),
+    history: createMemoryHistory({ initialEntries: [`${MOUNTED_PEOPLE}?${search}`] }),
   });
   render(<Provider><AppRuntimeProvider runtime={{ routeHref: mountedRouteHref }}><RouterProvider router={router} /></AppRuntimeProvider></Provider>);
   return router;
@@ -77,9 +78,26 @@ describe("Merge in a parties list's selection bar", () => {
     expect(router.state.location.search).toEqual({ peopleScope: "UNASSIGNED" });
   });
 
+  test("the comparison opens in the app the list was opened in", async () => {
+    const router = renderMountedSelection(["ada", "grace"], "app=console");
+
+    fireEvent.click(await screen.findByRole("button", { name: MERGE }));
+
+    await screen.findByText("Comparison");
+    expect(router.state.location.search).toEqual({ app: "console" });
+  });
+
+  test("three selected open the batch dialog with the selection as one set", async () => {
+    renderMountedSelection(["ada", "grace", "joan"]);
+
+    fireEvent.click(await screen.findByRole("button", { name: MERGE }));
+
+    expect(await screen.findByText(enPartiesMessages["duplicates.title"]!)).toBeTruthy();
+    expect(screen.queryByText("Comparison")).toBeNull();
+  });
+
   test.each([
     { count: 1, ids: ["ada"], reason: enPartiesMessages["merge.selection.tooFew"]! },
-    { count: 3, ids: ["ada", "grace", "joan"], reason: enPartiesMessages["merge.selection.tooMany"]! },
   ])("with $count selected, Merge stays in the bar, disabled, and says why", async ({ ids, reason }) => {
     const router = renderMountedSelection(ids);
     const merge = await screen.findByRole("button", { name: MERGE });
