@@ -301,7 +301,7 @@ export function FormViewRecordHeader({
   const archiveFlag = archiveFlagField(modelMetadata?.resource);
   const adornments = <>
     {!surface.isCreate && archiveFlag && displayRecord?.[archiveFlag] === true
-      ? <Chip tone="neutral">{t("record.archive.archived")}</Chip> : null}
+      ? <Chip>{t("record.archive.archived")}</Chip> : null}
     {currentTitleField ? <RecordFieldMarkControl field={currentTitleField.name} label={currentTitleField.label}
       restricted={titleRestricted} /> : null}
     {titlePlacementField && displayRecord && !titlePlacementRestricted ? <FieldDescriptorControl

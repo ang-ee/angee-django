@@ -1,9 +1,8 @@
 // @vitest-environment happy-dom
 
 import { cleanup, renderHook } from "@testing-library/react";
-import { ModelMetadataProvider, schemaFieldMetadataFromDataResources, type DataResourceFieldMetadata, type DataResourceMetadata } from "@angee/metadata";
+import { schemaFieldMetadataFromDataResources, type DataResourceFieldMetadata, type DataResourceMetadata } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
-import type { ReactNode } from "react";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { useArchiveActions } from "./archive";
@@ -22,10 +21,8 @@ const flag: DataResourceFieldMetadata = {
 const resource = testDataResource("notes.Note", { fields: [flag], updateFields: [flag.name] });
 
 function archiveActions(value: DataResourceMetadata | null | undefined) {
-  const metadata = schemaFieldMetadataFromDataResources(value ? [value] : []);
-  return renderHook(() => useArchiveActions(value), {
-    wrapper: ({ children }: { children: ReactNode }) => <ModelMetadataProvider metadata={metadata}>{children}</ModelMetadataProvider>,
-  });
+  const metadata = value ? schemaFieldMetadataFromDataResources([value]).labels[value.modelLabel] : value;
+  return renderHook(() => useArchiveActions(metadata));
 }
 
 describe("record archive actions", () => {
@@ -49,9 +46,11 @@ describe("record archive actions", () => {
     expect(unarchive).toMatchObject({ label: "Unarchive", icon: "undo-2", placement: "menu", set: { archived: false } });
     for (const archived of [undefined, null, false, true]) {
       const record = { id: "note-1", archived };
-      expect(archive!.visibleWhen!(record)).toBe(archived !== true);
+      expect(archive!.visibleWhen!(record)).toBe(archived === false);
       expect(unarchive!.visibleWhen!(record)).toBe(archived === true);
     }
+    expect(archive!.visibleWhen!({ id: "note-1" })).toBe(false);
+    expect(unarchive!.visibleWhen!({ id: "note-1" })).toBe(false);
     for (const action of [archive!, unarchive!]) {
       expect(action.permission).toBeUndefined();
       expect(action.confirm).toBeUndefined();

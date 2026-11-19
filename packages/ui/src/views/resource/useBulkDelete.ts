@@ -6,7 +6,7 @@ import {
   type DeletePreviewGroup,
   type DeletePreviewNode,
 } from "@angee/refine";
-import { refineResourceName, useModelMetadata, useModelRootFields } from "@angee/metadata";
+import { allowsRecordPermission, refineResourceName, rowPublicId, useModelMetadata, useModelRootFields, type Row } from "@angee/metadata";
 
 import { errorMessage, useToast } from "../../feedback";
 import { useUiT } from "../../i18n";
@@ -44,6 +44,8 @@ export function useBulkDelete(
   resource: string,
   selectedIds: ReadonlySet<string>,
   onSucceeded: (ids: readonly string[]) => void,
+  /** Selection snapshots; a record form checks its own loaded row before exposing Delete. */
+  selectedRows?: readonly Row[],
 ): UseBulkDeleteResult {
   const viewAs = useLatestRef(useRuntimeViewAs());
   const t = useUiT();
@@ -51,6 +53,12 @@ export function useBulkDelete(
   const rootFields = useModelRootFields(resource);
   const metadata = useModelMetadata(resource);
   const dataResource = metadata?.resource ?? null;
+  const declaresPermissions = Boolean(metadata?.fields.permissions);
+  const selectedIdList = React.useMemo(() => {
+    if (!selectedRows) return [...selectedIds];
+    const rows = new Map(selectedRows.map((row) => [rowPublicId(row), row]));
+    return [...selectedIds].filter((id) => allowsRecordPermission(rows.get(id), "delete", declaresPermissions));
+  }, [declaresPermissions, selectedIds, selectedRows]);
   const deletePreviewOperation = useDeletePreviewOperation(dataResource);
   const refineResource = refineResourceName(dataResource);
   const deleteAccess = useCan({
@@ -60,7 +68,8 @@ export function useBulkDelete(
   });
   const canDelete =
     (rootFields === null || Boolean(rootFields.deletePreview))
-    && (deleteAccess.data?.can ?? true);
+    && (deleteAccess.data?.can ?? true)
+    && (selectedRows === undefined || selectedIdList.length > 0);
   const deletePreview = useAngeeDeletePreview(deletePreviewOperation.target, {
     document: deletePreviewOperation.document,
   });
@@ -86,10 +95,6 @@ export function useBulkDelete(
       resource,
       t,
     ],
-  );
-  const selectedIdList = React.useMemo(
-    () => [...selectedIds],
-    [selectedIds],
   );
   const [previewState, setPreviewState] =
     React.useState<BulkPreviewState | null>(null);

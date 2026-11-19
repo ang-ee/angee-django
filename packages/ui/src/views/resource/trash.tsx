@@ -7,7 +7,7 @@ import {
 } from "@refinedev/core";
 import { extractActionOutcome, refineFieldsFromPaths, stableSerialize } from "@angee/refine";
 import {
-  holdsPermission,
+  allowsRecordPermission,
   refineResourceName,
   rowPublicId,
   trashFlagField,
@@ -94,10 +94,6 @@ function trashTargetType(resource: DataResourceMetadata | null | undefined): str
   return resource && trashFlagField(resource) ? resource.resourceType ?? null : null;
 }
 
-function canManageTrash(record: Row): boolean {
-  return !("permissions" in record) || holdsPermission(record, TRASH_PERMISSION);
-}
-
 /**
  * Run the shared `trash_record` / `restore_record` verbs for one trashable
  * resource, settling their outcome through the shared toast owner and
@@ -108,19 +104,19 @@ export function useTrashRecord(resource: DataResourceMetadata | null | undefined
   const askTrash = useTrashPrompt();
   const settle = useActionResultRun();
   const targetType = trashTargetType(resource);
-  const options = resource
+  const options = targetType && resource
     ? { dataProviderName: resource.schemaName, invalidateModels: [resource.modelLabel] }
-    : {};
-  const [trashRecord, trashState] = useAuthoredResourceMutation(TrashRecord, {
+    : null;
+  const [trashRecord, trashState] = useAuthoredResourceMutation(TrashRecord, options ? {
     ...options,
     errorNotification: false,
     shouldInvalidate: (data) => data?.trash_record.ok === true,
-  });
-  const [restoreRecord, restoreState] = useAuthoredResourceMutation(RestoreRecord, {
+  } : {});
+  const [restoreRecord, restoreState] = useAuthoredResourceMutation(RestoreRecord, options ? {
     ...options,
     errorNotification: false,
     shouldInvalidate: (data) => data?.restore_record.ok === true,
-  });
+  } : {});
   const trash = React.useCallback(async (id: string, name?: string): Promise<boolean> => {
     if (!targetType) return false;
     const answer = await askTrash(name);
@@ -151,17 +147,19 @@ export function useTrashRecord(resource: DataResourceMetadata | null | undefined
  * @owner SelectionBar
  */
 export function BulkTrashActions(props: BulkSelectionProps): React.ReactElement | null {
-  const targetType = trashTargetType(props.resource);
-  const flag = trashFlagField(props.resource);
+  const targetType = trashTargetType(props.modelMetadata.resource);
+  const flag = trashFlagField(props.modelMetadata.resource);
   return targetType && flag ? <TrashSelectionActions {...props} targetType={targetType} flag={flag} /> : null;
 }
 
-function TrashSelectionActions({ resource, selectedRows, onSucceeded, targetType, flag }: BulkSelectionProps & {
+function TrashSelectionActions({ modelMetadata, selectedRows, onSucceeded, targetType, flag }: BulkSelectionProps & {
   targetType: string;
   flag: string;
 }): React.ReactElement {
   const t = useUiT();
   const askTrash = useTrashPrompt();
+  const resource = modelMetadata.resource;
+  const declaresPermissions = Boolean(modelMetadata.fields.permissions);
   const bulk = useBulkAction(resource, onSucceeded);
   // No per-row cache invalidation or toast: the bulk owner settles the whole run.
   const options = { dataProviderName: resource.schemaName, errorNotification: false as const };
@@ -170,7 +168,7 @@ function TrashSelectionActions({ resource, selectedRows, onSucceeded, targetType
   return <>{[false, true].map((restore) => {
     const ids = selectedRows.flatMap((row) => {
       const id = rowPublicId(row);
-      return id && canManageTrash(row) && (row[flag] === true) === restore ? [id] : [];
+      return id && allowsRecordPermission(row, TRASH_PERMISSION, declaresPermissions) && row[flag] === restore ? [id] : [];
     });
     if (!ids.length) return null;
     return <SelectionBar.Action key={String(restore)} surface="brand" pending={bulk.pending} disabled={bulk.blocked}
@@ -211,7 +209,7 @@ export interface TrashActionOptions<TRow extends Row = Row> {
 
 /**
  * Record-form verbs for a trashable resource: Trash on an untrashed record,
- * Restore on a trashed one, requiring `delete` when the record projects
+ * Restore on a trashed one, requiring `delete` when the model declares
  * permissions. The form supplies these menu verbs and selects the trash flag.
  * @owner RecordActionBar
  */
@@ -222,6 +220,7 @@ export function useTrashActions(
   const t = useUiT();
   const { available, trash, restore } = useTrashRecord(resource);
   const flag = trashFlagField(resource);
+  const declaresPermissions = Boolean(resource?.fields?.some((field) => field.name === "permissions"));
   const { name } = options;
   return React.useMemo<readonly ActionDescriptor[]>(() => {
     if (!available || flag === null) return [];
@@ -231,7 +230,7 @@ export function useTrashActions(
         label: t("trash.action"),
         icon: "trash",
         placement: "menu",
-        visibleWhen: (record) => canManageTrash(record) && record[flag] !== true,
+        visibleWhen: (record) => allowsRecordPermission(record, TRASH_PERMISSION, declaresPermissions) && record[flag] === false,
         run: async (context) => {
           const id = rowPublicId(context.record);
           if (id && context.record && await trash(id, name?.(context.record))) context.refresh();
@@ -242,14 +241,14 @@ export function useTrashActions(
         label: t("trash.restore"),
         icon: "undo-2",
         placement: "menu",
-        visibleWhen: (record) => canManageTrash(record) && record[flag] === true,
+        visibleWhen: (record) => allowsRecordPermission(record, TRASH_PERMISSION, declaresPermissions) && record[flag] === true,
         run: async (context) => {
           const id = rowPublicId(context.record);
           if (id && await restore(id)) context.refresh();
         },
       },
     ];
-  }, [available, flag, name, restore, t, trash]);
+  }, [available, declaresPermissions, flag, name, restore, t, trash]);
 }
 
 /** List-row verbs matching {@link useTrashActions}, for `ListView` `rowActions`.
@@ -262,10 +261,10 @@ export function useTrashRowActions<TRow extends Row>(
   const t = useUiT();
   const { available, trash, restore } = useTrashRecord(resource);
   const flag = trashFlagField(resource);
+  const declaresPermissions = Boolean(resource?.fields?.some((field) => field.name === "permissions"));
   const { name } = options;
   return React.useMemo<readonly RowActionDeclaration<TRow>[]>(() => {
     if (!available || flag === null) return [];
-    const manages = (row: TRow) => holdsPermission(row, TRASH_PERMISSION);
     return [
       defineRowAction<TRow>({
         kind: "page",
@@ -275,7 +274,7 @@ export function useTrashRowActions<TRow extends Row>(
         variant: "ghost",
         placement: "menu",
         pendingPolicy: "disable-actions",
-        visible: (row) => manages(row) && row[flag] !== true,
+        visible: (row) => allowsRecordPermission(row, TRASH_PERMISSION, declaresPermissions) && row[flag] === false,
         onSelect: async (row) => {
           const id = rowPublicId(row);
           if (id) await trash(id, name?.(row));
@@ -288,14 +287,14 @@ export function useTrashRowActions<TRow extends Row>(
         icon: "undo-2",
         variant: "ghost",
         pendingPolicy: "disable-actions",
-        visible: (row) => manages(row) && row[flag] === true,
+        visible: (row) => allowsRecordPermission(row, TRASH_PERMISSION, declaresPermissions) && row[flag] === true,
         onSelect: async (row) => {
           const id = rowPublicId(row);
           if (id) await restore(id);
         },
       }),
     ];
-  }, [available, flag, name, restore, t, trash]);
+  }, [available, declaresPermissions, flag, name, restore, t, trash]);
 }
 
 export interface RemovedDisclosureProps {
@@ -374,6 +373,8 @@ export function RemovedItem({
 }
 
 export interface RemovedListProps<TRow extends Row = Row> {
+  /** The model's permission contract; domain reads may supply their own canRestore. */
+  resource?: DataResourceMetadata | null;
   pagination?: { page: number; pageSize: number; onPageChange: (page: number) => void };
   /** The removed rows, from the shared trash read or a domain read (a queue's removed tasks). */
   rows: readonly TRow[];
@@ -385,7 +386,7 @@ export interface RemovedListProps<TRow extends Row = Row> {
   label: (row: TRow) => string;
   /** Where a row keeps who removed it and why; default: the shared trash stamps. */
   stamps?: (row: TRow) => { trashedByLabel?: string | null; trashReason?: string | null };
-  /** Whether a row offers Restore; default: the reader holds the trash permission on it. */
+  /** Override the resource's permission contract for a domain-owned restore verb. */
   canRestore?: (row: TRow) => boolean;
   /** The restore verb: the shared `restore_record`, or a domain's own. */
   restore?: (row: TRow) => void | Promise<unknown>;
@@ -402,6 +403,7 @@ export interface RemovedListProps<TRow extends Row = Row> {
  * @kind surface
  */
 export function RemovedList<TRow extends Row = Row>({
+  resource,
   pagination,
   rows,
   total,
@@ -414,6 +416,7 @@ export function RemovedList<TRow extends Row = Row>({
   className,
 }: RemovedListProps<TRow>): React.ReactElement | null {
   const t = useUiT();
+  const declaresPermissions = Boolean(resource?.fields?.some((field) => field.name === "permissions"));
   if (error) return <ErrorBanner description={t("trash.loadFailed")} />;
   return (
     <RemovedDisclosure count={total ?? rows.length} className={className}>
@@ -423,7 +426,7 @@ export function RemovedList<TRow extends Row = Row>({
           trashedByLabel: typeof row.trashed_by_label === "string" ? row.trashed_by_label : null,
           trashReason: typeof row.trash_reason === "string" ? row.trash_reason : null,
         };
-        const restorable = restore && (canRestore ? canRestore(row) : Boolean(id) && holdsPermission(row, TRASH_PERMISSION));
+        const restorable = restore && (canRestore ? canRestore(row) : Boolean(id) && allowsRecordPermission(row, TRASH_PERMISSION, declaresPermissions));
         return (
           <RemovedItem
             key={id ?? label(row)}
@@ -455,7 +458,7 @@ type RemovedRecordRow = BaseRecord & Row;
 /**
  * "Removed (n)" for any trashable resource: the trashed rows the reader may
  * still read (Zed withholds them from everyone else), each with Restore when
- * the row projects `delete`. Renders nothing for an untrashable resource.
+ * the model's permission contract allows `delete`. Renders nothing for an untrashable resource.
  * @kind surface
  */
 export function RemovedRecords<TRow extends Row = Row>({
@@ -467,13 +470,14 @@ export function RemovedRecords<TRow extends Row = Row>({
   className,
 }: RemovedRecordsProps<TRow>): React.ReactElement | null {
   const flag = trashFlagField(resource);
+  const declaresPermissions = Boolean(resource?.fields?.some((field) => field.name === "permissions"));
   const { restore, busy } = useTrashRecord(resource);
   const scope = stableSerialize([resource?.modelLabel, filters, pageSize]);
   const [pagination, setPagination] = React.useState({ scope, page: 1 });
   const page = pagination.scope === scope ? pagination.page : 1;
   const selection = React.useMemo(
-    () => refineFieldsFromPaths(["id", "permissions", ...TRASH_STAMP_FIELDS, ...fields]),
-    [fields],
+    () => refineFieldsFromPaths(["id", ...(declaresPermissions ? ["permissions"] : []), ...TRASH_STAMP_FIELDS, ...fields]),
+    [declaresPermissions, fields],
   );
   const list = useList<RemovedRecordRow, HttpError>({
     resource: refineResourceName(resource ?? null),
@@ -492,6 +496,7 @@ export function RemovedRecords<TRow extends Row = Row>({
   if (!flag) return null;
   return (
     <RemovedList
+      resource={resource}
       pagination={{ page, pageSize, onPageChange: (next) => setPagination({ scope, page: next }) }}
       rows={rows}
       total={list.result.total ?? rows.length}

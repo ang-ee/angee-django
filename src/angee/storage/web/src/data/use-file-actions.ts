@@ -19,10 +19,6 @@ export interface FileActions {
   restore: (id: string) => Promise<boolean>;
   /** Move a file into a folder by public id, or `null` for the root; resolves whether it moved. */
   move: (id: string, folder: string | null) => Promise<boolean>;
-  /** Soft-delete many files in one pass, refetching once; stops at the first refusal and resolves whether all were trashed. */
-  trashMany: (ids: Iterable<string>) => Promise<boolean>;
-  /** Restore many files in one pass, refetching once; stops at the first refusal and resolves whether all were restored. */
-  restoreMany: (ids: Iterable<string>) => Promise<boolean>;
 }
 
 /**
@@ -63,22 +59,6 @@ export function useFileActions(
       settle(async () => {
         requireFileResource(resource);
         await updateFile.mutateAsync({ id, values: { folder }, errorNotification: false });
-        return true;
-      }, false),
-    trashMany: (ids) =>
-      settle(async () => {
-        for (const id of ids) {
-          requireFileResource(resource);
-          if (!(await deleteWithPreview.remove(id, { errorNotification: false }))) return false;
-        }
-        return true;
-      }, false),
-    restoreMany: (ids) =>
-      settle(async () => {
-        requireFileResource(resource);
-        for (const id of ids) {
-          if (!(await trashRecord.restore(id))) return false;
-        }
         return true;
       }, false),
   };

@@ -24,6 +24,10 @@ const flags: DataResourceFieldMetadata[] = [
   { name: "removed", kind: "scalar", scalar: "Boolean", readable: true, aggregatable: false,
     creatable: false, updatable: false, requiredOnCreate: false, trashable: true },
 ];
+const permissionField: DataResourceFieldMetadata = {
+  name: "permissions", kind: "list", scalar: "String", readable: true, aggregatable: false,
+  creatable: false, updatable: false, requiredOnCreate: false,
+};
 const query = ResourceQuery.forRows({ fields: {
   id: { scalar: "ID" }, title: { scalar: "String" }, archived: { scalar: "Boolean" }, removed: { scalar: "Boolean" },
 } });
@@ -177,12 +181,49 @@ test.each([
   expect(screen.queryByRole("button", { name: /^(Move to trash|Restore)$/ })).toBeNull();
 });
 
-test("projected delete permission gates trash for selected rows", async () => {
-  const f = await fixture({ rows: [
+test("declared delete permission gates trash for selected rows, including omitted permissions", async () => {
+  const f = await fixture({ metadata: { ...resource, fields: [...flags, permissionField] }, rows: [
     { ...note("one"), permissions: ["write"] }, { ...note("two", false, true), permissions: [] },
+    note("missing"), note("missing-removed", false, true),
   ] });
   f.selectAll();
   expect(screen.queryByRole("button", { name: /^(Move to trash|Restore)$/ })).toBeNull();
+});
+
+test("unselected archive and trash flags offer neither direction of either action", async () => {
+  const f = await fixture({ rows: [
+    { id: "missing", title: "Missing flags" },
+    { id: "null", title: "Null flags", archived: null, removed: null },
+  ] });
+  f.selectAll();
+  expect(screen.getByText("2 selected")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /^(Archive|Unarchive|Move to trash|Restore)$/ })).toBeNull();
+  expect(f.update).not.toHaveBeenCalled();
+  expect(f.custom).not.toHaveBeenCalled();
+});
+
+test.each(["Archive", "Unarchive", "Move to trash", "Restore"] as const)("bulk %s changes only rows holding its declared permission", async (action) => {
+  const archived = action === "Unarchive";
+  const removed = action === "Restore";
+  const f = await fixture({ metadata: { ...resource, fields: [...flags, permissionField] }, rows: [
+    { ...note("allowed", archived, removed), permissions: ["write", "delete"] },
+    { ...note("denied", archived, removed), permissions: ["read"] },
+    note("missing", archived, removed),
+  ] });
+  f.selectAll();
+  fireEvent.click(screen.getByRole("button", { name: action }));
+  if (action === "Move to trash") {
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: action }));
+  }
+  const archive = action === "Archive" || action === "Unarchive";
+  await screen.findByText(archive ? "Updated archive status for 1 record."
+    : action === "Restore" ? "Restored 1 record from the trash." : "Moved 1 record to the trash.");
+  const write = archive ? f.update : f.custom;
+  expect(write).toHaveBeenCalledTimes(1);
+  expect(write).toHaveBeenCalledWith(expect.objectContaining(archive
+    ? { id: "allowed" } : { payload: expect.objectContaining({ target_id: "allowed" }) }));
+  expect(f.view().selectedRows.map((row) => row.id)).toEqual(["denied", "missing"]);
 });
 
 test.each(["transport", "missing"] as const)("an archive %s failure is reported and stays selected", async (failure) => {

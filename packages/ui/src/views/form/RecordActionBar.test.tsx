@@ -137,12 +137,17 @@ describe("RecordActionBar", () => {
     { id: "primary", label: "Review", primary: true },
     { id: "toolbar", label: "Review", placement: "toolbar" },
     { id: "lone", label: "Review" },
-  ])("a parent Actions menu keeps the $id verb in the menu", async (action) => {
-    renderActionBar(<ActionMenu><RecordActionBar record={record} promoteLoneAction actions={[action]} /></ActionMenu>);
+  ])("a parent Actions menu keeps the $id verb beside the generic group", async (action) => {
+    renderActionBar(<ActionMenu><RecordActionBar record={record} promoteLoneAction actions={[action]}
+      genericActions={[{ id: "archive", label: "Archive", placement: "menu", set: { archived: true } }]} />
+    </ActionMenu>);
     expect(screen.queryByRole("button", { name: "Review" })).toBeNull();
     expect(screen.getAllByRole("button", { name: "Actions" })).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Actions" }));
     expect(await screen.findByRole("menuitem", { name: "Review" })).toBeTruthy();
+    const menu = within(screen.getByRole("menu"));
+    expect(menu.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Review", "Archive"]);
+    expect(menu.getAllByRole("separator")).toHaveLength(1);
   });
 
   test("trash opens its native reason prompt without a second confirmation", async () => {

@@ -3,6 +3,7 @@ import { useWatch } from "react-hook-form";
 import { developmentMode } from "../../lib/development-mode";
 import { useLatestRef } from "../../lib/use-latest-ref";
 import {
+  allowsRecordPermission,
   archiveFlagField,
   lineReadSelectionPaths,
   modelFieldForPath,
@@ -57,7 +58,9 @@ import {
   flattenedFormFields,
   formSections,
   formViewFieldLayout,
+  recordRepresentationValue,
   recordSubtitleParts,
+  titleText,
   withModeLockedFields,
   visibleSections,
   type FormSectionModel,
@@ -749,14 +752,18 @@ export function useFormViewSurface({
     ],
     [contributedActions, pageActions, save.displayRecord, sectionAdmits],
   );
-  const archiveActions = useArchiveActions(dataResource);
-  const trashActions = useTrashActions(dataResource);
-  const genericActions = React.useMemo(
-    () => isCreate || readOnly ? [] : [...archiveActions, ...trashActions],
-    [archiveActions, isCreate, readOnly, trashActions],
-  );
   const { titleField, titlePlacementField, statusField, bodyField, gridFields, gridGroups } =
     fieldLayout;
+  const recordName = React.useCallback((record: Row) => titleText(
+    titleField ? record[titleField.name] : recordRepresentationValue(record, modelMetadata),
+    t("form.record"),
+  ), [modelMetadata, t, titleField]);
+  const archiveActions = useArchiveActions(modelMetadata);
+  const trashActions = useTrashActions(dataResource, { name: recordName });
+  const genericActions = React.useMemo(
+    () => isCreate || readOnly ? [] : [...(submit ? [] : archiveActions), ...trashActions],
+    [archiveActions, isCreate, readOnly, submit, trashActions],
+  );
   const titleFieldMessages = titleField
     ? [
         ...fieldErrorMessages(
@@ -828,7 +835,7 @@ export function useFormViewSurface({
   const linesTrailing = save.linesActive && !linesDeclared;
   const visibleDeleteAction =
     readOnly || deleteAction === undefined ||
-    (save.displayRecord != null && "permissions" in save.displayRecord && !holdsPermission(save.displayRecord, "delete")) ||
+    !allowsRecordPermission(save.displayRecord, "delete", Boolean(modelMetadata?.fields.permissions)) ||
     (deleteVisibleWhen !== undefined &&
       (save.displayRecord == null || !deleteVisibleWhen(save.displayRecord)))
       ? undefined

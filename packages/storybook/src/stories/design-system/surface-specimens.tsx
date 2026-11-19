@@ -197,7 +197,6 @@ function HookValues() {
   const descriptors = U.useFormSpecFields(formSpec);
   const [ids] = U.useListIdentities(2);
   const routeRecord = U.useRouteRecordId();
-  const actions = U.useTrashActions(resource);
   const rowActions = U.useTrashRowActions(resource);
   const [, outcome] = U.useActionOutcomeMutation("library_action");
   const [, result] = U.useActionResultMutation("library_action");
@@ -213,7 +212,7 @@ function HookValues() {
       ["Implementation category", category("local") || "Loading"],
       ["Config fields", config.fields.length], ["Prefill", String(prefill("local")?.title ?? "")],
       ["Form descriptors", descriptors.length], ["Stable row identities", ids.current.length],
-      ["Route record", routeRecord ?? "Collection route"], ["Trash actions", actions.length],
+      ["Route record", routeRecord ?? "Collection route"],
       ["Trash row actions", rowActions.length],
       ["Action bindings", [action, chromeMutation, chromeOutcome, outcome, result].some(state => state.fetching) ? "Pending" : "Ready"],
     ]} />

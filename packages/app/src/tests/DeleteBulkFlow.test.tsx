@@ -62,7 +62,7 @@ const sdkMocks = vi.hoisted(() => ({
   rows: [
     { id: "record-1", title: "First record" },
     { id: "record-2", title: "Second record" },
-  ] satisfies Row[],
+  ] as Row[],
   mutate: vi.fn(),
   invalidate: vi.fn(async () => undefined),
 }));
@@ -113,6 +113,10 @@ describe("bulk delete flow", () => {
     });
     sdkMocks.mutate.mockReset();
     sdkMocks.invalidate.mockClear();
+    sdkMocks.rows = [
+      { id: "record-1", title: "First record" },
+      { id: "record-2", title: "Second record" },
+    ];
   });
 
   test("SelectionBar shows Delete when rows are selected", async () => {
@@ -144,6 +148,44 @@ describe("bulk delete flow", () => {
       "Export selected", "Delete", "Clear",
     ]);
     expect(screen.getByRole("button", { name: "Delete" }).classList.contains("hover:text-danger-text")).toBe(true);
+  });
+
+  test.each([false, true])("bulk Delete requires projected delete only when the model declares permissions (%s)", async (declaresPermissions) => {
+    const model = RECORD_METADATA.types.RecordType!;
+    const metadata = withTestResourceInventory({ types: { RecordType: { ...model,
+      fields: { ...model.fields, ...(declaresPermissions
+        ? { permissions: { name: "permissions", kind: "list" as const, scalar: "String" } } : {}) },
+    } } });
+    render(<TestUrlState><ModelMetadataProvider metadata={metadata}>
+      <ListView resource="example.Record" columns={columns} />
+    </ModelMetadataProvider></TestUrlState>);
+    fireEvent.click((await screen.findAllByRole("checkbox", { name: "Select row" }))[0]!);
+    expect(screen.getByText("1 selected")).toBeTruthy();
+    expect(Boolean(screen.queryByRole("button", { name: "Delete" }))).toBe(!declaresPermissions);
+    expect(sdkMocks.mutate).not.toHaveBeenCalled();
+  });
+
+  test("bulk Delete previews and deletes only permitted rows, keeping omitted permissions selected", async () => {
+    sdkMocks.rows[0] = { ...sdkMocks.rows[0], permissions: ["delete"] };
+    sdkMocks.mutate.mockImplementation(async ({ id }: { id: string }) => previewFor(id, id));
+    const model = RECORD_METADATA.types.RecordType!;
+    const metadata = withTestResourceInventory({ types: { RecordType: { ...model,
+      fields: { ...model.fields, permissions: { name: "permissions", kind: "list", scalar: "String" } },
+    } } });
+    render(<TestUrlState><ModelMetadataProvider metadata={metadata}>
+      <ListView resource="example.Record" columns={columns} />
+    </ModelMetadataProvider></TestUrlState>);
+    for (const checkbox of await screen.findAllByRole("checkbox", { name: "Select row" })) fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Delete 1 record?")).toBeTruthy();
+    expect(sdkMocks.mutate).toHaveBeenCalledExactlyOnceWith({ id: "record-1", confirm: false });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledWith({ id: "record-1", confirm: true }));
+    await screen.findByText("1 selected");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(sdkMocks.mutate).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
   });
 
   test("SelectionBar omits Delete when the resource exposes no delete root", async () => {

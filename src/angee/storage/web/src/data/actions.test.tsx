@@ -145,14 +145,11 @@ describe("storage file/folder actions", () => {
       await result.current.trash("fil_1");
       await expect(result.current.move("fil_1", "fld_1")).resolves.toBe(true);
       await result.current.move("fil_1", null);
-      await result.current.trashMany(["fil_2", "fil_3"]);
       await result.current.restore("fil_1");
     });
 
     expect(deleteFile?.calls).toEqual([
       expect.objectContaining({ values: { id: "fil_1", confirm: true } }),
-      expect.objectContaining({ values: { id: "fil_2", confirm: true } }),
-      expect.objectContaining({ values: { id: "fil_3", confirm: true } }),
     ]);
     // The verbs own the error surface: Refine's notification is off on every call.
     expect(updateFile?.calls).toEqual([
@@ -160,32 +157,31 @@ describe("storage file/folder actions", () => {
       { id: "fil_1", values: { folder: null }, errorNotification: false },
     ]);
     expect(sdk.authoredCalls).toEqual([{ id: "fil_1" }]);
-    expect(onChanged).toHaveBeenCalledTimes(5);
+    expect(onChanged).toHaveBeenCalledTimes(4);
   });
 
-  test("bulk restore stops on the shared owner's reported refusal", async () => {
+  test("single-file restore preserves the shared owner's reported refusal", async () => {
     sdk.refuseRestoreId = "fil_2";
     const onChanged = vi.fn();
     const { result } = renderHook(() => useFileActions({ onChanged }), { wrapper: MetadataWrapper });
     await act(async () => {
-      await expect(result.current.restoreMany(["fil_1", "fil_2", "fil_3"])).resolves.toBe(false);
+      await expect(result.current.restore("fil_2")).resolves.toBe(false);
     });
-    expect(sdk.authoredCalls).toEqual([{ id: "fil_1" }, { id: "fil_2" }]);
-    expect(onChanged).toHaveBeenCalledTimes(1);
+    expect(sdk.authoredCalls).toEqual([{ id: "fil_2" }]);
+    expect(onChanged).toHaveBeenCalledOnce();
   });
 
-  test("bulk trash does not treat a blocked confirmation as deletion", async () => {
+  test("single-file trash does not treat a blocked confirmation as deletion", async () => {
     sdk.blockedDeleteId = "fil_2";
     const { result } = renderHook(() => useFileActions(), { wrapper: MetadataWrapper });
     await act(async () => {
-      await expect(result.current.trashMany(["fil_1", "fil_2", "fil_3"])).resolves.toBe(false);
+      await expect(result.current.trash("fil_2")).resolves.toBe(false);
     });
-    expect(sdk.refineMutations[0]?.calls).toHaveLength(2);
+    expect(sdk.refineMutations[0]?.calls).toHaveLength(1);
     expect(sdk.refineMutations[0]?.calls).toEqual([
-      expect.objectContaining({ values: { id: "fil_1", confirm: true }, errorNotification: false }),
       expect.objectContaining({ values: { id: "fil_2", confirm: true }, errorNotification: false }),
     ]);
-    expect(sdk.invalidations).toEqual([FILE_INVALIDATION]);
+    expect(sdk.invalidations).toEqual([]);
   });
 
   test("a failed move settles once in the verb and resolves false", async () => {

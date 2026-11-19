@@ -1,7 +1,7 @@
 import * as React from "react";
 import {
   fieldUpdatable,
-  holdsPermission,
+  allowsRecordPermission,
   useCanonicalResourceModelLabels,
   useResourceInvalidates,
   refineResourceName,
@@ -377,8 +377,7 @@ export function useFormViewSave({
     () =>
       readOnly ||
       recordUnavailable ||
-      (!isCreate && (Array.isArray(record?.permissions) || Boolean(modelMetadata?.fields.permissions))
-        && !holdsPermission(record, "write")) ||
+      (!isCreate && !allowsRecordPermission(record, "write", Boolean(modelMetadata?.fields.permissions))) ||
       (!isCreate && record !== null && Boolean(readOnlyWhen?.(record))) ||
       (!submitOwner &&
         !Boolean(isCreate ? dataResource?.roots.create : dataResource?.roots.update)) ||

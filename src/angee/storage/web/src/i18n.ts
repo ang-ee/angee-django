@@ -66,10 +66,6 @@ export const enStorageMessages: Record<string, string> = {
   "newFolder.nameLabel": "New folder name",
   "newFolder.create": "Create",
 
-  // Selection-bar bulk verbs.
-  "bulk.restore": "Restore",
-  "bulk.trash": "Trash",
-
   // File list + upload surface.
   "list.emptyUpload": "Drop files here or use Upload.",
   "list.empty": "No files here yet",

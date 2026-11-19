@@ -257,6 +257,7 @@ describe("FormView", () => {
       fields: {
         title: { name: "title", kind: "scalar", scalar: "String" },
         reminderAt: { name: "reminderAt", kind: "scalar", scalar: "DateTime" },
+        permissions: { name: "permissions", kind: "list", scalar: "String" },
       },
     } } }, undefined, formChildren({ "notes.Note#sections": {
       "notes.private": { permission: "write", content: <>
@@ -283,7 +284,7 @@ describe("FormView", () => {
     const renderActions = () => renderWithProviders(<FormView resource="notes.Note" id="note-1">
       <Field name="title" title />
       <Action id="archive" label="Archive" permission="write" run={vi.fn()} />
-    </FormView>, undefined, undefined, formChildren({ "notes.Note#actions": {
+    </FormView>, recordActionsMetadata(), undefined, formChildren({ "notes.Note#actions": {
       "notes.reopen": { permission: "write", content: <button type="button">Reopen</button> },
     } }));
     renderActions();
@@ -431,19 +432,102 @@ describe("FormView", () => {
     expect(sdkMocks.recordSelection).toContain("is_trashed");
   });
 
-  test.each([undefined, [], ["read"], ["write"], ["delete"]].map((permissions) => ({ permissions })))("Delete follows projected permissions $permissions, preserving capability-only records", async ({ permissions }) => {
-    sdkMocks.record = { ...sdkMocks.record, ...(permissions === undefined ? {} : { permissions }) };
+  test.each([undefined, null, [], ["read"], ["write"], ["delete"]].map((permissions) => ({ permissions })))("declared permissions gate form writes, Trash and Delete ($permissions)", async ({ permissions }) => {
+    sdkMocks.record = { ...sdkMocks.record, is_archived: false, is_trashed: false,
+      ...(permissions === undefined ? {} : { permissions }) };
     renderWithProviders(<FormView resource="notes.Note" id="note-1"
       deleteAction={{ canDelete: true, isPending: false, onDelete: vi.fn() }}>
       <Field name="title" label="Title" title />
       <Action id="inspect" label="Inspect" placement="menu" run={vi.fn()} />
-    </FormView>);
+    </FormView>, recordActionsMetadata());
 
+    if (permissions?.includes("write")) await screen.findByDisplayValue("First");
+    else await screen.findByRole("heading", { name: "First" });
+    expect(Boolean(screen.queryByRole("textbox", { name: "Title" }))).toBe(Boolean(permissions?.includes("write")));
     fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
     await screen.findByRole("menuitem", { name: "Inspect" });
-    expect(Boolean(screen.queryByRole("menuitem", { name: "Delete" }))).toBe(
-      permissions === undefined || permissions.includes("delete"),
-    );
+    expect(Boolean(screen.queryByRole("menuitem", { name: "Archive" }))).toBe(Boolean(permissions?.includes("write")));
+    for (const name of ["Move to trash", "Delete"]) {
+      const action = screen.queryByRole("menuitem", { name });
+      expect(Boolean(action)).toBe(Boolean(permissions?.includes("delete")));
+      if (action) expect(action.getAttribute("aria-disabled")).not.toBe("true");
+    }
+  });
+
+  test("a form without a permissions field offers writes, Trash and Delete", async () => {
+    sdkMocks.record = { ...sdkMocks.record, is_archived: false, is_trashed: false };
+    const metadata = recordActionsMetadata();
+    const resource = metadata.labels["notes.Note"]!.resource;
+    renderWithProviders(<FormView resource="notes.Note" id="note-1"
+      deleteAction={{ canDelete: true, isPending: false, onDelete: vi.fn() }}>
+      <Field name="title" label="Title" title />
+    </FormView>, recordActionsMetadata({ fields: resource.fields?.filter((field) => field.name !== "permissions") }));
+    await screen.findByDisplayValue("First");
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    for (const name of ["Archive", "Move to trash", "Delete"]) {
+      expect(await screen.findByRole("menuitem", { name })).toBeTruthy();
+    }
+  });
+
+  test.each([false, true])("a custom submit owns saves and receives no generic archive patch (%s)", async (archived) => {
+    sdkMocks.record = { ...sdkMocks.record, is_archived: archived, is_trashed: false, permissions: ["write", "delete"] };
+    const submit = vi.fn(async () => ({ status: "ok" as const, data: sdkMocks.record! }));
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" submit={submit}>
+      <Field name="title" label="Title" title />
+    </FormView>, recordActionsMetadata());
+    await screen.findByDisplayValue("First");
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Move to trash" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: /^(Archive|Unarchive)$/ })).toBeNull();
+    expect(submit).not.toHaveBeenCalled();
+    expect(sdkMocks.mutate).not.toHaveBeenCalled();
+  });
+
+  test("a dirty form disables Archive without sending a patch", async () => {
+    sdkMocks.record = { ...sdkMocks.record, is_archived: false, permissions: ["write"] };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1">
+      <Field name="title" label="Title" title />
+    </FormView>, recordActionsMetadata());
+    fireEvent.change(await screen.findByRole("textbox", { name: "Title" }), { target: { value: "Unsaved title" } });
+    await screen.findByRole("button", { name: "Save" });
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    const archive = await screen.findByRole("menuitem", { name: "Archive" });
+    expect(archive.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(archive);
+    expect(sdkMocks.mutate).not.toHaveBeenCalled();
+  });
+
+  test("Archive sends the saved expected_revision through the resource update", async () => {
+    sdkMocks.record = { ...sdkMocks.record, is_archived: false, revision: 7, permissions: ["write"] };
+    const resource = recordActionsMetadata().labels["notes.Note"]!.resource;
+    renderWithProviders(<FormView resource="notes.Note" id="note-1">
+      <Field name="title" label="Title" title />
+    </FormView>, recordActionsMetadata({
+      updateArguments: [{ name: "expected_revision", type: "Int" }],
+      fields: [...(resource.fields ?? []), { name: "revision", kind: "scalar", scalar: "Int", readable: true,
+        creatable: false, updatable: false, aggregatable: false, requiredOnCreate: false }],
+    }));
+    await screen.findByDisplayValue("First");
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Archive" }));
+    await waitFor(() => expect(dataProvider.update).toHaveBeenCalledWith(expect.objectContaining({
+      id: "note-1", variables: { is_archived: true },
+      meta: expect.objectContaining({ gqlVariables: { expected_revision: 7 } }),
+    })));
+  });
+
+  test("the form's trash prompt names its record title", async () => {
+    sdkMocks.record = { ...sdkMocks.record, is_trashed: false, permissions: ["delete"] };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1">
+      <Field name="title" label="Title" title />
+    </FormView>, recordActionsMetadata());
+    await screen.findByRole("heading", { name: "First" });
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Move to trash" }));
+    const prompt = await screen.findByRole("alertdialog", { name: "Move “First” to the trash?" });
+    fireEvent.click(within(prompt).getByRole("button", { name: "Keep “First”" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(sdkMocks.mutate).not.toHaveBeenCalled();
   });
 
   test("a create form has no generic record actions", () => {
@@ -904,7 +988,7 @@ describe("FormView", () => {
 
   test("locks the saved form when projected permissions omit write", async () => {
     sdkMocks.record = { ...sdkMocks.record, permissions: ["read"] };
-    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={[{ name: "title", title: true }]} />);
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={[{ name: "title", title: true }]} />, recordActionsMetadata());
     expect(await screen.findByRole("heading", { name: "First" })).toBeTruthy();
     expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
   });
@@ -927,6 +1011,7 @@ describe("FormView", () => {
         title: { name: "title", kind: "scalar", scalar: "String" },
         secret: { name: "secret", kind: "scalar", scalar: "String" },
         redacted_fields: { name: "redacted_fields", kind: "list", scalar: "String" },
+        permissions: { name: "permissions", kind: "list", scalar: "String" },
       } } } },
     );
 
@@ -2773,7 +2858,7 @@ describe("FormView", () => {
       <FormView resource="notes.Note" id="note-1">
         <Field name="title" label="Title" title />
       </FormView>,
-      implMetadata(),
+      implMetadata({ permissions: { name: "permissions", kind: "list", scalar: "String" } }),
       undefined,
       formChildren({
         "parties.Party#actions": {

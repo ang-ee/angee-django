@@ -173,6 +173,7 @@ export function ListViewContent<TRow extends Row = Row>({
     source ? "" : resource,
     selectedIds,
     deselectSucceeded,
+    resourceView.selectedRows,
   );
   const cardActionContext = React.useMemo(
     () => ({ refresh: surface.list.refetch }),
@@ -261,7 +262,7 @@ export function ListViewContent<TRow extends Row = Row>({
       selectedRows: resourceView.selectedRows as readonly TRow[],
     }) : null;
   const genericSelection = !source && modelMetadata ? {
-    resource: modelMetadata.resource,
+    modelMetadata,
     selectedRows: resourceView.selectedRows,
     onSucceeded: deselectSucceeded,
   } : null;

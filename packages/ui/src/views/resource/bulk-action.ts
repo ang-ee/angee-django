@@ -2,7 +2,7 @@ import * as React from "react";
 import { useInvalidate } from "@refinedev/core";
 import { useQueryClient } from "@tanstack/react-query";
 import { invalidateAuthoredQueries } from "@angee/refine";
-import { refineResourceName, type DataResourceMetadata, type Row } from "@angee/metadata";
+import { refineResourceName, type DataResourceMetadata, type ModelMetadata, type Row } from "@angee/metadata";
 
 import { errorMessage, useToast } from "../../feedback";
 import { useUiT } from "../../i18n";
@@ -17,7 +17,7 @@ export const BULK_ACTION_LIMIT = 25;
 const BULK_ACTION_CONCURRENCY = 5;
 
 export interface BulkSelectionProps {
-  resource: DataResourceMetadata;
+  modelMetadata: ModelMetadata;
   selectedRows: readonly Row[];
   onSucceeded: (ids: readonly string[]) => void;
 }

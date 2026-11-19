@@ -1014,11 +1014,14 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **The form supplies generic record actions from metadata.** Pages declare
   nothing for Archive / Unarchive, Move to trash / Restore, or Delete. Archive
   patches the `archivable` flag only when the resource's update root accepts it
-  and the form is writable; an archived record carries an Archived header chip.
+  and the form is writable and saves through that update root, without a custom
+  `submit`; an archived record carries an Archived header chip. Archive and Trash
+  require their flag to be selected as `false`; Unarchive and Restore require `true`.
   Trash requires a `trashable` flag and a resource type and composes
   [the shared trash verbs](../../packages/ui/src/views/resource/trash.tsx).
   Delete requires the `deletePreview` root. Trash and Delete require `delete`
-  when the record projects permissions; without that projection, the resource
+  when the model declares a `permissions` field, including when the read omits it;
+  for models without that field, the resource
   capability gates the control and the server authorizes the write. These verbs
   stay in the form's overflow menu after page and container verbs, with Delete
   last. Removed-record lists compose `RemovedRecords` (or `RemovedDisclosure`
@@ -1333,7 +1336,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   an update mutation. The form supplies metadata-driven Archive and Trash;
   `ResourceList` binds its Delete through the shared preview owner. Delete
   affordances require the `deletePreview` root, and record Delete also requires
-  `delete` when the row projects permissions. Pages declare no generic actions
+  `delete` when the model declares a `permissions` field. Pages declare no generic actions
   and need no delete-only `crud(...)`.
 - **An addon contributes one menu root.** The app rail renders apps and their
   included, non-flattened sub-apps, at most two levels. The selected app's own

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { archiveFlagField, fieldUpdatable, refineResourceName, rowPublicId, useModelMetadata, type DataResourceMetadata, type Row } from "@angee/metadata";
+import { allowsRecordPermission, archiveFlagField, fieldUpdatable, refineResourceName, rowPublicId, type ModelMetadata, type Row } from "@angee/metadata";
 import { useUpdate, type BaseRecord, type HttpError } from "@refinedev/core";
 
 import { Glyph } from "../../chrome/Glyph";
@@ -14,12 +14,12 @@ import { useBulkAction, type BulkSelectionProps } from "./bulk-action";
  * @owner RecordActionBar
  */
 export function useArchiveActions(
-  resource: DataResourceMetadata | null | undefined,
+  metadata: ModelMetadata | null | undefined,
 ): readonly ActionDescriptor[] {
   const t = useUiT();
-  const metadata = useModelMetadata(resource?.modelLabel ?? "");
-  const flag = archiveFlagField(resource);
+  const flag = archiveFlagField(metadata?.resource);
   const available = flag !== null && fieldUpdatable(metadata, flag);
+  const declaresPermissions = Boolean(metadata?.fields.permissions);
   return React.useMemo<readonly ActionDescriptor[]>(() => {
     if (!available || flag === null) return [];
     return [
@@ -29,7 +29,7 @@ export function useArchiveActions(
         icon: "archive",
         placement: "menu",
         set: { [flag]: true },
-        visibleWhen: (record) => record[flag] !== true,
+        visibleWhen: (record) => record[flag] === false && allowsRecordPermission(record, "write", declaresPermissions),
       },
       {
         id: "unarchive",
@@ -37,24 +37,25 @@ export function useArchiveActions(
         icon: "undo-2",
         placement: "menu",
         set: { [flag]: false },
-        visibleWhen: (record) => record[flag] === true,
+        visibleWhen: (record) => record[flag] === true && allowsRecordPermission(record, "write", declaresPermissions),
       },
     ];
-  }, [available, flag, t]);
+  }, [available, declaresPermissions, flag, t]);
 }
 
 /** The selection composes the same admission, flag patches and row predicates as the form.
  * @owner SelectionBar
  */
 export function BulkArchiveActions(props: BulkSelectionProps): React.ReactElement | null {
-  const actions = useArchiveActions(props.resource);
+  const actions = useArchiveActions(props.modelMetadata);
   return actions.length ? <ArchiveSelectionActions {...props} actions={actions} /> : null;
 }
 
-function ArchiveSelectionActions({ resource, selectedRows, onSucceeded, actions }: BulkSelectionProps & {
+function ArchiveSelectionActions({ modelMetadata, selectedRows, onSucceeded, actions }: BulkSelectionProps & {
   actions: readonly ActionDescriptor[];
 }): React.ReactElement {
   const t = useUiT();
+  const resource = modelMetadata.resource;
   const bulk = useBulkAction(resource, onSucceeded);
   // This is the record form's applyPatch -> useUpdate transport. The registered
   // provider owns the update root and _set; only settlement moves to the batch.
