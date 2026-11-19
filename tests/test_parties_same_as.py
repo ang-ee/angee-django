@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from typing import Any
 
 import pytest
+from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
@@ -952,3 +953,50 @@ def test_a_claim_restated_with_more_evidence_changes_no_pair(
     with system_context(reason="same_as decision readback"):
         assert Party.same_as.kept_separate(holder, claimant) is (decision == "kept")
     assert _pairs() == ([({holder.pk, claimant.pk}, (handle,))] if decision == "asserted" else [])
+
+
+def _claimed_people(account: Any) -> tuple[Any, Any]:
+    """Two people ``account`` owns, each claimed for one address by a source: a certain pair ``account`` reviews."""
+
+    handle = _address(account, "zoe@example.com")
+    with system_context(reason="same_as an account's two people"):
+        older, newer = (
+            Person._base_manager.create(display_name=name, created_by=account)
+            for name in ("Zoë Example", "Zoe Example")
+        )
+        for person in (older, newer):
+            Party.objects.propose_claimed_handle_as_system(person, handle, evidence=handle, reason="tests.claim")
+    return older, newer
+
+
+def _account(kind: str) -> Any:
+    if kind == "person":
+        return create_user("same-as-certain-person")
+    if kind == "service":
+        return get_user_model().objects.create_user(username="same-as-certain-service", kind="service")
+    with system_context(reason="same_as an agent's account"):
+        agent = apps.get_model("agents", "Agent").objects.create(
+            name="Reviewer", owner=create_user("same-as-agent-owner"), runtime_class="pydantic",
+        )
+    return agent.user
+
+
+@pytest.mark.parametrize(
+    ("kind", "outcome"),
+    [
+        pytest.param("person", "merged", id="an-active-person"),
+        pytest.param("service", "not_permitted", id="a-service-account"),
+        pytest.param("agent", "not_permitted", id="an-agents-account"),
+    ],
+)
+def test_only_an_active_person_merges_certain_pairs(db: None, kind: str, outcome: str) -> None:
+    """The bulk merge is a person's action: an account that is not an active person merges nothing, even its own."""
+
+    del db
+    account = _account(kind)
+    older, newer = _claimed_people(account)
+    assert _reconcile() == 1
+
+    assert _merge_certain(account) == [(outcome, {older.pk, newer.pk}, older.pk if outcome == "merged" else None)]
+    with system_context(reason="same_as person-only readback"):
+        assert (Party._base_manager.get(pk=newer.pk).merged_into_id == older.pk) is (outcome == "merged")

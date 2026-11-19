@@ -12,8 +12,11 @@ live in code docstrings.
 
 - Parties: a person merges the certain same-person pairs awaiting their review in
   one action, `Party.objects.merge_certain_same_as_pairs(actor=, limit=)`,
-  exposed as the `merge_certain_same_as_pairs(limit)` mutation and the agent
-  tool of the same name. A pair is certain when both are people, neither is an
+  exposed as the `merge_certain_same_as_pairs(limit)` mutation. Only an active
+  person account writing both parties may: the party's new `merge_certain`
+  permission (`write & person->active_member`, parties schema revision 21)
+  refuses service and agent accounts, and no agent tool offers the action. A
+  pair is certain when both are people, neither is an
   account's own person, exactly the two are linked to an address it cites, and
   their names are equal but for case, accents and hyphens
   (`Party.comparable_name`). Each merges into the older record as the acting

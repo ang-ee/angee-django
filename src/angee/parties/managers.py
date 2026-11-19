@@ -833,7 +833,7 @@ class SameAsMergeOutcome(StrEnum):
     NAMES_DIFFER = "names_differ"
     """A name is missing, or the names differ beyond case, accents and hyphens."""
     NOT_PERMITTED = "not_permitted"
-    """The merge's own permission refused the acting person."""
+    """The account is not an active person writing both parties (``merge_certain``), or the merge refused it."""
     REFUSED = "refused"
     """The merge's guards refused it (a party kept apart, merged meanwhile, held by an addon)."""
 
@@ -2061,8 +2061,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         (:meth:`same_person_links`, the shared-sender providers consulted), and both
         bear a real name and the names agree but for case, accents and hyphens
         (``Party.comparable_name``); a pair someone kept apart awaits no review.
-        Each certain pair merges into the older record through ``Party.merge`` as
-        ``actor``, so the merge's own permission and guards decide. It loses no
+        Only an active person account merges, and only parties it writes (the
+        party's ``merge_certain`` permission); a service or agent account merges
+        nothing. Each certain pair merges into the older record through
+        ``Party.merge`` as ``actor``, so the merge's own permission and guards decide. It loses no
         value: a merge field the survivor leaves empty takes the newer record's
         value (``Party.merge_values``), the survivor's stands where both have one,
         and each kept value is recorded as ``actor``'s choice, as choosing those
@@ -2079,6 +2081,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 shared=self.shared_sender_ids(),
             )
         linked = {address: {link.party for link in address_links} for address, address_links in links.items()}
+        permitted = set(
+            self.with_actor(actor).with_action("merge_certain").filter(pk__in=list(people)).values_list("pk", flat=True)
+        )
         outcomes = []
         for pair in pairs:
             ids = {pair.left.pk, pair.right.pk}
@@ -2094,6 +2099,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 and pair.left.comparable_name == pair.right.comparable_name
             ):
                 outcome = SameAsMergeOutcome.NAMES_DIFFER
+            elif not ids <= permitted:
+                outcome = SameAsMergeOutcome.NOT_PERMITTED
             else:
                 survivor, merged = sorted((pair.left, pair.right), key=lambda party: (party.created_at, party.pk))
                 try:
