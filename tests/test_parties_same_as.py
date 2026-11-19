@@ -8,6 +8,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.test import override_settings
 from rebac import actor_context, system_context, to_subject_ref
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
@@ -290,6 +291,111 @@ def test_a_contested_control_claim_links_nobody(db: None) -> None:
 
     assert _reconcile() == 1
     assert _pairs() == [({holder.pk, contact.pk}, (handle,))]
+
+
+@pytest.mark.parametrize(
+    ("linked", "proposed"),
+    [pytest.param(4, 6, id="four-parties-pair-every-two"), pytest.param(5, 0, id="a-fifth-party-makes-it-shared")],
+)
+def test_an_address_more_parties_than_the_limit_are_linked_to_is_shared(
+    db: None, linked: int, proposed: int,
+) -> None:
+    """A switchboard on many cards gives no pairs at all, not one per two of them."""
+
+    del db
+    assert Party.objects.SHARED_ADDRESS_LIMIT == 4
+    owner = create_user("same-as-shared-address")
+    handle = _address(owner, "switchboard@example.com")
+    _holder(owner, handle)
+    for index in range(linked - 1):
+        _claimant(owner, handle, f"Caller {index}")
+
+    assert _reconcile() == proposed
+    assert len(_pairs()) == proposed
+
+
+def test_pairs_are_withdrawn_once_their_address_becomes_shared(db: None) -> None:
+    del db
+    owner = create_user("same-as-becomes-shared")
+    handle = _address(owner, "switchboard@example.com")
+    _holder(owner, handle)
+    _claimant(owner, handle)
+    assert _reconcile() == 1
+
+    for index in range(3):
+        _claimant(owner, handle, f"Caller {index}")
+
+    assert _reconcile() == 1
+    assert _pairs() == []
+
+
+def test_two_parties_one_source_links_to_an_address_are_not_paired(db: None) -> None:
+    """A source knows its own records are distinct: two cards of one address book sharing a number."""
+
+    del db
+    owner = create_user("same-as-one-source")
+    with system_context(reason="same_as one source"):
+        for name, value in (("Ada Example", "+44 20 7946 0958"), ("Bob Example", "+442079460958")):
+            card = Party._base_manager.create(display_name=name, created_by=owner)
+            phone = Handle._base_manager.create(platform="phone", value=value, created_by=owner)
+            Party.objects.assert_handle(card, phone, asserted_by=owner)
+
+    assert _reconcile() == 0
+    assert _pairs() == []
+
+
+def test_a_holding_is_the_source_of_the_statement_that_decides_it(db: None) -> None:
+    """The source deciding a holder and stating the other party is one source; a claim on either is a second."""
+
+    del db
+    owner = create_user("same-as-holding-source")
+    handle = _address(owner)
+    holder = _holder(owner, handle)
+    with system_context(reason="same_as one source below review"):
+        other = Party._base_manager.create(display_name="A. Example", created_by=owner)
+        Party.objects.assert_handle(other, handle, asserted_by=owner, confidence=0.4)
+    assert _reconcile() == 0
+
+    with system_context(reason="same_as a second source"):
+        Party.objects.propose_claimed_handle_as_system(holder, handle, evidence=handle, reason="tests.claim")
+
+    assert _reconcile() == 1
+    assert _pairs() == [({holder.pk, other.pk}, (handle,))]
+
+
+def shared_senders() -> list[Any]:
+    """A shared-sender provider naming every ``noreply@`` address, as messaging names list senders."""
+
+    return list(Handle._base_manager.filter(value__startswith="noreply@").values_list("pk", flat=True))
+
+
+def test_an_address_the_shared_sender_providers_name_links_nobody(db: None) -> None:
+    del db
+    owner = create_user("same-as-shared-sender")
+    handle = _address(owner, "noreply@example.com")
+    _holder(owner, handle)
+    _claimant(owner, handle)
+
+    with override_settings(ANGEE_PARTIES_SHARED_SENDER_PROVIDERS=[f"{__name__}.shared_senders"]):
+        assert _reconcile() == 0
+    assert _pairs() == []
+
+
+def test_the_review_list_fills_its_page_with_pairs_the_reader_can_read(db: None) -> None:
+    """A pair whose evidence the reader cannot read is dropped before the page is cut, not after."""
+
+    del db
+    reader, other = create_user("same-as-review-reader"), create_user("same-as-review-other")
+    readable = []
+    for handle, visible in ((_address(other, "hidden@example.com"), False), (_address(reader), True)):
+        pair = {_holder(reader, handle).pk, _claimant(reader, handle).pk}
+        if visible:
+            readable.append(pair)
+    assert _reconcile() == 2
+
+    page = Party.objects.with_actor(reader).same_as_pairs(limit=1)
+
+    assert [{pair.left.pk, pair.right.pk} for pair in page] == readable
 
 
 def test_a_link_a_person_dismissed_pairs_nobody(db: None) -> None:

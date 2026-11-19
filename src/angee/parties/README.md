@@ -82,7 +82,16 @@ proposes no one. Only an address that names one account links: an email address,
 phone number, or a handle with a platform id, never a name-only handle. A person is
 never paired with an organization, nor two accounts' own persons with each other,
 and an account's contested claim to an address another account controls links
-nothing. The job
+nothing. An address more than `PartyManager.SHARED_ADDRESS_LIMIT` parties are
+linked to (a switchboard, a family line) is shared and pairs nobody, as is one the
+shared-sender providers name. A pair needs two sources: two parties whose only
+links to the address one source states are that source's distinct records (two
+cards of one address book), so they are not proposed. A holding counts as the
+source of the statement that decides it; a source's claim and a holder found on its
+row name no single source, so each is a source of its own. The job finds the
+candidate addresses in SQL and reads only their links. Pairs follow from the
+model across owners too: two users' private contacts linked to one address are
+proposed to whoever can read both. The job
 skips current assertions and dismissals before each run's cap without
 continuation state, and withdraws its statements no link supports any more. An
 importer that lands its own party and claim proposes the same pair at once with

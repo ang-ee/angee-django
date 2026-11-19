@@ -54,9 +54,15 @@ def test_message_lists_the_inbox_navigator_and_same_as_pairs_batch_their_avatars
                 sender.set_avatar(picture)
                 shown[public_id_of(person)] = public_id_of(own or picture)
                 twin = Person._base_manager.create(display_name=f"Twin {index}", created_by=owner)
-                for party, value in ((person, f"+1858342{index:04d}"), (twin, f"+1 858 342 {index:04d}")):
-                    phone = Handle.objects.upsert(platform="phone", value=value, created_by_id=owner.pk)
-                    Party.objects.assert_handle(party, phone, asserted_by=owner)
+                phone = Handle.objects.upsert(platform="phone", value=f"+1858342{index:04d}", created_by_id=owner.pk)
+                Party.objects.assert_handle(person, phone, asserted_by=owner)
+                # The twin comes from a second source: one source's two records of one number are not a pair.
+                spelling = Handle.objects.upsert(
+                    platform="phone", value=f"+1 858 342 {index:04d}", created_by_id=owner.pk
+                )
+                Party.objects.propose_claimed_handle_as_system(
+                    twin, spelling, evidence=spelling, reason="tests.sender_avatar.twin"
+                )
                 Message._base_manager.create(
                     channel=channel,
                     created_by=owner,

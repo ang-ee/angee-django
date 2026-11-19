@@ -34,8 +34,16 @@ live in code docstrings.
   links (`Handle.identifies_account`: an email address, a phone number, or a
   platform id), so two friends an export records by one name are never one
   person. A person is never paired with an organization, nor two accounts' own
-  persons with each other, and a contested control claim links nothing. The job
-  withdraws exactly the rule's pairs no link supports.
+  persons with each other, and a contested control claim links nothing. An
+  address more than `PartyManager.SHARED_ADDRESS_LIMIT` (four) parties are linked
+  to, or one the shared-sender providers name, is shared and pairs nobody, and a
+  pair needs two sources between its parties, so one source's two records of one
+  address are not proposed. The job finds candidate addresses in SQL, reads only
+  their links, looks the rule up once, and withdraws exactly the rule's pairs no
+  link supports; the hourly task reads the shared-sender providers once for both
+  passes (`PartyManager.shared_sender_ids`, the new `shared=` argument of
+  `reconcile_suggestions` and `reconcile_same_as`). The review list
+  (`same_as_pairs`) drops a pair the reader cannot read before it fills a page.
 
 - Parties: a handle's holder is always the projection of a statement. A holder
   written onto the row with no statement behind it lost its address the moment
