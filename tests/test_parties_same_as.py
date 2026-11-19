@@ -401,6 +401,23 @@ def test_the_review_list_fills_its_page_with_pairs_the_reader_can_read(db: None)
     assert [{pair.left.pk, pair.right.pk} for pair in page] == readable
 
 
+def test_the_review_list_scans_a_bounded_number_of_pages(db: None) -> None:
+    """A reader who sees many pairs but none of their evidence costs at most four pages, not a scan of every pair."""
+
+    del db
+    reader, other = create_user("same-as-review-pages"), create_user("same-as-review-pages-other")
+    for index in range(4):
+        handle = _address(other, f"hidden-{index}@example.com")
+        _holder(reader, handle)
+        _claimant(reader, handle)
+    handle = _address(reader)
+    _holder(reader, handle)
+    _claimant(reader, handle)
+    assert _reconcile() == 5
+
+    assert Party.objects.with_actor(reader).same_as_pairs(limit=1) == []
+
+
 def test_a_link_a_person_dismissed_pairs_nobody(db: None) -> None:
     del db
     owner = create_user("same-as-dismissed-link")

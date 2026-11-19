@@ -768,7 +768,13 @@ live in code docstrings.
   (`Party.comparable_name`); a name that is one of the pair's cited addresses
   (`Party.names_an_address`) is no name. Every party merge now refuses a person
   with an organization (`Party.validate_merge`). A person's `anniversary` is a
-  merge choice (the Merge page shows it).
+  merge choice (the Merge page shows it). The web fragment's `DuplicatesDialog`
+  is the one batch surface: the Review page's "Merge certain pairs" action, and
+  the People and Organizations lists' Merge…, where one selected record opens
+  the person form's "Merge into…" (`useMergeIntoAction`, shared by both), two
+  open their compare page, and three or more open the dialog (one set per group
+  of two or more in a grouped list); the dialog marks a member whose grouped
+  value changed since the selection.
 
 - Parties: `Party.objects.propose_same_person_as_system(left, right, *, evidence,
   reason)` lets an importer propose that two parties are one person, citing the
@@ -822,7 +828,8 @@ live in code docstrings.
   link supports; the hourly task reads the shared-sender providers once for both
   passes (`PartyManager.shared_sender_ids`, the new `shared=` argument of
   `reconcile_suggestions` and `reconcile_same_as`). The review list
-  (`same_as_pairs`) drops a pair the reader cannot read before it fills a page.
+  (`same_as_pairs`) drops a pair the reader cannot read before it fills a page,
+  and walks at most `PartyQuerySet.SAME_AS_REVIEW_PAGES` (four) pages to fill it.
 
 - Parties: a handle's holder is always the projection of a statement. A holder
   written onto the row with no statement behind it lost its address the moment
@@ -837,13 +844,18 @@ live in code docstrings.
   aspect ranks (below a person, a system of record, a directory and an import),
   so the repair leaves a confirmed holder and one another party's applied
   statement contests as they are, for a person, rather than clear the
-  confirmation or move the address; it states a trashed holder for itself and a
-  merged-away one for its survivor. It returns a `HolderRepair`, and the command
-  reports how many it stated, left confirmed, left contested and re-resolved
-  (`-v 2` lists the handles left). Every provision runs it
+  confirmation or move the address; it leaves a trashed holder's address alone,
+  neither stating nor re-resolving it (resolution ignores a trashed party, so
+  either would clear the row), states it after a restore, and states a
+  merged-away holder for its survivor. It returns a `HolderRepair`, and the
+  command reports how many it stated, left confirmed, left contested and
+  re-resolved (`-v 2` lists the handles left). Every provision runs it
   (`PartiesConfig.compose_provision`), after the install resources load the
-  rule; it is idempotent. Test fixtures that create a handle with `party=` still
-  write a bare holder.
+  rule; it is idempotent. One run writes at most `HandleManager.REPAIR_LIMIT`
+  (500) holders (`resolve_stale_owners(limit=)`, the command's `--limit`); past
+  the cap the command's last line, in the provision log too, says how many
+  remain (`HolderRepair.remaining`) and the next run continues. Test fixtures
+  that create a handle with `party=` still write a bare holder.
 
 - `angee.integrate`: a stream's mapping can be composed from several declarers.
   `StreamDefinition.mapping_contributions` declares one

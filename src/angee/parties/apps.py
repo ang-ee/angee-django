@@ -26,7 +26,9 @@ class PartiesConfig(AppConfig):
         """Repair handle holders and directory owners' contact read on every provision, after the resources load.
 
         ``resolve_stale_owners`` states each holder written onto its row, leaves a
-        confirmed or contested one for a person and re-resolves stale ones;
+        trashed, confirmed or contested one as it is and re-resolves stale ones,
+        at most ``HandleManager.REPAIR_LIMIT`` holders a run (past that, the
+        provision log says how many remain and the next provision continues);
         ``grant_directory_owner_contact_reads`` grants each directory's owner the
         read of its contacts where missing (connecting grants it). Both are
         idempotent, so a deployment never depends on someone running them.

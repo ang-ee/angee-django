@@ -272,9 +272,14 @@ record's, a directory's or an import's statement outranks it, kinds the aspect d
 not list rank below it. So the repair moves no address and clears no
 confirmation: it leaves a confirmed holder (only a person or a seed states the
 preferred link that keeps the flag) and a holder another party's applied statement
-contests for a person, and reports both. A trashed holder is stated for itself,
-a merged-away one for its survivor. A seed that moves or clears a holder withdraws
-the statement its earlier load made for the old one.
+contests for a person, and reports both. It leaves a trashed holder's address
+alone (resolution ignores a trashed party, so stating or re-resolving it would
+clear the row) and states it after a restore; a merged-away holder is stated for
+its survivor. One run writes at most `HandleManager.REPAIR_LIMIT` (500) holders;
+past the cap the command, and so the provision log, ends with "Stopped at the cap
+of N holder(s); M more await the next provision or resolve_stale_owners run", and
+the next run continues (`--limit` sets another cap). A seed that moves or clears a
+holder withdraws the statement its earlier load made for the old one.
 
 Who an email address names is one verb,
 [PartyManager.people_for_emails](managers.py): given addresses in a caller's
@@ -432,9 +437,12 @@ Nothing merges unattended. A person may also merge in a batch: confirmed sets of
 two to ten records each (`PartyManager.merge_duplicates`, the `merge_duplicates`
 mutation; at most 50 sets), either the certain pairs the Review page lists
 (`certain_same_as_pairs`) or a selection from the People or Organizations list.
-There, two selected records of an ungrouped list open their compare page; three
-or more are one set, and a grouped list gives one set per group of two or more
-selected (a group without a value is never a set). Only an active person account that writes every record may (the party's
+There, one selected record opens "Merge into…" to choose the other, two open
+their compare page, and three or more are one set, or, in a grouped list, one
+set per group of two or more selected (a group without a value is never a set).
+The grouping is the list's as of the selection, never evidence: the dialog reads
+each member fresh, marks one whose grouped value has since changed, and sends
+only member ids. Only an active person account that writes every record may (the party's
 `batch_merge` permission, `write & person->active_member`); a service or agent
 account merges nothing, and no agent tool offers it. A set never holds an account's
 own person (merged by hand, on the compare page), records of two kinds, a trashed
