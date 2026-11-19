@@ -547,8 +547,8 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
 
     def _contact_target(
         self, stream: Any, link: Any, replaced: Sequence[Any], parsed: ParsedContact | None = None
-    ) -> tuple[Any | None, Any | None]:
-        """Return the person a contact lands on (``None`` to mint one) and the handle an adoption found them by.
+    ) -> tuple[Any | None, Any | None, list[tuple[Any, Any | None]]]:
+        """Return a contact's target (``None`` mints one), the handle an adoption found it by, and whom it passed over.
 
         The one place a contact's target is decided, in order: its own link's
         person; then, for a merge at the source, the person of the first link it
@@ -556,25 +556,36 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         stream, an existing person one of its emails names
         (``PartyManager.people_for_emails``, the preferred email first), the first
         :meth:`_adoptable` admits. A trashed person is nobody's target
-        (``PartyManager.contact_people``), and a two-way stream never adopts. Call
+        (``PartyManager.contact_people``), and a two-way stream never adopts. The
+        people passed over, each with what ties them to the contact, are every
+        other person a replaced link names (with that link) and every person an
+        adoption limit refused (with the handle their email found them by, if
+        any); :meth:`apply_record` proposes each as the target's same person. Call
         it once, under the contact locks (:meth:`apply_record`).
         """
 
         parties = apps.get_model("parties", "Party").objects
         people = parties.contact_people([link, *replaced])
-        for row in (link, *replaced):
-            if people[row.pk] is not None:
-                return people[row.pk], None
+        named = [(person, row) for row in (link, *replaced) if (person := people[row.pk]) is not None]
+        if named:
+            target = named[0][0]
+            others: dict[Any, tuple[Any, Any]] = {}
+            for person, row in named[1:]:
+                if person.pk != target.pk:
+                    others.setdefault(person.pk, (person, row))
+            return target, None, list(others.values())
         if parsed is None or stream.direction != StreamDirection.PULL:
-            return None, None
+            return None, None, []
         emails = [value for value, _label, _preferred in sorted(parsed.emails, key=lambda email: not email[2])]
         tried: set[Any] = set()
+        refused: list[tuple[Any, Any | None]] = []
         for holder in parties.people_for_emails(emails):
             if holder.person.pk not in tried:
                 tried.add(holder.person.pk)
                 if self._adoptable(holder, link):
-                    return holder.person, holder.handle
-        return None, None
+                    return holder.person, holder.handle, refused
+                refused.append((holder.person, holder.handle))
+        return None, None, refused
 
     def _adoptable(self, holder: Any, link: Any) -> bool:
         """Whether this directory adopts the existing person an email names (rulings R2 and R9).
@@ -613,8 +624,12 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         the people its own link and the links it replaces name, and its handles,
         are locked first, then :meth:`_contact_target` decides its person once, and
         the ingest withdraws what neither its link nor a replaced link still
-        supports. A tombstone withdraws the link's statements while the party
-        stays. A two-way stream's applied base is the person's projection; a
+        supports. Each person that decision passed over is proposed for the
+        same-as review as the landed person's same person
+        (``PartyManager.propose_directory_match``); adopting a person withdraws the
+        proposal pairing them with the link's previous person. A tombstone
+        withdraws the link's statements while the party stays. A two-way stream's
+        applied base is the person's projection; a
         pull-only stream's is the source's own (none for a tombstone), the side its
         comparison reads (:meth:`local_states`). The fixed contact projection has
         no dependency digest. The driver stamps the observation's mapping version
@@ -632,7 +647,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             return ApplyResult(target=folder, mapped_payload={"name": name})
         parties = apps.get_model("parties", "Party").objects
         if record.tombstone:
-            target, _adopted = self._contact_target(stream, link, ())
+            target = self._contact_target(stream, link, ())[0]
             parties.lock_contact(target)
             link.withdraw_statements()
         else:
@@ -642,8 +657,9 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
                 stream.links.filter(external_key__in=order).exclude(pk=link.pk),
                 key=lambda row: order.index(row.external_key),
             )
+            previous = link.target
             parties.lock_contact(*(row.target for row in (link, *replaced)), parsed=parsed)
-            target, adopted = self._contact_target(stream, link, replaced, parsed)
+            target, adopted, passed_over = self._contact_target(stream, link, replaced, parsed)
             target = parties.ingest_contact(
                 parsed,
                 stream=stream,
@@ -655,6 +671,11 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             if adopted is not None:
                 evidence = EvidenceReference.of(adopted).model_dump(mode="json")
                 links.observe(stream, link.external_key, metadata={**link.metadata, ADOPTED_THROUGH: evidence})
+                if previous is not None and previous.pk != target.pk:
+                    # Adopting the person a refusal once proposed as the previous person's answers that proposal.
+                    parties.withdraw_directory_match(previous, target)
+            for other, tie in passed_over:
+                parties.propose_directory_match(target, other, evidence=[link, *([tie] if tie is not None else [])])
         if stream.direction == StreamDirection.PULL:
             return ApplyResult(target=target, mapped_payload=None if record.tombstone else record.mapped_payload)
         return ApplyResult(

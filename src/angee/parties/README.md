@@ -55,7 +55,15 @@ directory's owner already has `write` on them (checked for that user, though
 sync runs as system work), and no other live link of the same integration names
 them. Otherwise the contact mints its own person; a two-way directory never
 adopts. The handle an adoption found the person by is the link's
-`adopted_through` metadata. A trashed person is nobody's target
+`adopted_through` metadata. Each person the decision passes over (a candidate
+a limit refused, or another person a replaced record was linked to) is proposed
+as the landed person's same person by parties' `directory_match` rule
+(`PartyManager.propose_directory_match`), citing the contact's link and the
+handle or the replaced link, and joins the same-as review. A pair kept separate
+is not proposed again; merging the two, or the contact later adopting the
+person it was refused, withdraws the proposal. The `same_as` rule's reconciler
+withdraws only its own rule's pairs, so it leaves these standing, though no
+shared handle row supports them. A trashed person is nobody's target
 (`PartyManager.contact_people`), so its record lands on a new person. The ingest
 verbs decide nothing: they land on the target they are given or mint one, and
 refuse to move a link off a live party.
@@ -70,9 +78,12 @@ winner and derived counters outside Party history.
 Who an email address names is one verb,
 [PartyManager.people_for_emails](managers.py): given addresses in a caller's
 preference order, it answers the people they name, each with its basis (the
-account with that address, the person holding it, else the one person a current
-contact claim proposes it for), comparing handles by their normalized value. A
-trashed person, an organization and a merged-away row are nobody's answer. It
+account with that address, the live person holding it, else, whenever no live
+person holds it, the one person a current contact claim proposes it for),
+comparing handles by their normalized value. A trashed person, an organization
+and a merged-away row are nobody's answer, and a holder that is no live person
+does not stop the claims: a person minted earlier for an organization's address
+is found again by their claim. It
 decides nothing: directory adoption, the connections import (which shares its
 holding rule) and an importer in another addon each apply their own policy, and
 only a `HELD` answer holds the address.

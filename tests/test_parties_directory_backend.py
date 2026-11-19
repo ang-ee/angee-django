@@ -17,7 +17,9 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from rebac import system_context
+from rebac.actors import to_subject_ref
 
+from angee.base.models.identity import public_id_of
 from angee.integrate.states import LinkStatus, StreamDirection
 from angee.integrate.streams import StreamPage, advance_stream, reconcile_stream
 from angee.integrate.testing.models import RecordLink, SyncStream
@@ -343,19 +345,87 @@ def test_a_merge_at_the_source_lands_on_the_replaced_records_person_and_withdraw
     assert not _failures(pull)
 
 
-def test_the_survivor_of_a_merge_takes_the_first_replaced_records_person_in_the_sources_order(pull: Pull) -> None:
-    """Replaced records linked to different people: the source's first names the survivor's person, not key order."""
+def _proposal_rows() -> list[Any]:
+    """The ``directory_match`` rule's current same-as statements, oldest first."""
+
+    rule = str(to_subject_ref(Party.objects.rule_source("directory_match")))
+    return list(
+        Party.same_as.model.statements.filter(asserted_by=rule).current().select_related("subject").order_by("pk")
+    )
+
+
+def _proposals() -> list[tuple[frozenset[str], str, list[Any]]]:
+    """Each pair the directory proposed: its two people (as link target ids), its status and its evidence."""
+
+    return [
+        (frozenset({str(row.subject.left_id), str(row.subject.right_id)}), row.status, row.evidence)
+        for row in _proposal_rows()
+    ]
+
+
+def _refs(*records: Any) -> list[Any]:
+    return [EvidenceReference.of(record).model_dump(mode="json") for record in records]
+
+
+def _merge_grace_and_ada(pull: Pull) -> tuple[str, str]:
+    """Sync both, then merge their records at the source into one replacing Grace's first, then Ada's."""
 
     pull.sync()
     ada, grace = (pull.link(key).target_object_id for key in ("ada", "grace"))
     for key in ("ada", "grace"):
         del pull.source.contacts[key]
     pull.source.put("merged", replace(_GRACE, notes="Merged at the source."), replaces=("grace", "ada"))
-
     assert pull.sync().count == 1
+    return ada, grace
+
+
+def test_the_survivor_of_a_merge_takes_the_first_replaced_records_person_and_proposes_the_other(pull: Pull) -> None:
+    """Replaced records linked to different people: the source's first names the survivor's person, not key order.
+
+    The other person is proposed as the survivor's same person, citing the
+    survivor's link and the replaced record that named them.
+    """
+
+    ada, grace = _merge_grace_and_ada(pull)
 
     assert pull.link("merged").target_object_id == grace
     assert Person.objects.filter(pk__in=[ada, grace]).count() == 2
+    assert _proposals() == [(frozenset({ada, grace}), "asserted", _refs(pull.link("merged"), pull.link("ada")))]
+    reviewed = Party.objects.with_actor(pull.directory.owner).same_as_pairs()
+    assert [(frozenset({str(pair.left.pk), str(pair.right.pk)}), pair.normalized_value) for pair in reviewed] == [
+        (frozenset({ada, grace}), "")
+    ]
+
+
+def test_a_proposed_pair_is_stated_once_and_a_dismissal_of_it_stands(pull: Pull) -> None:
+    """A later record restating the merge proposes nothing new, nor does one after a person keeps the two apart.
+
+    The second merge passes Ada's person over again on other evidence (its own
+    link), which would restate the pair were the dismissal not honoured.
+    """
+
+    ada, grace = _merge_grace_and_ada(pull)
+    (proposal,) = _proposal_rows()
+
+    pull.source.put("merged", replace(_GRACE, notes="Restated at the source."), replaces=("grace", "ada"))
+    assert pull.sync().count == 1
+    assert [(row.pk, row.updated_at) for row in _proposal_rows()] == [(proposal.pk, proposal.updated_at)]
+
+    owner = pull.directory.owner
+    left, right = (Party.objects.get(pk=pk) for pk in (ada, grace))
+    assert Party.objects.apply_same_as_pair(
+        left_id=public_id_of(left), right_id=public_id_of(right), survivor="left", action="keep_separate", actor=owner
+    ) == "dismissed"
+    del pull.source.contacts["merged"]
+    pull.source.put("merged-again", replace(_GRACE, notes="Merged once more."), replaces=("merged", "ada"))
+    assert pull.sync().count == 1
+
+    assert pull.link("merged-again").target_object_id == grace
+    assert Party.same_as.kept_separate(left, right)
+    assert [(row.pk, row.updated_at, row.status) for row in _proposal_rows()] == [
+        (proposal.pk, proposal.updated_at, "asserted")
+    ]
+    assert Party.objects.with_actor(owner).same_as_pairs() == []
 
 
 def test_a_trashed_person_is_nobodys_target_and_the_record_mints_another(pull: Pull) -> None:
@@ -509,9 +579,15 @@ def _refused_linked(pull: Pull) -> Any:
 def test_a_contact_mints_its_own_person_when_an_adoption_limit_refuses_the_one_its_email_names(
     pull: Pull, refusal: Any
 ) -> None:
-    """Each limit alone refuses the adoption: the contact mints, and the existing person gains no statement of it."""
+    """Each limit alone refuses the adoption: the contact mints, and the existing person gains no statement of it.
+
+    The two are proposed as one person, once, citing the contact's link and the
+    handle the email found the person by (an account's address alone has none).
+    A second record of the contact lands on its own person and proposes nothing.
+    """
 
     person = refusal(pull)
+    found_by = Handle.objects.filter(platform="email", normalized_value="ada@example.com").first()
 
     assert pull.sync().count == 2
 
@@ -519,6 +595,69 @@ def test_a_contact_mints_its_own_person_when_an_adoption_limit_refuses_the_one_i
     assert ada.target_object_id not in (None, str(person.pk))
     assert ADOPTED_THROUGH not in ada.metadata
     assert not Party.statements.filter(subject_id=person.pk, asserted_by=str(ada.asserted_by)).exists()
+    proposed = [(frozenset({ada.target_object_id, str(person.pk)}), "asserted", _refs(ada, *filter(None, [found_by])))]
+    assert _proposals() == proposed
+    pull.source.put("ada", replace(_ADA, notes="Edited at the source."))
+    assert pull.sync().count == 1
+    assert _proposals() == proposed
+
+
+def test_merging_a_proposed_pair_withdraws_it_and_the_same_as_reconciler_leaves_it_standing(pull: Pull) -> None:
+    """The minted and the existing person claim one handle row, which supports no pair of the ``same_as`` rule.
+
+    That rule's reconciler withdraws its own pair of them and leaves the
+    directory's, which the review lists by the address; merging the two through
+    the review's verb withdraws the directory's proposal.
+    """
+
+    owner = pull.directory.owner
+    person = _refused_linked(pull)
+    pull.sync()
+    minted = pull.link("ada").target_object_id
+    reviewed = Party.objects.with_actor(owner).same_as_pairs()
+    assert [(frozenset({str(pair.left.pk), str(pair.right.pk)}), pair.normalized_value) for pair in reviewed] == [
+        (frozenset({minted, str(person.pk)}), "ada@example.com")
+    ]
+    same_as = Party.objects.rule_source("same_as")
+    with system_context(reason="tests.directory_match.reconciler"):
+        left, right = (Party._base_manager.get(pk=pk) for pk in (minted, person.pk))
+        pair = Party.same_as.for_pair(left.with_actor(to_subject_ref(same_as)), right)
+        pair.statements.set(aspect="same_as", values={}, asserted_by=same_as)
+        Party.objects.reconcile_same_as()
+    statements = Party.same_as.model.statements.filter(subject=pair).current()
+    assert dict(statements.values_list("asserted_by", "status")) == {
+        str(to_subject_ref(same_as)): "withdrawn",
+        str(to_subject_ref(Party.objects.rule_source("directory_match"))): "asserted",
+    }
+
+    assert Party.objects.apply_same_as_pair(
+        left_id=public_id_of(Party.objects.get(pk=person.pk)),
+        right_id=public_id_of(Party.objects.get(pk=minted)),
+        survivor="left",
+        action="merge",
+        actor=owner,
+    ) == "merged"
+
+    assert [status for _pair, status, _evidence in _proposals()] == ["withdrawn"]
+
+
+def test_adopting_a_person_once_refused_withdraws_the_proposal_its_refusal_made(pull: Pull) -> None:
+    """The person is no account's any more and the minted one is trashed: the contact's next record adopts them."""
+
+    person = _refused_account_holder(pull)
+    pull.sync()
+    minted = Person.objects.get(pk=pull.link("ada").target_object_id)
+    assert [status for _pair, status, _evidence in _proposals()] == ["asserted"]
+
+    Person._base_manager.filter(pk=person.pk).update(user=None)
+    minted.trash(reason="Removed by its holder")
+    pull.source.put("ada", replace(_ADA, notes="Still at the source."))
+    assert pull.sync().count == 1
+
+    assert pull.link("ada").target_object_id == str(person.pk)
+    assert [(pair, status) for pair, status, _evidence in _proposals()] == [
+        (frozenset({str(minted.pk), str(person.pk)}), "withdrawn")
+    ]
 
 
 def test_a_two_way_directory_never_adopts(two_way: Pull) -> None:
@@ -530,9 +669,9 @@ def test_a_two_way_directory_never_adopts(two_way: Pull) -> None:
 
 
 def test_two_contacts_that_would_adopt_one_person_adopt_it_once(pull: Pull) -> None:
-    """The second contact of the same directory finds the person already linked, so it mints its own."""
+    """The second contact of one directory finds the person already linked, so it mints its own, proposed as them."""
 
-    person, _handle = _existing(pull.directory.owner)
+    person, handle = _existing(pull.directory.owner)
     pull.source.put("ada-copy", replace(_ADA, display_name="Ada L."))
 
     assert pull.sync().count == 3
@@ -540,6 +679,7 @@ def test_two_contacts_that_would_adopt_one_person_adopt_it_once(pull: Pull) -> N
     ada, copy = pull.link("ada"), pull.link("ada-copy")
     assert ada.target_object_id == str(person.pk)
     assert copy.target_object_id not in (None, str(person.pk))
+    assert _proposals() == [(frozenset({copy.target_object_id, str(person.pk)}), "asserted", _refs(copy, handle))]
 
 
 def test_a_directory_forwards_its_connection_test_and_credential_admission(
