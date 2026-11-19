@@ -186,4 +186,41 @@ describe("the batch merge dialog", () => {
     expect((await screen.findAllByText("Augusta King")).length).toBeGreaterThan(0);
     expect(screen.getAllByText(message("duplicates.moved"))).toHaveLength(1);
   });
+
+  test("a warning that clears after the set was first shown leaves it unticked until the person ticks it", async () => {
+    renderDialog();
+    const [warnedSet, cleanSet] = await screen.findAllByRole("checkbox");
+    expect(warnedSet!.getAttribute("aria-checked")).toBe("false");
+
+    // A refresh clears the disagreement: the set is no longer as the person first saw it.
+    mocks.previews = [{ ...PREVIEWS[0]!, disagreements: [], digest: "digest-ada-agreed" }, PREVIEWS[1]!, PREVIEWS[2]!];
+    fireEvent.click(cleanSet!);
+
+    await waitFor(() => expect(screen.getByText(message("duplicates.includeChanged"))).toBeTruthy());
+    expect(screen.getAllByRole("checkbox")[0]!.getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByRole("button", { name: message("duplicates.confirm", { count: "0" }) })).toBeTruthy();
+  });
+
+  test("a refused set that becomes mergeable is not included until the person ticks it", async () => {
+    mocks.merge.mockResolvedValue({ merge_duplicates: [merged("grace", "Grace Hopper")] });
+    renderDialog();
+    const [, cleanSet] = await screen.findAllByRole("checkbox");
+
+    mocks.previews = [
+      PREVIEWS[0]!,
+      { ...PREVIEWS[1]!, outcome: null, reason: "", survivor: { id: "grace" }, digest: "digest-grace" },
+      PREVIEWS[2]!,
+    ];
+    fireEvent.click(cleanSet!);
+
+    await waitFor(() => expect(screen.getAllByRole("checkbox")).toHaveLength(3));
+    const grace = screen.getAllByRole("checkbox")[1]!;
+    expect(grace.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(grace);
+    fireEvent.click(screen.getByRole("button", { name: message("duplicates.confirm", { count: "1" }) }));
+
+    await waitFor(() => expect(mocks.merge).toHaveBeenCalledWith({
+      sets: [["grace", "amazing-grace"]], digests: ["digest-grace"], certain: false,
+    }));
+  });
 });

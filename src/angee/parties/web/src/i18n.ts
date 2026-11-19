@@ -223,6 +223,7 @@ export const enPartiesMessages: Record<string, string> = {
   "duplicates.refused": "Will not merge: {reason}",
   "duplicates.include": "Include in this merge",
   "duplicates.includeWarned": "Not included until you tick it: these records disagree, or one no longer matches its group.",
+  "duplicates.includeChanged": "Changed since you saw it: not included until you tick it as it is now.",
   "duplicates.outcome.left": "Left out of this merge.",
   "duplicates.confirm": "Merge ({count})",
   "duplicates.cancel": "Cancel",

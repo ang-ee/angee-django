@@ -114,8 +114,9 @@ live in code docstrings.
   the batch and the dialog says the next batch follows; the overview counts every
   pair instead of a capped read. In the dialog each set that may merge has its
   own Include toggle, off by default when the set carries a warning (a
-  disagreement, a member that no longer matches its group), and the mutation
-  sends only the included sets. Each set that may merge carries a `digest`
+  disagreement, a member that no longer matches its group) and off again when
+  the set changes from the state the person saw or ticked it in, and the
+  mutation sends only the included sets. Each set that may merge carries a `digest`
   (`DuplicateSetPreview.digest`, `keyed_facts_digest`, the keyed hashing
   `IdentityBasis.facts_hash` now shares) of what the dialog shows of it: each
   member's id, name, creation time and first-met note as the reader's gates
