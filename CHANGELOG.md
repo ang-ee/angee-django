@@ -14,10 +14,13 @@ live in code docstrings.
   registers the `hubspot` directory backend: one HubSpot account's contacts read
   one way into parties over HubSpot's `2026-09` REST paths, with no HubSpot SDK.
   Its requests are integrate's typed request (`HttpClient.request_model`), whose
-  refusal rule it shares; it adds a 423 as transient (at least two seconds), and
-  a 429 without `Retry-After` waits for its policy's window (ten seconds, or an
-  hour for the daily limit). It admits only a non-empty static-token credential holding a service key with
-  `crm.objects.contacts.read` and declares no OAuth client. Connection discovery
+  refusal rule it shares; it adds a 423 as transient (at least two seconds), a
+  429 without `Retry-After` waits for its policy's window (ten seconds, or an
+  hour for the daily limit, which its message names), and HubSpot's rejection of
+  a key that lacks a service key's usual shape says to check it for extra or
+  missing characters. Its `credential_blocker` admits only a non-empty
+  static-token credential holding a service key with
+  `crm.objects.contacts.read`, and it declares no OAuth client. Connection discovery
   (`requires_connection_discovery`) learns the account's hub id, and its web host
   when HubSpot states one, into the directory's `subscription_state`, so a
   directory syncs only after discovery and its source links open each contact in
@@ -25,9 +28,9 @@ live in code docstrings.
   connection test is one one-contact read. A baseline lists contacts by record id;
   a delta searches by modified time without an offset; an unreadable stored cursor
   starts a new baseline, and a transient refusal inside one page keeps what that
-  page read. A merge's survivor lands on a replaced record's person, and an
-  archived or deleted contact is withdrawn by the second absence sweep. It ships
-  no connect action yet.
+  page read. A merge's survivor lands on a replaced record's person, the replaced
+  records leave with the absence sweeps, and an archived or deleted contact is
+  withdrawn by the second absence sweep. It ships no connect action yet.
 
 - Sharing a directory shares its contacts. `parties/directory` has a stored,
   grantable `contact_reader` relation (shared through the record-access surface

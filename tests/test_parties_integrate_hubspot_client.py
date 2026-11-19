@@ -11,6 +11,7 @@ import pytest
 
 from angee.integrate.testing.http import request_fields
 from angee.parties_integrate_hubspot.client import (
+    SERVICE_KEY_SHAPE,
     HubSpotClient,
     HubSpotError,
     HubSpotObject,
@@ -254,6 +255,12 @@ def test_a_search_at_one_modified_time_reads_its_records_above_an_id_in_id_order
     ]
 
 
+REJECTED = "HubSpot rejected the access token. Enter a valid HubSpot service key."
+CHECK_THE_KEY = "This key lacks a service key's usual shape: check it for extra or missing characters."
+RATE_LIMITED = "HubSpot is rate limiting requests (HTTP 429)."
+DAILY_LIMIT = "This HubSpot account has used its daily API request limit."
+
+
 def unavailable(status: int) -> str:
     """Return integrate's operator message for a transient refused answer of HubSpot's."""
 
@@ -263,28 +270,26 @@ def unavailable(status: int) -> str:
 @pytest.mark.parametrize(
     ("status", "fields", "transient", "wait", "message"),
     [
-        pytest.param(
-            401,
-            {"category": "INVALID_AUTHENTICATION"},
-            False,
-            None,
-            "HubSpot rejected the access token. Enter a valid HubSpot service key.",
-            id="401-token-rejected",
-        ),
+        pytest.param(401, {"category": "INVALID_AUTHENTICATION"}, False, None, REJECTED, id="401-token-rejected"),
         pytest.param(403, {}, False, None, "HubSpot refused the request (HTTP 403).", id="403-refused"),
         pytest.param(423, {}, True, timedelta(seconds=2), None, id="423-waits-two-seconds"),
         pytest.param(423, {"headers": {"Retry-After": "1"}}, True, timedelta(seconds=2), None, id="423-short-hint"),
         pytest.param(423, {"headers": {"Retry-After": "7"}}, True, timedelta(seconds=7), None, id="423-longer-hint"),
         pytest.param(
-            429, {"policy_name": "TEN_SECONDLY_ROLLING"}, True, timedelta(seconds=10), None, id="429-ten-secondly"
+            429,
+            {"policy_name": "TEN_SECONDLY_ROLLING"},
+            True,
+            timedelta(seconds=10),
+            RATE_LIMITED,
+            id="429-ten-secondly",
         ),
-        pytest.param(429, {"policy_name": "DAILY"}, True, timedelta(hours=1), None, id="429-daily"),
+        pytest.param(429, {"policy_name": "DAILY"}, True, timedelta(hours=1), DAILY_LIMIT, id="429-daily"),
         pytest.param(
             429,
             {"policy_name": "TEN_SECONDLY_ROLLING", "headers": {"Retry-After": "30"}},
             True,
             timedelta(seconds=30),
-            None,
+            RATE_LIMITED,
             id="429-ten-secondly-retry-after",
         ),
         pytest.param(
@@ -292,7 +297,7 @@ def unavailable(status: int) -> str:
             {"policy_name": "DAILY", "headers": {"Retry-After": "30"}},
             True,
             timedelta(seconds=30),
-            None,
+            DAILY_LIMIT,
             id="429-daily-retry-after",
         ),
         *(
@@ -358,6 +363,37 @@ def test_a_rejected_bearer_is_a_permanent_refusal(hubspot_server: HubSpotServer)
         stranger.list_page("contacts", after="", limit=10, properties=())
 
     assert (refusal.value.status, refusal.value.transient) == (401, False)
+    assert refusal.value.public_message == REJECTED
+
+
+def test_a_rejected_key_of_an_unusual_shape_adds_the_hint_and_nothing_else_does(hubspot_server: HubSpotServer) -> None:
+    unusual = HubSpotClient({"Authorization": f"Bearer {TOKEN}7"}, usual_key=False)
+
+    with pytest.raises(HubSpotError) as refusal:
+        unusual.list_page("contacts", after="", limit=10, properties=())
+    assert (refusal.value.status, refusal.value.public_message) == (401, f"{REJECTED} {CHECK_THE_KEY}")
+
+    hubspot_server.scopes = set()
+    with pytest.raises(HubSpotError) as missing:
+        HubSpotClient({"Authorization": f"Bearer {TOKEN}"}, usual_key=False).list_page(
+            "contacts", after="", limit=10, properties=()
+        )
+    assert CHECK_THE_KEY not in missing.value.public_message
+
+
+@pytest.mark.parametrize(
+    ("key", "usual"),
+    [
+        pytest.param(TOKEN, True, id="the-scripted-key"),
+        pytest.param("pat-eu1-0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", True, id="another-region"),
+        pytest.param(f"{TOKEN}7", False, id="a-stray-digit"),
+        pytest.param(TOKEN[:-1], False, id="a-missing-digit"),
+        pytest.param(f" {TOKEN}", False, id="a-leading-space"),
+        pytest.param("not a key", False, id="not-a-key"),
+    ],
+)
+def test_a_service_keys_usual_shape_is_pat_a_region_and_a_uuid(key: str, usual: bool) -> None:
+    assert (SERVICE_KEY_SHAPE.fullmatch(key) is not None) is usual
 
 
 @pytest.mark.parametrize(

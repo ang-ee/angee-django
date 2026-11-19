@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from itertools import batched
 from typing import Any, Self
@@ -50,6 +50,13 @@ EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 MISSING_SCOPES = "MISSING_SCOPES"
 """The ``category`` of HubSpot's refusal of a request whose scope the key lacks."""
+
+SERVICE_KEY_SHAPE = re.compile(r"pat-[a-z0-9]+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+"""The usual shape of a HubSpot service key: ``pat-``, a region, and a UUID.
+
+HubSpot publishes no key format, so the shape never refuses a key; it only adds
+a hint to HubSpot's rejection of one that lacks it (:meth:`HubSpotError.of`).
+"""
 
 _MODIFIED_PROPERTY = {"contacts": "lastmodifieddate"}
 _RECORD_ID = "hs_object_id"
@@ -79,14 +86,17 @@ class HubSpotError(IntegrationError):
     category: str | None = None
 
     @classmethod
-    def of(cls, refusal: HttpRefusal, *, scopes: Sequence[str] = ()) -> HubSpotError:
+    def of(cls, refusal: HttpRefusal, *, scopes: Sequence[str] = (), usual_key: bool = True) -> HubSpotError:
         """Return HubSpot's error for ``refusal``; ``scopes`` are what the request needed.
 
         HubSpot's own cases: a 423 (records locked for a moment) is transient and
         waits at least two seconds; a 429 without ``Retry-After`` waits for the
         window of the rate-limit policy its body names (ten seconds, or an hour for
-        the daily limit); a rejected key, and a missing scope naming ``scopes``,
-        are worded for the operator. ``HttpRefusal`` decides and words the rest.
+        the daily limit), and one under the daily limit says so; a rejected key, and
+        a missing scope naming ``scopes``, are worded for the operator. A rejected
+        key that is not ``usual_key`` (:data:`SERVICE_KEY_SHAPE`) adds a hint to
+        check it for extra or missing characters. ``HttpRefusal`` decides and words
+        the rest.
         """
 
         try:
@@ -97,16 +107,20 @@ class HubSpotError(IntegrationError):
             wait = max(refusal.retry_after or _LOCKED_WAIT, _LOCKED_WAIT)
             error = cls("HubSpot has locked these records for a moment.", transient=True, retry_after=wait)
         else:
+            wait = None
             if refusal.status == 429 and refusal.retry_after is None:
-                policy = _RATE_LIMIT_WAITS.get(facts.policy_name or "", _RATE_LIMIT_WAITS["TEN_SECONDLY_ROLLING"])
-                refusal = replace(refusal, retry_after=policy)
+                wait = _RATE_LIMIT_WAITS.get(facts.policy_name or "", _RATE_LIMIT_WAITS["TEN_SECONDLY_ROLLING"])
             message = None
             if refusal.status == 401:
                 message = "HubSpot rejected the access token. Enter a valid HubSpot service key."
+                if not usual_key:
+                    message += " This key lacks a service key's usual shape: check it for extra or missing characters."
             elif refusal.status == 403 and facts.category == MISSING_SCOPES:
                 needed = ", ".join(scopes) or "the scope this request needs"
                 message = f"The HubSpot service key is missing a scope this connection needs: {needed}."
-            error = refusal.as_error(cls, "HubSpot", public_message=message)
+            elif refusal.status == 429 and facts.policy_name == "DAILY":
+                message = "This HubSpot account has used its daily API request limit."
+            error = refusal.as_error(cls, "HubSpot", public_message=message, retry_after=wait)
         error.status, error.category = refusal.status, facts.category
         return error
 
@@ -205,18 +219,6 @@ class HubSpotPage(_HubSpotModel):
 
         return self.paging.next.after if self.paging is not None and self.paging.next is not None else ""
 
-    def head(self, count: int) -> HubSpotPage:
-        """Return the page cut to its first ``count`` records, the following page starting at the first one cut.
-
-        That position is the cut record's id, where a list walk resumes; a search
-        page's position is read only as a sign that more results follow.
-        """
-
-        if count >= len(self.results):
-            return self
-        following = HubSpotPaging(next=HubSpotNext(after=self.results[count].id))
-        return HubSpotPage(results=self.results[:count], paging=following)
-
 
 class _HubSpotBatchError(_HubSpotModel):
     """One error a partial (207) batch answer states for some of its records."""
@@ -251,10 +253,16 @@ class HubSpotClient:
     is cached between calls.
     """
 
-    def __init__(self, headers: Mapping[str, str]) -> None:
-        """Bind the authorization headers every request carries."""
+    def __init__(self, headers: Mapping[str, str], *, usual_key: bool = True) -> None:
+        """Bind the authorization headers every request carries.
+
+        ``usual_key`` states whether the caller's key has a service key's usual
+        shape (:data:`SERVICE_KEY_SHAPE`); a rejection of one that does not says to
+        check it (:meth:`HubSpotError.of`).
+        """
 
         self.headers = dict(headers)
+        self.usual_key = usual_key
         self.http = HttpClient()
 
     def token_info(self, token_key: str) -> HubSpotTokenInfo:
@@ -407,7 +415,7 @@ class HubSpotClient:
             json=payload,
             model=model,
             timeout=_REQUEST_TIMEOUT_SECONDS,
-            error=lambda refusal: HubSpotError.of(refusal, scopes=scopes),
+            error=lambda refusal: HubSpotError.of(refusal, scopes=scopes, usual_key=self.usual_key),
         )
 
 

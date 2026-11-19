@@ -7,7 +7,8 @@ holding every contact. Each contact lands as a person with its names, emails,
 phones, employer and postal address, and HubSpot's later edits follow on each
 sync. A job title lands only beside a company, because parties keeps a title on
 the employment. A person's own edits outrank HubSpot's. A contact HubSpot merges
-lands on the person of a record it replaced. A contact HubSpot archives or
+lands on the person of a record it replaced, and the replaced records leave with
+the absence sweeps. A contact HubSpot archives or
 deletes is withdrawn after two daily absence sweeps: the first marks its link
 unavailable, the second withdraws what it stated. The person stays.
 
@@ -27,8 +28,11 @@ The backend speaks HubSpot's date-versioned REST API through integrate's typed
 request (`HttpClient.request_model`), with no HubSpot SDK;
 [the stack guide](../../../docs/stack.md#backend) records why. Integrate's
 `HttpRefusal` classifies every refused request, and `HubSpotError` adds only
-HubSpot's own cases: a 423 is transient, and a rate limit without `Retry-After`
-waits for the window of the policy HubSpot names. `HubSpotDirectoryBackend` composes the parties directory base,
+HubSpot's own cases: a 423 is transient, a rate limit without `Retry-After`
+waits for the window of the policy HubSpot names, and the daily limit says so.
+When HubSpot rejects a key that lacks a service key's usual shape, the message
+says to check it for extra or missing characters; the shape never refuses a key
+before HubSpot sees it. `HubSpotDirectoryBackend` composes the parties directory base,
 `HubSpotClient` takes the authorization headers its caller gives it and never
 reads a credential, `HubSpotCursor` holds a stream's position inside a baseline
 or delta pass, and `contact_from_properties` maps HubSpot's standard contact

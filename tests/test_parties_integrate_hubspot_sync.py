@@ -43,10 +43,13 @@ SECOND_KEY = "pat-na1-11111111-1111-4111-8111-111111111111"
 OTHER_HUB_ID = 9876543
 CONNECTED = "Connected to HubSpot: the service key reads this account's contacts."
 REJECTED = "HubSpot rejected the access token. Enter a valid HubSpot service key."
+CHECK_THE_KEY = "This key lacks a service key's usual shape: check it for extra or missing characters."
 MISSING_SCOPE = f"The HubSpot service key is missing a scope this connection needs: {CONTACTS_READ}."
 UNREADABLE = "HubSpot returned an unreadable response."
 UNAVAILABLE = "HubSpot is temporarily unavailable (HTTP 503)."
 RATE_LIMITED = "HubSpot is rate limiting requests (HTTP 429)."
+DAILY_LIMIT = "This HubSpot account has used its daily API request limit."
+NOT_A_SERVICE_KEY = "A HubSpot directory reads with a HubSpot service key: attach a static token that holds one."
 
 ADA = {
     "firstname": "Ada",
@@ -328,50 +331,24 @@ def test_a_merged_contact_lands_on_the_person_of_a_record_it_replaced(hubspot: H
     person, again = hubspot.person(ada), hubspot.person(ada_again)
 
     survivor = hubspot.server.merge("contacts", ada, ada_again, modified=timezone.now())
-    hubspot.drain(page_bound=3)
+    # A page of one record holds the survivor: the replaced records are no records of its page.
+    assert sum(page.count for page in hubspot.drain(page_bound=1)) == 1
 
     assert hubspot.person(survivor).pk == person.pk
     assert Person.objects.count() == people
     assert Person.objects.filter(pk=again.pk).exists()
-    assert {hubspot.link(ada).status, hubspot.link(ada_again).status} == {LinkStatus.TOMBSTONE}
     assert asserted(person.pk, hubspot.link(survivor)).exists()
     assert not asserted(person.pk, hubspot.link(ada)).exists()
-    assert hubspot.link(grace).status == LinkStatus.CURRENT
+    assert {hubspot.link(ada).status, hubspot.link(ada_again).status} == {LinkStatus.CURRENT}
     (merged,) = hubspot.backend.read_keys(hubspot.stream, [ada])
     assert (merged.external_key, merged.tombstone) == (ada, True)
+
+    # The replaced records left HubSpot's id walk, so the absence sweeps tombstone their links.
+    assert [hubspot.sweep(), hubspot.sweep()] == [2, 2]
+    assert {hubspot.link(ada).status, hubspot.link(ada_again).status} == {LinkStatus.TOMBSTONE}
+    assert hubspot.person(survivor).pk == person.pk
+    assert hubspot.link(grace).status == LinkStatus.CURRENT
     assert not failures(hubspot)
-
-
-def test_a_merges_replaced_records_count_against_the_page_bound_only_while_they_have_links(hubspot: HubSpot) -> None:
-    """The page-bound workaround: the base follows a survivor with a tombstone per linked replaced record.
-
-    It goes with its workaround once the base stops adding those records to the page.
-    """
-
-    merged = [
-        hubspot.server.add("contacts", {**ADA, "email": f"ada{number}@example.com"}, modified=ago(days=2))
-        for number in range(3)
-    ]
-    fresh = hubspot.server.merge("contacts", *merged, modified=ago(days=1))
-    assert [page.count for page in hubspot.drain(page_bound=2)] == [1]
-    assert hubspot.link(fresh).status == LinkStatus.CURRENT
-
-    ada, ada_again = (
-        hubspot.server.add("contacts", properties, modified=timezone.now())
-        for properties in (ADA, {**ADA, "email": "ada.lovelace@example.com"})
-    )
-    hubspot.drain()
-    hubspot.server.merge("contacts", ada, ada_again, modified=timezone.now())
-
-    with pytest.raises(HubSpotError) as refused:
-        hubspot.pull(page_bound=2)
-
-    assert not refused.value.transient
-    assert refused.value.public_message == (
-        "A merged HubSpot contact replaces more contacts than a page of 2 records holds. "
-        "Raise this directory's sync_page_bound."
-    )
-    assert {hubspot.link(ada).status, hubspot.link(ada_again).status} == {LinkStatus.CURRENT}
 
 
 def test_a_page_stays_within_its_bound_hubspots_page_limit_and_the_deadline(hubspot: HubSpot) -> None:
@@ -488,7 +465,7 @@ def test_an_identity_read_answers_a_missing_contact_as_gone_and_fails_on_any_oth
         ),
         pytest.param(
             lambda server: server.queue(error_response(429, policy_name="DAILY")),
-            RATE_LIMITED,
+            DAILY_LIMIT,
             True,
             timedelta(hours=1),
             id="429-daily",
@@ -559,6 +536,26 @@ def test_the_connection_test_reads_one_contact_and_tells_a_rejected_key_from_a_m
     with pytest.raises(HubSpotError) as throttled:
         hubspot.directory.test_connection()
     assert throttled.value.transient
+
+
+def test_a_rejected_key_without_a_service_keys_usual_shape_says_to_check_it_and_the_shape_refuses_nothing(
+    hubspot: HubSpot,
+) -> None:
+    """The key's shape only words HubSpot's rejection: the request is always sent, whatever the key looks like."""
+
+    held = Credential.objects.get(pk=hubspot.directory.credential_id)
+    held.replace_material({"api_key": f"{TOKEN}7"})
+    hubspot.server.requests.clear()
+    with pytest.raises(HubSpotError) as rejected:
+        hubspot.directory.test_connection()
+    assert rejected.value.public_message == f"{REJECTED} {CHECK_THE_KEY}"
+    assert len(hubspot.server.requests) == 1
+    assert hubspot.discover() == {"ok": False, "reason": "discovery-failed"}
+    assert hubspot.directory.last_error == f"{REJECTED} {CHECK_THE_KEY}"
+
+    hubspot.server.token = "a key of another shape"
+    held.replace_material({"api_key": hubspot.server.token})
+    assert hubspot.directory.test_connection() == CONNECTED
 
 
 def test_the_connection_test_reads_a_saved_directorys_key_afresh_and_an_unsaved_ones_as_attached(
@@ -695,6 +692,8 @@ def test_a_rejected_key_stops_at_discovery_with_the_operator_message(hubspot: Hu
 def test_a_hubspot_directory_admits_only_a_static_token_with_a_key_and_connects_through_no_oauth_client(
     hubspot: HubSpot,
 ) -> None:
+    """The backend's one rule is the directory's blocker, which every attachment raises."""
+
     owner, held = hubspot.directory.owner, hubspot.directory.credential_id
     basic = Credential.objects.create_local_credential(
         owner, kind="basic_auth", name="Not a service key", material={"username": "ada", "password": "secret"}
@@ -702,6 +701,7 @@ def test_a_hubspot_directory_admits_only_a_static_token_with_a_key_and_connects_
     empty = Credential.objects.create_local_credential(owner, kind="static_token", name="No key yet", material={})
 
     for refused in (basic, empty):
+        assert hubspot.directory.credential_blocker(refused) == NOT_A_SERVICE_KEY
         with pytest.raises(ValidationError, match="static token"):
             hubspot.directory.attach_connection(refused)
         hubspot.directory.refresh_from_db()
@@ -710,5 +710,6 @@ def test_a_hubspot_directory_admits_only_a_static_token_with_a_key_and_connects_
         hubspot.directory.connection_oauth_slug()
 
     key = hubspot.attach_key(TOKEN, name="Another service key")
+    assert hubspot.directory.credential_blocker(key) is None
     assert hubspot.directory.credential_id == key.pk
     assert hubspot.discover()["ok"]

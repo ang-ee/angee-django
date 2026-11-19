@@ -34,10 +34,8 @@ from datetime import datetime, timedelta
 from time import monotonic
 from typing import Any, ClassVar
 
-from django.core.exceptions import ValidationError
 from django.utils import timezone
-from pydantic import BaseModel, ConfigDict
-from pydantic import ValidationError as PydanticValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.discovery import ConnectionDiscovery
@@ -49,6 +47,7 @@ from angee.parties_integrate_hubspot.client import (
     LIST_PAGE_LIMIT,
     MISSING_SCOPES,
     SEARCH_PAGE_LIMIT,
+    SERVICE_KEY_SHAPE,
     HubSpotClient,
     HubSpotError,
     HubSpotObject,
@@ -234,7 +233,7 @@ class HubSpotDirectoryBackend(DirectoryBackend):
 
     The directory reads with a HubSpot service key that has the contacts read
     scope, held in a static token, and connects through no OAuth client
-    (:meth:`admit_credential`). Each page, identity read and key walk reloads the
+    (:meth:`credential_blocker`). Each page, identity read and key walk reloads the
     credential, and every request sends its own authorization headers; the backend
     keeps no key. Connection discovery learns the account's hub id and the host of
     its web app, which the source links name, and holds the directory to that
@@ -250,12 +249,12 @@ class HubSpotDirectoryBackend(DirectoryBackend):
     requires_connection_discovery: ClassVar[bool] = True
     sync_parallelism: ClassVar[int | None] = 1
 
-    def admit_credential(self, credential: Any) -> None:
-        """Admit only a static token that holds a key: the service key this backend sends as its bearer."""
+    def credential_blocker(self, credential: Any) -> str | None:
+        """Refuse anything but a static token that holds a key: the service key this backend sends as its bearer."""
 
-        if credential.kind != CredentialKind.STATIC_TOKEN or not credential.secret_value().strip():
-            refusal = "A HubSpot directory reads with a HubSpot service key: attach a static token that holds one."
-            raise ValidationError({"credential": refusal})
+        if credential.kind == CredentialKind.STATIC_TOKEN and credential.secret_value().strip():
+            return None
+        return "A HubSpot directory reads with a HubSpot service key: attach a static token that holds one."
 
     def test_connection(self) -> str:
         """Ask HubSpot for one contact: one request proves the key and its contacts read scope, refused apart.
@@ -321,15 +320,13 @@ class HubSpotDirectoryBackend(DirectoryBackend):
         Once one has answered, none starts after ``deadline``, and a transient
         refusal ends the page with what was read, its cursor where the refused
         request would have gone on; the next page meets the refusal. A merge's
-        survivor takes room for every record it replaces that has a link, whose
-        tombstone follows it in the page (``DirectoryBackend.record_changes``); one
-        that does not fit waits for the next page.
+        survivor is one record (``DirectoryBackend.record_changes``).
         """
 
         client = self._client(self.bridge.fresh_credential())
         try:
             cursor = HubSpotCursor.model_validate(stream.cursor)
-        except PydanticValidationError:
+        except ValidationError:
             raise CursorInvalid() from None
         cursor = cursor.begin(stream.phase, now=timezone.now())
         payloads: dict[str, Mapping[str, Any] | None] = {}
@@ -344,25 +341,9 @@ class HubSpotDirectoryBackend(DirectoryBackend):
                     break
                 raise
             answered = True
-            linked = _linked_replaced(stream, page)
-            fits, taken = 0, 0
-            for record in page.results:
-                size = 1 + len(linked.intersection(_replaced(record)))
-                if taken + size > room:
-                    break
-                fits, taken = fits + 1, taken + size
-            if page.results and not fits:
-                if payloads:
-                    break
-                raise HubSpotError(
-                    f"A merged HubSpot contact replaces more contacts than a page of {page_bound} records holds. "
-                    "Raise this directory's sync_page_bound."
-                )
-            cut = fits < len(page.results)
-            page = page.head(fits)
             payloads.update((record.id, self._payload(record)) for record in page.results)
             cursor = cursor.advance(page, object_type=_OBJECT_TYPE)
-            room = 0 if cut else room - taken
+            room -= len(page.results)
         records = self.record_changes(stream, payloads)
         return StreamPage(records, cursor.model_dump(mode="json"), exhausted=not cursor.is_open)
 
@@ -400,28 +381,19 @@ class HubSpotDirectoryBackend(DirectoryBackend):
         return str(contact.get("display_name") or "") or super().source_label(link)
 
     def _client(self, credential: Any) -> HubSpotClient:
-        """Return a client that sends ``credential``'s own authorization headers."""
+        """Return a client that sends ``credential``'s own authorization headers.
+
+        The client also learns whether the key has a service key's usual shape, so
+        a rejection of one that does not says to check it (:data:`SERVICE_KEY_SHAPE`).
+        """
 
         if credential is None:
             raise HubSpotError("Attach a HubSpot service key to this directory.")
-        return HubSpotClient(credential.auth_headers())
+        usual = SERVICE_KEY_SHAPE.fullmatch(credential.secret_value()) is not None
+        return HubSpotClient(credential.auth_headers(), usual_key=usual)
 
     def _payload(self, record: HubSpotObject) -> dict[str, Any]:
-        """Return one contact's payload; a merge's survivor names the records it replaced."""
+        """Return one contact's payload; a merge's survivor names the records it replaced, in HubSpot's order."""
 
-        return self.observe(contact_from_properties(record.properties), replaces=_replaced(record))
-
-
-def _replaced(record: HubSpotObject) -> tuple[str, ...]:
-    """Return the ids of the records HubSpot merged into ``record``."""
-
-    return parse_options(record.properties.get(_MERGED_PROPERTY))
-
-
-def _linked_replaced(stream: Any, page: HubSpotPage) -> set[str]:
-    """Return the ids the page's merges replaced that have a link on ``stream``, read once for the page."""
-
-    replaced = [key for record in page.results for key in _replaced(record)]
-    if not replaced:
-        return set()
-    return set(stream.links.filter(external_key__in=replaced).values_list("external_key", flat=True))
+        replaced = parse_options(record.properties.get(_MERGED_PROPERTY))
+        return self.observe(contact_from_properties(record.properties), replaces=replaced)
