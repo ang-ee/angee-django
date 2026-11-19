@@ -9,6 +9,7 @@ from django.utils import timezone
 from rebac import PermissionDenied, actor_context, system_context
 
 from angee.graphql.testing.documents import execute_schema, result_data
+from angee.iam.permissions import PlatformAdminPermission
 from tests.conftest import Credential, create_platform_admin, make_integration
 from tests.test_iam_graphql import _schema
 from tests.test_integrate_jwt_bearer import neutral_key_file
@@ -78,7 +79,7 @@ def test_local_metadata_updates_and_secret_replacement_preserve_bindings(kind, o
     assert "material" not in schema.as_str().split("type CredentialType", 1)[1].split("}", 1)[0]
 
 
-def test_metadata_write_remains_owner_or_admin_but_replacement_is_admin_only():
+def test_metadata_write_remains_owner_or_admin_but_replacement_is_refused_by_zed(monkeypatch):
     owner = get_user_model().objects.create_user("credential-owner")
     with system_context(reason="test.local.credential"):
         credential = Credential.objects.create_local_credential(
@@ -90,11 +91,19 @@ def test_metadata_write_remains_owner_or_admin_but_replacement_is_admin_only():
     own = result_data(execute_schema(schema, UPDATE, variables, user=owner))["update_credentials_by_pk"]
     assert own["replacement_fields"] == []
     assert execute_schema(schema, UPDATE, variables, user=stranger).errors
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("Replacement must use Zed, not a resolver permission class")
+
+    monkeypatch.setattr(PlatformAdminPermission, "has_permission", unexpected)
+    assert credential.with_actor(owner).has_access("write")
     for actor in (owner, stranger):
-        result = execute_schema(schema, REPLACE, {
+        assert not credential.with_actor(actor).has_access("replace_secret")
+        assert not Credential.objects.with_actor(actor).with_action("replace_secret").filter(pk=credential.pk).exists()
+        result = result_data(execute_schema(schema, REPLACE, {
             "id": credential.public_id, "data": {"api_key": "refused-token"}, "confirmed": True,
-        }, user=actor)
-        assert result.errors and result.errors[0].extensions["code"] == "PERMISSION_DENIED"
+        }, user=actor))["replace_credential_secret"]
+        assert result["ok"] is False and "__all__" in result["validation_errors"]
         with actor_context(actor), pytest.raises(PermissionDenied):
             credential.with_actor(actor).replace_secret({"api_key": "refused-token"}, confirmed=True)
     assert Credential._base_manager.get(pk=credential.pk).reveal() == {"api_key": "x"}
@@ -103,10 +112,16 @@ def test_metadata_write_remains_owner_or_admin_but_replacement_is_admin_only():
 def test_oauth_metadata_and_manual_replacement_are_refused():
     credential = make_integration("oauth-unchanged", kind="oauth", material={"access_token": "oauth-token"}).credential
     admin = create_platform_admin("oauth-edit-admin", password=None)
+    owner = get_user_model().objects.create_user("oauth-owner")
+    with system_context(reason="test.oauth.owner"):
+        credential.user = owner
+        credential.save(update_fields=["user"])
     schema = _schema("console")
-    for patch in ({"name": "Manual"},):
-        result = execute_schema(schema, UPDATE, {"id": credential.public_id, "set": patch}, user=admin)
-        assert result.errors and next(iter(patch)) in result.errors[0].extensions["validationErrors"]
+    for actor in (admin, owner):
+        assert credential.with_actor(actor).has_access("write")
+        result = execute_schema(schema, UPDATE, {"id": credential.public_id, "set": {"name": "Manual"}}, user=actor)
+        assert result.errors and "name" in result.errors[0].extensions["validationErrors"]
+        assert Credential._base_manager.get(pk=credential.pk).name == credential.name
     replaced = result_data(execute_schema(schema, REPLACE, {
         "id": credential.public_id, "data": {"api_key": "manual"}, "confirmed": True,
     }, user=admin))["replace_credential_secret"]

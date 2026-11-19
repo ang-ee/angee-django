@@ -14,14 +14,16 @@ live in code docstrings.
   instead of each page.
   - **Passwords and credentials.** Change password uses the login throttle and
     retains the requesting session. Administrators Set password through a
-    revision-checked account verb that refuses protected accounts; raw password
-    updates delegate to that same rule. Typed creation, set and change share
+    revision-checked account verb that refuses protected accounts. **Contract change:**
+    raw `users` updates no longer accept `password`; use `set_user_password`.
+    Creation keeps its password input. Typed creation, set and change share
     Django validation. Non-OAuth credentials expose name editing and an
     administrator-only Replace secret verb that requires nonempty material,
     removes stale keys and preserves attachments; expiry stays read-only.
     Shared forms preserve multiline keys, declare autocomplete and use transient
     mutation handling. The user menu preserves dialog lifetime and focus and
-    hides Change password when the session has no usable password.
+    hides Change password when the session has no usable password or is in view-as;
+    preview identity reads return null for password usability.
   - **Toolbar.** Explicit placement wins; `primary` implies the toolbar. On a
     saved record, the form's own band then fills to two buttons with its visible,
     unplaced, non-danger verbs in declaration order, counting verbs already on

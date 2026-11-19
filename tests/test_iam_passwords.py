@@ -1,16 +1,18 @@
-"""Self-service password changes and the existing administrative password update."""
+"""Self-service password changes and the administrative account verb."""
 
 import pytest
 from axes.models import AccessAttempt
 from django.contrib.auth import HASH_SESSION_KEY, get_user, get_user_model, login
+from django.contrib.auth.hashers import get_hasher
 from django.contrib.auth.models import AnonymousUser
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 
 from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
+from angee.graphql.view_as import ViewAs
 from angee.iam.auth import ONE_ATTEMPT_MESSAGE
 from angee.iam.autoconfig import SETTINGS as IAM_SETTINGS
 from tests.conftest import create_platform_admin
-from tests.test_iam_account_actions import UPDATE, _manager
+from tests.test_iam_account_actions import _manager
 from tests.test_iam_graphql import _schema
 
 User = get_user_model()
@@ -24,6 +26,9 @@ SET = """mutation($id: ID!, $password: String!, $revision: Int!) {
 }"""
 CREATE = """mutation($object: users_insert_input!) {
   insert_users_one(object: $object) { id username }
+}"""
+LOGIN = """mutation($name: String!, $password: String!) {
+  login(username: $name, password: $password) { ok }
 }"""
 
 
@@ -113,8 +118,7 @@ def test_change_password_requires_sign_in_and_a_usable_password(password_user):
     assert not User._base_manager.get(pk=passwordless.pk).has_usable_password()
 
 
-@pytest.mark.parametrize("raw_update", [False, True])
-def test_set_password_admits_only_unprotected_people(password_user, raw_update, caplog, monkeypatch):
+def test_set_password_admits_only_unprotected_people(password_user, caplog, monkeypatch):
     admin = create_platform_admin("set-password-admin", password=CURRENT)
     manager = _manager("set-password-manager")
     refused_targets = (
@@ -124,21 +128,19 @@ def test_set_password_admits_only_unprotected_people(password_user, raw_update, 
         User.objects.create_user("service-password", kind="service"),
     )
     schema = _schema("console")
-    document = UPDATE if raw_update else SET
 
     def variables(target, revision):
-        return {"id": target.public_id, "revision": revision,
-                **({"set": {"password": NEW}} if raw_update else {"password": NEW})}
+        return {"id": target.public_id, "revision": revision, "password": NEW}
 
     before = User._base_manager.get(pk=password_user.pk)
     assert "set_password" in password_user.account_actions_for(to_subject_ref(admin))
     result = result_data(execute_schema(
-        schema, document, variables(password_user, before.account_revision), user=admin,
+        schema, SET, variables(password_user, before.account_revision), user=admin,
     ))
-    assert result["update_users_by_pk"] if raw_update else result["set_user_password"]["ok"]
+    assert result["set_user_password"]["ok"]
     assert User._base_manager.get(pk=password_user.pk).check_password(NEW)
     assert User._base_manager.get(pk=password_user.pk).account_revision == before.account_revision + 1
-    stale = execute_schema(schema, document, variables(password_user, before.account_revision), user=admin)
+    stale = execute_schema(schema, SET, variables(password_user, before.account_revision), user=admin)
     assert stale.errors and stale.errors[0].extensions["code"] == "STALE_REVISION"
 
     def unexpected(*args, **kwargs):
@@ -150,21 +152,34 @@ def test_set_password_admits_only_unprotected_people(password_user, raw_update, 
                                                                          (password_user, password_user)]:
         assert "set_password" not in target.account_actions_for(to_subject_ref(actor))
         before = User._base_manager.get(pk=target.pk)
-        refused = execute_schema(schema, document, variables(target, before.account_revision), user=actor)
-        assert refused.errors or not result_data(refused)["set_user_password"]["ok"]
+        refused = result_data(execute_schema(schema, SET, variables(target, before.account_revision), user=actor))
+        assert refused["set_user_password"]["ok"] is False
         assert User._base_manager.get(pk=target.pk).password == before.password
         assert User._base_manager.get(pk=target.pk).account_revision == before.account_revision
     assert NEW not in str(result) + caplog.text
 
 
-def test_set_password_validates_at_the_existing_update_owner(password_user):
-    admin = create_platform_admin("validator-admin", password=None)
-    before = User._base_manager.get(pk=password_user.pk)
-    result = execute_schema(_schema("console"), UPDATE, {
-        "id": password_user.public_id, "set": {"password": "short"}, "revision": before.account_revision,
-    }, user=admin)
-    assert result.errors and "password" in result.errors[0].extensions["validationErrors"]
-    assert User._base_manager.get(pk=password_user.pk).password == before.password
+@pytest.mark.parametrize("protected", [False, True])
+def test_raw_user_update_no_longer_accepts_password(password_user, protected, caplog):
+    admin = create_platform_admin("raw-update-admin", password=None)
+    target = User.objects.create_user("raw-update-target", password=CURRENT, is_staff=protected)
+    before = User._base_manager.get(pk=target.pk)
+    # The removed input field is rejected during document validation, before any
+    # variables or metadata updates are evaluated.
+    result = execute_schema(_schema("console"), """mutation($id: String!, $password: String!) {
+      update_users_by_pk(pk_columns: {id: $id}, _set: {
+        first_name: "Changed", is_staff: false, password: $password
+      }) { id }
+    }""", {"id": target.public_id, "password": NEW}, user=admin)
+    assert result.errors
+    assert any("unknown field 'password'" in error.message and "'users_set_input'" in error.message
+               for error in result.errors)
+    assert result.data is None
+    stored = User._base_manager.get(pk=target.pk)
+    assert (stored.first_name, stored.is_staff, stored.password, stored.account_revision) == (
+        before.first_name, before.is_staff, before.password, before.account_revision,
+    )
+    assert NEW not in str(result) + caplog.text
 
 
 @pytest.mark.parametrize("password", ["short", "123456789012", ""])
@@ -206,44 +221,48 @@ def test_creation_validates_only_actor_typed_passwords(password_user, monkeypatc
     }, user=password_user).errors
 
 
-def test_mixed_update_rolls_back_metadata_when_password_is_refused(password_user):
-    admin = create_platform_admin("mixed-password-admin", password=None)
-    before = User._base_manager.get(pk=password_user.pk)
-    refused = execute_schema(_schema("console"), UPDATE, {
-        "id": password_user.public_id, "set": {"first_name": "Changed", "password": "short"},
-        "revision": before.account_revision,
-    }, user=admin)
-    assert refused.errors
-    stored = User._base_manager.get(pk=password_user.pk)
-    assert (stored.first_name, stored.password, stored.account_revision) == (
-        before.first_name, before.password, before.account_revision,
-    )
-
-
-def test_password_patch_cannot_remove_its_targets_protection_first(password_user):
-    admin = create_platform_admin("demotion-password-admin", password=None)
-    target = User.objects.create_user("staff-demotion", password=CURRENT, is_staff=True)
-    refused = execute_schema(_schema("console"), UPDATE, {
-        "id": target.public_id, "set": {"is_staff": False, "password": NEW},
-    }, user=admin)
-    assert refused.errors and "protected" in refused.errors[0].message
-    stored = User._base_manager.get(pk=target.pk)
-    assert stored.is_staff and stored.check_password(CURRENT)
-
-
-def test_wrong_current_passwords_lock_out_through_the_login_throttle(password_user, settings, caplog):
+@pytest.mark.parametrize("order", [("login", "change"), ("change", "login")])
+def test_login_and_change_password_share_lockout_without_hashing_when_locked_out(
+    password_user, settings, caplog, monkeypatch, order,
+):
     settings.AUTHENTICATION_BACKENDS = IAM_SETTINGS["AUTHENTICATION_BACKENDS:append"]
     settings.AXES_FAILURE_LIMIT = 2
     settings.AXES_LOCKOUT_PARAMETERS = ["username"]
     schema = _schema("public")
-    for current in ("bad-first", "bad-second", CURRENT):
-        result = result_data(execute_schema(schema, CHANGE, {"current": current, "new": NEW},
-                                            user=password_user, session=True))["change_password"]
-        assert not result["ok"] and "current_password" in result["validation_errors"]
-    assert AccessAttempt.objects.get(username=password_user.username).failures_since_start >= 2
-    assert User._base_manager.get(pk=password_user.pk).check_password(CURRENT)
-    recorded = str(list(AccessAttempt.objects.values())) + caplog.text
-    assert all(secret not in recorded for secret in (CURRENT, NEW, "bad-first", "bad-second"))
+    before = User._base_manager.get(pk=password_user.pk)
+    results = []
+    for count, operation in enumerate(order, start=1):
+        if operation == "login":
+            result = result_data(execute_schema(schema, LOGIN, {
+                "name": password_user.username, "password": "wrong-login",
+            }, user=AnonymousUser(), session=True))["login"]
+        else:
+            result = result_data(execute_schema(schema, CHANGE, {
+                "current": "wrong-current", "new": NEW,
+            }, user=password_user, session=True))["change_password"]
+            assert "current_password" in result["validation_errors"]
+        assert result["ok"] is False
+        results.append(result)
+        # Both operations contribute to exactly the same username counter.
+        assert AccessAttempt.objects.get(username=password_user.username).failures_since_start == count
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("A locked-out authentication attempt must not invoke the password hasher")
+
+    monkeypatch.setattr(type(get_hasher()), "encode", unexpected)
+    monkeypatch.setattr(type(get_hasher()), "verify", unexpected)
+    refused_login = result_data(execute_schema(schema, LOGIN, {
+        "name": password_user.username, "password": CURRENT,
+    }, user=AnonymousUser(), session=True))["login"]
+    assert refused_login["ok"] is False
+    refused_change = result_data(execute_schema(schema, CHANGE, {
+        "current": CURRENT, "new": NEW,
+    }, user=password_user, session=True))["change_password"]
+    assert refused_change["ok"] is False and "current_password" in refused_change["validation_errors"]
+    stored = User._base_manager.get(pk=password_user.pk)
+    assert (stored.password, stored.account_revision) == (before.password, before.account_revision)
+    recorded = str(list(AccessAttempt.objects.values())) + caplog.text + str([*results, refused_login, refused_change])
+    assert all(secret not in recorded for secret in (CURRENT, NEW, "wrong-login", "wrong-current"))
 
 
 def test_one_password_attempt_per_request_including_aliases_and_login(password_user, settings):
@@ -255,9 +274,8 @@ def test_one_password_attempt_per_request_including_aliases_and_login(password_u
     }""", {"wrong": "wrong", "right": CURRENT, "new": NEW}, request=request)
     assert result.errors and result.errors[0].message == ONE_ATTEMPT_MESSAGE
     assert AccessAttempt.objects.get(username=password_user.username).failures_since_start == 1
-    again = execute_schema(_schema("public"), """mutation($name: String!, $password: String!) {
-      login(username: $name, password: $password) { ok }
-    }""", {"name": password_user.username, "password": CURRENT}, request=request)
+    again = execute_schema(_schema("public"), LOGIN,
+                           {"name": password_user.username, "password": CURRENT}, request=request)
     assert again.errors and again.errors[0].message == ONE_ATTEMPT_MESSAGE
     assert User._base_manager.get(pk=password_user.pk).check_password(CURRENT)
 
@@ -284,3 +302,25 @@ def test_session_user_projects_only_the_usable_password_fact(password_user):
         row = result_data(execute_schema(_schema("public"), "{ current_user { id has_usable_password } }", user=user))
         assert row["current_user"]["has_usable_password"] is usable
         assert CURRENT not in str(row) and user.password not in str(row)
+
+
+@pytest.mark.parametrize("schema_name", ["public", "console"])
+def test_view_as_hides_password_usability_and_refuses_password_changes(password_user, schema_name, monkeypatch):
+    admin = create_platform_admin("password-preview-admin", password=None)
+    request = graphql_request(password_user, session=True)
+    request.view_as = ViewAs(real_user=admin, target=password_user)
+    schema = _schema(schema_name)
+    row = result_data(execute_schema(schema, "{ current_user { id has_usable_password } }", request=request))
+    assert row["current_user"] == {"id": password_user.public_id, "has_usable_password": None}
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("Preview must refuse the mutation before authentication")
+
+    monkeypatch.setattr("angee.iam.auth.authenticate_once", unexpected)
+    before = User._base_manager.get(pk=password_user.pk)
+    refused = execute_schema(schema, CHANGE, {"current": CURRENT, "new": NEW}, request=request)
+    assert refused.errors and refused.errors[0].extensions["code"] == "VIEW_AS_READ_ONLY"
+    assert refused.data is None
+    stored = User._base_manager.get(pk=password_user.pk)
+    assert (stored.password, stored.account_revision) == (before.password, before.account_revision)
+    assert CURRENT not in str(refused) and NEW not in str(refused)

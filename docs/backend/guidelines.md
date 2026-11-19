@@ -793,10 +793,11 @@ data through REBAC, never a queryset bypass.
   into that permission from its fragment, never by mirroring holders; see
   [`tests/extcontrib`](../../tests/extcontrib/permissions.extends.zed). Generic
   updates pass `write` and `write__<field>` gates on changed fields only;
-  protected accounts additionally need `administer`. A generic update's
-  `password` delegates to `set_account_password` before modifying other fields;
-  that verb also preserves `write` and `write__password`. Permission and account
-  kind are checked before password validation or hashing. Actor-requested
+  protected accounts additionally need `administer`. Generic updates do not
+  accept `password`; use `set_user_password` with the observed revision.
+  Its sealed Zed permission intersects `admin->member`, `write` and
+  `write__password`, so the model and projection check one permission. Permission
+  and account kind are checked before password validation or hashing. Actor-requested
   creation, Set password and Change password share `User._set_validated_password`,
   with the user as Django's validator context; trusted bootstrap/resource
   factories retain their native behavior. **Change password** verifies the actor's current

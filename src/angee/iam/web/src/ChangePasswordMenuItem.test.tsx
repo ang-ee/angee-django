@@ -23,10 +23,14 @@ beforeEach(() => mocks.changePassword.mockReset().mockResolvedValue({ ok: true, 
 const containers = containersFromChildren([{ address: "shell#user-menu" }], {
   "shell#user-menu": { "iam.change-password": { content: <ChangePasswordMenuItem /> } },
 });
-function renderMenu(hasUsablePassword?: boolean) {
+function renderMenu(hasUsablePassword?: boolean, preview = false) {
+  const user = { id: "self", name: "Ada", hasUsablePassword };
   return render(<Provider><ShellPageTestProviders runtime={{
     widgets: defaultWidgets, containers,
-    auth: { status: "authenticated", user: { id: "self", name: "Ada", hasUsablePassword }, hasRole: () => false },
+    auth: { status: "authenticated", user, hasRole: () => false, viewAs: preview ? {
+      viewAs: { userId: user.id }, currentUser: user, realUser: { id: "admin", name: "Admin" },
+      viewablePeople: [], enter: vi.fn(), exit: vi.fn(),
+    } : undefined },
   }}><ModalsHost><ToastProvider><UserMenu /></ToastProvider></ModalsHost></ShellPageTestProviders></Provider>);
 }
 
@@ -35,6 +39,14 @@ test.each([true, false, undefined])("usable-password fact %s hides the item only
   fireEvent.click(screen.getByRole("button", { name: "User menu" }));
   await screen.findByRole("menu");
   expect(screen.queryByRole("menuitem", { name: "Change password" }) !== null).toBe(usable !== false);
+});
+
+test.each([true, false, undefined])("view-as never offers Change password (usable: %s)", async (usable) => {
+  renderMenu(usable, true);
+  fireEvent.click(screen.getByRole("button", { name: "User menu" }));
+  await screen.findByRole("menu");
+  expect(screen.queryByRole("menuitem", { name: "Change password" })).toBeNull();
+  expect(mocks.changePassword).not.toHaveBeenCalled();
 });
 
 test("the native menu opens the shared password dialog, which clears its inputs on close", async () => {

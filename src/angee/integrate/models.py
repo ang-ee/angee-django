@@ -1579,13 +1579,12 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
     def replace_secret(self, material: Mapping[str, Any], *, confirmed: bool) -> None:
         """Confirm a non-OAuth manual replacement, preserving write gates and kind validation.
 
-        The Zed permission and existing write gate admit administrators. Other
+        The Zed permission composes the administrator and write gates. Other
         capability owners continue to compose ``replace_material`` after their
         own admission, such as the IMAP connection's credential edit.
         """
 
         self.require_access("replace_secret")
-        self.require_access("write")
         if confirmed is not True:
             raise ValidationError({"confirmed": "Confirm replacing this credential's secret."})
         if not self.replacement_fields:

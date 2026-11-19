@@ -247,7 +247,7 @@ export function ResetPasswordRecordAction(): React.ReactElement | null {
   return <AccountActionBar actions={[action]} />;
 }
 
-/** `iam.User#actions-menu` child: set a chosen password through the administrative update. */
+/** `iam.User#actions-menu` child: set a chosen password through the set_user_password account verb. */
 export function SetPasswordRecordAction(): React.ReactElement | null {
   const action = useSetPasswordAction();
   return <AccountActionBar actions={[action]} />;

@@ -1,7 +1,7 @@
 // Authorization schema for the IAM addon.
 // @rebac_package: iam
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 26
+// @rebac_schema_revision: 27
 
 definition auth/user {
     // Const-backed universal admin: every user points at angee/role:admin
@@ -70,7 +70,8 @@ definition auth/user {
     // Emails the account a single-use sign-in link; the issuer never sees it.
     permission issue_sign_in_link = admin->member
     permission reset_password = admin->member
-    permission set_password = admin->member
+    // Sealed: fragments cannot bypass either write gate with a union arm.
+    permission set_password = admin->member & write & write__password
     permission set_active = admin->member
     permission rename = admin->member
 

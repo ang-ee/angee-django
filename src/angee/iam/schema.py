@@ -213,9 +213,11 @@ class CurrentUserType(AngeeNode):
     is_active: auto
 
     @strawberry_django.field(only=["password"])
-    def has_usable_password(self) -> bool:
-        """Disclose only whether this session user can change a password."""
+    def has_usable_password(self, info: strawberry.Info) -> bool | None:
+        """Disclose password usability to the session itself, never during a preview."""
 
+        if _view_as(info) is not None:
+            return None
         return bool(cast(Any, self).has_usable_password())
 
     @strawberry_django.field(only=["first_name", "last_name", "username"])
@@ -647,13 +649,11 @@ class IAMUserWriteBackend:
         *,
         expected_revision: int | None = None,
     ) -> Any:
-        """Patch one user through its ``write`` and field gates, hashing ``password`` when supplied."""
+        """Patch user metadata through its ``write`` and field gates."""
 
-        payload = dict(data)
-        password = payload.pop("password", None)
         with transaction.atomic():
             user = _user_for_resource_id(pk, User.objects.for_write().lock_if_supported())
-            user.update_account(payload, password=password, expected_revision=expected_revision)
+            user.update_account(data, expected_revision=expected_revision)
             return user
 
     def delete_preview(self, info: strawberry.Info, pk: str, *, confirm: bool) -> DeletePreview:
@@ -739,7 +739,7 @@ _USER_RESOURCE = hasura_model_resource(
     sortable=["first_name", "last_name"],
     aggregatable=["id"],
     insertable=["username", "email", "first_name", "last_name"],
-    updatable=["username", "password", "email", "first_name", "last_name", "is_staff", "is_active"],
+    updatable=["username", "email", "first_name", "last_name", "is_staff", "is_active"],
     get_queryset=_user_queryset,
     write_backend=IAMUserWriteBackend(),
     id_column="sqid",

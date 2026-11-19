@@ -114,18 +114,20 @@ rotates its key; other sessions lose their valid password hash. Link-only and
 OIDC-only accounts keep their sign-in method. The session user's boolean
 `has_usable_password` hides the menu entry when explicitly false; an identity
 payload without that fact leaves the entry visible. The server still refuses
-accounts without a usable password.
+accounts without a usable password. Under view-as the server returns null for
+this fact, the menu omits Change password, and the preview rejects the mutation.
 
 The user record's **Set password** action submits a chosen password through
 `set_user_password(id, password, expected_revision)`, returning `ActionResult`.
-`User.set_account_password` checks `set_password`, the shared account blockers,
-the observed revision and the existing `write` and `write__password` gates
-before validation or hashing. Like its sibling verbs, it refuses the actor's
-own account, elevated role members, staff, superusers and non-person accounts.
-The raw users update delegates its `password` to this same method before
-changing any metadata, so an update cannot remove protection and set a password
-in one request. Combined metadata and password updates are atomic and advance
-the revision for each native save.
+`User.set_account_password` checks `set_password`, the shared account blockers
+and the required observed revision before validation or hashing. Zed owns the
+permission's `admin->member & write & write__password` intersection; IAM seals
+it so fragments cannot bypass those gates (`angee.iam.E003`). Like its sibling
+verbs, it refuses the actor's own account, elevated role members, staff,
+superusers and non-person accounts.
+**Contract change:** the raw `users` update input no longer accepts `password`.
+Set a password with `set_user_password`; creation still accepts `password`.
+Metadata updates and password changes are separate operations.
 
 `User._set_validated_password` runs Django's configured validators with the user
 as context, then hashes the value. Actor-requested `create_person` (including

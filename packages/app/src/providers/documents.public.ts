@@ -11,7 +11,7 @@ interface CurrentUserFields {
   lastName: string;
   isStaff: boolean;
   isActive: boolean;
-  hasUsablePassword?: boolean;
+  hasUsablePassword?: boolean | null;
   roleRefs: string[];
   /** The asked `requires` refs the identity holds; identity reads select it, other user payloads do not. */
   permitted?: string[];

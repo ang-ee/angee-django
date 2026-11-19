@@ -9,9 +9,9 @@ export function ChangePasswordMenuItem(): React.ReactElement | null {
   const action = useChangePasswordAction();
   const preview = useRuntimeViewAs();
   const { user } = useRuntimeAuth();
-  if (user?.hasUsablePassword === false) return null;
+  if (preview.viewAs || user?.hasUsablePassword === false) return null;
   return <>
-    <DropdownMenu.Item aria-haspopup="dialog" disabled={Boolean(preview.viewAs || preview.pending)}
+    <DropdownMenu.Item aria-haspopup="dialog" disabled={Boolean(preview.pending)}
       onClick={() => setOpen(true)}>
       <Glyph name="auth" /><span className="flex-1 truncate">{action.label}</span>
     </DropdownMenu.Item>

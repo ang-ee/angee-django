@@ -208,9 +208,11 @@ administrators. `replace_credential_secret` takes the handler's write-only
 `replace_material`. The handler selects the token, Basic-auth pair, application
 keys, SSH key or JWT key file and requires all replacement fields to be nonempty.
 Only static-token creation allows an empty placeholder. OAuth must use its
-connection flow instead. The model requires the Zed `replace_secret` permission
-(`admin->member`) as well as the existing `write` gate; `replacement_fields`
-projects eligibility per actor. Owners without that permission can rename a
+connection flow instead. Zed owns the complete `replace_secret` permission
+(`admin->member & write`), sealed against bypassing fragment arms (`integrate.E001`).
+The mutation, model and `replacement_fields` projection all use that permission;
+the mutation has no additional administrator permission class.
+Owners without that permission can rename a
 manual credential but are neither offered nor allowed to replace its secret.
 Creation and replacement share field presentation: PEM and JSON use textareas,
 public identifiers use text, and single-line secrets use masked inputs. Secret

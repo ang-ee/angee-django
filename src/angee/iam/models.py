@@ -882,9 +882,6 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         annotations: dict[str, models.expressions.BaseExpression] = {}
         for action in UserAccountAction.values:
             rows = cls.objects.with_actor(actor).with_action(action).scoped_for_aggregate()
-            if action == UserAccountAction.SET_PASSWORD:
-                for permission in ("write", "write__password"):
-                    rows = rows.filter(pk__in=cls.objects.with_actor(actor).with_action(permission).values("pk"))
             for condition, _error in cls.account_action_blockers(action, protection, inactive):
                 rows = rows.exclude(condition)
             annotations[action] = models.Exists(rows.filter(pk=models.OuterRef("pk")))
@@ -1097,28 +1094,24 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         self.set_password(password)
 
     @sensitive_variables("password")
-    def set_account_password(self, password: str, *, expected_revision: int | None) -> None:
-        """Set a typed password for an unprotected person through the verb and existing write gates."""
+    def set_account_password(self, password: str, *, expected_revision: int) -> None:
+        """Set a typed password for an unprotected person through the revision-checked account verb."""
 
         with transaction.atomic():
             user = self._lock_for_account_action(
                 str(UserAccountAction.SET_PASSWORD), expected_revision=expected_revision,
             )
-            user.require_access("write")
-            user.require_access("write__password")
             user._set_validated_password(password)
             user.sudo(reason="iam.password.set").save(
                 update_fields=["password", "updated_at"], expected_revision=expected_revision,
             )
             self.password, self.account_revision = user.password, user.account_revision
 
-    @sensitive_variables("password")
     @transaction.atomic
     def update_account(
         self,
         changes: Mapping[str, Any],
         *,
-        password: str | None = None,
         expected_revision: int | None = None,
     ) -> None:
         """Apply an administrative patch through the instance actor's ``write`` and field gates.
@@ -1126,9 +1119,8 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         Only changed fields are saved, so each ``write__<field>`` gate guards a
         real change. A protected account accepts the patch only from an actor
         holding ``administer`` on it: a consumer's ``write`` grant never edits
-        an elevated account, the actor's own included. A password patch delegates
-        to the account verb, which refuses protected and non-person accounts.
-        Mixed patches are atomic; each saved change advances the native revision.
+        an elevated account, the actor's own included. Passwords change only
+        through ``set_account_password`` or self-service ``change_password``.
         """
 
         actor, _bypass = self.effective_actor(strict=True)
@@ -1137,10 +1129,6 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
             self.require_revision(expected_revision)
         if actor is not None and self.protected_against(actor) and not self.has_access("administer"):
             raise ValidationError(PROTECTED_ACCOUNT_MESSAGE)
-        if password is not None:
-            # Admit against the stored account, before a metadata patch can alter its protection.
-            self.set_account_password(password, expected_revision=expected_revision)
-            expected_revision = self.account_revision
         update_fields = {field for field, value in changes.items() if getattr(self, field) != value}
         for field in update_fields:
             setattr(self, field, changes[field])

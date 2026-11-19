@@ -26,13 +26,13 @@ const currentUser = {
 };
 
 describe("Angee app auth provider", () => {
-  test.each([true, false, undefined])("preserves the usable-password fact (%s) through the existing identity read", async (hasUsablePassword) => {
+  test.each([true, false, null, undefined])("normalizes the usable-password fact (%s) through the existing identity read", async (hasUsablePassword) => {
     const request = vi.fn(async (document: unknown) => {
       expect(document).toBe(AngeeCurrentUserDocument);
       return { current_user: { ...currentUser, hasUsablePassword } };
     });
     const provider = createAngeeAuthProviderFromRequest(request as never);
-    await expect(provider.getIdentity?.()).resolves.toMatchObject({ hasUsablePassword });
+    await expect(provider.getIdentity?.()).resolves.toMatchObject({ hasUsablePassword: hasUsablePassword ?? undefined });
     expect(request).toHaveBeenCalledOnce();
   });
 

@@ -594,7 +594,7 @@ export function currentUserToAuthState(
     email: payload.email || undefined,
     isStaff: payload.isStaff,
     isActive: payload.isActive,
-    hasUsablePassword: payload.hasUsablePassword,
+    hasUsablePassword: payload.hasUsablePassword ?? undefined,
     preferences: payload.preferences,
     roles: payload.roleRefs,
     permitted: payload.permitted,

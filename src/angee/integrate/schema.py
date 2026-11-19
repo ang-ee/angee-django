@@ -254,12 +254,12 @@ class CredentialType(AngeeNode):
 
         return cast(list[str], cast(Any, self).editable_fields)
 
-    @strawberry_django.field(only=["kind"], extensions=[PermissionsExtension(("replace_secret", "write"))])
+    @strawberry_django.field(only=["kind"], extensions=[PermissionsExtension(("replace_secret",))])
     def replacement_fields(self) -> list[str]:
         """Project replacement inputs only to an admitted actor, without reading material."""
 
-        allowed = held_permissions(cast(Any, self), ("replace_secret", "write"))
-        return cast(list[str], cast(Any, self).replacement_fields) if {"replace_secret", "write"} <= allowed else []
+        allowed = held_permissions(cast(Any, self), ("replace_secret",))
+        return cast(list[str], cast(Any, self).replacement_fields) if "replace_secret" in allowed else []
 
     @strawberry_django.field(only=["oauth_client"])
     def oauth_client(self) -> CredentialOAuthClientType | None:
@@ -984,7 +984,7 @@ class IntegrateExternalAccountMutation:
 class IntegrateCredentialMutation:
     """Admin CRUD for credentials; create mints provider-less kinds (OAuth arrives via connect)."""
 
-    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    @strawberry.mutation
     @action_guard("Replacing the credential secret failed.", camel_case_keys=False)
     @sensitive_variables("data")
     def replace_credential_secret(
