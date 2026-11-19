@@ -8,6 +8,7 @@ import { columnTone, type ColumnDescriptor } from "../../page";
 import { GroupedScopePager } from "../GroupedScopePager";
 import { snapshotFromNav } from "../grouped-navigation";
 import { ListEmpty, type GroupedListItem } from "../resource-view-list-body";
+import type { SelectionGroupPath } from "../resource-view-context";
 import type { ResourceViewGroup } from "../resource-view-model";
 import type { ListViewNavigationScope, ResourceListSnapshot } from "../resource-view-surface";
 import type { CardActionContext, CardRenderer, ListEmptyContent } from "../resource-view-types";
@@ -31,7 +32,8 @@ interface GroupedBoardBodyProps<TRow extends Row> {
   renderCard?: CardRenderer<TRow>;
   cardFrame: CardFrame;
   selectedIds: ReadonlySet<string>;
-  onToggleSelected?: (id: string, selected: boolean, row: TRow) => void;
+  /** A card's selection captures its record's group path, as the grouped list's rows do. */
+  onToggleSelected?: (id: string, selected: boolean, row: TRow, path: SelectionGroupPath) => void;
   fetching: boolean;
   error: Error | null;
   emptyContent: ListEmptyContent;
@@ -96,7 +98,7 @@ export function GroupedBoardBody<TRow extends Row>({
             onRecordOpen={() => onListStateChange?.(snapshotFromNav<TRow>(item.nav))}
             cardActions={cardActions} cardActionContext={cardActionContext} renderCard={renderCard}
             frame={cardFrame} selected={selectedIds.has(item.row.id)}
-            onToggleSelected={onToggleSelected ? (next) => onToggleSelected(item.row.id, next, item.row.original) : undefined}
+            onToggleSelected={onToggleSelected ? (next) => onToggleSelected(item.row.id, next, item.row.original, item.groupPath) : undefined}
             dragEnabled={false} sortable={false} laneId="" laneIdentity={lane} />);
           break;
         case "skeleton":

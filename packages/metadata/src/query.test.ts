@@ -217,6 +217,54 @@ describe("ResourceQuery", () => {
     expect(() => query.groupsFrom([{ field: "channel.nope" }])).toThrow(/unknown group/);
     expect(() => query.groupsFrom([{ field: "channel__display_name" }])).toThrow(/unknown group/);
   });
+  test("a repeated group asks the server only for groups of more than one record with a value", () => {
+    const valueDrill = (name: string): QueryDrill => ({ kind: "value", field: name, valueKey: name, nullMode: "isNull", valueMap: [] });
+    const column = (name: string, extra: Partial<QueryAxis> = {}): QueryAxis => ({
+      field: name, kind: "column", identityPath: name, paths: [name], server: { input: name.toUpperCase(), key: name },
+      drill: valueDrill(name), extractions: [], ...extra,
+    });
+    const query = ResourceQuery.from(testDataResource("messaging.Message", { query: testResourceQuery({
+      fields: {
+        channel: field("channel", "ID", ["exact", "inList", "isNull"], { kind: "relation" }),
+        body: field("body", "String", ["exact", "ne", "isNull"]),
+        metadata: field("metadata", "JSON", ["jsonContains", "isNull"]),
+        sent_at: field("sent_at", "DateTime", ["gte", "lt", "isNull"]),
+      },
+      axes: {
+        channel, body: column("body"),
+        "metadata.kind": column("metadata.kind", { kind: "json", drill: {
+          kind: "json", field: "metadata", valueKey: "metadata__kind", jsonPath: "kind", nullMode: "value", valueMap: [] } }),
+        sent_at: column("sent_at", { kind: "date", extractions: [
+          { name: "month", input: "MONTH", key: "sent_at_month", rangeKey: "sent_at_month_range",
+            drill: { kind: "range", field: "sent_at", valueKey: "sent_at_month", rangeKey: "sent_at_month_range", nullMode: "isNull", valueMap: [] } },
+          { name: "month_number", input: "MONTH_NUMBER", key: "sent_at_month_number", drill: null },
+        ] }),
+      },
+    }) }));
+
+    const [body] = query.groupsFrom([{ field: "body", repeated: true }]);
+    expect(body!.spec).toEqual({ field: "body", repeated: true });
+    expect(body!.id).toBe("body");
+    const projection = body!.groupBy();
+    expect(projection.having).toEqual({ count_gt: 1 });
+    // Null and the blank string are no value: the server leaves both groups out.
+    expect(query.toWhere(projection.filter)).toEqual({ body: { _is_null: false, _neq: "" } });
+    expect(query.toWhere(query.group({ field: "channel", repeated: true }).groupBy().filter)).toEqual({ channel: { _is_null: false } });
+    expect(query.toWhere(query.group({ field: "sent_at", granularity: "month", repeated: true }).groupBy().filter))
+      .toEqual({ sent_at: { _is_null: false } });
+    // Without the flag the read lists every group.
+    expect(query.axis("body").groupBy()).not.toHaveProperty("having");
+    expect(query.axis("body").groupBy()).not.toHaveProperty("filter");
+    // One axis per level whatever its flag; the flag is `true` or absent.
+    expect(() => query.groupsFrom([{ field: "body" }, { field: "body", repeated: true }])).toThrow(/duplicate/);
+    expect(() => query.groupsFrom([{ field: "body", repeated: false }])).toThrow(QueryParseError);
+    expect(() => query.groupsFrom([{ field: "body", having: { count_gt: 1 } }])).toThrow(QueryParseError);
+    // An axis whose drill cannot tell its empty group apart cannot list repeated values.
+    expect(query.axis("metadata.kind").repeatable).toBe(false);
+    expect(() => query.groupsFrom([{ field: "metadata.kind", repeated: true }])).toThrow(/repeated values/);
+    expect(() => query.group({ field: "sent_at", granularity: "month_number", repeated: true })).toThrow(/repeated values/);
+    expect(ResourceQuery.forRows({ fields: { body: { scalar: "String" } } }).axis("body").repeatable).toBe(false);
+  });
   test("rejects ambiguous identity aliases independently of declaration order", () => {
     const fields = {
       owner: { kind: "relation" as const, identityPath: "person.id", labelPath: "person.name" },

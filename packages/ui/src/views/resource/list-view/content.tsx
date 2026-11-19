@@ -145,6 +145,8 @@ export function ListViewContent<TRow extends Row = Row>({
     search: searchDeclaration,
     inferOptions: !source,
     serverGrouping: !clientRowModel,
+    // An authored source's groups document owns its own variables.
+    repeatable: !source && !clientRowModel,
     columns: resolvedColumns,
     rows: surface.rows,
     modelMetadata,
@@ -267,6 +269,7 @@ export function ListViewContent<TRow extends Row = Row>({
       filter: surface.mergedFilter,
       // Scope snapshots are shared Rows; narrow to the declared row type (see bulkActions).
       selectedRows: resourceView.selectedRows as readonly TRow[],
+      selectedGroups: resourceView.selectedGroups(effectiveGroupStack),
     }) : null;
   const genericSelection = !source && modelMetadata ? {
     modelMetadata,

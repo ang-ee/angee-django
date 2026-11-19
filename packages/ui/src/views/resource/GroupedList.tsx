@@ -34,7 +34,7 @@ import {
 } from "../../ui/table";
 import { textRoleVariants } from "../../ui/text";
 import { depthIndent } from "../../ui/tree";
-import type { ResourceViewContextValue } from "./resource-view-context";
+import type { ResourceViewContextValue, SelectionGroupPath } from "./resource-view-context";
 import type { ListViewNavigationScope, ResourceListSnapshot } from "./resource-view-surface";
 import {
   ALIGN_CLASS,
@@ -168,10 +168,12 @@ export function GroupedListBody<TRow extends Row>({
       <Glyph name={anyExpanded ? "chevron-down" : "chevron-right"} className="size-3.5" />
     </button>
   ) : null;
-  // Loaded record ids per group (nested groups included) and for the whole list.
-  const { groupRowIds, loadedRowIds } = React.useMemo(() => {
+  // Loaded record ids per group (nested groups included) and for the whole list,
+  // and each loaded record's group path, which its selection captures.
+  const { groupRowIds, loadedRowIds, groupPaths } = React.useMemo(() => {
     const byGroup = new Map<string, string[]>();
     const all: string[] = [];
+    const paths = new Map<string, SelectionGroupPath>();
     const open: { depth: number; key: string }[] = [];
     for (const item of listItems) {
       if (item.kind === "groupHeader") {
@@ -180,13 +182,14 @@ export function GroupedListBody<TRow extends Row>({
         byGroup.set(item.bucketKey, []);
       } else if (item.kind === "record") {
         all.push(item.row.id);
+        paths.set(item.row.id, item.groupPath);
         for (const group of open) byGroup.get(group.key)!.push(item.row.id);
       }
     }
-    return { groupRowIds: byGroup, loadedRowIds: all };
+    return { groupRowIds: byGroup, loadedRowIds: all, groupPaths: paths };
   }, [listItems]);
   const rowSelection = resourceView.state.rowSelection;
-  const { setRowSelection } = resourceView;
+  const { setRowSelection, toggleSelectedId } = resourceView;
   const selectIds = React.useCallback((ids: readonly string[], selected: boolean) => {
     setRowSelection((current) => {
       const next = { ...current };
@@ -195,8 +198,10 @@ export function GroupedListBody<TRow extends Row>({
         else delete next[id];
       }
       return next;
-    }, (id) => table.getCoreRowModel().rowsById[id]?.original);
-  }, [setRowSelection, table]);
+    }, (id) => table.getCoreRowModel().rowsById[id]?.original, (id) => groupPaths.get(id));
+  }, [setRowSelection, table, groupPaths]);
+  const toggleRow = React.useCallback((id: string, selected?: boolean, row?: TRow) =>
+    toggleSelectedId(id, selected, row, groupPaths.get(id)), [toggleSelectedId, groupPaths]);
   const selectedCount = loadedRowIds.filter((id) => rowSelection[id]).length;
 
   return (
@@ -300,6 +305,7 @@ export function GroupedListBody<TRow extends Row>({
                       groupRowIds={groupRowIds}
                       rowSelection={rowSelection}
                       onSelectIds={selectIds}
+                      onToggleRow={toggleRow}
                       onPageChange={setScopePage}
                       onPageSizeChange={setScopePageSize}
                       loadingLabel={t("list.loading")}
@@ -364,6 +370,7 @@ interface GroupedItemRowProps<TRow extends Row> {
   groupRowIds: ReadonlyMap<string, readonly string[]>;
   rowSelection: Readonly<Record<string, boolean>>;
   onSelectIds: (ids: readonly string[], selected: boolean) => void;
+  onToggleRow: (id: string, selected?: boolean, row?: TRow) => void;
   onPageChange: (key: string, page: number) => void;
   onPageSizeChange: (key: string, pageSize: number) => void;
   loadingLabel: React.ReactNode;
@@ -389,6 +396,7 @@ function GroupedItemRow<TRow extends Row>({
   groupRowIds,
   rowSelection,
   onSelectIds,
+  onToggleRow,
   onPageChange,
   onPageSizeChange,
   loadingLabel,
@@ -426,7 +434,7 @@ function GroupedItemRow<TRow extends Row>({
         <RecordRow
           row={item.row}
           selected={Boolean(resourceView.state.rowSelection[item.row.id])}
-          onToggleSelected={resourceView.toggleSelectedId}
+          onToggleSelected={onToggleRow}
           selectable={selectable}
           // The grouped colgroup/header reserve a leading chevron column on every
           // row, so a record row must keep it even when selection is off — else its

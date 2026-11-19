@@ -667,6 +667,9 @@ _PERSON_RESOURCE = hasura_model_resource(
     groupable=list(
         dict.fromkeys(
             [
+                "display_name",
+                "given_name",
+                "family_name",
                 "created_at",
                 *declared_hasura_resource_fields(Person, "hasura_groupable_fields"),
             ]
@@ -738,6 +741,8 @@ _ORGANIZATION_RESOURCE = hasura_model_resource(
     groupable=list(
         dict.fromkeys(
             [
+                "display_name",
+                "legal_name",
                 "domain",
                 "created_at",
                 *declared_hasura_resource_fields(Organization, "hasura_groupable_fields"),

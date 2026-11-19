@@ -123,7 +123,8 @@ export function resourceViewSearchToState(
 
 export function normaliseGroupStack(groups: unknown): readonly ResourceViewGroup[] {
   const parsed = v.parse(GroupSpecsSchema, groups);
-  const keys = parsed.map(serializeResourceViewGroup);
+  // A level's axis is its field and granularity; `repeated` only filters its groups.
+  const keys = parsed.map(({ field, granularity }) => `${field}:${granularity ?? ""}`);
   if (new Set(keys).size !== keys.length) throw new QueryParseError("groups", "duplicate group axis");
   return parsed;
 }
@@ -245,17 +246,22 @@ function parseResourceViewSort(value: string): ResourceViewSort | null {
   return { field, dir };
 }
 
+/** A level's URL spelling: `field`, `field:granularity`, either ending in `:repeated` for `GroupSpec.repeated`. */
+const REPEATED_GROUP = "repeated";
+
 function parseResourceViewGroup(value: string): ResourceViewGroup | null {
   if (!value) return null;
-  const [field, granularity, extra] = value.split(":");
+  const segments = value.split(":");
+  const repeated = segments.length > 1 && segments.at(-1) === REPEATED_GROUP;
+  const [field, granularity, extra] = repeated ? segments.slice(0, -1) : segments;
   if (!field || !/^[_A-Za-z][_0-9A-Za-z]*(?:\.[_A-Za-z][_0-9A-Za-z]*)*$/.test(field) || extra !== undefined || granularity === "") {
-    throw new QueryParseError("group", "expected field or field:granularity");
+    throw new QueryParseError("group", "expected field or field:granularity, optionally followed by :repeated");
   }
-  return { field, ...(granularity ? { granularity } : {}) };
+  return { field, ...(granularity ? { granularity } : {}), ...(repeated ? { repeated: true } : {}) };
 }
 
 export function serializeResourceViewGroup(group: ResourceViewGroup): string {
-  return group.granularity ? `${group.field}:${group.granularity}` : group.field;
+  return [group.field, ...(group.granularity ? [group.granularity] : []), ...(group.repeated ? [REPEATED_GROUP] : [])].join(":");
 }
 
 function parseResourceViewGroupStack(value: string): readonly ResourceViewGroup[] | null {

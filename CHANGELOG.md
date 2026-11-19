@@ -10,6 +10,20 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Grouped lists find repeated values. People group by `display_name`,
+  `given_name` and `family_name`, Organizations by `display_name` and
+  `legal_name`, beside their existing axes (`people_groups` and
+  `organizations_groups` gain those group-by values). A group level's
+  `repeated` (`GroupSpec`, "Repeated values only", `?group=display_name:repeated`)
+  makes the server group read keep only groups of more than one record the actor
+  reads (`having: {count_gt: 1}`) and leave out the records with no value (null,
+  and blank text), so counts and group pages are the repeated groups'; an axis
+  whose drill cannot tell its empty group apart refuses it. A page's
+  `bulkActions` receives `collection.selectedGroups`: absent on a flat list,
+  `null` when a selected id cannot be placed, else the selection split by its
+  innermost groups with their parents. `SelectionBarAction` takes a
+  `disabledReason`, shown beside the verb in the bar as its description.
+
 - `angee.knowledge_integrate_notion`: a token of another workspace fails
   discovery. Notion's discovery called `GET /v1/users/me` and recorded nothing,
   so an internal token of another workspace, re-entered on a connection, passed

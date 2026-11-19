@@ -22,6 +22,10 @@ export interface GroupProjection {
   orderBy: readonly { field: string; direction: "ASC"; nulls: "LAST" }[];
   valueKey: string;
   labelKey?: string;
+  /** A `repeated` group's HAVING: only groups of more than one record. */
+  having?: { readonly count_gt: number };
+  /** A `repeated` group's records: those with a value on the axis, combined with the read's filter. */
+  filter?: QueryFilter;
 }
 
 const TEXT_OPERATORS: readonly FilterOperator[] = [
@@ -167,10 +171,7 @@ export class ResourceQuery {
   }
 
   axis(field: string, granularity?: string): GroupAxis {
-    const canonical = this.canonicalAxisField(field);
-    const declaration = canonical === undefined ? undefined : this.contract.axes[canonical];
-    if (canonical === undefined || !declaration) throw new QueryParseError(`groups.${field}`, "unknown group axis");
-    return new GroupAxis(this, declaration, { field: canonical, ...(granularity ? { granularity } : {}) });
+    return this.group({ field, ...(granularity ? { granularity } : {}) });
   }
 
   /** Resolve a declared axis or its unique identity path; labels never identify axes. */
@@ -181,7 +182,14 @@ export class ResourceQuery {
     return matches[0]?.[0];
   }
 
-  group(spec: GroupSpec): GroupAxis { return this.axis(spec.field, spec.granularity); }
+  group(spec: GroupSpec): GroupAxis {
+    const canonical = this.canonicalAxisField(spec.field);
+    const declaration = canonical === undefined ? undefined : this.contract.axes[canonical];
+    if (canonical === undefined || !declaration) throw new QueryParseError(`groups.${spec.field}`, "unknown group axis");
+    return new GroupAxis(this, declaration, {
+      field: canonical, ...(spec.granularity ? { granularity: spec.granularity } : {}), ...(spec.repeated ? { repeated: true } : {}),
+    });
+  }
 
   relation(field: string): QueryField["relation"] { return this.fields[field]?.relation; }
 
@@ -469,9 +477,30 @@ export class GroupAxis {
     this.id = spec.granularity ? `${spec.field}:${spec.granularity}` : spec.field;
     this.extraction = spec.granularity ? declaration.extractions.find((item) => item.name === spec.granularity) : undefined;
     if (spec.granularity && !this.extraction) throw new QueryParseError(`groups.${spec.field}.granularity`, `unsupported extraction "${spec.granularity}"`);
+    if (spec.repeated && !this.repeatable) throw new QueryParseError(`groups.${spec.field}.repeated`, "axis cannot list only its repeated values");
   }
   get field(): string { return this.spec.field; }
   get granularity(): string | undefined { return this.spec.granularity; }
+  /** Whether a server group read can list only this axis's repeated values (`GroupSpec.repeated`). */
+  get repeatable(): boolean { return this.valued() !== undefined; }
+  /**
+   * The records with a value on this axis: the null group, and a text column's blank
+   * group, left out, since a missing value is not a repeated one. Undefined when the
+   * axis has no server read or its drill cannot tell those groups apart.
+   */
+  private valued(): QueryFilter | undefined {
+    const drill = this.extraction ? this.extraction.drill : this.declaration.drill;
+    if (!this.declaration.server || !drill || drill.nullMode !== "isNull") return undefined;
+    const filter = this.query.fields[drill.field]?.filter;
+    if (!filter) return undefined;
+    const blank = filter.scalar === "String" || filter.values.some(({ value }) => value === "");
+    if (blank && !filter.operators.includes("ne")) return undefined;
+    const comparisons = {
+      ...(filter.operators.includes("isNull") ? { isNull: false } : {}),
+      ...(blank ? { ne: "" } : {}),
+    };
+    return Object.keys(comparisons).length ? this.query.filterFrom({ [drill.field]: comparisons }) : {};
+  }
   get selection(): string[] {
     if (!this.declaration.identityPath) throw new QueryParseError(`groups.${this.field}`, "axis does not support client grouping");
     return [...this.declaration.paths];
@@ -509,7 +538,12 @@ export class GroupAxis {
     const label = server.labelInput && server.labelKey ? { input: server.labelInput, key: server.labelKey } : undefined;
     // Labels are not unique: identity breaks ties so bucket pages remain stable.
     const order = label ? [label, identity] : [identity];
-    return { dimensions: label ? [identity, label] : [identity], valueKey: identity.key, ...(label ? { labelKey: label.key } : {}), orderBy: order.map(({ key }) => ({ field: key, direction: "ASC", nulls: "LAST" })) };
+    return {
+      dimensions: label ? [identity, label] : [identity], valueKey: identity.key, ...(label ? { labelKey: label.key } : {}),
+      orderBy: order.map(({ key }) => ({ field: key, direction: "ASC", nulls: "LAST" })),
+      // The server owns both, so counts and group pages are those of the repeated groups.
+      ...(this.spec.repeated ? { having: { count_gt: 1 }, filter: this.valued()! } : {}),
+    };
   }
   bucketIdentity(bucket: GroupBucket): FilterPrimitive {
     const key = this.groupBy().valueKey;

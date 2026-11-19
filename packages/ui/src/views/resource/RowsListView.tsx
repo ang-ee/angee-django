@@ -269,6 +269,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
                   filter: surface.mergedFilter,
                   // Scope snapshots are shared Rows; narrow to the declared row type (see bulkActions).
                   selectedRows: resourceView.selectedRows as readonly TRow[],
+                  selectedGroups: resourceView.selectedGroups(effectiveGroupStack),
                 })
                 : undefined,
             }

@@ -34,6 +34,8 @@ export {
   type ListViewNavigationScope,
   type ResourceListSnapshot,
   type ColumnAlign,
+  type SelectedGroup,
+  type SelectedGroupLevel,
 } from "./resource/ListView";
 export {
   useListRecordNavigation,

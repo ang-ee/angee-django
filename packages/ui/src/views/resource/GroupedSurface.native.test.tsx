@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import * as React from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { GetListParams } from "@refinedev/core";
 import { ResourceQuery, schemaFieldMetadataFromDataResources, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
@@ -238,6 +238,113 @@ test("the rendered ListView displays a failed root group query instead of empty 
   expect(getList).not.toHaveBeenCalled();
 });
 
+
+const taskContract = ResourceQuery.forRows({ fields: {
+  id: { scalar: "ID" }, title: { scalar: "String" }, status: { scalar: "String" },
+  owner: { scalar: "String" }, kind: { scalar: "String" },
+} }).contract;
+for (const field of ["status", "owner", "kind"]) {
+  taskContract.axes[field]!.server = { input: field, key: field };
+  taskContract.axes[field]!.drill = { kind: "value", field, valueKey: field, nullMode: "isNull", valueMap: [] };
+}
+const taskResource = testDataResource("notes.Task", {
+  roots: { groups: "tasks_groups", aggregate: "tasks_aggregate" }, typeNames: { filter: "TaskBoolExp", order: "TaskOrderBy" },
+  query: taskContract,
+  fields: ["id", "title", "status", "owner", "kind"].map((name) => ({ name, kind: "scalar", scalar: "String", readable: true,
+    aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false })),
+});
+const tasks: Row[] = [
+  { id: "t1", title: "Task 1", status: "active", owner: "Ada", kind: "Same" },
+  { id: "t2", title: "Task 2", status: "active", owner: "Bo", kind: "Same" },
+  { id: "t3", title: "Task 3", status: "closed", owner: "Ada", kind: "Other" },
+];
+/** The few Hasura predicates the grouped list sends: equality, conjunction. */
+function matchesWhere(row: Row, where: Record<string, unknown> | undefined): boolean {
+  return Object.entries(where ?? {}).every(([key, condition]) => key === "_and"
+    ? (condition as Record<string, unknown>[]).every((branch) => matchesWhere(row, branch))
+    : row[key] === (condition as { _eq: unknown })._eq);
+}
+
+function selectedGroupsFixture(initialState: Record<string, unknown>) {
+  const seen: unknown[] = [];
+  const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
+    const variables = meta!.gqlVariables as { group_by: { field: string }[]; where?: Record<string, unknown>; rows_limit?: number };
+    const field = variables.group_by[0]!.field;
+    const rows = tasks.filter((row) => matchesWhere(row, variables.where));
+    const keys = [...new Set(rows.map((row) => String(row[field])))].sort();
+    return { data: { tasks_groups: keys.map((key) => {
+      const members = rows.filter((row) => row[field] === key);
+      return { key: { [field]: key }, aggregate: { count: members.length }, rows: members.slice(0, variables.rows_limit ?? 0) };
+    }), totalCount: keys.length } };
+  });
+  const getList = vi.fn(async () => ({ data: tasks, total: tasks.length }));
+  let view!: ResourceViewContextValue;
+  function Probe() { view = useResourceView(); return null; }
+  render(
+    <Provider resources={[taskResource]} apiUrl="test://selected-groups" dataProvider={{ custom, getList }}
+      queryClientConfig={{ defaultOptions: { queries: { retry: false } } }}>
+      <OperationDocumentsProvider documents={{ console: { groups: { "notes.Task": "query Groups { tasks_groups { key } totalCount }" } } }}>
+        <ToastProvider>
+          <ResourceViewProvider resource={taskResource.modelLabel} scope="local" initialState={initialState}>
+            <Probe />
+            <ListView resource={taskResource.modelLabel} columns={[{ field: "title", header: "Title" }]} scope="inherit"
+              bulkActions={(_ids, _clear, collection) => { seen.push(collection.selectedGroups); return null; }} />
+          </ResourceViewProvider>
+        </ToastProvider>
+      </OperationDocumentsProvider>
+    </Provider>,
+  );
+  const select = async (title: string) => {
+    const row = (await screen.findByText(title)).closest("tr")!;
+    fireEvent.click(within(row).getByRole("checkbox", { name: "Select row" }));
+  };
+  return { select, get view() { return view; }, get selectedGroups() { return seen.at(-1); } };
+}
+
+test("a flat list offers no group split to its bulk actions", async () => {
+  const f = selectedGroupsFixture({});
+  await f.select("Task 1");
+  await waitFor(() => expect(f.view.state.rowSelection).toEqual({ t1: true }));
+  expect(f.selectedGroups).toBeUndefined();
+});
+
+test("a grouped selection splits by group in display order and keeps a row's group after its page unloads", async () => {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status" }] });
+  await f.select("Task 3");
+  await f.select("Task 1");
+  await waitFor(() => expect(f.selectedGroups).toEqual([
+    { field: "status", key: "active", label: "active", parents: [], ids: ["t1"] },
+    { field: "status", key: "closed", label: "closed", parents: [], ids: ["t3"] },
+  ]));
+  // Collapsing "active" unloads its rows; the selected row keeps the group it was selected in.
+  fireEvent.click(screen.getByRole("button", { name: "active" }));
+  await waitFor(() => expect(screen.queryByText("Task 1")).toBeNull());
+  await f.select("Task 3");
+  await waitFor(() => expect(f.selectedGroups).toEqual([
+    { field: "status", key: "active", label: "active", parents: [], ids: ["t1"] },
+  ]));
+});
+
+test("a nested grouping keeps same-label inner groups under different parents apart", async () => {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "owner" }, { field: "kind" }] });
+  // Nested groups open on demand: one "Same" under Ada, one under Bo.
+  await waitFor(() => expect(screen.getAllByRole("button", { name: "Same" })).toHaveLength(2));
+  for (const inner of screen.getAllByRole("button", { name: "Same" })) fireEvent.click(inner);
+  await f.select("Task 2");
+  await f.select("Task 1");
+  await waitFor(() => expect(f.selectedGroups).toEqual([
+    { field: "kind", key: "Same", label: "Same", parents: [{ field: "owner", key: "Ada", label: "Ada" }], ids: ["t1"] },
+    { field: "kind", key: "Same", label: "Same", parents: [{ field: "owner", key: "Bo", label: "Bo" }], ids: ["t2"] },
+  ]));
+});
+
+test("a grouped selection holding an id no group placed offers no split rather than a partial one", async () => {
+  // A programmatic selection holds the id without its row or group.
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status" }], selectedIds: ["t3"] });
+  await f.select("Task 1");
+  await waitFor(() => expect(f.view.state.rowSelection).toEqual({ t3: true, t1: true }));
+  expect(f.selectedGroups).toBeNull();
+});
 
 test("an unbound ambient view reports invalid sorting before the list can request rows", async () => {
   const getList = vi.fn(async () => ({ data: [], total: 0 }));

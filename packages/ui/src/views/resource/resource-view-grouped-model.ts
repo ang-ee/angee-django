@@ -27,6 +27,7 @@ import {
 import type { UiTranslate } from "../../i18n";
 import { errorFromUnknown } from "../../data/errors";
 import type { CollectionGroupRequest } from "./collection-source";
+import type { SelectionGroupPath } from "./resource-view-context";
 
 /** Default size of a server-grouped bucket's first page; a source may declare its own. */
 const GROUPED_LEAF_PAGE_SIZE = 20;
@@ -128,6 +129,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
     bucket: AggregateBucket,
     depth: number,
     groups: GroupedQueryResult,
+    groupPath: SelectionGroupPath,
   ): GroupedListPager => {
     const pagination = paginationByScope[bucketKey];
     const leafPageSize = pagination?.pageSize ?? declaredLeafPageSize;
@@ -196,6 +198,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
           itemKey: `${bucketKey}:${row.id}`,
           row,
           nav,
+          groupPath,
         });
       }
     }
@@ -212,6 +215,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
   const walkLevel = (
     depth: number,
     parentFilter: ResourceViewFilter | undefined,
+    parentPath: SelectionGroupPath,
   ): GroupedListPager | undefined => {
     const axisGroup = groupStack[depth];
     if (!axisGroup) return;
@@ -219,7 +223,8 @@ export function buildGroupedRenderModel<TRow extends Row>(
       throw new Error("Resource metadata is required for server grouping.");
     const axis = resourceQuery.group(axisGroup);
     const projection = axis.groupBy();
-    const levelWhere = resourceQuery.toWhere(parentFilter);
+    // A repeated level reads only its valued records, and HAVING keeps its repeated groups.
+    const levelWhere = resourceQuery.toWhere(parentFilter, projection.filter);
     const levelScopeKey = stableSerialize({
       axis: axis.spec,
       filter: parentFilter ?? null,
@@ -234,6 +239,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
       dimensions: projection.dimensions,
       ...(projection.orderBy ? { orderBy: projection.orderBy } : {}),
       ...(levelWhere !== undefined ? { where: levelWhere } : {}),
+      ...(projection.having ? { having: projection.having } : {}),
       measures: queryMeasures,
       page: storedPage,
       pageSize: levelPageSize,
@@ -299,7 +305,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
       return pager;
     }
 
-    for (const bucket of result.buckets) {
+    for (const [index, bucket] of result.buckets.entries()) {
       const bucketFilter = axis.drill(bucket);
       const expandable = bucketFilter !== undefined;
       const bucketKey = stableSerialize({
@@ -331,14 +337,21 @@ export function buildGroupedRenderModel<TRow extends Row>(
       items.push(header);
       if (!expanded || bucketFilter === undefined) continue;
       const cumulativeFilter = Filter.combine(parentFilter ?? {}, bucketFilter);
+      const identity = axis.bucketIdentity(bucket);
+      const groupPath: SelectionGroupPath = [...parentPath, {
+        group: axis.spec,
+        key: identity === null ? null : String(identity),
+        label,
+        position: (storedPage - 1) * levelPageSize + index,
+      }];
       header.pager = isLeafLevel
-        ? emitLeaf(bucketKey, cumulativeFilter, bucket, depth, result)
-        : walkLevel(depth + 1, cumulativeFilter);
+        ? emitLeaf(bucketKey, cumulativeFilter, bucket, depth, result, groupPath)
+        : walkLevel(depth + 1, cumulativeFilter, groupPath);
     }
     return pager;
   };
 
-  walkLevel(0, baseFilter);
+  walkLevel(0, baseFilter, []);
   return { groupScopes, leafScopes, leafKeys, carriedLeaves, items, rootResult };
 }
 

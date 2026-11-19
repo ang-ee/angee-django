@@ -62,7 +62,13 @@ def test_public_resource_metadata_declares_people_surface() -> None:
         "updated_at",
     }
     assert metadata.aggregate_fields == ("id",)
-    assert set(metadata.query.axes) == {"created_at"}
+    assert set(metadata.query.axes) == {"display_name", "given_name", "family_name", "created_at"}
+    # A repeated-values read leaves the null and blank name groups out through these filters.
+    for name in ("display_name", "given_name", "family_name"):
+        name_filter = metadata.query.fields[name].filter
+        assert name_filter is not None
+        assert name_filter.scalar == "String"
+        assert {"isNull", "ne"} <= set(name_filter.operators)
     assert metadata.capabilities == (
         "list",
         "detail",
@@ -85,17 +91,22 @@ def test_public_resource_metadata_declares_people_surface() -> None:
     assert person["roots"]["create"] == "insert_people_one"
     assert person["roots"]["update"] == "update_people_by_pk"
     assert person["roots"]["delete"] is None
-    assert list(person["query"]["axes"]) == ["created_at"]
+    # The name axes come first, so the list offers them before "Created".
+    assert list(person["query"]["axes"]) == ["display_name", "given_name", "family_name", "created_at"]
     group_dimensions = person["query"]["axes"]
     assert {
         field: (
             dimension["server"]["input"],
             dimension["server"]["key"],
             dimension["kind"],
+            dimension["drill"]["field"],
         )
         for field, dimension in group_dimensions.items()
     } == {
-        "created_at": ("CREATED_AT", "created_at", "date"),
+        "display_name": ("DISPLAY_NAME", "display_name", "column", "display_name"),
+        "given_name": ("GIVEN_NAME", "given_name", "column", "given_name"),
+        "family_name": ("FAMILY_NAME", "family_name", "column", "family_name"),
+        "created_at": ("CREATED_AT", "created_at", "date", "created_at"),
     }
     created_at_extractions = {
         extraction["name"]: extraction for extraction in group_dimensions["created_at"]["extractions"]
@@ -369,6 +380,101 @@ def test_handle_aggregate_includes_unresolved_rows(db: None) -> None:
         party.sqid: 1,
     }
     assert result["groups_count"] == 2
+
+
+def test_organizations_group_by_their_names_beside_domain_and_created() -> None:
+    """Organization offers its names first, then its existing axes, each with its drill filter."""
+
+    resources = {item.model_label: item for item in _schema("public").angee_resources}
+    axes = resources["parties.Organization"].query.axes
+
+    assert list(axes) == ["display_name", "legal_name", "domain", "created_at"]
+    assert all(axis.drill is not None and axis.drill.field == name for name, axis in axes.items())
+
+
+def test_people_group_by_display_name_and_drill_to_a_groups_rows(db: None) -> None:
+    """One group per stored name with its count; the drill reads exactly that group's rows."""
+
+    admin = _platform_admin("people-name-groups-admin")
+    with system_context(reason="test.parties.people_name_groups.seed"):
+        first = Person.objects.create(display_name="Ada Lovelace", created_by_id=admin.pk)
+        second = Person.objects.create(display_name="Ada Lovelace", created_by_id=admin.pk)
+        Person.objects.create(display_name="Grace Hopper", created_by_id=admin.pk)
+
+    result = _data(
+        execute_schema(
+            _schema("public"),
+            """
+            query PeopleByName {
+              groups: people_groups(group_by: [{field: DISPLAY_NAME}], limit: 10) {
+                key { display_name }
+                aggregate { count }
+              }
+              groups_count: people_groups_count(group_by: [{field: DISPLAY_NAME}])
+              ada: people(where: {display_name: {_eq: "Ada Lovelace"}}) { id }
+            }
+            """,
+            user=admin,
+        )
+    )
+
+    assert {group["key"]["display_name"]: group["aggregate"]["count"] for group in result["groups"]} == {
+        "Ada Lovelace": 2,
+        "Grace Hopper": 1,
+    }
+    assert result["groups_count"] == 2
+    assert {row["id"] for row in result["ada"]} == {first.sqid, second.sqid}
+
+
+def test_repeated_name_groups_count_only_the_rows_the_actor_reads(db: None) -> None:
+    """A repeated-values read (count > 1, no empty name) counts the actor's rows, never the table.
+
+    A name shared by one visible and one hidden person is not repeated for that actor:
+    listing it would reveal that a hidden record of that name exists.
+    """
+
+    admin = _platform_admin("people-repeated-admin")
+    reader = User.objects.create_user(username="people-repeated-reader")
+    with system_context(reason="test.parties.people_repeated.seed"):
+        for name, readable in (
+            ("Ada Lovelace", True),
+            ("Ada Lovelace", False),
+            ("Grace Hopper", True),
+            ("Grace Hopper", True),
+            ("", True),
+            ("", True),
+            ("Solo", True),
+        ):
+            person = Person.objects.create(display_name=name, created_by_id=admin.pk)
+            if readable:
+                _grant_reader(person, reader)
+
+    query = """
+        query RepeatedNames {
+          groups: people_groups(
+            group_by: [{field: DISPLAY_NAME}]
+            where: {display_name: {_is_null: false, _neq: ""}}
+            having: {count_gt: 1}
+            limit: 10
+          ) {
+            key { display_name }
+            aggregate { count }
+          }
+          groups_count: people_groups_count(
+            group_by: [{field: DISPLAY_NAME}]
+            where: {display_name: {_is_null: false, _neq: ""}}
+            having: {count_gt: 1}
+          )
+        }
+    """
+
+    def repeated(user: Any) -> tuple[dict[str, int], int]:
+        result = _data(execute_schema(_schema("public"), query, user=user))
+        groups = {group["key"]["display_name"]: group["aggregate"]["count"] for group in result["groups"]}
+        return groups, result["groups_count"]
+
+    assert repeated(admin) == ({"Ada Lovelace": 2, "Grace Hopper": 2}, 2)
+    assert repeated(reader) == ({"Grace Hopper": 2}, 1)
 
 
 def test_circle_console_insert_establishes_private_creator_access(

@@ -148,6 +148,24 @@ export interface CardActionContext {
   refresh: () => void;
 }
 
+/** One group of the list's grouping as its header shows it. */
+export interface SelectedGroupLevel {
+  /** The axis as the resource declares it: `display_name`. */
+  field: string;
+  /** The group's stored value, as its rows read it; null when they store none. */
+  key: string | null;
+  /** What the group header shows, the list's own wording for an empty group included. */
+  label: string;
+}
+
+/** The selected rows of one innermost group (`bulkActions` → `selectedGroups`). */
+export interface SelectedGroup extends SelectedGroupLevel {
+  /** The enclosing groups, outermost first; [] at the root. */
+  parents: readonly SelectedGroupLevel[];
+  /** The group's selected rows, in selection order. */
+  ids: readonly string[];
+}
+
 /**
  * What a card renderer knows about the card it draws, discriminated by the
  * surface: narrow on `kind` before reading a board-only fact.
@@ -373,12 +391,25 @@ export interface ListViewProps<TRow extends Row = Row> {
    * must validate them, for example by revision. Surfaces sharing a selection
    * scope share its snapshots: a row selected through a sibling surface carries
    * that surface's fields, so actions must check the fields they need.
+   * selectedGroups is the selection split by the list's active grouping, in three
+   * states: absent (undefined) when the list is not grouped; null when it is
+   * grouped but at least one selected id cannot be placed in a group (selected
+   * while the list was flat or grouped otherwise, or by a select-all that holds
+   * ids without rows), so no split is offered, never a partial one; otherwise one
+   * entry per innermost group holding a selected row, in display order, every
+   * selected id in exactly one entry. A row keeps the group it was selected in
+   * after its page unloads. Like filter it is descriptive: the server does not
+   * check it.
    * Rendered content precedes the generic metadata-driven Archive, Trash/Restore
    * and Delete actions. A source list receives only these page-owned actions. */
   bulkActions?: (
     selectedIds: ReadonlySet<string>,
     clear: () => void,
-    collection: { filter: QueryFilter; selectedRows: readonly TRow[] },
+    collection: {
+      filter: QueryFilter;
+      selectedRows: readonly TRow[];
+      selectedGroups?: readonly SelectedGroup[] | null;
+    },
   ) => ReactNode;
   /** Optional action content rendered in each board card footer. */
   cardActions?: (row: TRow, context: CardActionContext) => ReactNode;

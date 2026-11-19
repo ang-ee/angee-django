@@ -4,8 +4,8 @@ import { Glyph } from "../../../chrome/Glyph";
 import { useUiT, type UiTranslate } from "../../../i18n";
 import { Button } from "../../../ui/button";
 import { Select } from "../../../ui/select";
+import { SwitchRow } from "../../../ui/switch";
 import type { ResourceToolbarGroupOption } from "../../../toolbars/ResourceToolbar";
-import { serializeResourceViewGroup } from "../model/search";
 import { resourceViewGroupsEqual } from "../resource-view-model";
 import { labelText } from "../resource-view-utils";
 import type { ResourceSearch, SearchActiveItem } from "./types";
@@ -44,7 +44,8 @@ export function GroupStackPanel({ search }: { search: ResourceSearch }): React.R
     <section>
       <h3 className="mb-2 px-2 text-13 font-semibold">{t("search.levels")}</h3>
       <ol aria-label={t("search.levels")} className="grid gap-1">
-        {levels.map((item) => <GroupLevel key={serializeResourceViewGroup(item.level)} item={item}
+        {/* Keyed by axis, so toggling a level's repeated values keeps its row and focus. */}
+        {levels.map((item) => <GroupLevel key={`${item.level.field}:${item.level.granularity ?? ""}`} item={item}
           search={search} axis={catalog.groups.find((axis) => axis.group.field === item.level.field)} />)}
       </ol>
       {levels.length > 0 ? <Button type="button" variant="ghost" size="sm"
@@ -118,6 +119,12 @@ function GroupLevel({ item, search, axis }: {
       aria-label={t("search.levelGranularity", { label })}
       options={axis.granularities.map((value) => ({ value, label: t(`search.granularity.${value}`) }))}
       onValueChange={(granularity) => search.setGroupLevel(item.index, { ...item.level, granularity })} /> : null}
+    {axis?.repeatable ? <SwitchRow label={t("search.repeatedOnly")} checked={item.level.repeated === true}
+      disabled={!search.groupingEnabled} className="border-0 bg-transparent px-0 py-0"
+      onCheckedChange={(repeated) => {
+        const { field, granularity } = item.level;
+        search.setGroupLevel(item.index, { field, ...(granularity ? { granularity } : {}), ...(repeated ? { repeated: true } : {}) });
+      }} /> : null}
   </li>;
 }
 

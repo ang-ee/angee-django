@@ -308,6 +308,7 @@ export const enUiMessages: Record<string, string> = {
   "search.groupGranularity": "Group granularity",
   "search.levelGranularity": "Granularity for {label}",
   "search.clearGrouping": "Clear grouping",
+  "search.repeatedOnly": "Repeated values only",
   "search.moveGroupUp": "Move up {label}",
   "search.moveGroupDown": "Move down {label}",
   "search.removeGroup": "Remove {label}",

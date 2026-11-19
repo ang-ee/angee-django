@@ -113,6 +113,8 @@ export interface ResourceToolbarGroupOption {
   type?: "date" | "value";
   /** Granularities whose groups can be opened; number parts with no matching filter are left out. */
   granularities?: readonly ResourceViewGroupGranularity[];
+  /** The list's group read can list only this axis's repeated values (`GroupSpec.repeated`). */
+  repeatable?: boolean;
 }
 
 export interface ResourceToolbarCustomFilterChip {
