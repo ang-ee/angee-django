@@ -208,9 +208,15 @@ test("metadata-dependent field shortcuts are omitted in production and retain va
 });
 
 function repeatedGroupsFixture(url = "/") {
-  const contract = ResourceQuery.forRows({ fields: { status: { scalar: "String" }, payload: { kind: "json", scalar: "JSON" } } }).contract;
+  const contract = ResourceQuery.forRows({ fields: {
+    status: { scalar: "String" }, payload: { kind: "json", scalar: "JSON" }, created: { scalar: "DateTime" },
+  } }).contract;
   contract.axes.status!.server = { input: "STATUS", key: "status" };
   contract.axes.status!.drill = { kind: "value", field: "status", valueKey: "status", nullMode: "isNull", valueMap: [] };
+  // A month opens through its range; a week has no drill, so it cannot leave out its empty group.
+  const created = contract.axes.created!;
+  contract.axes.created = { ...created, server: { input: "CREATED", key: "created" }, extractions: created.extractions.map((extraction) =>
+    extraction.name === "month" ? { ...extraction, drill: { kind: "range", field: "created", valueKey: "month", rangeKey: "month_range", nullMode: "isNull", valueMap: [] } } : extraction) };
   // JSON paths are values of their own: this axis cannot tell its empty group apart.
   contract.axes.payload!.server = { input: "PAYLOAD", key: "payload" };
   const resourceQuery = ResourceQuery.from(testDataResource("test.Record", { query: contract }));
@@ -218,7 +224,8 @@ function repeatedGroupsFixture(url = "/") {
   function Panel() {
     view = useResourceView();
     const result = useSearchCatalog({ resourceView: view, query: resourceQuery, serverGrouping: true, appliesRepeated: true,
-      columns: [{ field: "status", header: "Status" }, { field: "payload", header: "Payload" }], rows: [], modelMetadata: null });
+      columns: [{ field: "status", header: "Status" }, { field: "payload", header: "Payload" }, { field: "created", header: "Created" }],
+      rows: [], modelMetadata: null });
     return <GroupStackPanel search={useResourceSearch({ resourceView: view, catalog: result })} />;
   }
   const root = createRootRoute();
@@ -253,4 +260,10 @@ test("Repeated values only is a level's toggle while it groups, kept in the URL 
   await waitFor(() => expect(reloaded.view.state.groupStack).toEqual([]));
   expect(reloaded.router.state.location.search).not.toHaveProperty("group");
   expect(screen.queryByRole("switch", { name: "Repeated values only for Status" })).toBeNull();
+});
+
+test("the switch is decided per level: a date axis lists repeated months, not weeks it cannot drill", async () => {
+  repeatedGroupsFixture("/?group=created%3Amonth&then=created%3Aweek");
+  await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(2));
+  expect(screen.getAllByRole("switch").map((toggle) => toggle.getAttribute("aria-label"))).toEqual(["Repeated values only for Created · Month"]);
 });

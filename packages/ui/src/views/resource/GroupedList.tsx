@@ -34,7 +34,7 @@ import {
 } from "../../ui/table";
 import { textRoleVariants } from "../../ui/text";
 import { depthIndent } from "../../ui/tree";
-import type { ResourceViewContextValue } from "./resource-view-context";
+import { useSelectionPlaces, type ResourceViewContextValue, type SelectionPlaces } from "./resource-view-context";
 import { placedRecords } from "./resource-view-grouped-model";
 import type { ListViewNavigationScope, ResourceListSnapshot } from "./resource-view-surface";
 import {
@@ -177,7 +177,7 @@ export function GroupedListBody<TRow extends Row>({
     for (const item of listItems) {
       if (item.kind !== "record") continue;
       all.push(item);
-      for (const { bucketKey } of item.groupPath) {
+      for (const { bucketKey } of item.place.path) {
         const records = byGroup.get(bucketKey);
         if (records) records.push(item);
         else byGroup.set(bucketKey, [item]);
@@ -186,9 +186,9 @@ export function GroupedListBody<TRow extends Row>({
     return { groupRecords: byGroup, loadedRecords: all };
   }, [listItems]);
   const rowSelection = resourceView.state.rowSelection;
-  const { setRowSelection } = resourceView;
-  // Each record's selection captures the path it is shown under in these records;
-  // one shown under several paths captures none, so it cannot be placed.
+  const { setRowSelection, toggleSelectedId } = useSelectionPlaces();
+  // Ticking captures where each record is shown in these records, again for one
+  // already selected; one shown under several group paths captures none.
   const selectRecords = React.useCallback((records: readonly GroupedRecordItem<TRow>[], selected: boolean) => {
     const placed = placedRecords(records);
     setRowSelection((current) => {
@@ -302,6 +302,7 @@ export function GroupedListBody<TRow extends Row>({
                       onToggleGroup={toggleGroup}
                       groupRecords={groupRecords}
                       rowSelection={rowSelection}
+                      toggleSelectedId={toggleSelectedId}
                       onSelectRecords={selectRecords}
                       onPageChange={setScopePage}
                       onPageSizeChange={setScopePageSize}
@@ -366,6 +367,7 @@ interface GroupedItemRowProps<TRow extends Row> {
   onToggleGroup: (key: string) => void;
   groupRecords: ReadonlyMap<string, readonly GroupedRecordItem<TRow>[]>;
   rowSelection: Readonly<Record<string, boolean>>;
+  toggleSelectedId: SelectionPlaces["toggleSelectedId"];
   onSelectRecords: (records: readonly GroupedRecordItem<TRow>[], selected: boolean) => void;
   onPageChange: (key: string, page: number) => void;
   onPageSizeChange: (key: string, pageSize: number) => void;
@@ -391,6 +393,7 @@ function GroupedItemRow<TRow extends Row>({
   onToggleGroup,
   groupRecords,
   rowSelection,
+  toggleSelectedId,
   onSelectRecords,
   onPageChange,
   onPageSizeChange,
@@ -429,6 +432,7 @@ function GroupedItemRow<TRow extends Row>({
         <GroupedRecordRow
           item={item}
           resourceView={resourceView}
+          toggleSelectedId={toggleSelectedId}
           selectable={selectable}
           interactive={interactive}
           rowHref={rowHref}
@@ -458,6 +462,7 @@ type GroupedRecordItem<TRow extends Row> = Extract<GroupedListItem<TRow>, { kind
 function GroupedRecordRow<TRow extends Row>({
   item,
   resourceView,
+  toggleSelectedId,
   selectable,
   interactive,
   rowHref,
@@ -465,13 +470,12 @@ function GroupedRecordRow<TRow extends Row>({
   draggableRow,
   onRecordOpen,
   renderRowActions,
-}: Pick<GroupedItemRowProps<TRow>, "resourceView" | "selectable" | "interactive" | "rowHref" | "onRowClick"
+}: Pick<GroupedItemRowProps<TRow>, "resourceView" | "toggleSelectedId" | "selectable" | "interactive" | "rowHref" | "onRowClick"
   | "draggableRow" | "onRecordOpen" | "renderRowActions"> & { item: GroupedRecordItem<TRow> }): React.ReactElement {
-  const { nav, groupPath } = item;
-  const { toggleSelectedId } = resourceView;
-  // The row's selection captures the path it is shown under.
+  const { nav, place } = item;
+  // The row's selection captures where it is shown.
   const toggleSelected = React.useCallback((id: string, selected?: boolean, row?: TRow) =>
-    toggleSelectedId(id, selected, row, groupPath), [toggleSelectedId, groupPath]);
+    toggleSelectedId(id, selected, row, place), [toggleSelectedId, place]);
   const href = React.useMemo(() => rowHref ? (row: TRow) => rowHref(row, nav) : undefined, [rowHref, nav]);
   const open = React.useCallback(() => onRecordOpen(nav), [onRecordOpen, nav]);
   return (

@@ -116,8 +116,7 @@ test("Clear grouping clears the stack and leaves Add available", () => {
 });
 
 test("each level's Repeated values only switch is named by its level, and a set flag names the level", () => {
-  const repeatable = searchFixture({ catalog: { groups: [{ ...project, repeatable: true }, { ...status, repeatable: true }],
-    curatedGroups: [project, status] } }).catalog;
+  const repeatable = searchFixture({ catalog: { groups: [project, status], curatedGroups: [project, status], repeatable: () => true } }).catalog;
   function Content() {
     const search = useResourceSearch({ resourceView: useResourceView(), catalog: repeatable, groupingEnabled: true });
     return <GroupStackPanel search={search} />;

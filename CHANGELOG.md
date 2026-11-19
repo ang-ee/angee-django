@@ -17,20 +17,26 @@ live in code docstrings.
   `repeated` (`GroupSpec`, "Repeated values only", `?group=display_name:repeated`)
   makes the server group read keep only groups of more than one record the actor
   reads (`having: {count_gt: 1}`) and leave out the records with no value (null,
-  and blank text), so counts and group pages are the repeated groups'; an axis
-  whose drill cannot tell its empty group apart refuses it, as does a list that
-  groups without the native server read (client row model, authored `source`,
-  `RowsListView`), and a repeated grouping shows no footer totals.
-  `ResourceQuery.toGroupRead` assembles a level's read; `groupAxisId` and
-  `groupSpecsFrom` (`@angee/metadata`) own a level's axis identity and the stack
-  decoder. A page's `bulkActions` receives `collection.selectedGroups`: absent
-  on an ungrouped list, `null` when a selected row cannot be placed (selected
-  without its group, loaded now under another group or several, or on a surface
-  that places no rows: browser grouping, lane boards), else the selection split
-  by its innermost groups with their parents; a hint the server never trusts.
+  and blank text), so counts and group pages are the repeated groups'. The switch
+  is offered per level, where the level's axis at its granularity can tell its
+  empty group apart. A view switch or a URL that leaves the flag on a view grouping
+  without the native server read (client row model, authored `source`,
+  `RowsListView`, a gantt or contributed kind) drops it and keeps the grouping;
+  only an authored default asking for it is refused. A repeated grouping shows no
+  footer totals. `ResourceQuery.toGroupRead` assembles a level's read;
+  `groupAxisId` and `groupSpecsFrom` (`@angee/metadata`) own a level's axis
+  identity and the stack decoder. A page's `bulkActions` receives
+  `collection.selectedGroups`, the only read of the split: absent on an ungrouped
+  list, `null` when a selected row cannot be placed (selected without its group,
+  shown now under another group or several, missing from a page that listed it or
+  its groups and shows again, or loading; or on a surface that places no rows:
+  browser grouping, lane boards), else the selection split by its innermost groups
+  with their parents; a hint the server never trusts.
   `Button` and `SelectionBarAction` take a `disabledReason`: the verb's tooltip
-  and accessible description, focusable while disabled; the record action bar's
-  band verbs compose it.
+  and accessible description, focusable while disabled, dimmed through
+  `data-disabled`, without an `href` on a link it renders, and one element tree as
+  the reason comes and goes; an empty reason is no reason (`PaneRow` too). The
+  record action bar's band verbs compose it.
 
 - `angee.knowledge_integrate_notion`: a token of another workspace fails
   discovery. Notion's discovery called `GET /v1/users/me` and recorded nothing,

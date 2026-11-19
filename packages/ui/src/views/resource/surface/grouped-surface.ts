@@ -409,14 +409,14 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     return byScope;
   }, [leafKeys, leafResults, rowModels]);
 
-  const groupedItems = React.useMemo(
+  const { items: groupedItems, shown } = React.useMemo(
     () =>
       buildGroupedRenderModel<TRow>(
         groupByResults,
         leafResults,
         rowModelsByScopeKey,
         renderParams,
-      ).items,
+      ),
     [groupByResults, leafResults, rowModelsByScopeKey, renderParams],
   );
 
@@ -527,6 +527,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     setScopePage,
     setScopePageSize,
     groupedItems,
+    shown,
     tableColumns: tableColumns as readonly ColumnDef<TRow>[],
     table,
     columnVisibility,

@@ -326,3 +326,11 @@ test("grouped local rows are never placed, and their gallery never groups, as Li
   // The gallery pages records as cards: an ungrouped list, whatever group stack it keeps.
   expect(seen.at(-1)).toBeUndefined();
 });
+
+test("a gallery leaves a stored repeated level alone, as ListView's gallery does", () => {
+  render(<ToastProvider><ResourceViewProvider scope="local" initialState={{ view: "gallery", groupStack: [{ field: "status", repeated: true }] }}>
+    <RowsListView rows={rows} columns={columns} gallery={{ title: "name" }} />
+  </ResourceViewProvider></ToastProvider>);
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.getByText("Beta")).toBeTruthy();
+});

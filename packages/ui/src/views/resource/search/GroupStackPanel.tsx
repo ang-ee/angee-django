@@ -13,23 +13,25 @@ import type { ResourceSearch, SearchActiveItem } from "./types";
 type GroupItem = Extract<SearchActiveItem, { kind: "group" }>;
 const PRIMARY_GRANULARITIES = new Set(["year", "quarter", "month", "week", "day"]);
 
+/** What follows a level's axis label: its granularity and, when `repeated`, its repeated values. */
+function levelDetail(level: GroupSpec, t: UiTranslate, repeated: boolean): string {
+  return `${level.granularity ? ` · ${t(`search.granularity.${level.granularity}`)}` : ""}${repeated && level.repeated ? ` · ${t("search.repeatedOnly")}` : ""}`;
+}
+
 /** A level's axis and granularity: the level row's own controls name it. */
 function levelAxisLabel(item: GroupItem, t: UiTranslate): string {
-  const label = labelText(item.label) ?? item.level.field;
-  return item.level.granularity ? `${label} · ${t(`search.granularity.${item.level.granularity}`)}` : label;
+  return `${labelText(item.label) ?? item.level.field}${levelDetail(item.level, t, false)}`;
 }
 
 /** Shared text for level actions, chips and the group trigger, naming a level's repeated values. Activity owns the axis label. */
 export function groupLevelLabel(item: GroupItem, t: UiTranslate): string {
-  const label = levelAxisLabel(item, t);
-  return item.level.repeated ? `${label} · ${t("search.repeatedOnly")}` : label;
+  return `${labelText(item.label) ?? item.level.field}${levelDetail(item.level, t, true)}`;
 }
 
 /** Preserve the catalog's rich label in both the level row and its chip. */
 export function GroupLevelLabel({ item }: { item: GroupItem }): React.ReactElement {
   const t = useUiT();
-  return <>{item.label}{item.level.granularity ? <> · {t(`search.granularity.${item.level.granularity}`)}</> : null}
-    {item.level.repeated ? <> · {t("search.repeatedOnly")}</> : null}</>;
+  return <>{item.label}{levelDetail(item.level, t, true)}</>;
 }
 
 /** Both group hosts render this projection; every edit goes through the search commands. */
@@ -126,7 +128,7 @@ function GroupLevel({ item, search, axis }: {
       aria-label={t("search.levelGranularity", { label })}
       options={axis.granularities.map((value) => ({ value, label: t(`search.granularity.${value}`) }))}
       onValueChange={(granularity) => search.setGroupLevel(item.index, { ...item.level, granularity })} /> : null}
-    {axis?.repeatable ? <SwitchRow label={t("search.repeatedOnly")} checked={item.level.repeated === true}
+    {search.catalog.repeatable?.(item.level) ? <SwitchRow label={t("search.repeatedOnly")} checked={item.level.repeated === true}
       aria-label={t("search.levelRepeated", { label })}
       disabled={!search.groupingEnabled} frame="flush"
       onCheckedChange={(repeated) => {

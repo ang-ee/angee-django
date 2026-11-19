@@ -17,6 +17,7 @@ import {
 } from "./resource-view-context";
 import { DEFAULT_TEXT_FILTER_FIELD, resourceViewKindCapabilities, type ResourceViewGroup, type ResourceViewKind } from "./resource-view-model";
 import { EMPTY_SELECTED_IDS } from "./resource-view-codecs";
+import { selectedGroupsOf } from "./resource-view-grouped-model";
 import { validateResourceViewState } from "./model/state";
 import { filterForTextSearch, queryForColumns } from "./resource-query";
 import { ResourceQueryError } from "./ResourceQueryError";
@@ -44,7 +45,7 @@ import {
 import { useResourceSearch } from "./search/use-resource-search";
 import { useSearchCatalog } from "./search/catalog";
 import type { ResourceToolbarProps } from "../../toolbars";
-import { declaredGroupDefaults, validateDeclaredGroupDefaults } from "./search/group-defaults";
+import { declaredGroupDefaults, useAppliedRepeated, validateDeclaredGroupDefaults, withoutRepeated } from "./search/group-defaults";
 import {
   useRowActionsSurface,
   type RowActionDeclaration,
@@ -146,25 +147,29 @@ function ValidatedRowsListView<TRow extends StringIdRow>(
     () => props.query ?? queryForColumns(props.columns, null, defaults.groups),
     [props.query, props.columns, defaults],
   );
-  let state = props.resourceView.state;
+  // Local rows group in the browser, which cannot apply `GroupSpec.repeated`; the
+  // gallery never groups, so it leaves a stored flag alone, as ListView's gallery does.
+  const { grouping } = resourceViewKindCapabilities(props.resourceView.state.view);
+  const resourceView = useAppliedRepeated(props.resourceView, !grouping);
+  let state = resourceView.state;
   try {
-    validateDeclaredGroupDefaults("RowsListView", props.defaultGroup, undefined, props.resourceView.defaultState, t);
+    validateDeclaredGroupDefaults("RowsListView", props.defaultGroup, undefined, resourceView.defaultState, t);
   } catch (error) {
     return <ErrorBanner description={error instanceof Error ? error.message : String(error)} />;
   }
   try {
     query.groupsFrom(defaults.groupStack);
-    // Local rows group in the browser, which cannot apply `GroupSpec.repeated`.
     state = validateResourceViewState({
       ...state,
       filter: filterForTextSearch(query, state.filter, "title", props.columns.map(({ field }) => field)),
+      groupStack: grouping ? state.groupStack : withoutRepeated(state.groupStack),
     }, query, { appliesRepeated: false });
   } catch (error) {
     state = { ...state, queryError: error instanceof Error ? error : new Error("Invalid query.") };
   }
   return state.queryError
-    ? <ResourceQueryError error={state.queryError} onReset={props.resourceView.resetQuery} />
-    : <RowsListViewBody {...props} />;
+    ? <ResourceQueryError error={state.queryError} onReset={resourceView.resetQuery} />
+    : <RowsListViewBody {...props} resourceView={resourceView} />;
 }
 
 function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
@@ -274,7 +279,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
                   // Scope snapshots are shared Rows; narrow to the declared row type (see bulkActions).
                   selectedRows: resourceView.selectedRows as readonly TRow[],
                   // Rows grouped in the browser are never placed: a grouped list reports null.
-                  selectedGroups: resourceView.selectedGroups(effectiveGroupStack, null),
+                  selectedGroups: selectedGroupsOf(selectedIds, effectiveGroupStack, null),
                 })
                 : undefined,
             }

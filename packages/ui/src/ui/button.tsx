@@ -5,6 +5,7 @@ import {
 } from "@base-ui/react/button";
 
 import { cn } from "../lib/cn";
+import { shownContent } from "../lib/shown-content";
 import { tv, type VariantProps } from "../lib/variants";
 import { CountBadge } from "./count-badge";
 import { Spinner, type SpinnerSize } from "./spinner";
@@ -53,7 +54,9 @@ export const buttonVariants = tv({
     active: false,
     loading: false,
     focus: "visible",
-    disabled: "pseudo",
+    // Base UI sets `data-disabled` on a disabled button, natively disabled or
+    // focusable (`aria-disabled`), so both read as disabled.
+    disabled: "data",
   },
 });
 
@@ -88,16 +91,24 @@ export type ButtonProps = Omit<
     /**
      * Why the verb cannot run; a reason disables it (null, false and "" are no
      * reason). The reason is the button's tooltip and its accessible description,
-     * and the button stays focusable so keyboard users reach it.
+     * the button stays focusable so keyboard users reach it, and a link rendered
+     * through it loses its `href`. A button given this prop, even with no reason,
+     * keeps one element tree as its reason comes and goes, so a focused verb keeps
+     * its focus.
      */
     disabledReason?: React.ReactNode;
   };
 
+/** A link with a disabled reason opens nowhere: Base UI blocks its click and keys, not a middle-click or "open in new tab". */
+function withoutHref<T>(element: T): T {
+  return React.isValidElement<{ href?: unknown }>(element) ? React.cloneElement(element, { href: undefined }) as T : element;
+}
+
 /**
  * @kind primitive
  */
-export const Button = React.forwardRef<HTMLElement, ButtonProps>(function Button(
-  {
+export const Button = React.forwardRef<HTMLElement, ButtonProps>(function Button(props, ref) {
+  const {
     variant = "secondary",
     size = "md",
     active = false,
@@ -115,16 +126,18 @@ export const Button = React.forwardRef<HTMLElement, ButtonProps>(function Button
     nativeButton,
     render,
     "aria-describedby": describedBy,
-    ...props
-  },
-  ref,
-) {
+    ...rest
+  } = props;
   const reasonId = React.useId();
-  const reason = disabledReason === null || disabledReason === undefined || disabledReason === false || disabledReason === ""
-    ? null : disabledReason;
+  // A button given the prop keeps one element tree while its reason comes and goes.
+  const reasonGiven = "disabledReason" in props;
+  const reason = shownContent(disabledReason);
   const child = asChild
     ? (React.Children.only(children) as React.ReactElement<Record<string, unknown>>)
     : undefined;
+  const element = asChild ? child : render;
+  const rendered: ButtonProps["render"] = reason === null ? element
+    : typeof element === "function" ? (renderProps, state) => withoutHref(element(renderProps, state)) : withoutHref(element);
   const isLoading = loading || pending;
   const buttonContent =
     isLoading && loadingText !== undefined ? loadingText : children;
@@ -145,8 +158,8 @@ export const Button = React.forwardRef<HTMLElement, ButtonProps>(function Button
       disabled={disabled || isLoading || reason !== null}
       focusableWhenDisabled={focusableWhenDisabled || reason !== null}
       nativeButton={asChild ? (nativeButton ?? false) : nativeButton}
-      render={asChild ? child : render}
-      {...props}
+      render={rendered}
+      {...rest}
     >
       {asChild ? undefined : (
         <>
@@ -165,10 +178,10 @@ export const Button = React.forwardRef<HTMLElement, ButtonProps>(function Button
       )}
     </BaseButton>
   );
-  if (reason === null) return button;
+  if (!reasonGiven) return button;
   return (
     <>
-      <Tooltip label={reason} side="bottom">{button}</Tooltip>
+      <Tooltip label={reason} disabled={reason === null} side="bottom">{button}</Tooltip>
       <span id={reasonId} hidden>{reason}</span>
     </>
   );

@@ -3,11 +3,15 @@
 import * as React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { GetListParams } from "@refinedev/core";
+import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from "@tanstack/react-router";
 import { ResourceQuery, schemaFieldMetadataFromDataResources, type GroupSpec, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { OperationDocumentsProvider } from "@angee/refine";
 import { afterEach, expect, test, vi } from "vitest";
 import { createUiTestProviders } from "../../testing";
+import { AppRuntimeProvider, containersFromChildren, type ResourceViewKindContent } from "../../runtime";
+import { defaultWidgets } from "../../widgets";
+import { RESOURCE_CONTAINERS } from "./resource-view-kinds";
 
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "./resource-view-context";
 import { useGroupedResourceViewSurface, type GroupedResourceViewSurface } from "./resource-view-surface";
@@ -270,19 +274,15 @@ function matchesWhere(row: Row, where: Record<string, unknown> | undefined): boo
           : operator === "_is_null" ? (row[key] == null) === operand : false));
 }
 
-/** A rendered grouped Task list whose page's bulk actions record the selectedGroups they receive. */
-function selectedGroupsFixture(initialState: Record<string, unknown>, {
-  stale, columns = [{ field: "title", header: "Title" }],
-}: {
-  /** A stale page: the server also lists this row in another group. */
-  stale?: { id: string; group: string };
-  columns?: readonly { field: string; header: string; aggregate?: "count" }[];
-} = {}) {
-  const records = tasks.map((row) => ({ ...row }));
-  const seen: unknown[] = [];
+/** The Task server: groups (with HAVING and paging), aggregates and a group's later pages, over editable records. */
+function taskServer(rows: readonly Row[], stale?: { id: string; group: string }) {
+  const records = rows.map((row) => ({ ...row }));
+  let held: Promise<void> | null = null;
   const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
+    if (held) await held;
     const variables = meta!.gqlVariables as {
       group_by?: { field: string }[]; where?: Record<string, unknown>; having?: { count_gt: number }; rows_limit?: number;
+      limit?: number; offset?: number;
     };
     const rows = records.filter((row) => matchesWhere(row, variables.where));
     if (!variables.group_by) return { data: { tasks_aggregate: { aggregate: { count: rows.length } } } };
@@ -296,9 +296,43 @@ function selectedGroupsFixture(initialState: Record<string, unknown>, {
       return { key: { [field]: key }, aggregate: { count: members.length + extra.length },
         rows: [...members, ...extra].slice(0, variables.rows_limit ?? 0) };
     }).filter((bucket) => bucket.aggregate.count > (variables.having?.count_gt ?? 0));
-    return { data: { tasks_groups: buckets, totalCount: buckets.length } };
+    const offset = variables.offset ?? 0;
+    return { data: { tasks_groups: buckets.slice(offset, offset + (variables.limit ?? buckets.length)), totalCount: buckets.length } };
   });
-  const getList = vi.fn(async () => ({ data: records, total: records.length }));
+  // A group's later page: its rows in server order, one page of them.
+  const getList = vi.fn(async ({ pagination, meta }: GetListParams) => {
+    if (held) await held;
+    const matching = records.filter((row) => matchesWhere(row, (meta?.gqlVariables as { where?: Record<string, unknown> }).where));
+    const size = pagination?.pageSize ?? matching.length;
+    const page = pagination?.currentPage ?? 1;
+    return { data: matching.slice((page - 1) * size, page * size), total: matching.length };
+  });
+  const documents = { console: {
+    groups: { "notes.Task": "query Groups { tasks_groups { key } totalCount }" },
+    aggregates: { "notes.Task": "query Aggregate { tasks_aggregate { aggregate { count } } }" },
+  } };
+  return {
+    records, custom, getList, documents,
+    /** Hold the server's answers until the returned release runs. */
+    hold: () => {
+      let release!: () => void;
+      held = new Promise((resolve) => { release = resolve; });
+      return () => act(async () => { held = null; release(); });
+    },
+  };
+}
+
+/** A rendered grouped Task list whose page's bulk actions record the selectedGroups they receive. */
+function selectedGroupsFixture(initialState: Record<string, unknown>, {
+  stale, columns = [{ field: "title", header: "Title" }], rows = tasks,
+}: {
+  /** A stale page: the server also lists this row in another group. */
+  stale?: { id: string; group: string };
+  columns?: readonly { field: string; header: string; aggregate?: "count" }[];
+  rows?: readonly Row[];
+} = {}) {
+  const { records, custom, getList, documents, hold } = taskServer(rows, stale);
+  const seen: unknown[] = [];
   let view!: ResourceViewContextValue;
   let rerender!: () => void;
   function Probe() { view = useResourceView(); return null; }
@@ -316,10 +350,7 @@ function selectedGroupsFixture(initialState: Record<string, unknown>, {
   render(
     <Provider resources={[taskResource]} apiUrl="test://selected-groups" dataProvider={{ custom, getList }}
       queryClientConfig={{ defaultOptions: { queries: { retry: false } } }}>
-      <OperationDocumentsProvider documents={{ console: {
-        groups: { "notes.Task": "query Groups { tasks_groups { key } totalCount }" },
-        aggregates: { "notes.Task": "query Aggregate { tasks_aggregate { aggregate { count } } }" },
-      } }}>
+      <OperationDocumentsProvider documents={documents}>
         <ToastProvider><Page /></ToastProvider>
       </OperationDocumentsProvider>
     </Provider>,
@@ -339,6 +370,9 @@ function selectedGroupsFixture(initialState: Record<string, unknown>, {
       Object.assign(records.find((row) => row.id === id)!, patch);
       await act(async () => { await client.invalidateQueries(); });
     },
+    /** Start the live list's refetch without waiting for it. */
+    refetch: () => act(() => { void client.invalidateQueries(); }),
+    hold,
   };
 }
 
@@ -400,6 +434,123 @@ test("a selected row the live list now shows in another group offers no split", 
   expect(f.view.state.rowSelection).toEqual({ t1: true, t2: true });
 });
 
+test("a selected row that moved into a collapsed group offers no split once its old group's page settles without it", async () => {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status" }] });
+  fireEvent.click(await screen.findByRole("button", { name: "closed" }));
+  await waitFor(() => expect(screen.queryByText("Task 3")).toBeNull());
+  await f.select("Task 1");
+  await f.select("Task 2");
+  await waitFor(() => expect(f.selectedGroups).toEqual([status("active", "active", ["t1", "t2"])]));
+  await f.update("t2", { status: "closed" });
+  await waitFor(() => expect(f.selectedGroups).toBeNull());
+  expect(f.view.state.rowSelection).toEqual({ t1: true, t2: true });
+});
+
+test("a selected row that moved into a group on a page of groups not loaded offers no split", async () => {
+  // Two groups a page: "" and "active" here, "closed" on the next page.
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status" }], pageSize: 2 });
+  await f.select("Task 1");
+  await f.select("Task 2");
+  await waitFor(() => expect(f.selectedGroups).toEqual([status("active", "active", ["t1", "t2"])]));
+  await f.update("t2", { status: "closed" });
+  await waitFor(() => expect(f.selectedGroups).toBeNull());
+});
+
+test("a repeated group that shrinks away from its settled page of groups offers no split", async () => {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status", repeated: true }] });
+  await f.select("Task 1");
+  await f.select("Task 2");
+  await waitFor(() => expect(f.selectedGroups).toEqual([status("active", "active", ["t1", "t2"])]));
+  // Renamed, Task 1 leaves "active" with one record: both groups drop below two.
+  await f.update("t1", { status: "solo" });
+  await waitFor(() => expect(screen.queryByRole("button", { name: "active" })).toBeNull());
+  expect(f.selectedGroups).toBeNull();
+});
+
+test("a nested selection whose parent group left its settled page offers no split", async () => {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "owner" }, { field: "kind" }] });
+  // Nested groups open on demand: Ada's "Same", then Bo's.
+  await waitFor(() => expect(screen.getAllByRole("button", { name: "Same" })).toHaveLength(2));
+  fireEvent.click(screen.getAllByRole("button", { name: "Same" })[1]!);
+  await f.select("Task 2");
+  await waitFor(() => expect(f.selectedGroups).toEqual([
+    { field: "kind", key: "Same", label: "Same", parents: [{ field: "owner", key: "Bo", label: "Bo" }], ids: ["t2"] },
+  ]));
+  // Only the parent changes: Task 2 is now Cy's, whose "Same" opens on demand.
+  await f.update("t2", { owner: "Cy" });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Cy" })).toBeTruthy());
+  expect(screen.queryByText("Task 2")).toBeNull();
+  expect(f.selectedGroups).toBeNull();
+});
+
+test("while a page the split rests on refetches, there is no split", async () => {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status" }] });
+  await f.select("Task 1");
+  await f.select("Task 2");
+  await waitFor(() => expect(f.selectedGroups).toEqual([status("active", "active", ["t1", "t2"])]));
+  const release = f.hold();
+  f.refetch();
+  await waitFor(() => expect(f.selectedGroups).toBeNull());
+  expect(screen.getByText("Task 1")).toBeTruthy();
+  await release();
+  await waitFor(() => expect(f.selectedGroups).toEqual([status("active", "active", ["t1", "t2"])]));
+});
+
+test("collapsing a group or paging within it keeps the group a row was selected in", async () => {
+  const more = Array.from({ length: 20 }, (_, index) => ({ id: `a${index}`, title: `Active ${index}`, status: "active", owner: "Ada", kind: "Same" }));
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status" }] }, { rows: [...tasks, ...more] });
+  await f.select("Task 1");
+  await waitFor(() => expect(f.selectedGroups).toEqual([status("active", "active", ["t1"])]));
+  // The group's second page of records does not hold Task 1, and cannot tell where it is.
+  fireEvent.click(await screen.findByRole("button", { name: "Next active records" }));
+  expect(await screen.findByText("Active 19")).toBeTruthy();
+  expect(screen.queryByText("Task 1")).toBeNull();
+  expect(f.selectedGroups).toEqual([status("active", "active", ["t1"])]);
+  fireEvent.click(screen.getByRole("button", { name: "active" }));
+  await waitFor(() => expect(screen.queryByText("Active 19")).toBeNull());
+  expect(f.selectedGroups).toEqual([status("active", "active", ["t1"])]);
+});
+
+test("a nested split ranks each group once, so a parent that moved keeps its children together", async () => {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "owner" }, { field: "kind" }] }, { rows: [
+    { id: "t1", title: "Task 1", owner: "Ada", kind: "Same" }, { id: "t2", title: "Task 2", owner: "Bo", kind: "Same" },
+    { id: "t3", title: "Task 3", owner: "Ada", kind: "Other" }, { id: "t4", title: "Task 4", owner: "Aa", kind: "Other" },
+    { id: "t5", title: "Task 5", owner: "Ab", kind: "Other" },
+  ] });
+  const inner = (name: string, index: number) => fireEvent.click(screen.getAllByRole("button", { name })[index]!);
+  // Ada is third of the owners: Task 1 is selected under Ada > Same, which then folds away.
+  await waitFor(() => expect(screen.getAllByRole("button", { name: "Same" })).toHaveLength(2));
+  inner("Same", 0);
+  await f.select("Task 1");
+  inner("Same", 0);
+  await waitFor(() => expect(screen.queryByText("Task 1")).toBeNull());
+  // The owners before Ada leave: Ada is now first, Bo second.
+  await f.update("t4", { owner: "Zed" });
+  await f.update("t5", { owner: "Zed" });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Zed" })).toBeTruthy());
+  inner("Same", 1);
+  await f.select("Task 2");
+  inner("Other", 0);
+  await f.select("Task 3");
+  const kind = (key: string, owner: string, ids: string[]) =>
+    ({ field: "kind", key, label: key, parents: [{ field: "owner", key: owner, label: owner }], ids });
+  await waitFor(() => expect(f.selectedGroups).toEqual([kind("Other", "Ada", ["t3"]), kind("Same", "Ada", ["t1"]), kind("Same", "Bo", ["t2"])]));
+});
+
+test("groups that tie on their captured positions keep selection order", async () => {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status" }], pageSize: 1 }, { rows: [
+    { id: "rb", title: "Task b", status: "b" }, { id: "ra", title: "Task a", status: "zz" }, { id: "rc", title: "Task c", status: "c" },
+  ] });
+  // One group a page: "b" first, then "a" takes the first place and is selected there too.
+  await f.select("Task b");
+  await f.update("ra", { status: "a" });
+  await f.select("Task a");
+  // On the third page neither group shows: both rest on position 0, captured on the first.
+  act(() => f.view.setPage(3));
+  await waitFor(() => expect(screen.getByText("Task c")).toBeTruthy());
+  await waitFor(() => expect(f.selectedGroups).toEqual([status("b", "b", ["rb"]), status("a", "a", ["ra"])]));
+});
+
 test("a row shown under two groups at once cannot be placed", async () => {
   // A stale page of "closed" still lists Task 1 beside the fresh "active" page.
   const f = selectedGroupsFixture({ groupStack: [{ field: "status" }] }, { stale: { id: "t1", group: "closed" } });
@@ -420,23 +571,43 @@ test("a group header's checkbox and select-all capture each row's own group", as
   ]));
 });
 
+test("ticking a group header recaptures the group of the rows it covers that were already selected", async () => {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status" }] });
+  await f.select("Task 1");
+  await f.select("Task 2");
+  await waitFor(() => expect(f.selectedGroups).toEqual([status("active", "active", ["t1", "t2"])]));
+  // Task 2 moves to "closed", still selected: it has no place until it is ticked again.
+  await f.update("t2", { status: "closed" });
+  await waitFor(() => expect(f.selectedGroups).toBeNull());
+  fireEvent.click(screen.getByRole("checkbox", { name: "Select the loaded rows in closed" }));
+  await waitFor(() => expect(f.selectedGroups).toEqual([
+    status("active", "active", ["t1"]), status("closed", "closed", ["t2", "t3"]),
+  ]));
+});
+
 test("a grouped board card captures its record's group", async () => {
   const f = selectedGroupsFixture({ groupStack: [{ field: "status" }], view: "board" });
   fireEvent.click(await screen.findByRole("checkbox", { name: "Select Task 3" }));
   await waitFor(() => expect(f.selectedGroups).toEqual([status("closed", "closed", ["t3"])]));
 });
 
-test("the split checks the captured levels against the rendered ones and the surface's placement", async () => {
-  const f = selectedGroupsFixture({ groupStack: [{ field: "status" }] });
-  await f.select("Task 1");
-  await waitFor(() => expect(f.selectedGroups).toEqual([status("active", "active", ["t1"])]));
-  const none = new Map();
-  expect(f.view.selectedGroups([{ field: "status" }], none)).toEqual([status("active", "active", ["t1"])]);
-  // A level's `repeated` is part of its spec, as are its granularity and the level order.
-  expect(f.view.selectedGroups([{ field: "status", repeated: true }], none)).toBeNull();
-  expect(f.view.selectedGroups([{ field: "status", granularity: "month" }], none)).toBeNull();
-  // A surface that places no rows (a lane board under the same field, browser grouping) offers no split.
-  expect(f.view.selectedGroups([{ field: "status" }], null)).toBeNull();
+test("a list grouped in the browser places no rows, so its bulk actions get no split", async () => {
+  const clientResource = { ...taskResource, rowModel: "client" as const };
+  const seen: unknown[] = [];
+  render(
+    <Provider resources={[clientResource]} apiUrl="test://client-groups" dataProvider={{ getList: vi.fn(async () => ({ data: [...tasks], total: tasks.length })) }}
+      queryClientConfig={{ defaultOptions: { queries: { retry: false } } }}>
+      <ToastProvider>
+        <ListView resource={clientResource.modelLabel} columns={[{ field: "title", header: "Title" }]} scope="local"
+          defaultGroup={{ field: "status" }} bulkActions={(_ids, _clear, collection) => { seen.push(collection.selectedGroups); return null; }} />
+      </ToastProvider>
+    </Provider>,
+  );
+  fireEvent.click(await screen.findByRole("button", { name: /^active/, expanded: false }));
+  const row = (await screen.findByText("Task 1")).closest("tr")!;
+  fireEvent.click(within(row).getByRole("checkbox", { name: "Select row" }));
+  await waitFor(() => expect(seen.length).toBeGreaterThan(0));
+  expect(seen.at(-1)).toBeNull();
 });
 
 test("selectedGroups keeps its identity across re-renders while the selection is unchanged", async () => {
@@ -481,6 +652,39 @@ test("the selection clears when a level's axis, granularity, repeated values or 
     act(() => view.setGroupStack(groupStack));
     expect(view.state.rowSelection).toEqual({});
   }
+});
+
+test("a view switch drops repeated values the new view cannot apply, keeps the grouping, and the URL follows", async () => {
+  const server = taskServer(tasks);
+  // A contributed kind that renders the grouping itself, never through the server group read.
+  const timeline: ResourceViewKindContent = { label: "Timeline", icon: "network", render: () => <p>Timeline body</p>,
+    capabilities: { grouping: true, pagination: true, columns: false, filter: true } };
+  const containers = { ...containersFromChildren(RESOURCE_CONTAINERS, { "notes.Task#views": { "tasks.timeline": { content: timeline } } }), rules: {} };
+  const root = createRootRoute();
+  const route = createRoute({ getParentRoute: () => root, path: "/", component: () => (
+    <AppRuntimeProvider runtime={{ widgets: defaultWidgets, containers }}>
+      <ListView resource={taskResource.modelLabel} columns={[{ field: "title", header: "Title" }]} />
+    </AppRuntimeProvider>
+  ) });
+  const router = createRouter({ routeTree: root.addChildren([route]), history: createMemoryHistory({ initialEntries: ["/?group=status%3Arepeated"] }) });
+  render(
+    <Provider resources={[taskResource]} apiUrl="test://view-switch-repeated" dataProvider={{ custom: server.custom, getList: server.getList }}
+      queryClientConfig={{ defaultOptions: { queries: { retry: false } } }}>
+      <OperationDocumentsProvider documents={server.documents}>
+        <ToastProvider><RouterProvider router={router} /></ToastProvider>
+      </OperationDocumentsProvider>
+    </Provider>,
+  );
+  // Only "active" holds more than one record.
+  expect(await screen.findByRole("button", { name: "active" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "closed" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Timeline" }));
+  expect(await screen.findByText("Timeline body")).toBeTruthy();
+  await waitFor(() => expect(router.state.location.search).toEqual({ view: "tasks.timeline", group: "status" }));
+  fireEvent.click(screen.getByRole("button", { name: "List view" }));
+  // Back on the list, the grouping lists every group again.
+  expect(await screen.findByRole("button", { name: "closed" })).toBeTruthy();
+  expect(router.state.location.search).toEqual({ group: "status" });
 });
 
 test("a client-row-model list refuses a repeated level it would group in the browser", async () => {
