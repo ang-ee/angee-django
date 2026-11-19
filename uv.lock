@@ -2011,6 +2011,7 @@ dependencies = [
     { name = "angee-provenance" },
     { name = "angee-resources" },
     { name = "angee-server" },
+    { name = "angee-web" },
 ]
 
 [package.metadata]
@@ -2022,6 +2023,7 @@ requires-dist = [
     { name = "angee-provenance", editable = "src/angee/provenance" },
     { name = "angee-resources", editable = "src/angee/resources" },
     { name = "angee-server", editable = "src/angee/server" },
+    { name = "angee-web", editable = "src/angee/web" },
 ]
 
 [[package]]

@@ -72,6 +72,33 @@ change one:
 Delivery runs on a worker after the submission commits
 (`webforms.deliver_response`), retried with backoff.
 
+## The public address
+
+A form answers at `forms/w/<alias>` (`PUBLIC_PREFIX` in [`urls.py`](urls.py)).
+The prefix is an interim one: `forms/<slug>` is messaging's public form path
+until that path is removed, and one path has one owner.
+
+- `GET` describes the version the form serves now: `form`, `alias`, `version`
+  (its number), `definition`, `languages`, `default_language`, `language` (the
+  alias's, or empty), `theme` and `honeypot_field`. It is never cached. An alias
+  that leads to no form taking submissions is not found.
+- `POST` keeps one submission. The body is a JSON object with exactly
+  `submission_id`, `version`, `language`, `answers` and the honeypot field.
+  The shared guard (`angee.server.ingress`) runs first: JSON only, a body cap, a
+  rate limit per sender and address, no undeclared key, the honeypot, an
+  optional token hook. Then `Response.objects.receive` keeps it.
+  - `202 {"submission_id"}`: kept, or already kept under that id. A filled
+    honeypot gets the same answer and keeps nothing.
+  - `400 {"error": "invalid_submission", "fields": {<name>: [messages]}}`: each
+    refusal under its question's name, or under `version` or `submission_id`.
+  - `409 {"error": "form_changed"}`: the answers are to a version the form no
+    longer serves; the page reloads the definition.
+  - A refusal by the guard is `{"error": <code>, "message"}` with its status
+    (`413`, `415`, `429` with `Retry-After`, `403`, `503`).
+
+The bounds are the `ANGEE_WEBFORM_*` settings (body bytes, rate-limit burst and
+window, honeypot field, token hook).
+
 ## What a response becomes
 
 A form selects one target by key (`Form.target_class`). `store`, the default,
