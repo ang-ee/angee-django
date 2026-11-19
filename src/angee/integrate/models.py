@@ -5167,10 +5167,11 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         the declaration when no applied links exist, so deployment alone never replays
         records already applied at the declared version.
         A composed mapping (``StreamDefinition.mapping_contributions``) has no
-        declared version: the generation retains the ordered list it ran, and any
-        other list opens one baseline under a version none of the stream's
-        records was applied with (``_mapping_identity``), so its version never
-        lowers.
+        declared version: the generation retains the ordered list it ran with the
+        version it assigned it, and any other list, or a list that no longer names
+        the stream's version, opens one baseline under a version none of the
+        stream's records was applied with (``_mapping_identity``), so its version
+        never lowers.
         ``authoritative`` is the declaration's fact: a changed declaration flips the
         current generation through :meth:`set_authoritative`, so an adapter never
         flips it from inside a page.
@@ -5208,9 +5209,9 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
             }
             stream = self.filter(**identity).order_by("-generation").first()
             if stream is None:
-                version, retained = self._mapping_identity(definition, declared)
+                version, composed = self._mapping_identity(definition, declared)
                 fields = replace(definition, mapping_version=version).stream_fields()
-                return self.create(integration_id=bridge.pk, **fields, mapping_contributions=retained)
+                return self.create(integration_id=bridge.pk, **fields, mapping_contributions=composed)
             if stream.kind != definition.kind:
                 raise ValidationError("A stream's kind cannot change between declarations.")
             if container is not None and stream.container_id is None:
@@ -5225,7 +5226,7 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 )["version"]
                 stream.mapping_version = applied_version if applied_version is not None else definition.mapping_version
                 stream.save(update_fields=["mapping_version", "updated_at"])
-            version, retained = self._mapping_identity(definition, declared, stream)
+            version, composed = self._mapping_identity(definition, declared, stream)
             if (
                 stream.direction != definition.direction
                 or stream.snapshot != definition.snapshot
@@ -5237,7 +5238,7 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                     direction=definition.direction,
                     snapshot=definition.snapshot,
                     mapping_version=version,
-                    mapping_contributions=retained,
+                    mapping_contributions=composed,
                 )
             elif stream.mapping_version != version:
                 stream.mapping_version = version
@@ -5286,39 +5287,40 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
     @staticmethod
     def _mapping_identity(
         definition: StreamDefinition, declared: tuple[tuple[str, int], ...], stream: Any = None
-    ) -> tuple[int, list[list[Any]]]:
-        """Return the version ``definition`` runs under after ``stream``, and the contributions to retain.
+    ) -> tuple[int, dict[str, Any]]:
+        """Return the version ``definition`` runs under after ``stream``, and the composed mapping to retain.
 
         ``declared`` is the definition's ordered contributions. A plain declaration
         on a stream that never composed keeps its declared version, rollback
-        included. Otherwise the ordered contributions are the identity: the
-        retained list keeps the retained version, and any other list (added,
+        included. Otherwise the ordered contributions are the identity: the list
+        the stream's version ran keeps that version, and any other list (added,
         removed, exchanged, reordered or re-versioned) takes a version at least
-        the contributions' sum and above the retained one. A stream that first
-        composes also goes above every version its applied links carry: a plain
-        rollback or the lowest-stamp seed can leave records stamped above the
-        retained version, while a composed stream's version is already at least
-        every stamp. A plain version on a stream that composed reads as the one
-        contribution under the empty key, which no declared contribution may use,
-        so the stream never lowers its version onto one it stamped with another
-        list's output. The list to retain is JSON-native, as
+        the contributions' sum and above the stream's. With no list its version
+        ran (a stream that first composes, or one whose retained list no longer
+        names its version) the version also goes above every version its applied
+        links carry: a plain rollback, the lowest-stamp seed or a release before
+        the retained list can leave records stamped above the stream's version,
+        while a composed stream's version is otherwise at least every stamp. A
+        plain version on a stream that composed reads as the one contribution
+        under the empty key, which no declared contribution may use, so the
+        stream never lowers its version onto one it stamped with another list's
+        output. The composed mapping is JSON-native, as
         :attr:`SyncStream.mapping_contributions` stores it.
         """
 
         retained = () if stream is None else stream.retained_contributions
-        if not declared and not retained:
-            return definition.mapping_version, []
+        if not declared and retained == ():
+            return definition.mapping_version, {}
         declared = declared or (("", definition.mapping_version),)
-        stored = [[key, version] for key, version in declared]
         if declared == retained:
-            return stream.mapping_version, stored
-        floor = sum(version for _key, version in declared)
-        if stream is None:
-            return floor, stored
-        if not retained:
+            return stream.mapping_version, stream.mapping_contributions
+        version = sum(part for _key, part in declared)
+        if stream is not None:
+            version = max(version, stream.mapping_version + 1)
+        if stream is not None and not retained:
             stamped = stream.links.filter(applied_at__isnull=False).aggregate(version=models.Max("mapping_version"))
-            floor = max(floor, (stamped["version"] or 0) + 1)
-        return max(floor, stream.mapping_version + 1), stored
+            version = max(version, (stamped["version"] or 0) + 1)
+        return version, {"version": version, "parts": [[key, part] for key, part in declared]}
 
     def bump_generation(
         self,
@@ -5328,7 +5330,7 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         direction: StreamDirection | None = None,
         snapshot: bool | None = None,
         mapping_version: int | None = None,
-        mapping_contributions: list[list[Any]] | None = None,
+        mapping_contributions: dict[str, Any] | None = None,
     ) -> Any:
         """Create one new baseline while retaining identities and history.
 
@@ -5339,7 +5341,9 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         is returned unchanged, so no resync, cursor expiry or declaration revives a
         child whose container is gone. A reopened one stays retired, its pending
         retirement pass dropped: the new baseline verifies its links again.
-        An omitted mapping version or contribution list keeps its predecessor's.
+        An omitted mapping version or composed mapping keeps its predecessor's;
+        the composed mapping is copied as stored, so one that no longer names the
+        version still does not.
         """
 
         with system_context(reason="integrate.stream.bump_generation"), transaction.atomic():
@@ -5543,13 +5547,14 @@ class SyncStream(ImmutableFieldsMixin, SyncStateMixin, AuditMixin, AngeeDataMode
     A plain declaration's version, or the one the manager gave the contributions
     this generation ran; unknown until seeded by :meth:`SyncStreamManager.current`.
     """
-    mapping_contributions = models.JSONField(default=list, blank=True)
-    """The ``[key, version]`` contributions of a composed mapping this generation ran, in applied order.
+    mapping_contributions = models.JSONField(default=dict, blank=True)
+    """The composed mapping this generation ran, ``{"version": V, "parts": [[key, version], ...]}``.
 
-    Stored JSON-native, so a fresh and a reloaded row hold the same lists; read
-    it through :attr:`retained_contributions`. Empty for a stream that never
-    composed, which is also what a stream written before this column holds, so
-    it keeps the plain rule.
+    ``parts`` are in applied order and ``version`` is the mapping version the
+    manager assigned them. Stored JSON-native, so a fresh and a reloaded row hold
+    the same value; read it through :attr:`retained_contributions`. Empty for a
+    stream that never composed, which is also what a stream written before this
+    column holds, so it keeps the plain rule.
     """
     phase = StateField(choices_enum=StreamPhase, default=StreamPhase.BASELINE)
     state = StateField(choices_enum=StreamState, default=StreamState.OPEN)
@@ -5572,10 +5577,21 @@ class SyncStream(ImmutableFieldsMixin, SyncStateMixin, AuditMixin, AngeeDataMode
         return f"{self.key} ({self.partition})" if self.partition else self.key
 
     @property
-    def retained_contributions(self) -> tuple[tuple[str, int], ...]:
-        """The composed mapping this generation ran, as ``(key, version)`` pairs in applied order; empty when plain."""
+    def retained_contributions(self) -> tuple[tuple[str, int], ...] | None:
+        """The composed mapping this generation's version ran, as ``(key, version)`` pairs in applied order.
 
-        return tuple((key, version) for key, version in self.mapping_contributions)
+        Empty when the stream never composed. ``None`` when the stored parts no
+        longer name the stream's version: a release before the stored list
+        changed that version in place, or the row holds a bare list stored
+        without its version (an empty one is a stream that never composed).
+        """
+
+        stored = self.mapping_contributions
+        if not stored:
+            return ()
+        if isinstance(stored, list) or stored["version"] != self.mapping_version:
+            return None
+        return tuple((key, version) for key, version in stored["parts"])
 
     @property
     def operation_fence(self) -> tuple[Any, ...]:
