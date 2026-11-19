@@ -1639,21 +1639,29 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             .order_by("subject__left_id", "subject__right_id")
             .values_list("subject_id", "subject__left_id", "subject__right_id", "updated_at", "evidence")
         )
+        source_ref = str(to_subject_ref(source))
         decided = {(left_id, right_id) for _subject, left_id, right_id, _at, _cited in own}
-        for batch in batched(sorted({left_id for left_id, _right in supported}), query_batch_size(current)):
-            decided.update(
-                current.filter(subject__left_id__in=batch).values_list("subject__left_id", "subject__right_id")
-            )
+        others: set[tuple[Any, Any]] = set()
+        lefts = sorted({left_id for left_id, _right in supported})
+        for batch in batched(lefts, query_batch_size(current)):
+            for left_id, right_id, asserted_by in current.filter(subject__left_id__in=batch).values_list(
+                "subject__left_id", "subject__right_id", "asserted_by"
+            ):
+                decided.add((left_id, right_id))
+                if asserted_by != source_ref:
+                    others.add((left_id, right_id))
         unsupported = [
             subject for subject, left_id, right_id, at, _cited in own if (left_id, right_id) not in supported
             and at < started
         ][:limit]
         changed = statements.withdraw(source, unsupported) if unsupported else 0
         handle_model = apps.get_model("parties", "Handle")
+        # Only the rule's own undecided pair is restated: a person's decision (or another source's) stands.
         stale = [
             (left_id, right_id)
             for _subject, left_id, right_id, _at, cited in own
             if (left_id, right_id) in supported
+            and (left_id, right_id) not in others
             and not {EvidenceReference.model_validate(ref).id for ref in cited}
             <= {public_id_for(handle_model, pk) for pk in supported[left_id, right_id]}
         ]
@@ -1732,6 +1740,16 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
         party_model = apps.get_model("parties", "Party")
         stances = party_model.same_as.model.statements
+        decided = stances.current().filter(
+            subject__left_id=min(left_id, right_id),
+            subject__right_id=max(left_id, right_id),
+            status=stances.model.StatementStatus.ASSERTED,
+        )
+        if restate:
+            decided = decided.exclude(asserted_by=str(to_subject_ref(source)))
+        # A decided pair is read before it is locked: it takes no lock and makes no pair row.
+        if decided.exists():
+            return None
         with transaction.atomic():
             parties = party_model._base_manager.filter(pk__in=(left_id, right_id))
             live = parties.filter(is_trashed=False, merged_into__isnull=True)
@@ -1739,9 +1757,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 return None
             first, second = parties.order_by("pk")
             pair = party_model.same_as.for_pair(first.with_actor(to_subject_ref(source)), second)
-            decided = stances.current().filter(subject=pair, status=stances.model.StatementStatus.ASSERTED)
-            if restate:
-                decided = decided.exclude(asserted_by=str(to_subject_ref(source)))
+            # The pair locked both parties: read their state and the pair's decisions again under the lock.
             if live.count() != 2 or decided.exists():
                 return None
             return pair.statements.set(

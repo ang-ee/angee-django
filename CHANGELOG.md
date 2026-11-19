@@ -53,7 +53,10 @@ live in code docstrings.
   `OperationalError`: deadlock, lock or statement timeout) as `busy` and goes on. The job
   no longer withdraws a proposal stated after its run began, and restates a
   standing proposal whose cited handle was deleted or merged away with the handles
-  that still link the two, so it never hides from the review list.
+  that still link the two, so it never hides from the review list. Only the
+  rule's own undecided proposal is restated: a pair a person kept apart or
+  confirmed spends none of the run's budget, and a decided pair is read before
+  it is locked, so it takes no lock and makes no pair row.
 
 - Parties proposes a same-person pair for every two live parties of one kind
   linked to one address (`PartyManager.reconcile_same_as`, over

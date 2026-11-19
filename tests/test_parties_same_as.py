@@ -1027,3 +1027,43 @@ def test_a_merge_the_database_stops_is_reported_and_the_next_pair_still_merges(d
     ]
     with system_context(reason="same_as busy readback"):
         assert Party._base_manager.get(pk=first[1].pk).merged_into_id is None
+
+
+def _decided_pair_citing_a_deleted_handle(owner: Any, decide: Any) -> tuple[Any, Any]:
+    """A pair the job proposed citing a holder's written row, decided by a person, then the written row deleted."""
+
+    with system_context(reason="same_as a holder written onto its row"):
+        holder = Party._base_manager.create(display_name="Ada Example", created_by=owner)
+        written = Handle._base_manager.create(platform="email", value="Ada@Example.com", party=holder, created_by=owner)
+    stated = _address(owner, "ADA@example.com")
+    with system_context(reason="same_as the holder's own statement"):
+        Party.objects.assert_handle(holder, stated, asserted_by=owner)
+    claimant = _claimant(owner, _address(owner))
+    assert _reconcile() == 1
+    decide(owner, holder, claimant)
+    with system_context(reason="same_as the written row goes"):
+        Handle._base_manager.filter(pk=written.pk).delete()
+    return holder, claimant
+
+
+@pytest.mark.parametrize(
+    "decide", [pytest.param(_kept_separate, id="kept-apart"), pytest.param(_confirmed, id="confirmed")],
+)
+def test_a_decided_pair_with_stale_evidence_never_holds_back_a_new_proposal(db: None, decide: Any) -> None:
+    """Only the rule's own undecided pair is restated; a person's decision stands and spends no budget."""
+
+    del db
+    owner = create_user("same-as-stale-decided")
+    holder, claimant = _decided_pair_citing_a_deleted_handle(owner, decide)
+    second = _address(owner, "bob@example.com")
+    with system_context(reason="same_as a second pair"):
+        bob = Party._base_manager.create(display_name="Bob Example", created_by=owner)
+        Party.objects.assert_handle(bob, second, asserted_by=owner)
+    bob_claimant = _claimant(owner, second, "B. Example")
+
+    with system_context(reason="same_as a run of one"):
+        assert Party.objects.reconcile_same_as(limit=1) == 1
+    assert [row.status for row in _rule_pair_statements(bob, bob_claimant)] == ["asserted"]
+    with system_context(reason="same_as nothing left"):
+        assert Party.objects.reconcile_same_as(limit=1) == 0
+        assert Party.same_as.kept_separate(holder, claimant) is (decide is _kept_separate)
