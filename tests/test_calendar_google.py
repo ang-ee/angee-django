@@ -630,7 +630,9 @@ def test_setting_aside_many_unmappable_series_reads_the_streams_instance_keys_on
     assert {key: payload for key, payload in held.items() if key not in refused} == dict.fromkeys(instances, refusal)
 
 
-def test_a_hidden_calendar_retires_its_events_and_they_come_back_when_it_returns(connected: Connected) -> None:
+def test_a_calendar_that_leaves_the_list_retires_its_events_and_they_come_back_when_it_returns(
+    connected: Connected,
+) -> None:
     connected.poll()
     standup = connected.events()["standup"]
     work = connected.google.accounts["work-token"].calendars.pop("work@example.test")
