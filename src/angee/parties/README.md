@@ -447,6 +447,30 @@ the handle count, the birthday and the anniversary (`read_private`); the name
 parts and the nickname are identity, read by whoever reads the person, as are
 the languages and the occupation. The existing `reader` relation includes private Party reads; use it only
 when that wider access is intended. Both use the native record-access owner.
+
+Parties' roles (`parties/role`, anchored by `PartiesRole`) say once, for every
+party, what a per-record grant says for one: a **contact reader**
+(`contact_reader`) reads every party and its handles, addresses, relationships,
+folders and circles as a `reader` does, private fields included; a **contact
+manager** (`contact_manager`) also writes them as an `editor` does (correcting
+and confirming addresses, adopting where adoption applies (through the role's
+own members: a platform admin's reach of every role lends no adoption, as
+`parties/person#adopt` has no admin arm), keeping two people
+separate and merging them, since a party merge needs write on both); a
+**contact admin** (`contact_admin`) also deletes and transfers as an owner
+does, which is where trashing a party sits (its `delete`), reads every directory
+and shares who reads its contacts (`parties/directory#share`). Connecting,
+changing and removing a directory stay with its integration's writers and
+platform admins. The two choices a deployment's architect may flip are one line
+each in `parties/party`: `role_private` (whether a contact reader reads private
+fields) and `role_delete` (whether a contact manager trashes, and with it
+deletes). A role holder also reads the record tasks about every party
+(`read_as_subject`) and sees people with an account in pickers. Parties grants
+the roles to nobody: a deployment grants membership in the Permissions Hub, which
+lists them as Contact Reader, Contact Manager and Contact Admin, or with a
+`kind = "grants"` resource row (`{resource: "parties/role:contact_manager",
+relation: member, subject: <a user's xref>}`). A directory's contact readers keep
+exactly what they read without the roles.
 Adding an address or relationship to a party takes write on that party
 (`create` on `parties/address` and `parties/relationship` in [permissions.zed](permissions.zed)):
 the row changes the party's projection, which a two-way directory writes to its

@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 31
+// @rebac_schema_revision: 32
 
 // Parties, folders and circles are grant roots: each is owned through its
 // transferable `owner` column (OwnerMixin), which an insert defaults to the row's
@@ -32,6 +32,18 @@
 // Lossless contact data and handle counts are private. created_by,
 // updated_by and their labels remain readable: attribution belongs to identity.
 
+// Parties' roles hold on every party what a per-record grant holds on one: a
+// contact reader reads as a `reader` does, a contact manager writes as an
+// `editor` does, a contact admin also deletes and transfers as an owner does.
+// A deployment grants their membership (the Permissions Hub, or a grants
+// resource row); parties grants them to nobody. Platform admins hold each.
+definition parties/role {
+    relation member: auth/user | auth/group#member | angee/role:admin#member
+    relation admin:  angee/role // rebac:const=admin
+
+    permission effective_member = member + admin->member
+}
+
 definition parties/party {
     relation owner: auth/user // rebac:field=owner
     relation editor: auth/user | auth/group#member
@@ -45,27 +57,44 @@ definition parties/party {
     permission statement_source = directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin
     relation person: iam/kind // rebac:const=person
+    relation contact_reader: parties/role // rebac:const=contact_reader
+    relation contact_manager: parties/role // rebac:const=contact_manager
+    relation contact_admin: parties/role // rebac:const=contact_admin
+
+    // What the roles hold on every party; a person and an organization read these through `party`.
+    permission role_admin = contact_admin->effective_member
+    permission role_manage = contact_manager->effective_member + role_admin
+    permission role_read = contact_reader->effective_member + role_manage
+    // Choice 1: a contact reader reads the private fields, as a per-record reader does (`role_read`);
+    // `role_manage` here keeps a contact reader to identity, as `identity_reader`.
+    permission role_private = role_read
+    // Choice 2: trashing a party is its `delete`, which also admits deleting it, so it stays with the
+    // contact admin (`role_admin`); `role_manage` here would let a contact manager trash and delete.
+    permission role_delete = role_admin
+    // Adoption lends a person to a directory only through who holds them, never the platform admin
+    // (`parties/person#adopt`): the roles' stored members, without the admin reach of `effective_member`.
+    permission role_adopt = contact_manager->member + contact_admin->member
 
     permission create = authenticated
     // Whoever reads the contacts of a directory linking this party reads its identity.
     permission contact_read = linking_directory->contact_read
-    permission read_granted = owner + editor + reader + identity_reader + contact_read + statement_source + admin->member
+    permission read_granted = owner + editor + reader + identity_reader + contact_read + statement_source + role_read + admin->member
     permission read = read_granted
     // What a party lends the record tasks about it: its direct holders only, so
     // task access never recurses through a thread the party follows (rebac.E016).
     // A source states the party, never the record tasks about it: it admits through `write` alone.
-    permission read_as_subject = owner + editor + reader + admin->member
-    permission write_as_subject = owner + editor + admin->member
-    permission read_private = owner + editor + reader + admin->member
+    permission read_as_subject = owner + editor + reader + role_read + admin->member
+    permission write_as_subject = owner + editor + role_manage + admin->member
+    permission read_private = owner + editor + reader + role_private + admin->member
     permission read__notes = read_private
     permission read__first_met_note = read_private
     permission read__handle_count = read_private
-    permission write = owner + editor + statement_source + admin->member
+    permission write = owner + editor + statement_source + role_manage + admin->member
     // Merging records in a batch (certain same-person pairs, a selection) is a person's
     // decision: an active person account that writes the party, never a service or agent account.
     permission batch_merge = write & person->active_member
-    permission delete = owner + admin->member
-    permission transfer = owner + admin->member
+    permission delete = owner + role_delete + admin->member
+    permission transfer = owner + role_admin + admin->member
     permission write__owner = transfer
 }
 
@@ -85,9 +114,9 @@ definition parties/person {
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read_granted = owner + editor + reader + party->identity_reader + party->contact_read + statement_source + admin->member
+    permission read_granted = owner + editor + reader + party->identity_reader + party->contact_read + statement_source + party->role_read + admin->member
     permission read = read_granted
-    permission read_private = owner + editor + reader + admin->member
+    permission read_private = owner + editor + reader + party->role_private + admin->member
     // Field gates are per resource definition, including inherited columns. The
     // nickname is identity, like the name parts: whoever reads the person reads it.
     permission read__notes = read_private
@@ -95,14 +124,14 @@ definition parties/person {
     permission read__handle_count = read_private
     permission read__birthday = read_private
     permission read__anniversary = read_private
-    permission write = owner + editor + statement_source + admin->member
-    permission delete = owner + admin->member
+    permission write = owner + editor + statement_source + party->role_manage + admin->member
+    permission delete = owner + party->role_delete + admin->member
     permission write__owner = party->transfer
     // Adopting the person binds a directory's contact to them: the directory becomes one of their statement
     // sources and its contact readers read them. Only who holds the person lends them so: their owner (the
     // column a transfer moves) and their editors, granted on the party; no platform-admin arm, since every
     // directory's owner is a platform admin (`parties/directory#create`).
-    permission adopt = owner + editor + party->editor
+    permission adopt = owner + editor + party->editor + party->role_adopt
 }
 
 definition parties/organization {
@@ -116,14 +145,14 @@ definition parties/organization {
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read_granted = owner + editor + reader + party->identity_reader + party->contact_read + statement_source + admin->member
+    permission read_granted = owner + editor + reader + party->identity_reader + party->contact_read + statement_source + party->role_read + admin->member
     permission read = read_granted
-    permission read_private = owner + editor + reader + admin->member
+    permission read_private = owner + editor + reader + party->role_private + admin->member
     permission read__notes = read_private
     permission read__first_met_note = read_private
     permission read__handle_count = read_private
-    permission write = owner + editor + statement_source + admin->member
-    permission delete = owner + admin->member
+    permission write = owner + editor + statement_source + party->role_manage + admin->member
+    permission delete = owner + party->role_delete + admin->member
     permission write__owner = party->transfer
 }
 
@@ -140,12 +169,15 @@ definition parties/handle {
     relation statement_role: provenance/role // rebac:const=parties_statement_source
     permission statement_source = directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin
+    relation contact_reader: parties/role // rebac:const=contact_reader
+    relation contact_manager: parties/role // rebac:const=contact_manager
+    relation contact_admin: parties/role // rebac:const=contact_admin
 
     permission create = authenticated
-    permission read_granted = creator + editor + reader + statement_source + stating_directory->contact_read + admin->member
+    permission read_granted = creator + editor + reader + statement_source + stating_directory->contact_read + contact_reader->effective_member + contact_manager->effective_member + contact_admin->effective_member + admin->member
     permission read = read_granted
-    permission write  = creator + editor + admin->member
-    permission delete = creator + admin->member
+    permission write  = creator + editor + contact_manager->effective_member + contact_admin->effective_member + admin->member
+    permission delete = creator + contact_admin->effective_member + admin->member
 }
 
 definition parties/address {
@@ -161,10 +193,10 @@ definition parties/address {
     relation admin: angee/role // rebac:const=admin
 
     permission create = party->write + admin->member
-    permission read_granted = creator + editor + reader + statement_source + stating_directory->contact_read + admin->member
+    permission read_granted = creator + editor + reader + statement_source + stating_directory->contact_read + party->role_read + admin->member
     permission read = read_granted
-    permission write = creator + editor + statement_source + admin->member
-    permission delete = creator + admin->member
+    permission write = creator + editor + statement_source + party->role_manage + admin->member
+    permission delete = creator + party->role_admin + admin->member
 }
 
 // A synced folder is an address book: its directory states the folder's name
@@ -177,13 +209,16 @@ definition parties/folder {
     relation reader: auth/user | auth/group#member
     relation directory: integrate/integration // rebac:field=record_links__stream__integration
     relation admin: angee/role // rebac:const=admin
+    relation contact_reader: parties/role // rebac:const=contact_reader
+    relation contact_manager: parties/role // rebac:const=contact_manager
+    relation contact_admin: parties/role // rebac:const=contact_admin
 
     permission create = authenticated
-    permission read   = owner + editor + reader + admin->member
-    permission write  = owner + editor + admin->member
+    permission read   = owner + editor + reader + contact_reader->effective_member + contact_manager->effective_member + contact_admin->effective_member + admin->member
+    permission write  = owner + editor + contact_manager->effective_member + contact_admin->effective_member + admin->member
     permission write_statements = write + directory
-    permission delete = owner + admin->member
-    permission transfer = owner + admin->member
+    permission delete = owner + contact_admin->effective_member + admin->member
+    permission transfer = owner + contact_admin->effective_member + admin->member
     permission write__owner = transfer
 }
 
@@ -197,12 +232,15 @@ definition parties/circle {
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin
+    relation contact_reader: parties/role // rebac:const=contact_reader
+    relation contact_manager: parties/role // rebac:const=contact_manager
+    relation contact_admin: parties/role // rebac:const=contact_admin
 
     permission create = authenticated
-    permission read   = owner + editor + reader + admin->member
-    permission write  = owner + editor + admin->member
-    permission delete = owner + admin->member
-    permission transfer = owner + admin->member
+    permission read   = owner + editor + reader + contact_reader->effective_member + contact_manager->effective_member + contact_admin->effective_member + admin->member
+    permission write  = owner + editor + contact_manager->effective_member + contact_admin->effective_member + admin->member
+    permission delete = owner + contact_admin->effective_member + admin->member
+    permission transfer = owner + contact_admin->effective_member + admin->member
     permission write__owner = transfer
 }
 
@@ -211,11 +249,14 @@ definition parties/circle_member {
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin
+    relation contact_reader: parties/role // rebac:const=contact_reader
+    relation contact_manager: parties/role // rebac:const=contact_manager
+    relation contact_admin: parties/role // rebac:const=contact_admin
 
     permission create = authenticated
-    permission read   = creator + editor + reader + admin->member
-    permission write  = creator + editor + admin->member
-    permission delete = creator + admin->member
+    permission read   = creator + editor + reader + contact_reader->effective_member + contact_manager->effective_member + contact_admin->effective_member + admin->member
+    permission write  = creator + editor + contact_manager->effective_member + contact_admin->effective_member + admin->member
+    permission delete = creator + contact_admin->effective_member + admin->member
 }
 
 // The relationship vocabulary is catalogue data every signed-in user picks
@@ -246,10 +287,10 @@ definition parties/relationship {
     relation admin: angee/role // rebac:const=admin
 
     permission create = party->write + admin->member
-    permission read_granted = creator + editor + reader + statement_source + stating_directory->contact_read + admin->member
+    permission read_granted = creator + editor + reader + statement_source + stating_directory->contact_read + party->role_read + admin->member
     permission read = read_granted
-    permission write = creator + editor + statement_source + admin->member
-    permission delete = creator + admin->member
+    permission write = creator + editor + statement_source + party->role_manage + admin->member
+    permission delete = creator + party->role_admin + admin->member
 }
 
 // A Directory is a multi-table-inheritance child of integrate/integration (a
@@ -266,15 +307,22 @@ definition parties/relationship {
 // chain from a party through its record links to a directory is planned only for
 // an actor who may read a directory's contacts; a column arm (the integration's
 // owner) would keep it in every read of a party, for every actor.
+//
+// A contact admin reads every directory and shares its contacts (`share`, which
+// manages `contact_reader`); connecting, changing and removing a directory stay
+// with its integration's writers and platform admins, so the roles widen nobody
+// who may connect a directory to a vendor.
 definition parties/directory {
     relation integration: integrate/integration // rebac:field=integration_ptr
     relation contact_reader: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin
+    relation contact_admin: parties/role // rebac:const=contact_admin
 
     permission create = admin->member
-    permission read   = integration->read + admin->member
+    permission read   = integration->read + contact_admin->effective_member + admin->member
     permission write  = integration->write + admin->member
     permission delete = integration->write + admin->member
+    permission share  = write + contact_admin->effective_member
     permission contact_read = contact_reader
     permission write__owner = integration->transfer
 }

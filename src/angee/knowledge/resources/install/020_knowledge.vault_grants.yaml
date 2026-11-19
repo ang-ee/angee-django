@@ -1,0 +1,10 @@
+rows:
+  - resource: knowledge.vault_people
+    relation: contact_viewer
+    subject: parties/role:contact_reader#member
+  - resource: knowledge.vault_people
+    relation: contact_editor
+    subject: parties/role:contact_manager#member
+  - resource: knowledge.vault_people
+    relation: contact_admin
+    subject: parties/role:contact_admin#member
