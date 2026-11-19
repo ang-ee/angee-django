@@ -29,10 +29,11 @@ from angee.integrate.states import LinkStatus, StreamDirection, StreamPhase
 from angee.integrate.streams import BridgeSyncError, PageResult, advance_stream, open_stream, reconcile_stream
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.testing.models import Directory, Handle, Party, Person, RelationshipKind
-from angee.parties.backends import CONTACTS, ParsedContact
+from angee.parties.backends import CONTACTS, CREATED_AT, ParsedContact, contact_from_payload
 from angee.parties_integrate_hubspot.backends import OVERLAP, HubSpotDirectoryBackend
 from angee.parties_integrate_hubspot.client import EPOCH, HubSpotError
 from angee.parties_integrate_hubspot.testing.server import (
+    CREATED,
     HUB_ID,
     TOKEN,
     HubSpotServer,
@@ -321,6 +322,28 @@ def test_a_delta_lands_hubspots_edits_including_one_made_between_its_pages(hubsp
     assert hubspot.listings() == []
     assert all("after" not in search and search["limit"] == 1 for search in hubspot.searches())
     assert [page.count for page in hubspot.drain()] == [0]
+    assert not failures(hubspot)
+
+
+def test_a_contact_hands_the_ingest_hubspots_creation_time_and_a_later_edit_at_the_source_keeps_it(
+    hubspot: HubSpot,
+) -> None:
+    """The time HubSpot says a record was created reaches the ingest with its contact, outside what is compared."""
+
+    created = datetime(2024, 3, 1, 8, 30, tzinfo=UTC)
+    ada = hubspot.server.add("contacts", ADA, modified=ago(days=2), created=created)
+    grace = hubspot.server.add("contacts", GRACE, modified=ago(days=1))
+    hubspot.drain()
+
+    assert contact_from_payload(hubspot.link(ada).source_payload).created_at == created
+    assert contact_from_payload(hubspot.link(grace).source_payload).created_at == CREATED
+    assert CREATED_AT not in hubspot.link(ada).applied_base.mapped_payload
+
+    hubspot.server.update("contacts", ada, {"jobtitle": "Director"}, modified=timezone.now())
+    hubspot.drain()
+
+    assert hubspot.contact(ada).title == "Director"
+    assert contact_from_payload(hubspot.link(ada).source_payload).created_at == created
     assert not failures(hubspot)
 
 

@@ -10,6 +10,17 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`, `angee.parties_integrate_hubspot`: a contact carries the
+  time its source says the record was created. `ParsedContact.created_at` is a
+  fact about the record, not a contact field: no projection compares it, the
+  ingest states nothing of it, and a mapping may not change it. The directory
+  payload keeps it beside the compared projection (`CREATED_AT`), so it is never
+  a change to apply, and `contact_from_payload` hands it to the ingest with the
+  contact. The HubSpot backend fills it from each record's `createdAt`
+  (`HubSpotObject.created_at`, unset when unreadable, which never makes the
+  record unreadable). Upgrade: none; a link's stored payload gains the time on
+  the record's next read.
+
 - `angee.parties`: roles of its own, `parties/role` (`PartiesRole`):
   `contact_reader`, `contact_manager` and `contact_admin` hold on every party,
   and on the handles, addresses, relationships and circle memberships it holds
