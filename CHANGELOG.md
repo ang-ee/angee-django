@@ -123,6 +123,12 @@ live in code docstrings.
   shows nothing for an empty value instead of a mask. The `textarea` widget shows
   the field's placeholder, and its label only when the field declares none.
 
+- `angee.integrate`'s console credential form enters a static token's key in the
+  `password` widget (it was a plain text input) and drops the entered material
+  from the mutation cache once the create settles (`transient`). A private key
+  and a service-account key file are multi-line, so they stay in text areas,
+  which now show their placeholders.
+
 - Sharing a directory shares its contacts. `parties/directory` has a stored,
   grantable `contact_reader` relation (shared through the record-access surface
   under the directory's `write`) and a `contact_read` permission: its grantees and
