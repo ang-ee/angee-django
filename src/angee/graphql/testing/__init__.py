@@ -1,4 +1,4 @@
-"""GraphQL test support: capture broadcasts, execute documents and pin their SQL cost.
+"""GraphQL test support: capture broadcasts, read authored documents, execute documents and pin their SQL cost.
 
 Import document helpers from ``angee.graphql.testing.documents`` and
 ``capture_broadcasts`` from ``angee.graphql.testing``. The helpers are plain functions,

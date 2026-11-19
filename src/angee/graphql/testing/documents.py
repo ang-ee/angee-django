@@ -1,9 +1,11 @@
-"""Execute GraphQL documents as one actor and pin the SQL they issue."""
+"""Read an addon's authored GraphQL documents, execute documents as one actor and pin the SQL they issue."""
 
 from __future__ import annotations
 
+import re
 from contextlib import ExitStack
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -13,6 +15,25 @@ from django.http import HttpResponse
 from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context
+
+from graphql import DocumentNode, Source, parse
+
+_AUTHORED_DOCUMENT = re.compile(r"graphql\(`(.*?)`\)", re.S)
+
+
+def authored_documents(*paths: Path) -> list[DocumentNode]:
+    """Parse every ``graphql(`...`)`` document the web ``documents*.ts`` files at ``paths`` author.
+
+    Each document keeps its file as the source name, so a validation error names
+    the file. ``graphql.concat_ast`` joins them into the one document host codegen
+    validates.
+    """
+
+    return [
+        parse(Source(body, str(path)))
+        for path in paths
+        for body in _AUTHORED_DOCUMENT.findall(path.read_text(encoding="utf-8"))
+    ]
 
 
 def graphql_request(user: Any, *, session: bool = False) -> Any:

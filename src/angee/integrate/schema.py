@@ -318,7 +318,9 @@ class ConnectWithAccount:
     A capability's connect-facts type implements it and is built with :meth:`of`
     from an unsaved row of the capability (``IntegrationManager.build``).
     ``@angee/integrate``'s connect-with-account action reads it through its
-    ``ConnectWithAccountFields`` fragment.
+    ``ConnectWithAccountFields`` fragment, so integrate's console ``types``
+    bucket registers it: Strawberry omits a type nothing references, and a
+    host composing no implementer still validates the fragment.
     """
 
     oauth_client: strawberry.ID | None
@@ -2005,6 +2007,7 @@ _CONSOLE_TYPES: list[object] = [
     CredentialType,
     ConnectedExternalAccountType,
     ConnectedCredentialType,
+    ConnectWithAccount,
     ConnectableAccount,
     OAuthStartPayload,
     ConnectAccountResult,
