@@ -1,6 +1,7 @@
 import { createNamespaceT } from "@angee/ui/i18n";
 
 export const enWorkMessages: Record<string, string> = {
+  "triage.action.wake": "Wake",
   "project.team": "Team",
   "access.manager": "Manager",
   "common.category": "Category",

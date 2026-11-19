@@ -1,5 +1,17 @@
 import { graphql, type DocumentType } from "@angee/gql/console";
 
+export const RetryMessageDeliveryDocument = graphql(`
+  mutation MessagingRetryDelivery($id: ID!, $expected_revision: Int!) {
+    retry_message_delivery(id: $id, expected_revision: $expected_revision) { ok message id code validation_errors }
+  }
+`);
+
+export const AcknowledgeMessageDeliveryDocument = graphql(`
+  mutation MessagingAcknowledgeDelivery($id: ID!, $expected_revision: Int!) {
+    acknowledge_message_delivery(id: $id, expected_revision: $expected_revision) { ok message id code validation_errors }
+  }
+`);
+
 /** many_actions retains each selected row's revision and outcome. */
 export const SendHeldDraftsDocument = graphql(`
   mutation MessagingSendHeldDrafts($selection: [ActionSelectionInput!]!) {

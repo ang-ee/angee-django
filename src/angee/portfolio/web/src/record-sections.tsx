@@ -3,6 +3,9 @@ import {
   Column,
   DrawerResourceList,
   List,
+  RecordActionBar,
+  useActionResultRun,
+  useRecordChromeActionOutcome,
   useRecordChromeContext,
   useRouteHref,
   type StringIdRow,
@@ -10,8 +13,30 @@ import {
 import * as React from "react";
 
 import { initiativeProjectForm, releaseForm } from "./record-forms";
+import { PromoteProjectToProductDocument } from "./documents";
 import { usePortfolioT } from "./i18n";
-import { INITIATIVE_PROJECT_MODEL, RELEASE_MODEL } from "./resources";
+import { INITIATIVE_PROJECT_MODEL, PRODUCT_MODEL, RELEASE_MODEL } from "./resources";
+
+/** Portfolio's maturation verb joins the project's existing record menu. */
+export function PromoteProjectAction(): React.ReactElement | null {
+  const t = usePortfolioT();
+  const { record, recordId, formReadOnly } = useRecordChromeContext();
+  const [promote, state] = useRecordChromeActionOutcome({
+    document: PromoteProjectToProductDocument,
+    resultField: "promote_project_to_product",
+    idArgument: "id",
+  }, { invalidateModels: [PRODUCT_MODEL] });
+  const settle = useActionResultRun({ linkTo: PRODUCT_MODEL });
+  if (!record || !recordId || formReadOnly) return null;
+  return <RecordActionBar record={record} actions={[{
+    id: "portfolio-promote-project",
+    label: t("project.promote"),
+    permission: "write",
+    placement: "menu",
+    disabled: state.fetching,
+    run: async () => { await settle(() => promote(recordId)); },
+  }]} />;
+}
 
 interface ProjectRow extends StringIdRow {
   title?: unknown;

@@ -7,6 +7,8 @@ import {
   relationValueId,
   useActionOutcomeMutation,
   useAuthoredResourceMutation,
+  useActionResultRun,
+  useRecordChromeActionOutcome,
   useRecordChromeContext,
   useRecordChromeActionMutation,
   useDescriptorRowActions,
@@ -17,7 +19,7 @@ import {
 import * as React from "react";
 import { TASK_MODEL, offersTaskAction } from "@angee/projects";
 
-import { AcceptTaskDocument, DeclineTaskDocument } from "./documents";
+import { AcceptTaskDocument, DeclineTaskDocument, WakeTaskDocument } from "./documents";
 import { useTaskContext } from "./context";
 import { useWorkT } from "./i18n";
 import { STAGE_MODEL } from "./resources";
@@ -164,10 +166,24 @@ export function TriageRecordActions(): React.ReactElement | null {
   const stage = taskContext.data?.project_tasks_by_pk?.stage ?? record?.stage;
   const [start, startState] = useRecordChromeActionMutation<ActionFieldName>("start_task");
   const [returnToTriage, returnState] = useRecordChromeActionMutation<ActionFieldName>("return_task_to_triage");
-  if (!record || !queueId || context.formReadOnly) return null;
+  const [wake, wakeState] = useRecordChromeActionOutcome({
+    document: WakeTaskDocument, resultField: "wake_task", idArgument: "task",
+  });
+  const settle = useActionResultRun();
+  const wakeAction: ActionDescriptor = {
+    id: "work-wake-task", label: t("triage.action.wake"), permission: "write",
+    primary: true, placement: "menu", disabled: wakeState.fetching,
+    visibleWhen: (row) => row.snoozed_at != null && typeof row.revision === "number",
+    run: async () => {
+      if (typeof record?.revision !== "number") return;
+      await settle(() => wake(context.recordId, { expected_revision: record.revision }));
+    },
+  };
+  if (!record || context.formReadOnly) return null;
+  if (!queueId) return <RecordActionBar record={record} actions={[wakeAction]} />;
   if (!isTaskInTriage(record)) {
     // Start shows where it would act (a waiting stage); the row's task_actions admit both verbs.
-    const verbs: ActionDescriptor[] = [];
+    const verbs: ActionDescriptor[] = [wakeAction];
     if (["BACKLOG", "UNSTARTED"].includes(String(stage?.category).toUpperCase()) && offersTaskAction(record, "start")) verbs.push({
       id: "work-start-task", label: t("task.action.start"), icon: "work-start",
       disabled: startState.fetching || returnState.fetching,
@@ -180,7 +196,7 @@ export function TriageRecordActions(): React.ReactElement | null {
     });
     return <RecordActionBar record={record} actions={verbs} />;
   }
-  return <RecordActionBar record={record} actions={actions} />;
+  return <RecordActionBar record={record} actions={[wakeAction, ...actions]} />;
 }
 
 function canonicalTaskFilters(queueId: string) {

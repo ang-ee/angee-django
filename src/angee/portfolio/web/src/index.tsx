@@ -22,7 +22,7 @@ import {
   InitiativeUpdatesSection,
   ProjectUpdatesSection,
 } from "./update-composer";
-import { InitiativeProjectsTab, ProductProjectsTab, ProductReleasesTab } from "./record-sections";
+import { InitiativeProjectsTab, ProductProjectsTab, ProductReleasesTab, PromoteProjectAction } from "./record-sections";
 
 /** A tab label resolved through the host's i18n, with the bundled English as the fallback. */
 const tabLabel = (key: keyof typeof enPortfolioMessages) => ({ namespace: "portfolio", key, fallback: enPortfolioMessages[key] });
@@ -76,6 +76,14 @@ const portfolio = defineBaseAddon({
     "portfolio.Release": releaseForm,
   },
   containers: {
+    [`${PROJECT_MODEL}#actions-menu`]: {
+      "portfolio.promote-project": {
+        permission: "write",
+        requires: "portfolio.Product#create",
+        requiredFields: ["permissions"],
+        content: <PromoteProjectAction />,
+      },
+    },
     [`${PROJECT_MODEL}#sections`]: {
       "portfolio.project-fields": { sequence: 40, content: projectPortfolioFormSection },
       "portfolio.project-updates": {

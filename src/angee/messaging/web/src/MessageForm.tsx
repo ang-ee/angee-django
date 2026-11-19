@@ -1,16 +1,17 @@
 import * as React from "react";
 import {
-  Field, Form, Group, ListView, LoadingPanel, ErrorBanner,
+  Action, Field, Form, Group, ListView, LoadingPanel, ErrorBanner,
   NavLink, registerForm, useResourceRecordHrefLookup,
+  useActionResultRun, useAuthoredResourceMutation, useRecordAction,
   type ListColumn, type RecordPanelContext, type RecordTabDescriptor,
   type RegisteredFormProps,
   useMimeLabel,
   useResolvedWidget,
 } from "@angee/ui";
-import { useAuthoredQuery } from "@angee/refine";
+import { extractActionOutcome, useAuthoredQuery } from "@angee/refine";
 
 import { useMessagingT } from "./i18n";
-import { MessageReaderDocument, type PartListRow } from "./documents";
+import { AcknowledgeMessageDeliveryDocument, MessageReaderDocument, RetryMessageDeliveryDocument, type PartListRow } from "./documents";
 import { MessageReader } from "./MessageReader";
 
 const MODEL = "messaging.Message";
@@ -161,6 +162,27 @@ export function messageRecordTabs(
 function MessageForm({ resource: _resource, readOnly, ...props }: RegisteredFormProps): React.ReactElement {
   const t = useMessagingT();
   const recordTabs = React.useMemo(() => messageRecordTabs(t), [t]);
+  const [retry, retryState] = useAuthoredResourceMutation(RetryMessageDeliveryDocument, {
+    errorNotification: false,
+    invalidateModels: [MODEL, "messaging.Thread"],
+    shouldInvalidate: (data) => data?.retry_message_delivery.ok === true,
+  });
+  const [acknowledge, acknowledgeState] = useAuthoredResourceMutation(AcknowledgeMessageDeliveryDocument, {
+    errorNotification: false,
+    invalidateModels: [MODEL, "messaging.Thread"],
+    shouldInvalidate: (data) => data?.acknowledge_message_delivery.ok === true,
+  });
+  const settle = useActionResultRun();
+  const retryDelivery = useRecordAction(async (id, context) => {
+    const revision = context.record?.revision;
+    if (typeof revision !== "number") return;
+    await settle(async () => extractActionOutcome(await retry({ id, expected_revision: revision }), "retry_message_delivery"));
+  });
+  const markAsSent = useRecordAction(async (id, context) => {
+    const revision = context.record?.revision;
+    if (typeof revision !== "number") return;
+    await settle(async () => extractActionOutcome(await acknowledge({ id, expected_revision: revision }), "acknowledge_message_delivery"));
+  });
   const RecordTags = useResolvedWidget("angee.tags.recordTags")?.edit;
   const returning = React.useMemo(() => [...(props.returning ?? []), ...MESSAGE_TAG_FIELDS], [props.returning]);
   return <Form
@@ -177,6 +199,17 @@ function MessageForm({ resource: _resource, readOnly, ...props }: RegisteredForm
   >
     <Field name="title" title readOnly />
     <Field name="status" readOnly />
+    <Field name="revision" hidden readOnly />
+    <Action id="retry-delivery" label={t("messages.retryDelivery")} permission="send_held" primary
+      disabled={retryState.fetching || acknowledgeState.fetching}
+      confirm={{ title: t("messages.retryDelivery"), body: t("messages.retryDeliveryConfirm") }}
+      visibleWhen={(record) => typeof record.revision === "number" && ["FAILED", "UNCERTAIN"].includes(String(record.status).toUpperCase())}
+      run={retryDelivery} />
+    <Action id="mark-as-sent" label={t("messages.markAsSent")} permission="send_held"
+      disabled={retryState.fetching || acknowledgeState.fetching}
+      confirm={{ title: t("messages.markAsSent"), body: t("messages.markAsSentConfirm") }}
+      visibleWhen={(record) => typeof record.revision === "number" && String(record.status).toUpperCase() === "UNCERTAIN"}
+      run={markAsSent} />
     {/* The reader shows the sender and date; the envelope keeps the transport facts. */}
     {/* The transport id is a wire fact, not user text: the envelope keeps the labelled facts. */}
     <Group label={t("messages.groupEnvelope")} columns={2} pane="envelope">
