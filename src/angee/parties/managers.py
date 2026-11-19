@@ -3949,8 +3949,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         and no account's own; no address the contact carries is a person
         account's sign-in address in any spelling (``lookup.sign_in``), whichever
         address found the person and whether or not the account has a person;
-        the directory's owner holds ``adopt`` on them (their owner or an editor of their party:
-        no platform-admin arm), checked for that user though sync runs as system
+        the directory's owner holds ``adopt`` on them (their owner, an editor of their party or a
+        stored member of the contact manager or admin role: no platform-admin arm, so a platform
+        admin adopts only once a deployment grants the platform admins' set onto one of those
+        roles, after which every directory adopts), checked for that user though sync runs as system
         work; no other contact of the directory names them, a tombstoned one
         included, since its statements are keyed by integration, not by link
         (the links of the records ``replaces`` folded into this one are this

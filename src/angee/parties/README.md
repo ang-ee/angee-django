@@ -458,7 +458,10 @@ a `reader` does, private fields included; a **contact
 manager** (`contact_manager`) also writes them as an `editor` does (correcting
 and confirming addresses, adopting where adoption applies (through the role's
 own members: a platform admin's reach of every role lends no adoption, as
-`parties/person#adopt` has no admin arm), keeping two people
+`parties/person#adopt` has no admin arm; but a role's member may be a set, and
+granting the platform admins' set, `angee/role:admin#member`, onto the contact
+manager or admin role makes every platform admin a member, and so every
+directory, whose owner is a platform admin, adopts the people it names), keeping two people
 separate), but merges none: a merge retires the party merged away to the
 trash, so `Party.MERGED_PERMISSION` is `merge_away`, which is that party's
 write with `role_merge_away` (the contact admin) in place of `role_manage`
