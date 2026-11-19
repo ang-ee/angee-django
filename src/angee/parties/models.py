@@ -211,7 +211,8 @@ class Party(
         historical_queryset=PartyStatementQuerySet,
     )
     same_as = PairAspect(link="integrate.RecordLink")
-    MERGED_PERMISSION = "write"
+    MERGED_PERMISSION = "merge_away"
+    """A merge retires the party merged away to the trash: its write, but only a contact admin's of the roles."""
     retains_merged = True
 
     display_name = models.TextField()

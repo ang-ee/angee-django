@@ -102,6 +102,8 @@ MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
         "read__notes": (*ROLE_HOLDERS, "owner", "editor", "platform"),
         "read__birthday": (*ROLE_HOLDERS, "owner", "editor", "platform"),
         "write": (*WRITERS, "editor"),
+        # Merging away retires to the trash: through the roles, the contact admin's (pending ruling).
+        "merge_away": (*ADMINS, "editor"),
         "delete": ADMINS,
         # Adoption runs through the roles' own members, never a platform admin's reach of every role.
         "adopt": ("manager", "admin", "group manager", "owner", "editor"),
@@ -111,6 +113,7 @@ MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
         "read_private": (*ROLE_HOLDERS, "owner", "editor", "platform"),
         "read__notes": (*ROLE_HOLDERS, "owner", "editor", "platform"),
         "write": (*WRITERS, "editor"),
+        "merge_away": (*ADMINS, "editor"),
         "delete": ADMINS,
         "transfer": ADMINS,
     },
@@ -119,6 +122,7 @@ MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
         "read_private": (*ROLE_HOLDERS, "owner", "platform"),
         "read__notes": (*ROLE_HOLDERS, "owner", "platform"),
         "write": WRITERS,
+        "merge_away": ADMINS,
         "delete": ADMINS,
     },
     "handle": {"read": (*ROLE_HOLDERS, "owner", "platform"), "write": WRITERS, "delete": ADMINS},
@@ -189,11 +193,12 @@ def test_a_role_holder_sees_a_person_nobody_shared_with_them_and_their_pages(wor
         MarkdownPage.objects.write_body(w.note, "Likes nothing.")
 
 
-def test_a_manager_keeps_people_separate_confirms_and_merges_and_a_reader_cannot(world: SimpleNamespace) -> None:
-    """The review verbs ride the party's write."""
+def test_a_manager_keeps_people_separate_and_confirms_and_a_contact_admin_merges(world: SimpleNamespace) -> None:
+    """The review verbs ride the party's write; a merge trashes the party merged away, so the roles leave it to the
+    contact admin (pending ruling, parties/party#role_merge_away)."""
 
     w = world
-    reader, manager = w.holders["contact_reader"], w.holders["contact_manager"]
+    reader, manager, admin = (w.holders[role] for role in ROLES)
     with system_context(reason="tests.parties_roles.merge_seed"):
         survivor = Person.objects.create(display_name="Ada Example", created_by=w.owner)
         merged = Person.objects.create(display_name="Ada E.", created_by=w.owner)
@@ -207,10 +212,15 @@ def test_a_manager_keeps_people_separate_confirms_and_merges_and_a_reader_cannot
         Person.objects.get(pk=survivor.pk).confirm_statement(aspect="name", values={"given_name": "Ada"})
     with system_context(reason="tests.parties_roles.kept_separate"):
         assert Party.same_as.kept_separate(survivor, apart)
-    with actor_context(manager):
+    with actor_context(manager), pytest.raises(PermissionDenied):
+        Party.objects.get(pk=survivor.pk).merge(records=[merged.public_id])
+    with system_context(reason="tests.parties_roles.merge_refused"):
+        assert Party._base_manager.get(pk=merged.pk).merged_into_id is None
+    with actor_context(admin):
         Party.objects.get(pk=survivor.pk).merge(records=[merged.public_id])
     with system_context(reason="tests.parties_roles.merge_readback"):
-        assert Party._base_manager.get(pk=merged.pk).merged_into_id == survivor.pk
+        retired = Party._base_manager.get(pk=merged.pk)
+        assert retired.merged_into_id == survivor.pk and retired.is_trashed
 
 
 def test_a_partyless_handle_is_out_of_every_roles_reach(world: SimpleNamespace) -> None:

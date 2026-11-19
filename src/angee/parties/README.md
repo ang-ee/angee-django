@@ -459,7 +459,11 @@ manager** (`contact_manager`) also writes them as an `editor` does (correcting
 and confirming addresses, adopting where adoption applies (through the role's
 own members: a platform admin's reach of every role lends no adoption, as
 `parties/person#adopt` has no admin arm), keeping two people
-separate and merging them, since a party merge needs write on both); a
+separate), but merges none: a merge retires the party merged away to the
+trash, so `Party.MERGED_PERMISSION` is `merge_away`, which is that party's
+write with `role_merge_away` (the contact admin) in place of `role_manage`
+(pending the architect's ruling; `role_manage` there lets a manager merge, and
+so trash, without restoring); a
 **contact admin** (`contact_admin`) also deletes and transfers as an owner
 does, which is where trashing a party sits (its `delete`), reads every directory
 and shares who reads its contacts (`parties/directory#share`). Connecting,

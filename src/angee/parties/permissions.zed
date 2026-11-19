@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 34
+// @rebac_schema_revision: 35
 
 // Parties, folders and circles are grant roots: each is owned through its
 // transferable `owner` column (OwnerMixin), which an insert defaults to the row's
@@ -77,6 +77,9 @@ definition parties/party {
     // Pending ruling: the roles read the record tasks about a party (`read_as_subject`) and write none;
     // `role_manage` here lets a contact manager and admin write, share, delete and transfer them.
     permission role_write_as_subject = nil
+    // Pending ruling: merging a party away retires it to the trash (`Party.MERGED_PERMISSION`), which the
+    // roles leave to the contact admin (`role_admin`); `role_manage` here lets a contact manager merge, and so trash.
+    permission role_merge_away = role_admin
 
     permission create = authenticated
     // Whoever reads the contacts of a directory linking this party reads its identity.
@@ -96,6 +99,8 @@ definition parties/party {
     // Merging records in a batch (certain same-person pairs, a selection) is a person's
     // decision: an active person account that writes the party, never a service or agent account.
     permission batch_merge = write & person->active_member
+    // What merging this party away into another needs: its write, but through the roles only `role_merge_away`.
+    permission merge_away = owner + editor + statement_source + role_merge_away + admin->member
     permission delete = owner + role_delete + admin->member
     permission transfer = owner + role_admin + admin->member
     permission write__owner = transfer
@@ -128,6 +133,7 @@ definition parties/person {
     permission read__birthday = read_private
     permission read__anniversary = read_private
     permission write = owner + editor + statement_source + party->role_manage + admin->member
+    permission merge_away = owner + editor + statement_source + party->role_merge_away + admin->member
     permission delete = owner + party->role_delete + admin->member
     permission write__owner = party->transfer
     // Adopting the person binds a directory's contact to them: the directory becomes one of their statement
@@ -155,6 +161,7 @@ definition parties/organization {
     permission read__first_met_note = read_private
     permission read__handle_count = read_private
     permission write = owner + editor + statement_source + party->role_manage + admin->member
+    permission merge_away = owner + editor + statement_source + party->role_merge_away + admin->member
     permission delete = owner + party->role_delete + admin->member
     permission write__owner = party->transfer
 }
