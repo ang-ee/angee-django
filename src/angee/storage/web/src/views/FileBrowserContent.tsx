@@ -13,8 +13,6 @@ export interface FileBrowserContentProps {
   baseFilter: ResourceFilter<"storage.File">;
   /** Detail route for a clicked row — the list renders each row as a link. */
   rowHref: ListProps<StorageFileRow>["rowHref"];
-  /** Bulk actions rendered in the selection bar when files are selected. */
-  bulkActions: ListProps<StorageFileRow>["bulkActions"];
   onListStateChange: (state: ResourceListSnapshot<StorageFileRow>) => void;
   uploads: StorageUpload;
   uploadTarget: UploadTarget | null;
@@ -40,7 +38,6 @@ const FILE_LIST_FIELDS = [
 export function FileBrowserContent({
   baseFilter,
   rowHref,
-  bulkActions,
   onListStateChange,
   uploads,
   uploadTarget,
@@ -59,7 +56,6 @@ export function FileBrowserContent({
       baseFilter={baseFilter}
       fields={FILE_LIST_FIELDS}
       rowHref={rowHref}
-      bulkActions={bulkActions}
       draggableRow={fileDragPayload}
       renderCard={fileGalleryCard}
       onListStateChange={onListStateChange}

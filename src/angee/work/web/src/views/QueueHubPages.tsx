@@ -112,6 +112,8 @@ function QueueHubPage({ spec }: { spec: QueueHubSpec }): React.ReactElement {
       <PageBody>
         <List<QueueHubRow>
           resource={QUEUE_MODEL}
+          // Hubs navigate to a queue; queue removal belongs to its settings.
+          selectable={false}
           scope="local"
           baseFilter={spec.filter}
           order={{ key: "ASC" }}

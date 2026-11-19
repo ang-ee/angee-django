@@ -1,7 +1,7 @@
 import { type Row } from "@angee/metadata";
 import {
   useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
-import { useBusyRun, useDeleteWithPreview, useTrashRecord } from "@angee/ui";
+import { useBusyRun, useTrashRecord } from "@angee/ui";
 import {
   refineResourceName,
   useModelMetadata,
@@ -13,16 +13,12 @@ import type {
 
 export interface FileActions {
   busy: boolean;
-  /** Soft-delete a file into the Trash; resolves whether it was trashed. */
-  trash: (id: string) => Promise<boolean>;
+  /** Confirm and move a file into the Trash; resolves whether it was trashed. */
+  trash: (id: string, name?: string) => Promise<boolean>;
   /** Pull a file back out of the Trash; resolves whether it was restored. */
   restore: (id: string) => Promise<boolean>;
   /** Move a file into a folder by public id, or `null` for the root; resolves whether it moved. */
   move: (id: string, folder: string | null) => Promise<boolean>;
-  /** Soft-delete many files in one pass, refetching once; stops at the first refusal and resolves whether all were trashed. */
-  trashMany: (ids: Iterable<string>) => Promise<boolean>;
-  /** Restore many files in one pass, refetching once; stops at the first refusal and resolves whether all were restored. */
-  restoreMany: (ids: Iterable<string>) => Promise<boolean>;
 }
 
 /**
@@ -38,7 +34,6 @@ export function useFileActions(
   const { onChanged } = options;
   const metadata = useModelMetadata(FILE_MODEL);
   const resource = metadata?.resource ?? null;
-  const deleteWithPreview = useDeleteWithPreview(resource);
   const trashRecord = useTrashRecord(resource);
   const updateFile = useUpdate<RowRecord, HttpError, Record<string, unknown>>({
     resource: refineResourceName(resource),
@@ -49,10 +44,10 @@ export function useFileActions(
 
   return {
     busy,
-    trash: (id) =>
+    trash: (id, name) =>
       settle(async () => {
         requireFileResource(resource);
-        return deleteWithPreview.remove(id, { errorNotification: false });
+        return trashRecord.trash(id, name);
       }, false),
     restore: (id) =>
       settle(async () => {
@@ -63,22 +58,6 @@ export function useFileActions(
       settle(async () => {
         requireFileResource(resource);
         await updateFile.mutateAsync({ id, values: { folder }, errorNotification: false });
-        return true;
-      }, false),
-    trashMany: (ids) =>
-      settle(async () => {
-        for (const id of ids) {
-          requireFileResource(resource);
-          if (!(await deleteWithPreview.remove(id, { errorNotification: false }))) return false;
-        }
-        return true;
-      }, false),
-    restoreMany: (ids) =>
-      settle(async () => {
-        requireFileResource(resource);
-        for (const id of ids) {
-          if (!(await trashRecord.restore(id))) return false;
-        }
         return true;
       }, false),
   };

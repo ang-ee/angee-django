@@ -1,10 +1,18 @@
 import { createNamespaceT } from "@angee/ui/i18n";
 
 export const enSpacesMessages: Record<string, string> = {
+  "group.roster.removed": "Membership removed",
+  "group.roster.confirm": "Confirm",
+  "group.roster.confirmed": "Membership confirmed",
+  "group.roster.confirmError": "Could not confirm membership.",
+  "group.roster.dismiss": "Dismiss",
+  "group.roster.dismissed": "Membership dismissed",
+  "group.roster.dismissError": "Could not dismiss membership.",
   "group.parent": "Parent space",
   "group.details": "Details",
   "group.visibility": "Visibility",
   "group.makePublic": "Make public",
+  "group.makePublicConfirmBody": "This widens who can read this space. Make it public?",
   "group.makePrivate": "Make private",
   "group.tabs.roster": "Roster",
   "group.tabs.threads": "Threads",

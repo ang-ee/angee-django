@@ -276,8 +276,9 @@ export interface ListViewProps<TRow extends Row = Row> {
   tableLayout?: ResourceTableLayout;
   /** Keep column headers visible or accessible-only. Defaults to visible. */
   headerVisibility?: ResourceTableHeaderVisibility;
-  /** Enable row selection and the bulk-selection column. Defaults to true except
-   * in embedded presentation. Selection survives pagination, page-size and view
+  /** Enable row selection and the bulk-selection column. Outside embedded lists,
+   * defaults on for lifecycle actions, page bulkActions or a grantable model.
+   * A source list counts only page bulkActions; an explicit value always wins. Selection survives pagination, page-size and view
    * changes that keep the same grouping. setView can replace groupStack with the
    * new view's defaults, clearing selection if the grouping changes. Filter, sort,
    * group, preset query/fixed-filter, base-filter, resource and Router-history
@@ -372,7 +373,8 @@ export interface ListViewProps<TRow extends Row = Row> {
    * must validate them, for example by revision. Surfaces sharing a selection
    * scope share its snapshots: a row selected through a sibling surface carries
    * that surface's fields, so actions must check the fields they need.
-   * Rendered content replaces generic delete; null, undefined or false keeps it. */
+   * Rendered content precedes the generic metadata-driven Archive, Trash/Restore
+   * and Delete actions. A source list receives only these page-owned actions. */
   bulkActions?: (
     selectedIds: ReadonlySet<string>,
     clear: () => void,

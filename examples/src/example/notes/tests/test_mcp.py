@@ -217,7 +217,7 @@ class NotesMCPServerTests(MCPStreamableHTTPMixin, TransactionTestCase):
             self.assertEqual(reread["tags"], ["x"])
             self.assertEqual(reread["body"], "one two three")
 
-            # delete_note exercises the fixed-arg (confirm=true) + DeletePreview path; the
+            # The delete_note tool calls the generated notes_delete root with confirm=true; the
             # note is then gone, so a follow-up read returns a tool error.
             deleted = await self._tool("delete_note", {"sqid": created["sqid"]})
             self.assertGreaterEqual(deleted["total_deleted_count"], 1)

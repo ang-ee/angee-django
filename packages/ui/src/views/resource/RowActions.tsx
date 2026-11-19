@@ -26,9 +26,10 @@ export interface RowActionConfirmCopy<TRow extends Row> {
   cancel?: (row: TRow) => React.ReactNode;
 }
 
-/** The outcome copy a row verb toasts: the title on success and failure, the description as the failure reason. */
+/** Outcome-specific titles and the fallback failure reason for an authored row verb. */
 export interface RowActionToastCopy<TRow extends Row> {
-  title: (row: TRow) => string;
+  successTitle: (row: TRow) => string;
+  failureTitle: (row: TRow) => string;
   description: (row: TRow) => string;
 }
 
@@ -424,12 +425,12 @@ function AuthoredRowActionButton<TRow extends Row>({
       // The settle owner toasts the outcome: the declared copy titles it, its
       // description is the failure reason.
       await settle(async () => {
-        const failed = (reason: string) => ({ ok: false, message: action.toast.title(row), validationErrors: { outcome: [reason] } });
+        const failed = (reason: string) => ({ ok: false, message: action.toast.failureTitle(row), validationErrors: { outcome: [reason] } });
         try {
           // The unexported declaration brand proves this document and projector
           // were paired by defineRowAction before the heterogeneous array erased TDocument.
           const result = await mutate(action.variables(row) as never);
-          return action.succeeded(result) ? { ok: true, message: action.toast.title(row) } : failed(action.toast.description(row));
+          return action.succeeded(result) ? { ok: true, message: action.toast.successTitle(row) } : failed(action.toast.description(row));
         } catch (cause) {
           return failed(errorMessage(cause, action.toast.description(row)));
         }

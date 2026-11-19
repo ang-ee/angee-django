@@ -35,6 +35,8 @@ interface ConditionalMutationButtonBase<TField extends ActionFieldName> {
    * `validationErrors` to its inputs; omitted, the verb fires on the id alone.
    */
   args?: readonly ActionArg[];
+  /** Keep write-only credentials out of the shared mutation cache. */
+  transient?: boolean;
 }
 
 /**
@@ -62,6 +64,7 @@ export function ConditionalMutationButton<
   TField extends ActionFieldName = ActionFieldName,
 >({
   args,
+  transient,
   confirm,
   field,
   glyph,
@@ -77,8 +80,8 @@ export function ConditionalMutationButton<
     record,
     formReadOnly,
   } = useRecordChromeContext();
-  const [mutate] = useRecordChromeActionMutation<TField>(field);
-  const [mutateOutcome] = useRecordChromeActionOutcome<TField>(field);
+  const [mutate] = useRecordChromeActionMutation<TField>(field, { transient });
+  const [mutateOutcome] = useRecordChromeActionOutcome<TField>(field, { transient, errorNotification: false });
 
   if (
     record === null ||
@@ -91,7 +94,7 @@ export function ConditionalMutationButton<
     id: field,
     label,
     icon: glyph,
-    placement: "toolbar",
+    placement: variant === "primary" ? undefined : "toolbar",
     danger: variant === "danger",
     primary: variant === "primary",
     ...(confirm ? { confirm } : {}),

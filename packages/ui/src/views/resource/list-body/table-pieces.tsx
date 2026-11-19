@@ -31,12 +31,14 @@ export function ListSelectionBar({
   onClear,
   onDelete,
   deletePending = false,
+  pending = false,
   actions: extraActions,
 }: {
   count: number;
   onClear: () => void;
   onDelete?: () => void;
   deletePending?: boolean;
+  pending?: boolean;
   /** Caller-supplied bulk actions rendered before the built-in Delete/Clear. */
   actions?: React.ReactNode;
 }): React.ReactElement {
@@ -49,22 +51,23 @@ export function ListSelectionBar({
       {onDelete ? (
         <SelectionBarPrimitive.Action
           surface="brand"
+          tone="danger"
           pending={deletePending}
-          disabled={previewBlocked}
+          disabled={previewBlocked || pending}
           onClick={() => { if (!previewBlocked) onDelete(); }}
         >
           <Glyph name="trash" />
           {t("selection.delete")}
         </SelectionBarPrimitive.Action>
       ) : null}
-      <SelectionBarPrimitive.Action surface="brand" onClick={onClear}>
+      <SelectionBarPrimitive.Action surface="brand" disabled={pending} onClick={onClear}>
         {t("selection.clear")}
       </SelectionBarPrimitive.Action>
     </>
   );
   return (
     <SelectionBarPrimitive
-      className="h-11 w-full rounded-none border-b border-border-subtle shadow-none"
+      className="min-h-11 w-full rounded-none border-b border-border-subtle shadow-none"
       count={count}
       countLabel={t("selection.countSelected", { count })}
       actions={actions}

@@ -7,6 +7,9 @@ import { createNamespaceT } from "@angee/ui/i18n";
 // The addon that owns a vendor owns its connect label; this addon supplies
 // optional generic defaults and the shared authorization dialog copy.
 export const enIntegrateMessages: Record<string, string> = {
+  "credentials.action.replaceSecret": "Replace secret",
+  "credentials.replace.confirmTitle": "Replace this credential's secret?",
+  "credentials.replace.confirmBody": "Attached integrations will use the new material. Cached tokens will be discarded.",
   "connect.action": "Connect",
   "connect.reconnect": "Reconnect",
   "connect.connected": "Connection saved",
@@ -89,6 +92,7 @@ export const enIntegrateMessages: Record<string, string> = {
   "webhooks.filters": "Filters",
   "webhooks.sendTest": "Send test event",
   "webhooks.rotateSecret": "Rotate secret",
+  "webhooks.rotateConfirmBody": "This replaces the signing secret. Update your receivers with the new secret so they can verify future deliveries.",
   "webhooks.rotateFailed": "Could not rotate the signing secret.",
   "webhooks.newSecretTitle": "New signing secret",
   "webhooks.newSecretBody": "Copy this now — it is shown only once.",
@@ -127,6 +131,10 @@ export const enIntegrateMessages: Record<string, string> = {
   "credentials.create.kind.sshKey": "SSH key",
   "credentials.create.kind.jwtBearer": "JWT bearer (signing key)",
   "credentials.create.apiToken": "API token",
+  "credentials.create.username": "Username",
+  "credentials.create.password": "Password",
+  "credentials.create.appId": "Application ID",
+  "credentials.create.appSecret": "Application secret",
   "credentials.create.apiTokenPlaceholder": "Paste the static token",
   "credentials.create.privateKey": "Private key",
   "credentials.create.privateKeyPlaceholder": "Paste the private key (PEM)",

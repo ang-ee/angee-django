@@ -18,6 +18,7 @@ function TextareaEdit({
       ref={controlRef}
       value={value ?? ""}
       readOnly={readOnly}
+      autoComplete={field?.autoComplete}
       aria-label={widgetLabel(field, "Text")}
       placeholder={field?.label === undefined ? undefined : widgetLabel(field, "Text")}
       rows={6}

@@ -190,7 +190,7 @@ export interface AuthoredMutationOptions<
   TVariables = Record<string, unknown>,
 > extends AuthoredOperationOptions {
   /**
-   * For operations whose result is a secret shown once: observer reset on
+   * For operations carrying secret inputs or a secret result shown once: observer reset on
    * settlement; the cache entry is collected on the next tick; single-flight
    * per hook instance. Overlapping calls reject before executing.
    */

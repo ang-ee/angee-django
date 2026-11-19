@@ -1399,7 +1399,7 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
     def hand_actions(cls) -> tuple[str, ...]:
         """Add the queue's hand verbs to the task's projected admission."""
 
-        return (*super().hand_actions(), "accept", "start", "return_to_triage", "remove")
+        return (*super().hand_actions(), "accept", "start", "return_to_triage", "remove", "wake")
 
     @classmethod
     def action_permission(cls, action: str) -> str:
@@ -1443,6 +1443,7 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
                     {"stage": "Only a closed task can be reopened."},
                 ),
             ),
+            "wake": ((Q(snoozed_at__isnull=True), {"snoozed_at": "This task is not snoozed."}),),
             "accept": (reserved, (~triage, {"stage": "Only a task in triage can be accepted."})),
             "start": (
                 (triage, {"stage": "Accept a task in triage before starting it."}),

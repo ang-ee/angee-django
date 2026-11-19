@@ -6,6 +6,11 @@
 import { createNamespaceT } from "@angee/ui/i18n";
 
 export const enMessagingMessages: Record<string, string> = {
+  "messages.retryFailedDeliveryConfirm": "Retry this failed delivery?",
+  "messages.retryDelivery": "Retry delivery",
+  "messages.retryDeliveryConfirm": "The provider may already have accepted this message. Retrying can send it again. Retry delivery?",
+  "messages.markAsSent": "Mark as sent",
+  "messages.markAsSentConfirm": "Confirm that the provider sent this message without sending it again?",
   "copies.showAll": "Show source copies",
   "copies.collapse": "Group source copies",
   "copies.inspect": "Source copies",
@@ -179,6 +184,7 @@ export const enMessagingMessages: Record<string, string> = {
   "threads.makePrivate": "Make private",
   "threads.makeUnlisted": "Make unlisted",
   "threads.makePublic": "Make public",
+  "threads.makePublicConfirmBody": "This widens who can read this thread. Make it public?",
   "threads.makeRestricted": "Make restricted",
 
   // ChannelsPage — connected message channels.

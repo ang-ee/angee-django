@@ -25,7 +25,8 @@ export function InboxPage(): ReactElement {
       { id: "open", label: t("inbox.open"), group: t("inbox.state"), filter: { is_open: { exact: true } } },
       { id: "answered", label: t("inbox.answered"), group: t("inbox.state"), filter: { is_open: { exact: false } } },
     ]}>
-    <List resource={DECISION_MODEL} order={{ created_at: "DESC" }} emptyContent={t("inbox.empty")}>
+    {/* Decisions are answered individually; no action consumes a selection. */}
+    <List resource={DECISION_MODEL} selectable={false} order={{ created_at: "DESC" }} emptyContent={t("inbox.empty")}>
       <Column field="kind_label" header={t("inbox.question")} />
       {/* The records the question concerns: the first by name, the rest as a count. */}
       <Column field="records" header={t("inbox.concerns")} sortable={false}

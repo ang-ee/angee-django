@@ -34,7 +34,7 @@ class NotesVersioningTests(TransactionTestCase):
 
     def test_delete_returns_a_cascade_preview(self) -> None:
         query = (
-            "mutation($id: ID!){ delete_note(id: $id, confirm: true)"
+            "mutation($id: ID!){ notes_delete(id: $id, confirm: true)"
             "{ total_deleted_count has_blockers deleted { label count } } }"
         )
         with actor_context(to_subject_ref(self.user)):
@@ -45,14 +45,14 @@ class NotesVersioningTests(TransactionTestCase):
             )
 
         self.assertIsNone(result.errors)
-        self.assertEqual(result.data["delete_note"]["total_deleted_count"], 1)
-        self.assertFalse(result.data["delete_note"]["has_blockers"])
+        self.assertEqual(result.data["notes_delete"]["total_deleted_count"], 1)
+        self.assertFalse(result.data["notes_delete"]["has_blockers"])
         with system_context(reason="test"):
             self.assertFalse(Note.objects.filter(sqid=self.note.sqid).exists())
 
     def test_admin_delete_preserves_redacted_fields_for_history(self) -> None:
         query = (
-            "mutation($id: ID!){ delete_note(id: $id, confirm: true)"
+            "mutation($id: ID!){ notes_delete(id: $id, confirm: true)"
             "{ total_deleted_count has_blockers } }"
         )
         with system_context(reason="test-setup"):
@@ -85,8 +85,8 @@ class NotesVersioningTests(TransactionTestCase):
             )
 
         self.assertIsNone(result.errors)
-        self.assertEqual(result.data["delete_note"]["total_deleted_count"], 1)
-        self.assertFalse(result.data["delete_note"]["has_blockers"])
+        self.assertEqual(result.data["notes_delete"]["total_deleted_count"], 1)
+        self.assertFalse(result.data["notes_delete"]["has_blockers"])
         with system_context(reason="test"):
             self.assertFalse(Note.objects.filter(sqid=sqid).exists())
             history = Note.history.model.objects.get(id=note_id, history_type="-")

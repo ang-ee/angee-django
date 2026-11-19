@@ -71,7 +71,7 @@ function renderToolbar(record: Row): void {
 }
 
 describe("agent lifecycle toolbar", () => {
-  test("offers Provision until a conflicting instance is recorded, then Adopt and Replace", () => {
+  test("offers Provision until a conflict, then Adopt with Replace in the menu", async () => {
     renderToolbar(draft);
     expect(screen.getByRole("button", { name: "Provision" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Adopt existing" })).toBeNull();
@@ -80,7 +80,9 @@ describe("agent lifecycle toolbar", () => {
     renderToolbar(conflicted("WORKSPACE"));
     expect(screen.queryByRole("button", { name: "Provision" })).toBeNull();
     expect(screen.getByRole("button", { name: "Adopt existing" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Replace existing" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Replace existing" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Replace existing" })).toBeTruthy();
   });
 
   test("Adopt says the container is kept as it is, and runs only once confirmed", async () => {
@@ -100,7 +102,8 @@ describe("agent lifecycle toolbar", () => {
   test("words Replace and Deprovision for the conflicting instance's kind", async () => {
     renderToolbar(conflicted("SERVICE"));
 
-    fireEvent.click(screen.getByRole("button", { name: "Replace existing" }));
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Replace existing" }));
     const replace = await screen.findByRole("alertdialog", { name: "Replace the existing service?" });
     expect(replace.textContent).toContain("operator service “agent-ws-taken” and this agent's workspace");
     fireEvent.click(within(replace).getByRole("button", { name: "Cancel" }));
@@ -110,6 +113,12 @@ describe("agent lifecycle toolbar", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: "Deprovision" }));
     const deprovision = await screen.findByRole("alertdialog", { name: "Deprovision agent?" });
     expect(deprovision.textContent).toContain("operator service “agent-ws-taken” with it if the service mounts");
+  });
+
+  test("offers Reprovision on the toolbar when its owner admits it", () => {
+    renderToolbar({ id: "agt_1", can_reprovision: true, can_deprovision: true });
+    expect(screen.getByRole("button", { name: "Reprovision" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Deprovision" })).toBeNull();
   });
 
   test("every lifecycle verb refreshes the agent after a failure, which it records", () => {

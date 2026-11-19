@@ -37,7 +37,7 @@ export function usePartyStatementRowActions<TRow extends PartyStatementActionRow
         variables: rowIdVariables,
         invalidateModels: PARTY_STATEMENT_DECISION_INVALIDATES,
         toast: {
-          title: () => t("identity.confirmError"),
+          successTitle: () => t("identity.confirmed"), failureTitle: () => t("identity.confirmError"),
           description: () => t("identity.confirmError"),
         },
         visible: (row) => visibility === "all" || !row.is_confirmed,
@@ -59,7 +59,7 @@ export function usePartyStatementRowActions<TRow extends PartyStatementActionRow
           confirm: () => t("identity.dismiss"),
         },
         toast: {
-          title: () => t("identity.dismissError"),
+          successTitle: () => t("identity.dismissed"), failureTitle: () => t("identity.dismissError"),
           description: () => t("identity.dismissError"),
         },
         visible: (row) => visibility === "all" || !row.is_dismissed,

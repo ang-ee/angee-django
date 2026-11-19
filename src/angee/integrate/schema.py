@@ -24,6 +24,7 @@ from django.db import transaction
 from django.db.models import Count, Prefetch
 from django.utils.text import capfirst
 from django.utils.translation import gettext as _
+from django.views.decorators.debug import sensitive_variables
 from rebac import PermissionDenied, check_new, generic_target, system_context, to_subject_ref
 from rebac.resources import model_resource_type
 from strawberry import auto
@@ -40,6 +41,7 @@ from angee.graphql.actions import (
     action_guard,
     action_target,
     authorized_action_target,
+    authorized_permission_target,
     resolve_action_target,
 )
 from angee.graphql.actions import session_user as _session_user
@@ -246,6 +248,19 @@ class CredentialType(AngeeNode):
     created_at: auto
     updated_at: auto
 
+    @strawberry_django.field(only=["kind"])
+    def editable_fields(self) -> list[str]:
+        """Project the credential owner's manually editable metadata."""
+
+        return cast(list[str], cast(Any, self).editable_fields)
+
+    @strawberry_django.field(only=["kind"], extensions=[PermissionsExtension(("replace_secret",))])
+    def replacement_fields(self) -> list[str]:
+        """Project replacement inputs only to an admitted actor, without reading material."""
+
+        allowed = held_permissions(cast(Any, self), ("replace_secret",))
+        return cast(list[str], cast(Any, self).replacement_fields) if "replace_secret" in allowed else []
+
     @strawberry_django.field(only=["oauth_client"])
     def oauth_client(self) -> CredentialOAuthClientType | None:
         """Return a public-safe projection of the OAuth client (``None`` for local kinds)."""
@@ -440,18 +455,9 @@ class ExternalAccountInput:
 
 
 @strawberry.input
-class CredentialInput:
-    """Admin-write fields for a provider-less credential (OAuth ones arrive via connect).
+class CredentialMaterialInput:
+    """Write-only material; the credential kind's handler selects and validates its inputs."""
 
-    ``kind`` discriminates the material: ``static_token`` reads ``api_key``,
-    ``ssh_key`` reads ``private_key``, ``basic_auth`` reads ``username`` +
-    ``password``, ``app_keys`` reads ``app_id`` + ``app_secret``, ``jwt_bearer``
-    reads the provider's JSON ``key_file``. ``user`` defaults to the calling admin.
-    """
-
-    name: str
-    kind: str
-    user: PublicID | None = None
     api_key: str = ""
     private_key: str = ""
     username: str = ""
@@ -459,6 +465,15 @@ class CredentialInput:
     app_id: str = ""
     app_secret: str = ""
     key_file: str = ""
+
+
+@strawberry.input
+class CredentialInput(CredentialMaterialInput):
+    """Create a local credential; ``user`` defaults to the calling administrator."""
+
+    name: str
+    kind: str
+    user: PublicID | None = None
 
 
 @strawberry.type
@@ -724,6 +739,18 @@ _EXTERNAL_ACCOUNT_RESOURCE = hasura_model_resource(
     field_id_decode={"oauth_client": public_pk_decoder(OAuthClient)},
     get_queryset=_console_external_accounts,
 )
+
+
+class CredentialWriteBackend(AngeeHasuraWriteBackend):
+    """Keep exchange-owned metadata out of manual updates; native writes retain their gates."""
+
+    def _update_row(self, info: strawberry.Info, instance: Any, data: dict[str, Any]) -> Any:
+        """Validate the credential's metadata ownership before the inherited field-gated save."""
+
+        instance.validate_details(data)
+        return super()._update_row(info, instance, data)
+
+
 _CREDENTIAL_RESOURCE = hasura_model_resource(
     CredentialType,
     model=Credential,
@@ -743,7 +770,8 @@ _CREDENTIAL_RESOURCE = hasura_model_resource(
     groupable=["kind", "status", "last_refresh_status"],
     insert=False,
     delete=False,
-    updatable=["status"],
+    updatable=["status", "name"],
+    write_backend=CredentialWriteBackend(Credential),
     field_id_decode={
         "oauth_client": public_pk_decoder(OAuthClient),
         "external_account": public_pk_decoder(ExternalAccount),
@@ -771,11 +799,11 @@ def _enabled_oauth_client_from_id(oauth_client_id: PublicID) -> Any:
     return oauth_client
 
 
-def _credential_material(data: CredentialInput) -> dict[str, str]:
+def _credential_material(data: CredentialMaterialInput, *, kind: str) -> dict[str, str]:
     """Read the secret(s) the kind's handler names out of the discriminated input."""
 
     try:
-        handler = CredentialKind(data.kind).handler
+        handler = CredentialKind(kind).handler
     except ValueError as error:
         raise ValidationError({"kind": "Select a supported credential kind."}) from error
     material: dict[str, str] = {}
@@ -994,15 +1022,15 @@ class IntegrateExternalAccountMutation:
         )
         return cast(ExternalAccountType, account)
 
-    @strawberry.mutation(name="delete_external_account", permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def delete_external_account(self, id: PublicID, confirm: bool = False) -> DeletePreview:
+    @strawberry.mutation(name="external_accounts_delete", permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def external_accounts_delete(self, id: PublicID, confirm: bool | None = False) -> DeletePreview:
         """Delete the account; its ownership is a column and leaves with the row."""
 
         return delete_by_public_id(
             ExternalAccount,
             str(id),
             reason="integrate.graphql.external_account.delete",
-            confirm=confirm,
+            confirm=confirm is True,
             queryset=ExternalAccount.objects.for_write(),
         )
 
@@ -1010,6 +1038,18 @@ class IntegrateExternalAccountMutation:
 @strawberry.type
 class IntegrateCredentialMutation:
     """Admin CRUD for credentials; create mints provider-less kinds (OAuth arrives via connect)."""
+
+    @strawberry.mutation
+    @action_guard("Replacing the credential secret failed.", camel_case_keys=False)
+    @sensitive_variables("data")
+    def replace_credential_secret(
+        self, info: strawberry.Info, id: PublicID, data: CredentialMaterialInput, confirmed: bool,
+    ) -> ActionResult:
+        """Replace a non-OAuth credential's material without disclosing it or changing its bindings."""
+
+        credential = authorized_permission_target(info, Credential, id, "replace_secret")
+        credential.replace_secret(_credential_material(data, kind=credential.kind), confirmed=confirmed)
+        return ActionResult(ok=True, message="Credential secret replaced.")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def reveal_oauth_client_secret(self, id: PublicID) -> RevealedCredentialSecret:
@@ -1061,12 +1101,12 @@ class IntegrateCredentialMutation:
 
         user = _session_user(info) if data.user is None else _user_from_public_id(data.user)
         credential = Credential.objects.create_local_credential(
-            user, kind=data.kind, name=data.name, material=_credential_material(data)
+            user, kind=data.kind, name=data.name, material=_credential_material(data, kind=data.kind)
         )
         return cast(CredentialType, credential)
 
-    @strawberry.mutation(name="delete_credential", permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def delete_credential(self, id: PublicID, confirm: bool = False) -> DeletePreview:
+    @strawberry.mutation(name="credentials_delete", permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def credentials_delete(self, id: PublicID, confirm: bool | None = False) -> DeletePreview:
         """Delete the credential, then best-effort revoke remotely after commit."""
 
         with transaction.atomic():
@@ -1074,7 +1114,7 @@ class IntegrateCredentialMutation:
                 Credential,
                 str(id),
                 reason="integrate.graphql.credential.delete",
-                confirm=confirm,
+                confirm=confirm is True,
                 # The preview flow deletes the row itself; it runs the retire verb's preparation first.
                 before_delete=Credential.objects.prepare_disconnect,
                 queryset=Credential.objects.for_write(),
@@ -1085,13 +1125,13 @@ attach_delete_preview_metadata(
     IntegrateExternalAccountMutation,
     model=ExternalAccount,
     node=ExternalAccountType,
-    field="delete_external_account",
+    field="external_accounts_delete",
 )
 attach_delete_preview_metadata(
     IntegrateCredentialMutation,
     model=Credential,
     node=CredentialType,
-    field="delete_credential",
+    field="credentials_delete",
 )
 
 
@@ -1807,6 +1847,8 @@ _INTEGRATION_RESOURCE = hasura_model_resource(
     # The account binding follows the credential (``Integration.attach_connection``).
     updatable=["vendor", "credential"],
     insert=False,
+    # The inventory must not bypass a concrete kind's deletion policy.
+    delete=False,
     field_id_decode={
         "vendor": public_pk_decoder(Vendor),
         "credential": public_pk_decoder(Credential),

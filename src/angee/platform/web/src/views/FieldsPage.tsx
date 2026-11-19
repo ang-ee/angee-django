@@ -88,6 +88,8 @@ export function FieldsPage(): ReactElement {
   return (
     <ListView<FieldResourceRow>
       resource="platform.Field"
+      // Composed field metadata is read-only and has no selection actions.
+      selectable={false}
       columns={columns(t, routeHref)}
       groupOptions={groupOptions(t)}
       baseFilter={Object.keys(filter).length > 0 ? filter : undefined}

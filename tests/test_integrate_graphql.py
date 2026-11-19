@@ -664,7 +664,11 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
     assert metadata.roots.group_name == "integrations_groups"
     assert metadata.roots.create_name is None
     assert metadata.roots.update_name == "update_integrations_by_pk"
-    assert metadata.roots.delete_name == "delete_integrations_by_pk"
+    assert metadata.roots.delete_name is None
+    assert metadata.roots.delete_preview_name is None
+    mutation_fields = console_schema._schema.mutation_type.fields
+    assert "delete_integrations_by_pk" not in mutation_fields
+    assert "integrations_delete" not in mutation_fields
     assert {name for name, field in metadata.query.fields.items() if field.filter} == {
         "has_open_decisions",
         "display_name",
@@ -697,7 +701,9 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
     }
     assert metadata.default_measures[0].op == "count"
     assert metadata.aggregate_measures == ()
-    assert metadata.capabilities == ("list", "detail", "aggregate", "groups", "update", "delete", "changes")
+    assert metadata.capabilities == (
+        "list", "detail", "aggregate", "groups", "update", "changes",
+    )
     assert metadata.query.axes["vendor"].field == "vendor"
     assert metadata.query.fields["vendor"].relation.model == "integrate.Vendor"
     assert metadata.query.fields["vendor"].relation.identity_path == "vendor.id"
@@ -716,7 +722,8 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
     assert integration["roots"]["groupsCount"] == "integrations_groups_count"
     assert integration["roots"]["create"] is None
     assert integration["roots"]["update"] == "update_integrations_by_pk"
-    assert integration["roots"]["delete"] == "delete_integrations_by_pk"
+    assert integration["roots"]["delete"] is None
+    assert integration["roots"]["deletePreview"] is None
     assert integration["roots"]["changes"] == "integrationChanged"
     assert integration["capabilities"] == [
         "list",
@@ -724,7 +731,6 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
         "aggregate",
         "groups",
         "update",
-        "delete",
         "changes",
     ]
     assert list(integration["query"]["axes"]) == [
@@ -973,10 +979,10 @@ def test_integration_concrete_type_records_child_model(db: None) -> None:
         assert Integration.objects.get(pk=bridge.pk).concrete_type.model_class() is VcsBridge
 
 
-def test_integration_update_delete_are_admin_only(
+def test_integration_update_is_admin_only(
     db: None,
 ) -> None:
-    """Updating then deleting an integration is platform-admin gated."""
+    """The inventory retains its platform-admin-gated update surface."""
 
     plain = User.objects.create_user(username="conn-crud-plain", email="plain@example.com")
     admin = _platform_admin("conn-crud-admin")
@@ -1006,23 +1012,6 @@ def test_integration_update_delete_are_admin_only(
         "update_integrations_by_pk"
     ]
     assert updated == {"credential": None, "vendor": {"slug": "conn-crud"}}
-
-    delete_integration = """
-        mutation DeleteIntegration($id: String!) {
-          delete_integrations_by_pk(id: $id) {
-            id
-          }
-        }
-    """
-
-    assert execute_schema(console_schema, delete_integration, {"id": integration_id}, user=plain).errors is not None
-
-    deleted = _data(execute_schema(console_schema, delete_integration, {"id": integration_id}, user=admin))[
-        "delete_integrations_by_pk"
-    ]
-    assert deleted["id"] == integration_id
-    with system_context(reason="test.integrate.integration_crud.after_delete"):
-        assert not Integration.objects.filter(pk=conn.pk).exists()
 
 
 def test_attach_integration_credential_targets_owned_concrete_child(

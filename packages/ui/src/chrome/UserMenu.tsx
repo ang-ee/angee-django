@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import { useNavigate } from "@tanstack/react-router";
 
 import { useUiT } from "../i18n";
@@ -8,6 +8,7 @@ import { useOptionalAppearance } from "../theme";
 import { useContainer, useLoginPath, useRuntimeAuth, useRuntimeLogoutAction } from "../runtime";
 import { ContainerOutlet } from "../lib/container-outlet";
 import { avatarInitials } from "../ui/avatar";
+import { DialogReturnFocusContext } from "../ui/dialog";
 import {
   DropdownMenu,
   type DropdownMenuPositionerProps,
@@ -36,6 +37,7 @@ export function UserMenu({
   const t = useUiT();
   const { user, viewAs } = useRuntimeAuth();
   const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   // A preview selected in the contributed picker leaves the menu so the
   // persistent banner can receive focus and expose its exit action.
   useEffect(() => { if (viewAs?.pending) setOpen(false); }, [viewAs?.pending]);
@@ -64,6 +66,7 @@ export function UserMenu({
   return (
     <DropdownMenu.Root open={open} onOpenChange={setOpen}>
       <DropdownMenu.Trigger
+        ref={triggerRef}
         aria-label={userMenu}
         className={cn(
           "grid size-8 place-content-center rounded-6 border border-border-on-rail bg-avatar-default-bg text-2xs font-semibold uppercase text-on-brand outline-none transition-colors hover:bg-rail-hi focus-visible:focus-ring",
@@ -72,7 +75,7 @@ export function UserMenu({
       >
         {avatarInitials(displayName)}
       </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
+      <DropdownMenu.Portal keepMounted>
         <DropdownMenu.Positioner side={side} align={align} sideOffset={sideOffset}>
           <DropdownMenu.Content aria-label={userMenu} className="w-60 text-13">
             <div className="border-b border-border-subtle px-3 pb-2 pt-1">
@@ -86,7 +89,9 @@ export function UserMenu({
               <Glyph name={nextTheme === "dark" ? "moon" : "sun"} />
               <span className="flex-1 truncate">{themeLabel}</span>
             </DropdownMenu.Item>
-            <ContainerOutlet entries={contributedItems} />
+            <DialogReturnFocusContext.Provider value={triggerRef}>
+              <ContainerOutlet entries={contributedItems} />
+            </DialogReturnFocusContext.Provider>
             <DropdownMenu.Separator />
             <DropdownMenu.Item
               disabled={fetching}

@@ -126,6 +126,7 @@ describe("declared row actions", () => {
       cancel: "Keep",
       danger: true,
     });
+    await waitFor(() => expect(mocks.success).toHaveBeenCalledWith({ title: "Alpha removed" }));
     expect(parentClick).not.toHaveBeenCalled();
     expect(mocks.danger).not.toHaveBeenCalled();
     expect(screen.queryByTestId("glyph-trash")).toBeNull();
@@ -364,7 +365,8 @@ function typedActionInput(withConfirm = true) {
         }
       : {}),
     toast: {
-      title: (row: TestRow) => `${row.name} was not removed`,
+      successTitle: (row: TestRow) => `${row.name} removed`,
+      failureTitle: (row: TestRow) => `${row.name} was not removed`,
       description: (row: TestRow) => `Could not remove ${row.name}.`,
     },
     icon: "trash",

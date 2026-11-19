@@ -13,7 +13,8 @@ export function TriggerEventsList({ triggerId }: { triggerId?: string }) {
     scope={triggerId ? "local" : undefined} fields={["record_model"]}
     baseFilter={triggerId ? { trigger: { exact: triggerId } } : undefined}
     rowHref={triggerId ? (row) => href("workflows.trigger-events.record", { id: row.id }) : undefined}>
-    <List order={{ changed_at: "DESC" }} emptyContent={t("trigger.noEvents")}>
+    {/* The event ledger has no selection actions; retain the record tab's current presentation. */}
+    <List selectable={triggerId ? undefined : false} order={{ changed_at: "DESC" }} emptyContent={t("trigger.noEvents")}>
       <Column field="display_name" header={t("trigger.event")} />
       <Column field="record_id" header={t("trigger.record")} render={(row) => typeof row.record_model === "string" && typeof row.record_id === "string"
         ? <RecordReference model={row.record_model} id={row.record_id} /> : null} />

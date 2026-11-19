@@ -65,6 +65,10 @@ export {
 } from "./naming";
 
 export {
+  archiveFlagField,
+  resourceLifecycle,
+  canDeleteRecord,
+  type ResourceLifecycle,
   defaultWidgetForModelField,
   fieldUpdatable,
   filterFieldType,
@@ -74,6 +78,7 @@ export {
   isToOneRelationField,
   supportsChoiceFacet,
   trashFlagField,
+  unarchivedFilter,
   type ChoiceFacetSupport,
   type ResourceFilterFieldType,
 } from "./fields";
@@ -85,7 +90,7 @@ export {
   type PageResult,
   type Row,
 } from "./rows";
-export { holdsPermission } from "./permissions";
+export { allowsRecordPermission, holdsPermission } from "./permissions";
 export type {
   ResourceFilter,
   ResourceOrder,

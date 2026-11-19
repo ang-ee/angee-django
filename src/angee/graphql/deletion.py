@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass, field
-from itertools import chain
 from typing import Any, TypeVar
 
 import strawberry
@@ -20,6 +19,7 @@ from rebac import PermissionDenied, RebacMixin, current_actor, system_context
 
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import public_id_of
+from angee.base.models.refs import record_refs_for_delete
 from angee.base.permissions import require_rebac_queryset
 from angee.base.signals import starts_delete
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
@@ -139,10 +139,10 @@ class DeletePreview:
     """Rows Django would update because of ``on_delete`` behavior."""
 
     blocked: list[DeletePreviewGroup]
-    """Rows whose foreign-key policy blocks deletion."""
+    """Rows whose foreign-key or record-reference policy blocks deletion."""
 
     has_blockers: bool
-    """Whether foreign-key blockers or model refusals prevent deletion."""
+    """Whether related-record blockers or model refusals prevent deletion."""
 
     refusals: list[str] = strawberry.field(default_factory=list)
     """Distinct public-safe model refusals, without per-row cardinality."""
@@ -180,30 +180,35 @@ class DeletePreview:
         """
 
         collector = Collector(using=router.db_for_write(type(instance), instance=instance))
-        blocked: list[DeletePreviewGroup] = []
+        blockers: set[models.Model] = set()
         try:
             collector.collect([instance])
         except ProtectedError as error:
-            blocked = _groups(_count_by_model(error.protected_objects))
+            blockers.update(error.protected_objects)
         except RestrictedError as error:
-            blocked = _groups(_count_by_model(error.restricted_objects))
+            blockers.update(error.restricted_objects)
 
         fast_deletes: tuple[_FastDelete, ...] = tuple(
             (queryset, queryset.count()) for queryset in collector.fast_deletes
         )
-        refusals = list(dict.fromkeys(
-            message
-            for row, cascaded in chain(
-                [(instance, False)],
-                (
-                    (row, True)
-                    for model, rows in sorted(collector.data.items(), key=lambda item: item[0]._meta.label_lower)
-                    for row in sorted(rows, key=lambda row: row.pk)
-                    if not starts_delete(row, instance)
-                ),
-            )
-            if isinstance(row, AngeeModel) and (message := row.delete_blocker(cascaded=cascaded))
-        ))
+        collected = [instance, *(
+            row
+            for model, rows in sorted(collector.data.items(), key=lambda item: item[0]._meta.label_lower)
+            for row in sorted(rows, key=lambda row: row.pk)
+            if not starts_delete(row, instance)
+        )]
+        refusals = []
+        for row in collected:
+            if isinstance(row, AngeeModel) and (
+                message := row.delete_blocker(cascaded=not starts_delete(row, instance))
+            ):
+                if message not in refusals:
+                    refusals.append(message)
+        try:
+            record_refs_for_delete(collected, using=collector.using)
+        except ProtectedError as error:
+            blockers.update(error.protected_objects)
+        blocked = _groups(_count_by_model(blockers))
         groups = _PreviewRows.by_model(
             instance,
             collector,
@@ -378,8 +383,13 @@ def delete_by_public_id(
                     if before_delete is not None:
                         before_delete(instance)
                     instance.delete()
-            except (ProtectedError, RestrictedError):
+            except (ProtectedError, RestrictedError) as error:
                 preview = DeletePreview.from_instance(instance)
+                if not preview.has_blockers:
+                    preview = DeletePreview.blocked_from_error(instance, error)
+                    if not preview.has_blockers:
+                        preview.has_blockers = True
+                        preview.refusals = ["Deletion was refused by a related record; nothing was deleted."]
             except ValidationError as error:
                 preview.refusals = list(dict.fromkeys([*preview.refusals, *error.messages]))
                 preview.has_blockers = True
@@ -401,7 +411,7 @@ def attach_delete_preview_metadata(
     model_label: str | None = None,
     public_id_field: str = PUBLIC_ID_FIELD_NAME,
 ) -> type[_SurfaceT]:
-    """Attach resource metadata for one authored cascade-preview mutation."""
+    """Attach resource metadata for one generated or authored delete preview."""
 
     return attach_data_resource_contribution(
         surface,

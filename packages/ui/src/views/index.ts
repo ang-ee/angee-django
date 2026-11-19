@@ -365,10 +365,8 @@ export {
   TRASH_PERMISSION,
   TRASH_REASON_MAX_LENGTH,
   TRASH_STAMP_FIELDS,
-  useTrashActions,
   useTrashPrompt,
   useTrashRecord,
-  useTrashRowActions,
   type RemovedDisclosureProps,
   type RemovedItemProps,
   type RemovedListProps,
@@ -408,6 +406,7 @@ export {
 export {
   useRelationOptions,
   useRelationPickerOptions,
+  useRelationPickerSearch,
   useRelationSelectedOption,
   relationSelectedOption,
   type RelationOptionsConfig,

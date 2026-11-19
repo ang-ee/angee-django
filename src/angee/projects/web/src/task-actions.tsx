@@ -151,20 +151,20 @@ export function useTaskFormDeclaration(
   // Each lifecycle verb shows where it would act (status) and its owner admits it (`task_actions`).
   const standardActions = <>
     {(selection.verbs ?? ["complete", "drop", "reopen", "promote"]).includes("complete") ? <Action
-      id="complete" placement="toolbar" label={t("task.action.complete")} permission="write"
+      id="complete" primary label={t("task.action.complete")} permission="write"
       icon="check" run={complete} visibleWhen={(record) => isOpenTask(record) && offersTaskAction(record, "complete")} /> : null}
     {(selection.verbs ?? ["complete", "drop", "reopen", "promote"]).includes("drop") ? <Action
       id="drop" label={t("task.action.drop")} permission="write" icon="circle-x" danger
       args={[{ name: "reason", label: t("task.action.reason"), widget: "select", options: dropReasonOptions }]}
       submit={dropSubmit} visibleWhen={(record) => isOpenTask(record) && offersTaskAction(record, "drop")} /> : null}
     {(selection.verbs ?? ["complete", "drop", "reopen", "promote"]).includes("reopen") ? <Action
-      id="reopen" label={t("task.action.reopen")} permission="write"
+      id="reopen" primary label={t("task.action.reopen")} permission="write"
       icon="activity" run={reopen} visibleWhen={(record) => !isOpenTask(record) && offersTaskAction(record, "reopen")} /> : null}
     {(selection.verbs ?? ["complete", "drop", "reopen", "promote"]).includes("promote") ? <Action
-      id="promote" label={t("task.action.promote")} permission="write"
+      id="promote" placement="menu" label={t("task.action.promote")} permission="write"
       icon="projects" run={promote} /> : null}
     {(selection.verbs ?? ["complete", "drop", "reopen", "promote", "resetDue"]).includes("resetDue") ? <Action
-      id="reset-due" label={t("task.action.resetDue")} permission="write" icon="activity" run={resetDue}
+      id="reset-due" placement="menu" label={t("task.action.resetDue")} permission="write" icon="activity" run={resetDue}
       visibleWhen={(record) => record.due_rule != null} /> : null}
   </>;
   return (

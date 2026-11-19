@@ -10,6 +10,111 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Authored row actions declare `toast.successTitle` and `toast.failureTitle`
+  separately; `toast.description` remains the fallback failure reason. Callers
+  migrate from the former shared `toast.title` so successful and refused verbs
+  report the right outcome.
+- Message delivery recovery controls consume `delivery_actions`, projected from
+  the same retained-state admission check as Retry and Mark as sent. Task Wake
+  joins `task_actions`. Project permissions expose `transfer`; files expose the
+  sealed `inherit_visibility = drive->share` for the existing widening rule.
+- Record verbs, Delete, Archive and Trash are supplied by the shared views
+  instead of each page.
+  - **Passwords and credentials.** Change password uses the login throttle and
+    retains the requesting session. Administrators Set password through a
+    revision-checked account verb sealed to platform-admin membership and both write gates:
+    another person's protected account (including staff and superusers) is admitted;
+    self and service accounts remain refused, as do protected targets of Issue
+    password and Reset password. Non-user subjects are refused; successful sets log
+    only the verb and actor/target public ids after commit. **Contract change:**
+    raw `users` updates no longer accept `password`; use `set_user_password`.
+    Creation keeps its password input. Typed creation, set and change share
+    Django validation. Non-OAuth credentials expose name editing and an
+    administrator-only Replace secret verb that requires nonempty material,
+    removes stale keys and preserves attachments; expiry stays read-only.
+    Shared forms preserve multiline keys, declare autocomplete and use transient
+    mutation handling. The user menu preserves dialog lifetime and focus and
+    hides Change password when the session has no usable password or is in view-as;
+    preview identity reads return null for password usability.
+  - **Toolbar.** Explicit placement wins; `primary` implies the toolbar. On a
+    saved record, the form's own band then fills to two buttons with its visible,
+    unplaced, non-danger verbs in declaration order, counting verbs already on
+    that toolbar. Filled buttons stay secondary; the rest go to `⋮`, after the
+    verb buttons. `RecordActionBar` replaces `menuPlacement` with
+    `menuTrigger="icon" | "label"` (default `"label"`); both triggers follow the
+    buttons. An overflow menu is the last control of its group and never sits
+    between two buttons, in any toolbar: `ActionMenu` owns the rule, and a menu
+    behind the `more-vertical` or `more-horizontal` glyph orders its own trigger
+    after every sibling of its row, whatever contributed them; menus behind
+    other glyphs are unaffected. Contributed band buttons also render before
+    it (`RecordActionBar` `contributedVerbs`), and the message reader writes its
+    record chrome before its menu.
+    A verb contributed through `#sections` stays in the menu unless it declares
+    a placement. Create forms show Save / Create without record verbs.
+  - **Delete.** `hasura_model_resource(delete=True)` generates
+    `<res>_delete(id, confirm): DeletePreview`, served by the write backend's
+    `delete_preview`, which `delete` composes; a `delete=True` resource whose
+    backend lacks it fails at composition. Delete is gated by the resource's
+    delete-preview root, including preview-only resources, without requiring a
+    projected row permission. **Upgrade:** authored previews are removed and
+    their roots renamed (`delete_calendar` → `calendars_delete`,
+    `delete_calendar_event` → `calendar_events_delete`, `delete_agent` →
+    `agents_delete`, `delete_user` → `users_delete`, `delete_vault` →
+    `vaults_delete`, `delete_page` → `pages_delete`, `delete_folder` →
+    `folders_delete`, `delete_channel` → `channels_delete`, `delete_note` →
+    `notes_delete`, `delete_external_account` → `external_accounts_delete`,
+    `delete_credential` → `credentials_delete`); a consumer's authored preview on
+    a `delete=True` resource collides with the generated one and is deleted; a
+    custom delete moves into its write backend's `delete_preview`. Preview and
+    confirmation report live record links holding the target or a cascaded row
+    through the same edge-owned rule as deletion; confirmation deletes nothing
+    while a blocking link remains. Hold checks batch cascaded rows per edge and
+    target type; a deletion-time refusal with no retaining rows still reports a
+    readable blocker after rollback.
+  - **Not delete surfaces.** The `integrations` inventory and the storage
+    `files` resource are `delete=False`: deleting a channel's inventory row
+    skipped its purge, and a file's delete was already the move to trash.
+    `delete_integrations_by_pk`, `delete_files_by_pk` and `delete_file` are gone;
+    a file is removed through `trash_record`.
+  - **Archive.** A resource whose update root accepts its `archivable` flag gets
+    Archive / Unarchive on the record and the selection bar, and an Archived
+    header chip. Archived rows leave default lists, dashboards and relation
+    pickers unless a filter names the flag; every such list offers an
+    "Archived" filter. Pages drop their `is_archived` checkbox, grouping and
+    picker filter.
+  - **Flags and Trash.** Every resource whose model composes `TrashMixin` or
+    `ArchiveMixin` exposes its flag, including multi-table children. Trash verbs
+    act on the model storing the flag. A trashable resource gets Move to trash / Restore,
+    and its Delete is offered only for a row already in the trash.
+    Record Trash / Restore retain `allowsRecordPermission` gating.
+    `useTrashActions` is no longer exported: the form supplies it.
+  - **Bulk.** A page's `bulkActions` are added to the generic actions and no
+    longer replace Delete. Every bulk action is gated by the resource's roots
+    and flag contract, without projected row permissions; the server authorizes
+    each write. Bulk is a client fan-out over the single verb, bounded at 25 rows
+    a click (`BULK_ACTION_FANOUT_LIMIT`, distinct from the server selection limit).
+    Outside embedded presentation, selection defaults on only for lifecycle
+    actions, page `bulkActions` or a grantable model. A `source` list counts only
+    page `bulkActions`; explicit `selectable` wins.
+  - **Shared owners and API changes.** Metadata exports `resourceLifecycle` and
+    `canDeleteRecord` beside `archiveFlagField` and `unarchivedFilter` in
+    `packages/metadata/src/fields.ts`. Archive scope and the Archived filter
+    (stable id `archived`) share filterability independently of update support;
+    collection reads use one internal `useArchiveScopeFilter` hook.
+    `allowsRecordPermission(record, permission, metadata)` derives the permission
+    contract from resource or model metadata. Authored form Delete actions keep
+    their own admission while sharing the generic trash-state rule. `RemovedList` refuses its default Restore
+    without a resource; a domain may supply `canRestore`.
+    The relation picker option `catalogue` becomes `includeArchived`.
+    `useBulkAction` and `BulkActionRunner` are internal, and the unused
+    `useTrashRowActions` is removed. `RecordActionBar` adds `fillBand` and
+    `genericActions`; `useBulkDelete` takes the shared runner and optional row
+    snapshots, and `useTrashPrompt` accepts a count.
+  - Deferred: permanent delete in `RemovedRecords`, a transactional bulk verb,
+    `permissions` on master-data nodes, and a delete of their own for
+    `parties.Directory`, `posts.Feed` and `calendar.CalendarSource`, which were
+    deletable only through the inventory root.
+
 - Addons require django-compose 0.1.0.dev13, whose snapshot digest covers each
   addon's resolved path. A host that changes its sync from `--no-editable` to
   editable, or moves a source checkout, now recomposes on `compose --if-stale`;

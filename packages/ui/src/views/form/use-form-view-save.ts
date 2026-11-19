@@ -331,6 +331,7 @@ export function useFormViewSave({
     document: saveOperation.document,
   });
   const invalidate = useInvalidate();
+  const resourceInvalidates = useResourceInvalidates(dataResource ? [dataResource.modelLabel] : undefined);
   const linesActive =
     linesConfig !== null &&
     linesField !== null &&
@@ -358,13 +359,9 @@ export function useFormViewSave({
   );
   const invalidateResource = React.useCallback(async () => {
     if (!dataResource) return;
-    await invalidate({
-      resource: refineResourceName(dataResource),
-      dataProviderName: dataResource.schemaName,
-      id: id ?? undefined,
-      invalidates: ["list", "many", "detail"],
-    });
-  }, [dataResource, id, invalidate]);
+    await Promise.all(resourceInvalidates.map((target) => invalidate(target)));
+    // The successful-submit path below also invalidates authored reads for this model.
+  }, [dataResource, invalidate, resourceInvalidates]);
 
   const values = React.useMemo(() => {
     if (acknowledgedSource !== undefined || isCreate) {
@@ -383,6 +380,8 @@ export function useFormViewSave({
   const formTakesEdits = React.useMemo(
     () => !(
       readOnly ||
+      // A form is read-only for a record that projects its permissions without
+      // `write`, whether or not the model's metadata declares the field.
       (!isCreate && record != null
         && (Array.isArray(record.permissions) || Boolean(modelMetadata?.fields.permissions))
         && !holdsPermission(record, "write")) ||

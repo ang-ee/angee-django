@@ -1,4 +1,4 @@
-"""Work contracts that need the complete emitted Task graph, one composed host per profile."""
+"""Work and project verb contracts on the complete emitted Task graph, one composed host per profile."""
 
 from pathlib import Path
 

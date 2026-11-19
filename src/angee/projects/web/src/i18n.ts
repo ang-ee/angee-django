@@ -1,6 +1,8 @@
 import { createNamespaceT } from "@angee/ui/i18n";
 
 export const enProjectsMessages: Record<string, string> = {
+  "project.action.transferOwnership": "Transfer ownership",
+  "project.action.newOwner": "New owner",
   "common.visibility": "Visibility",
   "milestone.action.reach": "Mark reached",
   "project.phase.select": "Select current phase",

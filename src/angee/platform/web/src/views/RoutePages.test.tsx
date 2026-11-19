@@ -34,6 +34,7 @@ vi.mock("@angee/ui", async (importOriginal) => ({
     defaultGroup,
     groupOptions,
     baseFilter,
+    selectable,
   }: {
     columns?: ReadonlyArray<{
       field: string;
@@ -48,6 +49,7 @@ vi.mock("@angee/ui", async (importOriginal) => ({
     defaultGroup?: unknown;
     groupOptions?: unknown;
     baseFilter?: unknown;
+    selectable?: boolean;
   }) => {
     const row: Record<string, unknown> = resource === "platform.Field"
       ? {
@@ -89,6 +91,7 @@ vi.mock("@angee/ui", async (importOriginal) => ({
         data-default-group={JSON.stringify(defaultGroup)}
         data-group-options={JSON.stringify(groupOptions)}
         data-base-filter={JSON.stringify(baseFilter)}
+        data-selectable={String(selectable)}
       >
         {columns.map((column) => (
           <span key={column.field}>
@@ -124,6 +127,15 @@ beforeEach(() => {
 });
 
 describe("platform route consumers", () => {
+  test.each([
+    ["platform.Addon", AddonsPage],
+    ["platform.Model", ModelsPage],
+    ["platform.Field", FieldsPage],
+  ])("%s has no selection actions", (resource, Page) => {
+    render(<Page />);
+    expect(screen.getByTestId(resource).getAttribute("data-selectable")).toBe("false");
+  });
+
   test("FieldsPage offers its server group columns and groups by model by default", () => {
     render(<FieldsPage />);
     const list = screen.getByTestId("platform.Field");

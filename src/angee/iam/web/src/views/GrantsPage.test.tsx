@@ -30,6 +30,7 @@ describe("IAM grants page", () => {
 
     expect(mocks.listProps).toMatchObject({
       resource: "iam.Grant",
+      selectable: false,
       defaultGroup: { field: "namespace" },
       pageSize: 50,
     });

@@ -80,7 +80,7 @@ export function OperationsPage(): ReactNode {
 
       {/* The stack's lifecycle verbs: the shared verb bar, confirming the destructive one. */}
       <DetailSection title={t("operations.stack.title")}>
-        <RecordActionBar record={{} as Row} actions={stackActions} blocked={busy} menuPlacement="leading" />
+        <RecordActionBar record={{} as Row} actions={stackActions} blocked={busy} menuTrigger="icon" />
       </DetailSection>
       {operation ? (
         <Card>

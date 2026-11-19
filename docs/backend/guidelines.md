@@ -622,6 +622,9 @@ data through REBAC, never a queryset bypass.
   (`check_sealed_permissions`), which refuses a fragment that changes one:
   messaging's [`check_derived_reads`](../../src/angee/messaging/checks.py)
   (`messaging.E003`) seals the thread and message `read` and `read_inbox`.
+  Storage's [`check_derived_permissions`](../../src/angee/storage/checks.py)
+  (`storage.E001`) also seals `inherit_visibility`, so only the drive's sharers
+  can restore file inheritance.
 - **One user identity for authorization and attribution.** Every person and
   agent acts as its own `AUTH_USER_MODEL` row. Workflows also act as their linked
   `kind=service` user for trigger admission and triggered runs; source-declared
@@ -764,7 +767,10 @@ data through REBAC, never a queryset bypass.
   (`token`, `key`, `secret`, `password`) before `user_login_failed` receivers
   see it, and pass the account it names unmasked so axes records the attempt
   under that account. Each request makes one attempt
-  ([`authenticate_once`](../../src/angee/iam/auth.py)). IAM's autoconfig owns
+  ([`authenticate_once`](../../src/angee/iam/auth.py)). Self-service current-password
+  verification uses the same owner: authenticate before taking
+  a row lock, require the authenticated user to be the actor, and reject a hash
+  changed between authentication and the lock. IAM's autoconfig owns
   the axes policy (the cool-off, no reset on success, the username and
   whitelist callables); a refusal of a genuine but spent credential is not a
   guess.
@@ -780,16 +786,31 @@ data through REBAC, never a queryset bypass.
   account is renamed.
   `create_user` stays the trusted bootstrap and OIDC path.
 - **Managed accounts change through IAM's account verbs.** `User.set_active`,
-  `rename`, `issue_password`, `issue_sign_in_link` and `reset_password` lock
+  `rename`, `issue_password`, `issue_sign_in_link`, `reset_password` and
+  `set_account_password` lock
   the row, check their own Zed permission, the expected revision and the shared
   `User.account_action_blockers`, then write elevated; the `account_actions`
-  projection batches the same conditions. Every verb refuses a protected
+  projection batches the same conditions. These verbs refuse a protected
   account: staff, superusers, the actor's own and effective members of
-  `iam/protected:main#member`. A consumer marks an elevated role by unioning it
+  `iam/protected:main#member`, except Set password admits another person's protected
+  account for a concrete platform-administrator user. Self
+  still requires Change password; non-person accounts remain refused.
+  A consumer marks an elevated role by unioning it
   into that permission from its fragment, never by mirroring holders; see
   [`tests/extcontrib`](../../tests/extcontrib/permissions.extends.zed). Generic
   updates pass `write` and `write__<field>` gates on changed fields only;
-  protected accounts additionally need `administer`.
+  protected accounts additionally need `administer`. Generic updates do not
+  accept `password`; use `set_user_password` with the observed revision.
+  Its sealed Zed permission intersects `admin->member`, `write` and
+  `write__password`, so the model and projection check one permission. Permission
+  and account kind are checked before password validation or hashing. Extending
+  `administer` never widens this audience. Successful sets log only the verb and
+  actor/target public ids after commit through IAM's logger. Actor-requested
+  creation, Set password and Change password share `User._set_validated_password`,
+  with the user as Django's validator context; trusted bootstrap/resource
+  factories retain their native behavior. **Change password** verifies the actor's current
+  password and keeps only the requesting session's auth hash current; see the
+  [IAM password contract](../../src/angee/iam/README.md#chosen-passwords).
 - **Read derived facts from their owner.** Native live ORM backing exposes
   user kind/activity, roster roles and selected tools without tuple mirrors.
   Platform administration is an ordinary `angee/role:admin#member` grant to a
@@ -1295,7 +1316,15 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   `is_trashed`, subtracted outside any recursive arm (see
   [knowledge pages](../../src/angee/knowledge/permissions.zed)). The shared
   [`trash_record` / `restore_record`](../../src/angee/graphql/trash.py) verbs
-  check the row's `delete`; metadata marks the flag `trashable` for shared views.
+  accept a multi-table child's type and act on the same primary key through
+  the model storing the flag (`TrashMixin.trash_model()`), checking that
+  model's `delete` permission and `trash_targets()` scope.
+  [`hasura_model_resource`](../../src/angee/graphql/data/hasura.py) exposes
+  each composed mixin's flag without an addon node declaration and marks it
+  `trashable` or `archivable`, including inherited flags. The archive flag is
+  filterable; flag writes remain the resource's explicit decision, and read
+  gates are never bypassed. A removable record's removal action is Move to
+  trash when its model is trashable and Delete otherwise.
   A domain authority that is not `delete` (record-chatter moderation, the host's
   declared `ThreadedModelMixin.thread_moderate_access`, default `write`, beside
   `thread_read_access` and `thread_post_access`) keeps its own
@@ -1392,6 +1421,12 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   instance override cannot protect cascades.
   Receivers remain authoritative when state changes after preview and ensure
   Django collects those models rather than fast-deleting them.
+  Record-reference refusals use the same read-only
+  [`record_refs_for_delete()`](../../src/angee/base/models/refs.py) admission in
+  preview and `delete_record_refs`: each edge owns `blocks_target_delete` and
+  `live_reference_filter`. Preview passes all collected targets together; blocking
+  edges read them in bounded batches per target type. Confirmation retains a
+  readable blocker even when a deletion-time refusal names no retaining rows.
   When deleting a model needs locks in a domain order (a parent before the row),
   override its [`lock_for_delete()`](../../src/angee/base/models/base.py); its `pre_delete`
   receiver and every confirmed-delete caller of that model then lock through the
@@ -1703,6 +1738,19 @@ open fresh evaluator scopes for authorization and change-feed reads.
   write backends and their declared arguments; provenance owns creation claims,
   and the model owns optimistic locking. A host without provenance exposes no
   idempotency argument.
+- **Delete previews are generated with the resource's delete surface.**
+  [`hasura_model_resource`](../../src/angee/graphql/data/hasura.py) generates
+  `<resource>_delete(id, confirm)` and its metadata when `delete=True`.
+  Custom deletion belongs in the write backend's `delete_preview`, which both
+  that root and the native Hasura `delete` compose. Backends missing the method,
+  or overriding `delete` without a matching preview, fail at composition.
+  The default backend delegates to
+  [`delete_by_public_id`](../../src/angee/graphql/deletion.py) with its write
+  target queryset; model refusals remain `delete_blocker()`. An explicitly
+  gated authored preview on a `delete=False` resource uses the same root
+  spelling and `attach_delete_preview_metadata`.
+  A resource whose removal is the trash declares `delete=False` and uses the
+  shared trash verbs; see [storage files](../../src/angee/storage/README.md).
 - **Permission answers reuse the authorization owner.** Declare a type's
   `permissions` through [`permissions_field(names)`](../../src/angee/graphql/capabilities.py);
   it reports only the declared Zed permissions held by the current actor,

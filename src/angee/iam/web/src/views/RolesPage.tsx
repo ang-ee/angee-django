@@ -19,6 +19,8 @@ export function RolesPage(): ReactElement {
   ], [t]);
   return <ListView<IAMRole>
     resource="iam.Role"
+    // Role definitions are read-only; no action consumes a selection.
+    selectable={false}
     columns={columns}
     defaultGroup={{ field: "namespace" }}
     pageSize={50}

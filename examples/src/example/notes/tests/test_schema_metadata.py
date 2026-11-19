@@ -46,7 +46,7 @@ class NotesSchemaMetadataTests(SimpleTestCase):
                 "changes": None,
                 "create": "insert_notes_one",
                 "delete": "delete_notes_by_pk",
-                "deletePreview": "delete_note",
+                "deletePreview": "notes_delete",
                 "detail": "notes_by_pk",
                 "groups": "notes_groups",
                 "groupsCount": "notes_groups_count",

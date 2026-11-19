@@ -55,7 +55,7 @@ export function TriggersList({ workflowId }: { workflowId?: string }) {
         <Field name="next_occurrence_at" label={t("trigger.nextOccurrence")} readOnly showWhen={(row) => scheduled(row) && Boolean(row.next_occurrence_at)} />
       </Group>
       <Field name="disabled_reason" label={t("trigger.disabledReason")} readOnly widget="textarea" showWhen={(row) => Boolean(row.disabled_reason)} />
-      <Action id="enable" label={t("trigger.enable")} placement="toolbar" primary
+      <Action id="enable" label={t("trigger.enable")} primary
         visibleWhen={(row) => row.can_edit === true && row.enabled === false && row.enable_preview != null}
         confirm={(row) => {
           const preview = row.enable_preview as { grants: string[]; run_readers: string[] };
@@ -71,7 +71,7 @@ export function TriggersList({ workflowId }: { workflowId?: string }) {
             </div>,
           };
         }} run={enable} />
-      <Action id="disable" label={t("trigger.disable")} visibleWhen={(row) => row.can_edit === true && row.enabled === true} run={disable} />
+      <Action id="disable" label={t("trigger.disable")} placement="toolbar" visibleWhen={(row) => row.can_edit === true && row.enabled === true} run={disable} />
     </Form>
   </View>;
 }

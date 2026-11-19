@@ -16,7 +16,7 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.contrib.auth import get_user_model
+from django.contrib.auth import get_user_model, update_session_auth_hash
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.models import AnonymousUser
@@ -54,7 +54,7 @@ from angee.graphql.actions import ActionResult, action_guard, authorized_permiss
 from angee.graphql.capabilities import permission_expression
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.data.pydantic_resource import hasura_pydantic_resource
-from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
+from angee.graphql.deletion import DeletePreview, delete_by_public_id
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.sharing import authorized_record_access
@@ -211,6 +211,14 @@ class CurrentUserType(AngeeNode):
     kind: auto
     is_staff: auto
     is_active: auto
+
+    @strawberry_django.field(only=["password"])
+    def has_usable_password(self, info: strawberry.Info) -> bool | None:
+        """Disclose password usability to the session itself, never during a preview."""
+
+        if _view_as(info) is not None:
+            return None
+        return bool(cast(Any, self).has_usable_password())
 
     @strawberry_django.field(only=["first_name", "last_name", "username"])
     def display_name(self) -> str:
@@ -641,19 +649,22 @@ class IAMUserWriteBackend:
         *,
         expected_revision: int | None = None,
     ) -> Any:
-        """Patch one user through its ``write`` and field gates, hashing ``password`` when supplied."""
+        """Patch user metadata through its ``write`` and field gates."""
 
-        payload = dict(data)
-        password = payload.pop("password", None)
         with transaction.atomic():
             user = _user_for_resource_id(pk, User.objects.for_write().lock_if_supported())
-            user.update_account(payload, password=password, expected_revision=expected_revision)
+            user.update_account(data, expected_revision=expected_revision)
             return user
+
+    def delete_preview(self, info: strawberry.Info, pk: str, *, confirm: bool) -> DeletePreview:
+        """Preview or confirm deletion through the user's write scope and delete permission."""
+
+        return delete_by_public_id(User, str(pk), confirm=confirm, queryset=User.objects.for_write())
 
     def delete(self, info: strawberry.Info, pk: str) -> Any | None:
         """Delete one user by public id through its ``delete`` permission and return the deleted row."""
 
-        preview = delete_by_public_id(User, str(pk), confirm=True, queryset=User.objects.for_write())
+        preview = self.delete_preview(info, pk, confirm=True)
         preview.require_no_blockers()
         return preview.deleted_instance
 
@@ -728,7 +739,7 @@ _USER_RESOURCE = hasura_model_resource(
     sortable=["first_name", "last_name"],
     aggregatable=["id"],
     insertable=["username", "email", "first_name", "last_name"],
-    updatable=["username", "password", "email", "first_name", "last_name", "is_staff", "is_active"],
+    updatable=["username", "email", "first_name", "last_name", "is_staff", "is_active"],
     get_queryset=_user_queryset,
     write_backend=IAMUserWriteBackend(),
     id_column="sqid",
@@ -1001,6 +1012,17 @@ class IAMMutation:
         return True
 
     @strawberry.mutation
+    @action_guard("Changing the password failed.", camel_case_keys=False)
+    @sensitive_variables("current_password", "new_password")
+    def change_password(self, info: strawberry.Info, current_password: str, new_password: str) -> ActionResult:
+        """Change the signed-in user's own password and keep this session signed in; takes no target id."""
+
+        user = session_user(info)
+        user.change_password(get_request(info), current_password=current_password, new_password=new_password)
+        update_session_auth_hash(get_request(info), user)
+        return ActionResult(ok=True, message="Password changed.")
+
+    @strawberry.mutation
     def update_preferences(
         self,
         info: strawberry.Info,
@@ -1016,6 +1038,18 @@ class IAMMutation:
 @strawberry.type
 class IAMUserAccountMutation:
     """Account verbs gated by the target user's zed permissions and protection."""
+
+    @strawberry.mutation
+    @action_guard("Setting the password failed.", camel_case_keys=False)
+    @sensitive_variables("password")
+    def set_user_password(
+        self, info: strawberry.Info, id: PublicID, password: str, expected_revision: int,
+    ) -> ActionResult:
+        """Set another person's password through the account's administration gates without disclosing it."""
+
+        user = authorized_permission_target(info, User, id, str(UserAccountAction.SET_PASSWORD))
+        user.set_account_password(password, expected_revision=expected_revision)
+        return ActionResult(ok=True, message="Password set.")
 
     @strawberry.mutation
     def issue_user_password(self, info: strawberry.Info, id: PublicID) -> IssuedUserPassword:
@@ -1084,25 +1118,6 @@ class IAMUserAccountMutation:
             expected_revision=expected_revision,
         )
         return ActionResult(ok=True, message="Account renamed.")
-
-
-@strawberry.type
-class IAMUserDeletePreviewMutation:
-    """Authored cascade delete preview for users."""
-
-    @strawberry.mutation(name="delete_user")
-    def delete_user(self, info: strawberry.Info, id: PublicID, confirm: bool = False) -> DeletePreview:
-        """Preview or confirm deletion of one user by public id through its ``delete`` permission."""
-
-        return delete_by_public_id(User, str(id), confirm=confirm, queryset=User.objects.for_write())
-
-
-attach_delete_preview_metadata(
-    IAMUserDeletePreviewMutation,
-    model=User,
-    node=UserType,
-    field="delete_user",
-)
 
 
 @strawberry.type
@@ -1206,7 +1221,6 @@ schemas = {
             IAMMutation,
             _USER_RESOURCE.mutation,
             _GROUP_RESOURCE.mutation,
-            IAMUserDeletePreviewMutation,
             IAMUserAccountMutation,
             IAMPermissionHubMutation,
             IAMGroupMembershipMutation,

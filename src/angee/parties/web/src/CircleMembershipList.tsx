@@ -88,7 +88,7 @@ function CircleMembershipList({
           confirm: () => t("circle.membership.remove"),
         },
         toast: {
-          title: () => t("circle.membership.removeError"),
+          successTitle: () => t("circle.membership.removed"), failureTitle: () => t("circle.membership.removeError"),
           description: () => t("circle.membership.removeError"),
         },
         icon: "trash",

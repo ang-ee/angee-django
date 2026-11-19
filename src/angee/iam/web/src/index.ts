@@ -9,7 +9,9 @@ import {
   RenameRecordAction,
   ResetPasswordRecordAction,
   SetActiveRecordActions,
+  SetPasswordRecordAction,
 } from "./account-actions";
+import { ChangePasswordMenuItem } from "./ChangePasswordMenuItem";
 import { ShareListChrome, ShareRecordChrome } from "./ShareAccess";
 import { enIamMessages } from "./i18n";
 import { subjectsWidget } from "./assignment-subject-widget";
@@ -22,6 +24,7 @@ export {
   useRenameAction,
   useResetPasswordAction,
   useSetActiveActions,
+  useSetPasswordAction,
   type UserAccountAction,
 } from "./account-actions";
 export {
@@ -92,6 +95,9 @@ const iam = defineBaseAddon({
   menus: identityMenu,
   i18n: { iam: enIamMessages },
   containers: {
+    "shell#user-menu": {
+      "iam.change-password": { sequence: 30, content: createElement(ChangePasswordMenuItem) },
+    },
     // A model's access owners register their roles and visibility for the Share panel.
     "iam#access-roles": { models: true },
     "iam#access-visibility": { models: true },
@@ -121,6 +127,11 @@ const iam = defineBaseAddon({
         sequence: 9,
         requiredFields: ACCOUNT_ACTION_FIELDS,
         content: createElement(IssueSignInLinkRecordAction),
+      },
+      "iam.set-password": {
+        sequence: 10,
+        requiredFields: ACCOUNT_ACTION_FIELDS,
+        content: createElement(SetPasswordRecordAction),
       },
     },
     // The users list's columns; other addons add seat columns by sequence.

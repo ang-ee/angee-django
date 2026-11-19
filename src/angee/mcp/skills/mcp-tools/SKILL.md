@@ -79,11 +79,16 @@ through the same ambient actor.
                        description="Return one note in full by its public id (sqid)."),
            GraphQLTool(operation="insert_notes_one", name="create_note", fields=_DETAIL, flatten="object",
                        description="Create a note owned by the user caller and return it."),
-           GraphQLTool(operation="delete_note", name="delete_note", fields=("total_deleted_count",),
+           GraphQLTool(operation="notes_delete", name="delete_note", fields=("total_deleted_count",),
                        id_arg="id", fixed={"confirm": True},
                        description="Delete a note the caller may delete, by its public id (sqid)."),
        ])
    ```
+
+   The resource factory generates `notes_delete` from `delete=True`; custom deletion
+   lives in its write backend's `delete_preview`. The tool name `delete_note` is the
+   MCP verb, while `operation` names that generated GraphQL root. Do not author a
+   second preview mutation for the tool.
 
    Fields are snake_case leaves or `(name, (child, ...))` branches at most two deep
    (`GraphQLTool` in `src/angee/mcp/graphql.py`; nested shape: `_BACKLINKS` in `src/angee/knowledge/mcp_tools.py`). Project

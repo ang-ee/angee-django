@@ -2,12 +2,12 @@ import * as React from "react";
 import {
   Action, Field, Form, Group, ListView, LoadingPanel, ErrorBanner,
   NavLink, registerForm, useResourceRecordHrefLookup,
+  useActionResultMutation, useRecordAction,
   type ListColumn, type RecordPanelContext, type RecordTabDescriptor,
-  type RegisteredFormProps, useTrashActions,
+  type RegisteredFormProps,
   useMimeLabel,
   useResolvedWidget,
 } from "@angee/ui";
-import { useModelMetadata } from "@angee/metadata";
 import { useAuthoredQuery } from "@angee/refine";
 
 import { useMessagingT } from "./i18n";
@@ -162,10 +162,23 @@ export function messageRecordTabs(
 function MessageForm({ resource: _resource, readOnly, ...props }: RegisteredFormProps): React.ReactElement {
   const t = useMessagingT();
   const recordTabs = React.useMemo(() => messageRecordTabs(t), [t]);
+  const [retry, retryState] = useActionResultMutation("retry_message_delivery", {
+    invalidateModels: [MODEL, "messaging.Thread"],
+  });
+  const [acknowledge, acknowledgeState] = useActionResultMutation("acknowledge_message_delivery", {
+    invalidateModels: [MODEL, "messaging.Thread"],
+  });
+  const retryDelivery = useRecordAction(async (id, context) => {
+    const revision = context.record?.revision;
+    if (typeof revision !== "number") return;
+    await retry(id, { expected_revision: revision });
+  });
+  const markAsSent = useRecordAction(async (id, context) => {
+    const revision = context.record?.revision;
+    if (typeof revision !== "number") return;
+    await acknowledge(id, { expected_revision: revision });
+  });
   const RecordTags = useResolvedWidget("angee.tags.recordTags")?.edit;
-  // Moderation is the shared trash: channel managers move a message there and
-  // back, offered by the message's projected `delete` permission.
-  const trashActions = useTrashActions(useModelMetadata(MODEL)?.resource);
   const returning = React.useMemo(() => [...(props.returning ?? []), ...MESSAGE_TAG_FIELDS], [props.returning]);
   return <Form
     {...props}
@@ -181,14 +194,25 @@ function MessageForm({ resource: _resource, readOnly, ...props }: RegisteredForm
   >
     <Field name="title" title readOnly />
     <Field name="status" readOnly />
+    <Field name="revision" hidden readOnly />
+    <Field name="delivery_actions" hidden readOnly />
+    <Action id="retry-delivery" label={t("messages.retryDelivery")} primary
+      disabled={retryState.fetching || acknowledgeState.fetching}
+      confirm={(record) => ({ title: t("messages.retryDelivery"), body: t(String(record.status).toUpperCase() === "UNCERTAIN"
+        ? "messages.retryDeliveryConfirm" : "messages.retryFailedDeliveryConfirm") })}
+      visibleWhen={(record) => typeof record.revision === "number" && Array.isArray(record.delivery_actions) && record.delivery_actions.includes("retry")}
+      run={retryDelivery} />
+    <Action id="mark-as-sent" label={t("messages.markAsSent")}
+      disabled={retryState.fetching || acknowledgeState.fetching}
+      confirm={{ title: t("messages.markAsSent"), body: t("messages.markAsSentConfirm") }}
+      visibleWhen={(record) => typeof record.revision === "number" && Array.isArray(record.delivery_actions) && record.delivery_actions.includes("acknowledge")}
+      run={markAsSent} />
     {/* The reader shows the sender and date; the envelope keeps the transport facts. */}
     {/* The transport id is a wire fact, not user text: the envelope keeps the labelled facts. */}
     <Group label={t("messages.groupEnvelope")} columns={2} pane="envelope">
       <Field name="platform" readOnly />
       <Field name="direction" readOnly />
     </Group>
-    <Field name="is_trashed" hidden readOnly />
-    {!readOnly ? trashActions.map((action) => <Action key={action.id} {...action} />) : null}
   </Form>;
 }
 
