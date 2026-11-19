@@ -42,7 +42,8 @@ source addon contributes one adapter class, its registry key and its tests. Refe
 - `Bridge.run_sync`, `claim_sync`, `record_sync_error`, `update_live_state`, `claim_live_account`
   (`src/angee/integrate/models.py`) own lifecycle, telemetry and locks.
 - `Credential.auth_headers`, `ensure_fresh`, `Integration.fresh_credential` and `load_connection_credential`
-  (`src/angee/integrate/models.py`) own token material and refresh; `HttpClientMixin`/`angee.integrate.http` own outbound HTTP with the SSRF pin.
+  (`src/angee/integrate/models.py`) own token material and refresh; `HttpClientMixin`/`angee.integrate.http` own outbound HTTP with the SSRF pin,
+  and `HttpClient.request_model` is a vendor's typed JSON request.
 - `IntegrationError(public_message, transient=, retry_after=)` (`src/angee/integrate/errors.py`) is the only
   exception an operator sees; `RequestNotSentError` marks safe retries.
 - `LiveSession` (`src/angee/integrate/session.py`) owns the wake loop, QR reporting and cooperative stop;
@@ -145,6 +146,9 @@ source addon contributes one adapter class, its registry key and its tests. Refe
 
 6. **Errors and operator messages.** Raise an `IntegrationError` subclass composed from facts the operator owns
    (`ImapError` in `src/angee/messaging_integrate_imap/backend.py`); pass `transient=`/`retry_after=` for throttling.
+   Over HTTP, `HttpRefusal` (`src/angee/integrate/http.py`) classifies every failed answer once: send with
+   `self.http.request_model(method, url, model=..., error=VendorError)` and let `error` build the subclass from the
+   refusal's facts, adding the vendor's own transient statuses or waits there, never a status table of its own.
    Record-level refusals raise `SemanticError` (quarantined, page continues); infrastructure errors propagate
    (page rolls back) (`BridgeImpl.apply_record` in `src/angee/integrate/impl.py`). **Owner rule:** [Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts)
    "An integration failure reaches the operator only as an IntegrationError".
@@ -214,7 +218,7 @@ session exits within one wake on stop, shutdown and lost lock.
 
 <!--
 Docs: src/angee/integrate/README.md (whole); docs/backend/guidelines.md sections Record sync, Integrations and workers, Integration and worker contracts (cited by anchor and bullet title); docs/stack.md #backend (messaging-protocol rows and the implementation-registry choice); docs/checks.md #python-and-composition-contracts, #source-addon-test-models, #composition-and-schema, #frontend-packages-and-addon-fragments, #browser-verification, #what-ci-actually-runs; AGENTS.md (Repository Role).
-Code: src/angee/integrate/{impl.py,states.py,streams.py (def list),models.py (def list),session_process.py,live.py,session.py,session_runner.py,sync_runner.py,tasks.py,scheduler.py,queue.py,constants.py,autoconfig.py,pyproject.toml,credentials.py (def list),errors.py (def list),discovery.py (def list),locks.py (def list),testing/*};
+Code: src/angee/integrate/{impl.py,states.py,streams.py (def list),models.py (def list),session_process.py,live.py,session.py,session_runner.py,sync_runner.py,tasks.py,scheduler.py,queue.py,constants.py,autoconfig.py,pyproject.toml,credentials.py (def list),errors.py (def list),http.py (def list),discovery.py (def list),locks.py (def list),testing/*};
 src/angee/messaging/backends.py; src/angee/messaging/models.py; src/angee/messaging_integrate_imap/{pyproject.toml,autoconfig.py,README.md,backend.py,models.py};
 src/angee/platform_integrate_vcs/pyproject.toml; tests/{integrate_fixtures.py,conftest.py,settings.py,stream_adapters.py,test_integrate_streams.py,test_messaging_imap.py,test_integrate_live.py}.
 Doc gaps: no docs/ walkthrough for writing an adapter; the contract is in impl.py docstrings and the README; derived from IMAP and the test adapters.

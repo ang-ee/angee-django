@@ -279,6 +279,16 @@ stages and retained workflow runs intact. `discovery_ready` / `ready_for_work()`
 are the shared admission rule; generation zero preserves existing integrations
 until their next attachment or Resume. There is no separate polling repair scan.
 
+A vendor's JSON request is `HttpClient.request_model` ([outbound HTTP](http.py)):
+one pinned, size-capped request whose answer is validated into a Pydantic model.
+Whatever brings no usable answer is one `HttpRefusal`, classified once: a
+transport failure, a 429 or a 5xx is transient and waits for the answer's
+`Retry-After`; any other status, an oversized answer and one that does not
+validate are permanent, because the same request brings the same answer. The
+vendor's `error=` factory composes its `IntegrationError` from those facts
+(`HttpRefusal.message` names the service and nothing the answer said) and adds
+its own transient statuses and waits there.
+
 `IntegrationError(public_message, transient=…, retry_after=…)` owns the optional
 positive provider horizon. `RequestNotSentError` declares that connect, DNS or
 TLS handshake failed before HTTP request bytes were written and is safe to retry.
