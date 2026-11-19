@@ -37,8 +37,6 @@ export interface DuplicatesDialogProps {
   sets: readonly DuplicateSetInput[];
   /** The Review page's certain pairs: each set is re-checked as still certain when merged. */
   certain?: boolean;
-  /** Lines about what the selection left out (people with no one to merge with, blank groups). */
-  notes?: readonly string[];
   onClose: (merged: boolean) => void;
 }
 
@@ -49,7 +47,7 @@ export interface DuplicatesDialogProps {
  * listed sets and the dialog then shows each set's outcome. The server judges and
  * merges (`duplicate_set_previews`, `merge_duplicates`); the dialog only shows.
  */
-export function DuplicatesDialog({ sets: opened, certain = false, notes = [], onClose }: DuplicatesDialogProps): React.ReactElement {
+export function DuplicatesDialog({ sets: opened, certain = false, onClose }: DuplicatesDialogProps): React.ReactElement {
   const t = usePartiesT();
   // The dialog lists the sets it opened with; a caller's later reads never change what is confirmed.
   const [sets] = React.useState(opened);
@@ -94,7 +92,6 @@ export function DuplicatesDialog({ sets: opened, certain = false, notes = [], on
           </Dialog.Header>
           <Dialog.Body className="space-y-4">
             <Alert tone="info">{t("duplicates.valueRule")} {t("duplicates.undo")}</Alert>
-            {notes.map((note) => <Alert key={note} tone="warning">{note}</Alert>)}
             {preview.error ? <ErrorBanner description={t("duplicates.error")} /> : null}
             {mergeState.error ? <ErrorBanner description={t("duplicates.mergeError")} /> : null}
             {preview.isFetching && previews.length === 0 ? <LoadingPanel loadingLabel={t("duplicates.loading")} /> : null}

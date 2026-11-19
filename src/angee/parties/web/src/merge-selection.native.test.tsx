@@ -6,10 +6,14 @@ import { AppRuntimeProvider, ToastProvider, aliasRouteHref, createRouteHref, pag
 import { createUiTestProviders } from "@angee/ui/testing";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+const reads = vi.hoisted(() => ({ variables: [] as unknown[] }));
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
-  // The people workbench's scope counts; the list declarations do not read them.
-  useAuthoredQuery: () => ({ data: undefined, isFetching: false, error: null }),
+  // The people workbench's scope counts and the batch dialog's preview; each read's variables are kept.
+  useAuthoredQuery: (_document: unknown, variables: unknown) => {
+    reads.variables.push(variables);
+    return { data: undefined, isFetching: false, error: null };
+  },
 }));
 
 import { enPartiesMessages } from "./i18n";
@@ -22,6 +26,7 @@ const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://parti
 afterEach(() => {
   cleanup();
   clearClients();
+  reads.variables = [];
 });
 
 const MERGE = enPartiesMessages["merge.selection.action"]!;
@@ -40,7 +45,7 @@ const mountedRouteHref = aliasRouteHref(
 );
 
 /** The selection bar's Merge for `ids` on the mounted people list, which a scope search narrows. */
-function renderMountedSelection(ids: readonly string[], search = "peopleScope=UNASSIGNED", collection?: object) {
+function renderMountedSelection(ids: readonly string[], search = "peopleScope=UNASSIGNED") {
   // The app's root keeps `?app=` across links and redirects, as `createApp` declares it.
   const root = createRootRoute({ search: { middlewares: [retainSearchParams(["app"])] } });
   const router = createRouter({
@@ -48,7 +53,7 @@ function renderMountedSelection(ids: readonly string[], search = "peopleScope=UN
       createRoute({
         getParentRoute: () => root,
         path: MOUNTED_PEOPLE,
-        component: () => <MergeSelectionAction ids={new Set(ids)} collection={collection} />,
+        component: () => <MergeSelectionAction ids={new Set(ids)} />,
       }),
       createRoute({ getParentRoute: () => root, path: MERGE_PATH, component: () => <div>Comparison</div> }),
     ]),
@@ -103,6 +108,7 @@ describe("Merge in a parties list's selection bar", () => {
     fireEvent.click(await screen.findByRole("button", { name: MERGE }));
 
     expect(await screen.findByText(enPartiesMessages["duplicates.title"]!)).toBeTruthy();
+    expect(reads.variables).toContainEqual({ sets: [["ada", "grace", "joan"]], certain: false });
     expect(screen.queryByText("Comparison")).toBeNull();
   });
 
@@ -113,33 +119,6 @@ describe("Merge in a parties list's selection bar", () => {
 
     expect(await screen.findByText(enPartiesMessages["person.action.mergeOther"]!)).toBeTruthy();
     expect(router.state.location.pathname).toBe(MOUNTED_PEOPLE);
-  });
-
-  test.each([
-    {
-      state: "three a grouping cannot place",
-      ids: ["ada", "grace", "joan"],
-      collection: { selectedGroups: null },
-      reason: enPartiesMessages["merge.selection.unplaceable"]!,
-    },
-    {
-      state: "three in groups of one",
-      ids: ["ada", "grace", "joan"],
-      collection: {
-        selectedGroups: ["ada", "grace", "joan"].map((id) => ({ field: "display_name", key: id, label: id, parents: [], ids: [id] })),
-      },
-      reason: enPartiesMessages["merge.selection.noGroups"]!,
-    },
-  ])("with $state, Merge stays in the bar, disabled, and says why", async ({ ids, collection, reason }) => {
-    const router = renderMountedSelection(ids, "peopleScope=UNASSIGNED", collection);
-    const merge = await screen.findByRole("button", { name: MERGE });
-
-    expect(merge.getAttribute("aria-disabled")).toBe("true");
-    fireEvent.mouseEnter(merge);
-    expect(screen.getByText(reason)).toBeTruthy();
-    fireEvent.click(merge);
-    expect(router.state.location.pathname).toBe(MOUNTED_PEOPLE);
-    expect(screen.queryByText("Comparison")).toBeNull();
   });
 
   test("the people and organizations lists add Merge to their selection and keep the resource's default selectability", async () => {

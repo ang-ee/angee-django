@@ -783,9 +783,8 @@ live in code docstrings.
   is the one batch surface: the Review page's "Merge certain pairs" action, and
   the People and Organizations lists' Merge…, where one selected record opens
   the person form's "Merge into…" (`useMergeIntoAction`, shared by both), two
-  open their compare page, and three or more open the dialog (one set per group
-  of two or more in a grouped list); the dialog marks a member whose grouped
-  value changed since the selection.
+  open their compare page, and three or more open the dialog as one explicit
+  set, the whole selection.
 
 - Parties: `Party.objects.propose_same_person_as_system(left, right, *, evidence,
   reason)` lets an importer propose that two parties are one person, citing the
