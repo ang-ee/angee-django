@@ -869,7 +869,8 @@ def parts(*pairs: tuple[Any, Any]) -> tuple[MappingContribution, ...]:
 def test_a_changed_contribution_list_replays_each_record_once(
     stream_bridge: Channel, before: tuple[tuple[str, int], ...], after: tuple[tuple[str, int], ...]
 ) -> None:
-    adapter = composed_adapter(stream_bridge, contributions=parts(*before))
+    # The delta redelivers both rows unchanged, so a drain that lands nothing proves the version held.
+    adapter = composed_adapter(stream_bridge, contributions=parts(*before), delta=("person:1", "person:2"))
     initial, landed = drain_records(stream_bridge, adapter)
     assert landed == 2 and initial.mapping_version == sum(version for _key, version in before)
     assert initial.retained_contributions == before
@@ -997,6 +998,42 @@ def test_a_first_composed_version_lands_above_every_applied_stamp(stream_bridge:
     assert (composed.generation, landed) == (stream.generation + 1, 2)
     assert composed.mapping_version == 6
     assert set(RecordLink.objects.values_list("mapping_version", flat=True)) == {6}
+
+
+@pytest.mark.parametrize("left", ["lowered-in-place", "bare-list"])
+def test_a_retained_list_that_no_longer_names_the_stream_version_replays_once(
+    stream_bridge: Channel, left: str
+) -> None:
+    """Plain 3, then ``[base:1]`` at 4; an earlier release then leaves the list without the stream's version.
+
+    A release before the retained list lowers the version in place and applies a
+    record under it; a release that stored the list without its version leaves a
+    bare list. The same list declared again replays every record once, above every stamp.
+    """
+
+    adapter = composed_adapter(stream_bridge, mapping_version=3)
+    plain, landed = drain_records(stream_bridge, adapter)
+    adapter.contributions, adapter.mapping_version = parts(("base", 1)), 1
+    composed, landed = drain_records(stream_bridge, adapter)
+    assert (composed.generation, composed.mapping_version, landed) == (plain.generation + 1, 4, 2)
+
+    if left == "lowered-in-place":
+        SyncStream.objects.filter(pk=composed.pk).update(mapping_version=3)
+        composed.refresh_from_db()
+        adapter.delta = ("person:1",)
+        assert advance_stream(composed, adapter).count == 1
+        adapter.delta = ()
+        stamps = {"person:1": 3, "person:2": 4}
+    else:
+        SyncStream.objects.filter(pk=composed.pk).update(mapping_contributions=[["base", 1]])
+        stamps = {"person:1": 4, "person:2": 4}
+    assert dict(RecordLink.objects.values_list("external_key", "mapping_version")) == stamps
+    assert SyncStream.objects.get(pk=composed.pk).retained_contributions is None
+
+    returned, landed = drain_records(stream_bridge, adapter)
+    assert (returned.generation, returned.mapping_version, landed) == (composed.generation + 1, 5, 2)
+    assert returned.retained_contributions == (("base", 1),)
+    assert set(RecordLink.objects.values_list("mapping_version", flat=True)) == {5}
 
 
 def test_a_stream_written_before_retained_contributions_keeps_its_generation(stream_bridge: Channel) -> None:
