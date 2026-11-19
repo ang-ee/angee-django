@@ -164,13 +164,15 @@ describe("Merge in a parties list's selection bar", () => {
     expect(reads.variables).toContainEqual({ sets: [["ada", "grace"]], certain: false });
   });
 
-  test("more groups than one batch takes merge the first fifty, and the dialog says how many remain", async () => {
+  test("more groups than one batch takes merge the first fifty, and the dialog says how to reach the rest", async () => {
     const groups = Array.from({ length: 60 }, (_, index) => nameGroup(`Person ${index}`, [`a${index}`, `b${index}`]));
     renderMountedSelection(groups.flatMap((group) => group.ids), undefined, groups);
 
     fireEvent.click(await screen.findByRole("button", { name: MERGE }));
 
-    expect(await screen.findByText("This merges the first 50 of 60 groups; select Merge… again for the rest.")).toBeTruthy();
+    expect(await screen.findByText(
+      "This merges the first 50 of 60 groups. The selection clears after the merge: select the rest and choose Merge… again.",
+    )).toBeTruthy();
     expect(reads.variables).toContainEqual({ sets: groups.slice(0, 50).map((group) => [...group.ids]), certain: false });
   });
 

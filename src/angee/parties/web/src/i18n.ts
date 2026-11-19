@@ -232,7 +232,7 @@ export const enPartiesMessages: Record<string, string> = {
   "duplicates.refused": "Will not merge: {reason}",
   "duplicates.unpaired": "Left out, with no one else selected in their group: {count}.",
   "duplicates.blank": "Left out, in a group without a value: {count}.",
-  "duplicates.overCap": "This merges the first {count} of {total} groups; select Merge… again for the rest.",
+  "duplicates.overCap": "This merges the first {count} of {total} groups. The selection clears after the merge: select the rest and choose Merge… again.",
   "duplicates.include": "Include in this merge",
   "duplicates.includeWarned": "Not included until you tick it: these records disagree, or one no longer matches its group.",
   "duplicates.includeChanged": "Changed since you saw it: not included until you tick it as it is now.",

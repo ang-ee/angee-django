@@ -91,7 +91,8 @@ export function MergeSelectionAction({
     ? [
       ...(split.unpaired ? [t("duplicates.unpaired", { count: split.unpaired })] : []),
       ...(split.blank ? [t("duplicates.blank", { count: split.blank })] : []),
-      // A batch takes at most BATCH_SETS sets: the first ones in the list's order, and the dialog says how many are left.
+      // A batch takes at most BATCH_SETS sets: the first ones in the list's order. The dialog says how many are left;
+      // after a merge the list's selection clears (the shared selection offers only `clear`), so the rest is re-selected.
       ...(split.sets.length > BATCH_SETS ? [t("duplicates.overCap", { count: BATCH_SETS, total: split.sets.length })] : []),
     ]
     : [];
