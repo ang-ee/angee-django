@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 32
+// @rebac_schema_revision: 33
 
 // Parties, folders and circles are grant roots: each is owned through its
 // transferable `owner` column (OwnerMixin), which an insert defaults to the row's
@@ -169,15 +169,15 @@ definition parties/handle {
     relation statement_role: provenance/role // rebac:const=parties_statement_source
     permission statement_source = directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin
-    relation contact_reader: parties/role // rebac:const=contact_reader
-    relation contact_manager: parties/role // rebac:const=contact_manager
-    relation contact_admin: parties/role // rebac:const=contact_admin
+    // The party the handle resolves to: parties' roles reach a handle through it, as an address's,
+    // so a handle no party holds yet (a mailbox's sender, a calendar's attendee) is no role's.
+    relation party: parties/party // rebac:field=party
 
     permission create = authenticated
-    permission read_granted = creator + editor + reader + statement_source + stating_directory->contact_read + contact_reader->effective_member + contact_manager->effective_member + contact_admin->effective_member + admin->member
+    permission read_granted = creator + editor + reader + statement_source + stating_directory->contact_read + party->role_read + admin->member
     permission read = read_granted
-    permission write  = creator + editor + contact_manager->effective_member + contact_admin->effective_member + admin->member
-    permission delete = creator + contact_admin->effective_member + admin->member
+    permission write  = creator + editor + party->role_manage + admin->member
+    permission delete = creator + party->role_admin + admin->member
 }
 
 definition parties/address {
@@ -249,14 +249,13 @@ definition parties/circle_member {
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin
-    relation contact_reader: parties/role // rebac:const=contact_reader
-    relation contact_manager: parties/role // rebac:const=contact_manager
-    relation contact_admin: parties/role // rebac:const=contact_admin
+    // The member: parties' roles reach a membership through the party it names.
+    relation party: parties/party // rebac:field=party
 
     permission create = authenticated
-    permission read   = creator + editor + reader + contact_reader->effective_member + contact_manager->effective_member + contact_admin->effective_member + admin->member
-    permission write  = creator + editor + contact_manager->effective_member + contact_admin->effective_member + admin->member
-    permission delete = creator + contact_admin->effective_member + admin->member
+    permission read   = creator + editor + reader + party->role_read + admin->member
+    permission write  = creator + editor + party->role_manage + admin->member
+    permission delete = creator + party->role_admin + admin->member
 }
 
 // The relationship vocabulary is catalogue data every signed-in user picks

@@ -450,8 +450,11 @@ when that wider access is intended. Both use the native record-access owner.
 
 Parties' roles (`parties/role`, anchored by `PartiesRole`) say once, for every
 party, what a per-record grant says for one: a **contact reader**
-(`contact_reader`) reads every party and its handles, addresses, relationships,
-folders and circles as a `reader` does, private fields included; a **contact
+(`contact_reader`) reads every party, and the handles, addresses, relationships
+and circle memberships that party holds (through the party, so a handle no party
+holds yet, a mailbox's sender or a calendar's attendee, is no role's), and every
+address-book folder and circle (they hold no party: their arms are constants), as
+a `reader` does, private fields included; a **contact
 manager** (`contact_manager`) also writes them as an `editor` does (correcting
 and confirming addresses, adopting where adoption applies (through the role's
 own members: a platform admin's reach of every role lends no adoption, as

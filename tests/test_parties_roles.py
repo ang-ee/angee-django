@@ -16,7 +16,7 @@ from django.contrib.auth import get_user_model
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.roles import grant as grant_role
 
-from angee.messaging.testing.models import Party, Person
+from angee.messaging.testing.models import Circle, CircleMember, Handle, Party, Person
 from angee.resources.testing.models import Resource
 from tests.conftest import MarkdownPage, Page, RecordBinding, Vault
 from tests.test_parties_directory_readers import _allowed, _grant, _scoped
@@ -146,6 +146,25 @@ def test_roles_reach_handles_addresses_relationships_and_the_review_verbs(world:
         Party.objects.get(pk=survivor.pk).merge(records=[merged.public_id])
     with system_context(reason="tests.parties_roles.merge_readback"):
         assert Party._base_manager.get(pk=merged.pk).merged_into_id == survivor.pk
+
+
+def test_a_partyless_handle_is_out_of_every_roles_reach(world: SimpleNamespace) -> None:
+    """A mailbox's sender or a calendar's attendee, no party's yet: the roles reach a handle through its party."""
+
+    w = world
+    with system_context(reason="tests.parties_roles.partyless"):
+        handle = Handle.objects.create(platform="email", value="sender@example.com", created_by=w.outsider)
+        member = CircleMember.objects.create(circle=Circle.objects.create(name="Close"), party=w.unlinked)
+    assert handle.party_id is None
+    for role, actor in w.holders.items():
+        for action in ("read", "write", "delete"):
+            assert not _allowed(handle, actor, action), (role, action)
+        assert not Handle.objects.with_actor(actor).filter(party__isnull=True).exists(), role
+    assert _allowed(handle, w.outsider)
+    # A circle membership names its member: the roles reach it through that party.
+    assert _allowed(member, w.holders["contact_reader"]) and not _allowed(member, w.holders["contact_reader"], "write")
+    assert _allowed(member, w.holders["contact_manager"], "write")
+    assert _allowed(member, w.holders["contact_admin"], "delete")
 
 
 def test_a_contact_admin_reads_directories_and_shares_their_contacts_but_does_not_connect_or_change_them(

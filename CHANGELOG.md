@@ -12,8 +12,10 @@ live in code docstrings.
 
 - `angee.parties`: roles of its own, `parties/role` (`PartiesRole`):
   `contact_reader`, `contact_manager` and `contact_admin` hold on every party,
-  handle, address, relationship, folder and circle what a per-record `reader`,
-  `editor` and owner hold on one; a contact admin also reads every directory
+  and on the handles, addresses, relationships and circle memberships it holds
+  (through the party: a handle no party holds is no role's), and on every folder
+  and circle, what a per-record `reader`, `editor` and owner hold on one; a
+  contact admin also reads every directory
   and shares its contacts (`parties/directory#share`, which now manages
   `contact_reader`), and connecting a directory stays with platform admins.
   `parties/party#role_private` and `#role_delete` are the two one-line choices
