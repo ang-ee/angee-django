@@ -48,6 +48,7 @@ members = [
     "angee-operator",
     "angee-parties",
     "angee-parties-integrate-carddav",
+    "angee-parties-integrate-hubspot",
     "angee-platform",
     "angee-platform-integrate-operator",
     "angee-platform-integrate-vcs",
@@ -172,6 +173,7 @@ dependencies = [
     { name = "angee-operator" },
     { name = "angee-parties" },
     { name = "angee-parties-integrate-carddav" },
+    { name = "angee-parties-integrate-hubspot" },
     { name = "angee-platform" },
     { name = "angee-platform-integrate-operator" },
     { name = "angee-platform-integrate-vcs" },
@@ -283,6 +285,7 @@ requires-dist = [
     { name = "angee-operator", editable = "src/angee/operator" },
     { name = "angee-parties", editable = "src/angee/parties" },
     { name = "angee-parties-integrate-carddav", editable = "src/angee/parties_integrate_carddav" },
+    { name = "angee-parties-integrate-hubspot", editable = "src/angee/parties_integrate_hubspot" },
     { name = "angee-platform", editable = "src/angee/platform" },
     { name = "angee-platform-integrate-operator", editable = "src/angee/platform_integrate_operator" },
     { name = "angee-platform-integrate-vcs", editable = "src/angee/platform_integrate_vcs" },
@@ -1347,6 +1350,25 @@ requires-dist = [
     { name = "angee-parties", editable = "src/angee/parties" },
     { name = "angee-web", editable = "src/angee/web" },
     { name = "vobject", specifier = ">=0.9.9" },
+]
+
+[[package]]
+name = "angee-parties-integrate-hubspot"
+version = "3.0.0"
+source = { editable = "src/angee/parties_integrate_hubspot" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-integrate" },
+    { name = "angee-parties" },
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-parties", editable = "src/angee/parties" },
+    { name = "angee-web", editable = "src/angee/web" },
 ]
 
 [[package]]

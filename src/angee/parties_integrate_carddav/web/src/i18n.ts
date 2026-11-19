@@ -1,18 +1,13 @@
-import { createNamespaceT } from "@angee/ui/i18n";
-
-export const enCardDavMessages = {
-  "directory.connect.button": "CardDAV account",
-  "directory.connect.title": "Connect a CardDAV account",
-  "directory.connect.description":
+// The connect dialog's words, contributed to the parties namespace under
+// `directory.carddav` for `ConnectDirectoryAction`.
+export const enCardDavMessages: Record<string, string> = {
+  "directory.carddav.button": "CardDAV account",
+  "directory.carddav.title": "Connect a CardDAV account",
+  "directory.carddav.description":
     "Enter your CardDAV server URL and Basic-auth credentials. Each address book has a stream of enrolled contacts.",
-  "directory.connect.name": "Name",
-  "directory.connect.namePlaceholder": "Personal address book",
-  "directory.connect.serverUrl": "Server URL",
-  "directory.connect.serverUrlPlaceholder": "https://dav.example.com/",
-  "directory.connect.username": "Username",
-  "directory.connect.password": "Password",
-  "directory.connect.submit": "Connect",
-  "directory.connect.submitting": "Connecting…",
-  "directory.connect.error": "Could not connect the directory.",
+  "directory.carddav.namePlaceholder": "Personal address book",
+  "directory.carddav.serverUrl": "Server URL",
+  "directory.carddav.serverUrlPlaceholder": "https://dav.example.com/",
+  "directory.carddav.username": "Username",
+  "directory.carddav.password": "Password",
 };
-export const useCardDavT = createNamespaceT("parties_integrate_carddav", enCardDavMessages);

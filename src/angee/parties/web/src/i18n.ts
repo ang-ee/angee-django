@@ -69,6 +69,9 @@ export const enPartiesMessages: Record<string, string> = {
   "directory.group.lastSync": "Last sync",
   "directory.action.sync": "Sync now",
   "directory.connect.menu": "Connect",
+  "directory.connect.submit": "Connect",
+  "directory.connect.submitting": "Connecting…",
+  "directory.connect.error": "Could not connect the directory.",
   "folder.empty": "No folders yet. A connected directory adds one for each address book it syncs.",
   "person.tabs.identity": "Identity",
   "person.tabs.circles": "Circles",
@@ -203,3 +206,5 @@ export const enPartiesMessages: Record<string, string> = {
 };
 
 export const usePartiesT = createNamespaceT("parties", enPartiesMessages);
+
+export type PartiesT = ReturnType<typeof usePartiesT>;

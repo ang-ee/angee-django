@@ -10,6 +10,114 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- New addon `angee.parties_integrate_hubspot` (`angee-parties-integrate-hubspot`)
+  registers the `hubspot` directory backend: one HubSpot account's contacts read
+  one way into parties over HubSpot's `2026-09` REST paths, with no HubSpot SDK.
+  Its requests are integrate's pinned request (`HttpClient.request`), sent
+  through the backend's own client (`HubSpotClient(http, headers)`), whose
+  refusal rule (`HttpRefusal`) it shares; it adds a 423 as transient (at least two seconds), a
+  429 without `Retry-After` waits for its policy's window (ten seconds, or an
+  hour for the daily limit, which its message names), and HubSpot's rejection of
+  a key that lacks a service key's usual shape says to check it for extra or
+  missing characters. Its `credential_blocker` admits only a static-token
+  credential holding a service key with `crm.objects.contacts.read` that does not
+  need reconnecting, judging the key as the request sends it (only an empty one
+  is refused), and it declares no OAuth client. Connection discovery
+  (`requires_connection_discovery`) learns the account's hub id, and its web host
+  when HubSpot states one, into the directory's `subscription_state`, so a
+  directory syncs only after discovery and its source links open each contact in
+  HubSpot; a later discovery that finds another account refuses the key. The
+  connection test keeps the base's check, refusing a credential that needs
+  reconnecting without a request, then is one one-contact read. A baseline lists contacts by record id;
+  a delta searches by modified time without an offset, reaching back five minutes
+  for HubSpot's lagging search index only until a pass that started that long
+  after the newest change read has completed, so a quiet account costs one search
+  per poll; every pass keeps HubSpot's time (the `Date` of its first answer),
+  never the local clock; an unreadable stored cursor
+  starts a new baseline, and a transient refusal inside one page keeps what that
+  page read. A merge's survivor lands on a replaced record's person. A contact
+  that leaves HubSpot's id walk (archived, deleted or merged away) is withdrawn by
+  the second absence sweep; a read of the contact withdraws it at once only when
+  HubSpot names it not found or a survivor names it replaced, and an id HubSpot
+  merely leaves unanswered is a transient refusal; an empty id walk is believed
+  only when HubSpot's search counts no contact either. Each record of an answer is
+  validated alone: one HubSpot states unreadably is quarantined under its id
+  (`unreadable_record`) while its page lands, and one without a usable id is
+  logged and skipped. A platform admin connects an account
+  from the console: `@angee/parties-integrate-hubspot` adds a "HubSpot account"
+  entry to `parties.directories#toolbar`, whose dialog sends a name and the
+  service key (masked, trimmed) to `connect_hubspot_directory(name, service_key)`, which runs
+  `Directory.objects.connect`; discovery then arms the first sync. The `full`
+  project profile enables the addon. A consumer's `DirectoryMapping` of the
+  `hubspot` backend names contact properties by their internal names: while one
+  does, every read of contacts asks HubSpot for them beside the backend's own and
+  hands their values to the base, and a property the account does not define,
+  which HubSpot leaves out, reaches the mapping as not sent. `parse_string`,
+  `parse_options`, `parse_number`, `parse_bool`, `parse_datetime` and
+  `parse_date` (`angee.parties_integrate_hubspot.client`) read HubSpot's string
+  values by property type for mapping authors; each raises `ValueError` for a
+  value not of its type, which refuses that contact alone. A consumer reads
+  another HubSpot object type (deals, notes) as plain records with a
+  `HubSpotObjectMapping` registered under
+  `ANGEE_HUBSPOT_OBJECT_MAPPING_CLASSES.<key>` and checked at startup: each adds
+  one pull-only stream (`objects`, partitioned by the key) with the contacts
+  stream's pass, sweep and per-record refusals, on the type's own modified
+  property (`hs_lastmodifieddate`), asking for exactly the mapping's properties
+  and, when it names `contacts`, each record's associated contacts in one
+  association read per page (`HubSpotClient.associations`). Its `apply_record`
+  receives a `HubSpotObjectRecord` (id, properties as sent, contact ids, and
+  `person(contact_id)`) and states through the record's link as the integration;
+  `ContactNotLanded` makes a record wait for its contact on the driver's
+  missing-dependency refusal; `withdraw_record` runs when HubSpot says the record
+  is gone; its `version` is the stream's mapping, so a change replays every record
+  once. An optional `project(record)` turns the record as HubSpot sent it into the
+  values the link keeps and compares (by default the requested properties as
+  sent), so a note's body can be kept as its digest and a change the projection
+  hides applies nothing; `apply_record` receives those `values` and, held in
+  memory from the read that applies it and never stored or logged, the
+  `properties` HubSpot sent, so it can write the full text. Without them (an apply
+  that did not follow its own read, which no driver path makes today), reading
+  `properties` raises `PropertiesNotRead`, a missing-dependency refusal the rescan
+  answers with a new read. An association read
+  takes an id HubSpot names in its `NO_ASSOCIATIONS_FOUND` error as having no
+  contacts, and refuses any other error or an id neither answered nor named, for a
+  later retry. With no object mapping a directory reads only contacts. Operator messages
+  never repeat HubSpot's message text or error category. The scripted account
+  (`angee.parties_integrate_hubspot.testing.server`) builds its invented keys at
+  runtime (`service_key`), so no literal in the repository has a real key's shape.
+
+- `angee.parties`' web fragment owns the connect ceremony of a contacts
+  directory: `ConnectDirectoryAction` (`@angee/parties`) renders the menu trigger
+  and the typed mutation dialog with the shared submit and failure wording, and a
+  vendor declares only its connect mutation, its fields, its message range in the
+  parties namespace (`<prefix>.button`, `.title` and `.description`) and how raw
+  values become the mutation's variables. CardDAV and HubSpot are reduced to those
+  declarations: their copied dialogs and their own i18n namespaces are deleted,
+  and their words join the parties namespace under `directory.carddav` and
+  `directory.hubspot`. A connect now refreshes the directories list, which is a
+  resource view (`useAuthoredResourceMutation`; before, only the live
+  subscription updated it), and its entered key or password leaves the mutation
+  cache once the connect settles (`transient`, whose `@angee/refine`
+  documentation now names secret inputs). The fragment exports the toolbar as
+  `DIRECTORIES_TOOLBAR`, and each connect entry `requires` `DIRECTORY_CREATE`
+  (`parties.Directory#create`, the permission `Directory.objects.connect`
+  checks), so the Connect menu is absent for an identity the mutation refuses.
+
+- `@angee/ui`: the `password` widget is the masked entry of a secret that is not
+  the person's own sign-in password, and tells the browser so
+  (`autocomplete="new-password"` when the field declares no hint of its own):
+  a vendor key after a name field no longer
+  reads as a login form the browser fills with the console's saved sign-in. The
+  sign-in form keeps its own `current-password` hint. The widget's read form
+  shows nothing for an empty value instead of a mask. The `textarea` widget shows
+  the field's placeholder, and its label only when the field declares none.
+
+- `angee.integrate`'s console credential form enters a static token's key in the
+  `password` widget (it was a plain text input) and drops the entered material
+  from the mutation cache once the create settles (`transient`). A private key
+  and a service-account key file are multi-line, so they stay in text areas,
+  which now show their placeholders.
+
 - `angee.knowledge`: a source's text about a person, as a note in their folder:
   `RecordBindingManager.write_sourced_page(party, vault=, folder_title=,
   title=, body=, written=)` writes nothing for the same text, replaces a note
@@ -641,6 +749,20 @@ live in code docstrings.
   own phrases, never Google's reason. Capped JSON requests, GitHub's and
   OAuth's included, ask for an unencoded answer, and `is_transient_status`
   reads only 500–599 as server errors.
+
+- The CardDAV directory's requests compose that rule too
+  (`HttpClient.request(error=)` and `HttpRefusal.as_error`). A transport
+  failure, a 429 or a 5xx is now transient and waits for `Retry-After`; before,
+  a refused answer reached the operator as a permanent "CardDAV <method>
+  returned HTTP n." and a transport failure as a raw error. Integrate words every
+  other refusal, and a multistatus httpx2 cannot decode is a permanent unreadable
+  answer. CardDAV keeps only its own answers: a 412, or a 403 to a write, sets
+  that card aside; a cursor's 404, or a 403 naming `DAV:valid-sync-token`,
+  restarts the stream; a success over its byte cap splits a multiget, and a
+  listing over it says to use smaller address books. A tokenless book's listing
+  refused only for now stays transient instead of reading as a book with no
+  complete ETag listing, and a vCard photo's refusal keeps its words and takes
+  integrate's transience.
 
 - `angee.integrate`, `angee.workflows_integrate`: static-token and workflow loose
   ends. Testing a connection whose static token is not a header (an ICS feed

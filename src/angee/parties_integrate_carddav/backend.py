@@ -7,7 +7,8 @@ inventories with retained link ETags. Optional getctag skips unchanged books.
 vobject owns vCard parsing/serialization, parties owns the synchronized projection
 and ingest policy, and integrate owns bases, conflict classification and cursors.
 Every HTTP request uses the shared SSRF-pinned client and the Integration owner's
-Basic-auth credential. Writes use resource ETags with If-Match, never timestamps.
+Basic-auth credential; integrate's ``HttpRefusal`` decides every refusal CardDAV
+does not translate. Writes use resource ETags with If-Match, never timestamps.
 
 Auth is Basic only: HTTP Digest is not yet supported. A Digest server would need a
 ``DigestAuthCredentialHandler`` on the credential registry seam (the challenge /
@@ -39,7 +40,7 @@ from pydantic import ValidationError as PydanticValidationError
 from angee.base.serialization import canonical_json_sha256
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
-from angee.integrate.http import RedirectOriginError, ResponseTooLargeError, same_origin
+from angee.integrate.http import HttpRefusal, RedirectOriginError, same_origin
 from angee.integrate.states import LinkStatus, StreamDefinition, StreamDirection
 from angee.integrate.streams import (
     CursorInvalid,
@@ -79,6 +80,7 @@ bounding the memory of one parse. Multigets split to fit; oversized singletons a
 """
 _XML_FEED_BYTES = 64 * 1024
 """Bound each Expat feed so a document type refusal stops before the rest of the body."""
+_PHOTO_UNAVAILABLE = "The vCard photo could not be retrieved."
 # vCard's reserved year for a birthday/anniversary whose year is omitted (``--MMDD``).
 _NO_YEAR_SENTINEL = 1604
 
@@ -163,7 +165,7 @@ class CardDavError(IntegrationError):
 
 
 class CardDavResponseTooLargeError(CardDavError):
-    """A DAV response exceeded the limit; its message is safe for operator telemetry."""
+    """A DAV success answer over the backend's ``response_cap``; a multiget splits on it, a listing explains it."""
 
 
 @dataclass(frozen=True)
@@ -222,7 +224,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
             self.discover()
         except CardDavError:
             raise
-        except Exception as error:  # noqa: BLE001 — surface any transport/SSRF failure as a connect error.
+        except Exception as error:  # noqa: BLE001 — an address the policy refuses, or an answer that is not DAV.
             raise CardDavError("Could not connect to the CardDAV server.") from error
         parts = urlsplit(base)
         return f"Connected to {parts.hostname}{f':{parts.port}' if parts.port else ''}."
@@ -453,7 +455,10 @@ class CardDavDirectoryBackend(DirectoryBackend):
         )
 
     def _resolve_photo(self, contact: ParsedCard, *, collection: str) -> ParsedCard:
-        """Bound PHOTO downloads to public addresses on the collection's origin."""
+        """Bound PHOTO downloads to public addresses on the collection's origin; a refusal fails the card.
+
+        Failing it never promotes a partial comparison base (:func:`_photo_refused`).
+        """
 
         photo = contact.photo
         if photo is None or photo.data is not None or not photo.uri:
@@ -462,15 +467,15 @@ class CardDavDirectoryBackend(DirectoryBackend):
             raise CardDavError("The vCard photo must share the address book's origin.")
         try:
             response = self.http.request(
-                "GET", photo.uri, allow_private=False, max_bytes=int(settings.ANGEE_STORAGE_IMAGE_MAX_BYTES)
+                "GET", photo.uri, allow_private=False, max_bytes=int(settings.ANGEE_STORAGE_IMAGE_MAX_BYTES),
+                error=_photo_refused,
             )
-        except ResponseTooLargeError as error:
-            # Storage's image cap refuses it, as it refuses an inline photo that size.
-            raise UploadTooLarge("The vCard photo is larger than the image size cap.") from error
-        except Exception as error:  # noqa: BLE001 — do not promote a partial comparison base.
-            raise CardDavError("The vCard photo could not be retrieved.") from error
-        if not response.is_success or not response.content:
-            raise CardDavError("The vCard photo could not be retrieved.")
+        except ValidationError as error:  # the URL gate or the address policy refused the photo's address
+            raise CardDavError(_PHOTO_UNAVAILABLE) from error
+        if not response.is_success:
+            raise _photo_refused(HttpRefusal.of(response))
+        if not response.content:
+            raise CardDavError(_PHOTO_UNAVAILABLE)
         return replace(contact, photo=ParsedPhoto(data=response.content, mime=photo.mime or "application/octet-stream"))
 
     # --- identity: resource hrefs onto contact keys ---
@@ -613,7 +618,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
         headers: dict[str, str] | None = None,
         cursor_request: bool = False,
     ) -> Any:
-        """Send DAV through the pinned client and translate conditional failures."""
+        """Send DAV through the pinned client, translate conditional failures, and let ``_refused`` decide the rest."""
 
         if not same_origin(self._base_url(), url):
             raise CardDavError("CardDAV destinations must retain the configured server origin.")
@@ -632,11 +637,10 @@ class CardDavDirectoryBackend(DirectoryBackend):
                 allow_private=True,
                 same_origin_redirects=3,
                 max_bytes=self.response_cap,
+                error=_refused,
             )
         except RedirectOriginError as error:
             raise CardDavError("CardDAV redirects must retain the request origin.") from error
-        except ResponseTooLargeError as error:
-            raise CardDavResponseTooLargeError("CardDAV response exceeds the byte limit.") from error
         if response.status_code == 412:
             raise RemoteRejected()
         if response.status_code == 403 and method in {"PUT", "DELETE"}:
@@ -654,7 +658,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
                 if invalid:
                     raise CursorInvalid()
         if not response.is_success:
-            raise CardDavError(f"CardDAV {method} returned HTTP {response.status_code}.")
+            raise _refused(HttpRefusal.of(response))
         return response
 
     def _auth(self) -> dict[str, str]:
@@ -712,7 +716,8 @@ class CardDavDirectoryBackend(DirectoryBackend):
         """Return complete, href-ordered inventory versions; refuse incomplete listings.
 
         Baseline and reconciliation absence decisions require the entire inventory.
-        A refused listing preserves their checkpoints and requires smaller books.
+        A refused listing preserves their checkpoints and requires smaller books;
+        a permanent refusal of one that must carry ETags means it has none.
         """
 
         unavailable = (
@@ -726,7 +731,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
                 "The complete CardDAV address-book listing exceeds the response byte limit; use smaller address books."
             ) from error
         except CardDavError as error:
-            if require_etags:
+            if require_etags and not error.transient:
                 raise CardDavError(unavailable) from error
             raise
         hrefs: dict[str, str] = {}
@@ -999,6 +1004,20 @@ def _retain_lines[T](
         else:
             del card.contents[name]
     return missing
+
+
+def _refused(refusal: HttpRefusal) -> CardDavError:
+    """Return CardDAV's error for a refused DAV request; an oversized success is the one a multiget splits on."""
+
+    return refusal.as_error(CardDavResponseTooLargeError if refusal.cause == "oversized" else CardDavError, "CardDAV")
+
+
+def _photo_refused(refusal: HttpRefusal) -> Exception:
+    """Return a refused photo download's error; storage's image cap refuses an oversized one, as an inline one."""
+
+    if refusal.cause == "oversized":
+        return UploadTooLarge("The vCard photo is larger than the image size cap.")
+    return refusal.as_error(CardDavError, "CardDAV", public_message=_PHOTO_UNAVAILABLE)
 
 
 def _quarantined(href: str, payload: dict[str, Any], *, remote_version: str = "") -> RecordChange:

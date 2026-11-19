@@ -120,7 +120,7 @@ function PasswordEdit({
       ref={controlRef}
       {...field?.controlProps}
       type="password"
-      autoComplete={field?.autoComplete}
+      autoComplete={field?.autoComplete ?? "new-password"}
       value={value ?? ""}
       readOnly={readOnly}
       aria-label={widgetLabel(field, "Password")}
@@ -131,8 +131,10 @@ function PasswordEdit({
   );
 }
 
-function PasswordRead(): ReactElement {
-  return <span className="text-13 text-fg">••••••••</span>;
+function PasswordRead({
+  value,
+}: WidgetRenderProps<string>): ReactElement {
+  return <span className="text-13 text-fg">{value ? "••••••••" : ""}</span>;
 }
 
 export const emailWidget = {
@@ -153,6 +155,15 @@ export const phoneWidget = {
   cell: PhoneRead,
 } satisfies WidgetDefinition<string>;
 
+/**
+ * The masked entry of a secret that is not the person's own sign-in password: a
+ * vendor key, a service's password, another account's password. Its
+ * autocomplete hint is the field's own `autoComplete` (a form asking for the
+ * person's current password declares `current-password`), and `new-password`, the
+ * standard hint that keeps a browser from filling the person's saved sign-in into
+ * it, when the field declares none. The read form masks a value and shows nothing
+ * for none.
+ */
 export const passwordWidget = {
   edit: PasswordEdit,
   read: PasswordRead,

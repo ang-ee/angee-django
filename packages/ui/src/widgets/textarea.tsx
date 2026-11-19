@@ -20,7 +20,7 @@ function TextareaEdit({
       readOnly={readOnly}
       autoComplete={field?.autoComplete}
       aria-label={widgetLabel(field, "Text")}
-      placeholder={field?.label === undefined ? undefined : widgetLabel(field, "Text")}
+      placeholder={field?.placeholder ?? (field?.label === undefined ? undefined : widgetLabel(field, "Text"))}
       rows={6}
       onChange={(event) => onChange?.(event.currentTarget.value)}
       onBlur={onCommit}

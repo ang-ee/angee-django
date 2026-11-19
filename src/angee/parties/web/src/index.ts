@@ -8,6 +8,7 @@ import { organizationForm } from "./OrganizationForm";
 import { personForm } from "./PersonForm";
 import { partyForm } from "./PartyForm";
 import { partyPickerWidget } from "./PartyPicker";
+import { DIRECTORIES_TOOLBAR } from "./resources";
 
 const parties = defineBaseAddon({
   id: "parties",
@@ -103,14 +104,20 @@ const parties = defineBaseAddon({
   // Identity-claim states outside the framework vocabulary.
   statusTones: { suggested: "warning", dismissed: "neutral" },
   // Relationship-aware addons add Overview items; contact-consuming addons add Person and Organization form fields;
-  // directory backends add their connect verb to the directories toolbar.
+  // directory vendor addons add their connect verb (`ConnectDirectoryAction`) to the directories toolbar.
   containers: {
     "parties.overview#items": {},
     "parties.person#fields": {},
     "parties.organization#fields": {},
-    "parties.directories#toolbar": {},
+    [DIRECTORIES_TOOLBAR]: {},
   },
 });
+export {
+  ConnectDirectoryAction,
+  type ConnectDirectoryActionProps,
+  type ConnectDirectoryFields,
+} from "./ConnectDirectoryAction";
+export { DIRECTORIES_TOOLBAR, DIRECTORY_CREATE } from "./resources";
 export { resolvedSender, senderAvatarUrl, senderDisplayName, type SenderIdentity } from "./identity";
 export { addressFields, PartyAddresses } from "./PartyAddresses";
 export { useOrganizationFields } from "./OrganizationForm";
