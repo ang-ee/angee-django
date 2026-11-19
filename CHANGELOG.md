@@ -63,6 +63,17 @@ live in code docstrings.
   work; `Integration.lock_for_record_access` now takes the capability lock
   first, for a transfer and a record grant alike.
 
+- `angee.graphql`, `angee.base`, `angee.integrate`: an integration's refusal
+  reaches the operator as its message. An action guarded by `action_guard` let
+  an `IntegrationError` propagate, so resolving or retrying a sync failure,
+  choosing a side of a conflict or publishing a calendar while discovery was
+  pending showed the console a raw "An unexpected error occurred." The
+  transport-independent `angee.base.exceptions.PublicRefusal` (a message safe to
+  show, and whether a retry can succeed) is now one of the guard's baseline
+  errors, and `ActionResult.from_error` presents its `public_message`, adding
+  that a transient one can be retried. `IntegrationError` is one, so every
+  guarded action presents it in band, with no catch per mutation.
+
 - `angee.integrate`: a derived credential leaves with its integration. Deleting
   an integration left the credential its discovery derived, which
   `CredentialManager.store_derived` then refused to overwrite, so the next

@@ -372,7 +372,11 @@ lets that page commit; and an attach on a capability that requires no discovery
 settles at once and does not stop a run.
 
 `IntegrationError(public_message, transient=…, retry_after=…)` owns the optional
-positive provider horizon. `RequestNotSentError` declares that connect, DNS or
+positive provider horizon. Integrate's own console actions are guarded by
+`integrate.schema.integration_action_guard`, `action_guard` with an
+`IntegrationError` as an expected refusal: it is answered in band with its public
+message (an `OAuthFlowError` keeps its code), and a permanent one is logged at
+warning level. `RequestNotSentError` declares that connect, DNS or
 TLS handshake failed before HTTP request bytes were written and is safe to retry.
 Failures after sending retain an uncertain transport outcome. A hint implies transience unless explicitly declared
 otherwise. Aggregate failures retain a partition's horizon even when another
