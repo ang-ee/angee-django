@@ -989,14 +989,17 @@ def test_a_contact_mints_its_own_person_when_an_adoption_limit_refuses_the_one_i
 
 @pytest.mark.usefixtures("adoption")
 def test_merging_a_proposed_pair_withdraws_it_and_the_same_as_reconciler_leaves_it_standing(pull: Pull) -> None:
-    """The minted and the existing person claim one handle row, which supports no pair of the ``same_as`` rule.
+    """The minted and the existing person are linked to one address by two sources: a supported same-person pair.
 
-    That rule's reconciler withdraws its own pair of them and leaves the
-    directory's, which the review lists by the address; merging the two through
-    the review's verb withdraws the directory's proposal. The merging person writes
-    both (the platform admin who owns the directory), the deliberate override of
-    the ``adopt`` permission the limit refused; the merge leaves the directory one
-    contact on the survivor.
+    The existing person holds the address and the directory's contact claims it,
+    so the ``same_as`` rule's reconciler keeps its own statement of the pair beside
+    the directory's (a claim links its party: ``PartyManager.same_person_links``;
+    before, a pair resting on one handle row's claims was unsupported and the
+    reconciler withdrew it). The review lists the pair once, by the address;
+    merging the two through the review's verb withdraws the directory's proposal.
+    The merging person writes both (the platform admin who owns the directory), the
+    deliberate override of the ``adopt`` permission the limit refused; the merge
+    leaves the directory one contact on the survivor.
     """
 
     owner = pull.directory.owner
@@ -1015,7 +1018,7 @@ def test_merging_a_proposed_pair_withdraws_it_and_the_same_as_reconciler_leaves_
         Party.objects.reconcile_same_as()
     statements = Party.same_as.model.statements.filter(subject=pair).current()
     assert dict(statements.values_list("asserted_by", "status")) == {
-        str(to_subject_ref(same_as)): "withdrawn",
+        str(to_subject_ref(same_as)): "asserted",
         str(to_subject_ref(Party.objects.rule_source("directory_match"))): "asserted",
     }
 
