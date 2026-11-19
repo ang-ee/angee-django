@@ -11,7 +11,8 @@ A refusal becomes a :class:`HubSpotError` composed from facts: the status,
 HubSpot's error ``category`` and rate-limit ``policyName``, and the scopes the
 request needed, never HubSpot's message text. :func:`_retry_policy` is the status
 table that decides which refusals a later attempt can outlive and how long to
-wait. A failure to reach HubSpot, and an oversized answer, are transient.
+wait. A failure to reach HubSpot, and an oversized answer, are transient; an
+answer this client cannot read is permanent.
 
 HubSpot states every property value as a nullable string; the ``parse_*``
 functions turn one into a Python value by property type. Which property states
@@ -22,15 +23,16 @@ knows it.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from itertools import batched
-from typing import Any
+from typing import Any, Self
 from urllib.parse import urlencode
 
 import httpx2
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
 from angee.integrate.errors import IntegrationError, RequestNotSentError
@@ -50,6 +52,9 @@ BATCH_READ_LIMIT = 100
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 """HubSpot's timestamps count milliseconds from here."""
 
+MISSING_SCOPES = "MISSING_SCOPES"
+"""The ``category`` of HubSpot's refusal of a request whose scope the key lacks."""
+
 _MODIFIED_PROPERTY = {"contacts": "lastmodifieddate"}
 _RECORD_ID = "hs_object_id"
 _NOT_FOUND = "OBJECT_NOT_FOUND"
@@ -57,6 +62,7 @@ _RESPONSE_MAX_BYTES = 8 * 1024 * 1024
 _REQUEST_TIMEOUT_SECONDS = 30
 _LOCKED_WAIT = timedelta(seconds=2)
 _RATE_LIMIT_WAITS = {"TEN_SECONDLY_ROLLING": timedelta(seconds=10), "DAILY": timedelta(hours=1)}
+_HOST_NAME = re.compile(r"[A-Za-z0-9.-]+")
 
 
 def get_read_scope(object_type: str) -> str:
@@ -70,7 +76,8 @@ class HubSpotError(IntegrationError):
 
     ``status`` is the HTTP status of the refused answer, or ``None`` when the
     failure is not a refused answer (unreachable, oversized, unreadable, or a
-    record HubSpot could not read).
+    record HubSpot could not read). ``category`` is the one HubSpot stated for a
+    refused answer (:data:`MISSING_SCOPES`, say), else ``None``.
     """
 
     def __init__(
@@ -78,13 +85,15 @@ class HubSpotError(IntegrationError):
         public_message: str,
         *,
         status: int | None = None,
+        category: str | None = None,
         transient: bool | None = None,
         retry_after: timedelta | None = None,
     ) -> None:
-        """Record the refusal's status beside integrate's transience and wait."""
+        """Record the refusal's status and category beside integrate's transience and wait."""
 
         super().__init__(public_message, transient=transient, retry_after=retry_after)
         self.status = status
+        self.category = category
 
     @classmethod
     def from_response(cls, response: httpx2.Response, *, scopes: Sequence[str] = ()) -> HubSpotError:
@@ -93,9 +102,10 @@ class HubSpotError(IntegrationError):
         body = _error_body(response)
         transient, wait = _retry_policy(response, body)
         status = response.status_code
-        if status == 403 and body.category == "MISSING_SCOPES":
-            return cls.missing_scopes(scopes, status=status)
-        if status == 401:
+        if status == 403 and body.category == MISSING_SCOPES:
+            needed = ", ".join(scopes) or "the scope this request needs"
+            message = f"The HubSpot service key is missing a scope this connection needs: {needed}."
+        elif status == 401:
             message = "HubSpot rejected the access token. Enter a valid HubSpot service key."
         elif status == 403:
             message = "HubSpot refused this request for the service key."
@@ -109,18 +119,7 @@ class HubSpotError(IntegrationError):
             message = "HubSpot is temporarily unavailable."
         else:
             message = f"HubSpot refused the request (HTTP {status})."
-        return cls(message, status=status, transient=transient, retry_after=wait)
-
-    @classmethod
-    def missing_scopes(cls, scopes: Sequence[str], *, status: int | None = None) -> HubSpotError:
-        """Refuse a service key that lacks ``scopes``, which this connection needs; permanent.
-
-        ``status`` is 403 when HubSpot refused a request for it, ``None`` when the
-        key's introspection showed the scopes it lacks.
-        """
-
-        needed = ", ".join(scopes) or "the scope this request needs"
-        return cls(f"The HubSpot service key is missing a scope this connection needs: {needed}.", status=status)
+        return cls(message, status=status, category=body.category, transient=transient, retry_after=wait)
 
 
 class _HubSpotModel(BaseModel):
@@ -139,16 +138,29 @@ class _HubSpotErrorBody(_HubSpotModel):
 
 
 class HubSpotTokenInfo(_HubSpotModel):
-    """What HubSpot's token introspection states about one access token: the scopes it grants."""
+    """What HubSpot's token introspection states about one access token: the account (hub) it belongs to.
 
-    scopes: tuple[str, ...] = ()
+    The answer also lists scopes, which this client never reads: HubSpot need not
+    list every scope a key holds there.
+    """
+
+    hub_id: int
 
 
 class HubSpotAccount(_HubSpotModel):
-    """The account (portal, or hub) a token belongs to, and the host its web app serves it from."""
+    """The account (portal, or hub) a token belongs to, and the host its web app serves it from.
+
+    ``ui_domain`` is ``None`` when the answer states no host name: it only names
+    source links, so an absent or unexpected one never refuses the account.
+    """
 
     portal_id: int
-    ui_domain: str = Field(pattern=r"^[A-Za-z0-9.-]+$")
+    ui_domain: str | None = None
+
+    @field_validator("ui_domain", mode="before")
+    @classmethod
+    def _host_name_or_none(cls, value: Any) -> str | None:
+        return value if isinstance(value, str) and _HOST_NAME.fullmatch(value) else None
 
 
 class HubSpotObject(_HubSpotModel):
@@ -185,11 +197,18 @@ class HubSpotPage(_HubSpotModel):
 
     A list page's following position is the id of the record it starts at; a
     search page's is an offset into the query's results, which this client reads
-    only as a sign that more results follow.
+    only as a sign that more results follow. A page with no records that names a
+    following one is refused: no walk, search or drain could move past it.
     """
 
     results: tuple[HubSpotObject, ...] = ()
     paging: HubSpotPaging | None = None
+
+    @model_validator(mode="after")
+    def _records_before_more(self) -> Self:
+        if self.next_after and not self.results:
+            raise ValueError("A page without records names a following one.")
+        return self
 
     @property
     def next_after(self) -> str:
@@ -238,8 +257,9 @@ class HubSpotClient:
     """One HubSpot account's CRM, read with the authorization headers its caller supplies.
 
     The caller owns the credential: it passes the credential's own authorization
-    headers, and the key itself to :meth:`token_info`. Each method sends only the
-    requests its docstring names; nothing is cached between calls.
+    headers, and the key itself to :meth:`token_info`, the one request that carries
+    it in a body. Each method sends only the requests its docstring names; nothing
+    is cached between calls.
     """
 
     def __init__(self, headers: Mapping[str, str]) -> None:
@@ -249,10 +269,11 @@ class HubSpotClient:
         self.http = HttpClient()
 
     def token_info(self, token_key: str) -> HubSpotTokenInfo:
-        """Introspect ``token_key``: the scopes it grants.
+        """Introspect ``token_key``: the hub it belongs to.
 
-        HubSpot documents introspection for private-app keys only; a caller that is
-        refused learns what it needs from the requests the key makes instead.
+        HubSpot documents introspection for private-app keys only, and the key
+        travels in the request body, so a caller asks only when the account call
+        cannot answer.
         """
 
         return self._request(
@@ -287,14 +308,14 @@ class HubSpotClient:
         """Yield the ids of ``object_type``'s live records strictly after ``after``, in HubSpot's id order.
 
         HubSpot lists records by numeric id, and a list page's ``after`` names the
-        record it starts at. The walk starts at ``after`` itself and drops the ids
-        up to it, so it seeks past ``after`` whether or not that record still
-        exists, without reading the records before it. Each page is requested as
-        the caller reaches it.
+        record it starts at. The walk starts at the id after ``after``, so it seeks
+        past ``after`` whether or not that record still exists, without reading the
+        records before it, and each page of ids is one request; an id at or below
+        ``after`` is still dropped. Each page is requested as the caller reaches it.
         """
 
         floor = int(after) if after else None
-        position = after or ""
+        position = "" if floor is None else str(floor + 1)
         while True:
             page = self.list_page(object_type, after=position, limit=limit, properties=())
             yield from (record.id for record in page.results if floor is None or int(record.id) > floor)

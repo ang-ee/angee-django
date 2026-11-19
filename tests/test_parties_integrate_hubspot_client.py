@@ -98,7 +98,7 @@ def test_record_ids_seek_strictly_past_an_id_in_numeric_order(
     walk = client.record_ids("contacts", after="10", limit=1)
     assert hubspot_server.requests == []
     assert next(walk) == "11"
-    assert hubspot_server.requests[0].url.params["after"] == "10"
+    assert hubspot_server.requests[0].url.params["after"] == "11"
     assert list(walk) == ["100"]
     assert list(client.record_ids("contacts", limit=1)) == ["9", "10", "11", "100"]
     assert list(client.record_ids("contacts", after="12")) == ["100"]
@@ -181,26 +181,27 @@ def test_a_record_hubspot_failed_to_read_is_a_transient_refusal_and_never_missin
     assert VENDOR_TEXT not in refusal.value.public_message
 
 
-def test_token_info_states_its_scopes(hubspot_server: HubSpotServer, client: HubSpotClient) -> None:
+def test_token_info_states_the_hub_the_key_belongs_to(hubspot_server: HubSpotServer, client: HubSpotClient) -> None:
     info = client.token_info(TOKEN)
 
-    assert info.scopes == (CONTACTS_READ,)
+    assert info.hub_id == HUB_ID
     assert request_fields(hubspot_server.requests[0]) == {"tokenKey": TOKEN}
     with pytest.raises(HubSpotError) as rejected:
         client.token_info("pat-na1-ffffffff-ffff-4fff-8fff-ffffffffffff")
     assert (rejected.value.status, rejected.value.transient) == (401, False)
 
 
-def test_account_details_state_the_portal_and_its_web_host(
+def test_account_details_state_the_portal_and_its_web_host_when_it_is_a_host_name(
     hubspot_server: HubSpotServer, client: HubSpotClient
 ) -> None:
     account = client.account()
 
     assert (account.portal_id, account.ui_domain) == (HUB_ID, "app.hubspot.com")
     assert hubspot_server.requests[0].url.path == "/account-info/2026-09/details"
-    hubspot_server.queue(httpx2.Response(200, json={"portalId": HUB_ID, "uiDomain": "example.com/elsewhere"}))
-    with pytest.raises(HubSpotError):
-        client.account()
+    for answer in ({"portalId": HUB_ID, "uiDomain": "example.com/elsewhere"}, {"portalId": HUB_ID}):
+        hubspot_server.queue(httpx2.Response(200, json=answer))
+        unknown = client.account()
+        assert (unknown.portal_id, unknown.ui_domain) == (HUB_ID, None)
 
 
 def test_a_search_asks_for_changes_strictly_after_a_time_ascending_on_the_contacts_modified_property(

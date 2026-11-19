@@ -13,14 +13,18 @@ live in code docstrings.
 - New addon `angee.parties_integrate_hubspot` (`angee-parties-integrate-hubspot`)
   registers the `hubspot` directory backend: one HubSpot account's contacts read
   one way into parties over HubSpot's `2026-09` REST paths, with no HubSpot SDK.
-  It admits a static-token credential holding a service key with
-  `crm.objects.contacts.read`, and connection discovery
-  (`requires_connection_discovery`) learns the account's hub id and web host into
-  the directory's `subscription_state`, so a directory syncs only after discovery
-  and its source links open each contact in HubSpot. A baseline lists contacts by
-  record id; a delta searches by modified time without an offset. A merge's
-  survivor lands on a replaced record's person, and an archived or deleted
-  contact is withdrawn by the absence sweep. It ships no connect action yet.
+  It admits only a non-empty static-token credential holding a service key with
+  `crm.objects.contacts.read` and declares no OAuth client. Connection discovery
+  (`requires_connection_discovery`) learns the account's hub id, and its web host
+  when HubSpot states one, into the directory's `subscription_state`, so a
+  directory syncs only after discovery and its source links open each contact in
+  HubSpot; a later discovery that finds another account refuses the key. The
+  connection test is one one-contact read. A baseline lists contacts by record id;
+  a delta searches by modified time without an offset; an unreadable stored cursor
+  starts a new baseline, and a transient refusal inside one page keeps what that
+  page read. A merge's survivor lands on a replaced record's person, and an
+  archived or deleted contact is withdrawn by the second absence sweep. It ships
+  no connect action yet.
 
 - Sharing a directory shares its contacts. `parties/directory` has a stored,
   grantable `contact_reader` relation (shared through the record-access surface

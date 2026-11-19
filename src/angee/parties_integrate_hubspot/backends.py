@@ -37,22 +37,22 @@ from typing import Any, ClassVar
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict
+from pydantic import ValidationError as PydanticValidationError
 
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.states import StreamPhase
-from angee.integrate.streams import StreamPage
+from angee.integrate.streams import CursorInvalid, StreamPage
 from angee.parties.backends import CONTACTS, DirectoryBackend, ParsedAddress, ParsedAddressbook, ParsedContact
 from angee.parties_integrate_hubspot.client import (
     EPOCH,
     LIST_PAGE_LIMIT,
+    MISSING_SCOPES,
     SEARCH_PAGE_LIMIT,
-    HubSpotAccount,
     HubSpotClient,
     HubSpotError,
     HubSpotObject,
     HubSpotPage,
-    get_read_scope,
     parse_options,
     parse_string,
 )
@@ -232,46 +232,80 @@ def contact_from_properties(properties: Mapping[str, str | None]) -> ParsedConta
 class HubSpotDirectoryBackend(DirectoryBackend):
     """One HubSpot account's contacts, read one way into one address book of a directory.
 
-    The directory's credential is a static token holding a HubSpot service key
-    with the contacts read scope (:meth:`admit_credential`). Each page, identity
-    read and key walk reloads it, and every request sends the credential's own
-    authorization headers; the backend keeps no key. The connection test reads the
-    credential the directory holds, which a connect flow tests before saving
-    either. Connection discovery learns the account's hub id and the host of
-    its web app, which the source links name (:meth:`apply_discovery`). A
-    contact's external key is its HubSpot record id. Contacts HubSpot archived or
-    deleted are found by integrate's absence sweep (:meth:`contact_keys`).
+    The directory reads with a HubSpot service key that has the contacts read
+    scope, held in a static token, and connects through no OAuth client
+    (:meth:`admit_credential`). Each page, identity read and key walk reloads the
+    credential, and every request sends its own authorization headers; the backend
+    keeps no key. Connection discovery learns the account's hub id and the host of
+    its web app, which the source links name, and holds the directory to that
+    account (:meth:`apply_discovery`). A contact's external key is its HubSpot
+    record id. Contacts HubSpot archived or deleted are found by integrate's
+    absence sweep (:meth:`contact_keys`).
     """
 
     key = "hubspot"
     label = "HubSpot"
     defaults = {"vendor": "hubspot"}
+    oauth_client: ClassVar[str] = ""
     requires_connection_discovery: ClassVar[bool] = True
     sync_parallelism: ClassVar[int | None] = 1
 
     def admit_credential(self, credential: Any) -> None:
-        """Admit only a static token: the service key this backend sends as its bearer."""
+        """Admit only a static token that holds a key: the service key this backend sends as its bearer."""
 
-        if credential.kind != CredentialKind.STATIC_TOKEN:
-            raise ValidationError(
-                {"credential": "A HubSpot directory reads with a HubSpot service key (a static token)."}
-            )
+        if credential.kind != CredentialKind.STATIC_TOKEN or not credential.secret_value().strip():
+            refusal = "A HubSpot directory reads with a HubSpot service key: attach a static token that holds one."
+            raise ValidationError({"credential": refusal})
 
     def test_connection(self) -> str:
-        """Name the account the directory's key reads; a rejected key and a missing scope are refused apart."""
+        """Ask HubSpot for one contact: one request proves the key and its contacts read scope, refused apart.
 
-        return f"Connected to HubSpot account {self._account(self.bridge.credential).portal_id}."
+        A saved directory reloads its credential (``Integration.fresh_credential``),
+        so a key re-entered in place is the one tested; a connect flow tests an
+        unsaved directory with the credential it holds.
+        """
+
+        bridge = self.bridge
+        credential = bridge.fresh_credential() if bridge.pk is not None else bridge.credential
+        self._client(credential).list_page(_OBJECT_TYPE, after="", limit=1, properties=())
+        return "Connected to HubSpot: the service key reads this account's contacts."
 
     def discover_connection(self, credential: Any) -> ConnectionDiscovery:
-        """Learn, outside transactions, the account ``credential`` reads: its hub id and its web app's host."""
+        """Learn, outside transactions, the account ``credential`` reads: its hub id and, when stated, its web host.
 
-        account = self._account(credential)
-        return ConnectionDiscovery(data={"hub_id": account.portal_id, "ui_domain": account.ui_domain})
+        The account call states both. When HubSpot refuses it for a scope the key
+        lacks, the key's introspection states the hub id instead and the host stays
+        unknown; the scopes introspection lists are never read.
+        """
+
+        client = self._client(credential)
+        try:
+            account = client.account()
+        except HubSpotError as error:
+            if error.category != MISSING_SCOPES:
+                raise
+            return ConnectionDiscovery(data={"hub_id": client.token_info(credential.secret_value()).hub_id})
+        facts: dict[str, Any] = {"hub_id": account.portal_id}
+        if account.ui_domain is not None:
+            facts["ui_domain"] = account.ui_domain
+        return ConnectionDiscovery(data=facts)
 
     def apply_discovery(self, discovery: ConnectionDiscovery) -> None:
-        """Keep the account's hub id and web host on the directory, the connection facts its source links name."""
+        """Keep the account's hub id and web host on the directory; refuse a key of another account.
 
-        self.bridge.merge_subscription_state(hub_id=discovery.data["hub_id"], ui_domain=discovery.data["ui_domain"])
+        The first discovery stores the hub id, and every later one must find the
+        same account: a directory's cursor, links and source links all belong to
+        the account it first read, so a key of another one would mix two accounts'
+        contacts in one address book.
+        """
+
+        held, found = (self.bridge.subscription_state or {}).get("hub_id"), discovery.data["hub_id"]
+        if held is not None and held != found:
+            raise HubSpotError(
+                f"This service key belongs to HubSpot account {found}, but this directory reads account {held}. "
+                f"Attach a key of account {held}."
+            )
+        self.bridge.merge_subscription_state(**discovery.data)
 
     def discover(self) -> list[ParsedAddressbook]:
         """Return the account's one address book, which holds every contact."""
@@ -281,25 +315,39 @@ class HubSpotDirectoryBackend(DirectoryBackend):
     def extract_contacts(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
         """Read the next contacts of the stream's pass, at most ``page_bound`` records, as one page.
 
-        The stream's phase opens a baseline or a delta (:class:`HubSpotCursor`).
-        Requests follow one another until the page is full or the pass is done,
-        and none starts after ``deadline`` once one has answered. A merge's
-        survivor takes room for every record it replaces, whose tombstones follow it
-        in the page (``DirectoryBackend.record_changes``); one that does not fit
-        waits for the next page.
+        The stream's phase opens a baseline or a delta (:class:`HubSpotCursor`); a
+        stored cursor that cannot be read starts a new baseline (``CursorInvalid``).
+        Requests follow one another until the page is full or the pass is done.
+        Once one has answered, none starts after ``deadline``, and a transient
+        refusal ends the page with what was read, its cursor where the refused
+        request would have gone on; the next page meets the refusal. A merge's
+        survivor takes room for every record it replaces that has a link, whose
+        tombstone follows it in the page (``DirectoryBackend.record_changes``); one
+        that does not fit waits for the next page.
         """
 
         client = self._client(self.bridge.fresh_credential())
-        cursor = HubSpotCursor.model_validate(stream.cursor).begin(stream.phase, now=timezone.now())
+        try:
+            cursor = HubSpotCursor.model_validate(stream.cursor)
+        except PydanticValidationError:
+            raise CursorInvalid() from None
+        cursor = cursor.begin(stream.phase, now=timezone.now())
         payloads: dict[str, Mapping[str, Any] | None] = {}
-        room, asked = page_bound, False
+        room, answered = page_bound, False
         while cursor.is_open and room > 0:
-            if asked and deadline is not None and monotonic() >= deadline:
+            if answered and deadline is not None and monotonic() >= deadline:
                 break
-            page, asked = cursor.fetch(client, _OBJECT_TYPE, limit=room, properties=_READ_PROPERTIES), True
+            try:
+                page = cursor.fetch(client, _OBJECT_TYPE, limit=room, properties=_READ_PROPERTIES)
+            except HubSpotError as error:
+                if answered and error.transient:
+                    break
+                raise
+            answered = True
+            linked = _linked_replaced(stream, page)
             fits, taken = 0, 0
             for record in page.results:
-                size = 1 + len(_replaced(record))
+                size = 1 + len(linked.intersection(_replaced(record)))
                 if taken + size > room:
                     break
                 fits, taken = fits + 1, taken + size
@@ -307,7 +355,8 @@ class HubSpotDirectoryBackend(DirectoryBackend):
                 if payloads:
                     break
                 raise HubSpotError(
-                    f"A merged HubSpot contact replaces more contacts than a page of {page_bound} records holds."
+                    f"A merged HubSpot contact replaces more contacts than a page of {page_bound} records holds. "
+                    "Raise this directory's sync_page_bound."
                 )
             cut = fits < len(page.results)
             page = page.head(fits)
@@ -357,27 +406,6 @@ class HubSpotDirectoryBackend(DirectoryBackend):
             raise HubSpotError("Attach a HubSpot service key to this directory.")
         return HubSpotClient(credential.auth_headers())
 
-    def _account(self, credential: Any) -> HubSpotAccount:
-        """Return the account ``credential``'s key reads, refusing a key without the contacts read scope.
-
-        The key's introspection states its scopes. HubSpot documents introspection
-        for private-app keys only, so a key it refuses asks for one contact instead,
-        which refuses a rejected key and a missing scope with their own messages.
-        """
-
-        client = self._client(credential)
-        scope = get_read_scope(_OBJECT_TYPE)
-        try:
-            granted = client.token_info(credential.secret_value()).scopes
-        except HubSpotError as error:
-            if error.transient:
-                raise
-            client.list_page(_OBJECT_TYPE, after="", limit=1, properties=())
-        else:
-            if scope not in granted:
-                raise HubSpotError.missing_scopes((scope,))
-        return client.account()
-
     def _payload(self, record: HubSpotObject) -> dict[str, Any]:
         """Return one contact's payload; a merge's survivor names the records it replaced."""
 
@@ -388,3 +416,12 @@ def _replaced(record: HubSpotObject) -> tuple[str, ...]:
     """Return the ids of the records HubSpot merged into ``record``."""
 
     return parse_options(record.properties.get(_MERGED_PROPERTY))
+
+
+def _linked_replaced(stream: Any, page: HubSpotPage) -> set[str]:
+    """Return the ids the page's merges replaced that have a link on ``stream``, read once for the page."""
+
+    replaced = [key for record in page.results for key in _replaced(record)]
+    if not replaced:
+        return set()
+    return set(stream.links.filter(external_key__in=replaced).values_list("external_key", flat=True))

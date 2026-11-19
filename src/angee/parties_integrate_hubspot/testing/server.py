@@ -67,8 +67,8 @@ class HubSpotServer:
     """One HubSpot account in memory, which ``serve`` makes every outbound request reach.
 
     ``records`` maps each object type (``contacts``) to its records by numeric id;
-    ``add``, ``update``, ``archive`` and ``merge`` change them as HubSpot would,
-    stamping the type's modified property. The account answers token
+    ``add``, ``update``, ``archive``, ``delete`` and ``merge`` change them as HubSpot
+    would, stamping the type's modified property. The account answers token
     introspection, account details, list pages (by id, ``archived`` lists the
     soft-deleted), searches and batch reads (207 with an error per category). A
     search takes ``EQ`` and ``GT`` filters on the modified time (epoch
@@ -79,7 +79,8 @@ class HubSpotServer:
     bearer with 401 and a missing read scope with 403 ``MISSING_SCOPES``.
 
     Server-side behaviour is scripted rather than patched: ``queue`` answers the
-    next requests before any routing (an exception models an unreachable host),
+    next requests before any routing (an exception models an unreachable host,
+    and ``None`` lets one request through to the account),
     ``unindexed`` ids stay out of search results as HubSpot's lagging index does,
     ``read_errors`` names the ids a batch read fails on and the error category it
     states for each, and ``resolves_merged`` makes a batch read of a merged id
@@ -98,7 +99,7 @@ class HubSpotServer:
         self.resolves_merged = True
         self.unindexed: set[str] = set()
         self.read_errors: dict[str, str] = {}
-        self.queued: list[httpx2.Response | BaseException] = []
+        self.queued: list[httpx2.Response | BaseException | None] = []
         self.requests: list[httpx2.Request] = []
         self._next_id = 101
 
@@ -136,6 +137,11 @@ class HubSpotServer:
 
         self.records[object_type][record_id]["archived_at"] = at
 
+    def delete(self, object_type: str, record_id: str) -> None:
+        """Delete one record permanently: it leaves every listing, search and batch read, archived ones too."""
+
+        del self.records[object_type][record_id]
+
     def merge(self, object_type: str, primary: str, *others: str, modified: datetime) -> str:
         """Merge records as HubSpot does and return the new record's id.
 
@@ -146,15 +152,15 @@ class HubSpotServer:
         merged = (primary, *others)
         properties = dict(self.records[object_type][primary]["properties"])
         for record_id in merged:
-            del self.records[object_type][record_id]
+            self.delete(object_type, record_id)
         survivor = self.add(
             object_type, {**properties, "hs_merged_object_ids": ";".join(merged)}, modified=modified
         )
         self.merged[object_type].update(dict.fromkeys(merged, survivor))
         return survivor
 
-    def queue(self, *answers: httpx2.Response | BaseException) -> None:
-        """Answer the next requests with ``answers``, in order, before any routing."""
+    def queue(self, *answers: httpx2.Response | BaseException | None) -> None:
+        """Answer the next requests with ``answers``, in order, before any routing; ``None`` lets one through."""
 
         self.queued.extend(answers)
 
@@ -162,8 +168,7 @@ class HubSpotServer:
         """Answer one outbound request as the account would."""
 
         self.requests.append(request)
-        if self.queued:
-            queued = self.queued.pop(0)
+        if self.queued and (queued := self.queued.pop(0)) is not None:
             if isinstance(queued, BaseException):
                 raise queued
             return queued
