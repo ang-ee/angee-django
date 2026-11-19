@@ -81,6 +81,17 @@ live in code docstrings.
   credentials, names its server by host name and port in its connection message,
   and refuses a per-book contacts setting other than `local_delete`.
 
+- A pull-only directory adopts an existing person (rulings R2 and R9): a contact
+  with no person of its own or of a record it replaced lands on the first person
+  its emails name (`people_for_emails`, preferred email first) who is no
+  account's own person, whom the directory's owner already writes (a real
+  permission check for that user), and whom no other live link of the same
+  integration names; otherwise it mints its own. A two-way directory, CardDAV
+  included, never adopts. The link's `adopted_through` metadata
+  (`angee.parties.backends.ADOPTED_THROUGH`) names the handle the person was found by.
+  The same-as review pair a refused adoption should record awaits a ruling on
+  which source asserts it.
+
 - `PartyManager.people_for_emails(emails)` answers who email addresses name: per
   address, in the caller's preference order, an `EmailHolder(email, person,
   basis, handle)` for each basis that names someone (`EmailBasis.ACCOUNT`, the

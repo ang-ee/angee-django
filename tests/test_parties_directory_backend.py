@@ -14,14 +14,22 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 import pytest
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from rebac import system_context
 
 from angee.integrate.states import LinkStatus, StreamDirection
 from angee.integrate.streams import StreamPage, advance_stream, reconcile_stream
 from angee.integrate.testing.models import RecordLink, SyncStream
-from angee.messaging.testing.models import Directory, Organization, Party, Person, RelationshipKind
-from angee.parties.backends import DirectoryBackend, ManualDirectoryBackend, ParsedAddressbook, ParsedContact
+from angee.messaging.testing.models import Directory, Handle, Organization, Party, Person, RelationshipKind
+from angee.parties.backends import (
+    ADOPTED_THROUGH,
+    DirectoryBackend,
+    ManualDirectoryBackend,
+    ParsedAddressbook,
+    ParsedContact,
+)
+from angee.provenance.evidence import EvidenceReference
 from tests.conftest import make_integration
 from tests.stream_adapters import applied_history
 
@@ -116,10 +124,15 @@ class Pull:
         return RecordLink.objects.get(stream=self.stream, external_key=key)
 
 
-@pytest.fixture
-def pull(db: None) -> Iterator[Pull]:
-    del db
-    with system_context(reason="test pull-only directory"):
+class TwoWayDirectoryBackend(PullDirectoryBackend):
+    """The scripted source, declared two-way: its contacts never adopt an existing person."""
+
+    key = "two_way_test"
+    direction = StreamDirection.BIDIRECTIONAL
+
+
+def _connect(backend_class: type[PullDirectoryBackend]) -> Iterator[Pull]:
+    with system_context(reason="test scripted directory"):
         directory = make_integration("pull-directory", model=Directory)
         RelationshipKind.objects.create(
             slug="employee", name="Employee", inverse_name="Employer", category="professional",
@@ -128,14 +141,26 @@ def pull(db: None) -> Iterator[Pull]:
         source = Source()
         source.put("ada", _ADA)
         source.put("grace", _GRACE)
-        backend = PullDirectoryBackend(directory)
+        backend = backend_class(directory)
         backend.source = source
         (books,) = backend.streams()
         advance_stream(SyncStream.objects.current(directory, books), backend)
         _, contacts = backend.streams()
-        assert (contacts.direction, contacts.mapping_version) == (StreamDirection.PULL, 1)
+        assert (contacts.direction, contacts.mapping_version) == (backend_class.direction, 1)
         yield Pull(directory, backend, source, SyncStream.objects.current(directory, contacts))
         backend.close()
+
+
+@pytest.fixture
+def pull(db: None) -> Iterator[Pull]:
+    del db
+    yield from _connect(PullDirectoryBackend)
+
+
+@pytest.fixture
+def two_way(db: None) -> Iterator[Pull]:
+    del db
+    yield from _connect(TwoWayDirectoryBackend)
 
 
 def _asserted(party_id: Any, link: Any) -> Any:
@@ -252,9 +277,8 @@ _PHONE = "+15550100"
 def _handle_claims(party_id: Any, value: str) -> list[tuple[Any, str]]:
     """Each current claim this directory's statements make of ``value`` on the party: its link and status."""
 
-    return sorted(
-        Party.statements.filter(subject_id=party_id, handle__value=value).current().values_list("link_id", "status")
-    )
+    claims = Party.statements.filter(subject_id=party_id, handle__value=value).current()
+    return sorted(claims.values_list("link_id", "status"), key=lambda claim: (claim[0] is None, claim))
 
 
 def test_a_merge_at_the_source_lands_on_the_replaced_records_person_and_withdraws_what_only_it_stated(
@@ -394,6 +418,128 @@ def test_contact_ingest_never_rebinds_a_link(pull: Pull) -> None:
     assert Party.objects.ingest_contact(
         _ADA, stream=pull.stream, link=pull.link("ada"), created_by_id=pull.directory.owner_id, target=ada
     ).pk == ada.pk
+
+
+def _existing(creator: Any, *, email: str = "ada@example.com", **fields: Any) -> tuple[Any, Any]:
+    """A person ``creator`` owns, holding ``email`` by a rule at full confidence, as another importer mints one."""
+
+    person = Person.objects.create(display_name="Ada (existing)", created_by=creator, **fields)
+    handle = Handle.objects.upsert(platform="email", value=email, created_by_id=creator.pk)
+    rule = Party.objects.rule_source("source_sender")
+    Party.objects.assert_handle(person, handle, asserted_by=rule, confidence=1.0)
+    handle.refresh_from_db()
+    assert handle.party_id == person.pk
+    return person, handle
+
+
+def _user(username: str) -> Any:
+    return get_user_model().objects.create_user(username=username)
+
+
+def test_a_pull_only_contact_adopts_the_person_its_email_names_when_the_owner_writes_them(pull: Pull) -> None:
+    """The record attaches to the existing person, keeps one handle row, and the link records the handle as evidence.
+
+    The person was minted by another source's rule at full confidence; the
+    directory's own handle claim lands on the same row.
+    """
+
+    person, handle = _existing(pull.directory.owner)
+    people = Person.objects.count()
+
+    assert pull.sync().count == 2
+
+    ada = pull.link("ada")
+    assert ada.target_object_id == str(person.pk)
+    assert Person.objects.count() == people + 1  # Grace alone is new.
+    assert Handle.objects.filter(platform="email", normalized_value="ada@example.com").count() == 1
+    assert _handle_claims(person.pk, "ada@example.com") == [(ada.pk, "asserted"), (None, "asserted")]
+    assert ada.metadata[ADOPTED_THROUGH] == EvidenceReference.of(handle).model_dump(mode="json")
+    # The next pass finds the person through the link itself: nothing applies and the evidence stays.
+    pull.source.changed.add("ada")
+    assert pull.sync().count == 0
+    assert pull.link("ada").metadata[ADOPTED_THROUGH] == EvidenceReference.of(handle).model_dump(mode="json")
+
+
+def test_an_adopted_person_keeps_their_own_edits_and_private_fields(pull: Pull) -> None:
+    owner = pull.directory.owner
+    person, _handle = _existing(owner, first_met_note="Met at a lecture.")
+    as_person = Party.objects.get(pk=person.pk).with_actor(owner)
+    as_person.statements.set(aspect="identity", values={"display_name": "Ada (a friend)"})
+    as_person.statements.set(aspect="contact", values={"notes": "Owes me a letter.", "avatar": None})
+
+    pull.sync()
+
+    person.refresh_from_db()
+    assert pull.link("ada").target_object_id == str(person.pk)
+    assert (person.display_name, person.notes, person.first_met_note) == (
+        "Ada (a friend)", "Owes me a letter.", "Met at a lecture."
+    )
+    # What the person never stated arrives from the source.
+    assert (person.given_name, person.family_name) == ("Ada", "Lovelace")
+
+
+def _refused_owner(pull: Pull) -> Any:
+    """The owner cannot write the person: another user owns them."""
+
+    return _existing(_user("someone-else"))[0]
+
+
+def _refused_account_holder(pull: Pull) -> Any:
+    """The person holding the address is an account's own person, though the owner writes them."""
+
+    return _existing(pull.directory.owner, user=_user("ada-account"))[0]
+
+
+def _refused_account_basis(pull: Pull) -> Any:
+    """The address is only an account's: its person holds no handle of it, though the owner writes them."""
+
+    account = get_user_model().objects.create_user(username="ada-signin", email="ada@example.com")
+    return Person.objects.create(display_name="Ada (account)", created_by=pull.directory.owner, user=account)
+
+
+def _refused_linked(pull: Pull) -> Any:
+    """Another live link of this directory already names the person."""
+
+    person = _existing(pull.directory.owner)[0]
+    RecordLink.objects.observe(pull.stream, "earlier", target=Party._base_manager.get(pk=person.pk))
+    return person
+
+
+@pytest.mark.parametrize("refusal", [_refused_owner, _refused_account_holder, _refused_account_basis, _refused_linked])
+def test_a_contact_mints_its_own_person_when_an_adoption_limit_refuses_the_one_its_email_names(
+    pull: Pull, refusal: Any
+) -> None:
+    """Each limit alone refuses the adoption: the contact mints, and the existing person gains no statement of it."""
+
+    person = refusal(pull)
+
+    assert pull.sync().count == 2
+
+    ada = pull.link("ada")
+    assert ada.target_object_id not in (None, str(person.pk))
+    assert ADOPTED_THROUGH not in ada.metadata
+    assert not Party.statements.filter(subject_id=person.pk, asserted_by=str(ada.asserted_by)).exists()
+
+
+def test_a_two_way_directory_never_adopts(two_way: Pull) -> None:
+    person, _handle = _existing(two_way.directory.owner)
+
+    assert two_way.sync().count == 2
+
+    assert two_way.link("ada").target_object_id not in (None, str(person.pk))
+
+
+def test_two_contacts_that_would_adopt_one_person_adopt_it_once(pull: Pull) -> None:
+    """The second contact of the same directory finds the person already linked, so it mints its own."""
+
+    person, _handle = _existing(pull.directory.owner)
+    pull.source.put("ada-copy", replace(_ADA, display_name="Ada L."))
+
+    assert pull.sync().count == 3
+
+    ada, copy = pull.link("ada"), pull.link("ada-copy")
+    assert ada.target_object_id == str(person.pk)
+    assert copy.target_object_id not in (None, str(person.pk))
 
 
 def test_a_directory_forwards_its_connection_test_and_credential_admission(
