@@ -70,9 +70,21 @@ def world(contacts: SimpleNamespace) -> SimpleNamespace:
         folder = RecordBinding.objects.party_folder(c.unlinked, vault=vault, title="Grace Unlinked (folder)")
         note = Page.objects.create_in(vault, parent=folder, title="Grace Unlinked: notes", body="Likes jazz.")
     return SimpleNamespace(
-        **vars(c), holders=holders, editor=editor, nobody=nobody, group_manager=group_manager, vault=vault,
-        folder=folder, note=note, book=book, circle=circle, membership=membership, task=task, account=account,
-        account_handle=account_handle, account_task=account_task,
+        **vars(c),
+        holders=holders,
+        editor=editor,
+        nobody=nobody,
+        group_manager=group_manager,
+        vault=vault,
+        folder=folder,
+        note=note,
+        book=book,
+        circle=circle,
+        membership=membership,
+        task=task,
+        account=account,
+        account_handle=account_handle,
+        account_task=account_task,
     )
 
 
@@ -92,12 +104,24 @@ def _actors(w: SimpleNamespace) -> dict[str, Any]:
 
 def _rows(w: SimpleNamespace) -> dict[str, Any]:
     return {
-        "person": w.person, "party": w.person_party, "organization": w.organization, "handle": w.own_handle,
-        "address": w.address, "relationship": w.edge, "folder": w.book, "circle": w.circle,
-        "circle member": w.membership, "vault": w.vault, "vault page": w.note, "task": w.task,
-        "directory": w.directory, "account person": w.account,
+        "person": w.person,
+        "party": w.person_party,
+        "organization": w.organization,
+        "handle": w.own_handle,
+        "address": w.address,
+        "relationship": w.edge,
+        "folder": w.book,
+        "circle": w.circle,
+        "circle member": w.membership,
+        "vault": w.vault,
+        "vault page": w.note,
+        "task": w.task,
+        "directory": w.directory,
+        "account person": w.account,
         "account party": Party.objects.sudo(reason="tests.parties_roles.rows").get(pk=w.account.pk),
-        "account handle": w.account_handle, "account task": w.account_task, "account user": w.account.user,
+        "account handle": w.account_handle,
+        "account task": w.account_task,
+        "account user": w.account.user,
     }
 
 
