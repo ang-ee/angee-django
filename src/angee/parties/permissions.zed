@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 33
+// @rebac_schema_revision: 34
 
 // Parties, folders and circles are grant roots: each is owned through its
 // transferable `owner` column (OwnerMixin), which an insert defaults to the row's
@@ -74,6 +74,9 @@ definition parties/party {
     // Adoption lends a person to a directory only through who holds them, never the platform admin
     // (`parties/person#adopt`): the roles' stored members, without the admin reach of `effective_member`.
     permission role_adopt = contact_manager->member + contact_admin->member
+    // Pending ruling: the roles read the record tasks about a party (`read_as_subject`) and write none;
+    // `role_manage` here lets a contact manager and admin write, share, delete and transfer them.
+    permission role_write_as_subject = nil
 
     permission create = authenticated
     // Whoever reads the contacts of a directory linking this party reads its identity.
@@ -84,7 +87,7 @@ definition parties/party {
     // task access never recurses through a thread the party follows (rebac.E016).
     // A source states the party, never the record tasks about it: it admits through `write` alone.
     permission read_as_subject = owner + editor + reader + role_read + admin->member
-    permission write_as_subject = owner + editor + role_manage + admin->member
+    permission write_as_subject = owner + editor + role_write_as_subject + admin->member
     permission read_private = owner + editor + reader + role_private + admin->member
     permission read__notes = read_private
     permission read__first_met_note = read_private

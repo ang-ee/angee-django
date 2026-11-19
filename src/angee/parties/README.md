@@ -468,7 +468,10 @@ platform admins. The two choices a deployment's architect may flip are one line
 each in `parties/party`: `role_private` (whether a contact reader reads private
 fields) and `role_delete` (whether a contact manager trashes, and with it
 deletes). A role holder also reads the record tasks about every party
-(`read_as_subject`) and sees people with an account in pickers. Parties grants
+(`read_as_subject`) and sees people with an account in pickers, but writes,
+shares, deletes and transfers none of those tasks: `role_write_as_subject` is
+empty (pending the architect's ruling; `role_manage` there would lend a contact
+manager and admin the tasks' write). Parties grants
 the roles to nobody: a deployment grants membership in the Permissions Hub, which
 lists them as Contact Reader, Contact Manager and Contact Admin, or with a
 `kind = "grants"` resource row (`{resource: "parties/role:contact_manager",

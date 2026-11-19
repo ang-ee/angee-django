@@ -140,13 +140,14 @@ MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
         "write": ("manager", "admin", "group manager", "platform"),
         "delete": ("admin", "platform"),
     },
-    # A record task about the party (its own owner is someone else): the party lends what a per-record grant does.
+    # A record task about the party (its own owner is someone else): the party lends its per-record holders what
+    # they hold on it, and the roles read it but write none (pending ruling, parties/party#role_write_as_subject).
     "task": {
         "read": (*ROLE_HOLDERS, "owner", "editor", "platform"),
-        "write": (*WRITERS, "editor"),
-        "share": (*WRITERS, "editor"),
-        "delete": (*WRITERS, "editor"),
-        "transfer": (*WRITERS, "editor"),
+        "write": ("owner", "editor", "platform"),
+        "share": ("owner", "editor", "platform"),
+        "delete": ("owner", "editor", "platform"),
+        "transfer": ("owner", "editor", "platform"),
     },
     # A contact admin reads every directory and shares who reads its contacts; changing and removing one stay with
     # its integration's writers and platform admins, creating the row with platform admins.
