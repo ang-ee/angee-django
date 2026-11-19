@@ -50,7 +50,9 @@ apply learned.
 
 A push adapter may version its local projection. It yields each row's exact
 `LocalChange.local_version`, read with the projection, and the push records the
-version it read beside the base it wrote (`RecordLink.local_version`). A full
+version it read beside the base it wrote (`RecordLink.local_version`). That
+column's database default is the unknown version `""`, so a release before it,
+rolled back onto a migrated database, still creates links. A full
 read may then skip every row a link already holds at its current version
 (`RecordLinkManager.changed_since_base`). A projection that reads only the row's
 own tracked columns, plus a container setting, takes the row's history version

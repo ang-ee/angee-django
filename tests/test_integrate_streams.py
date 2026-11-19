@@ -1069,23 +1069,32 @@ def test_a_stream_written_before_retained_contributions_keeps_its_generation(str
     assert (composed.generation, composed.mapping_version, landed) == (initial.generation + 1, 4, 2)
 
 
+def insert_as_an_earlier_release(row: models.Model, omitted: str, **expressions: str) -> None:
+    """Copy ``row`` with an INSERT that names no ``omitted`` column, as a release whose model lacks it writes.
+
+    ``expressions`` replace columns by SQL over the copied row, so the copy keeps its unique constraints.
+    """
+
+    quote = connection.ops.quote_name
+    meta = type(row)._meta
+    columns = [field.column for field in meta.concrete_fields if not field.primary_key and field.name != omitted]
+    values = ", ".join(expressions.get(column, quote(column)) for column in columns)
+    table = quote(meta.db_table)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"INSERT INTO {table} ({', '.join(map(quote, columns))}) SELECT {values} FROM {table}"
+            f" WHERE {quote(meta.pk.column)} = %s",
+            [row.pk],
+        )
+
+
 def test_a_release_before_the_retained_list_still_creates_stream_generations(stream_bridge: Channel) -> None:
     """Its model has no such column, so its insert takes the database default: a stream that never composed."""
 
     adapter = composed_adapter(stream_bridge, contributions=parts(("base", 1)))
     composed, landed = drain_records(stream_bridge, adapter)
     assert (composed.mapping_version, landed) == (1, 2)
-    quote = connection.ops.quote_name
-    columns = [
-        field.column for field in SyncStream._meta.concrete_fields if field.name not in {"id", "mapping_contributions"}
-    ]
-    values = ", ".join("generation + 1" if column == "generation" else quote(column) for column in columns)
-    table = quote(SyncStream._meta.db_table)
-    with connection.cursor() as cursor:
-        cursor.execute(
-            f"INSERT INTO {table} ({', '.join(map(quote, columns))}) SELECT {values} FROM {table} WHERE id = %s",
-            [composed.pk],
-        )
+    insert_as_an_earlier_release(composed, "mapping_contributions", generation="generation + 1")
     successor = SyncStream.objects.order_by("-generation").first()
     RecordLink.objects.filter(stream=composed).update(stream=successor)
     assert successor.generation == composed.generation + 1
@@ -1093,6 +1102,17 @@ def test_a_release_before_the_retained_list_still_creates_stream_generations(str
 
     returned, landed = drain_records(stream_bridge, adapter)
     assert (returned.generation, returned.mapping_version, landed) == (successor.generation + 1, 2, 2)
+
+
+def test_a_release_before_the_local_version_still_creates_links(stream_bridge: Channel) -> None:
+    """Its model has no ``local_version``, so its insert takes the database default: an unknown local version."""
+
+    _stream, landed = drain_records(stream_bridge, composed_adapter(stream_bridge))
+    assert landed == 2
+    insert_as_an_earlier_release(
+        RecordLink.objects.get(external_key="person:1"), "local_version", external_key="external_key || ':copy'"
+    )
+    assert RecordLink.objects.get(external_key="person:1:copy").local_version == ""
 
 
 @pytest.mark.parametrize("composed", [False, True])
