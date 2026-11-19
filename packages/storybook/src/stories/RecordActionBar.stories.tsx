@@ -48,7 +48,7 @@ export const MenuOnly: Story = {
 /** The form's band opts into a lone unmarked verb, without giving it primary emphasis. */
 export const LoneVerb: Story = {
   render: () => (
-    <RecordActionBar record={record} menuPlacement="leading" promoteLoneAction actions={[
+    <RecordActionBar record={record} menuPlacement="leading" fillBand actions={[
       { id: "sync", label: "Sync now", icon: "refresh", run },
     ]} />
   ),

@@ -42,7 +42,7 @@ describe("RecordActionBar", () => {
   });
 
   test("explicit menu placement beats primary and lone-verb promotion", async () => {
-    renderActionBar(<RecordActionBar record={record} promoteLoneAction actions={[
+    renderActionBar(<RecordActionBar record={record} fillBand actions={[
       { id: "review", label: "Review", placement: "menu", primary: true, run: vi.fn() },
     ]} />);
     expect(screen.queryByRole("button", { name: "Review" })).toBeNull();
@@ -51,7 +51,7 @@ describe("RecordActionBar", () => {
   });
 
   test.each([null, { title: "Draft" }])("a record without a public id does not promote a bare run verb (%j)", async (draft) => {
-    renderActionBar(<RecordActionBar record={draft} promoteLoneAction actions={[
+    renderActionBar(<RecordActionBar record={draft} fillBand actions={[
       { id: "refresh", label: "Refresh skills", run: vi.fn() },
     ]} />);
     expect(screen.queryByRole("button", { name: "Refresh skills" })).toBeNull();
@@ -63,7 +63,7 @@ describe("RecordActionBar", () => {
     { id: "primary", label: "Review", primary: true, run: vi.fn() },
     { id: "toolbar", label: "Review", placement: "toolbar", run: vi.fn() },
   ])("create mode preserves $id toolbar placement", (action) => {
-    renderActionBar(<RecordActionBar record={null} promoteLoneAction actions={[action]} />);
+    renderActionBar(<RecordActionBar record={null} fillBand actions={[action]} />);
     expect(screen.getByRole<HTMLButtonElement>("button", { name: "Review" }).disabled).toBe(false);
   });
 
@@ -93,7 +93,7 @@ describe("RecordActionBar", () => {
       actions: [{ id: "review", label: "Review" }, { id: "inspect", label: "Inspect", placement: "menu" }],
       toolbar: ["Review"], menu: ["Inspect"] },
   ])("$name", async ({ promote, actions, toolbar, menu }) => {
-    renderActionBar(<RecordActionBar record={record} promoteLoneAction={promote} actions={actions} />);
+    renderActionBar(<RecordActionBar record={record} fillBand={promote} actions={actions} />);
     for (const name of toolbar) {
       const button = screen.getByRole("button", { name });
       expect(button.classList.contains("bg-inset")).toBe(true);
@@ -110,7 +110,7 @@ describe("RecordActionBar", () => {
   });
 
   test("a primary verb prevents lone-verb promotion", async () => {
-    renderActionBar(<RecordActionBar record={record} promoteLoneAction actions={[
+    renderActionBar(<RecordActionBar record={record} fillBand actions={[
       { id: "review", label: "Review", primary: true },
       { id: "inspect", label: "Inspect" },
     ]} />);
@@ -122,7 +122,7 @@ describe("RecordActionBar", () => {
 
   test.each(["visibleWhen", "permission"] as const)("%s filters verbs before promotion and toolbar detection", (gate) => {
     const hidden = gate === "visibleWhen" ? { visibleWhen: () => false } : { permission: "write" };
-    renderActionBar(<RecordActionBar record={{ ...record, permissions: ["read"] }} promoteLoneAction actions={[
+    renderActionBar(<RecordActionBar record={{ ...record, permissions: ["read"] }} fillBand actions={[
       { id: "review", label: "Review", permission: "read" },
       { id: "hidden", label: "Hidden", ...hidden },
       { id: "hidden-primary", label: "Hidden primary", primary: true, ...hidden },
@@ -138,7 +138,7 @@ describe("RecordActionBar", () => {
     { id: "toolbar", label: "Review", placement: "toolbar" },
     { id: "lone", label: "Review" },
   ])("a parent Actions menu keeps the $id verb beside the generic group", async (action) => {
-    renderActionBar(<ActionMenu><RecordActionBar record={record} promoteLoneAction actions={[action]}
+    renderActionBar(<ActionMenu><RecordActionBar record={record} fillBand actions={[action]}
       genericActions={[{ id: "archive", label: "Archive", placement: "menu", set: { archived: true } }]} />
     </ActionMenu>);
     expect(screen.queryByRole("button", { name: "Review" })).toBeNull();
@@ -438,7 +438,7 @@ describe("RecordActionBar", () => {
 
   test.each(["primary", "lone"] as const)("a %s action's typed-args dialog returns focus to its toolbar button", async (kind) => {
     const submit = vi.fn(async () => ({ ok: true, message: "Review recorded." }));
-    renderActionBar(<RecordActionBar record={record} applyPatch={vi.fn()} reload={vi.fn()} promoteLoneAction={kind === "lone"}
+    renderActionBar(<RecordActionBar record={record} applyPatch={vi.fn()} reload={vi.fn()} fillBand={kind === "lone"}
       genericActions={[{ id: "archive", label: "Archive", placement: "menu", set: { is_archived: true } }]}
       actions={[{ id: "review", label: "Review", primary: kind === "primary", args: [], submit }]} />);
     const trigger = screen.getByRole("button", { name: "Review" });

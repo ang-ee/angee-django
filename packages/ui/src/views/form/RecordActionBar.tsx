@@ -54,7 +54,7 @@ export function RecordActionBar({
   contributedActions,
   blocked: blockedByForm = false,
   menuPlacement = "trailing",
-  promoteLoneAction = false,
+  fillBand = false,
 }: {
   record: Row | null;
   actions: readonly RecordActionDescriptor[];
@@ -69,8 +69,8 @@ export function RecordActionBar({
   blocked?: boolean;
   /** Where the Actions menu sits: an icon-only `⋮` before the verbs (the command band), or a labeled menu after them. */
   menuPlacement?: "leading" | "trailing";
-  /** On a saved record, show the only visible, unplaced non-danger declared verb as a secondary button when no declared verb is already on the toolbar. Off by default; ignored inside an Actions menu. */
-  promoteLoneAction?: boolean;
+  /** On a saved record, show up to two of the visible, unplaced, non-danger declared verbs as secondary buttons, in declaration order, beside the ones already on the toolbar. Off by default; ignored inside an Actions menu. */
+  fillBand?: boolean;
 }): React.ReactElement | null {
   const preview = useRuntimeViewAs();
   const t = useUiT();
@@ -134,7 +134,7 @@ export function RecordActionBar({
       (!action.permission || holdsPermission(record, action.permission))
       && (!action.visibleWhen || (record != null && action.visibleWhen(record))),
   );
-  const placements = effectiveActionPlacements(visibleActions, recordId, promoteLoneAction, menu !== null);
+  const placements = effectiveActionPlacements(visibleActions, recordId, fillBand, menu !== null);
   const toolbarActions = visibleActions.filter((action) => placements.get(action) === "toolbar");
   const menuActions = visibleActions.filter((action) => placements.get(action) === "menu" && !genericActions.includes(action));
   const genericMenuActions = visibleActions.filter((action) => placements.get(action) === "menu" && genericActions.includes(action));
@@ -265,21 +265,33 @@ export function RecordActionBar({
   );
 }
 
-/** Resolve placement once, after permission and visibility filtering. A parent menu keeps every verb. */
+/** The form's band shows up to this many of its own verbs as buttons; the rest overflow into the menu. */
+const BAND_VERB_LIMIT = 2;
+
+/**
+ * Resolve placement once, after permission and visibility filtering. An explicit
+ * placement wins and `primary` implies the toolbar. On a saved record the form's
+ * band then fills up to {@link BAND_VERB_LIMIT} buttons from its own unplaced,
+ * non-danger verbs in declaration order. A parent menu keeps every verb.
+ */
 function effectiveActionPlacements(
   actions: readonly RecordActionDescriptor[],
   recordId: string | null,
-  promoteLoneAction: boolean,
+  fillBand: boolean,
   inMenu: boolean,
 ): Map<RecordActionDescriptor, "toolbar" | "menu"> {
   const placements = new Map(actions.map((action) => [
     action,
     inMenu ? "menu" : action.placement ?? (action.primary ? "toolbar" : "menu"),
   ] as const));
-  if (recordId !== null && promoteLoneAction && !inMenu && ![...placements.values()].includes("toolbar")) {
-    const candidates = actions.filter((action) => action.placement === undefined && !action.danger);
-    const [candidate] = candidates;
-    if (candidates.length === 1 && candidate) placements.set(candidate, "toolbar");
+  if (recordId !== null && fillBand && !inMenu) {
+    let shown = [...placements.values()].filter((placement) => placement === "toolbar").length;
+    for (const action of actions) {
+      if (shown >= BAND_VERB_LIMIT) break;
+      if (action.placement !== undefined || action.primary || action.danger) continue;
+      placements.set(action, "toolbar");
+      shown += 1;
+    }
   }
   return placements;
 }
