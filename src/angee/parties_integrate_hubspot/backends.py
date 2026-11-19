@@ -240,6 +240,14 @@ class HubSpotDirectoryBackend(DirectoryBackend):
     account (:meth:`apply_discovery`). A contact's external key is its HubSpot
     record id. Contacts HubSpot archived or deleted are found by integrate's
     absence sweep (:meth:`contact_keys`).
+
+    A consumer's ``DirectoryMapping`` of this backend names HubSpot contact
+    properties by their internal names (``DirectoryBackend.mapped_fields``). Every
+    read of contacts (a list page, a search, a drain, a batch read) asks HubSpot
+    for them beside the backend's own, and for nothing more, and hands HubSpot's
+    values of them to the base with each contact (``DirectoryBackend.observe``).
+    HubSpot leaves a property the account does not define out of its answer, so a
+    mapping receives it as not sent and the sync goes on.
     """
 
     key = "hubspot"
@@ -329,19 +337,21 @@ class HubSpotDirectoryBackend(DirectoryBackend):
         except ValidationError:
             raise CursorInvalid() from None
         cursor = cursor.begin(stream.phase, now=timezone.now())
+        mapped = self.mapped_fields()
+        properties = _read_properties(mapped)
         payloads: dict[str, Mapping[str, Any] | None] = {}
         room, answered = page_bound, False
         while cursor.is_open and room > 0:
             if answered and deadline is not None and monotonic() >= deadline:
                 break
             try:
-                page = cursor.fetch(client, _OBJECT_TYPE, limit=room, properties=_READ_PROPERTIES)
+                page = cursor.fetch(client, _OBJECT_TYPE, limit=room, properties=properties)
             except HubSpotError as error:
                 if answered and error.transient:
                     break
                 raise
             answered = True
-            payloads.update((record.id, self._payload(record)) for record in page.results)
+            payloads.update((record.id, self._payload(record, mapped)) for record in page.results)
             cursor = cursor.advance(page, object_type=_OBJECT_TYPE)
             room -= len(page.results)
         records = self.record_changes(stream, payloads)
@@ -355,9 +365,11 @@ class HubSpotDirectoryBackend(DirectoryBackend):
         """
 
         del stream
-        answer = self._client(self.bridge.fresh_credential()).batch_read(_OBJECT_TYPE, keys, _READ_PROPERTIES)
+        mapped = self.mapped_fields()
+        client = self._client(self.bridge.fresh_credential())
+        answer = client.batch_read(_OBJECT_TYPE, keys, _read_properties(mapped))
         found = {record.id: record for record in answer.found}
-        return {key: None if key in answer.missing else self._payload(found[key]) for key in keys}
+        return {key: None if key in answer.missing else self._payload(found[key], mapped) for key in keys}
 
     def contact_keys(self, stream: Any, *, after: str | None) -> Iterable[str]:
         """Walk the account's live contact ids past ``after``; an archived or deleted contact is not among them."""
@@ -392,8 +404,21 @@ class HubSpotDirectoryBackend(DirectoryBackend):
         usual = SERVICE_KEY_SHAPE.fullmatch(credential.secret_value()) is not None
         return HubSpotClient(credential.auth_headers(), usual_key=usual)
 
-    def _payload(self, record: HubSpotObject) -> dict[str, Any]:
-        """Return one contact's payload; a merge's survivor names the records it replaced, in HubSpot's order."""
+    def _payload(self, record: HubSpotObject, mapped: Sequence[str]) -> dict[str, Any]:
+        """Return one contact's payload; a merge's survivor names the records it replaced, in HubSpot's order.
 
-        replaced = parse_options(record.properties.get(_MERGED_PROPERTY))
-        return self.observe(contact_from_properties(record.properties), replaces=replaced)
+        HubSpot's values of the ``mapped`` properties go to the base as the row its
+        mappings project, as HubSpot sent them: one the account does not define is
+        absent, an unset one is ``None``.
+        """
+
+        properties = record.properties
+        replaced = parse_options(properties.get(_MERGED_PROPERTY))
+        row = {name: properties[name] for name in mapped if name in properties}
+        return self.observe(contact_from_properties(properties), replaces=replaced, row=row)
+
+
+def _read_properties(mapped: Sequence[str]) -> tuple[str, ...]:
+    """Return what a contacts read asks HubSpot for: the backend's own properties, then the ``mapped`` ones."""
+
+    return tuple(dict.fromkeys((*_READ_PROPERTIES, *mapped)))

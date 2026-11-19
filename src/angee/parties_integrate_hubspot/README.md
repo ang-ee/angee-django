@@ -45,6 +45,67 @@ reads a credential, `HubSpotCursor` holds a stream's position inside a baseline
 or delta pass, and `contact_from_properties` maps HubSpot's standard contact
 properties onto the parties neutral contact. Their docstrings own the contracts.
 
+## Mapping custom properties
+
+A consumer addon fills its own person columns from HubSpot contact properties,
+custom ones especially, with a parties directory mapping (`DirectoryMapping` in
+`angee.parties.backends`, which owns the contract; see the
+[parties README](../parties/README.md)). Its donor of `parties.Person` declares
+the columns and the statement group that owns them; its mapping names the
+`hubspot` backend and the properties' internal names, and is registered under its
+key from the consumer's `autoconfig.py`:
+
+```python
+from angee.parties.backends import DirectoryMapping
+from angee.parties_integrate_hubspot.client import parse_bool, parse_number, parse_options, parse_string
+
+
+class ExampleContactMapping(DirectoryMapping):
+    key = "example_hubspot"
+    backend = "hubspot"
+    fields = ("preferred_colour", "lucky_number", "contact_channels", "do_not_record")
+    version = 1
+
+    def project(self, row):
+        if parse_bool(row.get("do_not_record")):
+            return {"colour": "", "number": None, "prefers_email": False}
+        number = parse_number(row.get("lucky_number"))
+        return {
+            "colour": parse_string(row.get("preferred_colour")),
+            "number": None if number is None else int(number),
+            "prefers_email": "email" in parse_options(row.get("contact_channels")),
+        }
+
+    def apply_record(self, person, values, *, link):
+        person.statements_for("example").set(
+            aspect="example", values=values, asserted_by=link.asserting_source(), link=link
+        )
+
+
+# autoconfig.py
+SETTINGS = {"ANGEE_DIRECTORY_MAPPING_CLASSES.example_hubspot": "example.contacts.mappings.ExampleContactMapping"}
+```
+
+HubSpot states every value as a string or null, and the `parse_*` functions of
+`angee.parties_integrate_hubspot.client` read them by property type, so no
+mapping re-derives HubSpot's encodings: `parse_string` (text and single choice),
+`parse_options` (multiple choice, joined with `;`), `parse_number` (an exact
+`Decimal`), `parse_bool`, `parse_datetime` (an instant in UTC) and `parse_date`
+(the day HubSpot states as its midnight in UTC). Each answers `None` for an unset
+value and raises `ValueError` for a value not of its type; the mapping's author
+picks the parser by the property's type, and the backend reads no property
+definitions. `project` returns JSON values, so it turns a number, a day or an
+instant into the JSON form its column takes.
+
+The backend asks HubSpot for a mapped property only while a mapping names it,
+on every read of contacts, and hands HubSpot's values to the base, which keeps
+only the projections, compares them and applies them after each contact's
+ingest. Registering, removing or re-versioning a mapping replays every contact
+once. HubSpot ignores a property name the account does not define, so a misspelt
+or deleted property reaches `project` as not sent (absent from `row`, where an
+unset one is `None`) and the sync goes on: a mapped column that stays empty
+means the property's internal name needs checking in HubSpot.
+
 ## Tests
 
 `angee.parties_integrate_hubspot.testing.server` ships `HubSpotServer`, an

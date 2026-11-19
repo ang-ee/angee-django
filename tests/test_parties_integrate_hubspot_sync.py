@@ -25,10 +25,10 @@ from rebac import system_context
 from angee.integrate.errors import IntegrationError
 from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.states import LinkStatus, StreamDirection, StreamPhase
-from angee.integrate.streams import BridgeSyncError, PageResult, advance_stream, reconcile_stream
+from angee.integrate.streams import BridgeSyncError, PageResult, advance_stream, open_stream, reconcile_stream
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.testing.models import Directory, Handle, Party, Person, RelationshipKind
-from angee.parties.backends import ParsedContact
+from angee.parties.backends import CONTACTS, ParsedContact
 from angee.parties_integrate_hubspot.backends import HubSpotDirectoryBackend
 from angee.parties_integrate_hubspot.client import HubSpotError
 from angee.parties_integrate_hubspot.testing.server import HUB_ID, TOKEN, HubSpotServer, error_response, serve
@@ -94,6 +94,12 @@ class HubSpot:
         result = advance_stream(self.stream, self.backend, page_bound=page_bound)
         self.stream = result.stream
         return result
+
+    def reopen(self) -> Any:
+        """Open the contacts stream against the backend's declaration now, as each sync cycle does."""
+
+        self.stream = open_stream(self.directory, CONTACTS, "contacts", self.backend)
+        return self.stream
 
     def drain(self, *, page_bound: int = 100, between: Callable[[], None] | None = None) -> list[PageResult]:
         """Pull pages until the pass is done; ``between`` runs after each page."""

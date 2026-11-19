@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 import httpx2
@@ -11,10 +12,15 @@ import pytest
 
 from angee.integrate.testing.http import request_fields
 from angee.parties_integrate_hubspot.client import (
+    EPOCH,
     SERVICE_KEY_SHAPE,
     HubSpotClient,
     HubSpotError,
     HubSpotObject,
+    parse_bool,
+    parse_date,
+    parse_datetime,
+    parse_number,
     parse_options,
     parse_string,
 )
@@ -148,6 +154,28 @@ def test_a_batch_read_splits_ids_into_hubspots_batch_size(
 
     assert [record.id for record in read.found] == ids and read.missing == ()
     assert [len(request_fields(request)["inputs"]) for request in hubspot_server.requests] == [100, 1]
+
+
+def test_a_requested_property_the_account_lacks_is_left_out_and_one_it_has_unset_is_null(
+    hubspot_server: HubSpotServer, client: HubSpotClient
+) -> None:
+    """HubSpot ignores a property name the account does not define; it answers one it defines, null when unset."""
+
+    stated = hubspot_server.add("contacts", {"preferred_colour": "green"}, modified=MODIFIED)
+    unset = contact(hubspot_server, 1)
+    names = ("preferred_colour", "no_such_property")
+
+    listed = client.list_page("contacts", after="", limit=10, properties=names).results
+    searched = client.search_modified("contacts", since=EPOCH, limit=10, properties=names).results
+    read = client.batch_read("contacts", [stated, unset], names).found
+
+    for records in (listed, searched, read):
+        by_id = {record.id: record.properties for record in records}
+        assert (by_id[stated]["preferred_colour"], by_id[unset]["preferred_colour"]) == ("green", None)
+        assert all("no_such_property" not in properties for properties in by_id.values())
+    listing, search, batch = hubspot_server.requests
+    assert "no_such_property" in listing.url.params["properties"].split(",")
+    assert all("no_such_property" in request_fields(request)["properties"] for request in (search, batch))
 
 
 def test_a_batch_read_of_a_merged_id_reports_it_missing_beside_the_survivor(
@@ -453,12 +481,55 @@ def test_an_answer_that_fails_validation_is_a_permanent_vendor_error(
         pytest.param(parse_options, "", (), id="options-empty"),
         pytest.param(parse_options, "red", ("red",), id="options-one"),
         pytest.param(parse_options, "red;green; blue;", ("red", "green", "blue"), id="options-joined"),
+        pytest.param(parse_number, None, None, id="number-unset"),
+        pytest.param(parse_number, "", None, id="number-empty"),
+        pytest.param(parse_number, "42", Decimal(42), id="number-integer"),
+        pytest.param(parse_number, "-3.25", Decimal("-3.25"), id="number-exact-decimal"),
+        pytest.param(parse_bool, None, None, id="bool-unset"),
+        pytest.param(parse_bool, "", None, id="bool-empty"),
+        pytest.param(parse_bool, "true", True, id="bool-true"),
+        pytest.param(parse_bool, "FALSE", False, id="bool-false"),
+        pytest.param(parse_date, None, None, id="date-unset"),
+        pytest.param(parse_date, "", None, id="date-empty"),
+        pytest.param(parse_date, "2026-03-01", date(2026, 3, 1), id="date-iso-day"),
+        pytest.param(parse_date, "2026-03-01T00:00:00.000Z", date(2026, 3, 1), id="date-midnight-utc-not-shifted"),
+        pytest.param(parse_date, epoch_ms(datetime(2026, 3, 1, tzinfo=UTC)), date(2026, 3, 1), id="date-epoch-ms"),
+        pytest.param(parse_date, "-86400000", date(1969, 12, 31), id="date-before-epoch"),
+        pytest.param(parse_datetime, None, None, id="datetime-unset"),
+        pytest.param(
+            parse_datetime,
+            "2026-11-18T08:34:56-04:00",
+            datetime(2026, 11, 18, 12, 34, 56, tzinfo=UTC),
+            id="datetime-offset-to-utc",
+        ),
+        pytest.param(
+            parse_datetime,
+            epoch_ms(datetime(2026, 11, 18, 12, 34, 56, 789000, tzinfo=UTC)),
+            datetime(2026, 11, 18, 12, 34, 56, 789000, tzinfo=UTC),
+            id="datetime-epoch-ms",
+        ),
     ],
 )
 def test_each_parser_reads_hubspots_nullable_string(
     parse: Callable[[str | None], Any], raw: str | None, expected: Any
 ) -> None:
     assert parse(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("parse", "raw"),
+    [
+        pytest.param(parse_number, "twelve", id="number-words"),
+        pytest.param(parse_number, "NaN", id="number-not-finite"),
+        pytest.param(parse_bool, "yes", id="bool-other-word"),
+        pytest.param(parse_datetime, "soon", id="datetime-words"),
+        pytest.param(parse_datetime, "9" * 30, id="datetime-past-the-calendar"),
+        pytest.param(parse_date, "March", id="date-words"),
+    ],
+)
+def test_a_value_not_of_the_parsers_type_is_refused(parse: Callable[[str | None], Any], raw: str) -> None:
+    with pytest.raises(ValueError):
+        parse(raw)
 
 
 @pytest.mark.parametrize(

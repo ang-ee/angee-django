@@ -73,7 +73,14 @@ live in code docstrings.
   entry to `parties.directories#toolbar`, whose dialog sends a name and the key
   (masked, as entered) to `connect_hubspot_directory(name, token)`, which runs
   `Directory.objects.connect`; discovery then arms the first sync. The `full`
-  project profile enables the addon.
+  project profile enables the addon. A consumer's `DirectoryMapping` of the
+  `hubspot` backend names contact properties by their internal names: while one
+  does, every read of contacts asks HubSpot for them beside the backend's own and
+  hands their values to the base, and a property the account does not define,
+  which HubSpot leaves out, reaches the mapping as not sent. `parse_string`,
+  `parse_options`, `parse_number`, `parse_bool`, `parse_datetime` and
+  `parse_date` (`angee.parties_integrate_hubspot.client`) read HubSpot's string
+  values by property type for mapping authors.
 
 - Sharing a directory shares its contacts. `parties/directory` has a stored,
   grantable `contact_reader` relation (shared through the record-access surface

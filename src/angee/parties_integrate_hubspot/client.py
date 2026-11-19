@@ -13,9 +13,11 @@ answer, and :meth:`HubSpotError.of` turns it into HubSpot's error, adding only
 what is HubSpot's own (its docstring lists it) and never HubSpot's message text.
 
 HubSpot states every property value as a nullable string; the ``parse_*``
-functions turn one into a Python value by property type. Which property states
-a record's last-modified time depends on its object type, and the client alone
-knows it.
+functions turn one into a Python value by property type (text and single
+choice, multiple choice, number, bool, datetime, date). They are public for the
+consumers' directory mappings, whose author knows the type of each property
+mapped. Which property states a record's last-modified time depends on its
+object type, and the client alone knows it.
 """
 
 from __future__ import annotations
@@ -23,7 +25,8 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from itertools import batched
 from typing import Any, Self
 from urllib.parse import urlencode
@@ -176,7 +179,7 @@ class HubSpotObject(_HubSpotModel):
         """Return the record's last-modified time, or ``None`` when it was not read or cannot be parsed."""
 
         try:
-            return _parse_datetime(self.properties.get(_MODIFIED_PROPERTY[object_type]))
+            return parse_datetime(self.properties.get(_MODIFIED_PROPERTY[object_type]))
         except ValueError:
             return None
 
@@ -439,12 +442,38 @@ def parse_string(value: str | None) -> str:
 
 
 def parse_options(value: str | None) -> tuple[str, ...]:
-    """Return the values of a multi-valued property, which HubSpot joins with ``;``."""
+    """Return a multiple-choice (checkbox) property's option values, which HubSpot joins with ``;``."""
 
     return tuple(part for part in (item.strip() for item in (value or "").split(";")) if part)
 
 
-def _parse_datetime(value: str | None) -> datetime | None:
+def parse_number(value: str | None) -> Decimal | None:
+    """Return a ``number`` property's value exactly; ``None`` when unset, ``ValueError`` when it is not a number."""
+
+    text = parse_string(value)
+    if not text:
+        return None
+    try:
+        number = Decimal(text)
+    except InvalidOperation as error:
+        raise ValueError("Not a HubSpot number value.") from error
+    if not number.is_finite():
+        raise ValueError("Not a HubSpot number value.")
+    return number
+
+
+def parse_bool(value: str | None) -> bool | None:
+    """Return a ``bool`` property's value; ``None`` when unset, ``ValueError`` for anything but true or false."""
+
+    text = parse_string(value).lower()
+    if not text:
+        return None
+    if text not in ("true", "false"):
+        raise ValueError("Not a HubSpot boolean value.")
+    return text == "true"
+
+
+def parse_datetime(value: str | None) -> datetime | None:
     """Return a ``datetime`` property's instant in UTC, stated in ISO 8601 or epoch milliseconds.
 
     ``None`` when unset; a time without an offset is UTC; ``ValueError`` when the
@@ -461,3 +490,14 @@ def _parse_datetime(value: str | None) -> datetime | None:
         return moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment.astimezone(UTC)
     except (ValueError, OverflowError) as error:
         raise ValueError("Not a HubSpot date or time value.") from error
+
+
+def parse_date(value: str | None) -> date | None:
+    """Return a ``date`` property's day; ``None`` when unset, ``ValueError`` when it is not a day.
+
+    HubSpot states a day as its midnight in UTC, so the day is read in UTC and
+    never shifted into a local time zone.
+    """
+
+    moment = parse_datetime(value)
+    return moment.date() if moment is not None else None

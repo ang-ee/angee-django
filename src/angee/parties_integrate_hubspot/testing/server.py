@@ -33,6 +33,29 @@ VENDOR_TEXT = "Vendor text that must not reach an operator."
 
 _HOST = "https://api.hubapi.com"
 _MODIFIED_PROPERTY = {"contacts": "lastmodifieddate"}
+_STANDARD_PROPERTIES = {
+    "contacts": frozenset(
+        {
+            "hs_object_id",
+            "createdate",
+            "lastmodifieddate",
+            "hs_merged_object_ids",
+            "firstname",
+            "lastname",
+            "email",
+            "hs_additional_emails",
+            "phone",
+            "mobilephone",
+            "jobtitle",
+            "company",
+            "address",
+            "city",
+            "state",
+            "zip",
+            "country",
+        }
+    )
+}
 _READ_SCOPE = {"contacts": "crm.objects.contacts.read"}
 _RECORD_ID = "hs_object_id"
 _SEARCH_OPERATORS = {"EQ": operator.eq, "GT": operator.gt}
@@ -68,7 +91,11 @@ class HubSpotServer:
 
     ``records`` maps each object type (``contacts``) to its records by numeric id;
     ``add``, ``update``, ``archive``, ``delete`` and ``merge`` change them as HubSpot
-    would, stamping the type's modified property. The account answers token
+    would, stamping the type's modified property. ``properties`` names the
+    properties the account defines for each type: HubSpot's standard ones, and
+    every property a record was given. A read answers each requested property the
+    account defines, ``None`` when the record states none, and leaves out a name
+    it does not define, as HubSpot ignores one. The account answers token
     introspection, account details, list pages (by id, ``archived`` lists the
     soft-deleted), searches and batch reads (207 with an error per category). A
     search takes ``EQ`` and ``GT`` filters on the modified time (epoch
@@ -95,6 +122,7 @@ class HubSpotServer:
         self.hub_id = HUB_ID
         self.scopes = set(scopes)
         self.records: dict[str, dict[str, dict[str, Any]]] = {object_type: {} for object_type in _MODIFIED_PROPERTY}
+        self.properties = {object_type: set(names) for object_type, names in _STANDARD_PROPERTIES.items()}
         self.merged: dict[str, dict[str, str]] = {object_type: {} for object_type in _MODIFIED_PROPERTY}
         self.resolves_merged = True
         self.unindexed: set[str] = set()
@@ -116,6 +144,7 @@ class HubSpotServer:
 
         record_id = record_id or str(self._next_id)
         self._next_id = max(self._next_id, int(record_id) + 1)
+        self.properties[object_type].update(properties or {})
         self.records[object_type][record_id] = {
             "properties": {**(properties or {}), "hs_object_id": record_id, "createdate": _iso(created)},
             "created": created,
@@ -129,6 +158,7 @@ class HubSpotServer:
     ) -> None:
         """Change ``properties`` of one record and stamp ``modified`` on it."""
 
+        self.properties[object_type].update(properties)
         self.records[object_type][record_id]["properties"].update(properties)
         self._stamp(object_type, record_id, modified)
 
@@ -212,9 +242,10 @@ class HubSpotServer:
         record = self.records[object_type][record_id]
         stated = record["properties"]
         defaults = ("hs_object_id", "createdate", _MODIFIED_PROPERTY[object_type])
+        defined = self.properties[object_type]
         data = {
             "id": record_id,
-            "properties": {name: stated.get(name) for name in (*defaults, *names)},
+            "properties": {name: stated.get(name) for name in (*defaults, *names) if name in defined},
             "createdAt": _iso(record["created"]),
             "updatedAt": _iso(record["modified"]),
             "archived": record["archived_at"] is not None,
