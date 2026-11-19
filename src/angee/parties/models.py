@@ -621,7 +621,11 @@ class Handle(
 
     @classmethod
     def after_resource_load(cls, instances: Iterable[Any], *, tier: str, source: str) -> None:
-        """A seeded row naming its holder states it (``HandleManager.state_stored_holders``), so resolution keeps it."""
+        """A seeded row's holder is stated, and one the seed moved or cleared loses its earlier statement.
+
+        ``HandleManager.state_stored_holders`` takes each loaded row's holder as the
+        seed's word, so resolution keeps it.
+        """
 
         instances = tuple(instances)
         cast(HandleManager, cls._default_manager).state_stored_holders(instances)
@@ -697,7 +701,9 @@ class Handle(
     refuses a holder. A holder written onto the row with no statement behind it
     (a resource row, an older write) is stated by the ``stored_holder`` rule
     (``HandleManager.state_stored_holders``) after a resource load and by the
-    ``resolve_stale_owners`` repair; until then a resolution of the handle clears it.
+    ``resolve_stale_owners`` repair that provisioning runs, except a confirmed one
+    or one another party's applied statement contests, which the repair leaves for
+    a person; until then a resolution of the handle clears it.
     """
     party_link_confirmed = models.BooleanField(default=False, editable=False)
     """Whether the winning link materialised into ``party`` is human-confirmed."""

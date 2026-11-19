@@ -204,6 +204,19 @@ class _HandleSenderName(TypedDict):
     _sender_name: str
 
 
+class HolderRepair(NamedTuple):
+    """What a holder repair did (:meth:`HandleManager.resolve_stale_owners`)."""
+
+    stated: int
+    """Holders written onto their row that the ``stored_holder`` rule now states."""
+    confirmed: tuple[Any, ...]
+    """Handles whose confirmed holder was left as it is, for a person to confirm."""
+    contested: tuple[Any, ...]
+    """Handles whose holder was left as it is because another party's applied statement stands on the row."""
+    resolved: int = 0
+    """Holders whose statements no longer decided them, re-resolved."""
+
+
 class HandleQuerySet[HandleT: Handle](MergeableQuerySet[HandleT], AngeeHistoryQuerySet[HandleT]):
     """Handle read scopes over the Angee base."""
 
@@ -272,24 +285,23 @@ class HandleQuerySet[HandleT: Handle](MergeableQuerySet[HandleT], AngeeHistoryQu
         return Subquery(rows.values("confidence")[:1])
 
     def stored_holders(self) -> Self:
-        """Live handles whose live holder no current statement names: written onto the row, never stated.
+        """Live handles whose holder no current statement names: written onto the row, never stated.
 
         ``party`` is the projection of the winning applied handle statement
         (:meth:`~angee.parties.models.Handle.resolve`). A holder a row carries with
         no statement behind it (a resource row, an older write) is no candidate,
         so the next resolution of the handle, such as a claim stated on it, clears
-        it. A holder some statement names, withdrawn or below review confidence,
-        is not stored but stale: resolution owns it.
+        it. A trashed holder is one still; a merged-away holder is named through
+        its survivor. A holder some statement names, withdrawn or below review
+        confidence, is not stored but stale: resolution owns it.
         """
 
         named = (
             apps.get_model("parties", "Party")
             .objects.handle_statements()
-            .filter(handle_id=OuterRef("pk"), subject_id=OuterRef("party_id"))
+            .filter(handle_id=OuterRef("pk"), subject_id=MergeableQuerySet.survivor_id("party__", ref=OuterRef))
         )
-        return self.filter(
-            merged_into__isnull=True, party__is_trashed=False, party__merged_into__isnull=True,
-        ).exclude(Exists(named))
+        return self.filter(merged_into__isnull=True, party__isnull=False).exclude(Exists(named))
 
     def excluding_identity_of(self, user_id: Any) -> Self:
         """Drop the user's own handles: controlled by them or confirmed on their Person."""
@@ -597,54 +609,124 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             )
         return handle
 
-    def state_stored_holders(self, handles: Iterable[Any] | None = None) -> int:
-        """State each stored holder's link as the ``stored_holder`` rule, so resolution keeps it; return how many.
+    def state_stored_holders(self, handles: Iterable[Any] | None = None) -> HolderRepair:
+        """State each stored holder's link as the ``stored_holder`` rule, so resolution keeps it; return what it did.
 
         A holder no current statement names (:meth:`HandleQuerySet.stored_holders`)
         gains that rule's normal statement at full confidence, with the handle as its
-        evidence, as named system work, and the handle re-resolves under its lock. The
-        rule ranks below every source in the handle aspect's precedence: a source's
-        full statement still decides the address, while a claim below review
-        confidence never takes it from its holder. ``handles`` narrows the pass to
-        those rows (a resource load's). Idempotent.
+        evidence, as named system work rechecked under the identity locks: a
+        merged-away holder for its survivor, a trashed one for itself (resolution
+        ignores a trashed party, so its row is unheld until the handle resolves
+        after a restore). Two holders are left as they are and reported, so the
+        repair moves no address and clears no confirmation. A confirmed one: only a
+        person or a seed states the preferred link that keeps the flag, and the
+        rule's normal statement would clear it. A contested one, on a row where
+        another live party's applied statement stands: the rule is the last kind
+        the handle aspect ranks (below a person, a system of record, a directory and
+        an import, above kinds it does not list), so that party would take the
+        address.
+
+        ``handles`` are resource rows a load just wrote, and the holder each names
+        is the seed's word. What an earlier load stated for a holder a row no
+        longer names is withdrawn first, else the old holder would take the address
+        back, or stay linked beside the new one and be proposed as the same person;
+        then each named holder no standing statement names is stated. Idempotent.
         """
 
         party_model = apps.get_model("parties", "Party")
-        stored = self.stored_holders()
-        if handles is not None:
-            stored = stored.filter(pk__in=[row.pk for row in handles])
+        statements = party_model.objects.handle_statements()
         stated = 0
+        confirmed: list[Any] = []
+        contested: list[Any] = []
         with system_context(reason="parties.handle.state_stored_holders"):
-            pending = list(stored.order_by("pk").values_list("pk", "party_id"))
-            source = party_model.objects.rule_source("stored_holder") if pending else None
+            if handles is None:
+                pending = list(self.stored_holders().order_by("pk").values_list("pk", "party_id"))
+                naming = statements
+            else:
+                seeded = {row.pk: row.party_id for row in handles}
+                self._withdraw_moved_holders(seeded)
+                pending = sorted((pk, party_id) for pk, party_id in seeded.items() if party_id is not None)
+                naming = statements.filter(status=statements.model.StatementStatus.ASSERTED)
+            survivors = party_model.canonical_ids({party_id for _pk, party_id in pending})
+            competing = statements.applied().filter(subject__is_trashed=False)
+            source = None
             for pk, party_id in pending:
+                holder = survivors.get(party_id, party_id)
                 with transaction.atomic():
-                    locked, parties = party_model.objects.lock_identity_rows(party_ids=(party_id,), handle_ids=(pk,))
-                    if not self.stored_holders().filter(pk=pk, party_id=party_id).exists():
+                    locked, parties = party_model.objects.lock_identity_rows(party_ids=(holder,), handle_ids=(pk,))
+                    row = locked.get(pk)
+                    if (
+                        row is None
+                        or (handles is None and row.party_id != party_id)
+                        or naming.filter(handle_id=pk, subject_id=holder).exists()
+                    ):
                         continue
-                    party_model.objects.assert_handle(
-                        parties[party_id], locked[pk], asserted_by=source, evidence=[locked[pk]],
-                    )
+                    if row.party_link_confirmed:
+                        confirmed.append(pk)
+                        continue
+                    if competing.filter(handle_id=pk).exclude(subject_id=holder).exists():
+                        contested.append(pk)
+                        continue
+                    source = source or party_model.objects.rule_source("stored_holder")
+                    party_model.objects.assert_handle(parties[holder], row, asserted_by=source, evidence=[row])
                 stated += 1
-        return stated
+        return HolderRepair(stated, tuple(confirmed), tuple(contested))
 
-    def resolve_stale_owners(self) -> int:
-        """Make every holder the projection of its statements again; return the handles repaired.
+    @staticmethod
+    def _withdraw_moved_holders(holders: Mapping[Any, Any]) -> int:
+        """Withdraw the ``stored_holder`` rule's statements on these handles for anyone but each one's holder."""
 
-        A stored holder no statement names is stated first
-        (:meth:`state_stored_holders`), so the repair keeps it; a holder whose
-        statements no longer decide it (a withdrawn link, a suggestion below review
-        confidence) re-resolves. Idempotent: a second run repairs nothing.
+        party_model = apps.get_model("parties", "Party")
+        source = apps.get_model("provenance", "Rule")._base_manager.filter(key="parties.stored_holder").first()
+        if not holders or source is None:
+            return 0
+        survivors = party_model.canonical_ids({party_id for party_id in holders.values() if party_id is not None})
+        stance = party_model.statements.model
+        standing = (
+            stance._base_manager.filter(
+                aspect="handle", asserted_by=str(to_subject_ref(source)), superseded__isnull=True,
+            )
+            .exclude(status=stance.StatementStatus.WITHDRAWN)
+            .values_list("subject_id", "handle_id")
+        )
+        moved = {
+            (subject_id, handle_id)
+            for subject_id, handle_id in standing.filter(handle_id__in=sorted(holders))
+            if subject_id != survivors.get(holders[handle_id], holders[handle_id])
+        }
+        if not moved:
+            return 0
+        kept = [
+            {"subject": subject_id, "aspect": "handle", "handle": handle_id}
+            for subject_id, handle_id in standing
+            if (subject_id, handle_id) not in moved
+        ]
+        return int(party_model.statements.withdraw_unsupported(source, kept, aspect="handle"))
+
+    def resolve_stale_owners(self) -> HolderRepair:
+        """Make every holder the projection of its statements again; return what was stated, left and re-resolved.
+
+        Stored holders are stated first (:meth:`state_stored_holders`); the ones it
+        leaves (confirmed, contested) keep their row as it is for a person to
+        decide. A holder whose statements no longer decide it (a withdrawn link, a
+        suggestion below review confidence) re-resolves. Idempotent: a second run
+        states and re-resolves nothing.
         """
 
-        repaired = self.state_stored_holders()
+        repair = self.state_stored_holders()
         statements = apps.get_model("parties", "Party").objects.handle_statements()
         decisive = statements.applied().filter(handle_id=OuterRef("pk"), subject_id=OuterRef("party_id"))
-        stale = self.filter(party__isnull=False).exclude(Exists(decisive)).order_by("pk")
+        stale = (
+            self.filter(party__isnull=False)
+            .exclude(Exists(decisive))
+            .exclude(pk__in=self.stored_holders().values("pk"))
+            .order_by("pk")
+        )
+        resolved = 0
         for handle in stale.iterator():
             handle.resolve()
-            repaired += 1
-        return repaired
+            resolved += 1
+        return repair._replace(resolved=resolved)
 
     def fill_avatar(self, report: AvatarReport) -> bool:
         """Set the avatar a source reports on its handle; return whether it changed.

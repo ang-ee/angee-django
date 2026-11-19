@@ -61,11 +61,20 @@ live in code docstrings.
   `Handle.objects.upsert` now refuses `party`, `party_id` and
   `party_link_confirmed`; a seeded handle row naming its holder is stated by the
   new `parties.stored_holder` rule after its load
-  (`HandleManager.state_stored_holders`); and the `resolve_stale_owners` repair
-  states every such holder before it re-resolves stale ones, where it used to
-  clear them. Run `manage.py resolve_stale_owners` once per deployment after the
-  install resources load the new rule; a second run repairs nothing. Test
-  fixtures that create a handle with `party=` still write a bare holder.
+  (`HandleManager.state_stored_holders`), and a seed that moves or clears a
+  holder withdraws what its earlier load stated for the old one; and the
+  `resolve_stale_owners` repair states every such holder before it re-resolves
+  stale ones, where it used to clear them. The rule is the last kind the handle
+  aspect ranks (below a person, a system of record, a directory and an import),
+  so the repair leaves a confirmed holder and one another party's applied
+  statement contests as they are, for a person, rather than clear the
+  confirmation or move the address; it states a trashed holder for itself and a
+  merged-away one for its survivor. It returns a `HolderRepair`, and the command
+  reports how many it stated, left confirmed, left contested and re-resolved
+  (`-v 2` lists the handles left). Every provision runs it
+  (`PartiesConfig.compose_provision`), after the install resources load the
+  rule; it is idempotent. Test fixtures that create a handle with `party=` still
+  write a bare holder.
 
 - The UX guard accepts manifest `vocabulary` field tones by structure while rejecting local tone maps and switches.
 

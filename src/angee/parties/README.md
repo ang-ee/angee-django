@@ -26,8 +26,16 @@ winner and derived counters outside Party history. A handle's holder is that
 winner's subject, so sources state links and never write `party`. A holder a row
 carries with no statement behind it (a seeded row, an older write) is stated by
 the `parties.stored_holder` rule after its resource load and by the
-`resolve_stale_owners` repair, which runs once per deployment and again harmlessly;
-until then the next resolution of that handle would clear it.
+`resolve_stale_owners` repair, which every provision runs (`PartiesConfig.compose_provision`)
+and which is idempotent; until then the next resolution of that handle would clear
+it. The rule is the last kind the handle aspect ranks: a person's, a system of
+record's, a directory's or an import's statement outranks it, kinds the aspect does
+not list rank below it. So the repair moves no address and clears no
+confirmation: it leaves a confirmed holder (only a person or a seed states the
+preferred link that keeps the flag) and a holder another party's applied statement
+contests for a person, and reports both. A trashed holder is stated for itself,
+a merged-away one for its survivor. A seed that moves or clears a holder withdraws
+the statement its earlier load made for the old one.
 
 A card's `PHOTO` is stored as the person's avatar through storage's idempotent
 `File.objects.ingest_image` before the page transaction; a photo storage refuses
