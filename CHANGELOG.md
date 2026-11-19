@@ -799,6 +799,29 @@ live in code docstrings.
   declares contributions, which replays its records once. The database default
   lets a release before the column, rolled back onto the migrated database,
   still create stream generations.
+  Rollback: the stored `{"version", "parts"}` format is forward-only. Code from
+  this column's first form, which stored a bare `[[key, version], ...]` list,
+  reads `{}`, `[]` and bare lists, but fails on every composed stream this
+  release wrote: that stream's partition errors on each sync and writes nothing.
+  Before or after rolling back to it, run once on the host's PostgreSQL
+  database. The statement is idempotent and safe while the stack runs:
+
+  ```sql
+  UPDATE integrate_syncstream
+  SET mapping_contributions = CASE
+      WHEN (mapping_contributions ->> 'version')::bigint = mapping_version
+      THEN mapping_contributions -> 'parts' ELSE '[]'::jsonb END
+  WHERE jsonb_typeof(mapping_contributions) = 'object' AND mapping_contributions ? 'parts';
+  ```
+
+  A stream whose stored version is its own gets its bare list back, so it
+  replays nothing under that code. Any other stream gets `[]`, which that code
+  reads as never composed, so it replays once. Returning to this release then
+  replays each composed stream once, because a bare list carries no version.
+  Clearing every composed row to `[]` also recovers, but replays all of them.
+  It also leaves any stream the older code declares plain on the plain rule,
+  which can lower that stream's version onto a number its composed records
+  already carry, so those records are never replayed.
 
 - `angee.integrate.http` owns a vendor's typed JSON request
   (`HttpClient.request_model`) and one rule for a refused answer
