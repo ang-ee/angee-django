@@ -116,6 +116,12 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
   lineFooter?: (context: RecordToolbarContext) => React.ReactNode;
   /** Record chrome density and height behavior. */
   recordPresentation?: RecordPresentation;
+  /**
+   * What a saved record's form shows when its id reads no record (loaded, without a load error),
+   * given that id and the default state ("Record unavailable"), which it may render when it has
+   * nothing else to show. Omitted, the default shows.
+   */
+  renderUnavailable?: (id: string, unavailable: React.ReactElement) => React.ReactNode;
   className?: string;
 }
 
@@ -172,6 +178,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     recordPresentation = "document",
     publishBreadcrumbLabel = false,
     hideRecordChrome = false,
+    renderUnavailable,
     className,
   } = props;
   const {
@@ -233,7 +240,8 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     if (loadError) return <ErrorBanner title={t("form.loadFailed")}
       description={errorMessage(loadError, t("form.loadFailed"))}
       actions={<Button type="button" size="sm" onClick={() => void reload()}>{t("collection.retry")}</Button>} />;
-    return <EmptyState icon="lock" title={t("record.unavailable")} className="min-h-64 p-8" />;
+    const unavailable = <EmptyState icon="lock" title={t("record.unavailable")} className="min-h-64 p-8" />;
+    return props.id && renderUnavailable ? <>{renderUnavailable(props.id, unavailable)}</> : unavailable;
   }
   const toolbarStartNode =
     typeof toolbarStart === "function"

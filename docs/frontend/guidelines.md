@@ -1174,7 +1174,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   contribute that registration through `defineAddon`'s `forms` dictionary.
   Its component composes `Form`, `Field` and `Group` and receives
   `RegisteredFormProps`; it owns any create/edit distinction through the record
-  `id`. Collection routes and relation-picker create/edit dialogs use that same
+  `id`. A saved record whose id reads no record shows the form's "Record
+  unavailable" state; a form that knows where such an id leads passes
+  `renderUnavailable(id, unavailable)` (parties opens a merged record's survivor)
+  and renders `unavailable` when it has nothing else. Collection routes and relation-picker create/edit dialogs use that same
   form, so a caller declares the resource instead of repeating its fields. Keep
   the registration in a form module, independent of the lazy collection page.
   Secondary panes and lifecycle actions travel with that form. A migration removes

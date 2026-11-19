@@ -476,16 +476,17 @@ repeated-values group, count, search result or picker candidate, and the People
 workbench's count is the list's. Their by-id roots read the same rows; a party
 id resolves through `party_record(id)`, which answers a merged-away id with its
 survivor, and the record redirect (`/parties/records/<id>`, where references to a
-party link) and the Party form follow it.
+party link), the Party form and the person's and organization's own pages follow
+it: a page whose read misses passes the id to the record form's
+`renderUnavailable`, and `PartyRecordRedirect` opens the survivor's page when
+`party_record` names another party, so an old direct link to a merged-away
+person opens their survivor for someone who reads both, and shows "Record
+unavailable" to anyone else.
 
-Three limits follow from that read:
+Two limits follow from that read:
 
 - A party that was trashed but never merged leaves the lists, and nobody can
   find it in the interface to restore it until the framework has a trash
   surface. The shared `restore_record` verb still restores it by its id.
 - A party that every one of its sources has withdrawn leaves the lists too,
   as it already left the People workbench's count and search.
-- A direct link to a merged-away person's or organization's own page
-  (`/parties/people/<id>`, `/parties/organizations/<id>`) shows "Record
-  unavailable" rather than the survivor: the shared record form has no place
-  yet where a page may say what a missing record opens instead.

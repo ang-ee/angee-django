@@ -10,6 +10,21 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: `FormView` (and so `Form` and every registered form) takes an
+  optional `renderUnavailable(id, unavailable)`: what a saved record's form
+  shows when its id reads no record, given the default "Record unavailable"
+  state to render when it has nothing else; omitted, the default shows as
+  before. `angee.parties`: the person's and organization's own pages pass it,
+  so a direct link to a merged-away person or organization opens the survivor's
+  page for someone who reads both records (through `party_record`, keeping the
+  app they are in) and shows "Record unavailable" to anyone else. Debt:
+  following a merged-away record to its survivor (`merged_into`) is the shared
+  merge owner's fact, used beyond parties, yet `party_record` keeps it under
+  parties. Its fix is a generic survivor-of-an-id root beside `merge_records`
+  (`src/angee/graphql/merge.py`) with the same authorization, which the shared
+  record form asks whenever a resource its metadata marks `mergeable` misses, so
+  no form passes a hook and parties keeps only its concrete page
+  (`party_record`'s `concrete_kind`).
 - `angee.parties`: a merged-away party is no longer a row. The `people`,
   `organizations` and `parties` resources read `canonical()` parties, as
   handles, addresses and relationships already did, so a party merged into
@@ -24,9 +39,7 @@ live in code docstrings.
   trashed but never merged leaves the lists and cannot be found in the
   interface to restore until the framework has a trash surface (the shared
   `restore_record` verb still restores it by its id); a party that every one
-  of its sources has withdrawn leaves the lists too; and a direct link to a
-  merged-away person's or organization's own page shows "Record unavailable"
-  rather than the survivor.
+  of its sources has withdrawn leaves the lists too.
 - `angee.parties`: a list's Merge reads the list's grouping
   (`collection.selectedGroups`). One ticked record opens "Merge into…" and two
   open the compare page, whatever the grouping. Three or more on an ungrouped
