@@ -711,15 +711,18 @@ class EmailLookup:
 
     :meth:`PartyManager.lookup_emails` fills it; every key is a normalized
     address. ``holders`` keeps :meth:`PartyManager.people_for_emails`' answers
-    for each address read (an empty list when it names nobody) and ``sign_in``
-    the addresses a person account signs in with, in any spelling. A record
-    that lands or withdraws an address marks it ``changed``, so the next lookup
-    of it reads it again. ``verdicts`` keeps each adoption verdict
+    for each address read (an empty list when it names nobody), less the claim
+    basis for an address a lapsed holder keeps; ``lapsed`` the keys of each
+    address's lapsed holders (:meth:`PartyManager.lapsed_holders`); and
+    ``sign_in`` the addresses a person account signs in with, in any spelling.
+    A record that lands or withdraws an address marks it ``changed``, so the
+    next lookup of it reads it again. ``verdicts`` keeps each adoption verdict
     (:meth:`PartyManager.adoption_blocker`) by person and link, so the target
     decision and the ingest that binds the person admit them once.
     """
 
     holders: dict[str, list[EmailHolder]] = field(default_factory=dict)
+    lapsed: dict[str, set[Any]] = field(default_factory=dict)
     sign_in: set[str] = field(default_factory=set)
     changed: set[str] = field(default_factory=set)
     verdicts: dict[tuple[Any, Any], str | None] = field(default_factory=dict)
@@ -2023,11 +2026,13 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
         Only an address it has not read, or one a record of its page changed
         since (:attr:`EmailLookup.changed`), is read: its holders through
-        :meth:`people_for_emails`, and whether a person account signs in with it
-        in any spelling, the one given or one a handle holds
-        (``UserManager.sign_in_addresses``, iam's own comparison). Writes
-        nothing; the caller reads it under the locks of the addresses it decides
-        on.
+        :meth:`people_for_emails`, its lapsed holders (:meth:`lapsed_holders`),
+        and whether a person account signs in with it in any spelling, the one
+        given or one a handle holds (``UserManager.sign_in_addresses``, iam's
+        own comparison). An address a lapsed holder keeps is still theirs, so a
+        claim names nobody by it: the claim basis is left out of its holders.
+        Writes nothing; the caller reads it under the locks of the addresses it
+        decides on.
         """
 
         lookup = EmailLookup() if lookup is None else lookup
@@ -2036,12 +2041,18 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         if not wanted:
             return lookup
         keys = {_email_key(email) for email in wanted}
+        handle_model = apps.get_model("parties", "Handle")
+        lapsed = self.lapsed_holders(handle_model.Platform.EMAIL, keys)
         lookup.holders.update((key, []) for key in keys)
+        for key in keys:
+            lookup.lapsed[key] = lapsed.get(key, set())
         for holder in self.people_for_emails(wanted):
-            found = lookup.holders[_email_key(holder.email)]
+            key = _email_key(holder.email)
+            found = lookup.holders[key]
+            if holder.basis == EmailBasis.CLAIM and lookup.lapsed[key]:
+                continue
             if not any(row.basis == holder.basis and row.person.pk == holder.person.pk for row in found):
                 found.append(holder)
-        handle_model = apps.get_model("parties", "Handle")
         with system_context(reason="parties.lookup_emails"):
             spellings = {
                 *wanted,
@@ -2053,6 +2064,32 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         lookup.sign_in.update(_email_key(email) for email in get_user_model().objects.sign_in_addresses(spellings))
         lookup.changed.difference_update(keys)
         return lookup
+
+    def lapsed_holders(self, platform: str, values: Collection[str]) -> dict[str, set[Any]]:
+        """Return, by normalized value, the keys of the trashed people who still hold an address of ``platform``.
+
+        Such a person (trashed, never merged away) has an applied, current
+        statement of a handle of the address in some spelling: a restore makes
+        them its holder again, so what a source may state about the address, and
+        who may confirm it, treats them as its holder (:meth:`lookup_emails`).
+        :meth:`people_for_emails` answers nobody for them and stays as it is.
+        One read; ``values`` are normalized (``Handle.normalize_value``).
+        """
+
+        if not values:
+            return {}
+        lapsed: defaultdict[str, set[Any]] = defaultdict(set)
+        with system_context(reason="parties.lapsed_holders"):
+            rows = self.handle_statements().applied().filter(
+                handle__platform=platform,
+                handle__normalized_value__in=sorted(values),
+                subject__is_trashed=True,
+                subject__merged_into__isnull=True,
+                subject__person__isnull=False,
+            )
+            for value, subject_id in rows.values_list("handle__normalized_value", "subject_id"):
+                lapsed[value].add(subject_id)
+        return dict(lapsed)
 
     def _holders(self, handles: Sequence[Any]) -> dict[Any, tuple[Any, Any | None]]:
         """Return each handle's merge survivor and the live Person holding it, by handle pk, in bounded reads.
@@ -2321,7 +2358,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         found = instances_from_public_ids(handle_model, ids[:1], queryset=handle_model._base_manager.all())
         return cast("Handle", found[ids[0]].canonical()) if ids and ids[0] in found else None
 
-    def _withdraw_link(self, link: RecordLink) -> int:
+    def _withdraw_link(self, link: RecordLink, *, lookup: EmailLookup | None = None) -> int:
         """Withdraw what ``link`` asserts on the person it leaves, their addresses and edges, never handing it on.
 
         ``RecordLink.withdraw_statements`` moves a link's assertions to another
@@ -2329,16 +2366,29 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         leaving a person must withdraw them instead, or they stay asserted on
         that person through the sibling. Every statement table a contact's link
         states into is a person's (consumer groups included), an address's or a
-        relationship's. Returns how many it withdrew.
+        relationship's. The email addresses it stated are marked changed in
+        ``lookup``, as landing them does. Returns how many it withdrew.
         """
 
+        stated = self._stated_emails(link)
         source = link.asserting_source()
         tables = {
             model: None
             for owner in ("Person", "Address", "Relationship")
             for model in apps.get_model("parties", owner).statement_models()
         }
-        return sum(model.objects.withdraw(source, link=link) for model in tables)
+        withdrawn = sum(model.objects.withdraw(source, link=link) for model in tables)
+        if lookup is not None:
+            lookup.changed.update(stated)
+        return withdrawn
+
+    def _stated_emails(self, link: RecordLink) -> set[str]:
+        """Return the normalized email addresses ``link`` asserts: withdrawing it may change their holders."""
+
+        email = apps.get_model("parties", "Handle").Platform.EMAIL
+        statements = self.handle_statements()
+        asserted = statements.filter(link=link, status=statements.model.StatementStatus.ASSERTED)
+        return set(asserted.filter(handle__platform=email).values_list("handle__normalized_value", flat=True))
 
     def contact_handle_ids(self, contacts: Iterable[ParsedContact | ParsedOrganization]) -> set[Any]:
         """Return the handles the contacts' emails and phones name, every spelling of each (by normalized value).
@@ -2617,13 +2667,15 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         them, so it is a claim for review, and each such person comes back once,
         with the handle that names them, to be proposed as ``person``'s same
         person. An account's sign-in address is the account's, whether or not it
-        has a person yet, unless that person is ``person``: a claim too. One
-        ``source`` already claims on ``person`` stays a claim until ``person``
-        holds it through another statement or a person confirms the claim (either
-        makes ``person`` its holder), so no lapse of its holder (trashed, or its
-        statement withdrawn) and no second claimant turns the claim into a
-        holding. Any other address is stated in full. Values are normalized email
-        addresses (``Handle.normalize_value``).
+        has a person yet, unless that person is ``person``: a claim too. So is an
+        address a lapsed holder keeps (trashed, its statement of it current:
+        :meth:`lapsed_holders`), which a restore gives back to them; they are
+        not proposed. One ``source`` already claims on ``person`` stays a claim
+        until ``person`` holds it through another statement or a person confirms
+        the claim (either makes ``person`` its holder), so no lapse of its holder
+        (trashed, or its statement withdrawn) and no second claimant turns the
+        claim into a holding. Any other address is stated in full. Values are
+        normalized email addresses (``Handle.normalize_value``).
         """
 
         handle_model = apps.get_model("parties", "Handle")
@@ -2650,7 +2702,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             account = normalized in lookup.sign_in and not any(
                 holder.basis == EmailBasis.ACCOUNT and holder.person.pk == person.pk for holder in found
             )
-            if rivals or account or normalized in claimed:
+            if rivals or account or lookup.lapsed.get(normalized) or normalized in claimed:
                 claims.add(normalized)
             for holder in rivals:
                 others.setdefault(holder.person.pk, (holder.person, holder.handle))
@@ -2687,7 +2739,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         same person (:meth:`_contested_emails`, :meth:`propose_directory_match`),
         so a contact never moves an address away from its holder; the addresses
         it lands are marked changed in the lookup. A link leaving a person
-        withdraws what it stated on them before it binds its new person, and,
+        withdraws what it stated on them before it binds its new person (the
+        addresses it withdrew are read again before the contact's are judged),
+        and,
         when the person it leaves is trashed, the proposals pairing them with
         that person, or with whom its addresses now name. ``replaces`` are
         the links of records a merge at the source folded into this one: whatever
@@ -2730,7 +2784,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             gone = left is not None and self.contact_people([link])[link.pk] is None
             if left is not None:
                 # What the link stated on the person it leaves goes first.
-                self._withdraw_link(link)
+                self._withdraw_link(link, lookup=lookup)
             apps.get_model("integrate", "RecordLink").objects.bind_target(link, parent)
             for subject, aspect, values, evidence in (
                 (
@@ -2760,6 +2814,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                     link=link,
                     evidence=[EvidenceReference.of(row) for row in evidence],
                 )
+            if pull:
+                # What the link withdrew from the person it left may have been all that held an address.
+                lookup = self.lookup_emails((value for value, _label, _preferred in parsed.emails), lookup=lookup)
             claims, others = (
                 self._contested_emails(person, parsed, source=source, lookup=lookup)
                 if pull and lookup is not None

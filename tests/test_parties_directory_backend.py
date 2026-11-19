@@ -513,6 +513,8 @@ def test_a_record_rebinding_off_a_trashed_person_withdraws_what_its_link_stated_
     assert not _asserted(trashed.pk, link).exists()
     assert not Person.statements.filter(subject_id=trashed.pk, link=link, status="asserted").current().exists()
     assert _asserted(int(link.target_object_id), link).exists()
+    # The trashed person held the address through this link alone, now withdrawn: the new person holds it.
+    assert _claim_confidences(link.target_object_id, "ada@example.com") == [1.0]
 
 
 def test_a_record_minting_again_after_its_person_is_trashed_withdraws_the_pair_the_old_one_had(pull: Pull) -> None:
@@ -1314,6 +1316,71 @@ def test_a_claim_stays_a_claim_while_its_holder_is_trashed_and_restored(pull: Pu
     assert pull.sync().count == 1
     assert _held_by("ada@example.com") == person.pk
     assert _claim_confidences(minted, "ada@example.com") == [0.4]
+
+
+def _restore(person: Any, handle: Any) -> None:
+    """Restore the trashed holder, then resolve the handle as the next statement on it would.
+
+    Restoring a person re-resolves no handle: a handle resolved while its holder
+    was trashed keeps that answer until a statement on it changes.
+    """
+
+    Person._base_manager.get(pk=person.pk).restore()
+    Handle(pk=handle.pk).resolve()
+
+
+def test_a_holder_trashed_before_the_contact_first_states_its_address_keeps_it_when_restored(pull: Pull) -> None:
+    """A trashed holder whose statement of the address is current still holds it: the contact only claims it."""
+
+    person, handle = _existing(_user("someone-else"))
+    Person._base_manager.get(pk=person.pk).trash(reason="Removed by its holder")
+
+    pull.sync()
+
+    minted = pull.link("ada").target_object_id
+    assert minted not in (None, str(person.pk))
+    _restore(person, handle)
+    assert _held_by("ada@example.com") == person.pk
+    assert _claim_confidences(minted, "ada@example.com") == [0.4]
+
+
+def test_a_holder_trashed_while_the_source_dropped_the_address_keeps_it_when_the_source_adds_it_again(
+    pull: Pull,
+) -> None:
+    """The contact's claim was withdrawn, so it is no claim of its own any more; the lapsed holder keeps it one."""
+
+    person, handle = _existing(_user("someone-else"))
+    pull.sync()
+    minted = pull.link("ada").target_object_id
+    pull.source.put("ada", replace(_ADA, emails=()))
+    assert pull.sync().count == 1
+    assert _claim_confidences(minted, "ada@example.com") == []
+    Person._base_manager.get(pk=person.pk).trash(reason="Removed by its holder")
+
+    pull.source.put("ada", _ADA)
+    assert pull.sync().count == 1
+
+    _restore(person, handle)
+    assert _held_by("ada@example.com") == person.pk
+    assert _claim_confidences(minted, "ada@example.com") == [0.4]
+
+
+def test_a_contact_adopts_no_claimant_of_an_address_a_trashed_holder_keeps(pull: Pull) -> None:
+    """Another source only claims the address while its holder is trashed: the claim names nobody to adopt."""
+
+    person, handle = _existing(_user("someone-else"))
+    Person._base_manager.get(pk=person.pk).trash(reason="Removed by its holder")
+    claimant = Person.objects.create(display_name="Ada (claimed)", created_by=pull.directory.owner)
+    Party.objects.assert_handle(claimant, handle, asserted_by=Party.objects.rule_source("display_name"), confidence=0.4)
+
+    pull.sync()
+
+    ada = pull.link("ada")
+    assert ada.target_object_id not in (None, str(claimant.pk), str(person.pk))
+    _restore(person, handle)
+    assert _held_by("ada@example.com") == person.pk
+    assert _claim_confidences(ada.target_object_id, "ada@example.com") == [0.4]
+    assert not Party.statements.filter(subject_id=claimant.pk, asserted_by=str(ada.asserted_by)).exists()
 
 
 def test_confirming_a_claim_needs_write_on_the_person_who_holds_the_address(pull: Pull) -> None:
