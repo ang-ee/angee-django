@@ -382,6 +382,13 @@ describe("React architecture guardrails", () => {
     },
   );
 
+  test("every addon web fragment declares the typecheck script the fragment checks run", () => {
+    // `pnpm -r run typecheck` skips a package without the script instead of failing it.
+    const untyped = addonPackageRoots().filter((pkg) =>
+      !JSON.parse(readFileSync(join(pkg.root, "package.json"), "utf8")).scripts?.typecheck);
+    expect(untyped.map((pkg) => `${pkg.name} (${workspaceRelative(pkg.root)})`)).toEqual([]);
+  });
+
   test("addon guardrail registries reject malformed fields with their owning path", () => {
     expect(() => registryArray(
       { criticalExports: {} },
