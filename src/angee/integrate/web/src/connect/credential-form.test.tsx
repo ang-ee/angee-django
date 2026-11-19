@@ -57,6 +57,7 @@ afterEach(() => { cleanup(); clearClients(); });
 
 interface FieldLike {
   name: string;
+  widget?: string;
   options?: ReadonlyArray<{ value: string; label: string }>;
   showWhen?: (values: Record<string, unknown>) => boolean;
 }
@@ -94,6 +95,11 @@ describe("credentialCreateForm", () => {
     ]);
     expect(fields.get("api_key")?.showWhen?.({ kind: "static_token" })).toBe(true);
     expect(fields.get("api_key")?.showWhen?.({ kind: "ssh_key" })).toBe(false);
+    // A static token is a one-line secret, so it is entered in the masked password widget (whose
+    // rendering its own test proves); a private key or key file is multi-line, entered in a text area.
+    expect(fields.get("api_key")?.widget).toBe("password");
+    expect(fields.get("private_key")?.widget).toBe("textarea");
+    expect(fields.get("key_file")?.widget).toBe("textarea");
     expect(fields.get("private_key")?.showWhen?.({ kind: "ssh_key" })).toBe(true);
     expect(fields.get("private_key")?.showWhen?.({ kind: "static_token" })).toBe(false);
     expect(fields.get("key_file")?.showWhen?.({ kind: "jwt_bearer" })).toBe(true);
@@ -213,8 +219,9 @@ describe("credentialCreateForm", () => {
   ])("creates $kind using canonical input names and form-owned error feedback", async (material) => {
     const Component = credentialCreateForm.Component;
     render(<Component resource={credentialCreateForm.resource} id={null} />);
+    // The form renders the failure itself, and the entered secret is not kept in the mutation cache.
     expect(mocks.useAuthoredResourceMutation).toHaveBeenCalledWith(IntegrateCreateCredential,
-      expect.objectContaining({ errorNotification: false }));
+      expect.objectContaining({ errorNotification: false, transient: true }));
     const data = { name: "New credential", ...material };
     if (!mocks.createSubmit) throw new Error("Create submission was not registered.");
     await expect(mocks.createSubmit(data, {

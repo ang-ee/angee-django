@@ -1,9 +1,10 @@
 """Managers that own the directory-sync write path for parties.
 
-A directory backend parses a source into neutral ``ParsedContact`` rows; these
-managers turn one into a ``Party`` (a ``Person``) and its ``Handle`` /
-``PartyStatement`` / ``Address`` rows. A contact is keyed by its source UID within
-its observed RecordLink identity, handles dedupe on
+A directory backend parses a source into neutral ``ParsedContact`` and
+``ParsedOrganization`` rows; these managers turn one into a ``Party`` (a
+``Person`` or an ``Organization``) and its ``Handle`` / ``PartyStatement`` /
+``Address`` / ``Relationship`` rows. A contact is keyed by the external key of
+its observed RecordLink, handles dedupe on
 ``(platform, value)``, and ``handle_count`` plus the resolved ``Handle.party`` are
 maintained here in the same transaction — so every directory source shares one
 write path (the map lives on the models, not in each backend) and a re-sync
@@ -18,17 +19,19 @@ import logging
 import re
 from collections import defaultdict
 from collections.abc import Collection, Iterable, Mapping, Sequence
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from enum import StrEnum
 from functools import partial
 from itertools import batched, chain, combinations
-from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, Self, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, Self, TypedDict, cast
 
 from django.apps import apps
 from django.conf import settings
-from django.core.exceptions import ObjectDoesNotExist, ValidationError
-from django.db import IntegrityError, models, transaction
+from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.prefetch import GenericPrefetch
+from django.core.exceptions import ValidationError
+from django.db import IntegrityError, connection, models, transaction
 from django.db.models import (
     Case,
     Count,
@@ -42,21 +45,26 @@ from django.db.models import (
     TextField,
     Value,
     When,
+    prefetch_related_objects,
 )
 from django.db.models.functions import Coalesce, NullIf
 from django.db.models.lookups import Exact
 from django.utils import timezone
 from django.utils.crypto import salted_hmac
 from phonenumbers import PhoneNumberMatcher
+from pydantic import ValidationError as PydanticValidationError
 from rebac import (
     PermissionDenied,
     actor_context,
+    check_new,
     current_actor,
     system_context,
 )
 from rebac.actors import is_sudo, to_subject_ref
+from rebac.resources import model_resource_type
 
 from angee.base.hooks import resolve_hooks
+from angee.base.lineage import concrete_child
 from angee.base.models.hierarchy import HierarchyQuerySet
 from angee.base.models.identity import instances_from_public_ids, public_id_for
 from angee.base.models.trash import ArchiveQuerySet
@@ -64,7 +72,10 @@ from angee.base.pagination import clamp_page_size
 from angee.base.permissions import actor_user_id, reader_queryset
 from angee.base.querysets import MergeableQuerySet, by_key, query_batch_size
 from angee.base.serialization import canonical_json
-from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedPhoto
+from angee.integrate.errors import IntegrationError
+from angee.integrate.models import IntegrationLifecycle, IntegrationManager
+from angee.integrate.states import LinkStatus, StreamDirection
+from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedOrganization, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.provenance.context import changeset
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
@@ -85,7 +96,7 @@ if TYPE_CHECKING:
     from angee.integrate.models import RecordLink
     from angee.parties.connections import ParsedConnection
     from angee.parties.mixins import PartyStatementMixin
-    from angee.parties.models import Circle, Folder, Handle, Party, Person, Relationship
+    from angee.parties.models import Circle, Directory, Folder, Handle, Organization, Party, Person, Relationship
 
 logger = logging.getLogger(__name__)
 
@@ -566,16 +577,48 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         A claim is contested when another user already controls the row. The
         existing controller is never replaced; instead the competing user's
         identity link is recorded unconfirmed at ``0.3`` confidence and returned
-        for later review. The whole decision is atomic and row-locked.
+        for later review. The identity statement would move the address like a
+        confirmation does, so where someone holds the address whom the
+        statement's author may not take it from (``PartyManager.holding_blocker``:
+        an account's own sign-in address is always its own), the identity link is
+        stated as a claim for review at ``Party.CLAIM_CONFIDENCE``, as a contact
+        states an address someone else holds, and control stays as it is. Neither
+        contested path refuses or touches the handle's display fields: signing in
+        and connecting never settle who holds an address. The whole decision is
+        atomic and row-locked.
         """
 
         evidence = tuple(evidence)
+        author = asserted_by or user
         person_model = apps.get_model("parties", "Person")
         link_owner = apps.get_model("parties", "Party").objects
         with (
             system_context(reason="parties.handle.claim_control"),
             transaction.atomic(),
         ):
+            handle = self.upsert(platform=platform, value=value, created_by_id=user.pk)
+            handles, _parties = link_owner.lock_identity_rows(
+                party_ids=(),
+                handle_ids=(handle.pk,),
+            )
+            handle = handles[handle.pk]
+            person = person_model.objects.for_user(user)
+            controlled = handle.controller_id is not None and handle.controller_id != user.pk
+            held = (
+                not controlled
+                and handle.party_id != person.pk
+                and StatementSourceMixin.source_kind_for(to_subject_ref(author)) == SourceKind.PERSON
+                and link_owner.holding_blocker(person, handle, author=author) is not None
+            )
+            if controlled or held:
+                link_owner.assert_handle(
+                    person,
+                    handle,
+                    confidence=0.3 if controlled else link_owner.model.CLAIM_CONFIDENCE,
+                    asserted_by=author,
+                    evidence=evidence,
+                )
+                return handle
             handle = self.upsert(
                 platform=platform,
                 value=value,
@@ -583,21 +626,6 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                 display_name=display_name,
                 metadata=metadata or {},
             )
-            handles, _parties = link_owner.lock_identity_rows(
-                party_ids=(),
-                handle_ids=(handle.pk,),
-            )
-            handle = handles[handle.pk]
-            person = person_model.objects.for_user(user)
-            if handle.controller_id is not None and handle.controller_id != user.pk:
-                link_owner.assert_handle(
-                    person,
-                    handle,
-                    confidence=0.3,
-                    asserted_by=asserted_by or user,
-                    evidence=evidence,
-                )
-                return handle
             if handle.controller_id is None:
                 handle.controller = user
                 handle.save(update_fields=["controller", "updated_at"])
@@ -605,7 +633,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                 person,
                 handle,
                 confidence=1.0,
-                asserted_by=asserted_by or user,
+                asserted_by=author,
                 evidence=evidence,
             )
         return handle
@@ -809,6 +837,73 @@ class PartyStatementQuerySet[StatementT: PartyStatementMixin](StatementQuerySet[
                 | Q(source_kind__in=(SourceKind.DIRECTORY, SourceKind.PERSON)),
             )
         )
+
+class EmailBasis(StrEnum):
+    """How :meth:`PartyManager.people_for_emails` found a person for an email address."""
+
+    ACCOUNT = "account"
+    """The user account with that address is the person's: they are its own Person."""
+    HELD = "held"
+    """The person holds the address: it is their resolved email handle."""
+    CLAIM = "claim"
+    """The one person a current asserted contact claim proposes the address for; no live person holds it yet."""
+
+
+class EmailHolder(NamedTuple):
+    """One person an email address names, and the basis it names them by.
+
+    ``handle`` is the email handle that ties the address to the person: the one
+    they hold, or the one claimed for them; for an account, the one its person
+    holds, else ``None``. Only a ``HELD`` holder holds the address; a caller
+    states more about a person found otherwise.
+    """
+
+    email: str
+    """The address as the caller gave it."""
+    person: Person
+    basis: EmailBasis
+    handle: Handle | None
+
+
+def _email_key(value: str) -> str:
+    """Return the normalized email address ``value`` (``Handle.normalize_value``), the key every lookup compares."""
+
+    handle_model = apps.get_model("parties", "Handle")
+    return cast(str, handle_model.normalize_value(handle_model.Platform.EMAIL, value))
+
+
+@dataclass
+class EmailLookup:
+    """Who email addresses name and which an account signs in with, read once for a page.
+
+    :meth:`PartyManager.lookup_emails` fills it; every key is a normalized
+    address. ``holders`` keeps :meth:`PartyManager.people_for_emails`' answers
+    for each address read (an empty list when it names nobody), less the claim
+    basis for an address a lapsed holder keeps; ``lapsed`` the keys of each
+    address's lapsed holders (:meth:`PartyManager.lapsed_holders`); and
+    ``sign_in`` the addresses a person account signs in with, in any spelling.
+    A record that lands or withdraws an address marks it ``changed``, so the
+    next lookup of it reads it again. ``verdicts`` keeps each adoption verdict
+    (:meth:`PartyManager.adoption_blocker`) by person and link, so the target
+    decision and the ingest that binds the person admit them once.
+    """
+
+    holders: dict[str, list[EmailHolder]] = field(default_factory=dict)
+    lapsed: dict[str, set[Any]] = field(default_factory=dict)
+    sign_in: set[str] = field(default_factory=set)
+    changed: set[str] = field(default_factory=set)
+    verdicts: dict[tuple[Any, Any], str | None] = field(default_factory=dict)
+
+    def named(self, email: str) -> list[EmailHolder]:
+        """Return the people ``email`` names, on every basis, as read."""
+
+        return self.holders.get(_email_key(email), [])
+
+    def signs_in(self, emails: Iterable[str]) -> bool:
+        """Whether any of ``emails`` is an address a person account signs in with."""
+
+        return any(_email_key(email) in self.sign_in for email in emails)
+
 
 @dataclass(frozen=True, slots=True)
 class SameAsPair:
@@ -1749,6 +1844,56 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 evidence=[EvidenceReference.of(row) for row in handles],
             )
 
+    def propose_directory_match(self, person: Any, other: Any, *, evidence: Sequence[Any]) -> Any | None:
+        """Propose, as the ``directory_match`` rule, that a directory's ``person`` and ``other`` are one person.
+
+        A directory proposes it for each other person a contact's address names,
+        whoever holds, claims or signs in with it, whether or not the directory
+        adopts (:meth:`ingest_contact`, the one call site for an address), and for
+        the person of another record the source merged into it
+        (``DirectoryBackend.apply_record``).
+        ``evidence`` names what ties them (the contact's link, then the handle its
+        email found ``other`` by, or the merged record's link). The
+        pair joins the same-as review (:meth:`PartyQuerySet.same_as_pairs`), where a
+        person merges or dismisses it. A pair kept separate is not proposed again,
+        and proposing an unchanged pair again changes nothing (``StatementManager.set``).
+        The ``same_as`` rule's reconciler withdraws only its own rule's pairs
+        (:meth:`reconcile_same_as`), so it leaves these, which no shared handle row
+        supports, standing. Returns the rule's statement, ``None`` when nothing is
+        proposed.
+        """
+
+        party = apps.get_model("parties", "Party")
+        if person.pk == other.pk or party.same_as.kept_separate(person, other):
+            return None
+        with system_context(reason="parties.directory_match"):
+            rule = self.rule_source("directory_match")
+            left, right = (party._base_manager.get(pk=row.pk) for row in (person, other))
+            pair = party.same_as.for_pair(left.with_actor(to_subject_ref(rule)), right)
+            return pair.statements.set(
+                aspect="same_as",
+                values={},
+                asserted_by=rule,
+                evidence=[EvidenceReference.of(row) for row in evidence],
+            )
+
+    def withdraw_directory_match(self, person: Any, other: Any) -> int:
+        """Withdraw the ``directory_match`` rule's proposal that ``person`` and ``other`` are one person.
+
+        Called when the proposal is moot: the two are merged (``Party.merge_fields``),
+        or the contact whose link left ``person`` lands on ``other`` or proposes its
+        new person as ``other`` (:meth:`ingest_contact`). Returns how many
+        statements it withdrew.
+        """
+
+        party = apps.get_model("parties", "Party")
+        left_id, right_id = sorted((person.pk, other.pk))
+        pair = party.same_as.model._base_manager.filter(left_id=left_id, right_id=right_id).first()
+        if pair is None:
+            return 0
+        with system_context(reason="parties.directory_match"):
+            return party.same_as.model.statements.withdraw(self.rule_source("directory_match"), [pair.pk])
+
     def reconcile_suggestions(self, *, shared: Collection[Any] | None = None) -> int:
         """Reconcile the evidence-backed suggestions with every registered evidence provider.
 
@@ -2296,15 +2441,15 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 link=link,
                 evidence=handle,
             )
+            employer = parsed.organization.strip()
             relationships.land_employment(
                 person,
-                organization=parsed.organization,
-                title=parsed.title,
+                [Employment(employer, parsed.title)] if employer else [],
                 kinds=kinds,
                 created_by_id=created_by_id,
                 asserted_by=asserted_by,
                 link=link,
-                evidence=handle,
+                evidence=[handle],
             )
             parent.statements.set(
                 aspect="identity",
@@ -2316,21 +2461,31 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             person.refresh_from_db()
             return person
 
-    @staticmethod
-    def _connection_person(handle: Any, *, display_name: str, asserted_by: Any, created_by_id: Any) -> Any:
+    def _connection_person(self, handle: Any, *, display_name: str, asserted_by: Any, created_by_id: Any) -> Any:
         """Return the handle's Person; identity statements own subsequent names.
 
-        The handle's party when it has one; otherwise the party an earlier run of the
-        same import linked it to, since a claim awaiting review, or one the person
-        dismissed, resolves nothing; a re-import therefore never mints a second person.
+        The person who holds the handle, by the holding rule :meth:`people_for_emails`
+        answers with (:meth:`_holders`: through merge survivors, never an
+        organization or a trashed person); otherwise the untrashed person an earlier
+        run of the same import linked it to, since a claim awaiting review, or one
+        the person dismissed, resolves nothing; a re-import therefore never mints a
+        second person, and one whose earlier person is trashed mints a new one.
         An existing name is never overwritten: it may be user-curated, and export
         text must not clobber curation on every re-run.
         """
 
         person_model = apps.get_model("parties", "Person")
-        party_id = handle.party_id or (
+        held = self._holders([handle]).get(handle.pk)
+        if held is not None and held[1] is not None:
+            return held[1]
+        party_id = (
             apps.get_model("parties", "PartyStatement")
-            ._base_manager.filter(handle=handle, aspect="handle", asserted_by=str(to_subject_ref(asserted_by)))
+            ._base_manager.filter(
+                handle=handle,
+                aspect="handle",
+                asserted_by=str(to_subject_ref(asserted_by)),
+                subject__is_trashed=False,
+            )
             .order_by("pk")
             .values_list("subject_id", flat=True)
             .first()
@@ -2344,80 +2499,578 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             created_by_id=created_by_id,
         )
 
+    def people_for_emails(self, emails: Iterable[str]) -> list[EmailHolder]:
+        """Return the people the given email addresses name, each with the basis it names them by; decide nothing.
+
+        ``emails`` come in the caller's preference order, and so does the answer: per
+        address, at most one person on each basis, in this order (:class:`EmailBasis`):
+
+        1. ``ACCOUNT``: the user account with that address is its user's existing
+           Person (``UserManager.person_for_email``'s rule: an address two
+           accounts share names nobody); an account without a Person names
+           nobody, and a caller that needs one asks ``for_user`` itself;
+        2. ``HELD``: the first email handle of the address that a live Person
+           holds names them, through merge survivors;
+        3. ``CLAIM``: whenever no live Person holds the address, the one live
+           person a current asserted contact claim proposes a handle of it for;
+           two claimants name nobody.
+
+        A holder that is no live Person (an organization, a trashed person) does
+        not count as holding the address: the next handle a live Person holds
+        answers ``HELD``, and with none the claims answer, so a person minted
+        earlier for an organization's address is found again by their claim.
+        Handles compare by ``Handle.normalized_value``, so another spelling of the
+        address is the same address whichever row its exact value made (the account
+        compares by the account's own normalization). A trashed person, an
+        organization and a merged-away row are nobody's answer. One person may come
+        under several bases, and an address two people share (a family's) names
+        them both: each caller applies its own policy, and only a ``HELD`` holder
+        holds the address. Any batch reads in a bounded number of queries, and the
+        lookup writes nothing. This is a system identity lookup: the caller gates
+        what it reveals.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        person_model = apps.get_model("parties", "Person")
+        users = get_user_model().objects
+        given = [email for email in dict.fromkeys(emails) if email.strip()]
+        if not given:
+            return []
+        values = {email: handle_model.normalize_value(handle_model.Platform.EMAIL, email) for email in given}
+        addresses = {email: users.normalize_email(email) for email in given}
+        live = person_model._base_manager.filter(is_trashed=False, merged_into__isnull=True)
+        account_people = self.account_people(given)
+        with system_context(reason="parties.people_for_emails"):
+            known = list(
+                handle_model._base_manager.filter(
+                    platform=handle_model.Platform.EMAIL, normalized_value__in=set(values.values())
+                ).order_by("pk")
+            )
+            holders = self._holders(known)
+            held: dict[str, tuple[Any, Any]] = {}
+            for handle in known:
+                if (holding := holders.get(handle.pk)) is not None and holding[1] is not None:
+                    held.setdefault(handle.normalized_value, holding)
+            statements = self.handle_statements()
+            claims: defaultdict[str, dict[Any, Any]] = defaultdict(dict)
+            for value, subject_id, handle_id in (
+                statements.filter(handle__in=known, subject__in=live.values("pk"))
+                .members()
+                .filter(status=statements.model.StatementStatus.ASSERTED, snak=statements.model.StatementSnak.VALUE)
+                .order_by("handle_id")
+                .values_list("handle__normalized_value", "subject_id", "handle_id")
+            ):
+                claims[value].setdefault(subject_id, handle_id)
+            claimed = {value: next(iter(found.items())) for value, found in claims.items() if len(found) == 1}
+            claimants = live.in_bulk([subject_id for subject_id, _handle_id in claimed.values()])
+        by_pk = {handle.pk: handle for handle in known}
+        answer = []
+        for email in given:
+            holding = held.get(values[email], (None, None))
+            if (person := account_people.get(addresses[email])) is not None:
+                own_handle = holding[0] if holding[1] is not None and holding[1].pk == person.pk else None
+                answer.append(EmailHolder(email, person, EmailBasis.ACCOUNT, own_handle))
+            if holding[1] is not None:
+                answer.append(EmailHolder(email, holding[1], EmailBasis.HELD, holding[0]))
+            elif (claim := claimed.get(values[email])) is not None and claim[0] in claimants:
+                answer.append(EmailHolder(email, claimants[claim[0]], EmailBasis.CLAIM, by_pk[claim[1]]))
+        return answer
+
+    def account_people(self, emails: Iterable[str]) -> dict[str, Person]:
+        """Return the live Person of the one person account each address signs in with, by the account's address.
+
+        The rule :meth:`people_for_emails` answers ``ACCOUNT`` by
+        (``UserManager.person_for_email``'s: an address two accounts share names
+        nobody, and an account without a Person names nobody). Keys are the
+        accounts' own normalized addresses (``UserManager.normalize_email``). A
+        system identity read in two queries; the caller gates what it reveals.
+        """
+
+        users = get_user_model().objects
+        addresses = {users.normalize_email(email) for email in emails} - {""}
+        if not addresses:
+            return {}
+        live = apps.get_model("parties", "Person")._base_manager.filter(is_trashed=False, merged_into__isnull=True)
+        with system_context(reason="parties.account_people"):
+            accounts: defaultdict[str, list[Any]] = defaultdict(list)
+            for user in users.people().filter(email__in=addresses):
+                accounts[user.email].append(user)
+            owners = {found[0].pk: address for address, found in accounts.items() if len(found) == 1}
+            return {owners[person.user_id]: person for person in live.filter(user_id__in=list(owners))}
+
+    def lookup_emails(self, emails: Iterable[str], *, lookup: EmailLookup | None = None) -> EmailLookup:
+        """Return ``lookup`` (new by default) knowing whom each of ``emails`` names and which an account signs in with.
+
+        Only an address it has not read, or one a record of its page changed
+        since (:attr:`EmailLookup.changed`), is read: its holders through
+        :meth:`people_for_emails`, its lapsed holders (:meth:`lapsed_holders`),
+        and whether a person account signs in with it in any spelling, the one
+        given or one a handle holds, compared by iam's own key and by the
+        handle's normalized one (``UserManager.sign_in_addresses``). An address
+        a lapsed holder keeps is still theirs, so a claim names nobody by it:
+        the claim basis is left out of its holders.
+        Writes nothing; the caller reads it under the locks of the addresses it
+        decides on.
+        """
+
+        lookup = EmailLookup() if lookup is None else lookup
+        given = [email for email in dict.fromkeys(emails) if email.strip()]
+        wanted = [email for email in given if (key := _email_key(email)) not in lookup.holders or key in lookup.changed]
+        if not wanted:
+            return lookup
+        keys = {_email_key(email) for email in wanted}
+        handle_model = apps.get_model("parties", "Handle")
+        lapsed = self.lapsed_holders(handle_model.Platform.EMAIL, keys)
+        lookup.holders.update((key, []) for key in keys)
+        for key in keys:
+            lookup.lapsed[key] = lapsed.get(key, set())
+        for holder in self.people_for_emails(wanted):
+            key = _email_key(holder.email)
+            found = lookup.holders[key]
+            if holder.basis == EmailBasis.CLAIM and lookup.lapsed[key]:
+                continue
+            if not any(row.basis == holder.basis and row.person.pk == holder.person.pk for row in found):
+                found.append(holder)
+        with system_context(reason="parties.lookup_emails"):
+            spellings = {
+                *wanted,
+                *handle_model._base_manager.filter(
+                    platform=handle_model.Platform.EMAIL, normalized_value__in=keys
+                ).values_list("value", flat=True),
+            }
+        lookup.sign_in.difference_update(keys)
+        signed_in = get_user_model().objects.sign_in_addresses(spellings, key=_email_key)
+        lookup.sign_in.update(_email_key(email) for email in signed_in)
+        lookup.changed.difference_update(keys)
+        return lookup
+
+    def lapsed_holders(self, platform: str, values: Collection[str]) -> dict[str, set[Any]]:
+        """Return, by normalized value, the keys of the trashed people who still hold an address of ``platform``.
+
+        Such a person (trashed, never merged away) has an applied, current
+        statement of a handle of the address in some spelling: a restore makes
+        them its holder again, so what a source may state about the address, and
+        who may confirm it, treats them as its holder (:meth:`lookup_emails`).
+        :meth:`people_for_emails` answers nobody for them and stays as it is.
+        One read; ``values`` are normalized (``Handle.normalize_value``).
+        """
+
+        if not values:
+            return {}
+        lapsed: defaultdict[str, set[Any]] = defaultdict(set)
+        with system_context(reason="parties.lapsed_holders"):
+            rows = self.handle_statements().applied().filter(
+                handle__platform=platform,
+                handle__normalized_value__in=sorted(values),
+                subject__is_trashed=True,
+                subject__merged_into__isnull=True,
+                subject__person__isnull=False,
+            )
+            for value, subject_id in rows.values_list("handle__normalized_value", "subject_id"):
+                lapsed[value].add(subject_id)
+        return dict(lapsed)
+
+    def holding_blocker(self, party: Any, handle: Any, *, author: Any) -> str | None:
+        """Return why ``author``'s stance may not make ``party`` the holder of ``handle``'s address, else ``None``.
+
+        A person's stance that wins a handle (a confirmation, taking control, a
+        restored confirmation) gives ``party`` the address and what is
+        attributed to it. Its holders are read by the address, its platform and
+        normalized value in every spelling, as the page lookup reads them: each
+        live party a handle of it resolves to (through merge survivors, an
+        organization included), each lapsed holder (:meth:`lapsed_holders`), and,
+        for an email address, the person of the person account that signs in
+        with it (:meth:`lookup_emails`). An account's sign-in address is its
+        own: ``party`` may take it when it is that account's person, and nobody
+        may while the account has no person. Otherwise ``author`` needs
+        ``write`` on every holder but ``party``. The refusal is one message,
+        whoever holds the address, so it reveals no holder ``author`` cannot read.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        party_model = apps.get_model("parties", "Party")
+        refusal = "This address cannot be given to this party."
+        platform, value = handle.platform, handle.normalized_value
+        with system_context(reason="parties.holding_blocker"):
+            resolved = handle_model._base_manager.filter(platform=platform, normalized_value=value, party__isnull=False)
+            survivors = party_model.canonical_ids(set(resolved.values_list("party_id", flat=True)))
+            live = party_model._base_manager.filter(pk__in=set(survivors.values()), is_trashed=False)
+            holders = set(live.values_list("pk", flat=True))
+        holders |= self.lapsed_holders(platform, {value}).get(value, set())
+        if platform == handle_model.Platform.EMAIL:
+            lookup = self.lookup_emails([handle.value])
+            accounts = {row.person.pk for row in lookup.named(handle.value) if row.basis == EmailBasis.ACCOUNT}
+            if party.pk in accounts:
+                return None
+            if lookup.signs_in([handle.value]) and not accounts:
+                return refusal
+            holders |= accounts
+        holders.discard(party.pk)
+        rows = party_model._base_manager.filter(pk__in=holders) if holders else ()
+        return refusal if any(not row.with_actor(author).has_access("write") for row in rows) else None
+
+    def _holders(self, handles: Sequence[Any]) -> dict[Any, tuple[Any, Any | None]]:
+        """Return each handle's merge survivor and the live Person holding it, by handle pk, in bounded reads.
+
+        The survivor's party is followed to its own survivor; a party that is no
+        Person, or a trashed one, holds nothing (``None``). A handle whose survivor
+        has no party is absent.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        person_model = apps.get_model("parties", "Person")
+        loaded = {handle.pk: handle for handle in handles}
+        redirects = handle_model.canonical_ids([handle.pk for handle in handles if handle.merged_into_id is not None])
+        loaded.update(handle_model._base_manager.in_bulk(set(redirects.values()) - set(loaded)))
+        survivors = {handle.pk: loaded[redirects.get(handle.pk, handle.pk)] for handle in handles}
+        parties = apps.get_model("parties", "Party").canonical_ids(
+            {survivor.party_id for survivor in survivors.values() if survivor.party_id is not None}
+        )
+        people = person_model._base_manager.filter(is_trashed=False).in_bulk(set(parties.values()))
+        return {
+            pk: (survivor, people.get(parties.get(survivor.party_id)))
+            for pk, survivor in survivors.items()
+            if survivor.party_id is not None
+        }
+
     def contact_person(self, link: RecordLink) -> Person | None:
         """Resolve a contact through its native generic target and Person relation."""
+
+        return self._linked_party(link, apps.get_model("parties", "Person"))
+
+    def contact_people(self, links: Iterable[RecordLink]) -> dict[Any, Person | None]:
+        """Return the live Person each link names, keyed by link pk and read once for the batch.
+
+        A trashed person is nobody's target: it, like an unbound link, maps to
+        ``None``. The one rule a directory's comparison, its absence sweep, its
+        target resolution and the ingest's rebinding guard share.
+        """
+
+        return self._live_parties(links, apps.get_model("parties", "Person"))
+
+    def _live_parties(self, links: Iterable[RecordLink], model: Any) -> dict[Any, Any | None]:
+        """Return each link's untrashed ``model`` child (Person or Organization) by link pk; ``None`` while unbound."""
+
+        links = list(links)
+        prefetch_related_objects(
+            links, GenericPrefetch("target", [self.model._base_manager.select_related(model._meta.model_name)])
+        )
+        linked = {link.pk: self._linked_party(link, model) for link in links}
+        ids = [row.pk for row in linked.values() if row is not None]
+        live = {row.pk: row for row in model.objects.untrashed().filter(pk__in=ids)} if ids else {}
+        return {pk: live.get(row.pk) if row is not None else None for pk, row in linked.items()}
+
+    @staticmethod
+    def _linked_party(link: RecordLink, model: Any) -> Any | None:
+        """Resolve ``link``'s Party target to its ``model`` child (Person or Organization); ``None`` while unbound."""
 
         target = link.target
         if target is None:
             if link.target_content_type_id is not None or link.target_object_id:
                 raise ValidationError("The contact's linked target no longer exists.")
             return None
-        if not isinstance(target, apps.get_model("parties", "Party")):
-            raise ValidationError("A contact target must be a Party with a Person child.")
-        if isinstance(target, apps.get_model("parties", "Person")):
-            return target
-        try:
-            return target.person
-        except ObjectDoesNotExist as error:
-            raise ValidationError("A contact target must have a Person child.") from error
+        child = concrete_child(target, model) if isinstance(target, apps.get_model("parties", "Party")) else None
+        if child is None:
+            raise ValidationError(f"A contact target must be a Party of kind {model.__name__}.")
+        return child
+
+    def holding_links(self, link: RecordLink, replaces: Sequence[RecordLink] = (), *, readmitted: bool) -> set[Any]:
+        """Return the keys of ``link`` and of the links it ``replaces`` whose party stays or passes to it unadmitted.
+
+        Such a link is bound and observing (neither tombstoned nor withdrawn)
+        and, for a replaced one, of ``link``'s stream: ``link`` keeps its own
+        party, and a merge at the source hands the replaced record's over. Where
+        ``link`` returning from a tombstone is ``readmitted`` (a contact of a
+        directory that adopts, ``DirectoryBackend.adopts_existing_people``), its
+        party is a candidate admitted again (:meth:`adoption_blocker`), as is any
+        other link's; elsewhere (a directory that adopts nobody, a stream that
+        writes back, an organization) ``link`` keeps its bound party through a
+        tombstone.
+        """
+
+        rows = (
+            type(link)
+            .objects.sudo(reason="parties.holding_links")
+            .filter(
+                pk__in=[link.pk, *(row.pk for row in replaces)],
+                stream_id=link.stream_id,
+                target_object_id__isnull=False,
+            )
+        )
+        holding = set(rows.observing().values_list("pk", flat=True))
+        if link.target_object_id and not readmitted:
+            holding.add(link.pk)
+        return holding
+
+    def _naming_links(self, party_ids: Iterable[Any]) -> Any:
+        """Return the links naming any of ``party_ids`` that have not withdrawn it, each with its stream.
+
+        A tombstoned link still names its party: a record that returns lands
+        there again once admitted, so no other contact of its source takes the
+        party meanwhile.
+        """
+
+        parties = apps.get_model("parties", "Party")._base_manager.filter(pk__in=list(party_ids))
+        return (
+            apps.get_model("integrate", "RecordLink")
+            .objects.sudo(reason="parties.naming_links")
+            .filter(pk__in=parties.values("record_links"))
+            .exclude(status=LinkStatus.WITHDRAWN)
+            .select_related("stream")
+        )
+
+    def directory_merge_blocker(self, survivor: Party, merged: Sequence[Party]) -> str | None:
+        """Return why merging ``merged`` into ``survivor`` would set two contacts of one directory on one person.
+
+        A survivor takes every link its merged records had (a link follows its
+        record's survivor). Two bound, live links of one pull-only directory,
+        from different records, would put two records the source keeps
+        separate on one person, and the directory's statements, keyed by its
+        integration, would overwrite each other on every sync. A tombstoned or
+        withdrawn link counts for nothing, and a pair already on one record is
+        not this merge's. Any other merge is the merging person's to make: an
+        account's own person, or a person a two-way card names, included
+        (default pending the architect's ruling, O16). ``None`` when nothing
+        refuses.
+        """
+
+        ids = [survivor.pk, *(row.pk for row in merged)]
+        directory = apps.get_model("parties", "Directory")
+        contacts: defaultdict[Any, set[str]] = defaultdict(set)
+        for row in self._naming_links(ids).observing().select_related("stream__integration"):
+            kind = row.stream.integration.declared_concrete_model()
+            if row.stream.direction == StreamDirection.PULL and kind is not None and issubclass(kind, directory):
+                contacts[row.stream.integration_id].add(row.target_object_id)
+        if any(len(records) > 1 for records in contacts.values()):
+            return (
+                "These are two contacts of one directory, kept separate at its source: merged here, each sync would "
+                "overwrite one with the other. Merge them at the source, or remove one there; once the directory "
+                "has seen it gone, these two can be merged."
+            )
+        return None
+
+    def adoption_blocker(
+        self,
+        person: Person,
+        *,
+        link: RecordLink,
+        parsed: ParsedContact,
+        lookup: EmailLookup | None = None,
+        replaces: Sequence[RecordLink] = (),
+    ) -> str | None:
+        """Return why ``link``'s directory may not bind its contact ``parsed`` to the existing ``person``, or ``None``.
+
+        Adopting a person is an access change: the directory becomes one of their
+        statement sources and its contact readers read them. Every limit must hold
+        (rulings R2 and R9), each read from rows loaded here under the contact
+        locks the caller holds, never from the objects passed in: the link's
+        stream is pull-only; the person is live (neither trashed nor merged away)
+        and no account's own; no address the contact carries is a person
+        account's sign-in address in any spelling (``lookup.sign_in``), whichever
+        address found the person and whether or not the account has a person;
+        the directory's owner holds ``adopt`` on them (their owner or an editor of their party:
+        no platform-admin arm), checked for that user though sync runs as system
+        work; no other contact of the directory names them, a tombstoned one
+        included, since its statements are keyed by integration, not by link
+        (the links of the records ``replaces`` folded into this one are this
+        contact's own); and no live link of a stream that writes back names them,
+        which would publish what this source states about them. ``lookup`` is
+        the page's (:meth:`lookup_emails`) and keeps each verdict, so the target
+        decision and the ingest that binds the person admit them once; without
+        one the contact's addresses are looked up here.
+        :meth:`ingest_contact` calls it for every person new to its link where
+        the link's directory adopts (``DirectoryBackend.adopts_existing_people``).
+        """
+
+        stream = link.stream
+        if stream.direction != StreamDirection.PULL:
+            return "A directory that writes back adopts nobody."
+        emails = [value for value, _label, _preferred in parsed.emails]
+        lookup = self.lookup_emails(emails, lookup=lookup)
+        if (person.pk, link.pk) in lookup.verdicts:
+            return lookup.verdicts[person.pk, link.pk]
+        candidate = apps.get_model("parties", "Person")._base_manager.filter(pk=person.pk).first()
+        owner = stream.integration.owner
+        refusal = None
+        if candidate is None or candidate.is_trashed or candidate.merged_into_id is not None:
+            refusal = "The person is no longer live."
+        elif candidate.user_id is not None:
+            refusal = "The person is a user account's own."
+        elif lookup.signs_in(emails):
+            refusal = "An address of the contact is a user account's sign-in address."
+        elif owner is None or not candidate.with_actor(owner).has_access("adopt"):
+            refusal = "The directory's owner may not adopt the person."
+        else:
+            naming = self._naming_links([person.pk]).exclude(pk__in=[link.pk, *(row.pk for row in replaces)])
+            if any(row.stream.integration_id == stream.integration_id for row in naming):
+                refusal = "Another contact of the directory is the person."
+            elif any(row.stream.writes_back for row in naming.observing()):
+                refusal = "A stream that writes back names the person."
+        lookup.verdicts[person.pk, link.pk] = refusal
+        return refusal
+
+    def _target_is_new[M: models.Model](
+        self,
+        link: RecordLink,
+        model: type[M],
+        target: M | None,
+        *,
+        replaces: Sequence[RecordLink] = (),
+        readmitted: bool,
+    ) -> bool:
+        """Return whether ``target``, the ``model`` row the caller decided ``link`` lands on, needs admission.
+
+        Binding a link lends its party to the directory's contact readers, so a
+        target must be a ``model`` row, and a link that holds a live row
+        (:meth:`holding_links`) keeps it: an ingest never rebinds it. Its own row,
+        or one a replaced link hands over, needs no admission; ``None`` mints
+        one. Any other row is new to the link, and its verb admits it or
+        refuses. Where a link returning from a tombstone is ``readmitted`` (the
+        person of a contact whose directory adopts), the row it named is new to
+        it too; where no rule admits a row (a directory that adopts nobody, an
+        organization), the link keeps its own through a tombstone. A link whose
+        row is trashed names nobody (:meth:`contact_people`).
+        """
+
+        if target is not None and not isinstance(target, model):
+            raise ValidationError(f"A contact target must be a Party of kind {model.__name__}.")
+        named = self._live_parties([link, *replaces], model)
+        holding = self.holding_links(link, replaces, readmitted=readmitted)
+        kept = named[link.pk] if link.pk in holding else None
+        if kept is not None and (target is None or kept.pk != target.pk):
+            raise ValidationError("A bound link keeps its target; ingestion never rebinds it.")
+        return target is not None and not any(
+            (row := named[pk]) is not None and row.pk == target.pk for pk in holding
+        )
+
+    def _adopted_through(self, party: Any, *, source: Any) -> Handle | None:
+        """Return the handle ``source``'s identity statement on ``party`` cites: the one an adoption found them by."""
+
+        handle_model = apps.get_model("parties", "Handle")
+        statements = party.statements.model
+        stated = (
+            statements._base_manager.filter(
+                subject_id=party.pk,
+                aspect="identity",
+                asserted_by=str(to_subject_ref(source)),
+                status=statements.StatementStatus.ASSERTED,
+                superseded__isnull=True,
+            )
+            .order_by("pk")
+            .values_list("evidence", flat=True)
+            .first()
+        )
+        ids = [
+            ref.id
+            for ref in (EvidenceReference.model_validate(value) for value in stated or ())
+            if ref.model.lower() == handle_model._meta.label_lower
+        ]
+        found = instances_from_public_ids(handle_model, ids[:1], queryset=handle_model._base_manager.all())
+        return cast("Handle", found[ids[0]].canonical()) if ids and ids[0] in found else None
+
+    def _withdraw_link(self, link: RecordLink, *, lookup: EmailLookup | None = None) -> int:
+        """Withdraw what ``link`` asserts on the person it leaves, their addresses and edges, never handing it on.
+
+        ``RecordLink.withdraw_statements`` moves a link's assertions to another
+        observing link of its source naming the same record; a contact link
+        leaving a person must withdraw them instead, or they stay asserted on
+        that person through the sibling. Every statement table a contact's link
+        states into is a person's (consumer groups included), an address's or a
+        relationship's. The email addresses it stated are marked changed in
+        ``lookup``, as landing them does. Returns how many it withdrew.
+        """
+
+        stated = self._stated_emails(link)
+        source = link.asserting_source()
+        tables = {
+            model: None
+            for owner in ("Person", "Address", "Relationship")
+            for model in apps.get_model("parties", owner).statement_models()
+        }
+        withdrawn = sum(model.objects.withdraw(source, link=link) for model in tables)
+        if lookup is not None:
+            lookup.changed.update(stated)
+        return withdrawn
+
+    def withdraw_contact(self, link: RecordLink, *, lookup: EmailLookup | None = None) -> int:
+        """Withdraw what a contact's ``link`` states as its record leaves the source, the party kept.
+
+        A tombstone's withdrawal (``RecordLink.withdraw_statements``: what
+        another observing link of the source evidences moves there). The email
+        addresses it stated are marked changed in ``lookup``, as landing them
+        does, so a later record of the page reads their holders again. Returns
+        how many it withdrew.
+        """
+
+        stated = self._stated_emails(link)
+        withdrawn = link.withdraw_statements()
+        if lookup is not None:
+            lookup.changed.update(stated)
+        return withdrawn
+
+    def _stated_emails(self, link: RecordLink) -> set[str]:
+        """Return the normalized email addresses ``link`` asserts: withdrawing it may change their holders."""
+
+        email = apps.get_model("parties", "Handle").Platform.EMAIL
+        statements = self.handle_statements()
+        asserted = statements.filter(link=link, status=statements.model.StatementStatus.ASSERTED)
+        return set(asserted.filter(handle__platform=email).values_list("handle__normalized_value", flat=True))
+
+    def contact_handle_ids(self, contacts: Iterable[ParsedContact | ParsedOrganization]) -> set[Any]:
+        """Return the handles the contacts' emails and phones name, every spelling of each (by normalized value).
+
+        The upsert path keys on the exact value, so two spellings of one address
+        can be two rows; a lock of an address's identities covers them all.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        values: defaultdict[str, set[str]] = defaultdict(set)
+        for contact in contacts:
+            for platform, points in (("email", contact.emails), ("phone", contact.phones)):
+                values[platform].update(handle_model.normalize_value(platform, item[0]) for item in points)
+        if not any(values.values()):
+            return set()
+        spelled = Q(pk__in=[])
+        for platform, normalized in values.items():
+            spelled |= Q(platform=platform, normalized_value__in=sorted(normalized))
+        with system_context(reason="parties.contact_handles"):
+            return set(handle_model.objects.filter(spelled).values_list("pk", flat=True))
 
     def lock_contact(
         self,
-        person: Any | None,
-        *,
-        parsed: ParsedContact | None = None,
+        *parties: Any | None,
+        parsed: ParsedContact | ParsedOrganization | None = None,
     ) -> None:
-        """Lock the mapped contact aggregate before a caller rechecks its base.
+        """Lock the mapped contact aggregates of ``parties`` before a caller rechecks or lands one.
 
-        Follow the shared Handle, Party, PartyStatement order before locking the
-        Person child and its mapped collections. The parent row lock also fences
-        inserts through its foreign keys while the page transaction is open.
+        Follow the shared Handle, Party, PartyStatement order (the handles the
+        parties' statements and ``parsed`` name first, every spelling of each:
+        :meth:`contact_handle_ids`) before locking each Person, Organization or
+        Party row given and its mapped collections. The parent row lock also
+        fences inserts through its foreign keys while the page transaction is
+        open. ``None`` entries are skipped.
         """
 
         associations = apps.get_model("parties", "Party").objects
-        handles = apps.get_model("parties", "Handle").objects
+        rows = sorted((party for party in parties if party is not None), key=lambda row: row.pk)
+        ids = [row.pk for row in rows]
         handle_ids = (
-            set(associations.handle_statements().filter(subject_id=person.pk).values_list("handle_id", flat=True))
-            if person is not None
+            set(associations.handle_statements().filter(subject_id__in=ids).values_list("handle_id", flat=True))
+            if ids
             else set()
         )
         if parsed is not None:
-            handle_ids.update(
-                handles.filter(
-                    Q(platform="email", value__in=[item[0] for item in parsed.emails])
-                    | Q(platform="phone", value__in=[item[0] for item in parsed.phones])
-                ).values_list("pk", flat=True)
-            )
-        associations.lock_identity_rows(
-            party_ids=(person.pk,) if person is not None else (),
-            handle_ids=handle_ids,
-        )
-        if person is None:
+            handle_ids.update(self.contact_handle_ids([parsed]))
+        associations.lock_identity_rows(party_ids=ids, handle_ids=handle_ids)
+        if not rows:
             return
         employee = apps.get_model("parties", "RelationshipKind").employee()
-        list(
-            apps.get_model("parties", "Person")
-            .objects.filter(
-                pk=person.pk,
-            )
-            .order_by("pk")
-            .lock_if_supported()
-        )
-        list(
-            apps.get_model("parties", "Address")
-            .objects.filter(
-                party_id=person.pk,
-            )
-            .order_by("pk")
-            .lock_if_supported()
-        )
+        for row in rows:
+            list(type(row).objects.filter(pk=row.pk).order_by("pk").lock_if_supported())
+        list(apps.get_model("parties", "Address").objects.filter(party_id__in=ids).order_by("pk").lock_if_supported())
         list(
             apps.get_model("parties", "Relationship")
-            .objects.filter(
-                party_id=person.pk,
-                kind=employee,
-                other_party__isnull=True,
-            )
+            .objects.filter(party_id__in=ids, kind=employee)
             .order_by("pk")
             .lock_if_supported()
         )
@@ -2510,18 +3163,20 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             )
         return result
 
-    def prepare_contact(self, parsed: ParsedContact) -> ParsedContact:
-        """Store fetched photo bytes before contact locks and name countries as stored.
+    def prepare_contact[V: ParsedContact | ParsedOrganization](self, parsed: V) -> V:
+        """Take a fetched contact's or organization's stored form before contact locks.
 
-        The photo is stored as the person's avatar (``File.objects.ingest_image``,
-        which refuses a non-image or oversized photo) and keeps its content address.
-        Addresses take their stored form
-        (:meth:`AddressManager.as_stored`), so the projection both sync sides compare
-        reads a card's "USA" as the stored "US".
+        Addresses take their stored form (:meth:`AddressManager.as_stored`), so the
+        projection both sync sides compare reads a source's "USA" as the stored
+        "US"; an organization has nothing else to prepare. A contact's photo is
+        stored as the person's avatar (``File.objects.ingest_image``, which refuses
+        a non-image or oversized photo) and keeps its content address.
         """
 
         addresses = apps.get_model("parties", "Address").objects
         parsed = replace(parsed, addresses=tuple(addresses.as_stored(address) for address in parsed.addresses))
+        if not isinstance(parsed, ParsedContact):
+            return parsed
         photo = parsed.photo
         if photo is None or photo.content_hash:
             return parsed
@@ -2559,6 +3214,127 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             raise ValidationError("The prepared contact photo is no longer available.")
         return avatar
 
+    def _land_handles(
+        self,
+        party: Any,
+        parsed: ParsedContact | ParsedOrganization,
+        *,
+        display_name: str,
+        source: Any,
+        link: Any,
+        created_by_id: Any,
+        replaces: Sequence[Any] = (),
+        through: Handle | None = None,
+        claims: Collection[str] = (),
+    ) -> set[str]:
+        """Assert the emails and phones ``link`` names for ``party``; withdraw the others it or ``replaces`` asserted.
+
+        Each handle dedupes on its value and keeps the label and preference the
+        source gives it, and the name the source gives its party (``display_name``;
+        a blank one keeps the handle's); the Party row is the assertion's evidence.
+        An email spelling ``through``'s address lands on that handle, the one an
+        adoption found ``party`` by, never on a second row of another spelling.
+        An email whose normalized value is in ``claims`` is someone else's
+        (:meth:`_contested_emails`): it is stated as a claim for review, below
+        ``Party.REVIEW_CONFIDENCE``, so it never resolves the handle, and the
+        handle's display fields stay its holder's. ``replaces`` are the links of
+        records a merge at the source folded into this one: a handle only they
+        asserted on ``party`` is withdrawn, never moved. Returns the normalized
+        email addresses it stated or withdrew, whose holders may have changed.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        handles = handle_model.objects
+        landed = set(
+            self.handle_statements()
+            .filter(
+                subject_id=party.pk,
+                link__in=[link, *replaces],
+                status=self.handle_statements().model.StatementStatus.ASSERTED,
+                handle__platform=handle_model.Platform.EMAIL,
+            )
+            .values_list("handle__normalized_value", flat=True)
+        )
+        supported = []
+        for platform, points in (("email", parsed.emails), ("phone", parsed.phones)):
+            for value, label, preferred in points:
+                normalized = handle_model.normalize_value(platform, value)
+                if through is not None and platform == through.platform and normalized == through.normalized_value:
+                    value = through.value
+                claim = platform == handle_model.Platform.EMAIL and normalized in claims
+                shown = {} if claim else {"display_name": display_name, "label": label, "is_preferred": preferred}
+                handle = handles.upsert(platform=platform, value=value, created_by_id=created_by_id, **shown)
+                mapped = {} if claim else {"label": label, "is_preferred": preferred}
+                dirty = [name for name, value in mapped.items() if getattr(handle, name) != value]
+                if dirty:
+                    for name in dirty:
+                        setattr(handle, name, mapped[name])
+                    handle.save(update_fields=(*dirty, "updated_at"))
+                confidence = self.model.CLAIM_CONFIDENCE if claim else 1.0
+                self.assert_handle(
+                    party, handle, asserted_by=source, link=link, evidence=[party], confidence=confidence
+                )
+                supported.append({"subject": party, "aspect": "handle", "handle": handle})
+                if platform == handle_model.Platform.EMAIL:
+                    landed.add(normalized)
+        for stating in (link, *replaces):
+            party.statements.withdraw_unsupported(source, supported, aspect="handle", link=stating)
+        return landed
+
+    def _contested_emails(
+        self, person: Person, parsed: ParsedContact, *, source: Any, lookup: EmailLookup
+    ) -> tuple[set[str], list[tuple[Person, Handle | None]]]:
+        """Return the contact's emails ``source`` may only claim for ``person``, and the people they name instead.
+
+        What a contact may state about an address depends on whom ``lookup``
+        (:meth:`lookup_emails`: :meth:`people_for_emails` on any basis, and the
+        addresses a person account signs in with) finds by it. One that names a
+        person other than ``person`` is theirs, unless ``person`` holds it too:
+        stating it in full would move it, and what is attributed to it, away from
+        them, so it is a claim for review, and each such person comes back once,
+        with the handle that names them, to be proposed as ``person``'s same
+        person. An account's sign-in address is the account's, whether or not it
+        has a person yet, unless that person is ``person``: a claim too. So is an
+        address a lapsed holder keeps (trashed, its statement of it current:
+        :meth:`lapsed_holders`), which a restore gives back to them; they are
+        not proposed. One ``source`` already claims on ``person`` stays a claim
+        until ``person`` holds it through another statement or a person confirms
+        the claim (either makes ``person`` its holder), so no lapse of its holder
+        (trashed, or its statement withdrawn) and no second claimant turns the
+        claim into a holding. Any other address is stated in full. Values are
+        normalized email addresses (``Handle.normalize_value``).
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        email = handle_model.Platform.EMAIL
+        claimed = set(
+            self.handle_statements()
+            .filter(
+                subject_id=person.pk,
+                asserted_by=str(to_subject_ref(source)),
+                status=self.handle_statements().model.StatementStatus.ASSERTED,
+                confidence__lt=self.model.REVIEW_CONFIDENCE,
+                handle__platform=email,
+            )
+            .values_list("handle__normalized_value", flat=True)
+        )
+        claims: set[str] = set()
+        others: dict[Any, tuple[Person, Handle | None]] = {}
+        for value, _label, _preferred in parsed.emails:
+            normalized = handle_model.normalize_value(email, value)
+            found = lookup.named(value)
+            if any(holder.basis == EmailBasis.HELD and holder.person.pk == person.pk for holder in found):
+                continue
+            rivals = [holder for holder in found if holder.person.pk != person.pk]
+            account = normalized in lookup.sign_in and not any(
+                holder.basis == EmailBasis.ACCOUNT and holder.person.pk == person.pk for holder in found
+            )
+            if rivals or account or lookup.lapsed.get(normalized) or normalized in claimed:
+                claims.add(normalized)
+            for holder in rivals:
+                others.setdefault(holder.person.pk, (holder.person, holder.handle))
+        return claims, list(others.values())
+
     def ingest_contact(
         self,
         parsed: ParsedContact,
@@ -2567,20 +3343,47 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         created_by_id: Any,
         link: Any,
         target: Person | None = None,
+        replaces: Sequence[Any] = (),
+        through: Handle | None = None,
+        lookup: EmailLookup | None = None,
     ) -> Any:
         """Assert one link's contact facts; preserve other sources and person preferences.
 
-        The link owns stable source identity, transport version and lossless bytes.
-        ``stream`` is the link's contacts stream as the page holds it, so its
-        container (the address book, whose folder belongs to the same directory)
-        and integration resolve once per page. Addresses are matched by their
-        normalized identity (``AddressManager.identity_key``), repeated equal
-        addresses included, so a respelled card address updates its row and keeps
-        what the card does not carry; removed members withdraw only this source's
-        statements instead of deleting rows.
+        The link owns the contact's source identity (its external key) and what the
+        source sent. ``stream`` is the link's contacts stream as the page holds it,
+        so its container (the address book, whose folder belongs to the same
+        directory) and integration resolve once per page. ``target`` is the person
+        the caller decided the contact is, ``None`` to mint one; a link holding a
+        live person keeps it (:meth:`_target_is_new`). A person new to the link
+        is refused unless its directory adopts
+        (``DirectoryBackend.adopts_existing_people``, off by default), and then
+        binds only as adoption admits it (:meth:`adoption_blocker`), under the
+        contact's locks, taken first. ``through`` is the handle an adoption
+        found ``target`` by: the identity statement cites it as evidence,
+        restated on every later record, and the contact's spelling of its address
+        lands on it. On a pull-only stream, whether or not its directory adopts,
+        ``lookup`` (the page's, :meth:`lookup_emails`; else one read here) says
+        who each address names: an email another person is linked to (holds it,
+        claims it, keeps it as a lapsed holder, or signs in with it) is only
+        claimed, for review, and each such live person is proposed here as the
+        contact's same person, the directory's one proposal for an address
+        (:meth:`_contested_emails`, :meth:`propose_directory_match`), so a
+        contact never moves an address away from anyone; the addresses it lands
+        are marked changed in the lookup. A link leaving a person
+        withdraws what it stated on them before it binds its new person (the
+        addresses it withdrew are read again before the contact's are judged),
+        and,
+        when the person it leaves is trashed, the proposals pairing them with
+        that person, or with whom its addresses now name. ``replaces`` are
+        the links of records a merge at the source folded into this one: whatever
+        they stated on the person that this record restates moves to ``link``
+        (statements are keyed by source, subject and aspect), and the rest is
+        withdrawn with this link's own unsupported handles, addresses and
+        employers. Addresses land through :meth:`AddressManager.land_addresses`
+        and the employer through :meth:`RelationshipManager.land_employment`;
+        removed members withdraw only this source's statements instead of
+        deleting rows.
         """
-        if not parsed.uid:
-            return None
         container = stream.container if stream.container_id is not None else None
         folder = container.target if container is not None else None
         folders = apps.get_model("parties", "Folder")
@@ -2590,113 +3393,183 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             or folder.directory_id != stream.integration_id
         ):
             raise ValidationError("Contact ingestion requires a link of its directory's address-book stream.")
-        if link.external_key != parsed.uid:
-            raise ValidationError("The contact does not match the observed link identity.")
         parsed = self.prepare_contact(parsed)
         people = apps.get_model("parties", "Person").objects
-        handles = apps.get_model("parties", "Handle").objects
-        addresses = apps.get_model("parties", "Address")
-        relationships = apps.get_model("parties", "Relationship")
         source = stream.integration
+        pull = stream.direction == StreamDirection.PULL
+        # The folder belongs to the stream's own directory, checked above.
+        adopts = pull and cast("Directory", folder.directory).backend.adopts_existing_people()
         with transaction.atomic():
-            linked_person = self.contact_person(link)
-            target = target or linked_person
-            if target is not None:
-                self.lock_contact(target, parsed=parsed)
+            self.lock_contact(target, parsed=parsed)
+            if adopts:
+                lookup = self.lookup_emails((value for value, _label, _preferred in parsed.emails), lookup=lookup)
+            new = self._target_is_new(link, people.model, target, replaces=replaces, readmitted=adopts)
+            if new and target is not None:
+                if not adopts:
+                    raise ValidationError(
+                        "This directory binds no existing person: a contact lands on its own person, on the person "
+                        "of a record it replaced, or on a new one."
+                    )
+                blocker = self.adoption_blocker(target, link=link, parsed=parsed, lookup=lookup, replaces=replaces)
+                if blocker is not None:
+                    raise ValidationError(blocker)
             person = target or people.create(
                 display_name=(parsed.display_name or parsed.family_name or people.model.PLACEHOLDER_NAME),
                 created_by_id=created_by_id,
             )
             parent = apps.get_model("parties", "Party")._base_manager.get(pk=person.pk)
+            through = through.canonical() if through is not None else self._adopted_through(parent, source=source)
+            left = link.target if link.target_object_id and link.target_object_id != str(parent.pk) else None
+            gone = left is not None and self.contact_people([link])[link.pk] is None
+            if left is not None:
+                # What the link stated on the person it leaves goes first.
+                self._withdraw_link(link, lookup=lookup)
             apps.get_model("integrate", "RecordLink").objects.bind_target(link, parent)
-            for subject, aspect, values in (
+            for subject, aspect, values, evidence in (
                 (
                     parent,
                     "identity",
                     {"display_name": (parsed.display_name or parsed.family_name or people.model.PLACEHOLDER_NAME)},
+                    [through] if through is not None else [],
                 ),
                 (
                     parent,
                     "contact",
                     {"notes": parsed.notes, "avatar": self.resolve_contact_photo(parsed.photo)},
+                    [],
                 ),
                 (
                     person,
                     "name",
                     {name: getattr(parsed, name) for name in person.statements.model.statement_aspects["name"].fields},
+                    [],
                 ),
-                (person, "dates", {"birthday": parsed.birthday, "anniversary": parsed.anniversary}),
+                (person, "dates", {"birthday": parsed.birthday, "anniversary": parsed.anniversary}, []),
             ):
-                subject.statements.set(aspect=aspect, values=values, asserted_by=source, link=link)
-            supported_handles = []
-            for platform, points in (("email", parsed.emails), ("phone", parsed.phones)):
-                for value, label, preferred in points:
-                    handle = handles.upsert(
-                        platform=platform,
-                        value=value,
-                        created_by_id=created_by_id,
-                        display_name=parsed.display_name,
-                        label=label,
-                        is_preferred=preferred,
-                    )
-                    mapped = {"label": label, "is_preferred": preferred}
-                    dirty = [name for name, value in mapped.items() if getattr(handle, name) != value]
-                    if dirty:
-                        for name in dirty:
-                            setattr(handle, name, mapped[name])
-                        handle.save(update_fields=(*dirty, "updated_at"))
-                    self.assert_handle(parent, handle, asserted_by=source, link=link, evidence=[parent])
-                    supported_handles.append({"subject": parent, "aspect": "handle", "handle": handle})
-            parent.statements.withdraw_unsupported(source, supported_handles, aspect="handle", link=link)
-            supported_addresses: list[Any] = []
-            stored = list(addresses._base_manager.filter(party_id=person.pk).order_by("pk"))
-            for parsed_address in parsed.addresses:
-                values = asdict(parsed_address)
-                key = addresses.objects.identity_key(values)
-                address = next(
-                    (
-                        row
-                        for row in stored
-                        if row.pk not in supported_addresses
-                        and addresses.objects.identity_key(
-                            {name: getattr(row, name) for name in addresses.objects.components}
-                        )
-                        == key
-                    ),
-                    None,
-                )
-                if address is None:
-                    address = addresses.objects.create(party_id=person.pk, created_by_id=created_by_id, **values)
-                address.statements.set(aspect="address", values=values, asserted_by=source, link=link)
-                supported_addresses.append(address.pk)
-            removed = addresses.statements.filter(link=link).exclude(subject_id__in=supported_addresses)
-            addresses.statements.withdraw(source, list(removed.values_list("subject_id", flat=True)), link=link)
-            employee = apps.get_model("parties", "RelationshipKind").employee()
-            if employee is None:
-                raise ValidationError("CardDAV employment sync requires the employee RelationshipKind master row.")
-            previous = relationships.statements.filter(link=link, subject__party_id=person.pk, subject__kind=employee)
-            edge = relationships._base_manager.filter(pk__in=previous.values("subject_id")).order_by("pk").first()
-            if parsed.organization:
-                if edge is None:
-                    edge = relationships.objects.create(
-                        party_id=person.pk, kind=employee, other_name=parsed.organization, created_by_id=created_by_id
-                    )
-                edge.statements.set(
-                    aspect="relationship",
+                subject.statements.set(
+                    aspect=aspect,
+                    values=values,
                     asserted_by=source,
                     link=link,
-                    values={
-                        "other_name": parsed.organization,
-                        "title": parsed.title,
-                        "notes": parsed.role,
-                        "started_at": None,
-                        "ended_at": None,
-                    },
+                    evidence=[EvidenceReference.of(row) for row in evidence],
                 )
-            elif edge is not None:
-                edge.statements.withdraw(source, link=link)
+            if pull:
+                # What the link withdrew from the person it left may have been all that held an address.
+                lookup = self.lookup_emails((value for value, _label, _preferred in parsed.emails), lookup=lookup)
+            claims, others = (
+                self._contested_emails(person, parsed, source=source, lookup=lookup)
+                if pull and lookup is not None
+                else (set(), [])
+            )
+            landed = self._land_handles(
+                parent,
+                parsed,
+                display_name=parsed.display_name,
+                source=source,
+                link=link,
+                created_by_id=created_by_id,
+                replaces=replaces,
+                through=through,
+                claims=claims,
+            )
+            if lookup is not None:
+                lookup.changed.update(landed)
+            for other, handle in others:
+                self.propose_directory_match(person, other, evidence=[link, *([handle] if handle is not None else [])])
+            if gone:
+                # What the link proposed for the trashed person it left is moot: its new person is, or is
+                # proposed as, them. A live person it left (refused on its return) stays proposed.
+                for other in (person, *(row for row, _handle in others)):
+                    self.withdraw_directory_match(left, other)
+            apps.get_model("parties", "Address").objects.land_addresses(
+                person,
+                parsed.addresses,
+                asserted_by=source,
+                link=link,
+                created_by_id=created_by_id,
+                replaces=replaces,
+            )
+            apps.get_model("parties", "Relationship").objects.land_employment(
+                person,
+                [Employment(parsed.organization, parsed.title, parsed.role)] if parsed.organization else [],
+                created_by_id=created_by_id,
+                asserted_by=source,
+                link=link,
+                replaces=replaces,
+            )
             person.refresh_from_db()
             return person
+
+    def ingest_organization(
+        self,
+        parsed: ParsedOrganization,
+        *,
+        stream: Any,
+        link: Any,
+        created_by_id: Any,
+        target: Organization | None = None,
+    ) -> Any:
+        """Assert one link's organization facts; preserve other sources and person decisions.
+
+        The organization counterpart of :meth:`ingest_contact`, for a directory
+        stream whose records are organizations. ``stream`` is the link's stream as
+        the page holds it: its integration's kind is read from the row in hand
+        (``Integration.declared_concrete_model``). ``target`` is the organization
+        the caller decided the record is, ``None`` to mint one; a link holding a
+        live organization keeps it, through a tombstone too, since no rule
+        admits it again (:meth:`_target_is_new`). Until matching an
+        existing organization is ruled, any other organization is refused: binding
+        one would lend it to the directory's contact readers and make the source
+        one of its statement sources with no admission rule. The record's locks
+        are taken before that decision, as a contact's are. The
+        link is bound before the facts are stated: identity, the legal identity,
+        handles and addresses, each withdrawing this link's statements it no
+        longer supports. The legal identity is stated whole (an omitted field is
+        stated empty, so legal name and domain move together) when the source
+        carries either field, and withdrawn when it carries neither, so the
+        sources that know it keep it.
+        """
+
+        kind = stream.integration.declared_concrete_model()
+        if link.stream_id != stream.pk or kind is None or not issubclass(kind, apps.get_model("parties", "Directory")):
+            raise ValidationError("Organization ingestion requires a link of its directory's stream.")
+        parsed = self.prepare_contact(parsed)
+        organizations = apps.get_model("parties", "Organization").objects
+        name = parsed.display_name or parsed.legal_name
+        source = stream.integration
+        with transaction.atomic():
+            self.lock_contact(target, parsed=parsed)
+            if self._target_is_new(link, organizations.model, target, readmitted=False):
+                raise ValidationError("Organizations are not matched yet: a record binds its own or a new one.")
+            organization: Any = target or organizations.create(
+                display_name=name or organizations.model.PLACEHOLDER_NAME, created_by_id=created_by_id
+            )
+            parent = apps.get_model("parties", "Party")._base_manager.get(pk=organization.pk)
+            apps.get_model("integrate", "RecordLink").objects.bind_target(link, parent)
+            parent.statements.set(
+                aspect="identity",
+                values={"display_name": name or organizations.model.PLACEHOLDER_NAME},
+                asserted_by=source,
+                link=link,
+            )
+            legal = organization.statements.model.statement_aspects["legal_identity"].fields
+            if any(getattr(parsed, field) for field in legal):
+                organization.statements.set(
+                    aspect="legal_identity",
+                    values={field: getattr(parsed, field) for field in legal},
+                    asserted_by=source,
+                    link=link,
+                )
+            else:
+                organization.statements.withdraw_unsupported(source, [], aspect="legal_identity", link=link)
+            self._land_handles(
+                parent, parsed, display_name=name, source=source, link=link, created_by_id=created_by_id
+            )
+            apps.get_model("parties", "Address").objects.land_addresses(
+                organization, parsed.addresses, asserted_by=source, link=link, created_by_id=created_by_id
+            )
+            organization.refresh_from_db()
+            return organization
 
 
 def _user_display_name(user: Any) -> str:
@@ -2706,6 +3579,19 @@ def _user_display_name(user: Any) -> str:
         if text := (candidate or "").strip():
             return text
     return str(user.pk)
+
+
+class Employment(NamedTuple):
+    """One employer a source names for a person, as :meth:`RelationshipManager.land_employment` lands it.
+
+    ``employer`` is the counterparty: a tracked Organization, or the free-text
+    name of one that is not tracked (``Relationship.other_name``). ``title`` and
+    ``notes`` are the edge's own (a vCard ``TITLE`` and ``ROLE``).
+    """
+
+    employer: Organization | str
+    title: str = ""
+    notes: str = ""
 
 
 class RelationshipManager[RelationshipT: Relationship](StatementSubjectManager[RelationshipT]):
@@ -2763,45 +3649,103 @@ class RelationshipManager[RelationshipT: Relationship](StatementSubjectManager[R
     def land_employment(
         self,
         person: Any,
+        employers: Iterable[Employment],
         *,
-        organization: str,
-        title: str,
-        kinds: dict[Any, Any],
         created_by_id: Any,
         asserted_by: Any,
         link: Any,
-        evidence: Any,
+        evidence: Iterable[Any] = (),
+        kinds: dict[Any, Any] | None = None,
+        replaces: Sequence[Any] = (),
     ) -> None:
-        """Land the free-text employee relationship shape when an employer is named."""
+        """State the employers ``link`` names for ``person``; withdraw the link's edges it no longer names.
 
-        organization = str(organization or "").strip()
-        if not organization:
-            return
+        An organization is the edge's tracked counterparty, one edge per pair
+        (``uq_relationship_edge``) that every source naming it states, taken with
+        an atomic get-or-create on that key. A free-text name is a value of the
+        link's own edge, not its identity: a name the link already states keeps its
+        edge, a new name renames in place an edge whose name the link no longer
+        states, and only then is an edge created, so a source keeps one edge per
+        employer it names. An employer named twice lands once, as its first
+        naming states it. A dropped employer loses only this link's statement;
+        rows are never deleted. Landing an employer first locks the person's
+        identity rows (``Party.lock_subject``, the shared Handle, Party order),
+        whatever the caller holds; a call naming none only withdraws, which locks
+        each edge it changes. ``evidence`` names the records supporting the
+        claims; ``kinds`` caches the employee kind across a batch. ``replaces`` are
+        the links of records a merge at the source folded into ``link``'s: their
+        edges are the link's own for reuse, and one it no longer names is withdrawn.
+        """
+
+        kinds = {} if kinds is None else kinds
         if "employee" not in kinds:
             kinds["employee"] = self.model._meta.get_field("kind").related_model.employee()
         kind = kinds["employee"]
+        named: dict[Any, Employment] = {}
+        for employment in employers:
+            if not employment.employer:
+                raise ValidationError("An employer is an organization or a non-empty name.")
+            employer = employment.employer
+            named.setdefault(employer if isinstance(employer, str) else ("organization", employer.pk), employment)
+        employers = list(named.values())
         if kind is None:
-            raise ValidationError("The employee RelationshipKind master row is required.")
-        edge, _ = self.get_or_create(
-            party=person,
-            other_party=None,
-            other_name=organization,
-            kind=kind,
-            defaults={"created_by_id": created_by_id},
+            if employers:
+                raise ValidationError("Employment requires the employee RelationshipKind master row.")
+            return  # Without the kind no employment edge exists to withdraw.
+        if employers:
+            person.lock_subject()
+        stating = (link, *replaces)
+        stated = dict(
+            self.model.statements.current()
+            .filter(link__in=stating, subject__party_id=person.pk, subject__kind=kind)
+            .values_list("subject_id", "other_name")
         )
-        edge.statements.set(
-            aspect="relationship",
-            asserted_by=asserted_by,
-            link=link,
-            evidence=[EvidenceReference.of(evidence)],
-            values={
-                "other_name": organization,
-                "title": str(title or ""),
-                "notes": "",
-                "started_at": None,
-                "ended_at": None,
-            },
-        )
+        names = {employment.employer for employment in employers if isinstance(employment.employer, str)}
+        # Only a free-text name reuses a stated edge row; a withdrawal needs the keys alone.
+        edges = self.model._base_manager.in_bulk(list(stated)) if names else {}
+        landed: dict[int, Any] = {}
+        for index, employment in enumerate(employers):
+            organization = employment.employer
+            if not isinstance(organization, str):
+                landed[index], _ = self.model._base_manager.get_or_create(
+                    party_id=person.pk,
+                    other_party=organization,
+                    kind=kind,
+                    defaults={"created_by_id": created_by_id},
+                )
+        # A free-text name takes an edge the link stated by name: its own first, then one to rename in place.
+        claimed = {edge.pk for edge in landed.values()}
+        pool = [edges[pk] for pk in sorted(edges) if stated[pk] and pk not in claimed]
+        own: dict[str | None, Any] = {}
+        for edge in pool:
+            own.setdefault(stated[edge.pk], edge)
+        spare = [edge for edge in pool if stated[edge.pk] not in names or own[stated[edge.pk]] is not edge]
+        for index, employment in enumerate(employers):
+            name = employment.employer
+            if isinstance(name, str):
+                landed[index] = (
+                    own.pop(name, None)
+                    or (spare.pop(0) if spare else None)
+                    or self.create(party_id=person.pk, kind=kind, other_name=name, created_by_id=created_by_id)
+                )
+        refs = [EvidenceReference.of(row) for row in evidence]
+        for index, employment in enumerate(employers):
+            landed[index].statements.set(
+                aspect="relationship",
+                asserted_by=asserted_by,
+                link=link,
+                evidence=refs,
+                values={
+                    "other_name": employment.employer if isinstance(employment.employer, str) else "",
+                    "title": employment.title,
+                    "notes": employment.notes,
+                    "started_at": None,
+                    "ended_at": None,
+                },
+            )
+        if dropped := sorted(set(stated) - {edge.pk for edge in landed.values()}):
+            for each in stating:
+                self.model.statements.withdraw(asserted_by, dropped, link=each)
 
 
 class FolderManager[FolderT: Folder](AngeeHistoryManager[FolderT]):
@@ -2827,3 +3771,122 @@ class FolderManager[FolderT: Folder](AngeeHistoryManager[FolderT]):
                 apps.get_model("integrate", "RecordLink").objects.bind_target(link, folder)
             folder.statements.set(aspect="identity", values={"name": name}, asserted_by=integration, link=link)
             return folder
+
+
+class DirectoryManager[DirectoryT: Directory](IntegrationManager[DirectoryT]):
+    """Connect directories: the one sequence every vendor's connect verb runs."""
+
+    def connect(
+        self,
+        owner: Any,
+        *,
+        backend_class: str,
+        display_name: str,
+        credential_kind: str,
+        material: dict[str, Any],
+        config: dict[str, Any] | None = None,
+    ) -> DirectoryT:
+        """Connect ``owner``'s account at a contact source, tested before anything is saved, and queue its first sync.
+
+        Called outside any transaction, since it reaches the network, and refused
+        inside one. ``owner`` must hold ``create`` on a directory
+        (``parties/directory``), checked first. ``backend_class`` is resolved
+        next, an unknown one refused as itself. ``config`` is what a person
+        submits, so this is where a directory's configuration is edited: it is
+        validated strictly against the backend's config model, and a setting the
+        model does not know is a ``ValidationError`` naming it (a save that
+        edits nothing keeps what is stored, and a reader ignores what it does
+        not know). A backend whose seeded vendor row is not loaded yet is an
+        operator refusal that says to load resources; any configuration error
+        building the unsaved credential (``credential_kind`` and its secret
+        ``material``) and directory then stays itself. The backend admits the credential and tests the connection
+        (``DirectoryBackend.test_connection``) outside any transaction, and its
+        refusal is a ``ValidationError`` carrying the backend's own operator
+        message, so a directory that could never sync is never saved. Then one
+        transaction, as system work, creates the directory (its vendor is the
+        backend's seeded one, ``IntegrationManager.build``) and a credential of
+        its own, named after the backend, ``display_name`` and the directory's id
+        so no connection or reconnect ever reuses one, connects the directory
+        with it (``Integration.attach_connection``, which enters connection
+        discovery) and claims the address the account signs in as as the owner's
+        own handle (``DirectoryBackend.account_address``); held by someone the
+        owner may not take it from, it is only claimed for review, and the
+        connection stands. Once that commits, the
+        first sync is requested if the directory is ready for work; a backend
+        whose discovery is pending gets its first sync from the discovery's
+        completion. A failure to queue it is logged, and the directory stays
+        connected for its next scheduled sync. A vendor's connect mutation calls
+        this; it has no GraphQL of its own.
+        """
+
+        if connection.in_atomic_block:
+            raise RuntimeError("Connecting a directory runs outside any transaction: its connection test is remote.")
+        resource_type = model_resource_type(self.model)
+        if resource_type is None or not check_new(
+            subject=to_subject_ref(owner), action="create", resource_type=resource_type
+        ).allowed:
+            raise PermissionDenied("This account may not connect a directory.")
+        credentials = apps.get_model("integrate", "Credential").objects
+        impl = self.model._meta.get_field("backend_class").resolve_class(backend_class)
+        submitted = dict(config or {})
+        impl.parse_config(submitted)
+        if impl.config_model is not None:
+            try:
+                impl.config_model.model_validate(submitted, extra="forbid")
+            except PydanticValidationError as error:
+                unknown = sorted(".".join(map(str, issue["loc"])) for issue in error.errors(include_url=False))
+                raise ValidationError({"config": f"Unknown settings: {', '.join(unknown)}."}) from None
+        if not self._vendor_loaded(impl):
+            # The backend's vendor is a seeded row (its master resource), absent until resources load.
+            raise ValidationError(
+                "This directory's vendor is not loaded on this server: run `manage.py resources load`, "
+                "then connect again."
+            )
+        fields = {
+            "backend_class": backend_class,
+            "owner": owner,
+            "display_name": display_name,
+            "config": submitted,
+            "created_by_id": owner.pk,
+        }
+        candidate = self.build(**fields, lifecycle=IntegrationLifecycle.CONNECTED)
+        name = f"{impl.label} — {display_name}"
+        unsaved = credentials.prepare_local_credential(owner, kind=credential_kind, name=name, material=material)
+        candidate.attach_connection(unsaved)
+        try:
+            candidate.test_connection()
+        except IntegrationError as error:
+            raise ValidationError(error.public_message) from error
+        with system_context(reason="parties.directory.connect"), transaction.atomic():
+            directory = self.build(**fields, lifecycle=IntegrationLifecycle.DISCONNECTED)
+            directory.save()
+            suffix = f" ({directory.sqid})"
+            limit = cast(int, credentials.model._meta.get_field("name").max_length) - len(suffix)
+            credential = credentials.create_local_credential(
+                owner, kind=credential_kind, name=f"{name[:limit]}{suffix}", material=material
+            )
+            directory.attach_connection(credential)
+            if address := directory.backend.account_address():
+                handles = apps.get_model("parties", "Handle").objects
+                handles.claim_control(
+                    owner,
+                    platform=handles.model.Platform.for_value(address),
+                    value=address,
+                    asserted_by=owner,
+                    evidence=[directory],
+                    display_name=display_name,
+                )
+        if directory.discovery_ready:
+            try:
+                directory.request_sync()
+            except Exception:  # noqa: BLE001 -- the committed directory stays connected; its next scheduled sync runs.
+                logger.warning("The first sync of directory %s could not be queued.", directory.pk, exc_info=True)
+        return directory
+
+    def _vendor_loaded(self, impl: Any) -> bool:
+        """Whether the seeded vendor row the backend ``impl``'s defaults name is loaded (or it names none)."""
+
+        slug = impl.effective_defaults().get("vendor")
+        vendors = self.model._meta.get_field("vendor").related_model
+        with system_context(reason="parties.directory.connect"):
+            return not isinstance(slug, str) or vendors._base_manager.filter(slug=slug).exists()

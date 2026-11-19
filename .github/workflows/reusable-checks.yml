@@ -258,6 +258,11 @@ jobs:
             tests/test_calendar_google_publish.py::test_moving_a_series_waits_on_an_override_a_push_is_binding_then_releases_its_link \
             tests/test_calendar_google_publish.py::test_an_edit_the_push_waits_on_to_bind_its_event_is_the_next_push \
             tests/test_parties_addressbook_upgrade.py::test_the_address_book_template_upgrades_in_one_postgresql_migration \
+            tests/test_parties_directory_backend.py::test_a_page_holds_every_handle_its_linked_people_carry_before_any_record_applies \
+            tests/test_parties_directory_backend.py::test_mail_landing_on_a_pages_address_waits_for_the_page \
+            tests/test_parties_directory_backend.py::test_a_merge_of_a_pages_person_waits_for_the_page \
+            tests/test_parties_directory_backend.py::test_a_confirmation_of_a_pages_address_waits_for_the_page \
+            tests/test_parties_directory_backend.py::test_an_account_adopting_a_pages_candidate_waits_for_the_page \
             tests/test_parties_same_as_concurrency.py \
             tests/test_agent_sessions.py tests/test_agent_sessions_concurrency.py \
             tests/test_integrate_discovery_concurrency.py \

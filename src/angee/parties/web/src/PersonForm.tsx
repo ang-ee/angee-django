@@ -56,6 +56,10 @@ export function personFields(t: ReturnType<typeof usePartiesT>, extraFields: Rea
       <Field name="family_name" label={t("person.field.familyName")} />
     </Group>
     <Field name="tags" />
+    <Group label={t("person.group.about")} columns={2}>
+      <Field name="occupation" label={t("person.field.occupation")} />
+      <Field name="languages" label={t("person.field.languages")} />
+    </Group>
     <Group label={t("person.group.details")} pane="personal-details" columns={2}>
       <Field name="additional_name" label={t("person.field.middleName")} />
       <Field name="nickname" label={t("person.field.nickname")} />

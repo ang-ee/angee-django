@@ -1,6 +1,17 @@
 // Knowledge-owned arms contributed to upstream resource definitions.
 // @rebac_package: knowledge
-// @rebac_schema_revision: 3
+// @rebac_schema_revision: 4
+
+// A party is bindable: its readers read a binding to it and its writers write one.
+// Parties cannot name knowledge (knowledge depends on messaging, which depends on
+// parties), so knowledge declares the record owner's arm here, as a record owner
+// above it declares its own.
+definition knowledge/record_binding {
+    relation party: parties/party // rebac:field=target
+
+    permission target_read = party->read
+    permission target_write = party->write
+}
 
 // Pages carry tags: adding or removing one needs write on the page, and a page's
 // tags are visible to its readers.

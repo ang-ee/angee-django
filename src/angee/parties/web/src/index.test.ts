@@ -4,13 +4,17 @@ import { MenuTree } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import { folderForm } from "./FolderForm";
-import parties from "./index";
+import parties, { DIRECTORIES_TOOLBAR } from "./index";
 
 const declaredMenus = composeAddons([{ id: parties.id, menus: parties.menus, routes: parties.routes }], { canonicalModelLabel: (model) => model }).menuComposition.logical;
 
 describe("parties addon manifest", () => {
   test("satisfies the rendered-addon invariants", () => {
     expect(() => expectValidBaseAddon(parties)).not.toThrow();
+  });
+
+  test("declares the directories toolbar its vendors contribute their connect verb to", () => {
+    expect(parties.containers?.[DIRECTORIES_TOOLBAR]).toEqual({});
   });
 
   test("lists contact folders beside the directories in their Settings category", () => {

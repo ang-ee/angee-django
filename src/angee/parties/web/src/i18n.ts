@@ -21,7 +21,10 @@ export const enPartiesMessages: Record<string, string> = {
   "person.tabs.addresses": "Addresses",
   "person.empty.handles": "No handles for this person yet.",
   "person.group.name": "Name",
+  "person.group.about": "About",
   "person.group.details": "Personal details",
+  "person.field.occupation": "Occupation",
+  "person.field.languages": "Languages",
   "common.notes": "Notes",
   "person.field.givenName": "Given name",
   "person.field.familyName": "Family name",
@@ -66,6 +69,9 @@ export const enPartiesMessages: Record<string, string> = {
   "directory.group.lastSync": "Last sync",
   "directory.action.sync": "Sync now",
   "directory.connect.menu": "Connect",
+  "directory.connect.submit": "Connect",
+  "directory.connect.submitting": "Connecting…",
+  "directory.connect.error": "Could not connect the directory.",
   "folder.empty": "No folders yet. A connected directory adds one for each address book it syncs.",
   "person.tabs.identity": "Identity",
   "person.tabs.circles": "Circles",
@@ -154,6 +160,9 @@ export const enPartiesMessages: Record<string, string> = {
   "merge.dismissing": "Saving decision…",
   "merge.mutationError": "Could not merge these records.",
   "merge.dismissError": "Could not save the keep-separate decision.",
+  "merge.selection.action": "Merge…",
+  "merge.selection.tooFew": "Select a second record to compare with this one.",
+  "merge.selection.tooMany": "Merge compares two records at a time. Select exactly two.",
   "person.action.merge": "Merge into…",
   "person.action.mergeOther": "Other party",
   "person.action.mergeOther.description": "Choose the duplicate record to compare with this person.",
@@ -200,3 +209,5 @@ export const enPartiesMessages: Record<string, string> = {
 };
 
 export const usePartiesT = createNamespaceT("parties", enPartiesMessages);
+
+export type PartiesT = ReturnType<typeof usePartiesT>;

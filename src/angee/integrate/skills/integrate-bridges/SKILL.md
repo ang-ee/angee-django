@@ -103,7 +103,10 @@ source addon contributes one adapter class, its registry key and its tests. Refe
    sequence=...)` per part, in any order, and never a version of your own: integrate orders the parts by sequence,
    then key, and the stream retains the ordered list and gives
    every change of it a new version (`SyncStreamManager.current` in `src/angee/integrate/models.py`), never a
-   bridge-side column. If a partition is itself a record of another
+   bridge-side column. A directory composes its consumers' `DirectoryMapping` classes into its contacts stream this
+   way (`DirectoryBackend.contacts_stream` in `src/angee/parties/backends.py`); a pull-only vendor backend only asks
+   its source for `mapped_fields()` and passes their values to `observe(..., row=...)`. If a partition is itself a
+   record of another
    stream (an address book, a calendar) → declare that parent stream with `holds_containers=True`, create the
    container row in its `apply_record`,
    report a complete listing's misses as `StreamPage.absent`, and declare one child per
@@ -112,8 +115,11 @@ source addon contributes one adapter class, its registry key and its tests. Refe
    container and retires the child of one that stops observing. `extract` returns one page and the cursor that
    covers it; the driver commits both. If the source is a mutable replica → return `RecordChange` rows and implement
    `enumerate_keys`, `read_keys` (set `supports_identity_reads = True`) and, for two-way, `local_changes` +
-   `write_back` (`src/angee/integrate/impl.py`). If the capability base already applies →
-   inherit `apply_record`; otherwise apply through the domain's idempotent ingest verb and return
+   `write_back` (`src/angee/integrate/impl.py`). If the capability base already builds and applies records
+   (`DirectoryBackend` in `src/angee/parties/backends.py`, `CalendarBackend` in `src/angee/calendar/backends.py`) →
+   implement its capability-named hooks (a directory's `extract_contacts`, `read_contacts` and `contact_keys`),
+   make payloads with its `observe` and pages with its `record_changes`, declare its `direction`, and inherit
+   `read_keys`, `enumerate_keys` and `apply_record`; otherwise apply through the domain's idempotent ingest verb and return
    `ApplyResult(target=...)` (`ChannelBackend.apply_record` in `src/angee/messaging/backends.py`). **Owner rule:**
    [Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts): the cursor commits with the records it
    covers, the driver alone promotes links, adapters never persist cursors or credentials.

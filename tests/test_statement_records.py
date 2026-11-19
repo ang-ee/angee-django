@@ -200,6 +200,43 @@ def test_statement_copy_dispatches_to_the_field_owner() -> None:
     assert isinstance(ProjectedSubject._meta.get_field("label"), ProjectedField)
 
 
+@isolate_apps("tests")
+def test_a_mapped_member_keeps_the_reverse_name_it_declares() -> None:
+    """Only a member mapped to a new foreign key that names its reverse gains an accessor."""
+
+    class Target(models.Model):
+        class Meta:
+            app_label = "tests"
+
+    class ClaimSubject(StatementsMixin, AngeeModel):
+        label = models.CharField(max_length=40)
+        target = models.ForeignKey(Target, null=True, on_delete=models.CASCADE, related_name="subjects")
+        statements = StatementRecords(
+            aspects={
+                "identity": Aspect(fields=("label", "target")),
+                "named": Aspect(
+                    member={
+                        "named": models.ForeignKey(Target, on_delete=models.PROTECT, related_name="%(class)s_claims")
+                    }
+                ),
+                "unnamed": Aspect(member={"unnamed": models.ForeignKey(Target, on_delete=models.PROTECT)}),
+            }
+        )
+
+        class Meta:
+            app_label = "tests"
+
+    statement = ClaimSubject.statements.model
+    reverse = Target._meta.get_field("claimsubjectstatement_claims")
+    assert (reverse.related_model, reverse.field.name) == (statement, "named")
+    assert {relation.name for relation in Target._meta.related_objects} == {"subjects", "claimsubjectstatement_claims"}
+    # A copied subject field keeps none, so it never takes the accessor its subject's field holds.
+    for name in ("unnamed", "target"):
+        assert statement._meta.get_field(name).remote_field.hidden, name
+    # The statement table's own history copies its columns as simple-history does.
+    assert statement.history.model._meta.get_field("named").remote_field.hidden
+
+
 # Survivorship over the ``tax`` aspect, whose precedence is PERSON, then SYSTEM_OF_RECORD, then every other kind.
 P, SOR, IMPORT, SEED = SourceKind.PERSON, SourceKind.SYSTEM_OF_RECORD, SourceKind.IMPORT, SourceKind.SEED
 _NOW = datetime(2026, 1, 1, tzinfo=UTC)
