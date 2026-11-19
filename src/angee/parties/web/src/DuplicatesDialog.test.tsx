@@ -46,6 +46,7 @@ const PREVIEWS = [
   {
     outcome: null,
     reason: "",
+    digest: "digest-ada",
     survivor: { id: "ada" },
     members: [
       member("ada", "Ada Lovelace", "ada@example.test", "2020-01-01T00:00:00Z"),
@@ -56,6 +57,7 @@ const PREVIEWS = [
   {
     outcome: "REFUSED",
     reason: "A person kept two of these records apart.",
+    digest: "",
     survivor: null,
     members: [
       member("grace", "Grace Hopper", "grace@example.test", "2020-02-01T00:00:00Z"),
@@ -66,6 +68,7 @@ const PREVIEWS = [
   {
     outcome: null,
     reason: "",
+    digest: "digest-joan",
     survivor: { id: "joan" },
     members: [
       member("joan", "Joan Clarke", "joan@example.test", "2020-04-01T00:00:00Z"),
@@ -114,7 +117,8 @@ describe("the batch merge dialog", () => {
     renderDialog();
 
     expect(await screen.findByText("Lovelace")).toBeTruthy();
-    expect(screen.getAllByText(message("duplicates.survives"))).toHaveLength(1);
+    // Ada's set and Joan's each name their survivor; the refused set names none.
+    expect(screen.getAllByText(message("duplicates.survives"))).toHaveLength(2);
     expect(screen.getByText("augusta@example.test")).toBeTruthy();
     expect(screen.getByText("Augusta")).toBeTruthy();
     expect(screen.getByText(message("duplicates.refused", { reason: "A person kept two of these records apart." }))).toBeTruthy();
@@ -132,7 +136,7 @@ describe("the batch merge dialog", () => {
     fireEvent.click(await screen.findByRole("button", { name: message("duplicates.confirm", { count: "1" }) }));
 
     expect(await screen.findByText(message("duplicates.outcome.merged", { name: "Joan Clarke" }))).toBeTruthy();
-    expect(mocks.merge).toHaveBeenCalledWith({ sets: [["joan", "joan-2"]], certain: false });
+    expect(mocks.merge).toHaveBeenCalledWith({ sets: [["joan", "joan-2"]], digests: ["digest-joan"], certain: false });
     expect(screen.getByText(message("duplicates.outcome.left"))).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: message("duplicates.done") }));
     expect(onClose).toHaveBeenCalledWith(true);
@@ -147,7 +151,9 @@ describe("the batch merge dialog", () => {
     fireEvent.click(cleanSet!);
     fireEvent.click(screen.getByRole("button", { name: message("duplicates.confirm", { count: "1" }) }));
 
-    await waitFor(() => expect(mocks.merge).toHaveBeenCalledWith({ sets: [["ada", "augusta"]], certain: false }));
+    await waitFor(() => expect(mocks.merge).toHaveBeenCalledWith({
+      sets: [["ada", "augusta"]], digests: ["digest-ada"], certain: false,
+    }));
   });
 
   test("a disagreement's compare link opens the pair's comparison in the same app", async () => {

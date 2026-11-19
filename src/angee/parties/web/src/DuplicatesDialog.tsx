@@ -84,7 +84,12 @@ export function DuplicatesDialog({ sets: opened, certain = false, notes = [], on
 
   const submit = React.useCallback(async () => {
     const sent = sending;
-    const response = await merge({ sets: sent.map((row) => row.members.map((member) => member.id)), certain });
+    // Each set's digest of what the person saw: a set that changed since is refused, to be looked at again.
+    const response = await merge({
+      sets: sent.map((row) => row.members.map((member) => member.id)),
+      digests: sent.map((row) => row.digest),
+      certain,
+    });
     const answered = response?.merge_duplicates;
     if (!answered) return;
     // One outcome answers each sent set, in the order sent.

@@ -583,3 +583,62 @@ def test_the_review_counts_say_how_many_pairs_and_how_many_certain_the_reader_ma
 
     assert (counts.pairs, counts.certain) == (5, 3)
     assert schema == {"pairs": 5, "certain": 3}
+
+
+def _renamed(owner: Any, pair: list[Any]) -> None:
+    del owner
+    with system_context(reason="duplicates digest rename"):
+        Person._base_manager.filter(pk=pair[1].pk).update(display_name="Zoe Renamed")
+
+
+def _readdressed(owner: Any, pair: list[Any]) -> None:
+    del owner, pair
+    with system_context(reason="duplicates digest readdress"):
+        Handle._base_manager.filter(value="digest@example.com").update(
+            value="moved@example.com", normalized_value="moved@example.com",
+        )
+
+
+def _restated(owner: Any, pair: list[Any]) -> None:
+    with system_context(reason="duplicates digest restate"):
+        handle = Handle._base_manager.get(value="digest@example.com")
+        Party.objects.assert_handle(pair[1], handle, asserted_by=owner)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        pytest.param(_renamed, id="a-name"),
+        pytest.param(_readdressed, id="a-handle"),
+        pytest.param(_restated, id="a-source"),
+    ],
+)
+def test_a_set_whose_shown_facts_changed_since_the_preview_is_refused(db: None, change: Any) -> None:
+    """The mutation echoes each set's digest of what the dialog showed; a changed set asks the person to look again."""
+
+    del db
+    owner = create_user("duplicates-digest-changed")
+    pair = _people(owner, "Zoe Example", "Zoe Example", value="digest@example.com")
+    ids = [[person.public_id for person in pair]]
+    (preview,) = Party.objects.preview_duplicates(actor=owner, sets=ids)
+
+    change(owner, pair)
+    (outcome,) = Party.objects.merge_duplicates(actor=owner, sets=ids, digests=[preview.digest])
+
+    assert (str(outcome.outcome), outcome.reason) == ("refused", Party.objects.CHANGED_REASON)
+    assert _merged_into(pair[1]) == [None]
+
+
+def test_an_unchanged_set_merges_with_the_digest_of_its_preview(db: None) -> None:
+    del db
+    owner = create_user("duplicates-digest-same")
+    pair = _people(owner, "Zoe Example", "Zoe Example", value="digest@example.com")
+    ids = [[person.public_id for person in pair]]
+    (preview,) = Party.objects.preview_duplicates(actor=owner, sets=ids)
+    (again,) = Party.objects.preview_duplicates(actor=owner, sets=ids)
+
+    (outcome,) = Party.objects.merge_duplicates(actor=owner, sets=ids, digests=[preview.digest])
+
+    assert preview.digest and preview.digest == again.digest
+    assert str(outcome.outcome) == "merged"
+    assert _merged_into(pair[1]) == [pair[0].pk]

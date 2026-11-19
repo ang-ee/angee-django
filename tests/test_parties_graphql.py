@@ -731,12 +731,13 @@ _PREVIEW = """query Preview($sets: [[ID!]!]!) {
     survivor { id }
     outcome
     reason
+    digest
     disagreements { field values shown }
   }
 }"""
 
-_MERGE = """mutation Merge($sets: [[ID!]!]!) {
-  merge_duplicates(sets: $sets, certain: true) { members outcome reason survivor { id } }
+_MERGE = """mutation Merge($sets: [[ID!]!]!, $digests: [String!]!) {
+  merge_duplicates(sets: $sets, certain: true, digests: $digests) { members outcome reason survivor { id } }
 }"""
 
 
@@ -757,7 +758,7 @@ def test_a_person_lists_previews_and_merges_a_certain_pair_through_the_schema(db
     console = _schema("console")
     sets = {"sets": [[older.sqid, newer.sqid]]}
 
-    anonymous = execute_schema(console, _MERGE, sets)
+    anonymous = execute_schema(console, _MERGE, {**sets, "digests": [""]})
     assert [error.message for error in anonymous.errors or ()] == ["Authentication required."]
 
     assert _data(execute_schema(console, _CERTAIN, user=owner))["certain_same_as_pairs"] == [
@@ -772,7 +773,9 @@ def test_a_person_lists_previews_and_merges_a_certain_pair_through_the_schema(db
         {"field": "display_name", "values": ["Zoë Example", "Zoe Example"], "shown": "Zoë Example"},
     ]
     assert {row["source_kind"] for row in preview["members"][1]["statements"]} == {"RULE"}
-    assert _data(execute_schema(console, _MERGE, sets, user=owner))["merge_duplicates"] == [
+    assert preview["digest"]
+    merge = {**sets, "digests": [preview["digest"]]}
+    assert _data(execute_schema(console, _MERGE, merge, user=owner))["merge_duplicates"] == [
         {"members": [older.sqid, newer.sqid], "outcome": "MERGED", "reason": "", "survivor": {"id": older.sqid}},
     ]
 

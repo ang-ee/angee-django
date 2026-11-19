@@ -151,7 +151,9 @@ each set that merges, the fields its records disagree on and the value that will
 show, leaving out a field the person's `read__<field>` gate hides on any record.
 Each set that may merge has its own Include toggle, off until the person ticks it
 when the set carries a warning (its records disagree, or one no longer matches its
-group), and the merge sends only the included sets; a
+group), and the merge sends only the included sets, each with the digest of what
+the dialog showed of it: a set whose shown names, addresses or sources changed
+since is refused under the lock and asks the person to look again; a
 person who wants to choose merges that pair on the compare page instead. A merge,
 batch or not, reverts from its changeset. A person's `anniversary` is a merge
 choice like their birthday; a party's `avatar` is not one yet. Merging a person
