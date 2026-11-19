@@ -103,7 +103,10 @@ source addon contributes one adapter class, its registry key and its tests. Refe
    sequence=...)` per part, in any order, and never a version of your own: integrate orders the parts by sequence,
    then key, and the stream retains the ordered list and gives
    every change of it a new version (`SyncStreamManager.current` in `src/angee/integrate/models.py`), never a
-   bridge-side column. If a partition is itself a record of another
+   bridge-side column. A directory composes its consumers' `DirectoryMapping` classes into its contacts stream this
+   way (`DirectoryBackend.contacts_stream` in `src/angee/parties/backends.py`); a pull-only vendor backend only asks
+   its source for `mapped_fields()` and passes their values to `observe(..., row=...)`. If a partition is itself a
+   record of another
    stream (an address book, a calendar) → declare that parent stream with `holds_containers=True`, create the
    container row in its `apply_record`,
    report a complete listing's misses as `StreamPage.absent`, and declare one child per

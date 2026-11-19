@@ -24,7 +24,7 @@ from rebac.roles import grant as grant_role
 
 from angee.base.models.identity import public_id_of
 from angee.integrate.states import LinkStatus, StreamDirection, StreamKind
-from angee.integrate.streams import StreamPage, advance_stream, reconcile_stream
+from angee.integrate.streams import StreamPage, advance_stream, open_stream, reconcile_stream
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.testing.models import Directory, Handle, Organization, Party, Person, RelationshipKind
 from angee.parties.backends import (
@@ -59,16 +59,26 @@ _GRACE = ParsedContact(
 
 @dataclass
 class Source:
-    """What the scripted source serves: its contacts, the ids each merge replaced, and what changed since a page."""
+    """What the scripted source serves: its contacts, the ids each merge replaced, and what changed since a page.
+
+    ``fields`` holds each contact's other source fields; the source answers only
+    those it is asked for, and ``requested`` records every request's field names.
+    """
 
     contacts: dict[str, ParsedContact] = field(default_factory=dict)
     replaced: dict[str, tuple[str, ...]] = field(default_factory=dict)
     deleted: set[str] = field(default_factory=set)
     changed: set[str] = field(default_factory=set)
+    fields: dict[str, dict[str, Any]] = field(default_factory=dict)
+    requested: list[tuple[str, ...]] = field(default_factory=list)
 
-    def put(self, key: str, contact: ParsedContact, *, replaces: tuple[str, ...] = ()) -> None:
+    def put(
+        self, key: str, contact: ParsedContact, *, replaces: tuple[str, ...] = (), fields: dict[str, Any] | None = None
+    ) -> None:
         self.contacts[key] = contact
         self.replaced[key] = replaces
+        if fields is not None:
+            self.fields[key] = fields
         self.changed.add(key)
 
 
@@ -98,8 +108,15 @@ class PullDirectoryBackend(DirectoryBackend):
         return (key for key in sorted(self.source.contacts) if after is None or key > after)
 
     def _payload(self, key: str) -> dict[str, Any] | None:
+        """Ask the source for the contact and the fields the mappings name, as a vendor's request would."""
+
         contact = self.source.contacts.get(key)
-        return None if contact is None else self.observe(contact, replaces=self.source.replaced.get(key, ()))
+        if contact is None:
+            return None
+        asked = self.mapped_fields()
+        self.source.requested.append(asked)
+        row = {name: value for name, value in self.source.fields.get(key, {}).items() if name in asked}
+        return self.observe(contact, replaces=self.source.replaced.get(key, ()), row=row)
 
 
 @dataclass
@@ -113,6 +130,12 @@ class Pull:
         result = advance_stream(self.stream, self.backend, page_bound=page_bound)
         self.stream = result.stream
         return result
+
+    def reopen(self) -> Any:
+        """Open the contacts stream against the backend's declaration now, as each sync cycle does."""
+
+        self.stream = open_stream(self.directory, CONTACTS, _BOOK, self.backend)
+        return self.stream
 
     def sweep(self) -> int:
         """Run one absence sweep to completion, one key per pulse; return the absences it observed."""

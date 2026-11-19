@@ -54,6 +54,27 @@ record of the page: it leaves the source's key walk, so the absence sweep
 tombstones its link. A two-way stream compares the person's own projection and
 keeps a vanished contact's statements.
 
+A consumer addon fills its own person columns from a pull-only directory's
+source fields in code, with a [directory mapping](backends.py)
+(`DirectoryMapping`): its donor of `parties.Person` declares the columns and the
+statement group that owns them, whose precedence decides against the person's
+own values, and its mapping names the backend, the source fields and a version,
+and is registered under its key in `ANGEE_DIRECTORY_MAPPING_CLASSES` from its
+`autoconfig.py`. The backend asks its source for the fields its mappings name
+(`DirectoryBackend.mapped_fields`) and passes their values to `observe`; each
+mapping's `project` keeps what may enter the system, and only those projections
+are kept, under the payload's `mappings` key, which is also part of the
+comparison, so a changed mapped value applies. After the contact's ingest, in
+its savepoint, each mapping states its values on the landed person, minted or
+adopted, through the contact's link, so withdrawing the link withdraws them.
+Each mapping is one part of the contacts stream's mapping: adding, removing,
+exchanging or re-versioning one replays every contact once. Without a mapping a
+backend asks for, keeps and compares exactly what it did before. A mapping of a
+backend that writes back, or of no registered backend, fails the system check.
+Known gap: a mapping that is no longer registered leaves what it stated asserted
+until its link is withdrawn, because its replay cannot tell which statements
+were its own.
+
 One function decides a contact's target (`DirectoryBackend._contact_target`),
 once, under the page's and the contact's locks: its own link's person, then a
 replaced link's, then, on a pull-only stream, an existing person one of its

@@ -6,7 +6,9 @@ discovered book as a folder, and each book's link is the container of its
 ``contacts`` stream, which syncs the way the backend declares
 (:attr:`DirectoryBackend.direction`). The base turns payloads into records and
 applies them; both sides compare one deterministic projection, and every inbound
-write composes the parties ingest owners. The manual backend declares no streams.
+write composes the parties ingest owners. A consumer's :class:`DirectoryMapping`
+adds source fields of a pull-only backend's contacts to that projection and
+states them on its own person columns. The manual backend declares no streams.
 """
 
 from __future__ import annotations
@@ -19,17 +21,31 @@ from typing import Any, ClassVar, cast
 
 from django.apps import apps
 
+from angee.base.implementations import ImplBase, resolve_all_impl_classes
 from angee.base.serialization import canonical_json_sha256
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl
-from angee.integrate.states import LinkStatus, StreamDefinition, StreamDirection, StreamKind, StreamPhase
+from angee.integrate.states import (
+    LinkStatus,
+    MappingContribution,
+    StreamDefinition,
+    StreamDirection,
+    StreamKind,
+    StreamPhase,
+)
 from angee.integrate.streams import ApplyResult, LocalChange, RecordChange, SemanticError, StreamPage
 
 ADDRESSBOOKS = "addressbooks"
 """The stream whose records are a directory's address books; each targets its folder."""
 CONTACTS = "contacts"
 """One address book's contacts; its stream's container is the book's link."""
+MAPPINGS = "mappings"
+"""The payload key holding what each :class:`DirectoryMapping` projected, by mapping key.
+
+A contact's payload and mapped payload carry it only while a mapping applies,
+so a backend without one keeps the payload it always had.
+"""
 
 
 @dataclass(frozen=True)
@@ -237,6 +253,59 @@ def organization_projection(organization: ParsedOrganization) -> dict[str, Any]:
     }
 
 
+class DirectoryMapping(ImplBase):
+    """Fill a consumer addon's own person columns from source fields of one pull-only directory backend.
+
+    The consumer declares the columns and the statement group that owns them on
+    a donor of ``parties.Person`` (its precedence decides against the person's
+    own values), and registers its mapping under the mapping's ``key`` from its
+    ``autoconfig.py``: ``"ANGEE_DIRECTORY_MAPPING_CLASSES.<key>": "<dotted.path>"``.
+    ``backend`` is the registry key of the directory backend whose contacts it
+    maps; that backend asks its source for ``fields`` too
+    (:meth:`DirectoryBackend.mapped_fields`). ``version`` is its part of the
+    contacts stream's mapping: adding, removing, exchanging or re-versioning a
+    mapping replays every contact once.
+
+    While extracting, :meth:`project` turns the source's values of ``fields``
+    into the values to state, dropping what must not enter the system: only its
+    result is kept, in the record's payloads, and a change of it is a change of
+    the record. After the contact's ingest, in its savepoint, :meth:`apply_record`
+    states them on the person the contact landed on, minted or adopted, through
+    the contact's link, so withdrawing the link withdraws them. Mappings apply in
+    key order, each stating its own group. A mapping states every field of its
+    group: a field it leaves out is stated as empty. A mapping of a backend that
+    writes back is refused at startup (``check_directory_mappings``).
+    """
+
+    registry_setting = "ANGEE_DIRECTORY_MAPPING_CLASSES"
+
+    backend: ClassVar[str] = ""
+    """The registry key of the pull-only directory backend whose contacts this maps."""
+    fields: ClassVar[tuple[str, ...]] = ()
+    """The source fields this mapping reads; its backend asks the source for them."""
+    version: ClassVar[int] = 1
+    """This mapping's version; raise it when :meth:`project` or :meth:`apply_record` changes what it states."""
+
+    def project(self, row: Mapping[str, Any]) -> dict[str, Any]:
+        """Return the JSON values to state from ``row``, the source's values of :attr:`fields` it sent.
+
+        Drop here whatever must not enter the system: the result is the only
+        trace of the source fields that the record keeps, in link history
+        without limit. Called while extracting, outside any transaction.
+        """
+
+        raise NotImplementedError("DirectoryMapping subclasses must implement project().")
+
+    def apply_record(self, person: Any, values: Mapping[str, Any], *, link: Any) -> None:
+        """State ``values`` (:meth:`project`'s result) on ``person`` through ``link``, asserted by its source.
+
+        For a donor's group ``"example"``: ``person.statements_for("example").set(aspect="example",
+        values=values, asserted_by=link.asserting_source(), link=link)``.
+        """
+
+        raise NotImplementedError("DirectoryMapping subclasses must implement apply_record().")
+
+
 class DirectoryBackend(BridgeImpl, HttpClientMixin):
     """An address-book stream, and one contacts replica per address book mapped through Party.ingest_contact.
 
@@ -248,7 +317,10 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
     ``addressbooks`` stream itself, builds every record and applies it. A backend
     that maps a wire identity of its own onto the keys builds its records itself,
     binds them through :meth:`local_states`, and reads keys through its own
-    :meth:`read_keys`.
+    :meth:`read_keys`. A pull-only backend supports consumer mappings
+    (:class:`DirectoryMapping`) by asking its source for :meth:`mapped_fields`
+    as well and passing their values to :meth:`observe` as ``row``, for every
+    payload it makes; the base does the rest.
     """
 
     registry_setting = "ANGEE_DIRECTORY_BACKEND_CLASSES"
@@ -307,6 +379,20 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
 
         return ""
 
+    def mappings(self) -> tuple[DirectoryMapping, ...]:
+        """Return the registered mappings of this backend's contacts (:class:`DirectoryMapping`), in key order."""
+
+        return tuple(mapping() for mapping in resolve_all_impl_classes(DirectoryMapping) if mapping.backend == self.key)
+
+    def mapped_fields(self) -> tuple[str, ...]:
+        """Return the source fields this backend's mappings name, sorted; empty while no mapping applies.
+
+        A backend asks its source for these beside its own, and nothing more,
+        and hands their values to :meth:`observe` as ``row``.
+        """
+
+        return tuple(sorted({name for mapping in self.mappings() for name in mapping.fields}))
+
     def discover(self) -> list[ParsedAddressbook]:
         """Return every address-book collection the source exposes."""
 
@@ -332,7 +418,11 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         """Declare the contacts stream an address-book link holds, in :attr:`direction`, writing nothing.
 
         The partition is the address book's key, the link's external key.
-        Integrate's absence sweep reads it daily (:meth:`contact_keys`).
+        Integrate's absence sweep reads it daily (:meth:`contact_keys`). Each of
+        the backend's :meth:`mappings` is one part of the stream's mapping, so a
+        change of the set replays every contact once; without one the stream
+        keeps its plain version. The parts share one sequence: mappings apply
+        in key order.
         """
 
         return StreamDefinition(
@@ -342,6 +432,9 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             direction=self.direction,
             reconcile_interval=timedelta(days=1),
             container=addressbook,
+            mapping_contributions=tuple(
+                MappingContribution(mapping.key, mapping.version, sequence=0) for mapping in self.mappings()
+            ),
         )
 
     def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
@@ -414,18 +507,29 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
 
         raise NotImplementedError("DirectoryBackend subclasses must implement contact_keys().")
 
-    def observe(self, contact: ParsedContact, *, replaces: Iterable[str] = ()) -> dict[str, Any]:
+    def observe(
+        self, contact: ParsedContact, *, replaces: Iterable[str] = (), row: Mapping[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Return the retained source payload of one contact, in the form parties stores.
 
         The contact takes its stored form first (photo stored, addresses as
         stored: ``PartyManager.prepare_contact``), so an unchanged source compares
         unchanged. ``replaces`` names the keys of the records a merge at the source
         folded into this one, in the source's order (the first one's person is the
-        survivor's: :meth:`apply_record`); the payload keeps each once. Call it
-        while extracting, outside any transaction.
+        survivor's: :meth:`apply_record`); the payload keeps each once. ``row``
+        holds the source's values of :meth:`mapped_fields`: each mapping projects
+        the ones it names, and the payload keeps only those projections, under
+        :data:`MAPPINGS`, never ``row`` itself. Call it while extracting, outside
+        any transaction.
         """
 
         payload: dict[str, Any] = {"contact": contact_projection(self._prepare_contact(contact))}
+        if mappings := self.mappings():
+            row = row or {}
+            payload[MAPPINGS] = {
+                mapping.key: mapping.project({name: row[name] for name in mapping.fields if name in row})
+                for mapping in mappings
+            }
         if replaced := list(dict.fromkeys(replaces)):
             payload["replaces"] = replaced
         return payload
@@ -436,10 +540,12 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         ``None`` is a record the source removed (a tombstone). A payload carrying
         ``error`` is one the backend could not map; the driver quarantines it under
         its key. Any other payload is one :meth:`observe` made: its ``contact``
-        projection is the remote side, and the source hash covers the whole payload.
-        A record the source merged away (a key another payload ``replaces``) is no
-        record here: it leaves the source's key walk, so the absence sweep
-        tombstones its link, and an identity read of it answers it gone.
+        projection, with the mappings' projections under :data:`MAPPINGS` when it
+        carries them, is the remote side, and the source hash covers the whole
+        payload. A record the source merged away (a key another payload
+        ``replaces``) is no record here: it leaves the source's key walk, so the
+        absence sweep tombstones its link, and an identity read of it answers it
+        gone.
         """
 
         links = stream.links.filter(external_key__in=list(payloads)).with_sync_evidence()
@@ -456,12 +562,15 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
                     )
                 )
             else:
+                mapped = payload["contact"]
+                if MAPPINGS in payload:
+                    mapped = {**mapped, MAPPINGS: payload[MAPPINGS]}
                 records.append(
                     RecordChange(
                         key,
                         dict(payload),
                         canonical_json_sha256(payload),
-                        mapped_payload=payload["contact"],
+                        mapped_payload=mapped,
                         target=target,
                         projection=projection,
                     )
@@ -657,7 +766,10 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         for a link leaving a trashed person, what it stated there and the
         proposals pairing that person. Each other person a replaced link names is
         proposed for the same-as review as the landed person's same person
-        (``PartyManager.propose_directory_match``). A tombstone
+        (``PartyManager.propose_directory_match``). Then each of the backend's
+        :meth:`mappings` the payload carries a projection of states it on the
+        landed person through the link (:meth:`DirectoryMapping.apply_record`),
+        in the same savepoint. A tombstone
         withdraws the link's statements while the party stays. A two-way stream's
         applied base is the person's projection; a
         pull-only stream's is the source's own (none for a tombstone), the side its
@@ -700,6 +812,10 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             )
             for other, tie in passed_over:
                 parties.propose_directory_match(target, other, evidence=[link, *([tie] if tie is not None else [])])
+            projections = record.source_payload.get(MAPPINGS, {})
+            for mapping in self.mappings():
+                if mapping.key in projections:
+                    mapping.apply_record(target, projections[mapping.key], link=link)
         if stream.direction == StreamDirection.PULL:
             return ApplyResult(target=target, mapped_payload=None if record.tombstone else record.mapped_payload)
         return ApplyResult(
