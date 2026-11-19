@@ -10,6 +10,7 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- The UX guard accepts manifest `vocabulary` field tones by structure while rejecting local tone maps and switches.
 - Authored row actions declare `toast.successTitle` and `toast.failureTitle`
   separately; `toast.description` remains the fallback failure reason. Callers
   migrate from the former shared `toast.title` so successful and refused verbs
