@@ -13,8 +13,7 @@
 {% if stack_flavor == "framework" and ingress_domain_value != "localhost" %}        until EDGE_IP=$$(getent hosts edge | awk 'NR==1 {print $$1}') && test -n "$$EDGE_IP"; do sleep 1; done
         EDGE_PROXY_CIDRS=$$(ip -4 route | awk '$$2 == "dev" && index($$1, "/") {printf "%s%s", sep, $$1; sep=" "}')
         test -n "$$EDGE_PROXY_CIDRS" || exit 1
-{% endif %}
-        cat >/etc/caddy/Caddyfile <<'CADDY'
+{% endif %}{# On the same line as the script's next line: a block scalar that opens with a blank line is re-saved by the operator as an unparsable `|4-`. #}        cat >/etc/caddy/Caddyfile <<'CADDY'
 {% if stack_flavor == "framework" and ingress_domain_value != "localhost" %}        {
           servers {
             trusted_proxies static EDGE_PROXY_CIDRS

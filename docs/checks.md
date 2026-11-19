@@ -601,6 +601,14 @@ Both maps came from local macOS arm64 runs of these commands (SQLite with
 (PostgreSQL 17.10) with `max_locks_per_transaction = 256`. Use them for relative
 balance and check actual CI wall times against the 60-minute limit.
 
+The [staging smoke](../.github/workflows/staging-smoke.yml) deploys a staging host on
+the runner's Docker the way a host does: `angee init -t staging` and `angee up` with
+the latest released CLI, with this commit's templates and framework slot and the
+messaging bridges as a public repository. It then waits for Django behind the SPA
+and signs the administrator in. It runs on pull requests that change the stack,
+project or workspace templates, the Django base image (which it then builds instead
+of pulling) or the root JS manifests, and on demand.
+
 Separate workflows enforce private-path exclusion and other repository policies.
 The [release workflow](../.github/workflows/release.yml) runs on pushes to `main`: it
 opens the Version Packages pull request from pending changesets once the
