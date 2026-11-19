@@ -20,8 +20,10 @@ live in code docstrings.
   when its body is over the cap or httpx2 cannot decode it, never reading past
   the cap, and still follows a redirect hop whose body is over the cap.
   `HttpRefusal.as_error` builds the
-  vendor's `IntegrationError`, with the vendor's own words and wait when it
-  states them, and a refusal's `cause` tells a
+  vendor's `IntegrationError`, with the vendor's own words, transience and wait
+  when it states them (a wait implies transience); a refusal keeps the answer's
+  headers, without credential or cookie headers and out of its `repr`, for a
+  vendor's own signal, and its `cause` tells a
   request not sent from one whose outcome is uncertain. A request the HTTP
   library will not build, a header value it cannot encode or will not send, is
   `RequestNotBuiltError`: not sent, permanent, worded as a request that could
@@ -29,7 +31,9 @@ live in code docstrings.
   quotes the value. Notion, the Google
   client (Drive and Calendar), ICS, GitHub and OAuth's JSON reads (discovery,
   userinfo, JWKS) moved onto it, and `HttpClient.get_json` is removed. GitHub's
-  refusals are now `IntegrationError`s, a 429 or 5xx transient; OIDC discovery
+  refusals are now `IntegrationError`s, a 429 or 5xx transient, and its rate
+  limit (a 403 or 429 with no requests remaining, or with a `Retry-After`)
+  transient until the window resets; OIDC discovery
   keeps a provider's 5xx or 429 transient instead of a permanent configuration
   error; Google's oversized and unreadable answers are no longer retried; a
   Notion page over the cap or unreadable is quarantined instead of stalling its

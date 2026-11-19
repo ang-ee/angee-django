@@ -145,9 +145,10 @@ source addon contributes one adapter class, its registry key and its tests. Refe
    (`ImapError` in `src/angee/messaging_integrate_imap/backend.py`); pass `transient=`/`retry_after=` for throttling.
    Over HTTP, `HttpRefusal` (`src/angee/integrate/http.py`) classifies every failed answer once: send with
    `self.http.request_model(method, url, model=..., error=lambda refusal: refusal.as_error(VendorError, "Vendor"))`.
-   The vendor states only its own cases, never a status table of its own: through that hand-off
-   (`as_error(error, service, *, public_message=None, retry_after=None)`: its words, and a wait its error body names,
-   used instead of the answer's `Retry-After`), or by building a status it adds as transient by hand. A refused
+   The vendor states only its own cases, never a status table of its own, through that hand-off
+   (`as_error(error, service, *, public_message=None, transient=None, retry_after=None)`: its words, a refusing status
+   it knows to be transient, and a wait its body or headers name, used instead of the answer's `Retry-After`), reading
+   their signals from the refusal's `status`, `body` and `headers` (a copy without credentials or cookies). A refused
    answer keeps its status even when its body is over the cap or cannot be decoded; one record's oversized or
    unreadable answer is that record's refusal.
    Record-level refusals raise `SemanticError` (quarantined, page continues); infrastructure errors propagate
