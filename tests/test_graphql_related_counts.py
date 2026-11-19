@@ -90,9 +90,14 @@ def test_an_unreadable_record_has_no_counts(schema, referenced):
 
 
 def count_and_reads(captured):
-    """A read's statements that count, and the others."""
+    """A read's counting statement, the record's host row selecting each ``group_<n>``, and the others.
+
+    The host row is ``count_related``'s own statement. Matching ``COUNT(`` alone would also take
+    REBAC's actor profile statement, which bounds its read with a count of its own.
+    """
     statements = [query["sql"] for query in captured.captured_queries]
-    return [sql for sql in statements if "COUNT(" in sql], [sql for sql in statements if "COUNT(" not in sql]
+    counting = [sql for sql in statements if 'AS "group_0"' in sql]
+    return counting, [sql for sql in statements if sql not in counting]
 
 
 @pytest.mark.django_db(transaction=True)
