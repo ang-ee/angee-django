@@ -2890,6 +2890,17 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             target = copy(self).sudo(reason="integrate.connection.lock_target").concrete_capability()
         return type(target).objects.lock_if_supported().get(pk=self.pk)
 
+    def lock_for_record_access(self) -> Self:
+        """Lock as bridge work does, the concrete row then its ancestors (:meth:`lock_capability`); reload this row.
+
+        A grant or an ownership transfer then takes integrate's lock order; the
+        reload keeps this row's own type, the resource its relations name.
+        """
+
+        with system_context(reason="integrate.integration.lock_for_record_access"):
+            self.lock_capability()
+        return super().lock_for_record_access()
+
     def sync_lock_key(self) -> LockKey:
         """Return the advisory task lock held by this capability's sync, live session and discovery work."""
 

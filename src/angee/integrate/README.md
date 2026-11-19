@@ -303,7 +303,9 @@ is the one place that takes a credential with the integrations it serves, for a
 re-entry, a reconnect, an adoption and a credential's deletion or disconnect
 (`Credential.lock_for_delete`); when what the credential serves changed between
 its two reads it releases every lock to a savepoint and takes them again in that
-order. A page's stream lock reads its integration without locking it.
+order. A grant or an ownership transfer of an integration takes its capability
+rows the same way (`Integration.lock_for_record_access`). A page's stream lock
+reads its integration without locking it.
 The worker runs
 `IntegrationImpl.discover_connection(credential) -> ConnectionDiscovery` outside
 transactions under the sync advisory lock. The result contains adapter-owned

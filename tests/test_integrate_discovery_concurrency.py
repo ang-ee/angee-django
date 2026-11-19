@@ -7,7 +7,7 @@ from django.db import connection, transaction
 from rebac import actor_context, system_context
 
 from angee.integrate.discovery import ConnectionDiscovery
-from tests.conftest import Credential, Integration, create_platform_admin
+from tests.conftest import Credential, Integration, create_platform_admin, create_user
 from tests.integrate_fixtures import ConnectionBridge
 from tests.lock_waits import submit, wait_for_lock
 from tests.test_integrate_discovery import bridge as bridge
@@ -72,23 +72,27 @@ def test_finish_commits_before_blocked_attach_and_new_attachment_clears_completi
     assert bridge.discovery_completed_at is None and bridge.next_sync_at is None
 
 
-@pytest.mark.parametrize("verb", ["resume", "retry_discovery"])
+@pytest.mark.parametrize("verb", ["resume", "retry_discovery", "transfer_ownership"])
 def test_parent_verb_waits_for_the_concrete_row_without_holding_the_parent(bridge, verb):
     with system_context(reason="test parent verb lock order"):
         if verb == "resume":
             bridge.pause()
-        else:
+        elif verb == "retry_discovery":
             bridge.config = {"discovery": "refusal"}
             bridge.save(update_fields=["config"])
             bridge.run_discovery(credential_pk=bridge.credential_id, generation=bridge.discovery_generation)
 
     # Operator verbs are actor-admitted (GraphQL is their only caller); Resume is admin-only.
     operator = create_platform_admin(f"lock-order-{verb}")
+    recipient = create_user(f"lock-order-{verb}-recipient")
 
     def operate():
         with actor_context(operator):
             row = Integration.objects.get(pk=bridge.pk)
-            getattr(row, verb)()
+            if verb == "transfer_ownership":
+                row.with_actor(operator).transfer_ownership(recipient)
+            else:
+                getattr(row, verb)()
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         with system_context(reason="test child-only worker lock"), transaction.atomic():
@@ -100,7 +104,7 @@ def test_parent_verb_waits_for_the_concrete_row_without_holding_the_parent(bridg
             Integration.objects.lock_if_supported().get(pk=bridge.pk)
         contender.result(timeout=10)
     bridge.refresh_from_db()
-    assert bridge.discovery_pending
+    assert bridge.owner_id == recipient.pk if verb == "transfer_ownership" else bridge.discovery_pending
 
 
 def test_reconsent_waits_for_resume_without_locking_its_source_credential(bridge):

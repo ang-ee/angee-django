@@ -58,7 +58,10 @@ live in code docstrings.
   an instance still pinned to that owner, who lost write with the row, and a
   pinned actor outranks the system context, so an owner's transfer of an
   integration running on their own credential was refused. The release now runs
-  on the locked capability row (`Integration.lock_capability`).
+  on the locked capability row (`Integration.lock_capability`). The transfer
+  also locked the parent row before the concrete one, the reverse of bridge
+  work; `Integration.lock_for_record_access` now takes the capability lock
+  first, for a transfer and a record grant alike.
 
 - `angee.workflows_integrate`: a sync step waits for a pending connection
   discovery instead of failing. The discovery refusal reached `bridge_io`'s
