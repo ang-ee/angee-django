@@ -16,6 +16,7 @@ from __future__ import annotations
 import gzip
 import json
 import socket
+import traceback
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
@@ -926,6 +927,97 @@ def test_a_request_with_an_error_factory_returns_any_status_and_refuses_what_it_
 
     assert oversized.value.refusal.cause == "oversized" and isinstance(oversized.value.__cause__, ResponseTooLargeError)
     assert causes == {"unreachable": (True, True), "not_sent": (True, True)}
+
+
+_KEY = "example-key-5f3a"
+"""An invented credential: no refusal may carry it in its message, its ``repr`` or its exception chain."""
+
+_API = "https://api.example.test/items"
+
+
+def _dial_the_real_http_stack(monkeypatch: pytest.MonkeyPatch, *refusals: BaseException) -> None:
+    """Send through the real pinned transport, httpcore2 and h11, with only DNS and the socket scripted.
+
+    ``mock_transport`` replaces the transport, so it never reaches h11's header validation. Here the raw dial
+    returns httpcore2's own ``MockStream`` answering one JSON page, or raises each of ``refusals`` in turn.
+    """
+
+    _resolve_to(monkeypatch, "93.184.216.34")
+    page = b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{"items":[]}'
+    queue = list(refusals)
+
+    def connect(self: Any, host: str, port: int, **kwargs: Any) -> httpcore2.NetworkStream:
+        if queue:
+            raise queue.pop(0)
+        return httpcore2.MockStream([page])
+
+    monkeypatch.setattr(httpcore2.SyncBackend, "connect_tcp", connect)
+
+
+def _texts(error: BaseException) -> Iterator[str]:
+    """Yield every text ``error`` carries: its rendered traceback, as a log or an error tracker records it, and the
+    ``str`` and ``repr`` of each link of its chain, a suppressed context included."""
+
+    yield "".join(traceback.format_exception(error))
+    link: BaseException | None = error
+    while link is not None:
+        yield str(link)
+        yield repr(link)
+        link = link.__cause__ or link.__context__
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(f"Bearer {_KEY} ", id="trailing-space-h11-will-not-send"),
+        pytest.param(f"Bearer {_KEY}\t", id="trailing-tab-h11-will-not-send"),
+        pytest.param(f"Bearer {_KEY}​", id="zero-width-space-that-cannot-be-encoded"),
+        pytest.param(f"Bearer {_KEY}", id="no-break-space-that-cannot-be-encoded"),
+    ],
+)
+def test_a_request_the_library_will_not_build_is_a_permanent_not_sent_refusal_that_keeps_no_header_value(
+    monkeypatch: pytest.MonkeyPatch, value: str,
+) -> None:
+    """The request could not be built: not sent, permanent, worded so, and none of the library's text is kept."""
+
+    _dial_the_real_http_stack(monkeypatch)
+    legal = {"Authorization": f"Bearer {_KEY}"}
+    # The path is real: the same request with a legal value is sent and answered.
+    assert HttpClient().request_model("GET", _API, headers=legal, model=_Page, error=_vendor_error) == _Page(items=[])
+
+    headers = {"Authorization": value}
+    with pytest.raises(_VendorError) as refused:
+        HttpClient().request_model("GET", _API, headers=headers, model=_Page, error=_vendor_error)
+    with pytest.raises(RequestNotSentError) as raw:
+        HttpClient().request("GET", _API, headers=headers)
+    with pytest.raises(RequestNotSentError) as streamed, HttpClient().stream("GET", _API, headers=headers):
+        pass
+
+    error, facts = refused.value, refused.value.refusal
+    assert (facts.cause, facts.status, error.transient, error.retry_after) == ("not_sent", None, False, None)
+    assert str(error) == "The request to Example API could not be sent as configured."
+    assert error.__cause__ is None
+    for failure in (facts.failure, raw.value, streamed.value):
+        assert isinstance(failure, RequestNotSentError) and not failure.transient
+        assert failure.__cause__ is None and failure.__context__ is None
+    for carrier in (error, raw.value, streamed.value):
+        assert not [text for text in _texts(carrier) if _KEY in text]
+    assert _KEY not in repr(facts)
+
+
+def test_a_refused_connection_stays_a_transient_not_sent_refusal_that_chains_its_cause(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A connection that could not be made can be outlived: transient, the usual words, its failure chained."""
+
+    _dial_the_real_http_stack(monkeypatch, ConnectionRefusedError("refused"))
+    with pytest.raises(_VendorError) as refused:
+        HttpClient().request_model("GET", _API, headers={"Authorization": f"Bearer {_KEY}"}, error=_vendor_error)
+
+    error = refused.value
+    assert (error.refusal.cause, error.transient, str(error)) == ("not_sent", True, "Example API could not be reached.")
+    assert error.__cause__ is error.refusal.failure
+    assert isinstance(error.__cause__, RequestNotSentError) and error.__cause__.transient
 
 
 def test_retry_after_dates_reach_the_refusal_of_a_bounded_download() -> None:

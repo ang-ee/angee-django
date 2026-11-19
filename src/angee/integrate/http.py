@@ -49,7 +49,13 @@ import httpx2
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
-from .errors import IntegrationError, RequestNotSentError, is_transient_failure, is_transient_status
+from .errors import (
+    IntegrationError,
+    RequestNotBuiltError,
+    RequestNotSentError,
+    is_transient_failure,
+    is_transient_status,
+)
 from .net import (
     AddressNotAllowedError,
     canonical_address,
@@ -198,9 +204,10 @@ class HttpRefusal:
     @property
     def cause(self) -> Literal["status", "not_sent", "unreachable", "oversized", "unreadable"]:
         """What stopped the request: a ``"status"``, or a failure. ``"not_sent"`` left no request bytes, so
-        even a write may be sent again; ``"unreachable"``, any other transport failure, may have taken effect;
-        ``"oversized"`` is a success answer over the byte cap; ``"unreadable"`` is a success answer whose body
-        httpx2 cannot decode or does not validate.
+        even a write may be sent again: a connection that could not be made, or a request the HTTP library
+        would not build (:class:`RequestNotBuiltError`); ``"unreachable"``, any other transport failure, may
+        have taken effect; ``"oversized"`` is a success answer over the byte cap; ``"unreadable"`` is a success
+        answer whose body httpx2 cannot decode or does not validate.
         """
 
         if self.status is not None:
@@ -218,7 +225,8 @@ class HttpRefusal:
         """Whether a later attempt can outlive this refusal: ``is_transient_status``, else ``is_transient_failure``.
 
         A transport failure can be outlived. An oversized or unreadable answer
-        cannot: the same request brings the same answer.
+        cannot: the same request brings the same answer. Nor can a request not
+        built: the same request fails the same way.
         """
 
         if self.status is not None:
@@ -228,6 +236,8 @@ class HttpRefusal:
     def public_message(self, service: str) -> str:
         """Return an operator message naming ``service`` that states only this refusal's facts."""
 
+        if isinstance(self.failure, RequestNotBuiltError):
+            return f"The request to {service} could not be sent as configured."
         cause = self.cause
         if cause in ("not_sent", "unreachable"):
             return f"{service} could not be reached."
@@ -345,12 +355,20 @@ class PinnedTransport(httpx2.HTTPTransport):
         pool._network_backend = _PinnedBackend(allow_private=allow_private)
 
     def handle_request(self, request: httpx2.Request) -> httpx2.Response:
-        """Classify only native connect/handshake failures as provably not sent."""
+        """Classify native connect/handshake failures, and a request h11 will not build, as provably not sent.
+
+        h11 refuses a header value before writing anything; that refusal is
+        :class:`RequestNotBuiltError`, raised apart from h11's error, whose text
+        quotes the value. A connect failure keeps its cause.
+        """
 
         try:
             return super().handle_request(request)
         except (httpx2.ConnectError, httpx2.ConnectTimeout) as error:
             raise RequestNotSentError() from error
+        except httpx2.LocalProtocolError:
+            pass
+        raise RequestNotBuiltError()
 
 
 class HttpClient:
@@ -594,10 +612,14 @@ class HttpClient:
         A non-success status is the answer even when its body is over the cap
         or httpx2 cannot decode it: the response, or a redirect hop that is
         still followed, keeps its status with an empty body.
+        A header value the HTTP library cannot encode or will not send raises
+        the permanent :class:`RequestNotBuiltError`.
         With ``error``, a transport failure and a success over the cap or
         whose body httpx2 cannot decode raise what ``error`` returns for their
         :class:`HttpRefusal` instead, chained to the failure the refusal keeps;
-        the response is returned whatever its status.
+        the response is returned whatever its status. A request not built
+        chains nothing: the library's text for it quotes the header value, which
+        can be a credential, so its refusal keeps only the owner's own failure.
         ``HttpRefusal.cause`` tells a request not sent from one that may already
         have taken effect.
         """
@@ -665,7 +687,8 @@ class HttpClient:
         except (httpx2.TransportError, httpx2.DecodingError, RequestNotSentError, ResponseTooLargeError) as failure:
             if error is None:
                 raise
-            raise error(HttpRefusal(failure=failure)) from failure
+            chained = None if isinstance(failure, RequestNotBuiltError) else failure
+            raise error(HttpRefusal(failure=failure)) from chained
         return response
 
     @overload
@@ -698,8 +721,10 @@ class HttpClient:
         policy's ``ValidationError`` propagate.
         """
 
-        sent = httpx2.Headers({"Accept": "application/json"})
-        sent.update(headers)
+        # Merged unencoded: ``request`` encodes the values, so one that cannot be is that request's refusal.
+        sent = dict(headers or {})
+        if not any(name.lower() == "accept" for name in sent):
+            sent["Accept"] = "application/json"
         response = self.request(
             method, url, headers=sent, json=json, allow_private=allow_private, max_bytes=max_bytes, timeout=timeout,
             error=error,
@@ -762,10 +787,19 @@ class HttpClientMixin:
 
 
 def _request_headers(headers: Mapping[str, str] | None, *, capped: bool) -> httpx2.Headers:
-    """Keep the URL's Host and request identity encoding for capped response reads."""
+    """Encode the caller's headers, keep the URL's Host and request identity encoding for capped response reads.
 
-    result = httpx2.Headers(headers)
-    result.pop("Host", None)
-    if capped:
-        result["Accept-Encoding"] = "identity"
-    return result
+    The one place a header value is encoded: one that cannot be is :class:`RequestNotBuiltError`, raised apart
+    from the encoder's error, which holds the value.
+    """
+
+    try:
+        result = httpx2.Headers(headers)
+    except UnicodeEncodeError:
+        pass
+    else:
+        result.pop("Host", None)
+        if capped:
+            result["Accept-Encoding"] = "identity"
+        return result
+    raise RequestNotBuiltError()

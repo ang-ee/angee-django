@@ -83,8 +83,23 @@ class RequestNotSentError(IntegrationError):
 
     transient = True
 
+    def __init__(
+        self, public_message: str = "The HTTP request was not sent; the connection could not be established.",
+    ) -> None:
+        super().__init__(public_message)
+
+
+class RequestNotBuiltError(RequestNotSentError):
+    """The HTTP library would not build the request as configured: a header value it cannot encode or will not send.
+
+    Nothing was written, so it is not sent; the same request fails the same way, so it is permanent. It never
+    chains the library's error, whose text quotes the header value, which can be a credential.
+    """
+
+    transient = False
+
     def __init__(self) -> None:
-        super().__init__("The HTTP request was not sent; the connection could not be established.")
+        super().__init__("The HTTP request was not sent; it could not be built as configured.")
 
 
 @dataclass(frozen=True, slots=True)

@@ -328,7 +328,11 @@ states its own cases through that hand-off: its words as `public_message`, and
 a wait its error body names as `retry_after`, used instead of the answer's
 `Retry-After`. It builds the error of a status it adds as transient by hand. A
 refusal keeps the failure that stopped its request: its `cause` tells a request
-`not_sent` from one `unreachable` after it may have been sent.
+`not_sent` from one `unreachable` after it may have been sent. A request the
+HTTP library will not build, a header value it cannot encode or will not send,
+is `not_sent` and permanent (`RequestNotBuiltError`), worded as a request that
+could not be sent as configured; it chains none of the library's text, which
+quotes the value, a credential perhaps.
 
 `IntegrationError(public_message, transient=…, retry_after=…)` owns the optional
 positive provider horizon. `RequestNotSentError` declares that connect, DNS or
