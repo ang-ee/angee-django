@@ -10,6 +10,14 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.integrate`: a disconnected integration waits for the discovery its
+  reconnect runs. A secret re-entered on a disconnected integration leaves
+  discovery unsettled until `connect` awaits it, but
+  `Integration.require_discovery_ready` took that for a discovery that failed
+  and refused permanently, so a queued reply failed for good. It now refuses
+  transiently ("Connection discovery runs when this integration is connected
+  again."), and delivery defers the send as it does for a pending discovery.
+
 - `angee.integrate`: one rule says which credential is derived. Once a source
   grant was removed by a path that skips its disconnect, `Integration.derived_credential_id`
   still called the attached credential derived while the manager's own query did

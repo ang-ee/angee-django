@@ -399,7 +399,8 @@ A run already admitted stops once discovery is pending. Every commit to a stream
 or its links takes the stream lock (`SyncStreamManager.lock_current`): a page, a
 push's reflection, a sweep's phase and absences, a retained failure, a conflict
 decision. There the stream's integration, read with the stream, is asked
-`require_discovery_ready()`: a pending discovery refuses transiently, and one that
+`require_discovery_ready()`: a pending discovery refuses transiently, and so does
+a disconnected integration's, which runs when it is connected again; one that
 finished without success refuses permanently with its own operator message. The
 driver asks again, on the integration as stored (one read), before each remote
 write (each write-back of a two-way page, each push candidate,

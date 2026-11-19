@@ -1221,6 +1221,22 @@ def test_a_derived_credential_whose_grant_was_lost_leaves_with_its_integration(b
         assert not Credential.objects.filter(pk=derived_pk).exists()
 
 
+def test_a_disconnected_integration_waits_for_the_discovery_its_reconnect_runs(bridge, sent_tasks):
+    with system_context(reason="test a secret re-entered while disconnected"):
+        assert settle(bridge)["ok"]
+        bridge.set_lifecycle("disconnected")
+        bridge.credential.replace_material({"api_key": "re-entered"})
+        bridge.refresh_from_db()
+        # Discovery did not run: it waits for the reconnect, which is not a failure.
+        assert not bridge.discovery_pending and not bridge.discovery_ready
+        with pytest.raises(IntegrationError, match="connected again") as waiting:
+            bridge.require_discovery_ready()
+        assert waiting.value.transient
+        bridge.set_lifecycle("connected")
+        assert bridge.discovery_pending
+        assert settle(bridge)["ok"] and bridge.discovery_ready
+
+
 def test_a_derived_credential_whose_grant_was_lost_is_still_derived(bridge, sent_tasks):
     with system_context(reason="test a derived credential after its grant went"):
         bridge.config = {"derived": True, "derived_name": "Shared resource"}
