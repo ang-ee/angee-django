@@ -83,7 +83,9 @@ statements on the ordered Party pair for every two live parties of one kind link
 to one address (`PartyManager.same_person_links`). A party is linked when it holds
 a handle of that normalized value, or when a source that states its own record (a
 person, a system of record, a directory, an import, a source's claim) names one for
-it in a standing statement, a claim below review confidence included. Any other
+it in a standing statement, a claim below review confidence included, whatever
+its evidence names (the handle, or the source's record link); a claim re-stated
+with more evidence is the same link and changes no pair. Any other
 rule or extraction, parties' own suggesters among them (a shared name, a domain, a
 twin spelling, a signature), links nobody until it is named, so a shared name alone
 proposes no one. Only an address that names one account links: an email address, a

@@ -878,3 +878,77 @@ def test_a_certain_merge_loses_no_value_the_survivor_leaves_empty(db: None) -> N
         survivor.display_name, survivor.nickname, survivor.given_name, survivor.notes, survivor.birthday,
         survivor.anniversary,
     ) == ("Zoë Example", "Zo", "Zoe", "Met at the gallery", date(1990, 2, 3), date(2015, 6, 7))
+
+
+def _record_link(name: str, key: str) -> Any:
+    """An importer's record link: a claim's evidence names the source record, not the handle."""
+
+    with system_context(reason="same_as an importer's record"):
+        channel = make_integration(name, model=Channel, backend_class="manual")
+        return RecordLink.objects.observe(current_stream(channel, "contacts", kind=StreamKind.RECORD_REPLICA), key)
+
+
+def _claim(party: Any, handle: Any, evidence: Any) -> Any:
+    with system_context(reason="same_as an importer's claim"):
+        return Party.objects.propose_claimed_handle_as_system(party, handle, evidence=evidence, reason="tests.claim")
+
+
+@pytest.mark.parametrize("cited", [pytest.param("handle", id="the-handle"), pytest.param("record", id="a-record-link")])
+def test_a_claim_links_its_party_whatever_its_evidence_names(db: None, cited: str) -> None:
+    """The pairing reads a claim's party, handle and source; the pair cites the handles that link the two."""
+
+    del db
+    owner = create_user(f"same-as-claim-evidence-{cited}")
+    handle = _address(owner)
+    holder = _holder(owner, handle)
+    with system_context(reason="same_as an imported party"):
+        claimant = Party._base_manager.create(display_name="A. Example", created_by=owner)
+    statement = _claim(claimant, handle, handle if cited == "handle" else _record_link("importer", "contact-1"))
+
+    assert [ref["model"].lower() for ref in statement.evidence] == [
+        "parties.handle" if cited == "handle" else "integrate.recordlink"
+    ]
+    assert _reconcile() == 1
+    assert _pairs() == [({holder.pk, claimant.pk}, (handle,))]
+
+
+def _pair_history(holder: Any, claimant: Any) -> tuple[Any, ...]:
+    """Every pair statement on the two, with its stance and recency, and the pair's own history size."""
+
+    with system_context(reason="same_as pair history"):
+        pair = Party.same_as.model._base_manager.get(left_id=min(holder.pk, claimant.pk))
+        stances = Party.same_as.model.statements.model
+        rows = tuple(
+            stances._base_manager.filter(subject=pair).order_by("pk").values_list("pk", "status", "rank", "updated_at")
+        )
+        return rows, stances.history.filter(subject_id=pair.pk).count(), type(pair).history.filter(id=pair.pk).count()
+
+
+@pytest.mark.parametrize("decision", [pytest.param("asserted", id="asserted"), pytest.param("kept", id="kept-apart")])
+def test_a_claim_restated_with_more_evidence_changes_no_pair(
+    db: None, django_capture_on_commit_callbacks: Any, decision: str,
+) -> None:
+    """A later record of the same claim lengthens its evidence; the pair changes only when a link comes or goes."""
+
+    del db
+    owner = create_user(f"same-as-claim-restated-{decision}")
+    handle = _address(owner)
+    holder = _holder(owner, handle)
+    with system_context(reason="same_as an imported party"):
+        claimant = Party._base_manager.create(display_name="A. Example", created_by=owner)
+    first = _claim(claimant, handle, _record_link("importer", "contact-1"))
+    assert _reconcile() == 1
+    if decision == "kept":
+        _kept_separate(owner, holder, claimant)
+    before = _pair_history(holder, claimant)
+
+    restated = _claim(claimant, handle, _record_link("importer-again", "contact-2"))
+    with django_capture_on_commit_callbacks(execute=True):
+        Party.objects.propose_same_person_as_system(claimant, holder, evidence=[handle], reason="tests.importer.page")
+
+    assert (restated.pk, len(restated.evidence)) == (first.pk, 2)
+    assert _reconcile() == 0
+    assert _pair_history(holder, claimant) == before
+    with system_context(reason="same_as decision readback"):
+        assert Party.same_as.kept_separate(holder, claimant) is (decision == "kept")
+    assert _pairs() == ([({holder.pk, claimant.pk}, (handle,))] if decision == "asserted" else [])
