@@ -198,7 +198,8 @@ class HttpRefusal:
     def cause(self) -> Literal["status", "not_sent", "unreachable", "oversized", "unreadable"]:
         """What stopped the request: a ``"status"``, or a failure. ``"not_sent"`` left no request bytes, so
         even a write may be sent again; ``"unreachable"``, any other transport failure, may have taken effect;
-        ``"oversized"`` is over the byte cap; ``"unreadable"`` is a success answer that does not validate.
+        ``"oversized"`` is over the byte cap; ``"unreadable"`` is a body httpx2 cannot decode, or a success
+        answer that does not validate.
         """
 
         if self.status is not None:
@@ -207,7 +208,7 @@ class HttpRefusal:
             return "not_sent"
         if isinstance(self.failure, ResponseTooLargeError):
             return "oversized"
-        if isinstance(self.failure, ValueError):
+        if isinstance(self.failure, (ValueError, httpx2.DecodingError)):
             return "unreadable"
         return "unreachable"
 
@@ -581,9 +582,10 @@ class HttpClient:
         encodes its response, httpx2 may decode a whole network chunk before the
         cap is checked: the cap bounds accepted decoded content, not peak decoder
         memory.
-        With ``error``, a transport failure and an oversized answer raise what
-        ``error`` returns for their :class:`HttpRefusal` instead, chained to the
-        failure the refusal keeps; the response is returned whatever its status.
+        With ``error``, a transport failure, an oversized answer and a body httpx2
+        cannot decode raise what ``error`` returns for their :class:`HttpRefusal`
+        instead, chained to the failure the refusal keeps; the response is
+        returned whatever its status.
         ``HttpRefusal.cause`` tells a request not sent from one that may already
         have taken effect.
         """
@@ -639,7 +641,7 @@ class HttpClient:
                     if not same_origin(destination, response.url):
                         raise RedirectOriginError("Redirects must retain the request origin.")
                     url = str(destination)
-        except (httpx2.TransportError, RequestNotSentError, ResponseTooLargeError) as failure:
+        except (httpx2.TransportError, httpx2.DecodingError, RequestNotSentError, ResponseTooLargeError) as failure:
             if error is None:
                 raise
             raise error(HttpRefusal(failure=failure)) from failure
@@ -668,8 +670,8 @@ class HttpClient:
 
         ``json`` is the body; ``Accept: application/json`` is sent unless
         ``headers`` names another. Every :class:`HttpRefusal` (a transport failure,
-        an answer over ``max_bytes``, a non-success status, one that does not
-        validate) raises what ``error`` returns for it: the caller's
+        an answer over ``max_bytes``, a non-success status, one that cannot be
+        decoded or does not validate) raises what ``error`` returns for it: the caller's
         ``IntegrationError`` (:meth:`HttpRefusal.as_error`), or a domain signal it
         owns (a ``FileNotFoundError`` for a 404). The URL gate's and address
         policy's ``ValidationError`` propagate.

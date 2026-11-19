@@ -711,6 +711,11 @@ def _answer(answer: httpx2.Response | Exception) -> Any:
             "Example API returned an unreadable response.", id="not-json",
         ),
         pytest.param(
+            httpx2.Response(200, headers={"Content-Encoding": "gzip"}, stream=httpx2.ByteStream(b"not gzip")),
+            "unreadable", None, False, None, "Example API returned an unreadable response.",
+            id="a-body-httpx2-cannot-decode",
+        ),
+        pytest.param(
             httpx2.Response(200, content=b"x" * 65), "oversized", None, False, None,
             "Example API returned an oversized response.", id="oversized-is-permanent",
         ),

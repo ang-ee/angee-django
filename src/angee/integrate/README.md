@@ -284,10 +284,11 @@ one pinned, size-capped request whose answer is validated into a Pydantic model;
 a capped request asks for an unencoded answer. Whatever brings it no usable
 answer is one `HttpRefusal`, classified once: a transport failure, a 429 or a
 5xx is transient and waits for the answer's `Retry-After`; any other status, an
-oversized answer and one that does not validate are permanent, because the same
-request brings the same answer. A whole-resource poll reads it again on its next
-run, a pager shrinks its page, and one record's oversized answer is that
-record's refusal, quarantined while the page of results continues. The vendor's
+oversized answer and one that cannot be decoded or does not validate are
+permanent, because the same request brings the same answer. A whole-resource
+poll reads it again on its next run, a pager shrinks its page, and one record's
+oversized or unreadable answer is that record's refusal, quarantined while the
+page of results continues. The vendor's
 `error=` factory turns the refusal into its `IntegrationError` with
 `HttpRefusal.as_error`, whose `public_message` names the service and nothing the
 answer said; the vendor words its own cases and adds its own transient statuses
