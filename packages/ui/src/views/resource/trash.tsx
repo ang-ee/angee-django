@@ -28,7 +28,7 @@ import { useActionResultRun } from "./action-result-run";
 import { useAuthoredResourceMutation } from "./authored-resource-mutation";
 import { RestoreRecord, TrashRecord } from "./documents";
 import { defineRowAction, type RowActionDeclaration } from "./RowActions";
-import { BULK_ACTION_LIMIT, useBulkAction, type BulkSelectionProps } from "./bulk-action";
+import { BULK_ACTION_LIMIT, type BulkSelectionProps } from "./bulk-action";
 
 /** The record permission that offers trash and restore — the shared verbs' authority.
  * @kind null
@@ -53,17 +53,18 @@ export type TrashPrompt = (name?: string) => Promise<{ reason: string } | null>;
 
 /**
  * The one trash confirmation: a danger dialog with an optional reason and a
- * cancel label that names the record when the caller knows its name. Domain
+ * cancel label that names the record when the caller knows its name, or counts
+ * the records when the caller supplies a bulk count. Domain
  * verbs with their own transport (record chatter) compose it before their
  * mutation; resource records use {@link useTrashRecord}.
  * @owner ModalsHost
  */
-export function useTrashPrompt(): TrashPrompt {
+export function useTrashPrompt(count?: number): TrashPrompt {
   const prompt = usePrompt();
   const t = useUiT();
   return React.useCallback<TrashPrompt>(async (name) => {
     const values = await prompt({
-      title: name ? t("trash.titleNamed", { name }) : t("trash.title"),
+      title: count !== undefined ? t("trash.bulkTitle", { count }) : name ? t("trash.titleNamed", { name }) : t("trash.title"),
       body: t("trash.body"),
       fields: [{
         name: "reason",
@@ -73,11 +74,11 @@ export function useTrashPrompt(): TrashPrompt {
         maxLength: TRASH_REASON_MAX_LENGTH,
       }],
       confirm: t("trash.confirm"),
-      cancel: name ? t("trash.cancelNamed", { name }) : t("trash.cancel"),
+      cancel: count !== undefined ? t("trash.bulkCancel", { count }) : name ? t("trash.cancelNamed", { name }) : t("trash.cancel"),
       danger: true,
     });
     return values ? { reason: (values.reason ?? "").trim() } : null;
-  }, [prompt, t]);
+  }, [count, prompt, t]);
 }
 
 export interface UseTrashRecordResult {
@@ -152,32 +153,34 @@ export function BulkTrashActions(props: BulkSelectionProps): React.ReactElement 
   return targetType && flag ? <TrashSelectionActions {...props} targetType={targetType} flag={flag} /> : null;
 }
 
-function TrashSelectionActions({ modelMetadata, selectedRows, onSucceeded, targetType, flag }: BulkSelectionProps & {
+function TrashSelectionActions({ modelMetadata, selectedRows, unprocessedCount, bulk, targetType, flag }: BulkSelectionProps & {
   targetType: string;
   flag: string;
 }): React.ReactElement {
   const t = useUiT();
-  const askTrash = useTrashPrompt();
   const resource = modelMetadata.resource;
   const declaresPermissions = Boolean(modelMetadata.fields.permissions);
-  const bulk = useBulkAction(resource, onSucceeded);
+  const selections = [false, true].map((restore) => ({
+    restore,
+    ids: selectedRows.flatMap((row) => {
+      const id = rowPublicId(row);
+      return id && allowsRecordPermission(row, TRASH_PERMISSION, declaresPermissions) && row[flag] === restore ? [id] : [];
+    }),
+  }));
+  const askTrash = useTrashPrompt(Math.min(selections[0]!.ids.length, BULK_ACTION_LIMIT));
   // No per-row cache invalidation or toast: the bulk owner settles the whole run.
   const options = { dataProviderName: resource.schemaName, errorNotification: false as const };
   const [trashRecord] = useAuthoredResourceMutation(TrashRecord, options);
   const [restoreRecord] = useAuthoredResourceMutation(RestoreRecord, options);
-  return <>{[false, true].map((restore) => {
-    const ids = selectedRows.flatMap((row) => {
-      const id = rowPublicId(row);
-      return id && allowsRecordPermission(row, TRASH_PERMISSION, declaresPermissions) && row[flag] === restore ? [id] : [];
-    });
+  return <>{selections.map(({ restore, ids }) => {
     if (!ids.length) return null;
     return <SelectionBar.Action key={String(restore)} surface="brand" pending={bulk.pending} disabled={bulk.blocked}
       onClick={() => {
         let reason = "";
         void bulk.run({
-          ids,
+          ids, unprocessedCount,
           confirm: restore ? undefined : async () => {
-            const answer = await askTrash(t("deletePreview.recordCount", { count: Math.min(ids.length, BULK_ACTION_LIMIT) }));
+            const answer = await askTrash();
             if (!answer) return false;
             reason = answer.reason;
             return true;
@@ -188,9 +191,10 @@ function TrashSelectionActions({ modelMetadata, selectedRows, onSucceeded, targe
               restore ? await restoreRecord(target) : await trashRecord({ ...target, reason }),
               restore ? "restore_record" : "trash_record",
             );
-            if (!outcome?.ok) {
-              const firstReason = Object.values(outcome?.validationErrors ?? {}).flat()[0];
-              throw new Error(firstReason || outcome?.message || t("action.noResult"));
+            if (!outcome) throw new Error(t("action.noResult"));
+            if (!outcome.ok) {
+              const firstReason = Object.values(outcome.validationErrors ?? {}).flat()[0];
+              return { status: "refused", reason: firstReason || outcome.message || t("action.noResult") };
             }
           },
           done: (count) => t(restore ? "trash.bulkRestored" : "trash.bulkDone", { count }),

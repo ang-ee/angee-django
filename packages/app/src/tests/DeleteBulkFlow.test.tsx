@@ -21,10 +21,6 @@ import {
   createRouter,
   } from "@tanstack/react-router";
 import {
-  QueryClient,
-  QueryClientProvider,
-  } from "@tanstack/react-query";
-import {
   createContext,
   useContext,
   useMemo,
@@ -57,6 +53,7 @@ import { ToastProvider } from "@angee/ui/feedback/index";
 import { DeletePreviewTree } from "@angee/ui/views/DeletePreviewTree";
 import { ListView, type ListColumn } from "@angee/ui/views/ListView";
 import { ResourceViewProvider } from "@angee/ui/views/resource-view-context";
+import { createUiTestProviders } from "@angee/ui/testing";
 
 const sdkMocks = vi.hoisted(() => ({
   rows: [
@@ -64,41 +61,19 @@ const sdkMocks = vi.hoisted(() => ({
     { id: "record-2", title: "Second record" },
   ] as Row[],
   mutate: vi.fn(),
-  invalidate: vi.fn(async () => undefined),
+  getList: vi.fn(),
 }));
 
-vi.mock("@angee/ui/runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/ui/runtime")>();
-  return {
-    ...actual,
-  };
-});
-
-vi.mock("@refinedev/core", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@refinedev/core")>();
-  return {
-    ...actual,
-    useList: () => ({
-      result: { data: sdkMocks.rows, total: sdkMocks.rows.length },
-      query: { isFetching: false, error: null, refetch: vi.fn() },
-    }),
-    useCustomMutation: () => ({
-      mutateAsync: async ({ values }: { values?: { id?: string; confirm?: boolean } }) => ({
-        data: { deleteRecordPreview: await sdkMocks.mutate(values ?? {}) },
-      }),
-      mutation: { isPending: false, error: null, reset: vi.fn() },
-    }),
-    useCustom: () => ({
-      result: { data: undefined },
-      query: { isFetching: false, error: null, refetch: vi.fn() },
-    }),
-    useCan: () => ({
-      data: { can: true },
-      isLoading: false,
-      error: null,
-    }),
-    useInvalidate: () => sdkMocks.invalidate,
-  };
+const { Provider, clearClients } = createUiTestProviders({
+  apiUrl: "test://delete-bulk",
+  queryClientConfig: { defaultOptions: { queries: { retry: false }, mutations: { retry: false } } },
+  dataProvider: {
+    getList: async () => {
+      sdkMocks.getList();
+      return { data: sdkMocks.rows, total: sdkMocks.rows.length };
+    },
+    custom: async ({ payload }) => ({ data: { deleteRecordPreview: await sdkMocks.mutate(payload ?? {}) } }),
+  },
 });
 
 const columns = [
@@ -112,7 +87,8 @@ describe("bulk delete flow", () => {
       await nextTask();
     });
     sdkMocks.mutate.mockReset();
-    sdkMocks.invalidate.mockClear();
+    clearClients();
+    sdkMocks.getList.mockClear();
     sdkMocks.rows = [
       { id: "record-1", title: "First record" },
       { id: "record-2", title: "Second record" },
@@ -204,6 +180,75 @@ describe("bulk delete flow", () => {
     expect(sdkMocks.mutate).not.toHaveBeenCalled();
   });
 
+  test.each([false, true, null, undefined])("trashable bulk Delete admits only an explicitly trashed row (%s)", async (removed) => {
+    sdkMocks.rows = [
+      { id: "record-1", title: "First record", removed },
+      { id: "record-2", title: "Second record", removed: false },
+    ];
+    sdkMocks.mutate.mockImplementation(async ({ id }: { id: string }) => previewFor(id, id));
+    const model = RECORD_METADATA.types.RecordType!;
+    const metadata = withTestResourceInventory({ types: { RecordType: { ...model,
+      fields: { ...model.fields, removed: { name: "removed", kind: "scalar", scalar: "Boolean" } },
+      resource: { ...model.resource, fields: [{ name: "removed", kind: "scalar", scalar: "Boolean",
+        readable: true, trashable: true, aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false }] },
+    } } });
+    render(<TestUrlState><ModelMetadataProvider metadata={metadata}>
+      <ListView resource="example.Record" columns={columns} />
+    </ModelMetadataProvider></TestUrlState>);
+    for (const checkbox of await screen.findAllByRole("checkbox", { name: "Select row" })) fireEvent.click(checkbox);
+    if (removed !== true) {
+      expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+      expect(sdkMocks.mutate).not.toHaveBeenCalled();
+      return;
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    const dialog = await screen.findByRole("dialog", { name: "Delete 1 record?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(sdkMocks.mutate.mock.calls).toEqual([[{ id: "record-1", confirm: false }], [{ id: "record-1", confirm: true }]]);
+    expect(screen.getByText("1 selected")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+  });
+
+  test("Delete disables Clear throughout preview and confirmation", async () => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    sdkMocks.mutate.mockImplementation(async ({ id }: { id: string }) => { await pending; return previewFor(id, id); });
+    render(<TestUrlState><ListView resource="example.Record" columns={columns} /></TestUrlState>);
+    fireEvent.click((await screen.findAllByRole("checkbox", { name: "Select row" }))[0]!);
+    const clear = screen.getByRole<HTMLButtonElement>("button", { name: "Clear" });
+    const remove = screen.getByRole<HTMLButtonElement>("button", { name: "Delete" });
+    fireEvent.click(remove);
+    expect(clear.disabled).toBe(true);
+    expect(remove.disabled).toBe(true);
+    fireEvent.click(clear);
+    fireEvent.click(remove);
+    await act(async () => { finish(); });
+    const dialog = await screen.findByRole("dialog");
+    expect(sdkMocks.mutate).toHaveBeenCalledTimes(1);
+    expect(clear.disabled).toBe(true);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(clear.disabled).toBe(false));
+    expect(screen.getByText("1 selected")).toBeTruthy();
+  });
+
+  test("Delete reports refused and failed confirmations separately", async () => {
+    sdkMocks.rows.push({ id: "record-3", title: "Third record" });
+    sdkMocks.mutate.mockImplementation(async ({ id, confirm }: { id: string; confirm?: boolean }) => {
+      if (confirm && id === "record-1") return { ...previewFor(id, id), has_blockers: true, refusals: ["Stop active work first."] };
+      if (confirm && id === "record-2") throw new Error("Connection lost.");
+      return previewFor(id, id);
+    });
+    render(<TestUrlState><ListView resource="example.Record" columns={columns} /></TestUrlState>);
+    for (const checkbox of await screen.findAllByRole("checkbox", { name: "Select row" })) fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
+    await screen.findByText("1 refused: Stop active work first. 1 failed: Connection lost.");
+    expect(screen.getByText("Deleted 1 record")).toBeTruthy();
+    expect(screen.getByText("2 selected")).toBeTruthy();
+    expect(sdkMocks.getList).toHaveBeenCalledTimes(2);
+  });
+
   test("clicking Delete runs dry-run preview and opens the tree dialog", async () => {
     sdkMocks.mutate.mockResolvedValue(previewFor("record-1", "First record"));
 
@@ -291,8 +336,8 @@ describe("bulk delete flow", () => {
     expect(screen.getByText("1 selected")).toBeTruthy();
     const rows = screen.getAllByRole("checkbox", { name: "Select row" });
     expect(rows.map((row) => row.getAttribute("aria-checked"))).toEqual(["true", "false"]);
-    expect(screen.getByText("1 failed Stop active work first.")).toBeTruthy();
-    expect(sdkMocks.invalidate).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("1 refused: Stop active work first.")).toBeTruthy();
+    expect(sdkMocks.getList).toHaveBeenCalledTimes(2);
   });
 
   test.each(["refused", "missing", "transport"])("a %s confirm outcome keeps that row selected", async (outcome) => {
@@ -314,7 +359,7 @@ describe("bulk delete flow", () => {
     expect(screen.getByText("Deleted 1 record")).toBeTruthy();
     expect(screen.getAllByRole("checkbox", { name: "Select row" }).map((row) => row.getAttribute("aria-checked")))
       .toEqual(["true", "false"]);
-    expect(sdkMocks.invalidate).toHaveBeenCalledTimes(1);
+    expect(sdkMocks.getList).toHaveBeenCalledTimes(2);
     expect(screen.getAllByRole("button", { name: "Dismiss notification" })).toHaveLength(1);
   });
 
@@ -352,7 +397,7 @@ describe("bulk delete flow", () => {
     expect(sdkMocks.mutate).not.toHaveBeenCalledWith(expect.objectContaining({ id: "record-27" }));
     expect(screen.getByText("2 selected")).toBeTruthy();
     expect(screen.getByText("2 records were not processed and remain selected.")).toBeTruthy();
-    expect(sdkMocks.invalidate).toHaveBeenCalledTimes(1);
+    expect(sdkMocks.getList).toHaveBeenCalledTimes(2);
   });
 
   test("confirming deletes and clears selection", async () => {
@@ -484,25 +529,13 @@ function TestScreen(): ReactElement | null {
 }
 
 function TestLayout({ children }: { children: ReactNode }): ReactElement {
-  const queryClient = useMemo(
-    () =>
-      new QueryClient({
-        defaultOptions: {
-          queries: { retry: false },
-          mutations: { retry: false },
-        },
-      }),
-    [],
-  );
   return (
     <AppRuntimeProvider runtime={{ icons: baseIcons }}>
-      <QueryClientProvider client={queryClient}>
+      <Provider metadata={RECORD_METADATA}>
         <OperationDocumentsProvider documents={RECORD_OPERATION_DOCUMENTS}>
-          <ModelMetadataProvider metadata={RECORD_METADATA}>
-            <ToastProvider>{children}</ToastProvider>
-          </ModelMetadataProvider>
+          <ToastProvider>{children}</ToastProvider>
         </OperationDocumentsProvider>
-      </QueryClientProvider>
+      </Provider>
     </AppRuntimeProvider>
   );
 }

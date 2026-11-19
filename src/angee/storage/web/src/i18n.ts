@@ -60,8 +60,6 @@ export const enStorageMessages: Record<string, string> = {
   "file.facts": "{type} · {size} · uploaded {date} by {by}",
   "file.factsAnonymous": "{type} · {size} · uploaded {date}",
   "file.inTrash": "In trash",
-  "file.trashTitle": 'Move "{name}" to the trash?',
-  "file.trashBody": "You can restore it from the drive's Trash.",
   "newFolder.placeholder": "Folder name",
   "newFolder.nameLabel": "New folder name",
   "newFolder.create": "Create",
@@ -94,7 +92,7 @@ export const enStorageMessages: Record<string, string> = {
   "file.rename": "Rename",
   "file.download": "Download",
   "file.restore": "Restore",
-  "file.trash": "Trash",
+  "file.trash": "Move to trash",
 
   // File detail record form — section + field labels.
   "file.details": "Details",

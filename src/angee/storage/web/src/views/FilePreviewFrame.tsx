@@ -3,7 +3,7 @@ import { useAuthoredQuery } from "@angee/refine";
 import { useModelMetadata, type Row } from "@angee/metadata";
 import {
   Button, Card, CardContent, CommandBand, ControlBandProvider, EmptyState, ErrorBanner, formatDate, formatSize,
-  Glyph, LoadingPanel, RecordHeader, useConfirm, type RecordChromeContext, type RecordNavigation,
+  Glyph, LoadingPanel, RecordHeader, type RecordChromeContext, type RecordNavigation,
 } from "@angee/ui";
 
 import { StorageFileById } from "../data/documents";
@@ -33,15 +33,13 @@ export function FilePreviewFrame({
   fileNavigation: RecordNavigation | null;
 }): ReactElement {
   const t = useStorageT();
-  const confirm = useConfirm();
   // The file verbs settle their own failures; the pane closes only on a completed trash.
   const lifecycle = async (id: string, restore: boolean, name: string) => {
     if (restore) {
       await fileActions.restore(id);
       return;
     }
-    if (!(await confirm({ title: t("file.trashTitle", { name }), body: t("file.trashBody"), confirm: t("file.trash"), danger: true }))) return;
-    if (await fileActions.trash(id)) closeDetail();
+    if (await fileActions.trash(id, name)) closeDetail();
   };
   const metadata = useModelMetadata(FILE_MODEL);
   const query = useAuthoredQuery(StorageFileById, { id }, { models: [FILE_MODEL] });

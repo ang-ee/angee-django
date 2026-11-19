@@ -397,8 +397,8 @@ describe("FormView", () => {
     expect(screen.queryByRole("menuitem", { name: "Publish" })).toBeNull();
   });
 
-  test("page menu verbs precede containers, then Archive, Trash and Delete", async () => {
-    sdkMocks.record = { ...sdkMocks.record, is_archived: false, is_trashed: false, permissions: ["write", "delete"] };
+  test("page menu verbs precede containers, then Archive, Restore and Delete", async () => {
+    sdkMocks.record = { ...sdkMocks.record, is_archived: false, is_trashed: true, permissions: ["write", "delete"] };
     renderWithProviders(<FormView resource="notes.Note" id="note-1"
       deleteAction={{ canDelete: true, isPending: false, onDelete: vi.fn() }}>
       <Field name="title" label="Title" title />
@@ -412,7 +412,7 @@ describe("FormView", () => {
     await screen.findByRole("menuitem", { name: "Archive" });
     const menu = within(screen.getByRole("menu"));
     expect(menu.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
-      "Download", "Export", "Archive", "Move to trash", "Delete",
+      "Download", "Export", "Archive", "Restore", "Delete",
     ]);
     expect(menu.getAllByRole("separator")).toHaveLength(1);
   });
@@ -432,8 +432,9 @@ describe("FormView", () => {
     expect(sdkMocks.recordSelection).toContain("is_trashed");
   });
 
-  test.each([undefined, null, [], ["read"], ["write"], ["delete"]].map((permissions) => ({ permissions })))("declared permissions gate form writes, Trash and Delete ($permissions)", async ({ permissions }) => {
-    sdkMocks.record = { ...sdkMocks.record, is_archived: false, is_trashed: false,
+  test.each([undefined, null, [], ["read"], ["write"], ["delete"]].flatMap((permissions) =>
+    [false, true].map((trashed) => ({ permissions, trashed }))))("declared permissions gate form writes and removal ($permissions, trashed=$trashed)", async ({ permissions, trashed }) => {
+    sdkMocks.record = { ...sdkMocks.record, is_archived: false, is_trashed: trashed,
       ...(permissions === undefined ? {} : { permissions }) };
     renderWithProviders(<FormView resource="notes.Note" id="note-1"
       deleteAction={{ canDelete: true, isPending: false, onDelete: vi.fn() }}>
@@ -447,15 +448,15 @@ describe("FormView", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
     await screen.findByRole("menuitem", { name: "Inspect" });
     expect(Boolean(screen.queryByRole("menuitem", { name: "Archive" }))).toBe(Boolean(permissions?.includes("write")));
-    for (const name of ["Move to trash", "Delete"]) {
+    for (const name of [trashed ? "Restore" : "Move to trash", "Delete"]) {
       const action = screen.queryByRole("menuitem", { name });
-      expect(Boolean(action)).toBe(Boolean(permissions?.includes("delete")));
+      expect(Boolean(action)).toBe(Boolean(permissions?.includes("delete")) && (name !== "Delete" || trashed));
       if (action) expect(action.getAttribute("aria-disabled")).not.toBe("true");
     }
   });
 
-  test("a form without a permissions field offers writes, Trash and Delete", async () => {
-    sdkMocks.record = { ...sdkMocks.record, is_archived: false, is_trashed: false };
+  test.each([false, true])("a form without permissions still gates Delete on trash state (%s)", async (trashed) => {
+    sdkMocks.record = { ...sdkMocks.record, is_archived: false, is_trashed: trashed };
     const metadata = recordActionsMetadata();
     const resource = metadata.labels["notes.Note"]!.resource;
     renderWithProviders(<FormView resource="notes.Note" id="note-1"
@@ -464,9 +465,23 @@ describe("FormView", () => {
     </FormView>, recordActionsMetadata({ fields: resource.fields?.filter((field) => field.name !== "permissions") }));
     await screen.findByDisplayValue("First");
     fireEvent.click(screen.getByRole("button", { name: "Actions" }));
-    for (const name of ["Archive", "Move to trash", "Delete"]) {
+    for (const name of ["Archive", trashed ? "Restore" : "Move to trash"]) {
       expect(await screen.findByRole("menuitem", { name })).toBeTruthy();
     }
+    expect(Boolean(screen.queryByRole("menuitem", { name: "Delete" }))).toBe(trashed);
+  });
+
+  test.each([undefined, null])("a missing trash state cannot offer hard Delete (%s)", async (is_trashed) => {
+    sdkMocks.record = { ...sdkMocks.record, is_trashed, permissions: ["delete"] };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1"
+      deleteAction={{ canDelete: true, isPending: false, onDelete: vi.fn() }}>
+      <Field name="title" label="Title" title />
+      <Action id="inspect" label="Inspect" placement="menu" run={vi.fn()} />
+    </FormView>, recordActionsMetadata());
+    await screen.findByRole("heading", { name: "First" });
+    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
+    await screen.findByRole("menuitem", { name: "Inspect" });
+    expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
   });
 
   test.each([false, true])("a custom submit owns saves and receives no generic archive patch (%s)", async (archived) => {

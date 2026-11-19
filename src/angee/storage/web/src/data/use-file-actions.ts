@@ -1,7 +1,7 @@
 import { type Row } from "@angee/metadata";
 import {
   useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
-import { useBusyRun, useDeleteWithPreview, useTrashRecord } from "@angee/ui";
+import { useBusyRun, useTrashRecord } from "@angee/ui";
 import {
   refineResourceName,
   useModelMetadata,
@@ -13,8 +13,8 @@ import type {
 
 export interface FileActions {
   busy: boolean;
-  /** Soft-delete a file into the Trash; resolves whether it was trashed. */
-  trash: (id: string) => Promise<boolean>;
+  /** Confirm and move a file into the Trash; resolves whether it was trashed. */
+  trash: (id: string, name?: string) => Promise<boolean>;
   /** Pull a file back out of the Trash; resolves whether it was restored. */
   restore: (id: string) => Promise<boolean>;
   /** Move a file into a folder by public id, or `null` for the root; resolves whether it moved. */
@@ -34,7 +34,6 @@ export function useFileActions(
   const { onChanged } = options;
   const metadata = useModelMetadata(FILE_MODEL);
   const resource = metadata?.resource ?? null;
-  const deleteWithPreview = useDeleteWithPreview(resource);
   const trashRecord = useTrashRecord(resource);
   const updateFile = useUpdate<RowRecord, HttpError, Record<string, unknown>>({
     resource: refineResourceName(resource),
@@ -45,10 +44,10 @@ export function useFileActions(
 
   return {
     busy,
-    trash: (id) =>
+    trash: (id, name) =>
       settle(async () => {
         requireFileResource(resource);
-        return deleteWithPreview.remove(id, { errorNotification: false });
+        return trashRecord.trash(id, name);
       }, false),
     restore: (id) =>
       settle(async () => {

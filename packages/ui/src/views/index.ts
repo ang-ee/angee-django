@@ -351,6 +351,7 @@ export {
   useBulkDelete,
   type UseBulkDeleteResult,
 } from "./resource/useBulkDelete";
+export { useBulkAction, type BulkActionRunner } from "./resource/bulk-action";
 export {
   useDeletePreviewOperation,
   useDeleteWithPreview,

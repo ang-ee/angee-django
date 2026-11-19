@@ -1,6 +1,6 @@
 import * as React from "react";
 import { MAX_PAGE_SIZE, useAngeeAggregate } from "@angee/refine";
-import { ResourceQuery, modelLabelSegment, useModelMetadata } from "@angee/metadata";
+import { ResourceQuery, modelLabelSegment, rowPublicId, trashFlagField, useModelMetadata } from "@angee/metadata";
 import type { ModelFieldMetadata, Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
 import { titleCase } from "../../../lib/titleCase";
@@ -22,6 +22,7 @@ import type { ColumnDescriptor } from "../../page";
 import { useRelationFacets } from "../../relation/relation-facet";
 import { useScalarFacets } from "../../relation/scalar-facet";
 import { useBulkDelete } from "../useBulkDelete";
+import { useBulkAction } from "../bulk-action";
 import { BulkArchiveActions } from "../archive";
 import { BulkTrashActions } from "../trash";
 import { recordRepresentationValue, titleText } from "../../form/form-view-model";
@@ -169,10 +170,17 @@ export function ListViewContent<TRow extends Row = Row>({
       return remaining;
     });
   }, [resourceView.setRowSelection]);
+  const bulk = useBulkAction(source ? null : modelMetadata?.resource, deselectSucceeded);
+  const selectedRowsById = React.useMemo(() => new Map(resourceView.selectedRows.map((row) => [rowPublicId(row), row])),
+    [resourceView.selectedRows]);
+  const trashFlag = trashFlagField(modelMetadata?.resource);
+  const deleteIds = React.useMemo(() => trashFlag
+    ? new Set([...selectedIds].filter((id) => selectedRowsById.get(id)?.[trashFlag] === true))
+    : selectedIds, [selectedIds, selectedRowsById, trashFlag]);
   const bulkDelete = useBulkDelete(
     source ? "" : resource,
-    selectedIds,
-    deselectSucceeded,
+    deleteIds,
+    bulk,
     resourceView.selectedRows,
   );
   const cardActionContext = React.useMemo(
@@ -264,7 +272,8 @@ export function ListViewContent<TRow extends Row = Row>({
   const genericSelection = !source && modelMetadata ? {
     modelMetadata,
     selectedRows: resourceView.selectedRows,
-    onSucceeded: deselectSucceeded,
+    unprocessedCount: [...selectedIds].filter((id) => !selectedRowsById.has(id)).length,
+    bulk,
   } : null;
 
   return (
@@ -282,6 +291,7 @@ export function ListViewContent<TRow extends Row = Row>({
             ? bulkDelete.deleteInitiate
             : undefined,
         deletePending: bulkDelete.isPending,
+        pending: bulk.pending,
         actions: <>
           {domainBulkActions}
           {genericSelection ? <>

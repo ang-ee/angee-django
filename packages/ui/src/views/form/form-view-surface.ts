@@ -833,8 +833,10 @@ export function useFormViewSurface({
   );
   const linesLabel = linesTabLabel ?? t("lines.section");
   const linesTrailing = save.linesActive && !linesDeclared;
+  const trashFlag = trashFlagField(dataResource);
   const visibleDeleteAction =
     readOnly || deleteAction === undefined ||
+    (trashFlag !== null && save.displayRecord?.[trashFlag] !== true) ||
     !allowsRecordPermission(save.displayRecord, "delete", Boolean(modelMetadata?.fields.permissions)) ||
     (deleteVisibleWhen !== undefined &&
       (save.displayRecord == null || !deleteVisibleWhen(save.displayRecord)))

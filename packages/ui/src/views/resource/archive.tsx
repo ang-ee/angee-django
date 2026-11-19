@@ -6,7 +6,7 @@ import { Glyph } from "../../chrome/Glyph";
 import { useUiT } from "../../i18n";
 import { SelectionBar } from "../../ui/selection-bar";
 import type { ActionDescriptor } from "../page/Action";
-import { useBulkAction, type BulkSelectionProps } from "./bulk-action";
+import type { BulkSelectionProps } from "./bulk-action";
 
 /**
  * Archive and Unarchive patch the metadata-owned flag through the form's update
@@ -51,14 +51,14 @@ export function BulkArchiveActions(props: BulkSelectionProps): React.ReactElemen
   return actions.length ? <ArchiveSelectionActions {...props} actions={actions} /> : null;
 }
 
-function ArchiveSelectionActions({ modelMetadata, selectedRows, onSucceeded, actions }: BulkSelectionProps & {
+function ArchiveSelectionActions({ modelMetadata, selectedRows, unprocessedCount, bulk, actions }: BulkSelectionProps & {
   actions: readonly ActionDescriptor[];
 }): React.ReactElement {
   const t = useUiT();
   const resource = modelMetadata.resource;
-  const bulk = useBulkAction(resource, onSucceeded);
   // This is the record form's applyPatch -> useUpdate transport. The registered
-  // provider owns the update root and _set; only settlement moves to the batch.
+  // provider owns the update root and _set. A flag-only bulk write deliberately
+  // omits expected_revision; it does not submit the form's observed edit baseline.
   const update = useUpdate<BaseRecord & Row, HttpError, Record<string, unknown>>({
     resource: refineResourceName(resource),
     dataProviderName: resource.schemaName,
@@ -76,7 +76,7 @@ function ArchiveSelectionActions({ modelMetadata, selectedRows, onSucceeded, act
     if (!ids.length) return null;
     return <SelectionBar.Action key={action.id} surface="brand" pending={bulk.pending} disabled={bulk.blocked}
       onClick={() => void bulk.run({
-        ids,
+        ids, unprocessedCount,
         perform: async (id) => {
           const result = await update.mutateAsync({ id, values: action.set! });
           if (!rowPublicId(result.data)) throw new Error(t("action.noResult"));

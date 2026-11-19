@@ -114,6 +114,65 @@ test("mixed archive selection offers both verbs and changes only the matching ro
   expect(f.view().selectedRows.map((row) => row.id)).toEqual(["two"]);
 });
 
+test.each(["Archive", "Move to trash"])("%s reserves every generic verb and Clear until it settles", async (first) => {
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => { finish = resolve; });
+  const f = await fixture({ rows: [note("one"), note("two", true, true)],
+    metadata: { ...resource, roots: { ...resource.roots, deletePreview: "notes_delete" } },
+    update: async (id) => { await pending; return { data: { id } }; },
+    custom: async () => { await pending; return { trash_record: { ok: true } }; },
+  });
+  f.selectAll();
+  const archive = screen.getByRole<HTMLButtonElement>("button", { name: "Archive" });
+  const trash = screen.getByRole<HTMLButtonElement>("button", { name: "Move to trash" });
+  const buttons = ["Archive", "Unarchive", "Move to trash", "Restore", "Delete", "Clear"].map((name) =>
+    screen.getByRole<HTMLButtonElement>("button", { name }));
+  fireEvent.click(first === "Archive" ? archive : trash);
+  for (const button of buttons) {
+    expect(button.disabled).toBe(true);
+    fireEvent.click(button);
+  }
+  expect(Object.keys(f.view().state.rowSelection).length).toBe(2);
+  if (first === "Move to trash") {
+    const dialog = await screen.findByRole("alertdialog");
+    expect(f.update).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Move to trash" }));
+  } else expect(f.custom).not.toHaveBeenCalled();
+  await act(async () => { finish(); });
+  await screen.findByText(first === "Archive" ? "Updated archive status for 1 record." : "Moved 1 record to the trash.");
+  expect(f.update).toHaveBeenCalledTimes(first === "Archive" ? 1 : 0);
+  expect(f.custom).toHaveBeenCalledTimes(first === "Move to trash" ? 1 : 0);
+  expect(Object.keys(f.view().state.rowSelection).length).toBe(1);
+  expect(screen.getByRole<HTMLButtonElement>("button", { name: "Clear" }).disabled).toBe(false);
+});
+
+test.each(["Archive", "Unarchive", "Move to trash", "Restore"])("%s reports and retains selected ids without row snapshots", async (action) => {
+  const row = note("one", action === "Unarchive", action === "Restore");
+  const f = await fixture({ rows: [row] });
+  act(() => f.view().setRowSelection({ one: true, unseen: true }, (id) => id === "one" ? row : undefined));
+  fireEvent.click(screen.getByRole("button", { name: action }));
+  if (action === "Move to trash") {
+    fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: action }));
+  }
+  await screen.findByText("1 record was not processed and remains selected.");
+  expect(Object.keys(f.view().state.rowSelection)).toEqual(["unseen"]);
+  expect(f.update.mock.calls.length + f.custom.mock.calls.length).toBe(1);
+});
+
+test.each(["refused", "failed"])("a wholly %s trash run leads with the unsuccessful outcome", async (outcome) => {
+  const f = await fixture({ custom: async () => {
+    if (outcome === "failed") throw new Error("Connection lost.");
+    return { trash_record: { ok: false, message: "Stop active work first." } };
+  } });
+  f.selectAll();
+  fireEvent.click(screen.getByRole("button", { name: "Move to trash" }));
+  fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Move to trash" }));
+  await screen.findByText(outcome === "refused" ? "2 records were refused." : "Could not move 2 records to the trash.");
+  expect(screen.queryByText("Moved 0 records to the trash.")).toBeNull();
+  expect(Object.keys(f.view().state.rowSelection).length).toBe(2);
+  expect(f.getList).toHaveBeenCalledTimes(1);
+});
+
 test.each([
   { ...resource, updateFields: ["title"] },
   { ...resource, roots: { ...resource.roots, update: undefined } },
@@ -134,11 +193,11 @@ test("trash asks once, calls the shared verb per row, and retains and reports a 
   const reads = f.getList.mock.calls.length;
   fireEvent.click(screen.getByRole("button", { name: "Move to trash" }));
   const dialog = await screen.findByRole("alertdialog");
-  expect(within(dialog).getByText("Move “3 records” to the trash?")).toBeTruthy();
+  expect(within(dialog).getByText("Move 3 records to the trash?")).toBeTruthy();
   fireEvent.change(within(dialog).getByRole("textbox", { name: "Reason (optional)" }), { target: { value: "  Superseded  " } });
   fireEvent.click(within(dialog).getByRole("button", { name: "Move to trash" }));
   await screen.findByText("Moved 1 record to the trash.");
-  expect(screen.getByText("Could not move 2 records to the trash. Still in use.")).toBeTruthy();
+  expect(screen.getByText("2 refused: Still in use.")).toBeTruthy();
   expect(screen.queryByRole("alertdialog")).toBeNull();
   expect(f.custom).toHaveBeenCalledTimes(3);
   for (const id of ["one", "two", "three"]) expect(f.custom).toHaveBeenCalledWith(expect.objectContaining({
@@ -166,7 +225,7 @@ test("canceling bulk trash leaves every row selected and performs no writes", as
   f.selectAll();
   fireEvent.click(screen.getByRole("button", { name: "Move to trash" }));
   const dialog = await screen.findByRole("alertdialog");
-  fireEvent.click(within(dialog).getByRole("button", { name: "Keep “2 records”" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Keep 2 records" }));
   await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
   expect(f.custom).not.toHaveBeenCalled();
   expect(f.view().selectedRows).toHaveLength(2);
@@ -235,7 +294,7 @@ test.each(["transport", "missing"] as const)("an archive %s failure is reported 
   f.selectAll();
   fireEvent.click(screen.getByRole("button", { name: "Archive" }));
   await screen.findByText("Updated archive status for 1 record.");
-  expect(screen.getByText(/Could not update archive status for 1 record\./)).toBeTruthy();
+  expect(screen.getByText(/^1 failed:/)).toBeTruthy();
   expect(f.view().selectedRows.map((row) => row.id)).toEqual(["two"]);
 });
 
@@ -252,7 +311,7 @@ test.each(["Archive", "Move to trash", "Restore"] as const)("%s caps the operati
   fireEvent.click(screen.getByRole("button", { name: action }));
   if (action === "Move to trash") {
     const dialog = await screen.findByRole("alertdialog");
-    expect(within(dialog).getByText("Move “25 records” to the trash?")).toBeTruthy();
+    expect(within(dialog).getByText("Move 25 records to the trash?")).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: action }));
   }
   const write = action === "Archive" ? f.update : f.custom;

@@ -15,6 +15,7 @@ import { useUiT } from "../../../i18n";
 import { createLabelForResource } from "../resource-view-utils";
 import type { ListComponent } from "../List";
 import { useBulkDelete } from "../useBulkDelete";
+import { useBulkAction } from "../bulk-action";
 import { useResourceView } from "../resource-view-context";
 import type { CalendarViewSpec } from "../resource-view-types";
 import { mergePageFacets } from "../../page";
@@ -257,7 +258,8 @@ export function ResourceListBody<TRow extends Row = Row>({
   const handleRecordDeleted = React.useCallback(() => {
     handleCloseRecord?.();
   }, [handleCloseRecord]);
-  const recordDelete = useBulkDelete(resource, recordDeleteIds, handleRecordDeleted);
+  const recordBulk = useBulkAction(modelMetadata?.resource, handleRecordDeleted);
+  const recordDelete = useBulkDelete(resource, recordDeleteIds, recordBulk);
   const recordDeleteAction = open && recordDelete.canDelete
     ? {
         canDelete: recordDeleteIds.size > 0,

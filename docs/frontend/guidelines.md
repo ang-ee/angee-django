@@ -298,8 +298,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   never revives its old selection. Resource metadata supplies the selection bar's
   generic Archive/Unarchive, Move to trash/Restore and Delete actions. Bulk is a
   bounded client fan-out over each single-record verb: successful rows leave the
-  selection, refused and overflow rows stay, and one refresh and toast settle the
-  run. See the
+  selection, refused, failed, unobserved and overflow rows stay, and one refresh
+  and toast settle the run. One runner belongs to the list; generic actions and
+  Clear stay disabled through its preview, confirmation and writes. See the
   [selection and bulk-action contracts](../../packages/ui/src/views/resource/resource-view-context.tsx)
   and [list declarations](../../packages/ui/src/views/resource/resource-view-types.ts).
 - **Derive during render.** Do not store `filteredRows`, selected records,
@@ -1019,7 +1020,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   require their flag to be selected as `false`; Unarchive and Restore require `true`.
   Trash requires a `trashable` flag and a resource type and composes
   [the shared trash verbs](../../packages/ui/src/views/resource/trash.tsx).
-  Delete requires the `deletePreview` root. Trash and Delete require `delete`
+  Delete requires the `deletePreview` root. On a trashable resource it is offered
+  only for records whose trash flag is `true`; bulk Delete previews and deletes
+  only those selected records. A resource without a trash flag keeps its existing
+  Delete rule. Trash and Delete require `delete`
   when the model declares a `permissions` field, including when the read omits it;
   for models without that field, the resource
   capability gates the control and the server authorizes the write. These verbs
