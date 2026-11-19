@@ -248,6 +248,7 @@ export const DuplicateSetPreviews = graphql(`
     duplicate_set_previews(sets: $sets, certain: $certain) {
       outcome
       reason
+      digest
       survivor { id }
       members {
         id
@@ -263,8 +264,8 @@ export const DuplicateSetPreviews = graphql(`
 `);
 
 export const MergeDuplicates = graphql(`
-  mutation MergeDuplicates($sets: [[ID!]!]!, $certain: Boolean = false) {
-    merge_duplicates(sets: $sets, certain: $certain) {
+  mutation MergeDuplicates($sets: [[ID!]!]!, $digests: [String!]!, $certain: Boolean = false) {
+    merge_duplicates(sets: $sets, digests: $digests, certain: $certain) {
       members
       outcome
       reason

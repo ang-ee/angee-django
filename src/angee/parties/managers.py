@@ -134,6 +134,24 @@ class DisplayAvatarPrefetches(NamedTuple):
     """Each party's ranked handles with an avatar the actor can read, avatar loaded."""
 
 
+IDENTITY_BASIS_DIGEST = "angee.parties.identity_basis"
+"""The purpose of an identity review's digest (:attr:`IdentityBasis.facts_hash`); fixed: issued digests rely on it."""
+DUPLICATE_SET_DIGEST = "angee.parties.duplicate_set"
+"""The purpose of a batch merge set's digest (:attr:`DuplicateSetPreview.digest`)."""
+
+
+def keyed_facts_digest(purpose: str, facts: Any) -> str:
+    """A keyed digest of facts a reader was shown, to compare later under a lock.
+
+    ``purpose`` is Django's ``salted_hmac`` key salt: each purpose derives its
+    own key from the site secret, so a digest issued for one purpose never
+    stands for another over the same facts, and a client holding a digest
+    cannot confirm a guess of what it covers.
+    """
+
+    return salted_hmac(purpose, canonical_json(facts), algorithm="sha256").hexdigest()
+
+
 @dataclass(frozen=True, slots=True)
 class IdentityBasis:
     """One Party identity read: the actor-visible facts and the complete basis.
@@ -151,11 +169,7 @@ class IdentityBasis:
     def facts_hash(self) -> str:
         """Keyed digest of the complete basis; it cannot confirm guesses of hidden rows."""
 
-        return salted_hmac(
-            "angee.parties.identity_basis",
-            canonical_json(self.complete),
-            algorithm="sha256",
-        ).hexdigest()
+        return keyed_facts_digest(IDENTITY_BASIS_DIGEST, self.complete)
 
 
 class CircleQuerySet[CircleT: Circle](HierarchyQuerySet[CircleT], AngeeHistoryQuerySet[CircleT]):
@@ -1000,6 +1014,9 @@ class DuplicateSetPreview:
     disagreements: tuple[FieldDisagreement, ...] = ()
     """The merge fields the members disagree on, only for a set that merges; a field the actor's
     ``read__<field>`` gate hides on any member is left out."""
+    digest: str = ""
+    """For a set that merges, a keyed digest of everything the dialog shows of it, which the merge
+    compares under its lock (:meth:`PartyManager.merge_duplicates`)."""
 
     @property
     def survivor(self) -> Any:
@@ -2358,6 +2375,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     SET_MEMBERS: ClassVar[int] = 10
     """The most records one set of a batch merge holds."""
 
+    CHANGED_REASON: ClassVar[str] = (
+        "These records changed since you looked at them; nothing merged. Look at them again before merging."
+    )
+    """What a person reads of a set whose shown facts changed between the preview and the merge."""
     STOPPED_REASON: ClassVar[str] = (
         "The database stopped this merge for a concurrent change; nothing merged, try again."
     )
@@ -2488,7 +2509,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         return self._judge_sets(actor, confirmed, certain=certain)
 
     def merge_duplicates(
-        self, *, actor: Any, sets: Sequence[Sequence[str]], certain: bool = False,
+        self,
+        *,
+        actor: Any,
+        sets: Sequence[Sequence[str]],
+        certain: bool = False,
+        digests: Sequence[str] | None = None,
     ) -> list[DuplicateSetOutcome]:
         """Merge each confirmed set of records into its oldest member as ``actor``'s merge; return every outcome.
 
@@ -2499,7 +2525,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         Then, in its own transaction, its members, their same-person partners and
         every Handle any of them holds or names are locked in one pass
         (``Party.lock_merge_records``), the set is judged again under those locks
-        (:meth:`preview_duplicates`), and a member that changed
+        (:meth:`preview_duplicates`), and a set whose shown facts changed since the
+        preview (its ``digests`` entry, :attr:`DuplicateSetPreview.digest`, no
+        longer matches) is refused with :attr:`CHANGED_REASON`, as is a member that changed
         since the person looked (merged elsewhere, trashed, kept apart from another)
         refuses the set rather than shrinking it. Then the others fold into the
         oldest in key order through ``Party.merge``, whose own permission and guards
@@ -2518,10 +2546,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
         party_model = apps.get_model("parties", "Party")
         confirmed = self._confirmed_sets(sets)
+        if digests is not None and len(digests) != len(confirmed):
+            raise ValidationError({"digests": "Send one digest for each set."})
         readable = self._readable_members(actor, confirmed)
         permitted = self.batch_mergeable(actor, sorted({row.pk for row in readable.values()}))
         outcomes = []
-        for ids in confirmed:
+        for index, ids in enumerate(confirmed):
             if refusal := self._admission(ids, readable, permitted):
                 outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.REFUSED, reason=refusal))
                 continue
@@ -2533,6 +2563,11 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                     (preview,) = self._judge_sets(actor, [ids], certain=certain)
                     if preview.outcome is not None:
                         outcomes.append(DuplicateSetOutcome(ids, preview.outcome, reason=preview.reason))
+                        continue
+                    if digests is not None and preview.digest != digests[index]:
+                        outcomes.append(
+                            DuplicateSetOutcome(ids, DuplicateMergeOutcome.REFUSED, reason=self.CHANGED_REASON)
+                        )
                         continue
                     survivor, *merged = preview.members
                     kept = survivor.with_actor(actor).merge(
@@ -2552,12 +2587,21 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.MERGED, survivor=kept))
         return outcomes
 
-    def _readable_members(self, actor: Any, confirmed: Sequence[tuple[str, ...]]) -> Mapping[str, Any]:
-        """The members of the sets within the size cap that ``actor`` reads, by the public id given, in one read."""
+    def _readable_members(
+        self, actor: Any, confirmed: Sequence[tuple[str, ...]], *, statements: bool = False,
+    ) -> Mapping[str, Any]:
+        """The members of the sets within the size cap that ``actor`` reads, by the public id given, in one read.
+
+        ``statements`` loads with them the handle statements they show ``actor``
+        (:meth:`readable_statements_prefetch`), inside that same read.
+        """
 
         party_model = apps.get_model("parties", "Party")
         named = {pk for ids in confirmed if len(ids) <= self.SET_MEMBERS for pk in ids}
-        return instances_from_public_ids(party_model, named, queryset=party_model._default_manager.with_actor(actor))
+        readable = party_model._default_manager.with_actor(actor)
+        if statements:
+            readable = readable.prefetch_related(self.readable_statements_prefetch(actor))
+        return instances_from_public_ids(party_model, named, queryset=readable)
 
     def _admission(self, ids: Sequence[str], readable: Mapping[str, Any], permitted: Collection[Any]) -> str:
         """Why a set is refused before it is locked or read further, or ``""``.
@@ -2587,7 +2631,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
         party_model = apps.get_model("parties", "Party")
         readable = party_model._default_manager.with_actor(actor)
-        found = self._readable_members(actor, confirmed)
+        # With the statements the dialog lists, read once for every member and digested (the schema reuses them).
+        found = self._readable_members(actor, confirmed, statements=True)
         pks = sorted({row.pk for row in found.values()})
         people, organizations = self.party_kinds(pks)
         permitted = self.batch_mergeable(actor, pks)
@@ -2633,9 +2678,53 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         shown = self._disagreements(
             actor, [preview.members if preview.outcome is None else () for preview in previews], people,
         )
+        judged = [replace(preview, disagreements=shown[index]) for index, preview in enumerate(previews)]
         return [
-            replace(preview, disagreements=shown[index]) for index, preview in enumerate(previews)
+            replace(preview, digest=self._shown_digest(preview)) if preview.outcome is None else preview
+            for preview in judged
         ]
+
+    def readable_statements_prefetch(self, actor: Any) -> Prefetch:
+        """The handle statements a party shows ``actor``, each with its handle read through ``actor``."""
+
+        handles = apps.get_model("parties", "Handle").objects.with_actor(actor)
+        return Prefetch(
+            "partystatement_set",
+            queryset=self.handle_statements().for_reader(actor).prefetch_related(Prefetch("handle", queryset=handles)),
+            to_attr="_readable_handle_statements",
+        )
+
+    @staticmethod
+    def _shown_digest(preview: DuplicateSetPreview) -> str:
+        """The keyed digest of what the dialog shows of a set (:attr:`DuplicateSetPreview.digest`).
+
+        It covers what the reader was shown and nothing else: each member's id,
+        name, creation time, first-met note (as the reader's gates leave it) and
+        the readable handle statements with their source and handle, the
+        survivor, and the disagreements with the values that will show.
+        """
+
+        def statement(row: Any) -> list[Any]:
+            handle = row.handle
+            return [
+                public_id_for(type(row), row.pk), str(row.source_kind),
+                *([handle.public_id, str(handle.platform), handle.value] if handle is not None else []),
+            ]
+
+        return keyed_facts_digest(DUPLICATE_SET_DIGEST, {
+            "members": [
+                {
+                    "id": row.public_id,
+                    "name": row.display_name,
+                    "created": row.created_at.isoformat() if row.created_at else None,
+                    "first_met": row.first_met_note,
+                    "statements": sorted(statement(item) for item in row._readable_handle_statements),
+                }
+                for row in preview.members
+            ],
+            "survivor": preview.members[0].public_id if preview.members else None,
+            "disagreements": [[row.field, list(row.values), row.shown] for row in preview.disagreements],
+        })
 
     @staticmethod
     def _disagreements(

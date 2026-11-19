@@ -456,6 +456,8 @@ class DuplicateSetPreviewType:
     survivor: PartyType | None
     outcome: DuplicateMergeOutcome | None
     reason: str
+    digest: str
+    """For a set that merges, the keyed digest of what the dialog shows of it: send it back to ``merge_duplicates``."""
     disagreements: list[FieldDisagreementType]
 
 
@@ -484,13 +486,8 @@ def _prefetch_member_facts(members: list[Any], actor: Any) -> None:
     prefetch_related_objects(
         members,
         *(concrete_child_accessor(Party, child) for child in concrete_child_models(Party)),
-        Prefetch(
-            "partystatement_set",
-            queryset=Party.objects.handle_statements()
-            .for_reader(actor)
-            .prefetch_related(Prefetch("handle", queryset=Handle.objects.with_actor(actor))),
-            to_attr="_readable_handle_statements",
-        ),
+        # The preview read these already to digest them; Django skips a fetched ``to_attr``.
+        Party.objects.readable_statements_prefetch(actor),
         *Party.objects.display_avatar_prefetches(actor, avatars=files),
     )
 
@@ -705,14 +702,19 @@ class PartiesIdentityMutation:
 
     @strawberry.mutation
     def merge_duplicates(
-        self, info: strawberry.Info, sets: list[list[strawberry.ID]], certain: bool = False,
+        self, info: strawberry.Info, sets: list[list[strawberry.ID]], digests: list[str], certain: bool = False,
     ) -> list[DuplicateSetOutcomeType]:
-        """Merge each confirmed set of records into its oldest member as the signed-in person; return every outcome."""
+        """Merge each confirmed set into its oldest member as the signed-in person; return every outcome.
+
+        ``digests`` are the sets' ``digest`` from ``duplicate_set_previews``, one per set: a set whose shown
+        facts changed since is refused, to be looked at again.
+        """
 
         return cast(
             "list[DuplicateSetOutcomeType]",
             Party.objects.merge_duplicates(
                 actor=session_user(info), sets=[[str(pk) for pk in ids] for ids in sets], certain=certain,
+                digests=digests,
             ),
         )
 

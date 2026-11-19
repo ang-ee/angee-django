@@ -51,8 +51,11 @@ export interface DuplicatesDialogProps {
  * apart (addresses, sources, dates), which record survives and why, and the fields
  * they disagree on with the value that will show. Each set that may merge has its
  * own Include toggle, off until the person ticks it when the set carries a
- * warning (its records disagree, or one no longer matches its group); one confirm
- * merges exactly the included sets and the dialog then shows each set's outcome.
+ * warning (its records disagree, or one no longer matches its group), and off
+ * again whenever the set changes from the state the person saw or ticked it in
+ * (a refreshed preview, a refused set that becomes mergeable), so nothing is
+ * included in a state the person did not see; one confirm merges exactly the
+ * included sets and the dialog then shows each set's outcome.
  * The server judges and merges (`duplicate_set_previews`, `merge_duplicates`); the
  * dialog only shows.
  */
@@ -73,18 +76,40 @@ export function DuplicatesDialog({ sets: opened, certain = false, notes = [], on
   const [merge, mergeState] = useAuthoredMutation(MergeDuplicates, { invalidateModels: PARTY_MERGE_INVALIDATES });
   const live = preview.data?.duplicate_set_previews ?? [];
   const previews = result?.shown ?? live;
-  // The person's ticks by set; an untouched set follows its warnings.
-  const [ticks, setTicks] = React.useState<ReadonlyMap<number, boolean>>(new Map());
+  // Each set's state when the person first saw it, and the person's ticks with the state each was made in.
+  const [firstSeen, setFirstSeen] = React.useState<ReadonlyMap<number, string>>(new Map());
+  React.useEffect(() => {
+    setFirstSeen((seen) => {
+      const added = live.flatMap((row, index) => (seen.has(index) ? [] : [[index, stateOf(row)] as const]));
+      return added.length > 0 ? new Map([...seen, ...added]) : seen;
+    });
+  }, [live]);
+  const [ticks, setTicks] = React.useState<ReadonlyMap<number, { checked: boolean; state: string }>>(new Map());
+  // Whether a set has changed since it was first shown, or since the person's tick: it then waits for a new tick.
+  const changed = (index: number): boolean => {
+    const row = live[index];
+    if (!row) return false;
+    const tick = ticks.get(index);
+    return tick ? tick.state !== stateOf(row) : firstSeen.has(index) && firstSeen.get(index) !== stateOf(row);
+  };
+  // A set merges only in a state the person saw: ticked in it, or untouched, unwarned and as first shown.
   const included = (index: number): boolean => {
     const row = live[index];
-    return row?.outcome == null && (ticks.get(index) ?? !warned(row, sets[index]?.grouping));
+    if (!row || row.outcome != null || changed(index)) return false;
+    const tick = ticks.get(index);
+    return tick ? tick.checked : firstSeen.get(index) === stateOf(row) && !warned(row, sets[index]?.grouping);
   };
   const sending = live.filter((_row, index) => included(index));
   const merged = result ? [...result.outcomes.values()].some((row) => row.outcome === "MERGED") : false;
 
   const submit = React.useCallback(async () => {
     const sent = sending;
-    const response = await merge({ sets: sent.map((row) => row.members.map((member) => member.id)), certain });
+    // Each set's digest of what the person saw: a set that changed since is refused, to be looked at again.
+    const response = await merge({
+      sets: sent.map((row) => row.members.map((member) => member.id)),
+      digests: sent.map((row) => row.digest),
+      certain,
+    });
     const answered = response?.merge_duplicates;
     if (!answered) return;
     // One outcome answers each sent set, in the order sent.
@@ -120,7 +145,8 @@ export function DuplicatesDialog({ sets: opened, certain = false, notes = [], on
                 outcome={result?.outcomes.get(row)}
                 include={result || row.outcome != null ? undefined : {
                   checked: included(index),
-                  onChange: (checked) => setTicks((current) => new Map(current).set(index, checked)),
+                  changed: changed(index),
+                  onChange: (checked) => setTicks((current) => new Map(current).set(index, { checked, state: stateOf(row) })),
                 }}
                 left={result !== null && row.outcome == null && !result.outcomes.has(row)}
               />
@@ -164,8 +190,8 @@ function DuplicateSetSection({
   heading?: string;
   grouping?: DuplicateSetInput["grouping"];
   outcome?: DuplicateSetOutcome;
-  /** The set's Include toggle, while it may merge and nothing has been sent. */
-  include?: { checked: boolean; onChange: (checked: boolean) => void };
+  /** The set's Include toggle, while it may merge and nothing has been sent; ``changed`` since the person saw it. */
+  include?: { checked: boolean; changed: boolean; onChange: (checked: boolean) => void };
   /** The person left this set out of the merge that was sent. */
   left?: boolean;
 }): React.ReactElement {
@@ -227,7 +253,8 @@ function DuplicateSetSection({
           <Checkbox id={includeId} aria-label={t("duplicates.include")} checked={include.checked}
             onCheckedChange={(checked) => include.onChange(checked === true)} />
           <label htmlFor={includeId} className="font-medium text-fg">{t("duplicates.include")}</label>
-          {warned(preview, grouping) ? <span className="text-fg-muted">{t("duplicates.includeWarned")}</span> : null}
+          {include.changed ? <span className="text-fg-muted">{t("duplicates.includeChanged")}</span>
+            : warned(preview, grouping) ? <span className="text-fg-muted">{t("duplicates.includeWarned")}</span> : null}
         </div>
       ) : null}
       {left ? <Alert tone="info">{t("duplicates.outcome.left")}</Alert> : null}
@@ -274,6 +301,11 @@ function OutcomeLine({ outcome }: { outcome: DuplicateSetOutcome }): React.React
 /** Every address a source states for a member, the one it holds included, once each. */
 function memberAddresses(member: DuplicateSetMember): string[] {
   return [...new Set(member.statements.flatMap((statement) => (statement.handle ? [statement.handle.value] : [])))];
+}
+
+/** A set's state as the person sees it: its outcome and the digest of everything shown of it. */
+function stateOf(preview: DuplicateSetPreview): string {
+  return `${preview.outcome ?? ""}:${preview.digest}`;
 }
 
 /** Whether a set carries a warning the person should look at before merging it: its records disagree, or one moved. */
