@@ -433,25 +433,33 @@ def _direct_read(viewer: Any, person: Any) -> dict[str, Any]:
     return result_data(execute_schema(_schema("console"), query, {"id": person.sqid}, user=viewer))["people_by_pk"]
 
 
-def test_a_reader_without_a_fields_gate_sees_none_of_its_values_in_the_preview(
-    db: None, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Each field's own ``read__<field>`` gate decides, per member, as the record read does: no second list."""
+def test_each_field_gate_hides_its_values_from_a_reader_without_it(db: None) -> None:
+    """Each field's own ``read__<field>`` gate decides per member, as the record read does: no second list.
+
+    No person account may merge a set while lacking a private field's gate on a member: ``write`` on a party
+    is its owner, an editor, an admin or a statement source, and the statement-source role holds only rules,
+    seeds and admins, while ``read_private`` covers owners, editors and admins. So the preview of a set that
+    merges never meets a hidden field through a real actor. The gate itself is pinned here on the members as
+    the preview reads them, through a reader without the gate and through the owner, who holds it.
+    """
 
     del db
     owner, viewer = create_user("duplicates-gate-owner"), create_user("duplicates-gate-viewer")
     pair = _private_pair(owner, viewer)
-    # A reader who may merge but not read the private fields: the batch permission is granted here alone.
-    monkeypatch.setattr(type(Party.objects), "batch_mergeable", lambda self, actor, pks: set(pks))
-    ids = [[person.public_id for person in pair]]
+    ids = (tuple(person.public_id for person in pair),)
 
-    (seen,) = Party.objects.preview_duplicates(actor=viewer, sets=ids)
-    (owned,) = Party.objects.preview_duplicates(actor=owner, sets=ids)
+    def disagreements(actor: Any) -> dict[str, tuple[str | None, ...]]:
+        members = Party.objects._readable_members(actor, ids)
+        rows = [members[pk] for pk in ids[0]]
+        people, _organizations = Party.objects.party_kinds([row.pk for row in rows])
+        (shown,) = Party.objects._disagreements(actor, [rows], people)
+        return {row.field: row.values for row in shown}
 
     hidden = {field for field, value in _direct_read(viewer, pair[0]).items() if value is None}
     assert hidden == set(PRIVATE_FIELDS)
-    assert seen.outcome is None
-    assert {row.field: row.values for row in seen.disagreements} == {"given_name": ("Zoe", "Zoey")}
+    assert disagreements(viewer) == {"given_name": ("Zoe", "Zoey")}
+    assert set(disagreements(owner)) == {"given_name", *PRIVATE_FIELDS}
+    (owned,) = Party.objects.preview_duplicates(actor=owner, sets=[list(ids[0])])
     assert {row.field for row in owned.disagreements} == {"given_name", *PRIVATE_FIELDS}
 
 

@@ -94,3 +94,48 @@ def test_a_merge_takes_its_pair_partners_handles_before_any_party() -> None:
         assert Party.same_as.model._base_manager.filter(
             left_id=min(survivor.pk, partner.pk), right_id=max(survivor.pk, partner.pk),
         ).exists()
+
+
+def test_a_reader_who_may_not_merge_is_refused_before_any_lock() -> None:
+    """A set the actor reads but may not merge is refused at once, even while another holds its rows."""
+
+    from rebac import RelationshipTuple, to_object_ref, to_subject_ref, write_relationships
+
+    from angee.messaging.testing.models import Person
+
+    owner, reader = create_user("prelock-batch-owner"), create_user("prelock-batch-reader")
+    with system_context(reason="tests.parties.prelock_batch"):
+        people = []
+        for index in range(3):
+            person = Person._base_manager.create(display_name="Zoe Example", created_by=owner)
+            handle = Handle._base_manager.create(
+                platform="email", value=f"prelock{index}@example.com", created_by=owner,
+            )
+            Party.objects.assert_handle(person, handle, asserted_by=owner)
+            people.append(person)
+        write_relationships([
+            RelationshipTuple(
+                resource=to_object_ref(Party._base_manager.get(pk=person.pk)), relation="reader",
+                subject=to_subject_ref(reader),
+            )
+            for person in people
+        ])
+    sets = [[person.public_id for person in people]]
+
+    def merge() -> list[tuple[str, str]]:
+        with connection.cursor() as cursor:
+            cursor.execute("SET lock_timeout = '2s'")
+        return [(str(row.outcome), row.reason) for row in Party.objects.merge_duplicates(actor=reader, sets=sets)]
+
+    pks = [person.pk for person in people]
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with transaction.atomic(), system_context(reason="tests.parties.prelock_batch_holder"):
+            list(Party._base_manager.filter(pk__in=pks).select_for_update())
+            list(Handle._base_manager.filter(party_id__in=pks).select_for_update())
+            future, _pid = submit(pool, merge)
+            # Answered while the rows are still held: the refusal took no lock.
+            outcomes = future.result(timeout=1.5)
+
+    assert outcomes == [
+        ("refused", "Only an active person who may change every one of these records merges them in a batch."),
+    ]
