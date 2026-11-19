@@ -6,7 +6,6 @@ re-read by identity when supported; there is no durable work queue.
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
@@ -20,7 +19,6 @@ from time import monotonic
 from typing import Any
 from urllib.parse import urlsplit
 
-from deepdiff import DeepDiff
 from django.core.exceptions import ValidationError
 from django.db import DataError, close_old_connections, connection, connections, transaction
 from django.utils import timezone
@@ -28,7 +26,7 @@ from pydantic import ConfigDict, JsonValue, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
 
-from angee.base.serialization import canonical_json, canonical_json_sha256
+from angee.base.serialization import canonical_json_sha256, json_equal
 from angee.integrate.errors import IntegrationError, safe_integration_failure
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.states import (
@@ -280,12 +278,11 @@ def classify_change(
     tombstone: bool = False,
     mapping_changed: bool = False,
 ) -> ChangeKind:
-    """Compare nested mapped facts; concurrent divergent edits require a choice."""
-    base, local, remote = (json.loads(canonical_json(value)) for value in (base, local, remote))
-    local_changed = bool(DeepDiff(base, local))
-    remote_changed = bool(DeepDiff(base, remote)) or mapping_changed
+    """Compare nested mapped facts as JSON values (``json_equal``); concurrent divergent edits require a choice."""
+    local_changed = not json_equal(base, local)
+    remote_changed = not json_equal(base, remote) or mapping_changed
     if local_changed and (remote_changed or tombstone):
-        if not tombstone and not mapping_changed and not DeepDiff(local, remote):
+        if not tombstone and not mapping_changed and json_equal(local, remote):
             return ChangeKind.APPLY
         return ChangeKind.CONFLICT
     if remote_changed:
@@ -1065,7 +1062,7 @@ def reconcile_stream(stream: Any, adapter: BridgeImpl, *, page_bound: int = 100,
             page = _extract_page(adapter, baseline, page_bound, deadline=deadline)
             if page.resync_required:
                 raise CursorInvalid()
-            if not page.exhausted and page.cursor == baseline.cursor:
+            if not page.exhausted and json_equal(page.cursor, baseline.cursor):
                 raise AdapterContractError("Reconciliation baseline did not advance its cursor.")
             state = {**state, "cursor": page.cursor, "phase": "enumerate" if page.exhausted else "extract"}
             locked = _apply_page(
@@ -1347,7 +1344,7 @@ def _retire(bridge: Any, adapter: BridgeImpl, definition: StreamDefinition, dead
             while monotonic() < deadline:
                 pending = child.reconcile_state
                 reconcile_stream(child, adapter, page_bound=page_bound, deadline=deadline)
-                if not child.reconcile_state or child.reconcile_state == pending:
+                if not child.reconcile_state or json_equal(child.reconcile_state, pending):
                     break
     except Exception as error:  # noqa: BLE001 -- retain the operation that actually failed.
         raise BridgeSyncError((PartitionFailure(definition, "retire", error),)) from error

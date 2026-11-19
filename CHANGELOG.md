@@ -10,6 +10,18 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Integrate compares synchronized JSON as JSON values (`json_equal` in
+  `angee.base.serialization`), never with Python's `==`. A move from `[False]`
+  to `[0]` was classified unchanged, because `False == 0` in Python and
+  `DeepDiff` matched array items by that equality, so the remote's change never
+  applied; a bool and a number now always differ. A number is the value its
+  spelling denotes: `1` and `1.0` are one number at any depth (`DeepDiff` called
+  `{"a": 1}` to `{"a": 1.0}` a change but `[1]` to `[1.0]` none), and a base
+  whose numbers PostgreSQL's `jsonb` respells (`1e+16` reads back as
+  `10000000000000000`) still equals the projection that wrote it. The stream
+  fence and the sweep's cursor-progress checks compare cursors the same way.
+  `angee-integrate` no longer requires `deepdiff`.
+
 - Addons require django-compose 0.1.0.dev13, whose snapshot digest covers each
   addon's resolved path. A host that changes its sync from `--no-editable` to
   editable, or moves a source checkout, now recomposes on `compose --if-stale`;
