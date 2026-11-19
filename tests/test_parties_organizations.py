@@ -273,6 +273,26 @@ def test_a_passed_target_is_an_organization_and_never_rebinds_a_link(source: Sim
         assert RecordLink.objects.get(pk=unbound.pk).target_object_id is None
 
 
+def test_a_link_returning_from_a_tombstone_keeps_its_own_organization(source: SimpleNamespace) -> None:
+    """No admission applies to an organization, so its own is never new to its link, tombstoned or not."""
+
+    with system_context(reason="tests.organizations.returning"):
+        link = RecordLink.objects.observe(source.organizations, "company-returning")
+    organization = _ingest(source, link, EXAMPLE)
+    with system_context(reason="tests.organizations.returning"):
+        RecordLink.objects.tombstone(link)
+
+    assert _ingest(source, link, replace(EXAMPLE, display_name="Example Again"), target=organization).pk == (
+        organization.pk
+    )
+    # Handed none, it does not mint a second one beside its own.
+    with pytest.raises(ValidationError, match="never rebinds"):
+        _ingest(source, link, EXAMPLE)
+    with system_context(reason="tests.organizations.read"):
+        assert list(Organization._base_manager.values_list("pk", flat=True)) == [organization.pk]
+        assert Organization._base_manager.get(pk=organization.pk).display_name == "Example Again"
+
+
 def test_an_existing_organization_new_to_its_link_is_refused_under_the_contact_locks(
     source: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -242,6 +242,51 @@ def test_a_configuration_error_other_than_an_unloaded_vendor_reaches_the_caller(
         _connect(admin)
 
 
+@pytest.mark.parametrize(
+    ("config", "unknown"),
+    [
+        ({"server_url": "https://dav.example.com/", "sever_url": "https://dav.example.com/"}, "sever_url"),
+        ({"server_url": "https://dav.example.com/", "streams": {"events": {}}}, "streams.events"),
+        (
+            {"server_url": "https://dav.example.com/", "streams": {"contacts": {"people": {"local_delet": "x"}}}},
+            "streams.contacts.people.local_delet",
+        ),
+    ],
+)
+def test_connecting_refuses_a_setting_its_backend_does_not_know_before_the_connection_test(
+    monkeypatch: pytest.MonkeyPatch, config: dict[str, Any], unknown: str
+) -> None:
+    """Connect is where a person's configuration is edited: a mistyped key is refused there, nothing saved."""
+
+    _load_vendor()
+    monkeypatch.setattr(CardDavDirectoryBackend, "test_connection", lambda backend: pytest.fail("tested"))
+    admin = parties_graphql._platform_admin("carddav-typo-admin")
+
+    with pytest.raises(ValidationError, match=rf"{unknown}\b"):
+        _connect(admin, config=config)
+
+    with system_context(reason="test.parties.carddav.typo.verify"):
+        assert not Credential._base_manager.exists() and not Directory._base_manager.exists()
+
+
+def test_an_unknown_backend_is_refused_as_itself(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The backend is resolved before anything else, never inside the handling of another error."""
+
+    _load_vendor()
+    admin = parties_graphql._platform_admin("carddav-unknown-admin")
+
+    with pytest.raises(ImproperlyConfigured, match="no_such_backend") as raised:
+        _connect(admin, backend_class="no_such_backend")
+
+    chain, error = [], raised.value
+    while error is not None:
+        chain.append(error)
+        error = error.__context__
+    assert [type(row) for row in chain if isinstance(row, ImproperlyConfigured)] == [ImproperlyConfigured]
+    with system_context(reason="test.parties.carddav.unknown.verify"):
+        assert not Credential._base_manager.exists() and not Directory._base_manager.exists()
+
+
 def test_a_backend_that_requires_discovery_leaves_the_first_sync_to_it(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

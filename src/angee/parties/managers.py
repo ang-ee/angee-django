@@ -29,7 +29,7 @@ from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.prefetch import GenericPrefetch
-from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connection, models, transaction
 from django.db.models import (
     Case,
@@ -49,6 +49,7 @@ from django.db.models.functions import Coalesce, NullIf
 from django.db.models.lookups import Exact
 from django.utils.crypto import salted_hmac
 from phonenumbers import PhoneNumberMatcher
+from pydantic import ValidationError as PydanticValidationError
 from rebac import (
     PermissionDenied,
     actor_context,
@@ -2043,9 +2044,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         since (:attr:`EmailLookup.changed`), is read: its holders through
         :meth:`people_for_emails`, its lapsed holders (:meth:`lapsed_holders`),
         and whether a person account signs in with it in any spelling, the one
-        given or one a handle holds (``UserManager.sign_in_addresses``, iam's
-        own comparison). An address a lapsed holder keeps is still theirs, so a
-        claim names nobody by it: the claim basis is left out of its holders.
+        given or one a handle holds, compared by iam's own key and by the
+        handle's normalized one (``UserManager.sign_in_addresses``). An address
+        a lapsed holder keeps is still theirs, so a claim names nobody by it:
+        the claim basis is left out of its holders.
         Writes nothing; the caller reads it under the locks of the addresses it
         decides on.
         """
@@ -2076,7 +2078,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 ).values_list("value", flat=True),
             }
         lookup.sign_in.difference_update(keys)
-        lookup.sign_in.update(_email_key(email) for email in get_user_model().objects.sign_in_addresses(spellings))
+        signed_in = get_user_model().objects.sign_in_addresses(spellings, key=_email_key)
+        lookup.sign_in.update(_email_key(email) for email in signed_in)
         lookup.changed.difference_update(keys)
         return lookup
 
@@ -2363,7 +2366,13 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         return refusal
 
     def _target_is_new[M: models.Model](
-        self, link: RecordLink, model: type[M], target: M | None, *, replaces: Sequence[RecordLink] = ()
+        self,
+        link: RecordLink,
+        model: type[M],
+        target: M | None,
+        *,
+        replaces: Sequence[RecordLink] = (),
+        readmitted: bool = True,
     ) -> bool:
         """Return whether ``target``, the ``model`` row the caller decided ``link`` lands on, needs admission.
 
@@ -2371,15 +2380,19 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         target must be a ``model`` row, and a link that holds a live row
         (:meth:`holding_links`) keeps it: an ingest never rebinds it. Its own row,
         or one a replaced link hands over, needs no admission; ``None`` mints
-        one. Any other row is new to the link, the row a link returning from a
-        tombstone named included, and its verb admits it or refuses. A link whose
-        row is trashed names nobody (:meth:`contact_people`).
+        one. Any other row is new to the link, and its verb admits it or
+        refuses. Where a link returning from a tombstone is ``readmitted`` (a
+        pull-only contact's person), the row it named is new to it too; where
+        no rule admits a row (an organization), the link keeps its own through a
+        tombstone. A link whose row is trashed names nobody (:meth:`contact_people`).
         """
 
         if target is not None and not isinstance(target, model):
             raise ValidationError(f"A contact target must be a Party of kind {model.__name__}.")
         named = self._live_parties([link, *replaces], model)
         holding = self.holding_links(link, replaces)
+        if not readmitted and link.target_object_id:
+            holding.add(link.pk)
         kept = named[link.pk] if link.pk in holding else None
         if kept is not None and (target is None or kept.pk != target.pk):
             raise ValidationError("A bound link keeps its target; ingestion never rebinds it.")
@@ -2714,8 +2727,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                     for name in dirty:
                         setattr(handle, name, mapped[name])
                     handle.save(update_fields=(*dirty, "updated_at"))
+                confidence = self.model.CLAIM_CONFIDENCE if claim else 1.0
                 self.assert_handle(
-                    party, handle, asserted_by=source, link=link, evidence=[party], confidence=0.4 if claim else 1.0
+                    party, handle, asserted_by=source, link=link, evidence=[party], confidence=confidence
                 )
                 supported.append({"subject": party, "aspect": "handle", "handle": handle})
                 if platform == handle_model.Platform.EMAIL:
@@ -2947,7 +2961,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         the page holds it: its integration's kind is read from the row in hand
         (``Integration.declared_concrete_model``). ``target`` is the organization
         the caller decided the record is, ``None`` to mint one; a link holding a
-        live organization keeps it (:meth:`_target_is_new`). Until matching an
+        live organization keeps it, through a tombstone too, since no rule
+        admits it again (:meth:`_target_is_new`). Until matching an
         existing organization is ruled, any other organization is refused: binding
         one would lend it to the directory's contact readers and make the source
         one of its statement sources with no admission rule. The record's locks
@@ -2969,7 +2984,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         source = stream.integration
         with transaction.atomic():
             self.lock_contact(target, parsed=parsed)
-            if self._target_is_new(link, organizations.model, target):
+            if self._target_is_new(link, organizations.model, target, readmitted=False):
                 raise ValidationError("Organizations are not matched yet: a record binds its own or a new one.")
             organization: Any = target or organizations.create(
                 display_name=name or organizations.model.PLACEHOLDER_NAME, created_by_id=created_by_id
@@ -3220,12 +3235,16 @@ class DirectoryManager[DirectoryT: Directory](IntegrationManager[DirectoryT]):
 
         Called outside any transaction, since it reaches the network, and refused
         inside one. ``owner`` must hold ``create`` on a directory
-        (``parties/directory``), checked first. The credential
-        (``credential_kind`` and its secret ``material``) and a directory of
-        ``backend_class`` with its non-secret ``config`` are built unsaved; a
-        backend whose seeded vendor row is not loaded yet is an operator refusal
-        that says to load resources, and any other configuration error stays
-        itself. The backend admits the credential and tests the connection
+        (``parties/directory``), checked first. ``backend_class`` is resolved
+        next, an unknown one refused as itself. ``config`` is what a person
+        submits, so this is where a directory's configuration is edited: it is
+        validated strictly against the backend's config model, and a setting the
+        model does not know is a ``ValidationError`` naming it (a save that
+        edits nothing keeps what is stored, and a reader ignores what it does
+        not know). A backend whose seeded vendor row is not loaded yet is an
+        operator refusal that says to load resources; any configuration error
+        building the unsaved credential (``credential_kind`` and its secret
+        ``material``) and directory then stays itself. The backend admits the credential and tests the connection
         (``DirectoryBackend.test_connection``) outside any transaction, and its
         refusal is a ``ValidationError`` carrying the backend's own operator
         message, so a directory that could never sync is never saved. Then one
@@ -3251,24 +3270,30 @@ class DirectoryManager[DirectoryT: Directory](IntegrationManager[DirectoryT]):
         ).allowed:
             raise PermissionDenied("This account may not connect a directory.")
         credentials = apps.get_model("integrate", "Credential").objects
-        fields = {
-            "backend_class": backend_class,
-            "owner": owner,
-            "display_name": display_name,
-            "config": dict(config or {}),
-            "created_by_id": owner.pk,
-        }
-        try:
-            candidate = self.build(**fields, lifecycle=IntegrationLifecycle.CONNECTED)
-        except ImproperlyConfigured as error:
-            if self._vendor_loaded(backend_class):
-                raise
+        impl = self.model._meta.get_field("backend_class").resolve_class(backend_class)
+        submitted = dict(config or {})
+        impl.parse_config(submitted)
+        if impl.config_model is not None:
+            try:
+                impl.config_model.model_validate(submitted, extra="forbid")
+            except PydanticValidationError as error:
+                unknown = sorted(".".join(map(str, issue["loc"])) for issue in error.errors(include_url=False))
+                raise ValidationError({"config": f"Unknown settings: {', '.join(unknown)}."}) from None
+        if not self._vendor_loaded(impl):
             # The backend's vendor is a seeded row (its master resource), absent until resources load.
             raise ValidationError(
                 "This directory's vendor is not loaded on this server: run `manage.py resources load`, "
                 "then connect again."
-            ) from error
-        name = f"{candidate.get_backend_class_impl().label} — {display_name}"
+            )
+        fields = {
+            "backend_class": backend_class,
+            "owner": owner,
+            "display_name": display_name,
+            "config": submitted,
+            "created_by_id": owner.pk,
+        }
+        candidate = self.build(**fields, lifecycle=IntegrationLifecycle.CONNECTED)
+        name = f"{impl.label} — {display_name}"
         unsaved = credentials.prepare_local_credential(owner, kind=credential_kind, name=name, material=material)
         candidate.attach_connection(unsaved)
         try:
@@ -3301,10 +3326,9 @@ class DirectoryManager[DirectoryT: Directory](IntegrationManager[DirectoryT]):
                 logger.warning("The first sync of directory %s could not be queued.", directory.pk, exc_info=True)
         return directory
 
-    def _vendor_loaded(self, backend_class: str) -> bool:
-        """Whether the seeded vendor row ``backend_class``'s defaults name is loaded (or it names none)."""
+    def _vendor_loaded(self, impl: Any) -> bool:
+        """Whether the seeded vendor row the backend ``impl``'s defaults name is loaded (or it names none)."""
 
-        impl = self.model._meta.get_field("backend_class").resolve_class(backend_class)
         slug = impl.effective_defaults().get("vendor")
         vendors = self.model._meta.get_field("vendor").related_model
         with system_context(reason="parties.directory.connect"):

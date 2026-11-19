@@ -117,6 +117,12 @@ class Party(
     sqid_prefix = "pty_"
     history = ModelHistory(inherit=True, excluded_fields=("handle_count",))
     REVIEW_CONFIDENCE: ClassVar[float] = 0.5
+    """The confidence at which a normal handle statement applies; below it, a statement awaits review.
+
+    ``parties/handle#stating_directory`` in permissions.zed repeats it: a test holds the two to one number.
+    """
+    CLAIM_CONFIDENCE: ClassVar[float] = 0.4
+    """The confidence of a source's claim for review on an address someone else holds: below review, never applied."""
 
     def handle_candidates(self, candidates: Sequence[Any]) -> Sequence[Any]:
         return [row for row in candidates if row.confidence >= self.REVIEW_CONFIDENCE]

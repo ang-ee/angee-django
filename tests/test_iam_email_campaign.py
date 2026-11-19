@@ -112,6 +112,23 @@ def test_sign_in_addresses_answers_the_given_addresses_a_person_account_signs_in
     assert not captured.captured_queries
 
 
+def test_sign_in_addresses_also_compare_by_the_callers_key_in_one_query(db):
+    """A caller's key that collapses a provider's spellings finds the account its own key keeps apart."""
+
+    User.objects.create_user("dotted", "ada.lovelace@mail.example")
+    User.objects.create_user("elsewhere", "adalovelace@other.example")
+
+    def collapsed(address: str) -> str:
+        local, _, domain = address.strip().lower().rpartition("@")
+        return f"{local.replace('.', '')}@{domain}"
+
+    given = ["AdaLovelace@mail.example", "grace@mail.example"]
+    with CaptureQueriesContext(connection) as captured:
+        assert User.objects.sign_in_addresses(given, key=collapsed) == {"AdaLovelace@mail.example"}
+    assert len([q for q in captured if User._meta.db_table in q["sql"]]) == 1
+    assert User.objects.sign_in_addresses(given) == set()
+
+
 @pytest.mark.django_db(transaction=True)
 def test_ambiguous_lookup_refuses_with_code_only_and_creation_does_not_add_a_third(legacy_person_emails, iam_admin):
     for username in ("legacy-a", "legacy-b"):

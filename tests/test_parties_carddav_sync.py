@@ -2859,35 +2859,47 @@ def test_a_directory_tests_its_connection_by_discovery_and_reports_the_servers_r
     assert refused.value.public_message == "CardDAV PROPFIND returned HTTP 401."
 
 
-def test_a_known_setting_is_validated_when_written_and_an_unknown_one_ignored_on_save_and_when_read(
-    replica: Replica,
-) -> None:
-    """Any save of the directory validates the keys it knows and drops the rest; a book's stream reads its keys alone.
+def test_a_save_that_does_not_edit_the_configuration_keeps_what_is_stored(replica: Replica) -> None:
+    """A directory carrying keys another version knows saves them back unchanged: a save never strips or refuses them.
 
-    A directory stored before the write was validated, or carrying a key a later
-    version added, still saves, and never fails the sync.
+    A known setting written with an invalid value is still refused.
     """
+
+    server_url = replica.directory.config["server_url"]
+    stored = {
+        "server_url": server_url,
+        "unknown": 1,
+        "streams": {"contacts": {_BOOK: {"local_delete": "propagate", "remote_delete": "retain"}}, "events": {}},
+    }
+    with system_context(reason="test CardDAV stored setting"):
+        Directory._base_manager.filter(pk=replica.directory.pk).update(config=stored)
+        replica.directory.refresh_from_db()
+        replica.directory.save()
+        assert Directory._base_manager.get(pk=replica.directory.pk).config == stored
+
+    replica.directory.config["streams"]["contacts"][_BOOK]["local_delete"] = "explode"
+    with system_context(reason="test CardDAV stored setting"), pytest.raises(ValidationError):
+        replica.directory.save()
+
+
+def test_a_books_stream_reads_only_the_policy_keys_it_knows(replica: Replica) -> None:
+    """A reader ignores what it does not know; a value stored before the write was validated reads as the default."""
 
     book = RecordLink.objects.get(stream=replica.addressbooks, external_key=_BOOK)
     server_url = replica.directory.config["server_url"]
-    replica.directory.config.update(
-        unknown=1, streams={"contacts": {_BOOK: {"local_delete": "propagate", "remote_delete": "retain"}}, "events": {}}
-    )
     with system_context(reason="test CardDAV per-book setting"):
-        replica.directory.save()
-        assert Directory._base_manager.get(pk=replica.directory.pk).config == {
-            "server_url": server_url,
-            "streams": {"contacts": {_BOOK: {"local_delete": "propagate"}}},
-        }
+        Directory._base_manager.filter(pk=replica.directory.pk).update(
+            config={
+                "server_url": server_url,
+                "streams": {"contacts": {_BOOK: {"local_delete": "propagate", "remote_delete": "retain"}}},
+            }
+        )
+        replica.directory.refresh_from_db()
     assert replica.backend.contacts_stream(book).config == {"local_delete": "propagate"}
-
-    replica.directory.config["streams"]["contacts"][_BOOK]["local_delete"] = "explode"
-    with system_context(reason="test CardDAV per-book setting"), pytest.raises(ValidationError):
-        replica.directory.save()
 
     with system_context(reason="test CardDAV per-book setting"):
         Directory._base_manager.filter(pk=replica.directory.pk).update(
-            config={"server_url": server_url, "streams": {"contacts": {_BOOK: {"remote_delete": "retain"}}}}
+            config={"server_url": server_url, "streams": {"contacts": {_BOOK: {"local_delete": "explode"}}}}
         )
         replica.directory.refresh_from_db()
     assert replica.backend.contacts_stream(book).config == {"local_delete": "conflict"}
