@@ -9,6 +9,7 @@ import httpx2
 import pytest
 import vobject
 from django.core import checks
+from django.core.exceptions import ValidationError
 from django.db import connection
 from rebac import system_context
 
@@ -144,43 +145,43 @@ def test_photo_download_is_capped_and_uses_the_collection_origin(settings: Any) 
     assert resolved.photo == ParsedPhoto(data=b"photo", mime="image/jpeg")
 
 
-def test_connect_probe_failure_writes_no_rows(
+def test_a_refused_connection_test_writes_no_rows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A rejected external probe runs before atomic and leaves no partial rows."""
+    """A refused connection test runs before any transaction and leaves no partial rows."""
 
-    probe_atomic_states: list[bool] = []
+    test_atomic_states: list[bool] = []
 
-    def reject_probe(backend: CardDavDirectoryBackend) -> str:
+    def refuse(backend: CardDavDirectoryBackend) -> str:
         del backend
-        probe_atomic_states.append(connection.in_atomic_block)
-        raise CardDavError("CardDAV probe rejected")
+        test_atomic_states.append(connection.in_atomic_block)
+        raise CardDavError("CardDAV connection refused")
 
-    monkeypatch.setattr(CardDavDirectoryBackend, "test_connection", reject_probe)
-    admin = parties_graphql._platform_admin("carddav-probe-failure-admin")
+    monkeypatch.setattr(CardDavDirectoryBackend, "test_connection", refuse)
+    admin = parties_graphql._platform_admin("carddav-test-failure-admin")
 
     result = _connect_carddav(admin)
 
     assert result.errors is not None
     assert result.errors[0].message == "An unexpected error occurred."
     assert result.errors[0].extensions == {"code": "INTERNAL"}
-    assert probe_atomic_states == [False]
-    with system_context(reason="test.parties.carddav.probe_failure.verify"):
+    assert test_atomic_states == [False]
+    with system_context(reason="test.parties.carddav.test_failure.verify"):
         for model in (Credential, Vendor, Integration, Directory, Handle, Party, Person, Party.statements.model):
             assert not model._base_manager.exists(), model._meta.label
 
 
-def test_connect_probe_success_commits_every_owned_row_atomically(
+def test_a_passed_connection_test_commits_every_owned_row_atomically(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A successful external probe precedes one complete atomic write phase."""
+    """A passed connection test precedes one complete atomic write phase."""
 
-    probe_atomic_states: list[bool] = []
+    test_atomic_states: list[bool] = []
     write_atomic_states: list[bool] = []
 
-    def accept_probe(backend: CardDavDirectoryBackend) -> str:
+    def accept(backend: CardDavDirectoryBackend) -> str:
         del backend
-        probe_atomic_states.append(connection.in_atomic_block)
+        test_atomic_states.append(connection.in_atomic_block)
         return "Connected."
 
     claim_control = Handle.objects.claim_control
@@ -189,9 +190,9 @@ def test_connect_probe_success_commits_every_owned_row_atomically(
         write_atomic_states.append(connection.in_atomic_block)
         return claim_control(user, **kwargs)
 
-    monkeypatch.setattr(CardDavDirectoryBackend, "test_connection", accept_probe)
+    monkeypatch.setattr(CardDavDirectoryBackend, "test_connection", accept)
     monkeypatch.setattr(Handle.objects, "claim_control", atomic_claim_control)
-    admin = parties_graphql._platform_admin("carddav-probe-success-admin")
+    admin = parties_graphql._platform_admin("carddav-test-success-admin")
 
     result = _connect_carddav(admin)
 
@@ -206,10 +207,10 @@ def test_connect_probe_success_commits_every_owned_row_atomically(
         "runtime_status": "OK",
         "config": {"server_url": "https://dav.example.com/"},
     }
-    assert probe_atomic_states == [False]
+    assert test_atomic_states == [False]
     assert write_atomic_states == [True]
 
-    with system_context(reason="test.parties.carddav.probe_success.verify"):
+    with system_context(reason="test.parties.carddav.test_success.verify"):
         credential = Credential.objects.get()
         vendor = Vendor.objects.get()
         directory = Directory.objects.get()
@@ -242,6 +243,30 @@ def test_connect_probe_success_commits_every_owned_row_atomically(
         assert link.evidence == [{"model": integration._meta.label, "id": integration.public_id, "pointer": ""}]
         assert link.confidence == 1.0
         assert link.is_confirmed is False
+
+
+def test_the_connection_message_names_the_host_and_port_never_the_credentials_in_the_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A server URL may carry a user and password; the message keeps only the host name and port."""
+
+    monkeypatch.setattr(CardDavDirectoryBackend, "discover", lambda backend: [])
+    url = "https://ada:secret@dav.example:8443/dav/"
+    directory = Directory(credential=None, backend_class="carddav", config={"server_url": url})
+    assert directory.test_connection() == "Connected to dav.example:8443."
+
+
+@pytest.mark.parametrize(("kind", "admitted"), [("basic_auth", True), ("static_token", False)])
+def test_carddav_admits_only_basic_auth_credentials(kind: str, admitted: bool) -> None:
+    """``Directory.admit_credential`` asks the backend, which signs in with a username and password only."""
+
+    directory = Directory(credential=None, backend_class="carddav", config={"server_url": "https://dav.example/"})
+    credential = Credential(kind=kind)
+    if admitted:
+        directory.admit_credential(credential)
+    else:
+        with pytest.raises(ValidationError, match="username and password"):
+            directory.admit_credential(credential)
 
 
 def _connect_carddav(admin: Any) -> Any:

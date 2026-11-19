@@ -83,7 +83,11 @@ from angee.storage.exceptions import UploadTargetNotFound, UploadTooLarge
 from angee.storage.models import UploadState
 from tests.conftest import Backend, Drive, File, MimeType, current_stream, make_integration
 from tests.stream_adapters import applied_history, failure_state
-from tests.test_storage import PNG_BYTES
+from tests.test_storage import (  # noqa: F401 -- the image drive the regression card's PHOTO lands on
+    PNG_BYTES,
+    drive,
+    image_drive,
+)
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -2000,7 +2004,7 @@ def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
     """The storage-owner double observes intake before apply; only hashes enter revisions."""
 
     backend = Backend.objects.create(slug="avatar-double", label="Avatar double", backend_class="local")
-    drive = Drive.objects.create(backend=backend, slug=settings.ANGEE_STORAGE_IMAGE_DRIVE, name="Images")
+    images = Drive.objects.create(backend=backend, slug=settings.ANGEE_STORAGE_IMAGE_DRIVE, name="Images")
     mime = MimeType.objects.create(mime_type="image/png", category="image", label="PNG")
     encoded = base64.b64encode(PNG_BYTES).decode()
     digest = hashlib.sha256(PNG_BYTES).hexdigest()
@@ -2018,7 +2022,7 @@ def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
         assert content == PNG_BYTES
         phases.append("extract")
         return File.objects.get_or_create(
-            drive=drive,
+            drive=images,
             content_hash=hashlib.sha256(content).hexdigest(),
             defaults={
                 "filename": filename,
@@ -2044,7 +2048,7 @@ def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
         phases.append("apply")
         return original_apply(stream, record)
 
-    monkeypatch.setattr(Drive.objects, "image_drive", lambda: drive)
+    monkeypatch.setattr(Drive.objects, "image_drive", lambda: images)
     monkeypatch.setattr(File.objects, "ingest_bytes", ingest_bytes)
     monkeypatch.setattr(File, "open_stream", unexpected_open)
     monkeypatch.setattr(replica.backend, "apply_record", apply_after_intake)
@@ -2139,9 +2143,9 @@ def test_write_back_refuses_an_avatar_the_image_rule_refuses_and_writes_nothing(
 
     person, link = replica.baseline()
     backend = Backend.objects.create(slug="legacy", label="Legacy", backend_class="local")
-    drive = Drive.objects.create(backend=backend, slug="assets", name="Assets")
+    assets = Drive.objects.create(backend=backend, slug="assets", name="Assets")
     legacy = File.objects.create(
-        drive=drive,
+        drive=assets,
         content_hash=hashlib.sha256(PNG_BYTES).hexdigest(),
         filename="old.png",
         size_bytes=len(PNG_BYTES),
@@ -2578,7 +2582,8 @@ _LEGACY_CARD = (
     "NICKNAME:Countess\r\nEMAIL;TYPE=HOME:ada@example.com\r\nEMAIL;TYPE=WORK,PREF:ada@work.example.com\r\n"
     "TEL;TYPE=CELL:+15550100\r\nADR;TYPE=HOME:;;12 Analytical St;London;;EC1;GB\r\n"
     "ORG:Analytical Engines;Research\r\nTITLE:Mathematician\r\nROLE:Programmer\r\nBDAY:1815-12-10\r\n"
-    "NOTE:First programmer.\r\nX-FAVOURITE-COLOUR:green\r\nEND:VCARD\r\n"
+    "NOTE:First programmer.\r\nX-FAVOURITE-COLOUR:green\r\n"
+    f"PHOTO;ENCODING=b;TYPE=PNG:{base64.b64encode(PNG_BYTES).decode()}\r\nEND:VCARD\r\n"
 )
 _LEGACY_PROJECTION = {
     "additional_name": "Augusta",
@@ -2606,27 +2611,35 @@ _LEGACY_PROJECTION = {
     "notes": "First programmer.",
     "organization": "Analytical Engines",
     "phones": [["+15550100", "cell", False]],
-    "photo": None,
+    "photo": {"hash": "ebda4d4ace3059d20d30b04f8fb1a9390f9e8bd8cd2117fca38db09ba2efa1a0", "mime": "image/png"},
     "role": "Programmer",
     "title": "Mathematician",
 }
 _LEGACY_CONTACT_PAYLOAD = {
     "href": _HREF,
-    "raw_vcard": _LEGACY_CARD.replace("\r\n", "\n").strip(),
+    # The retained card leaves PHOTO out, so vobject re-serializes it.
+    "raw_vcard": (
+        "BEGIN:VCARD\nVERSION:3.0\nUID:ada\nADR;TYPE=HOME:;;12 Analytical St;London;;EC1;GB\nBDAY:1815-12-10\n"
+        "EMAIL;TYPE=HOME:ada@example.com\nEMAIL;TYPE=WORK,PREF:ada@work.example.com\nFN:Ada Lovelace\n"
+        "N:Lovelace;Ada;Augusta;;\nNICKNAME:Countess\nNOTE:First programmer.\nORG:Analytical Engines;Research\n"
+        "ROLE:Programmer\nTEL;TYPE=CELL:+15550100\nTITLE:Mathematician\nX-FAVOURITE-COLOUR:green\nEND:VCARD"
+    ),
     "contact": _LEGACY_PROJECTION,
 }
-_LEGACY_CONTACT_HASH = "39b7e76c2d6b9d22410265162e841e43b33b0c84d537ed6188a3177d5285ff29"
+_LEGACY_CONTACT_HASH = "fee84e2d50c80960cbba2dbb437fd19d33637d2d1ed21c5ab40822d00cbcf23d"
 _LEGACY_BOOK_PAYLOAD = {"href": _BOOK, "name": "Contacts"}
 _LEGACY_BOOK_HASH = "b1f3416ed72b12d139eb574718ae20a8e572209c877e60c371c82f1fe0369138"
 
 
+@pytest.mark.usefixtures("image_drive")
 def test_links_the_href_base_wrote_classify_unchanged_and_push_nothing(replica: Replica) -> None:
     """A deployment's CardDAV links survive the directory seam with no migration and no re-download.
 
     The literals are what the base stored before CardDAV's identity and record
     building moved into its backend: the contact payload ``{"href", "raw_vcard",
     "contact"}``, a hash over the projection, the UID and href as metadata, and an
-    address-book payload that named its href. The contact keeps every byte, the
+    address-book payload that named its href; the card's ``PHOTO`` rides as its
+    content address and stays out of the retained card. The contact keeps every byte, the
     projection keeps its keys, the stream keeps mapping version 1 with no
     dependency digest, and the book is re-observed once under its new payload.
     """
@@ -2824,6 +2837,37 @@ def test_a_failed_discovery_raises_and_leaves_every_address_book_in_place(
     book.refresh_from_db()
     replica.stream.refresh_from_db()
     assert (book.status, book.absence_count, replica.stream.state) == (LinkStatus.CURRENT, 0, StreamState.OPEN)
+
+
+def test_a_directory_tests_its_connection_by_discovery_and_reports_the_servers_refusal(
+    replica: Replica, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``Directory.test_connection`` runs discovery: the server's host name on success, its refusal otherwise."""
+
+    assert replica.directory.test_connection() == "Connected to dav.example."
+    assert [request[0] for request in replica.server.requests] == ["PROPFIND"] * 3
+    original = replica.server.handle_request
+
+    def refuse(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "PROPFIND" and b"current-user-principal" in request.content:
+            return httpx2.Response(401)
+        return original(request)
+
+    monkeypatch.setattr(replica.server, "handle_request", refuse)
+    with pytest.raises(CardDavError) as refused:
+        replica.directory.test_connection()
+    assert refused.value.public_message == "CardDAV PROPFIND returned HTTP 401."
+
+
+def test_a_per_book_contacts_setting_other_than_local_delete_is_refused(replica: Replica) -> None:
+    """The book's stream takes ``local_delete`` alone; an unknown key is refused instead of riding into its config."""
+
+    book = RecordLink.objects.get(stream=replica.addressbooks, external_key=_BOOK)
+    replica.directory.config["streams"] = {"contacts": {_BOOK: {"local_delete": "propagate"}}}
+    assert replica.backend.contacts_stream(book).config == {"local_delete": "propagate"}
+    replica.directory.config["streams"]["contacts"][_BOOK]["remote_delete"] = "retain"
+    with pytest.raises(ValueError, match="Unknown Directory contacts setting"):
+        replica.backend.contacts_stream(book)
 
 
 def test_an_empty_listing_confirms_no_address_book_absence(replica: Replica) -> None:

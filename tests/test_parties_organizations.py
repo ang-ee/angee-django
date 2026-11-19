@@ -118,7 +118,7 @@ def test_an_unbound_link_mints_one_organization_and_a_replay_changes_nothing(sou
         assert all(before.values())
         assert all(status == "asserted" for rows in before.values() for _pk, _at, status in rows)
 
-    again = _ingest(source, link, EXAMPLE)
+    again = _ingest(source, link, EXAMPLE, target=organization)
 
     with system_context(reason="tests.organizations.replay"):
         assert again.pk == organization.pk
@@ -143,9 +143,9 @@ def test_a_changed_record_renames_clears_drops_and_respells_in_place(source: Sim
         phones=(),
         addresses=(ParsedAddress(label="Office", street="1  MAIN st", city="springfield", country="US"),),
     )
-    _ingest(source, link, changed)
+    _ingest(source, link, changed, target=organization)
     # The domain is part of the legal identity: omitting it states it empty, beside the legal name.
-    renamed = _ingest(source, link, replace(changed, domain=""))
+    renamed = _ingest(source, link, replace(changed, domain=""), target=organization)
 
     with system_context(reason="tests.organizations.read"):
         assert renamed.pk == organization.pk
@@ -228,14 +228,14 @@ def test_a_source_carrying_no_legal_identity_leaves_it_to_the_sources_that_do(so
         )
     assert _legal(organization) == ("Example Limited", "example.com")
 
-    _ingest(source, link, unknown)
+    _ingest(source, link, unknown, target=organization)
     assert _legal(organization) == ("Example Registered Limited", "example.org")
     with system_context(reason="tests.organizations.read"):
         statement = Organization.statements.model._base_manager.get(subject_id=organization.pk, link=link)
         assert statement.status == "withdrawn"
 
     # Carrying either field states the whole aspect again, and it outranks the register.
-    _ingest(source, link, replace(unknown, domain="example.net"))
+    _ingest(source, link, replace(unknown, domain="example.net"), target=organization)
     assert _legal(organization) == ("", "example.net")
 
 
@@ -256,6 +256,8 @@ def test_a_passed_target_is_an_organization_and_never_rebinds_a_link(source: Sim
         (person_link, None, "kind Organization"),
         (unbound, person, "kind Organization"),
         (bound, other, "never rebinds"),
+        # The caller decides the target: none is no decision to mint beside a live bound one.
+        (bound, None, "never rebinds"),
     ):
         with pytest.raises(ValidationError, match=message):
             _ingest(source, link, EXAMPLE, target=target)

@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 from itertools import chain, combinations, groupby, islice
@@ -26,9 +26,23 @@ from typing import TYPE_CHECKING, Any, NamedTuple, Self, TypedDict
 
 from django.apps import apps
 from django.conf import settings
+from django.contrib.contenttypes.prefetch import GenericPrefetch
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
-from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Prefetch, Q, Subquery, TextField, Value, When
+from django.db.models import (
+    Case,
+    Count,
+    Exists,
+    IntegerField,
+    OuterRef,
+    Prefetch,
+    Q,
+    Subquery,
+    TextField,
+    Value,
+    When,
+    prefetch_related_objects,
+)
 from django.db.models.functions import Coalesce, NullIf
 from django.db.models.lookups import Exact
 from django.utils.crypto import salted_hmac
@@ -1791,6 +1805,28 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
         return self._linked_party(link, apps.get_model("parties", "Person"))
 
+    def contact_people(self, links: Iterable[RecordLink]) -> dict[Any, Person | None]:
+        """Return the live Person each link names, keyed by link pk and read once for the batch.
+
+        A trashed person is nobody's target: it, like an unbound link, maps to
+        ``None``. The one rule a directory's comparison, its absence sweep, its
+        target resolution and the ingest's rebinding guard share.
+        """
+
+        return self._live_parties(links, apps.get_model("parties", "Person"))
+
+    def _live_parties(self, links: Iterable[RecordLink], model: Any) -> dict[Any, Any | None]:
+        """Return each link's untrashed ``model`` child (Person or Organization) by link pk; ``None`` while unbound."""
+
+        links = list(links)
+        prefetch_related_objects(
+            links, GenericPrefetch("target", [self.model._base_manager.select_related(model._meta.model_name)])
+        )
+        linked = {link.pk: self._linked_party(link, model) for link in links}
+        ids = [row.pk for row in linked.values() if row is not None]
+        live = {row.pk: row for row in model.objects.untrashed().filter(pk__in=ids)} if ids else {}
+        return {pk: live.get(row.pk) if row is not None else None for pk, row in linked.items()}
+
     @staticmethod
     def _linked_party(link: RecordLink, model: Any) -> Any | None:
         """Resolve ``link``'s Party target to its ``model`` child (Person or Organization); ``None`` while unbound."""
@@ -1805,43 +1841,43 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             raise ValidationError(f"A contact target must be a Party of kind {model.__name__}.")
         return child
 
-    @classmethod
-    def _ingest_target[M: models.Model](cls, link: RecordLink, model: type[M], target: M | None) -> M | None:
-        """Return the ``model`` row an ingest lands ``link`` on: its bound target, else the passed ``target``.
+    def _ingest_target[M: models.Model](self, link: RecordLink, model: type[M], target: M | None) -> M | None:
+        """Return the ``model`` row the caller decided ``link`` lands on, ``None`` to mint one; ingest decides nothing.
 
         Binding a link lends its party to the directory's contact readers, so a
-        passed target must be a ``model`` row and must be the target a bound link
-        already has: an ingest never rebinds a link.
+        target must be a ``model`` row, and a link bound to a live row keeps it: an
+        ingest never rebinds it. A link whose row is trashed names nobody
+        (:meth:`contact_people`), so its record lands on whoever the caller decided.
         """
 
-        linked = cls._linked_party(link, model)
-        if target is None:
-            return linked
-        if not isinstance(target, model):
+        if target is not None and not isinstance(target, model):
             raise ValidationError(f"A contact target must be a Party of kind {model.__name__}.")
-        if linked is not None and linked.pk != target.pk:
+        live = self._live_parties([link], model)[link.pk]
+        if live is not None and (target is None or live.pk != target.pk):
             raise ValidationError("A bound link keeps its target; ingestion never rebinds it.")
         return target
 
     def lock_contact(
         self,
-        party: Any | None,
-        *,
+        *parties: Any | None,
         parsed: ParsedContact | ParsedOrganization | None = None,
     ) -> None:
-        """Lock the mapped contact aggregate before a caller rechecks its base.
+        """Lock the mapped contact aggregates of ``parties`` before a caller rechecks or lands one.
 
-        Follow the shared Handle, Party, PartyStatement order before locking the
-        Person or Organization child ``party`` is and its mapped collections. The
-        parent row lock also fences inserts through its foreign keys while the
-        page transaction is open.
+        Follow the shared Handle, Party, PartyStatement order (the handles the
+        parties' statements and ``parsed`` name first) before locking each Person,
+        Organization or Party row given and its mapped collections. The parent row
+        lock also fences inserts through its foreign keys while the page
+        transaction is open. ``None`` entries are skipped.
         """
 
         associations = apps.get_model("parties", "Party").objects
         handles = apps.get_model("parties", "Handle").objects
+        rows = sorted((party for party in parties if party is not None), key=lambda row: row.pk)
+        ids = [row.pk for row in rows]
         handle_ids = (
-            set(associations.handle_statements().filter(subject_id=party.pk).values_list("handle_id", flat=True))
-            if party is not None
+            set(associations.handle_statements().filter(subject_id__in=ids).values_list("handle_id", flat=True))
+            if ids
             else set()
         )
         if parsed is not None:
@@ -1851,28 +1887,16 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                     | Q(platform="phone", value__in=[item[0] for item in parsed.phones])
                 ).values_list("pk", flat=True)
             )
-        associations.lock_identity_rows(
-            party_ids=(party.pk,) if party is not None else (),
-            handle_ids=handle_ids,
-        )
-        if party is None:
+        associations.lock_identity_rows(party_ids=ids, handle_ids=handle_ids)
+        if not rows:
             return
         employee = apps.get_model("parties", "RelationshipKind").employee()
-        list(type(party).objects.filter(pk=party.pk).order_by("pk").lock_if_supported())
-        list(
-            apps.get_model("parties", "Address")
-            .objects.filter(
-                party_id=party.pk,
-            )
-            .order_by("pk")
-            .lock_if_supported()
-        )
+        for row in rows:
+            list(type(row).objects.filter(pk=row.pk).order_by("pk").lock_if_supported())
+        list(apps.get_model("parties", "Address").objects.filter(party_id__in=ids).order_by("pk").lock_if_supported())
         list(
             apps.get_model("parties", "Relationship")
-            .objects.filter(
-                party_id=party.pk,
-                kind=employee,
-            )
+            .objects.filter(party_id__in=ids, kind=employee)
             .order_by("pk")
             .lock_if_supported()
         )
@@ -2025,12 +2049,15 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         source: Any,
         link: Any,
         created_by_id: Any,
+        replaces: Sequence[Any] = (),
     ) -> None:
-        """Assert the emails and phones ``link`` names for ``party``; withdraw the link's others.
+        """Assert the emails and phones ``link`` names for ``party``; withdraw the others it or ``replaces`` asserted.
 
         Each handle dedupes on its value and keeps the label and preference the
         source gives it, and the name the source gives its party (``display_name``;
         a blank one keeps the handle's); the Party row is the assertion's evidence.
+        ``replaces`` are the links of records a merge at the source folded into
+        this one: a handle only they asserted on ``party`` is withdrawn, never moved.
         """
 
         handles = apps.get_model("parties", "Handle").objects
@@ -2053,7 +2080,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                     handle.save(update_fields=(*dirty, "updated_at"))
                 self.assert_handle(party, handle, asserted_by=source, link=link, evidence=[party])
                 supported.append({"subject": party, "aspect": "handle", "handle": handle})
-        party.statements.withdraw_unsupported(source, supported, aspect="handle", link=link)
+        for stating in (link, *replaces):
+            party.statements.withdraw_unsupported(source, supported, aspect="handle", link=stating)
 
     def ingest_contact(
         self,
@@ -2063,16 +2091,21 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         created_by_id: Any,
         link: Any,
         target: Person | None = None,
+        replaces: Sequence[Any] = (),
     ) -> Any:
         """Assert one link's contact facts; preserve other sources and person preferences.
 
         The link owns the contact's source identity (its external key) and what the
         source sent. ``stream`` is the link's contacts stream as the page holds it,
         so its container (the address book, whose folder belongs to the same
-        directory) and integration resolve once per page. A link with no target
-        lands on ``target`` or mints a Person; a bound link keeps its own
-        (:meth:`_ingest_target`). Addresses land through
-        :meth:`AddressManager.land_addresses` and the employer through
+        directory) and integration resolve once per page. ``target`` is the person
+        the caller decided the contact is, ``None`` to mint one; a link bound to a
+        live person keeps it (:meth:`_ingest_target`). ``replaces`` are the links of
+        records a merge at the source folded into this one: whatever they stated
+        on the person that this record restates moves to ``link`` (statements are
+        keyed by source, subject and aspect), and the rest is withdrawn with this
+        link's own unsupported handles, addresses and employers. Addresses land
+        through :meth:`AddressManager.land_addresses` and the employer through
         :meth:`RelationshipManager.land_employment`; removed members withdraw only
         this source's statements instead of deleting rows.
         """
@@ -2124,9 +2157,15 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 source=source,
                 link=link,
                 created_by_id=created_by_id,
+                replaces=replaces,
             )
             apps.get_model("parties", "Address").objects.land_addresses(
-                person, parsed.addresses, asserted_by=source, link=link, created_by_id=created_by_id
+                person,
+                parsed.addresses,
+                asserted_by=source,
+                link=link,
+                created_by_id=created_by_id,
+                replaces=replaces,
             )
             apps.get_model("parties", "Relationship").objects.land_employment(
                 person,
@@ -2134,6 +2173,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 created_by_id=created_by_id,
                 asserted_by=source,
                 link=link,
+                replaces=replaces,
             )
             person.refresh_from_db()
             return person
@@ -2152,9 +2192,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         The organization counterpart of :meth:`ingest_contact`, for a directory
         stream whose records are organizations. ``stream`` is the link's stream as
         the page holds it: its integration's kind is read from the row in hand
-        (``Integration.declared_concrete_model``). A link with no target lands on
-        ``target`` or mints an Organization; matching an existing one is not
-        decided here, and a bound link keeps its own (:meth:`_ingest_target`). The
+        (``Integration.declared_concrete_model``). ``target`` is the organization
+        the caller decided the record is, ``None`` to mint one; a link bound to a
+        live organization keeps it (:meth:`_ingest_target`). The
         link is bound before the facts are stated: identity, the legal identity,
         handles and addresses, each withdrawing this link's statements it no
         longer supports. The legal identity is stated whole (an omitted field is
@@ -2289,6 +2329,7 @@ class RelationshipManager[RelationshipT: Relationship](StatementSubjectManager[R
         link: Any,
         evidence: Iterable[Any] = (),
         kinds: dict[Any, Any] | None = None,
+        replaces: Sequence[Any] = (),
     ) -> None:
         """State the employers ``link`` names for ``person``; withdraw the link's edges it no longer names.
 
@@ -2304,7 +2345,9 @@ class RelationshipManager[RelationshipT: Relationship](StatementSubjectManager[R
         identity rows (``Party.lock_subject``, the shared Handle, Party order),
         whatever the caller holds; a call naming none only withdraws, which locks
         each edge it changes. ``evidence`` names the records supporting the
-        claims; ``kinds`` caches the employee kind across a batch.
+        claims; ``kinds`` caches the employee kind across a batch. ``replaces`` are
+        the links of records a merge at the source folded into ``link``'s: their
+        edges are the link's own for reuse, and one it no longer names is withdrawn.
         """
 
         kinds = {} if kinds is None else kinds
@@ -2324,9 +2367,10 @@ class RelationshipManager[RelationshipT: Relationship](StatementSubjectManager[R
             return  # Without the kind no employment edge exists to withdraw.
         if employers:
             person.lock_subject()
+        stating = (link, *replaces)
         stated = dict(
             self.model.statements.current()
-            .filter(link=link, subject__party_id=person.pk, subject__kind=kind)
+            .filter(link__in=stating, subject__party_id=person.pk, subject__kind=kind)
             .values_list("subject_id", "other_name")
         )
         names = {employment.employer for employment in employers if isinstance(employment.employer, str)}
@@ -2373,7 +2417,8 @@ class RelationshipManager[RelationshipT: Relationship](StatementSubjectManager[R
                 },
             )
         if dropped := sorted(set(stated) - {edge.pk for edge in landed.values()}):
-            self.model.statements.withdraw(asserted_by, dropped, link=link)
+            for each in stating:
+                self.model.statements.withdraw(asserted_by, dropped, link=each)
 
 
 class FolderManager[FolderT: Folder](AngeeHistoryManager[FolderT]):

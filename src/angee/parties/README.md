@@ -30,10 +30,20 @@ address-book stream: a person's edit is a statement that outranks the source,
 never a conflict, and an unchanged re-read applies nothing. A tombstone in a
 page, or a record the absence sweep confirms gone, withdraws the link's
 statements and keeps the party; a record that returns applies again. A payload
-may name the records a merge at the source replaced (`observe(..., replaces=...)`):
-the survivor lands on a replaced record's person and their tombstones follow it
-in the page, so their statements move to its link. A two-way stream compares the
-person's own projection and keeps a vanished contact's statements.
+may name the records a merge at the source replaced, in the source's order
+(`observe(..., replaces=...)`): the survivor lands on the first one's person, what
+it restates moves to its link (statements are keyed by source, subject and
+aspect), and what only a replaced record stated is withdrawn with the survivor's
+own unsupported handles, addresses and employers. A replaced record is never a
+record of the page: it leaves the source's key walk, so the absence sweep
+tombstones its link. A two-way stream compares the person's own projection and
+keeps a vanished contact's statements.
+
+One function decides a contact's target (`DirectoryBackend._contact_target`),
+once, under the contact locks: its own link's person, then a replaced link's.
+A trashed person is nobody's target (`PartyManager.contact_people`), so its
+record lands on a new person. The ingest verbs decide nothing: they land on the
+target they are given or mint one, and refuse to move a link off a live party.
 
 [PartyManager.ingest_contact](managers.py) asserts directory facts; Address and
 Relationship keep their own identities and statements. Missing members withdraw
@@ -49,8 +59,9 @@ identity, the whole legal identity (legal name and domain together, or withdrawn
 when the source carries neither), handles and addresses;
 `organization_projection` is its comparison shape, over the stored form
 `prepare_contact` gives organizations as it gives contacts. Neither verb rebinds
-a bound link: binding lends the party to the directory's contact readers, so a
-passed target must be of the verb's kind and the link's own. Both verbs land
+a link bound to a live party: binding lends the party to the directory's contact
+readers, so a target must be of the verb's kind and, for such a link, its own.
+Both verbs land
 addresses through `AddressManager.land_addresses`. Employment has one verb,
 [RelationshipManager.land_employment](managers.py): an employer is a tracked
 Organization or a free-text name, a link may name several, and the link's edges
