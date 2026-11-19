@@ -345,7 +345,11 @@ live in code docstrings.
     its events stream's mapping version (`CalendarBackend.events_mapping_version`),
     and a test pins what a push writes to it.
   - Hosts add the `RecordLink.local_version` column (`makemigrations`). Existing
-    links start unknown, so the first poll reads every published event once.
+    links start unknown, so the first poll reads every published event once. Its
+    database default is that unknown version (`CharField(blank=True,
+    db_default="", default="", max_length=255)`), so a release before the column,
+    rolled back onto the migrated database, still creates links. A host that
+    already added the column gets one `AlterField` for the default.
 - **Breaking (`delete_blocker` overrides):** `AngeeModel.delete_blocker(*,
   cascaded=False)` says where the row sits in the delete: `DeletePreview` judges
   its target as the start and every collected row as cascaded, and a model's

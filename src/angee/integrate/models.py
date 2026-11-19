@@ -6045,7 +6045,7 @@ class RecordLink(
     outbox_retry_at = models.DateTimeField(null=True, blank=True)
     outbox_last_error = models.JSONField(default=dict, blank=True)
     remote_version = models.CharField(max_length=512, blank=True)
-    local_version = models.CharField(max_length=255, blank=True, default="")
+    local_version = models.CharField(max_length=255, blank=True, default="", db_default="")
     """The local version (``LocalChange.local_version``) whose projection the applied base holds; ``""``: unknown.
 
     A push records the version it read with what it wrote; any other promotion
@@ -6053,7 +6053,8 @@ class RecordLink(
     still projects the base. Stored framed by the mapping version that projected
     it, so a mapping change reads every row again; a version is at most
     ``LOCAL_VERSION_LENGTH`` long, so its framed form fits. It advances without a
-    new base, so the link's history leaves it out.
+    new base, so the link's history leaves it out. The database default is the
+    unknown version, so a release before this column still creates links.
     """
     origin = models.CharField(max_length=16, blank=True)
     last_seen_at = models.DateTimeField(null=True, blank=True)
