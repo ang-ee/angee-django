@@ -334,6 +334,10 @@ re-entered or a credential attached since admission leaves discovery pending, so
 the run sends nothing and commits nothing it read (a transient
 `IntegrationError`); earlier pages and their cursor stay, and the next run waits
 for discovery. Operator actions on a stream's retained failures wait for it too.
+A workflow sync step checks readiness before any IO or lock
+(`workflows_integrate.steps.bridge_io`): a pending discovery parks it in a time
+wait, with the discovery message as a note and no attempt spent, and a failed
+one fails it with that message.
 Discovery's own apply writes no stream. While a run holds the sync lock discovery
 cannot settle, so readiness stands for the generation the run was admitted under.
 Two limits still hold: a multi-partition workflow step runs without the sync

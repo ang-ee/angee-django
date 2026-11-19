@@ -44,6 +44,16 @@ live in code docstrings.
   integration running on their own credential was refused. The release now runs
   on the locked capability row (`Integration.lock_capability`).
 
+- `angee.workflows_integrate`: a sync step waits for a pending connection
+  discovery instead of failing. The discovery refusal reached `bridge_io`'s
+  catch-all as a retryable "Stream transport failed.", so a step was failed
+  within seconds of a re-entered secret, with the wrong message, before
+  discovery could finish; a single-sync bridge's attempts also held the lock
+  discovery needs. `bridge_io` now asks the bridge before any IO or lock: a
+  pending discovery parks the step in a time wait until discovery's next attempt
+  is due, without spending an attempt or beginning an effect, and notes the
+  discovery message; a failed discovery fails the step with that message.
+
 - `angee.integrate`: a sync run already in flight sends and commits nothing once
   a secret is re-entered or a credential attached. Admission was fenced, but a
   run admitted before the change read the fresh credential and went on with the

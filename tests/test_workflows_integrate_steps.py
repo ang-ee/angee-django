@@ -17,6 +17,7 @@ from rebac import system_context
 from rebac.actors import to_subject_ref
 
 from angee.decisions.testing.models import Decision
+from angee.integrate.errors import IntegrationFailure
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.net import AddressResolutionError
 from angee.integrate.states import (
@@ -396,6 +397,59 @@ def test_map_keeps_each_partition_cursor_and_collects_its_counts(cycle):
     assert len(cycle.extracted) == 4 and len(cycle.declared) == 2
     cycle.bridge.refresh_from_db()
     assert cycle.bridge.last_sync_items == 4
+
+
+def _rediscovering(cycle, monkeypatch):
+    """A subject whose capability learns its account at discovery, sent to discover again by a re-entered secret."""
+    monkeypatch.setattr(ConnectionBridge, "capability_impl", property(cycle.adapter_class))
+    with system_context(reason="test a re-entered secret under a sync cycle"):
+        bridge = make_integration("rediscovering-cycle", model=ConnectionBridge)
+        assert bridge.finish_discovery(credential_pk=bridge.credential_id, generation=bridge.discovery_generation)
+        bridge.credential.replace_material({"api_key": "re-entered"})
+        bridge.refresh_from_db()
+    assert bridge.discovery_pending
+    return bridge
+
+
+def test_a_step_waits_for_pending_discovery_without_an_attempt_and_resumes_once_it_settles(cycle, monkeypatch):
+    bridge = _rediscovering(cycle, monkeypatch)
+    run = cycle.start(StreamStage, {"key": "records", "page_bound": 1}, subject=bridge)
+
+    assert runner.execute(step_row(run).pk)
+
+    waiting = step_row(run)
+    assert (waiting.status, waiting.waiting_kind, waiting.retries) == ("waiting", "time", 0)
+    assert waiting.notes[-1]["message"] == "Connection discovery must finish before syncing."
+    attempt = StepAttempt.system_queryset().get(step_run=waiting)
+    assert attempt.effect_started_at is None and attempt.error == ""
+    assert cycle.extracted == []
+    with system_context(reason="test discovery settles under a waiting cycle"):
+        assert bridge.finish_discovery(credential_pk=bridge.credential_id, generation=bridge.discovery_generation)
+    wake(run)
+
+    run_until(run)
+
+    assert run.status == "succeeded" and step_row(run).retries == 0
+    assert run.output["counts"]["cycle_items"] == 2
+
+
+def test_a_step_fails_with_the_discovery_message_once_discovery_failed(cycle, monkeypatch):
+    bridge = _rediscovering(cycle, monkeypatch)
+    with system_context(reason="test rediscovery refused the re-entered secret"):
+        assert bridge.finish_discovery(
+            credential_pk=bridge.credential_id, generation=bridge.discovery_generation,
+            error=IntegrationFailure("This key reads another account."),
+        )
+    run = cycle.start(StreamStage, {"key": "records", "page_bound": 1}, subject=bridge)
+
+    assert runner.execute(step_row(run).pk)
+
+    attempt = StepAttempt.system_queryset().get(step_run=step_row(run))
+    assert (attempt.result, attempt.error) == (
+        "failed", "IntegrationError: Connection discovery must finish before syncing.",
+    )
+    # A failed discovery needs the operator: the step fails at once, nothing read, rather than retrying.
+    assert step_row(run).status == "failed" and cycle.extracted == []
 
 
 # A resolver that is briefly offline can answer "no such host" (macOS does), so that is transport too.

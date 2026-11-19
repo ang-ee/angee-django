@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from angee.base.models.identity import public_id_of
 from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRecordReference, DecisionRequest
+from angee.integrate.errors import IntegrationError
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.models import Bridge
 from angee.integrate.net import AddressResolutionError
@@ -260,7 +261,21 @@ def bridge_io(ctx: StepContext, bridge: Bridge) -> Iterator[BridgeImpl | Wait]:
     A host that does not resolve is retried too: a resolver that is briefly offline
     answers "no such host" on some platforms (macOS), and a host that truly has no
     address still fails once the step's attempts run out.
+
+    Readiness is checked before any IO or lock (discovery takes the bridge lock to
+    run): a bridge awaiting connection discovery, as a re-entered secret leaves it,
+    waits the same way, until discovery's next attempt is due, and notes the
+    discovery message; one whose discovery failed fails with that message.
     """
+    try:
+        bridge.require_discovery_ready()
+    except IntegrationError as refusal:
+        if not bridge.discovery_pending:
+            raise
+        assert bridge.discovery_retry_at is not None  # discovery_pending reads the persisted deadline.
+        ctx.note(refusal.public_message, tone="warning")
+        yield ctx.wait(until=max(ctx.now + timedelta(seconds=1), bridge.discovery_retry_at), state=ctx.state)
+        return
     try:
         with closing(bridge.capability_impl) as adapter:
             lock = bridge.sync_lock() if adapter.sync_parallelism == 1 else nullcontext(True)
