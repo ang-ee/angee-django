@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
-from types import SimpleNamespace
 from typing import Any
-from unittest.mock import Mock
 
 import pytest
 from django.core.exceptions import ValidationError
@@ -16,7 +14,7 @@ from rebac import actor_context, system_context
 import tests.test_messaging  # noqa: F401 -- register the fixture model graph before database setup
 from angee.base.signals import mute_changes
 from angee.messaging import delivery
-from angee.messaging.backends import DeliveryOutcome
+from angee.messaging.backends import DeliveryOutcome, ManualChannelBackend
 from angee.messaging.testing.models import Message
 from tests.test_messaging import channel as channel
 
@@ -60,23 +58,12 @@ def test_queued_delivery_waits_for_commit_and_persists_status(
         "angee.jobs.enqueue.celery_app.send_task",
         lambda _name, *, kwargs, **_options: payloads.append(kwargs),
     )
-    channels = Mock()
-    channels.sudo.return_value = channels
-    channels.get.return_value = SimpleNamespace(
-        # Delivery admission asks the channel's integration whether its discovery is ready.
-        require_discovery_ready=lambda: None,
-        backend=SimpleNamespace(
-            deliver=lambda message: DeliveryOutcome(accepted=True),
-            delivery_lock=lambda: nullcontext(True),
-            close=lambda: None,
-        ),
+    delivered: list[Any] = []
+    # The stored channel's own backend sends: delivery reaches it through the channel as stored.
+    monkeypatch.setattr(
+        ManualChannelBackend, "deliver",
+        lambda _backend, message: delivered.append(message.channel_id) or DeliveryOutcome(accepted=True),
     )
-    get_model = delivery.apps.get_model
-
-    def delivery_model(app_label: str, model_name: str | None = None) -> Any:
-        if (app_label, model_name) == ("messaging", "Channel"):
-            return SimpleNamespace(objects=channels)
-        return get_model(app_label, model_name)
 
     with system_context(reason="messaging delivery"), mute_changes():
         revision = message.revision
@@ -94,11 +81,10 @@ def test_queued_delivery_waits_for_commit_and_persists_status(
         assert payloads == [
             {"model_label": message._meta.label_lower, "pk": message.pk, "external_id": message.external_id}
         ]
-        monkeypatch.setattr(delivery.apps, "get_model", delivery_model)
         monkeypatch.setattr(delivery, "task_lock", lambda _key: nullcontext(True))
         outcome = delivery.run_message_delivery(**payloads[0])
         assert outcome["delivered"] is True
-        channels.get.assert_called_once_with(pk=message.channel_id)
+        assert delivered == [channel.pk]
         message.refresh_from_db()
         assert message.status == Message.MessageStatus.SENT
         assert message.sent_at is not None

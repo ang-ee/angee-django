@@ -294,7 +294,7 @@ def bridge_io(ctx: StepContext, bridge: Bridge) -> Iterator[BridgeImpl | Wait]:
                     try:
                         # Asked again under the lock on the bridge as stored now: a secret re-entered while
                         # the step waited for the lock holds its IO back, and the next attempt's check decides.
-                        type(bridge).require_stored_discovery_ready(bridge.pk)
+                        bridge.require_stored_discovery_ready()
                     except IntegrationError:
                         acquired = False
                 if not acquired:
