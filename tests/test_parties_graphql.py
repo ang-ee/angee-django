@@ -719,13 +719,27 @@ def test_merge_scalar_fields_follow_the_party_and_person_projections(db: None) -
     assert set(person.merge_common_scalar_fields) < set(person.merge_scalar_fields)
 
 
-_MERGE_CERTAIN = """mutation MergeCertain {
-  merge_certain_same_as_pairs(limit: 10) { outcome normalized_value left { id } right { id } survivor { id } }
+_CERTAIN = """query Certain {
+  certain_same_as_pairs(limit: 10) { normalized_value left { id } right { id } survivor { id } }
+}"""
+
+_PREVIEW = """query Preview($sets: [[ID!]!]!) {
+  duplicate_set_previews(sets: $sets, certain: true) {
+    members { id display_name created_at statements { source_kind handle { value } } }
+    survivor { id }
+    outcome
+    reason
+    disagreements { field values shown }
+  }
+}"""
+
+_MERGE = """mutation Merge($sets: [[ID!]!]!) {
+  merge_duplicates(sets: $sets, certain: true) { members outcome reason survivor { id } }
 }"""
 
 
-def test_merge_certain_same_as_pairs_merges_as_the_signed_in_person(db: None) -> None:
-    """A non-admin owner merges their certain pair through the schema; an anonymous request is refused."""
+def test_a_person_lists_previews_and_merges_a_certain_pair_through_the_schema(db: None) -> None:
+    """A non-admin owner reads the certain pair, its preview and merges it; an anonymous request is refused."""
 
     del db
     owner = User.objects.create_user(username="certain-pair-owner")
@@ -738,17 +752,24 @@ def test_merge_certain_same_as_pairs_merges_as_the_signed_in_person(db: None) ->
             newer, handle, evidence=handle, reason="tests.claim",
         )
         messaging_models.Party.objects.reconcile_same_as()
+    console = _schema("console")
+    sets = {"sets": [[older.sqid, newer.sqid]]}
 
-    anonymous = execute_schema(_schema("console"), _MERGE_CERTAIN)
+    anonymous = execute_schema(console, _MERGE, sets)
     assert [error.message for error in anonymous.errors or ()] == ["Authentication required."]
 
-    data = _data(execute_schema(_schema("console"), _MERGE_CERTAIN, user=owner))
-    assert data["merge_certain_same_as_pairs"] == [
-        {
-            "outcome": "MERGED",
-            "normalized_value": "zoe@example.com",
-            "left": {"id": older.sqid},
-            "right": {"id": newer.sqid},
-            "survivor": {"id": older.sqid},
-        }
+    assert _data(execute_schema(console, _CERTAIN, user=owner))["certain_same_as_pairs"] == [
+        {"normalized_value": "zoe@example.com", "left": {"id": older.sqid}, "right": {"id": newer.sqid},
+         "survivor": {"id": older.sqid}},
+    ]
+    (preview,) = _data(execute_schema(console, _PREVIEW, sets, user=owner))["duplicate_set_previews"]
+    assert ([member["id"] for member in preview["members"]], preview["survivor"], preview["outcome"]) == (
+        [older.sqid, newer.sqid], {"id": older.sqid}, None,
+    )
+    assert preview["disagreements"] == [
+        {"field": "display_name", "values": ["Zoë Example", "Zoe Example"], "shown": "Zoë Example"},
+    ]
+    assert {row["source_kind"] for row in preview["members"][1]["statements"]} == {"RULE"}
+    assert _data(execute_schema(console, _MERGE, sets, user=owner))["merge_duplicates"] == [
+        {"members": [older.sqid, newer.sqid], "outcome": "MERGED", "reason": "", "survivor": {"id": older.sqid}},
     ]

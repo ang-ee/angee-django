@@ -121,19 +121,27 @@ pointing owners union statements, retaining collisions as superseded. Where the
 records disagree on a merge field, the merging person confirms the value kept
 (the survivor's, or the chosen override), so no moved statement outranks it.
 
-Nothing merges unattended. A person merges the certain pairs awaiting their
-review in one action, `PartyManager.merge_certain_same_as_pairs` (the
-`merge_certain_same_as_pairs` mutation), as their own merges. Only an active person
-account that writes both parties may (the party's `merge_certain` permission,
-`write & person->active_member`); a service or agent account merges nothing, and no
-agent tool offers it. A pair is certain when both are people, neither is an
-account's own person, exactly the two are linked to an address the pair cites, and
-both bear a real name, none of the pair's cited addresses (a record named after its
-e-mail has no name of its own), equal to the other's but for case, accents and
-hyphens. The older record
-survives and loses no value: a merge field it leaves empty takes the newer record's
-value (`Party.merge_values`), its own stands where both have one, and each kept
-value is recorded as that person's choice. The merge's own permission and guards
-decide each pair, and the action returns every pair it read with its outcome, a
-bounded number per call. A person's `anniversary` is a merge choice like their
-birthday; a party's `avatar` is not one yet.
+Nothing merges unattended. A person may also merge in a batch: confirmed sets of
+two to ten records each (`PartyManager.merge_duplicates`, the `merge_duplicates`
+mutation; at most 50 sets), either the certain pairs the Review page lists
+(`certain_same_as_pairs`) or a selection from the People or Organizations list.
+Only an active person account that writes every record may (the party's
+`batch_merge` permission, `write & person->active_member`); a service or agent
+account merges nothing, and no agent tool offers it. A set never holds an account's
+own person (merged by hand, on the compare page), records of two kinds, a trashed
+or merged record, or two records a person kept apart; each is refused for that set
+with its reason, and a set merges exactly as the person confirmed it or not at all.
+A pair is certain when both are people, neither is an account's own person,
+exactly the two are linked to an address the pair cites, and both bear a real
+name, none of the pair's cited addresses (a record named after its e-mail has no
+name of its own), equal to the other's but for case, accents and hyphens. In each
+set the oldest record survives and the others fold into it in key order, under one
+lock pass. A batch records no value as the person's choice: each record's
+statements move to the survivor as their sources' own and the provenance ranking
+decides what shows; a field the survivor leaves empty takes a merged record's
+value as a plain value no one states (`Party.merge_values`). The dialog shows, for
+each set, the fields its records disagree on and the value that will show; a
+person who wants to choose merges that pair on the compare page instead. A merge,
+batch or not, reverts from its changeset. A person's `anniversary` is a merge
+choice like their birthday; a party's `avatar` is not one yet. Merging a person
+with an organization is refused by every merge.

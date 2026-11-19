@@ -10,25 +10,33 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
-- Parties: a person merges the certain same-person pairs awaiting their review in
-  one action, `Party.objects.merge_certain_same_as_pairs(actor=, limit=)`,
-  exposed as the `merge_certain_same_as_pairs(limit)` mutation. Only an active
-  person account writing both parties may: the party's new `merge_certain`
-  permission (`write & person->active_member`, parties schema revision 21)
-  refuses service and agent accounts, and no agent tool offers the action. A
-  pair is certain when both are people, neither is an
-  account's own person, exactly the two are linked to an address it cites, and
-  their names are equal but for case, accents and hyphens
+- Parties: a person merges duplicates in a batch,
+  `Party.objects.merge_duplicates(actor=, sets=, certain=False)`, the
+  `merge_duplicates(sets, certain)` mutation: confirmed sets of two to ten
+  records (at most 50 sets), from the certain pairs the Review page lists
+  (`certain_same_as_pairs`, `certain=True` re-checks each) or a selection from a
+  list. `duplicate_set_previews(sets, certain)` reads what the dialog shows
+  (members oldest first with their statements and handles, the survivor, a
+  refusal, and the fields the records disagree on with the value that will
+  show) in a fixed number of queries. Only an active person account writing
+  every record may (the party's new `batch_merge` permission,
+  `write & person->active_member`, parties schema revision 22), read on the
+  party whatever manager is asked; no agent tool offers it. A set holding an
+  account's own person, two kinds, a trashed or merged record or two records a
+  person kept apart refuses with its reason; a set merges exactly as confirmed,
+  judged again under one lock pass of its members, their same-person partners
+  and their handles; the oldest record survives and the others fold into it in
+  key order; a lock conflict (deadlock, lock not granted) is that set's
+  `stopped`, any other database error stops the call. A batch records no value
+  as the person's choice (`PartyManager.BATCH_CONFIRMED_FIELDS`): statements move
+  as their sources' own and an empty survivor field takes a merged record's
+  value as a plain value (`Party.merge_values`). A pair is certain when both are
+  people, neither is an account's own person, exactly the two are linked to an
+  address it cites, and their names are equal but for case, accents and hyphens
   (`Party.comparable_name`); a name that is one of the pair's cited addresses
-  (`Party.names_an_address`, a record named after its e-mail) is no name. Each merges into the older record as the acting
-  person's own merge, through the merge's permission and guards, and loses no
-  value: a merge field the survivor leaves empty takes the newer record's value
-  (`Party.merge_values`), the survivor's stands where both have one, and each
-  kept value is recorded as that person's choice. It returns every pair it read
-  with its outcome (`SameAsMergeOutcome`: merged, or the reason it was left), at
-  most `limit` per call. Nothing merges without a person. A person's
-  `anniversary` is now a merge choice (the Merge page shows it); before, a merge
-  that confirmed a differing birthday pinned the survivor's anniversary.
+  (`Party.names_an_address`) is no name. Every party merge now refuses a person
+  with an organization (`Party.validate_merge`). A person's `anniversary` is a
+  merge choice (the Merge page shows it).
 
 - Parties: `Party.objects.propose_same_person_as_system(left, right, *, evidence,
   reason)` lets an importer propose that two parties are one person, citing the
@@ -50,8 +58,8 @@ live in code docstrings.
   that pass (`Party.lock_merge_records`): the fold re-keys the merged party's
   other pairs onto the survivor, which locked each partner's Handles after party
   rows and could deadlock with a resolution of the partner's address (a defect
-  already on `main`). The bulk merge reports a merge the database stops (an
-  `OperationalError`: deadlock, lock or statement timeout) as `busy` and goes on. The job
+  already on `main`); the pass reads the partners again under its lock and tops
+  the set up when a pair committed while it waited. The job
   no longer withdraws a proposal stated after its run began, and restates a
   standing proposal whose cited handle was deleted or merged away with the handles
   that still link the two, so it never hides from the review list. Only the

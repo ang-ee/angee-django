@@ -14,7 +14,7 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.db.models import Exists, OuterRef, Prefetch
+from django.db.models import Exists, OuterRef, Prefetch, prefetch_related_objects
 from rebac.graphql.strawberry_django import optimize
 from strawberry import auto
 from strawberry_django.fields.field import StrawberryDjangoField
@@ -35,7 +35,7 @@ from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
 from angee.integrate.schema import BridgeTypeMixin
-from angee.parties.managers import DisplayAvatarPrefetches, SameAsMergeOutcome
+from angee.parties.managers import DisplayAvatarPrefetches, DuplicateMergeOutcome
 from angee.parties.models import Circle as CircleModel
 from angee.parties.models import Party as PartyModel
 from angee.parties.models import RelationshipKind as RelationshipKindModel
@@ -55,7 +55,7 @@ CircleMember = apps.get_model("parties", "CircleMember")
 SameAsStatement = Party.same_as.model.statements.model
 RelationshipKind = apps.get_model("parties", "RelationshipKind")
 strawberry.enum(cast(Any, RelationshipKind.PartyKind))
-strawberry.enum(SameAsMergeOutcome)
+strawberry.enum(DuplicateMergeOutcome)
 Relationship = apps.get_model("parties", "Relationship")
 
 _PARTY_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(Party, "hasura_updatable_fields")
@@ -410,14 +410,63 @@ class SameAsPairType:
 
 
 @strawberry.type
-class SameAsPairOutcomeType:
-    """One same-person pair the bulk merge read: merged into ``survivor``, or left, and why."""
+class CertainSameAsPairType:
+    """A same-person pair one confirm would merge now: the two, the address linking them, and the older survivor."""
 
     left: PartyType
     right: PartyType
     normalized_value: str
-    outcome: SameAsMergeOutcome
+    survivor: PartyType
+
+
+@strawberry.type
+class FieldDisagreementType:
+    """A merge field the members of a set disagree on: each member's value, and the value the survivor will show."""
+
+    field: str
+    values: list[str | None]
+    shown: str | None
+
+
+@strawberry.type
+class DuplicateSetPreviewType:
+    """A set of records a person says are one, as the batch merge would merge it now.
+
+    ``members`` come oldest first, each with what tells it apart (its handles,
+    its statements' sources, its dates); the first survives.
+    """
+
+    members: list[PartyType]
     survivor: PartyType | None
+    outcome: DuplicateMergeOutcome | None
+    reason: str
+    disagreements: list[FieldDisagreementType]
+
+
+@strawberry.type
+class DuplicateSetOutcomeType:
+    """What one confirmed set of records came to: merged into ``survivor``, or left, and why."""
+
+    members: list[strawberry.ID]
+    outcome: DuplicateMergeOutcome
+    survivor: PartyType | None
+    reason: str
+
+
+def _prefetch_member_facts(members: list[Any], actor: Any) -> None:
+    """Load what the duplicate dialog shows of every member in one batch: statements, handles, avatars."""
+
+    files = apps.get_model("storage", "File").objects.with_actor(actor)
+    prefetch_related_objects(
+        members,
+        Prefetch(
+            "partystatement_set",
+            queryset=Party.objects.handle_statements().for_reader(actor).select_related("subject", "handle"),
+            to_attr="_readable_handle_statements",
+        ),
+        Prefetch("handles", queryset=Handle.objects.with_actor(actor)),
+        *Party.objects.display_avatar_prefetches(actor, avatars=files),
+    )
 
 
 @strawberry.enum
@@ -454,6 +503,28 @@ class PartiesReviewQuery:
             "list[SameAsPairType]",
             Party.objects.all().same_as_pairs(limit=limit),
         )
+
+    @strawberry.field
+    def certain_same_as_pairs(self, info: strawberry.Info, limit: int = 50) -> list[CertainSameAsPairType]:
+        """Return the certain same-person pairs awaiting the signed-in person's review, at most 50."""
+
+        return cast(
+            "list[CertainSameAsPairType]",
+            Party.objects.certain_same_as_pairs(actor=session_user(info), limit=limit),
+        )
+
+    @strawberry.field
+    def duplicate_set_previews(
+        self, info: strawberry.Info, sets: list[list[strawberry.ID]], certain: bool = False,
+    ) -> list[DuplicateSetPreviewType]:
+        """Return each set of records as the batch merge would merge it now, with what tells its members apart."""
+
+        actor = session_user(info)
+        previews = Party.objects.preview_duplicates(
+            actor=actor, sets=[[str(pk) for pk in ids] for ids in sets], certain=certain,
+        )
+        _prefetch_member_facts([member for preview in previews for member in preview.members], actor)
+        return cast("list[DuplicateSetPreviewType]", previews)
 
     @strawberry.field
     def search_parties(self, query: str, limit: int = 20) -> list[PersonType]:
@@ -581,12 +652,16 @@ class PartiesIdentityMutation:
         )
 
     @strawberry.mutation
-    def merge_certain_same_as_pairs(self, info: strawberry.Info, limit: int = 50) -> list[SameAsPairOutcomeType]:
-        """Merge, as the signed-in person's own merges, each certain same-person pair awaiting their review."""
+    def merge_duplicates(
+        self, info: strawberry.Info, sets: list[list[strawberry.ID]], certain: bool = False,
+    ) -> list[DuplicateSetOutcomeType]:
+        """Merge each confirmed set of records into its oldest member as the signed-in person; return every outcome."""
 
         return cast(
-            "list[SameAsPairOutcomeType]",
-            Party.objects.merge_certain_same_as_pairs(actor=session_user(info), limit=limit),
+            "list[DuplicateSetOutcomeType]",
+            Party.objects.merge_duplicates(
+                actor=session_user(info), sets=[[str(pk) for pk in ids] for ids in sets], certain=certain,
+            ),
         )
 
     @strawberry.mutation
@@ -1028,7 +1103,10 @@ _PARTIES_SCHEMA_BUCKET = {
         CircleMemberType,
         SameAsStatementType,
         SameAsPairType,
-        SameAsPairOutcomeType,
+        CertainSameAsPairType,
+        FieldDisagreementType,
+        DuplicateSetPreviewType,
+        DuplicateSetOutcomeType,
         PeopleWorkbenchScope,
         PeopleWorkbenchType,
         RelationshipKindType,
