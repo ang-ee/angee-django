@@ -285,22 +285,32 @@ class HubSpotDirectoryBackend(DirectoryBackend):
     sync_parallelism: ClassVar[int | None] = 1
 
     def credential_blocker(self, credential: Any) -> str | None:
-        """Refuse anything but a static token that holds a key: the service key this backend sends as its bearer."""
+        """Refuse anything but a static token holding a key, and one that needs reconnecting.
 
-        if credential.kind == CredentialKind.STATIC_TOKEN and credential.secret_value().strip():
-            return None
-        return "A HubSpot directory reads with a HubSpot service key: attach a static token that holds one."
+        The key is judged as it is sent: a static token's bearer is its key as
+        stored, so only an empty one, with nothing to send, is refused here, and
+        HubSpot judges any other.
+        """
+
+        if credential.kind != CredentialKind.STATIC_TOKEN or not credential.secret_value():
+            return "A HubSpot directory reads with a HubSpot service key: attach a static token that holds one."
+        if credential.is_reconnect_required:
+            return "This HubSpot service key must be reconnected: enter the key again."
+        return None
 
     def test_connection(self) -> str:
         """Ask HubSpot for one contact: one request proves the key and its contacts read scope, refused apart.
 
         A saved directory reloads its credential (``Integration.fresh_credential``),
         so a key re-entered in place is the one tested; a connect flow tests an
-        unsaved directory with the credential it holds.
+        unsaved directory with the credential it holds. The base's check comes
+        first, on that credential: one that needs reconnecting is refused without
+        a request (``Integration.probe_credential``).
         """
 
         bridge = self.bridge
         credential = bridge.fresh_credential() if bridge.pk is not None else bridge.credential
+        super().test_connection()
         self._client(credential).list_page(_OBJECT_TYPE, after="", limit=1, properties=())
         return "Connected to HubSpot: the service key reads this account's contacts."
 

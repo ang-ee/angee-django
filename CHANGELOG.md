@@ -56,14 +56,16 @@ live in code docstrings.
   429 without `Retry-After` waits for its policy's window (ten seconds, or an
   hour for the daily limit, which its message names), and HubSpot's rejection of
   a key that lacks a service key's usual shape says to check it for extra or
-  missing characters. Its `credential_blocker` admits only a non-empty
-  static-token credential holding a service key with
-  `crm.objects.contacts.read`, and it declares no OAuth client. Connection discovery
+  missing characters. Its `credential_blocker` admits only a static-token
+  credential holding a service key with `crm.objects.contacts.read` that does not
+  need reconnecting, judging the key as the request sends it (only an empty one
+  is refused), and it declares no OAuth client. Connection discovery
   (`requires_connection_discovery`) learns the account's hub id, and its web host
   when HubSpot states one, into the directory's `subscription_state`, so a
   directory syncs only after discovery and its source links open each contact in
   HubSpot; a later discovery that finds another account refuses the key. The
-  connection test is one one-contact read. A baseline lists contacts by record id;
+  connection test keeps the base's check, refusing a credential that needs
+  reconnecting without a request, then is one one-contact read. A baseline lists contacts by record id;
   a delta searches by modified time without an offset, reaching back five minutes
   for HubSpot's lagging search index only until a pass that started that long
   after the newest change read has completed, so a quiet account costs one search

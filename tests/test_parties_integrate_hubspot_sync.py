@@ -50,6 +50,7 @@ UNAVAILABLE = "HubSpot is temporarily unavailable (HTTP 503)."
 RATE_LIMITED = "HubSpot is rate limiting requests (HTTP 429)."
 DAILY_LIMIT = "This HubSpot account has used its daily API request limit."
 NOT_A_SERVICE_KEY = "A HubSpot directory reads with a HubSpot service key: attach a static token that holds one."
+RECONNECT_THE_KEY = "This HubSpot service key must be reconnected: enter the key again."
 UNANSWERED = "HubSpot did not answer for some records."
 EMPTY_WALK = "HubSpot listed no contacts, but its search still counts some; retrying later."
 IMPORTED = datetime(2026, 11, 2, 9, 0, tzinfo=UTC)
@@ -749,6 +750,43 @@ def test_a_rejected_key_without_a_service_keys_usual_shape_says_to_check_it_and_
     hubspot.server.token = "a key of another shape"
     held.replace_material({"api_key": hubspot.server.token})
     assert hubspot.directory.test_connection() == CONNECTED
+
+
+def test_a_credential_that_needs_reconnecting_is_neither_reported_connected_nor_admitted(hubspot: HubSpot) -> None:
+    """The connection test keeps the base's check, on the credential it reloads, before it asks HubSpot anything."""
+
+    held = Credential.objects.get(pk=hubspot.directory.credential_id)
+    Credential.objects.filter(pk=held.pk).update(status="revoked")
+    hubspot.server.requests.clear()
+
+    with pytest.raises(IntegrationError) as refused:
+        hubspot.directory.test_connection()
+
+    assert (refused.value.public_message, hubspot.server.requests) == ("Reconnect this account.", [])
+    held.refresh_from_db()
+    assert hubspot.directory.credential_blocker(held) == RECONNECT_THE_KEY
+
+
+def test_admission_judges_the_key_as_the_header_sends_it(hubspot: HubSpot) -> None:
+    """Only an empty key, with nothing to send, is refused before HubSpot sees it; HubSpot judges any other."""
+
+    owner = hubspot.directory.owner
+    blank = Credential.objects.create_local_credential(
+        owner, kind="static_token", name="A blank key", material={"api_key": "   "}
+    )
+    empty = Credential.objects.create_local_credential(owner, kind="static_token", name="No key", material={})
+
+    assert (hubspot.directory.credential_blocker(empty), hubspot.directory.credential_blocker(blank)) == (
+        NOT_A_SERVICE_KEY,
+        None,
+    )
+    hubspot.directory.attach_connection(blank)
+    hubspot.server.requests.clear()
+    with pytest.raises(HubSpotError) as rejected:
+        hubspot.directory.test_connection()
+    assert rejected.value.public_message == f"{REJECTED} {CHECK_THE_KEY}"
+    (sent,) = hubspot.server.requests
+    assert sent.headers["authorization"] == "Bearer    "
 
 
 def test_the_connection_test_reads_a_saved_directorys_key_afresh_and_an_unsaved_ones_as_attached(

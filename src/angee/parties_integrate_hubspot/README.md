@@ -28,13 +28,15 @@ record without a usable id cannot be told apart from any other, so it is logged
 and skipped.
 
 A directory reads with a static-token credential holding a HubSpot service key
-that has the `crm.objects.contacts.read` scope. The backend admits no other kind
-and no empty token, and connects through no OAuth client. Connection discovery
+that has the `crm.objects.contacts.read` scope. The backend admits no other kind,
+no empty key and no credential that needs reconnecting, and connects through no
+OAuth client. It judges the key as the request sends it, unstripped. Connection discovery
 checks the key and learns the account it reads, so a directory syncs only once
 discovery has finished, and its source links open each contact in HubSpot when
 HubSpot states the account's web host. Once a directory has learned its account,
-discovery refuses a key of another account. The connection test asks HubSpot for
-one contact, and it refuses a rejected key and a key without the scope with
+discovery refuses a key of another account. The connection test refuses a
+credential that needs reconnecting without a request; otherwise it asks HubSpot
+for one contact, and it refuses a rejected key and a key without the scope with
 separate messages.
 
 A platform admin connects an account from the console's Directories page: the
