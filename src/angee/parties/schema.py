@@ -433,8 +433,8 @@ class CertainSameAsPairType:
 
 
 @strawberry.type
-class FieldDisagreementType:
-    """A merge field the members of a set disagree on: each member's value, and the value the survivor will show."""
+class MergeFieldValuesType:
+    """A merge field whose values differ across a set's members: each member's value, and what the survivor shows."""
 
     field: str
     values: list[str | None]
@@ -456,7 +456,10 @@ class DuplicateSetPreviewType:
     reason: str
     digest: str
     """For a set that merges, the keyed digest of what the dialog shows of it: send it back to ``merge_duplicates``."""
-    disagreements: list[FieldDisagreementType]
+    disagreements: list[MergeFieldValuesType]
+    """Fields the members state at least two different values for: what a person must look at."""
+    fills: list[MergeFieldValuesType]
+    """Fields exactly one value is stated for, the rest empty: the merge gives the survivor that value."""
 
 
 @strawberry.type
@@ -1139,7 +1142,7 @@ _PARTIES_SCHEMA_BUCKET = {
         SameAsStatementType,
         SameAsPairType,
         CertainSameAsPairType,
-        FieldDisagreementType,
+        MergeFieldValuesType,
         DuplicateSetPreviewType,
         DuplicateSetOutcomeType,
         PeopleWorkbenchScope,

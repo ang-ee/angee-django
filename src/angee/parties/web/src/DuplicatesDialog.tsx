@@ -308,22 +308,30 @@ function stateOf(preview: DuplicateSetPreview): string {
   return `${preview.outcome ?? ""}:${preview.digest}`;
 }
 
-/** Whether a set carries a warning the person should look at before merging it: its records disagree, or one moved. */
+/**
+ * Whether a set carries a warning the person should look at before merging it:
+ * its records state two different values of a field, or one moved from its group.
+ * A fill (one value stated, the rest empty) is no warning: the merge loses nothing.
+ */
 function warned(preview: DuplicateSetPreview | undefined, grouping: DuplicateSetInput["grouping"]): boolean {
   return preview !== undefined && (preview.disagreements.length > 0 || movedMembers(preview, grouping).size > 0);
 }
 
 /**
  * The members whose current value of a field the list grouped the set by is no
- * longer the group's: the fresh read's disagreements hold each member's value of
- * every merge field they disagree on, so a stale grouping shows at no extra read.
+ * longer the group's: the fresh read holds each member's value of every merge
+ * field whose values differ (a disagreement, or a fill when one value is stated
+ * and the rest empty), so a stale grouping shows at no extra read, a member whose
+ * value was cleared included. When every member moved to the same new value
+ * nothing differs, and nothing is marked.
  */
 function movedMembers(preview: DuplicateSetPreview, grouping: DuplicateSetInput["grouping"]): ReadonlySet<string> {
   const moved = new Set<string>();
+  const differing = [...preview.disagreements, ...preview.fills];
   for (const level of grouping ?? []) {
-    const disagreement = level.key === null ? undefined : preview.disagreements.find((row) => row.field === level.field);
+    const row = level.key === null ? undefined : differing.find((item) => item.field === level.field);
     preview.members.forEach((member, index) => {
-      if (disagreement && disagreement.values[index] !== level.key) moved.add(member.id);
+      if (row && row.values[index] !== level.key) moved.add(member.id);
     });
   }
   return moved;

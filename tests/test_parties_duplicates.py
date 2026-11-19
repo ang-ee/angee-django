@@ -691,3 +691,94 @@ def test_an_identity_digest_and_a_duplicate_set_digest_never_stand_for_each_othe
     assert replayed == "conflict"
     assert (str(outcome.outcome), outcome.reason) == ("refused", Party.objects.CHANGED_REASON)
     assert matched != "conflict"
+
+
+def _set_with(owner: Any, field: str, *values: Any, tag: str = "") -> list[Any]:
+    """A set of people with one name, each stating ``values`` (``""`` or ``None``: left empty) for ``field``."""
+
+    members = _people(owner, *("Zoe Example" for _ in values), value=f"{field}{tag}-{len(values)}@example.com")
+    with system_context(reason="duplicates one-sided values"):
+        for member, value in zip(members, values, strict=True):
+            Person._base_manager.filter(pk=member.pk).update(**{field: value})
+    return members
+
+
+def _preview_of(actor: Any, members: list[Any]) -> Any:
+    (preview,) = Party.objects.preview_duplicates(actor=actor, sets=[[member.public_id for member in members]])
+    return preview
+
+
+def _fields(rows: Any) -> dict[str, tuple[Any, ...]]:
+    return {row.field: row.values for row in rows}
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("notes", "Met at the fair.", id="a-party-field"),
+        pytest.param("nickname", "Zo", id="a-person-field"),
+    ],
+)
+def test_a_field_only_one_member_states_is_a_fill_and_no_disagreement(db: None, field: str, value: str) -> None:
+    """Nothing is chosen and nothing is lost: the merge fills the survivor's empty field (``Party.merge_values``)."""
+
+    del db
+    owner = create_user(f"duplicates-one-sided-{field}")
+    for tag, values in (("-survivor-empty", ("", value)), ("-other-empty", (value, ""))):
+        preview = _preview_of(owner, _set_with(owner, field, *values, tag=tag))
+        assert (preview.outcome, preview.disagreements) == (None, ())
+        assert _fields(preview.fills) == {field: tuple(item or None for item in values)}
+
+
+def test_two_stated_values_are_a_disagreement_that_keeps_every_members_value(db: None) -> None:
+    del db
+    owner = create_user("duplicates-two-stated")
+    preview = _preview_of(owner, _set_with(owner, "nickname", "Zo", "Zed", ""))
+
+    assert (_fields(preview.disagreements), preview.fills) == ({"nickname": ("Zo", "Zed", None)}, ())
+
+
+def test_two_members_stating_one_value_and_a_third_leaving_it_empty_is_a_fill(db: None) -> None:
+    del db
+    owner = create_user("duplicates-one-value-and-empty")
+    preview = _preview_of(owner, _set_with(owner, "nickname", "Zo", "Zo", ""))
+
+    assert (preview.disagreements, _fields(preview.fills)) == ((), {"nickname": ("Zo", "Zo", None)})
+
+
+def test_a_field_hidden_from_the_actor_on_any_member_is_neither_a_fill_nor_a_disagreement(db: None) -> None:
+    """The party's editor holds none of the person's grants: the person's birthday is hidden from them."""
+
+    del db
+    owner, editor = create_user("duplicates-hidden-fill-owner"), create_user("duplicates-hidden-fill-editor")
+    members = _set_with(owner, "birthday", date(1990, 1, 2), None)
+    with system_context(reason="duplicates party editor"):
+        write_relationships([
+            RelationshipTuple(
+                resource=to_object_ref(Party._base_manager.get(pk=member.pk)), relation="editor",
+                subject=to_subject_ref(editor),
+            )
+            for member in members
+        ])
+
+    seen, owned = _preview_of(editor, members), _preview_of(owner, members)
+
+    assert (seen.outcome, seen.disagreements, seen.fills) == (None, (), ())
+    assert _fields(owned.fills) == {"birthday": ("1990-01-02", None)}
+
+
+def test_the_digest_changes_when_a_fill_appears_or_changes(db: None) -> None:
+    del db
+    owner = create_user("duplicates-fill-digest")
+    members = _set_with(owner, "nickname", "", "")
+    plain = _preview_of(owner, members).digest
+
+    def nickname(value: str) -> str:
+        with system_context(reason="duplicates fill digest"):
+            Person._base_manager.filter(pk=members[1].pk).update(nickname=value)
+        return _preview_of(owner, members).digest
+
+    appeared = nickname("Zo")
+    changed = nickname("Zed")
+
+    assert len({plain, appeared, changed}) == 3
