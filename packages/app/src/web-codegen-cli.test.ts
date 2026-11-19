@@ -1,10 +1,11 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { generateWebRuntime, type WebCodegenInputs } from "@angee/app/web-codegen";
 
 // Regression coverage for the frontend runtime codegen CLI this package ships.
 // The suites run the real binary against synthetic manifests in a temp dir —
@@ -22,6 +23,96 @@ describe("angee-web-codegen", () => {
 
   afterEach(async () => {
     await rm(root, { recursive: true, force: true });
+  });
+
+  describe("static site assets", () => {
+    let runtime: string;
+    let web: string;
+    let addon: string;
+    const assets = { "demo.preview": "./art/preview.png", "demo.icon": "./art/icon.svg", "demo.touch": "./art/touch.png" };
+    async function siteManifest(shell: object = {}, declarations: Record<string, string> = assets, installed = false) {
+      await writeFile(join(runtime, "web", "manifest.json"), JSON.stringify({
+        schema: 1,
+        addonPackages: [{ package: "@demo/site", sourceRoot: "src/headless", ...(installed ? {} : { root: "../../linked-addon" }), assets: declarations }],
+        deployment: { shell },
+      }));
+    }
+    beforeEach(async () => {
+      root = await realpath(root);
+      runtime = join(root, "runtime");
+      web = join(root, "web");
+      addon = join(root, "addon");
+      await mkdir(join(runtime, "web"), { recursive: true });
+      await mkdir(join(web, "node_modules", "@demo"), { recursive: true });
+      await mkdir(join(addon, "src", "headless"), { recursive: true });
+      await mkdir(join(addon, "art"));
+      await writeFile(join(addon, "package.json"), JSON.stringify({ name: "@demo/site" }));
+      await writeFile(join(addon, "src", "headless", "index.ts"), "export default {};");
+      for (const file of Object.values(assets)) await writeFile(join(addon, file), "asset bytes");
+      await symlink(addon, join(root, "linked-addon"));
+      await symlink(addon, join(web, "node_modules", "@demo", "site"));
+    });
+
+    it.each([false, true])("resolves package-root assets (installed fallback: %s) without leaking paths into app.ts", async (installed) => {
+      await siteManifest({ brand: { name: "Suite", mark: "suite" }, site: {
+        description: "Suite tools", icon: "demo.icon", touchIcon: "demo.touch", image: "demo.preview",
+      } }, assets, installed);
+      const result = await generateWebRuntime({ webRoot: web, runtimeDir: runtime });
+      expect(result.site).toEqual({
+        title: "Suite", siteName: "Suite", description: "Suite tools",
+        icon: join(addon, "art/icon.svg"), touchIcon: join(addon, "art/touch.png"), image: join(addon, "art/preview.png"),
+      });
+      const app = await readFile(join(runtime, "web/app.ts"), "utf8");
+      for (const file of Object.values(assets)) {
+        expect(result.inputs.files).toContain(join(addon, file));
+        expect(app).not.toContain(join(addon, file));
+      }
+    });
+
+    it("leaves the site absent without a shell brand or site, and defaults a brand-only title", async () => {
+      await siteManifest();
+      expect(await generateWebRuntime({ webRoot: web, runtimeDir: runtime })).not.toHaveProperty("site");
+      await siteManifest({ brand: { name: "Suite", mark: "suite" } });
+      expect((await generateWebRuntime({ webRoot: web, runtimeDir: runtime })).site).toEqual({ title: "Suite", siteName: "Suite" });
+      await siteManifest({ brand: { name: "Suite", mark: "suite" }, site: { title: "Chosen" } });
+      expect((await generateWebRuntime({ webRoot: web, runtimeDir: runtime })).site?.title).toBe("Chosen");
+    });
+
+    it("lists unknown asset choices in sorted order", async () => {
+      await siteManifest({ site: { title: "Site", icon: "unknown" } });
+      await expect(generateWebRuntime({ webRoot: web, runtimeDir: runtime }))
+        .rejects.toThrow('unknown asset "unknown"; declared assets: demo.icon, demo.preview, demo.touch');
+    });
+
+    it.each(["missing", "directory", "escaping symlink"])("refuses a %s and registers the input before failure", async (kind) => {
+      const file = join(addon, "art/icon.svg");
+      await rm(file);
+      if (kind === "directory") await mkdir(file);
+      if (kind === "escaping symlink") {
+        await writeFile(join(root, "outside.svg"), "outside");
+        await symlink(join(root, "outside.svg"), file);
+      }
+      await siteManifest({ site: { title: "Site", icon: "demo.icon" } });
+      let inputs: WebCodegenInputs | undefined;
+      await expect(generateWebRuntime({ webRoot: web, runtimeDir: runtime, onInputs: (next) => { inputs = next; } }))
+        .rejects.toThrow(kind === "escaping symlink" ? "outside package @demo/site" : "must be a regular file");
+      expect(inputs?.files).toContain(kind === "escaping symlink" ? join(root, "outside.svg") : file);
+    });
+
+    it.each([
+      ["icon", "demo.preview"], ["touchIcon", "demo.touch"], ["image", "demo.preview"],
+    ])("resolves %s with a PNG", async (slot, name) => {
+      await siteManifest({ site: { title: "Site", [slot]: name } });
+      expect((await generateWebRuntime({ webRoot: web, runtimeDir: runtime })).site).toHaveProperty(slot);
+    });
+
+    it.each([
+      ["icon", ".jpg"], ["touchIcon", ".svg"], ["touchIcon", ".ico"], ["image", ".svg"], ["image", ".webp"],
+    ])("refuses %s with extension %s", async (slot, extension) => {
+      await writeFile(join(addon, `art/wrong${extension}`), "wrong type");
+      await siteManifest({ site: { title: "Site", [slot]: "demo.wrong" } }, { "demo.wrong": `./art/wrong${extension}` });
+      await expect(generateWebRuntime({ webRoot: web, runtimeDir: runtime })).rejects.toThrow(`site.${slot} asset "demo.wrong" must use`);
+    });
   });
 
   it.each([

@@ -1,11 +1,12 @@
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import { Window } from "happy-dom";
 import { afterEach, beforeEach, expect, onTestFinished, test, vi } from "vitest";
-import { build, createServer, resolveConfig, type ViteDevServer } from "vite";
+import { build, createServer, preview, resolveConfig, searchForWorkspaceRoot, type UserConfig, type ViteDevServer } from "vite";
 import * as codegen from "@angee/app/web-codegen";
 import { defineAngeeWebViteConfig } from "../config/vite";
 
@@ -15,14 +16,14 @@ let web: string;
 let addon: string;
 const servers: ViteDevServer[] = [];
 
-function write(file: string, body: string) {
+function write(file: string, body: string | Uint8Array) {
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, body);
 }
-function manifest(extra = {}) {
+function manifest(extra = {}, assets: Record<string, string> = {}) {
   write(join(runtime, "web", "manifest.json"), JSON.stringify({
     schema: 1,
-    addonPackages: [{ package: "@demo/theme", root: "../../linked-addon", sourceRoot: "src/headless" }],
+    addonPackages: [{ package: "@demo/theme", root: "../../linked-addon", sourceRoot: "src/headless", assets }],
     documentRoots: [{ kind: "package", package: "@demo/theme" }],
     ...extra,
   }));
@@ -50,13 +51,16 @@ async function config() {
 }
 async function editSource(server: ViteDevServer, file: string, edit: () => void): Promise<void> {
   let acknowledge!: () => void;
-  const observed = new Promise<void>((resolve) => { acknowledge = resolve; });
+  let timer: ReturnType<typeof setTimeout>;
+  const observed = new Promise<void>((resolve, reject) => {
+    acknowledge = resolve;
+    timer = setTimeout(() => reject(new Error(`No watcher event for ${file}`)), 10_000);
+  });
   const onEvent = (event: string, changed: string) => {
     if (["add", "change", "unlink"].includes(event) && changed === file) acknowledge();
   };
-  const cleanup = () => { server.watcher.off("all", onEvent); };
+  const cleanup = () => { clearTimeout(timer); server.watcher.off("all", onEvent); };
   server.watcher.on("all", onEvent);
-  // The existing test deadline still fails an event that never arrives.
   onTestFinished(cleanup);
   try {
     edit();
@@ -66,17 +70,28 @@ async function editSource(server: ViteDevServer, file: string, edit: () => void)
   }
 }
 
-async function start() {
+async function start(allow?: string[]) {
+  // Include the probe in the initial scan: creating it between that scan and
+  // polling's baseline can leave a new file unobserved until a directory edit.
+  const probe = join(addon, "src", "watcher-ready.txt");
+  write(probe, "ready");
   const server = await createServer({
     ...await config(), configFile: false, logLevel: "silent",
     optimizeDeps: { noDiscovery: true, entries: [] },
-    server: { middlewareMode: true, ws: false, watch: { ignored: ["**/.jj/**"] } },
+    // Native polling delivers real events in sandboxes without macOS FSEvents.
+    server: { middlewareMode: true, ws: false, watch: { usePolling: true, ignored: ["**/.jj/**"] }, ...(allow ? { fs: { allow } } : {}) },
   });
   servers.push(server);
-  // Directory registration/initial scanning does not acknowledge delivery of
-  // native filesystem events. Observe one real edit before testing regeneration.
-  const probe = join(addon, "src", "watcher-ready.txt");
-  await editSource(server, probe, () => write(probe, "ready"));
+  // A real event, rather than registration alone, acknowledges an active watch.
+  let revision = 0;
+  const writeProbe = () => write(probe, `ready ${++revision}`);
+  const timer = setInterval(writeProbe, 50);
+  onTestFinished(() => clearInterval(timer));
+  try {
+    await editSource(server, probe, writeProbe);
+  } finally {
+    clearInterval(timer);
+  }
   rmSync(probe);
   return server;
 }
@@ -100,6 +115,7 @@ async function firstPaintBrand(server: ViteDevServer) {
 }
 
 beforeEach(() => {
+  vi.stubEnv("ANGEE_PUBLIC_ORIGIN", undefined);
   root = realpathSync(mkdtempSync(join(tmpdir(), "angee-vite-codegen-")));
   runtime = join(root, "runtime");
   web = join(root, "web");
@@ -119,6 +135,7 @@ beforeEach(() => {
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.close()));
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -275,4 +292,184 @@ test("bursts coalesce, concurrent changes get one serial follow-up, outputs stay
   await server.close();
   expect(generate).toHaveBeenCalledTimes(beforeClose);
   expect(server.watcher.listenerCount("all")).toBe(0);
+}, 30_000);
+
+const siteTitle = 'Suite <Tools> & "Friends"';
+const siteDescription = 'Tools for <everyone> & "you"';
+const siteAssets = { "demo.icon": "./art/icon & mark.svg", "demo.image": "./art/tiny preview.png" };
+const tinyPng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3e8AAAAASUVORK5CYII=", "base64");
+const iconBytes = '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0"/></svg>';
+
+function declareSite(image = "demo.image", assets: Record<string, string> = siteAssets) {
+  manifest({ deployment: { shell: {
+    brand: { name: "Suite", mark: "suite" },
+    site: { title: siteTitle, description: siteDescription, icon: "demo.icon", touchIcon: image, image },
+  } } }, assets);
+}
+function siteFiles() {
+  write(join(addon, siteAssets["demo.icon"]), iconBytes);
+  write(join(addon, siteAssets["demo.image"]), tinyPng);
+  declareSite();
+}
+function head(html: string) {
+  const window = new Window();
+  // Inspect static facts independently of the appearance IIFE, tested above.
+  const document = new window.DOMParser().parseFromString(html.replace(/<script\b[\s\S]*?<\/script>/gi, ""), "text/html");
+  onTestFinished(() => window.happyDOM.close());
+  return document.head;
+}
+async function builtSite(options: UserConfig = {}) {
+  const result = await build({
+    ...await config(), configFile: false, logLevel: "silent", build: { write: false }, ...options,
+  });
+  const outputs = (Array.isArray(result) ? result : [result]).flatMap((bundle) => "output" in bundle ? bundle.output : []);
+  const index = outputs.find((entry) => entry.type === "asset" && entry.fileName === "index.html");
+  if (!index || index.type !== "asset") throw new Error("Missing built index.html");
+  return { outputs, html: Buffer.from(index.source).toString() };
+}
+
+test("dev replaces the title, writes ordered escaped tags, and serves only the selected files beyond its allowances", async () => {
+  siteFiles();
+  const hostAllowed = join(root, "host-allowed");
+  const server = await start([hostAllowed]);
+  const html = await server.transformIndexHtml("/", "<html><head><title>Angee</title><title>Old duplicate</title></head><body></body></html>");
+  const documentHead = head(html);
+  expect(documentHead.querySelectorAll("title")).toHaveLength(1);
+  expect(documentHead.querySelector("title")?.textContent).toBe(siteTitle);
+  expect(html).toContain('Suite &lt;Tools&gt; &amp; "Friends"');
+  expect(documentHead.querySelector('meta[name="description"]')?.getAttribute("content")).toBe(siteDescription);
+  expect([...documentHead.querySelectorAll("title,meta,link")].map((tag) =>
+    tag.tagName === "TITLE" ? "title" : tag.getAttribute("name") ?? tag.getAttribute("property") ?? tag.getAttribute("rel"),
+  )).toEqual([
+    "title", "description", "og:type", "og:site_name", "og:title", "og:description", "og:image", "twitter:card", "icon", "apple-touch-icon",
+  ]);
+  expect(documentHead.querySelector('link[rel="icon"]')?.getAttribute("type")).toBe("image/svg+xml");
+  const selected = Object.values(siteAssets).map((file) => join(addon, file));
+  expect(server.config.server.fs.allow).toEqual(expect.arrayContaining([searchForWorkspaceRoot(web), hostAllowed, ...selected]));
+  expect(server.config.server.fs.allow).not.toContain(addon);
+  expect(server.config.server.fs.allow).not.toContain(join(addon, "art"));
+  const http = createHttpServer(server.middlewares);
+  onTestFinished(() => new Promise<void>((resolve, reject) => http.close((error) => error ? reject(error) : resolve())));
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
+  const address = http.address();
+  if (!address || typeof address === "string") throw new Error("Missing dev server address");
+  const get = (url: string) => fetch(`http://127.0.0.1:${address.port}${url}`);
+  for (const [selector, attribute, bytes] of [
+    ['link[rel="icon"]', "href", Buffer.from(iconBytes)],
+    ['meta[property="og:image"]', "content", tinyPng],
+  ] as const) {
+    const url = documentHead.querySelector(selector)!.getAttribute(attribute)!;
+    expect(url).toMatch(/^\/@fs\//);
+    expect(url).not.toMatch(/[ #]/);
+    const response = await get(url);
+    expect(response.status).toBe(200);
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
+  }
+  write(join(addon, "art/unselected.png"), "unselected");
+  expect((await get(`/@fs/${join(addon, "art/unselected.png")}`)).status).toBe(403);
+}, 30_000);
+
+test("dev asset edits reload, missing newly selected files retry, and obsolete file allowances disappear", async () => {
+  siteFiles();
+  const server = await start();
+  const sent = vi.spyOn(server.ws, "send");
+  const image = join(addon, siteAssets["demo.image"]);
+  await editSource(server, image, () => write(image, "changed bytes"));
+  await vi.waitFor(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
+  sent.mockClear();
+  await editSource(server, join(runtime, "web/manifest.json"), () => {
+    declareSite("demo.repaired", { ...siteAssets, "demo.repaired": "./new-art/repaired.png" });
+  });
+  await vi.waitFor(() => expect(sent).toHaveBeenCalledWith(expect.objectContaining({ type: "error" })));
+  sent.mockClear();
+  const repaired = join(addon, "new-art/repaired.png");
+  await editSource(server, repaired, () => write(repaired, tinyPng));
+  await vi.waitFor(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
+  const html = head(await server.transformIndexHtml("/", "<html><head></head></html>"));
+  expect(html.querySelectorAll("title")).toHaveLength(1);
+  expect(html.querySelector('meta[property="og:image"]')?.getAttribute("content")).toContain("new-art/repaired.png");
+  expect(server.config.server.fs.allow).toContain(repaired);
+  expect(server.config.server.fs.allow).not.toContain(image);
+}, 30_000);
+
+test.each([undefined, "https://user:secret@site.example.test:8443/path?ignored=yes#fragment"])(
+  "build emits tiny assets with native names, base and exact fresh bytes (origin: %s)", async (origin) => {
+    vi.stubEnv("ANGEE_PUBLIC_ORIGIN", origin);
+    siteFiles();
+    write(join(web, "index.html"), '<html><head><title>Angee</title></head><body><script type="module" src="/main.ts"></script></body></html>');
+    const options = { base: "/preview/", build: { write: false, rolldownOptions: { output: { assetFileNames: "media/[name]-[hash][extname]" } } } };
+    const first = await builtSite(options);
+    const documentHead = head(first.html);
+    expect(documentHead.querySelectorAll("title")).toHaveLength(1);
+    expect(documentHead.querySelector("title")?.textContent).toBe(siteTitle);
+    expect(documentHead.querySelector('meta[property="og:url"]')?.getAttribute("content"))
+      .toBe(origin ? "https://site.example.test:8443/preview/" : undefined);
+    expect(documentHead.querySelector('meta[name="twitter:card"]')?.getAttribute("content")).toBe("summary_large_image");
+    const selected = first.outputs.filter((entry) => entry.type === "asset" && entry.originalFileNames.some((file) => file.startsWith(join(addon, "art"))));
+    expect(selected).toHaveLength(2); // image and touch icon select the same file.
+    const imageUrl = documentHead.querySelector('meta[property="og:image"]')!.getAttribute("content")!;
+    expect(imageUrl).toMatch(origin ? /^https:\/\/site.example.test:8443\/preview\/media\// : /^\/preview\/media\//);
+    for (const [selector, attribute, bytes] of [
+      ['link[rel="icon"]', "href", Buffer.from(iconBytes)],
+      ['meta[property="og:image"]', "content", tinyPng],
+      ['link[rel="apple-touch-icon"]', "href", tinyPng],
+    ] as const) {
+      const url = documentHead.querySelector(selector)!.getAttribute(attribute)!;
+      if (attribute === "href") expect(url).toMatch(/^\/preview\/media\//);
+      const fileName = decodeURIComponent(new URL(url, "http://localhost").pathname).replace("/preview/", "");
+      const emitted = first.outputs.find((entry) => entry.fileName === fileName);
+      expect(emitted?.type === "asset" ? Buffer.from(emitted.source) : undefined).toEqual(bytes);
+    }
+    const changed = Buffer.concat([tinyPng, Buffer.from("new bytes")]);
+    write(join(addon, siteAssets["demo.image"]), changed);
+    const next = await builtSite(options);
+    const nextImageUrl = head(next.html).querySelector('meta[property="og:image"]')!.getAttribute("content")!;
+    expect(nextImageUrl).not.toBe(imageUrl);
+    const emitted = next.outputs.find((entry) => entry.fileName === decodeURIComponent(new URL(nextImageUrl, "http://localhost").pathname).replace("/preview/", ""));
+    expect(emitted?.type === "asset" ? Buffer.from(emitted.source) : undefined).toEqual(changed);
+  }, 30_000,
+);
+
+test("no site preserves the built head, and a title alone omits absent facts", async () => {
+  const original = '<title>Original &amp; unchanged</title><meta name="description" content="Host">';
+  write(join(web, "index.html"), `<html><head>${original}</head><body></body></html>`);
+  const built = await builtSite();
+  expect(built.html).toContain(original);
+  expect(built.html).not.toContain("og:");
+  expect(built.html).not.toContain("twitter:");
+  write(join(web, "index.html"), "<html><head></head><body></body></html>");
+  manifest({ deployment: { shell: { site: { title: "Title alone" } } } });
+  const titled = await builtSite();
+  expect(titled.html).toContain("<title>Title alone</title>");
+  const documentHead = head(titled.html);
+  expect([...documentHead.querySelectorAll("title,meta,link")].map((tag) => tag.outerHTML),
+    titled.html.replace(/<script\b[\s\S]*?<\/script>/g, "<script>…</script>"),
+  ).toEqual([
+    "<title>Title alone</title>", '<meta property="og:type" content="website">',
+    '<meta property="og:title" content="Title alone">', '<meta name="twitter:card" content="summary">',
+  ]);
+}, 30_000);
+
+test.each(["not a URL", "ftp://site.example.test", "file:///tmp/site", "mailto:site@example.test"])(
+  "config refuses a non-http(s) public origin: %s", async (origin) => {
+    vi.stubEnv("ANGEE_PUBLIC_ORIGIN", origin);
+    await expect(resolveConfig({ ...await config(), configFile: false }, "build")).rejects.toThrow("ANGEE_PUBLIC_ORIGIN must be an http(s) URL");
+  },
+);
+
+test("preview serves the built site and assets after sources and runtime disappear", async () => {
+  siteFiles();
+  const built = await builtSite({ build: { write: true } });
+  const value = await config();
+  rmSync(runtime, { recursive: true, force: true });
+  rmSync(addon, { recursive: true, force: true });
+  rmSync(join(web, "package.json"));
+  const server = await preview({ ...value, configFile: false, logLevel: "silent", preview: { host: "127.0.0.1", port: 0, strictPort: false } });
+  onTestFinished(() => new Promise<void>((resolve, reject) => server.httpServer.close((error) => error ? reject(error) : resolve())));
+  const address = server.httpServer.address();
+  if (!address || typeof address === "string") throw new Error("Missing preview address");
+  const origin = `http://127.0.0.1:${address.port}`;
+  expect(await (await fetch(origin)).text()).toBe(built.html);
+  const imageUrl = head(built.html).querySelector('meta[property="og:image"]')!.getAttribute("content")!;
+  expect(Buffer.from(await (await fetch(new URL(imageUrl, origin))).arrayBuffer())).toEqual(tinyPng);
 }, 30_000);

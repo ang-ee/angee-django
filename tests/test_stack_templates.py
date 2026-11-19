@@ -449,6 +449,7 @@ def _render_local_stack(
     sentry_dsn: str = "",
     sentry_web_dsn: str = "",
     operator_home: str = "",
+    template: Path = LOCAL_TEMPLATE,
 ) -> dict[str, Any]:
     """Render the docker-mode local stack enough for YAML contract tests."""
 
@@ -477,7 +478,7 @@ def _render_local_stack(
         "web_image": "ghcr.io/ang-ee/angee-web:latest",
         "web_path": "web",
     }
-    return _render_stack_manifest(LOCAL_TEMPLATE, variables)
+    return _render_stack_manifest(template, variables)
 
 
 def _render_dev_stack(
@@ -2502,6 +2503,44 @@ def test_empty_sentry_dsns_render_no_error_reporting(stack: Any) -> None:
     rendered = json.dumps(stack())
 
     assert "SENTRY" not in rendered
+
+
+@pytest.mark.parametrize("ingress", ["localhost", "site.example.test"])
+@pytest.mark.parametrize("sentry", ["", "https://public@example.test/1"])
+@pytest.mark.parametrize(
+    "runtime, mode, section, service",
+    [
+        ("process", "development", "services", "frontend"),
+        ("docker", "development", "services", "frontend"),
+        ("docker", "production", "jobs", "frontend-build"),
+        ("instance", "production", "jobs", "frontend-build"),
+    ],
+    ids=["dev-process", "dev-docker", "framework-build", "instance-build"],
+)
+def test_public_origin_reaches_python_and_frontend_independently_of_sentry(
+    tmp_path: Path, runtime: str, mode: str, section: str, service: str, ingress: str, sentry: str,
+) -> None:
+    if runtime == "instance":
+        # The shipped local wrapper pins localhost. Exercise the shared instance
+        # branch with a public wrapper too, without inventing a local-stack input.
+        wrapper = tmp_path / "local" / "angee.yaml.jinja"
+        wrapper.parent.mkdir()
+        (wrapper.parent / "copier.yml").touch()
+        (tmp_path / "_shared").symlink_to(ROOT / "templates/stacks/_shared", target_is_directory=True)
+        wrapper.write_text(LOCAL_TEMPLATE.read_text().replace(
+            '{% set ingress_domain_value = "localhost" %}', f'{{% set ingress_domain_value = "{ingress}" %}}',
+        ))
+        stack = _render_local_stack(template=wrapper, serve_mode=mode, sentry_web_dsn=sentry)
+    else:
+        stack = _render_dev_stack(
+            _runtime_mode=runtime, serve_mode=mode, ingress_domain=ingress, sentry_web_dsn=sentry,
+        )
+    environments = [stack[section][service].get("env") or {}, *_env_nodes(stack, "DATABASE_URL").values()]
+    for environment in environments:
+        if ingress == "localhost":
+            assert "ANGEE_PUBLIC_ORIGIN" not in environment
+        else:
+            assert environment["ANGEE_PUBLIC_ORIGIN"] == "https://site.example.test"
 
 
 @pytest.mark.parametrize(

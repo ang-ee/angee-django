@@ -21,6 +21,15 @@ export interface WebCodegenOptions {
 export interface WebCodegenResult {
   inputs: WebCodegenInputs;
   themes: readonly ThemeDefinition<unknown>[];
+  /** Build-only static head facts; selected asset paths are absolute canonical files. */
+  site?: {
+    title: string;
+    description?: string;
+    siteName?: string;
+    icon?: string;
+    touchIcon?: string;
+    image?: string;
+  };
 }
 
 /** Generate GraphQL documents and the composed frontend runtime once. */

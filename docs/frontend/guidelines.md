@@ -332,6 +332,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   ```python
   ANGEE_UI = {"shell": {
       "brand": {"name": "Suite", "mark": "suite"},  # nothing selected: every root
+      "site": {"description": "Tools for the whole team", "icon": "suite.icon", "image": "suite.preview"},
       "theme": "suite.light",
       "apps": {
           "payables": {"rail": ["accounting", "files"], "home": "accounting.bills"},
@@ -346,6 +347,19 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   never the environment. It is a compiler input, so a change to it alone
   recomposes on the stack's `compose --if-stale`
   ([integration inputs](../composer.md#runtime-build-and-import)).
+
+  `brand` owns runtime identity; `site` owns the static HTML head, one per
+  deployment on every ingress alias. Its title defaults to `shell.brand.name`;
+  without a shell brand, declare `site.title`. The addon that ships a public
+  asset declares its name and package-relative path in `web/package.json`:
+  `"angee": { "assets": { "suite.icon": "./src/assets/icon.svg" } }`.
+  The deployment selects those names through `site.icon`, `site.touchIcon`
+  and `site.image`; see [`ShellSettings`](../../packages/app/src/define-addon.ts)
+  and [`generateWebRuntime`](../../packages/app/src/web-codegen.mjs). Vite emits
+  the selected files and writes the title, description, icons and link-preview
+  tags before JavaScript runs. The static head's absolute URLs follow the
+  stack's `ANGEE_PUBLIC_ORIGIN`. Asset declarations are compose inputs; changing
+  only image bytes needs no compose, and Vite rereads them on build or dev reload.
 
   [`selectApp`](../../packages/app/src/boot-app.tsx) takes `?app=<root id |
   apps name>`, else the hostname's `hosts` entry, else `shell.app`, else

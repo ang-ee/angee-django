@@ -131,6 +131,15 @@ export interface AppDeclaration {
  */
 export interface ShellSettings {
   brand?: RuntimeBrand;
+  /** Static head shared by every ingress alias; assets name addon package declarations. */
+  site?: {
+    /** Defaults to shell.brand.name; required without a shell brand. */
+    title?: string;
+    description?: string;
+    icon?: string;
+    touchIcon?: string;
+    image?: string;
+  };
   /** An installed theme id; it also backs a selected app that names none. */
   theme?: string;
   /** Named rails; a name must not be a menu root id. */

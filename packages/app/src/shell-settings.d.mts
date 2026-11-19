@@ -7,3 +7,7 @@ export function assertBrand(where: string, brand: unknown): asserts brand is Run
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function assertShellSettings(shell: unknown): asserts shell is ShellSettings;
+
+/** Static head facts from validated shell settings; asset names remain unresolved. */
+export function shellSiteSettings(shell: ShellSettings):
+  (Omit<NonNullable<ShellSettings["site"]>, "title"> & { title: string; siteName?: string }) | undefined;

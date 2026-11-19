@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, matchesGlob, resolve } from "node:path";
+import { basename, dirname, extname, join, matchesGlob, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { build, defineConfig, mergeConfig, type Plugin, type UserConfig, type ViteDevServer } from "vite";
-import { generateWebRuntime, type WebCodegenInputs } from "@angee/app/web-codegen";
+import { build, defineConfig, mergeConfig, searchForWorkspaceRoot, type HtmlTagDescriptor, type Plugin, type UserConfig, type ViteDevServer } from "vite";
+import { generateWebRuntime, type WebCodegenInputs, type WebCodegenResult } from "@angee/app/web-codegen";
 import {
   resolveThemeOptions,
   type AppearanceBootstrapPayload,
@@ -19,7 +19,7 @@ import {
 // does not resolve extensionless relative imports.
 const ANGEE_WATCH_IGNORED: readonly string[] = ["**/.jj/**"];
 
-// The framework owner of the web Vite defaults: the plugin pair, the dev-server
+// The framework owner of the web Vite defaults: the plugins, the dev-server
 // host/port/proxy wiring, the generated-schema alias, and the project-derived
 // `optimizeDeps` set. A project's `web/vite.config.ts` imports
 // `@angee/app/vite`, calls `defineAngeeWebViteConfig`, and supplies only the two
@@ -288,11 +288,13 @@ export async function defineAngeeWebViteConfig({
   ...overrides
 }: AngeeWebViteConfig): Promise<UserConfig> {
   const appearancePlugin = angeeAppearancePlugin();
+  const sitePlugin = angeeSitePlugin();
   const base = defineConfig({
     root: webRoot,
     plugins: [
-      angeeWebCodegenPlugin({ webRoot, gqlRuntimeDir, appearance, appearancePlugin, prebundleAngeePackages }),
+      angeeWebCodegenPlugin({ webRoot, gqlRuntimeDir, appearance, appearancePlugin, sitePlugin, prebundleAngeePackages }),
       appearancePlugin,
+      sitePlugin,
       preloadSchemaMetadata(),
       react(),
       tailwindcss(),
@@ -372,10 +374,12 @@ function angeeWebCodegenPlugin({
   gqlRuntimeDir,
   appearance,
   appearancePlugin,
+  sitePlugin,
   prebundleAngeePackages,
 }: Pick<AngeeWebViteConfig, "webRoot" | "gqlRuntimeDir" | "appearance" | "prebundleAngeePackages"> & {
   webRoot: string;
   appearancePlugin: ReturnType<typeof angeeAppearancePlugin>;
+  sitePlugin: ReturnType<typeof angeeSitePlugin>;
 }): Plugin {
   const runtimeDir = dirname(gqlRuntimeDir);
   let inputs: WebCodegenInputs = { files: [], globs: [], directories: [], excluded: [] };
@@ -410,6 +414,7 @@ function angeeWebCodegenPlugin({
     inputs = generated.inputs;
     discovering = inputs;
     appearancePlugin.update(payload);
+    sitePlugin.update(generated.site);
     const module = server?.environments.client.moduleGraph.getModuleById(RESOLVED_VIRTUAL_APPEARANCE);
     if (module) server!.environments.client.moduleGraph.invalidateModule(module);
   };
@@ -480,6 +485,98 @@ function angeeWebCodegenPlugin({
       clearTimeout(timer);
       server?.watcher.off("all", changed);
       await running;
+    },
+  };
+}
+
+/** Write the deployment's static head through Vite's native HTML and asset hooks. */
+function angeeSitePlugin(): Plugin & { update(site: WebCodegenResult["site"]): void } {
+  let site: WebCodegenResult["site"];
+  let base = "/";
+  let origin: string | undefined;
+  let building = false;
+  let server: ViteDevServer | undefined;
+  let allowed: string[] = [];
+  const files = () => [...new Set([site?.icon, site?.touchIcon, site?.image].filter((file): file is string => !!file))].sort();
+  const allowFiles = () => {
+    if (server) server.config.server.fs.allow = [...new Set([...allowed, ...files()])].sort();
+  };
+  return {
+    name: "angee:site",
+    update(next) {
+      site = next;
+      allowFiles();
+    },
+    config(_config, env) {
+      if (env.isPreview) return;
+      const value = process.env.ANGEE_PUBLIC_ORIGIN;
+      if (value) {
+        try {
+          const parsed = new URL(value);
+          if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error();
+          origin = parsed.origin;
+        } catch {
+          throw new Error("ANGEE_PUBLIC_ORIGIN must be an http(s) URL.");
+        }
+      }
+    },
+    configResolved(config) {
+      base = config.base;
+      building = config.command === "build";
+    },
+    configureServer(value) {
+      server = value;
+      // Keep both the host's list and Vite's workspace/client allowances. Add
+      // selected files, never their package directories; refresh on regeneration.
+      allowed = [...new Set([searchForWorkspaceRoot(server.config.root), ...server.config.server.fs.allow])];
+      allowFiles();
+    },
+    buildStart() {
+      if (!building) return;
+      for (const file of files()) {
+        this.addWatchFile(file);
+        this.emitFile({ type: "asset", name: basename(file), originalFileName: file, source: readFileSync(file) });
+      }
+    },
+    transformIndexHtml: {
+      order: "post",
+      handler(html, context) {
+        if (!site) return;
+        // Post hooks receive the final bundle, as in schema-metadata-preload.
+        // Native emission supplies names and hashing and never inlines the files.
+        const assetUrl = (file: string) => {
+          if (!building) return encodeURI(posix.join("/@fs/", file.replaceAll("\\", "/")));
+          const asset = Object.values(context.bundle ?? {}).find((entry) =>
+            entry.type === "asset" && entry.originalFileNames.includes(file));
+          if (!asset) throw new Error(`Missing emitted site asset: ${file}`);
+          // A relative or full-URL Vite base still gives head icons root-relative URLs.
+          return new URL(`${base}${asset.fileName}`, "http://angee.invalid/").pathname;
+        };
+        const image = site.image ? assetUrl(site.image) : undefined;
+        const tags: HtmlTagDescriptor[] = [{
+          tag: "title", children: site.title.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
+        }];
+        const meta = (attribute: "name" | "property", name: string, content: string | undefined) => {
+          if (content !== undefined) tags.push({ tag: "meta", attrs: { [attribute]: name, content } });
+        };
+        meta("name", "description", site.description);
+        meta("property", "og:type", "website");
+        meta("property", "og:site_name", site.siteName);
+        meta("property", "og:title", site.title);
+        meta("property", "og:description", site.description);
+        meta("property", "og:url", origin ? new URL(new URL(base, "http://angee.invalid/").pathname, origin).href : undefined);
+        meta("property", "og:image", image && origin ? new URL(image, origin).href : image);
+        meta("name", "twitter:card", image ? "summary_large_image" : "summary");
+        if (site.icon) {
+          const types: Record<string, string> = { ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon" };
+          tags.push({ tag: "link", attrs: { rel: "icon", type: types[extname(site.icon).toLowerCase()], href: assetUrl(site.icon) } });
+        }
+        if (site.touchIcon) tags.push({ tag: "link", attrs: { rel: "apple-touch-icon", href: assetUrl(site.touchIcon) } });
+        return {
+          html: html.replace(/<title\b[^>]*>[\s\S]*?<\/title\s*>/gi, ""),
+          tags: tags.map((tag) => ({ ...tag, injectTo: "head" })),
+        };
+      },
     },
   };
 }

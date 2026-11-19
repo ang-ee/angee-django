@@ -294,6 +294,12 @@ entry imports the generated stylesheet; Vite resolves theme-relative images and
 fonts through its normal asset pipeline. Browser composition also checks that
 each addon contribution references its canonical discovered definition.
 
+Static head icons and link-preview images use the addon's named `angee.assets`
+declarations in `web/package.json`, selected by the deployment's
+[`ANGEE_UI.shell.site`](guidelines.md#rules). They are independent of the selected
+theme and app. Vite emits these files without inlining them; selected assets must
+remain inside their package, including after resolving symlinks.
+
 Projects created before this feature need a template update. Re-render the
 project template, review the explicit `/src/index.css` head link and virtual
 `virtual:angee-appearance` wiring, then run the runtime build and production

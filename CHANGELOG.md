@@ -10,6 +10,12 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Deployments declare static site facts in `ANGEE_UI.shell.site`, selecting
+  addon-owned `angee.assets` from web package metadata. Vite writes the title,
+  description, icons and link-preview tags, emits selected assets through its
+  native pipeline, and uses the stack's shared `ANGEE_PUBLIC_ORIGIN` for absolute
+  preview URLs. Image-only edits need no compose and refresh through Vite.
+
 - The UX guard accepts manifest `vocabulary` field tones by structure while rejecting local tone maps and switches.
 
 - Integrate compares synchronized JSON as JSON values (`json_equal` in

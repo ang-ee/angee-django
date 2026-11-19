@@ -109,7 +109,12 @@ angee --root /srv/shop secret reveal admin-password
 - **`settings_file`** names a settings file in one of the repositories, relative to
   the stack root. Every Python service and job loads it as `YAMLCONF_CONFFILE`,
   the final layer after the host's `settings.yaml`, so a product keeps the
-  settings it overrides (brand, wording, currency) in its own repository. Keep
+  settings it overrides (runtime brand, static site head, wording, currency) in
+  its own repository. `ANGEE_UI.shell.site` selects the title, description and
+  named public assets the product's addons ship; see the
+  [shell contract](../docs/frontend/guidelines.md#rules). The frontend receives
+  the same `ANGEE_PUBLIC_ORIGIN` as Django for a public ingress, so link-preview
+  URLs follow the stack's canonical origin across its aliases. Keep
   `INSTALLED_APPS` out of it; the host's roster and `roots` own that.
 - **Deploy keys.** Every repository given by SSH URL declares a required secret
   `deploy-key-<name>` and `sources.<name>.auth.ssh_key_secret`. The operator

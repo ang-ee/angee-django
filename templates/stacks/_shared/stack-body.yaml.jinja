@@ -20,6 +20,7 @@
 {# stack_template is the ref a framework-flavored wrapper records as template.active. #}
 {# Process mode always renders development, even if a caller bypasses the Copier validator. #}
 {% set effective_serve_mode = "development" %}{% if runtime_mode == "docker" %}{% set effective_serve_mode = serve_mode %}{% endif %}{% set database_url = "postgres://"|add:postgres_user|add:":${secret.db-password}@"|add:postgres_address|add:"/"|add:postgres_db %}{% set redis_url = "redis://"|add:redis_address|add:"/"|add:redis_db %}{% set celery_broker_url = "redis://"|add:redis_address|add:"/"|add:redis_broker_db %}
+{% set public_origin = "" %}{% if ingress_domain_value == "localhost" %}{% else %}{% set public_origin = "https://"|add:ingress_domain_value %}{% endif %}
 version: 1
 kind: stack
 {% if stack_flavor == "framework" %}
@@ -338,10 +339,12 @@ jobs:
     mounts:
       - source://app:/app
     workdir: /app
-    command: ["sh", "-c", "corepack enable pnpm && exec pnpm --dir {{ web_path }} build"]{% if sentry_web_dsn %}
+    command: ["sh", "-c", "corepack enable pnpm && exec pnpm --dir {{ web_path }} build"]{% if public_origin or sentry_web_dsn %}
     env:
+{% if public_origin %}      ANGEE_PUBLIC_ORIGIN: "{{ public_origin }}"
+{% endif %}{% if sentry_web_dsn %}
       VITE_SENTRY_DSN: "{{ sentry_web_dsn }}"
-      VITE_SENTRY_ENVIRONMENT: "{{ effective_serve_mode }}"{% endif %}
+      VITE_SENTRY_ENVIRONMENT: "{{ effective_serve_mode }}"{% endif %}{% endif %}
     depends_on: [deps, compose, operator-schema]
 {% endif %}
 {% else %}
@@ -364,10 +367,12 @@ jobs:
         && if [ ! -f {{ container_project_dir }}/pnpm-lock.yaml ]; then
         pnpm install --lockfile-only --no-frozen-lockfile --lockfile-dir {{ container_project_dir }} || exit; fi
         && pnpm install --frozen-lockfile --lockfile-dir {{ container_project_dir }}
-        && pnpm --config.verify-deps-before-run=false --filter ./../angee-project/{{ web_path }} --fail-if-no-match run build{% if sentry_web_dsn %}
+        && pnpm --config.verify-deps-before-run=false --filter ./../angee-project/{{ web_path }} --fail-if-no-match run build{% if public_origin or sentry_web_dsn %}
     env:
+{% if public_origin %}      ANGEE_PUBLIC_ORIGIN: "{{ public_origin }}"
+{% endif %}{% if sentry_web_dsn %}
       VITE_SENTRY_DSN: "{{ sentry_web_dsn }}"
-      VITE_SENTRY_ENVIRONMENT: "{{ effective_serve_mode }}"{% endif %}
+      VITE_SENTRY_ENVIRONMENT: "{{ effective_serve_mode }}"{% endif %}{% endif %}
     depends_on: [compose, operator-schema]
 
 {% endif %}
@@ -507,7 +512,8 @@ services:
       ANGEE_DJANGO_URL: http://127.0.0.1:{{ django_port }}
       ANGEE_UI_PORT: "{{ ui_port }}"
       # The UI proxies /operator/* to the daemon (same-origin, no CORS).
-      ANGEE_OPERATOR_URL: "{{ operator_url }}"{% if sentry_web_dsn %}
+      ANGEE_OPERATOR_URL: "{{ operator_url }}"{% if public_origin %}
+      ANGEE_PUBLIC_ORIGIN: "{{ public_origin }}"{% endif %}{% if sentry_web_dsn %}
       VITE_SENTRY_DSN: "{{ sentry_web_dsn }}"
       VITE_SENTRY_ENVIRONMENT: "{{ effective_serve_mode }}"{% endif %}
     ready:
@@ -543,7 +549,8 @@ services:
       ANGEE_DJANGO_URL: http://django:8000
       ANGEE_UI_PORT: "{{ ui_port }}"
       ANGEE_OPERATOR_URL: "{{ operator_url }}"{% if ingress_domain_value == "localhost" %}{% else %}
-      ANGEE_UI_ALLOWED_HOSTS: "{{ ingress_domain_value }}{% if ingress_aliases %},{{ ingress_aliases }}{% endif %}"{% endif %}{% if sentry_web_dsn %}
+      ANGEE_UI_ALLOWED_HOSTS: "{{ ingress_domain_value }}{% if ingress_aliases %},{{ ingress_aliases }}{% endif %}"{% endif %}{% if public_origin %}
+      ANGEE_PUBLIC_ORIGIN: "{{ public_origin }}"{% endif %}{% if sentry_web_dsn %}
       VITE_SENTRY_DSN: "{{ sentry_web_dsn }}"
       VITE_SENTRY_ENVIRONMENT: "{{ effective_serve_mode }}"{% endif %}
     command:

@@ -4,6 +4,7 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
@@ -35,7 +36,7 @@ import {
   serializableThemeMetadata,
 } from "@angee/ui/theme-runtime";
 
-import { assertShellSettings } from "@angee/app/shell-runtime";
+import { assertShellSettings, shellSiteSettings } from "@angee/app/shell-runtime";
 
 const AGGREGATE_MEASURE_OPERATORS = ["sum", "avg", "min", "max"];
 const DELETE_PREVIEW_SELECTION =
@@ -71,6 +72,7 @@ export async function generateWebRuntime({
   const manifest = readManifest(runtimeDir);
   assertShellSettings(manifest.deployment?.shell ?? {});
   const addonSources = addonSourceDirectories(runtimeDir, webRoot, manifest, inputs);
+  const site = resolveSiteAssets(manifest, addonSources, inputs);
   const externalEntries = Array.isArray(manifest.codegen) ? manifest.codegen : [];
   const djangoSchemas = schemaNamesFor(runtimeDir);
   const documentRoots = documentRootsFor(webRoot, manifest, addonSources);
@@ -102,7 +104,43 @@ export async function generateWebRuntime({
   }
   emitThemeArtifacts(runtimeDir, installedThemes, inputs);
   emitAppModule(runtimeDir, manifest, djangoSchemas, addonSources, installedThemes);
-  return { inputs: inputs.snapshot(), themes: installedThemes.definitions };
+  return { inputs: inputs.snapshot(), themes: installedThemes.definitions, ...(site ? { site } : {}) };
+}
+
+/** Resolve only the deployment's selected assets, within their owning package. */
+function resolveSiteAssets(manifest, addonSources, inputs) {
+  const site = shellSiteSettings(manifest.deployment?.shell ?? {});
+  if (!site) return undefined;
+  const assets = new Map((manifest.addonPackages ?? []).flatMap((pkg) =>
+    Object.entries(pkg.assets ?? {}).map(([name, file]) => [name, { file, package: pkg.package }]),
+  ));
+  for (const [slot, extensions] of Object.entries({
+    icon: [".svg", ".png", ".ico"], touchIcon: [".png"], image: [".png", ".jpg", ".jpeg"],
+  })) {
+    const name = site[slot];
+    if (name === undefined) continue;
+    const asset = assets.get(name);
+    const where = `ANGEE_UI.shell.site.${slot}`;
+    if (!asset) {
+      throw new Error(`${where} names unknown asset ${JSON.stringify(name)}; declared assets: ${[...assets.keys()].sort().join(", ") || "(none)"}.`);
+    }
+    const root = realpathSync(addonSources.get(asset.package).root);
+    const file = path.resolve(root, asset.file);
+    inputs.file(file);
+    if (!existsSync(file) || !statSync(file).isFile()) {
+      throw new Error(`${where} asset ${JSON.stringify(name)} must be a regular file: ${file}`);
+    }
+    const canonical = realpathSync(file);
+    const relative = path.relative(root, canonical);
+    if (path.isAbsolute(relative) || relative === ".." || relative.startsWith(`..${path.sep}`)) {
+      throw new Error(`${where} asset ${JSON.stringify(name)} resolves outside package ${asset.package}: ${canonical}`);
+    }
+    if (!extensions.includes(path.extname(canonical).toLowerCase())) {
+      throw new Error(`${where} asset ${JSON.stringify(name)} must use ${extensions.join(", ")}: ${canonical}`);
+    }
+    site[slot] = canonical;
+  }
+  return site;
 }
 
 function importThemeModule(entry) {

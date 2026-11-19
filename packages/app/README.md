@@ -17,11 +17,11 @@ and icon), `theme` (an installed theme id), `themeLocked` (`true` beside
 `theme`: within this app its theme wins over the person's own theme choice) and
 `railExpanded` (desktop rail expansion until a user saves their own choice).
 They layer like other menu fields, and an included app drops them. The
-deployment's `ANGEE_UI.shell` selects the app: `{ brand?, theme?, apps?: {
-<name>: { rail, brand?, theme?, themeLocked?, home?, railExpanded? } }, hosts?:
-{ <hostname>: <root id | apps name> } }`; the shell's own `theme` cannot be locked. `selectApp` (in
+deployment's `ANGEE_UI.shell` selects the app: `{ brand?, site?, theme?, apps?: {
+<name>: { rail?, brand?, theme?, themeLocked?, home?, railExpanded? } }, hosts?:
+{ <hostname>: <root id | apps name> }, app?: <root id | apps name> }`; the shell's own `theme` cannot be locked. `selectApp` (in
 [`boot-app.tsx`](src/boot-app.tsx)) takes `?app=`, else the hostname's `hosts`
-entry, else nothing, which shows every root with `shell.brand` and
+entry, else `shell.app`, else nothing, which shows every root with `shell.brand` and
 `shell.theme`. A root id is the one-root app; a named app takes its own brand,
 theme, home and rail default, else its first rail root's. A theme lock travels
 with the theme it is declared beside, and boot refuses a lock with no theme. `createApp` reads `location`
@@ -34,6 +34,16 @@ app and host is checked at boot, selected or not, and an unknown `?app=` warns
 in development and falls back. Only the deployment layer declares `shell`.
 Addons cannot claim the `ui` translation namespace, which belongs to the
 rendered package.
+
+`shell.site` declares the deployment's static title, description, icon, touch icon
+and link-preview image. Its title defaults to `shell.brand.name`; the other
+fields are optional. It is shared by every ingress alias and does not follow
+runtime app selection. Addons declare public assets by name in their
+`web/package.json` `angee.assets` mapping, and the deployment selects those names.
+The shared generator resolves them; Vite writes the head and emits the files,
+using the stack's `ANGEE_PUBLIC_ORIGIN` for absolute preview URLs. See
+[`ShellSettings`](src/define-addon.ts) and the
+[shell and asset guide](../../docs/frontend/guidelines.md#rules).
 
 Addons shape the menu with a dict keyed by node id (`menus: { … }`). A key in
 the addon's own namespace (its id, or `<id>.…`) declares a node; any other key
