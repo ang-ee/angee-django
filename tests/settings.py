@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     "angee.storage_integrate_google_drive",
     "angee.storage_integrate_iphone",
     "angee.parties",
+    "angee.parties_integrate_hubspot",
     "angee.money",
     "angee.scheduling",
     "angee.sequence",

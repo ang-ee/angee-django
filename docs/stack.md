@@ -165,6 +165,12 @@ GPL code is incompatible with a framework composed into commercial consumers.
 `django-reversion-compare` was evaluated and rejected for the same GPL reason;
 `django-simple-history` owns snapshots and revert.
 
+HubSpot client choice: `hubspot-api-client` was evaluated and rejected because it
+hard-codes the v3/v4 paths HubSpot is retiring. `hubspot-sdk` was rejected as an
+alpha. [`parties_integrate_hubspot`](../src/angee/parties_integrate_hubspot/client.py)
+calls the date-versioned REST paths through `integrate.http.HttpClient` and
+validates each answer with pydantic.
+
 ### Stack serve mode
 
 Both stack templates take `serve_mode: development | production`. The framework

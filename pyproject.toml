@@ -47,6 +47,7 @@ dependencies = [
     "angee-operator==3.0.0",
     "angee-parties==3.0.0",
     "angee-parties-integrate-carddav==3.0.0",
+    "angee-parties-integrate-hubspot==3.0.0",
     "angee-platform==3.0.0",
     "angee-platform-integrate-operator==3.0.0",
     "angee-platform-integrate-vcs==3.0.0",
@@ -167,6 +168,7 @@ angee-nexus = {workspace = true}
 angee-operator = {workspace = true}
 angee-parties = {workspace = true}
 angee-parties-integrate-carddav = {workspace = true}
+angee-parties-integrate-hubspot = {workspace = true}
 angee-platform = {workspace = true}
 angee-platform-integrate-operator = {workspace = true}
 angee-platform-integrate-vcs = {workspace = true}
