@@ -155,7 +155,7 @@ export const enPartiesMessages: Record<string, string> = {
   "merge.dismissError": "Could not save the keep-separate decision.",
   "person.action.merge": "Merge into…",
   "person.action.mergeOther": "Other party",
-  "person.action.mergeOther.description": "Choose the duplicate record to compare with this person.",
+  "person.action.mergeOther.description": "Choose the duplicate record to compare with this one.",
   "person.action.mergeRequired": "Choose another party.",
   "people.smart.heading": "Smart views",
   "people.smart.all": "All people",
