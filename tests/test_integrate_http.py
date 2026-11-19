@@ -19,7 +19,7 @@ import socket
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
-from typing import Any
+from typing import Any, assert_type
 
 import httpcore2
 import httpx2
@@ -627,21 +627,6 @@ def test_stream_retains_native_response_until_context_exit(fail: bool) -> None:
     assert request.content == b"request"
 
 
-@pytest.mark.parametrize(("answer", "outcome"), [
-    (httpx2.Response(200, json={"ready": True}), {"ready": True}),
-    (httpx2.Response(503), httpx2.HTTPStatusError),
-    (httpx2.Response(200, text="bad json"), ValueError),
-], ids=["json", "http-error", "decode-error"])
-def test_json_get_uses_shared_headers_and_preserves_http_and_decode_errors(answer: Any, outcome: Any) -> None:
-    with mock_transport(lambda request: answer) as requests:
-        if isinstance(outcome, dict):
-            assert HttpClient().get_json(URL) == outcome
-        else:
-            with pytest.raises(outcome):
-                HttpClient().get_json(URL)
-    assert requests[0].headers["Accept"] == "application/json"
-
-
 @pytest.mark.parametrize(
     ("header", "delay"),
     [
@@ -663,16 +648,22 @@ def test_retry_after_reads_delay_seconds_or_a_future_http_date(header: str | Non
 
 
 class _VendorError(IntegrationError):
-    """A vendor refusal built from the facts alone; the vendor adds its own transient 423 and its wait."""
+    """A vendor refusal; ``refusal`` keeps the facts its factory saw before the owner chained the failure."""
 
-    def __init__(self, refusal: HttpRefusal) -> None:
-        self.refusal = refusal
-        locked = refusal.status == 423
-        super().__init__(
-            refusal.message("Example API"),
-            transient=refusal.transient or locked,
-            retry_after=refusal.retry_after or (timedelta(seconds=2) if locked else None),
-        )
+    refusal: HttpRefusal
+
+
+def _vendor_error(refusal: HttpRefusal) -> _VendorError:
+    """The vendor's one factory: its own transient 423 and wait, its own words for a 401, else the shared hand-off."""
+
+    if refusal.status == 423:
+        wait = refusal.retry_after or timedelta(seconds=2)
+        error = _VendorError(refusal.public_message("Example API"), transient=True, retry_after=wait)
+    else:
+        own = "Example API rejected this credential." if refusal.status == 401 else None
+        error = refusal.as_error(_VendorError, "Example API", public_message=own)
+    error.refusal = refusal
+    return error
 
 
 class _Page(BaseModel):
@@ -704,6 +695,10 @@ def _answer(answer: httpx2.Response | Exception) -> Any:
             "Example API refused the request (HTTP 404).", id="client-error",
         ),
         pytest.param(
+            httpx2.Response(401), "status", 401, False, None,
+            "Example API rejected this credential.", id="vendor-words-its-own-case",
+        ),
+        pytest.param(
             httpx2.Response(423), "status", 423, True, timedelta(seconds=2),
             "Example API refused the request (HTTP 423).", id="vendor-adds-a-transient-status-and-its-wait",
         ),
@@ -724,7 +719,7 @@ def _answer(answer: httpx2.Response | Exception) -> Any:
             "Example API could not be reached.", id="transport-failure",
         ),
         pytest.param(
-            RequestNotSentError(), "unreachable", None, True, None,
+            RequestNotSentError(), "not_sent", None, True, None,
             "Example API could not be reached.", id="not-sent",
         ),
     ],
@@ -736,7 +731,7 @@ def test_the_typed_request_raises_the_callers_error_from_the_facts_of_each_refus
     """One status rule; the caller composes the message and never sees the answer's text."""
 
     with mock_transport(_answer(answer)), pytest.raises(_VendorError) as refused:
-        HttpClient().request_model("GET", URL, model=_Page, error=_VendorError, max_bytes=64)
+        HttpClient().request_model("GET", URL, model=_Page, error=_vendor_error, max_bytes=64)
 
     facts = refused.value.refusal
     assert (facts.cause, facts.status, refused.value.transient, refused.value.retry_after) == (
@@ -744,33 +739,51 @@ def test_the_typed_request_raises_the_callers_error_from_the_facts_of_each_refus
     )
     assert str(refused.value) == message
     assert facts.body == ({"message": "secret vendor text"} if status == 404 else None)
+    # The factory saw the failure the owner then chained, so it can tell a request not sent from an uncertain one.
+    assert facts.failure is refused.value.__cause__
+    if isinstance(answer, Exception):
+        assert facts.failure is answer
 
 
-def test_the_typed_request_sends_json_and_returns_the_validated_model_or_the_parsed_json() -> None:
+def test_a_refusal_has_a_status_or_a_failure() -> None:
+    with pytest.raises(ValueError):
+        HttpRefusal()
+    with pytest.raises(ValueError):
+        HttpRefusal(status=503, failure=RequestNotSentError())
+
+
+def test_the_typed_request_sends_native_json_and_returns_the_validated_model_or_the_parsed_json() -> None:
     with mock_transport(lambda request: httpx2.Response(200, json={"items": ["a"]})) as requests:
-        page = HttpClient().request_model("POST", URL, payload={"q": "ada"}, model=_Page, error=_VendorError)
+        page = HttpClient().request_model("POST", URL, json={"q": "ada"}, model=_Page, error=_vendor_error)
         parsed = HttpClient().request_model(
-            "GET", URL, headers={"Accept": "application/vnd.example+json"}, error=_VendorError,
+            "GET", URL, headers={"accept": "application/vnd.example+json"}, error=_vendor_error,
         )
 
+    assert_type(page, _Page)
     assert page == _Page(items=["a"]) and parsed == {"items": ["a"]}
     assert json.loads(requests[0].content) == {"q": "ada"}
     assert requests[0].headers["content-type"] == "application/json"
-    assert [request.headers["accept"] for request in requests] == ["application/json", "application/vnd.example+json"]
+    # The caller's header replaces the default whatever its case.
+    assert [request.headers.get_list("accept") for request in requests] == [
+        ["application/json"], ["application/vnd.example+json"],
+    ]
 
 
-def test_a_request_with_an_error_factory_returns_any_status_and_refuses_transport_and_oversize() -> None:
-    """The raw request keeps every status for its caller to read; only an answer it could not read is refused."""
+def test_a_request_with_an_error_factory_returns_any_status_and_refuses_what_it_could_not_read() -> None:
+    """The raw request keeps every status for its caller; its factory tells a request not sent from an uncertain one."""
 
     with mock_transport(lambda request: httpx2.Response(404, content=b"xy")):
-        assert HttpClient().request("GET", URL, max_bytes=2, error=_VendorError).status_code == 404
+        assert HttpClient().request("GET", URL, max_bytes=2, error=_vendor_error).status_code == 404
         with pytest.raises(_VendorError) as oversized:
-            HttpClient().request("GET", URL, max_bytes=1, error=_VendorError)
-    with mock_transport(_answer(httpx2.ReadTimeout("slow"))), pytest.raises(_VendorError) as unreachable:
-        HttpClient().request("POST", URL, error=_VendorError)
+            HttpClient().request("GET", URL, max_bytes=1, error=_vendor_error)
+    causes = {}
+    for failure in (httpx2.ReadTimeout("slow"), RequestNotSentError()):
+        with mock_transport(_answer(failure)), pytest.raises(_VendorError) as refused:
+            HttpClient().request("POST", URL, error=_vendor_error)
+        causes[refused.value.refusal.cause] = (refused.value.refusal.failure is failure, refused.value.transient)
 
     assert oversized.value.refusal.cause == "oversized" and isinstance(oversized.value.__cause__, ResponseTooLargeError)
-    assert unreachable.value.refusal.cause == "unreachable" and unreachable.value.transient
+    assert causes == {"unreachable": (True, True), "not_sent": (True, True)}
 
 
 def test_retry_after_dates_reach_the_refusal_of_a_bounded_download() -> None:

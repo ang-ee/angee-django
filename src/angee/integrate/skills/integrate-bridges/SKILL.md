@@ -147,8 +147,9 @@ source addon contributes one adapter class, its registry key and its tests. Refe
 6. **Errors and operator messages.** Raise an `IntegrationError` subclass composed from facts the operator owns
    (`ImapError` in `src/angee/messaging_integrate_imap/backend.py`); pass `transient=`/`retry_after=` for throttling.
    Over HTTP, `HttpRefusal` (`src/angee/integrate/http.py`) classifies every failed answer once: send with
-   `self.http.request_model(method, url, model=..., error=VendorError)` and let `error` build the subclass from the
-   refusal's facts, adding the vendor's own transient statuses or waits there, never a status table of its own.
+   `self.http.request_model(method, url, model=..., error=lambda refusal: refusal.as_error(VendorError, "Vendor"))`.
+   The vendor words only its own cases before that hand-off (`public_message=`, or a status it adds as transient
+   built by hand), never a status table of its own; one record's oversized answer is that record's refusal.
    Record-level refusals raise `SemanticError` (quarantined, page continues); infrastructure errors propagate
    (page rolls back) (`BridgeImpl.apply_record` in `src/angee/integrate/impl.py`). **Owner rule:** [Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts)
    "An integration failure reaches the operator only as an IntegrationError".
