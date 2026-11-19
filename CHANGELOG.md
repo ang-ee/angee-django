@@ -10,6 +10,19 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.knowledge_integrate_notion`: a token of another workspace fails
+  discovery. Notion's discovery called `GET /v1/users/me` and recorded nothing,
+  so an internal token of another workspace, re-entered on a connection, passed
+  rediscovery, and the sync resumed on the old cursor and links and mixed two
+  workspaces into one vault. Discovery now reads the workspace the token's bot
+  belongs to (`bot.workspace_id`, which Notion's answer requires), and
+  `NotionBackend.apply_discovery` keeps the first one in
+  `Bridge.subscription_state`. Another workspace fails discovery with "This
+  connection belongs to another Notion workspace; create a separate connection.",
+  and an answer that names no workspace is refused rather than matched. A
+  connection discovered before it kept a workspace records the one its next
+  discovery reads.
+
 - `angee.integrate`, `angee.workflows_integrate`: static-token and workflow loose
   ends. Testing a connection whose static token is not a header (an ICS feed
   address with a space or a non-ASCII character) failed with "Credential is not
