@@ -415,6 +415,16 @@ class SameAsPairType:
 
 
 @strawberry.type
+class SelectionDuplicateSetsType:
+    """The duplicate sets among selected records: each set's member ids, and how many were left out."""
+
+    sets: list[list[strawberry.ID]]
+    left_out: int
+    explicit: bool
+    """No pair was found among three to ten selected records: the selection is one set, as selected."""
+
+
+@strawberry.type
 class SameAsPairCountsType:
     """How many pairs the reader may review, and how many of those are certain."""
 
@@ -543,6 +553,17 @@ class PartiesReviewQuery:
         return cast(
             "list[CertainSameAsPairType]",
             Party.objects.certain_same_as_pairs(actor=session_user(info), limit=limit, after=after),
+        )
+
+    @strawberry.field
+    def selection_duplicate_sets(self, info: strawberry.Info, ids: list[strawberry.ID]) -> SelectionDuplicateSetsType:
+        """Return the duplicate sets among records selected on an ungrouped list, under the signed-in reader."""
+
+        found = Party.objects.selection_duplicate_sets(actor=session_user(info), ids=[str(pk) for pk in ids])
+        return SelectionDuplicateSetsType(
+            sets=[[strawberry.ID(pk) for pk in members] for members in found.sets],
+            left_out=found.left_out,
+            explicit=found.explicit,
         )
 
     @strawberry.field

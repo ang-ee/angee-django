@@ -126,13 +126,14 @@ describe("Merge in a parties list's selection bar", () => {
     expect(router.state.location.search).toEqual({ app: "console" });
   });
 
-  test("three selected open the batch dialog with the selection as one set", async () => {
+  test("three selected on an ungrouped list ask the server for the duplicate sets among them", async () => {
     renderMountedSelection(["ada", "grace", "joan"]);
 
     fireEvent.click(await screen.findByRole("button", { name: MERGE }));
 
     expect(await screen.findByText(enPartiesMessages["duplicates.title"]!)).toBeTruthy();
-    expect(reads.variables).toContainEqual({ sets: [["ada", "grace", "joan"]], certain: false, groupings: null });
+    expect(reads.variables).toContainEqual({ ids: ["ada", "grace", "joan"] });
+    expect(reads.variables).not.toContainEqual(expect.objectContaining({ sets: [["ada", "grace", "joan"]] }));
     expect(screen.queryByText("Comparison")).toBeNull();
   });
 

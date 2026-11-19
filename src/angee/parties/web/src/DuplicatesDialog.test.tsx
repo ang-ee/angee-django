@@ -10,12 +10,16 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   merge: vi.fn(), invalidate: vi.fn(), previews: [] as readonly unknown[], variables: [] as unknown[],
+  selection: undefined as unknown,
 }));
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredQuery: (_document: unknown, variables: unknown) => {
     mocks.variables.push(variables);
-    return { data: { duplicate_set_previews: mocks.previews }, isFetching: false, error: null };
+    return {
+      data: { duplicate_set_previews: mocks.previews, selection_duplicate_sets: mocks.selection },
+      isFetching: false, error: null,
+    };
   },
   useAuthoredMutation: () => [mocks.merge, { fetching: false, error: null, reset: () => undefined }],
   useInvalidateAuthoredModels: () => mocks.invalidate,
@@ -31,6 +35,7 @@ beforeEach(() => {
   mocks.invalidate.mockReset();
   mocks.previews = PREVIEWS;
   mocks.variables = [];
+  mocks.selection = undefined;
 });
 afterEach(() => {
   cleanup();
@@ -102,13 +107,13 @@ const merged = (id: string, name: string) => ({
 });
 
 /** The dialog over the review queue of the app opened with `?app=console`, links routed as the host routes them. */
-function renderDialog(onClose = vi.fn(), sets = SETS, certain = false) {
+function renderDialog(onClose = vi.fn(), sets = SETS, certain = false, selection?: readonly string[]) {
   function Host(): React.ReactElement {
     const router = useRouter();
     const navigate = React.useMemo(() => routerNavigator(router), [router]);
     return (
       <InAppLinkProvider navigate={navigate}>
-        <DuplicatesDialog sets={sets} certain={certain} onClose={onClose} />
+        <DuplicatesDialog sets={sets} selection={selection} certain={certain} onClose={onClose} />
         <Outlet />
       </InAppLinkProvider>
     );
@@ -422,6 +427,36 @@ describe("the batch merge dialog", () => {
       await waitFor(() => expect(onClose).toHaveBeenCalledWith(false));
       await waitFor(() => expect(mocks.invalidate).toHaveBeenCalledTimes(1));
       expect(mocks.merge).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("a selection from an ungrouped list", () => {
+    test("lists the duplicate sets the server found among it and says how many were left out", async () => {
+      mocks.selection = { sets: [["joan", "joan-2"]], left_out: 44, explicit: false };
+      mocks.previews = [PREVIEWS[2]!];
+      renderDialog(vi.fn(), [], false, ["joan", "joan-2", ...Array.from({ length: 44 }, (_value, index) => `single-${index}`)]);
+
+      expect(await screen.findByText(message("duplicates.leftOutUnpaired", { count: "44" }))).toBeTruthy();
+      await waitFor(() => expect(mocks.variables).toContainEqual({ sets: [["joan", "joan-2"]], certain: false, groupings: null }));
+      const [set] = await screen.findAllByRole("checkbox");
+      expect(set!.getAttribute("aria-checked")).toBe("true");
+    });
+
+    test("says so when three to ten records with no pair among them are offered as one set", async () => {
+      mocks.selection = { sets: [["joan", "joan-2"]], left_out: 0, explicit: true };
+      mocks.previews = [PREVIEWS[2]!];
+      renderDialog(vi.fn(), [], false, ["joan", "joan-2", "mary"]);
+
+      expect(await screen.findByText(message("duplicates.explicitSet"))).toBeTruthy();
+    });
+
+    test("says what to do when no duplicate is found among more than ten", async () => {
+      mocks.selection = { sets: [], left_out: 11, explicit: false };
+      mocks.previews = [];
+      renderDialog(vi.fn(), [], false, Array.from({ length: 11 }, (_value, index) => `single-${index}`));
+
+      expect(await screen.findByText(message("duplicates.noneFound", { count: "11" }))).toBeTruthy();
+      expect(screen.getByRole("button", { name: message("duplicates.confirm", { count: "0" }) })).toBeTruthy();
     });
   });
 });

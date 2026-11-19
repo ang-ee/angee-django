@@ -954,3 +954,92 @@ def test_a_sets_merge_costs_a_counted_number_of_statements(db: None) -> None:
     two = _merge_statements(owner, *sets[1:])
 
     assert (two[0] - one[0], two[1] - one[1]) == (374, 18)
+
+
+def _singles(owner: Any, count: int, tag: str) -> list[Any]:
+    with system_context(reason="duplicates singles"):
+        return [
+            Person._base_manager.create(display_name=f"Single {tag} {index}", created_by=owner)
+            for index in range(count)
+        ]
+
+
+def _derived(actor: Any, selected: list[Any]) -> Any:
+    return Party.objects.selection_duplicate_sets(actor=actor, ids=[party.public_id for party in selected])
+
+
+def _as_sets(found: Any) -> list[frozenset[str]]:
+    return sorted((frozenset(members) for members in found.sets), key=sorted)
+
+
+def test_fifty_selected_give_one_set_per_pair_among_them_and_the_rest_left_out(db: None) -> None:
+    del db
+    owner = create_user("selection-fifty")
+    pairs = [_people(owner, f"Zoe Example {i}", f"Zoe Example {i}", value=f"sel{i}@example.com") for i in range(3)]
+    _reconcile()
+    singles = _singles(owner, 44, "fifty")
+
+    found = _derived(owner, [party for pair in pairs for party in pair] + singles)
+
+    assert _as_sets(found) == sorted((frozenset(party.public_id for party in pair) for pair in pairs), key=sorted)
+    assert (found.left_out, found.explicit) == (44, False)
+
+
+def test_a_chain_of_pairs_all_selected_is_one_set(db: None) -> None:
+    del db
+    owner = create_user("selection-chain")
+    with system_context(reason="selection chain"):
+        a, b, c = (Person._base_manager.create(display_name="Zoe Example", created_by=owner) for _ in range(3))
+    for holder, claimant, value in ((a, b, "chain-ab@example.com"), (c, b, "chain-bc@example.com")):
+        handle = _address(owner, value)
+        with system_context(reason="selection chain"):
+            Party.objects.assert_handle(holder, handle, asserted_by=owner)
+            Party.objects.propose_claimed_handle_as_system(claimant, handle, evidence=handle, reason="tests.claim")
+    _reconcile()
+
+    found = _derived(owner, [a, b, c] + _singles(owner, 9, "chain"))
+
+    assert _as_sets(found) == [frozenset({a.public_id, b.public_id, c.public_id})]
+
+
+def test_a_pair_outside_the_selection_kept_apart_or_unreviewable_gives_no_set(db: None) -> None:
+    del db
+    owner, other = create_user("selection-excluded"), create_user("selection-excluded-other")
+    kept = _people(owner, "Zoe Kept", "Zoe Kept", value="kept@example.com")
+    outside = _people(owner, "Zoe Outside", "Zoe Outside", value="outside@example.com")
+    hidden_handle = _address(other, "hidden@example.com")
+    with system_context(reason="selection hidden pair"):
+        hidden = [Person._base_manager.create(display_name="Zoe Hidden", created_by=owner) for _ in range(2)]
+        Party.objects.assert_handle(hidden[0], hidden_handle, asserted_by=owner)
+        Party.objects.propose_claimed_handle_as_system(
+            hidden[1], hidden_handle, evidence=hidden_handle, reason="tests.claim",
+        )
+    reviewable = _people(owner, "Zoe Fine", "Zoe Fine", value="fine@example.com")
+    _reconcile()
+    _kept_separate(owner, kept[0], kept[1])
+
+    found = _derived(owner, [*kept, outside[0], *hidden, *reviewable] + _singles(owner, 6, "excluded"))
+
+    assert _as_sets(found) == [frozenset(party.public_id for party in reviewable)]
+
+
+def test_three_to_ten_with_no_pair_are_one_explicit_set_and_eleven_are_none(db: None) -> None:
+    del db
+    owner = create_user("selection-explicit")
+    three, eleven = _singles(owner, 3, "three"), _singles(owner, 11, "eleven")
+
+    explicit, none = _derived(owner, three), _derived(owner, eleven)
+
+    assert (explicit.sets, explicit.left_out, explicit.explicit) == (
+        (tuple(party.public_id for party in three),), 0, True,
+    )
+    assert (none.sets, none.left_out, none.explicit) == ((), 11, False)
+
+
+def test_a_selection_over_the_bound_is_refused_with_its_count(db: None) -> None:
+    del db
+    owner = create_user("selection-bound")
+    ids = [f"pty_{index}" for index in range(Party.objects.SELECTION_LIMIT + 1)]
+
+    with pytest.raises(ValidationError, match="1,001 are selected"):
+        Party.objects.selection_duplicate_sets(actor=owner, ids=ids)

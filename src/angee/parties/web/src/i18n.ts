@@ -233,6 +233,10 @@ export const enPartiesMessages: Record<string, string> = {
   "duplicates.compare": "Choose on the compare page: {name}",
   "duplicates.refused": "Will not merge: {reason}",
   "duplicates.unpaired": "Left out, with no one else selected in their group: {count}.",
+  "duplicates.leftOutUnpaired": "Left out, no duplicate of theirs is selected: {count}.",
+  "duplicates.explicitSet": "No duplicates were found among these records: they are offered as one set, as you selected them.",
+  "duplicates.noneFound":
+    "No duplicates were found among the {count} selected records. Group the list by name to merge by name, or select the records of one person.",
   "duplicates.blank": "Left out, in a group without a value: {count}.",
   "duplicates.overCap": "This merges the first {count} of {total} groups. The selection clears after the merge: select the rest and choose Merge… again.",
   "duplicates.include": "Include in this merge",

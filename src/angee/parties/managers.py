@@ -233,6 +233,17 @@ class _HandleSenderName(TypedDict):
     _sender_name: str
 
 
+class SelectionDuplicateSets(NamedTuple):
+    """The duplicate sets among records a person selected (:meth:`PartyManager.selection_duplicate_sets`)."""
+
+    sets: tuple[tuple[str, ...], ...]
+    """Each set's members by public id, as selected; a set over the member cap is kept whole, and refused."""
+    left_out: int
+    """Selected records in no set: no duplicate of theirs is selected (or they are not the reader's to read)."""
+    explicit: bool = False
+    """No pair was found among three to ten selected records: the whole selection is one set, as selected."""
+
+
 class SameAsReviewCounts(NamedTuple):
     """How many pairs a reader may review, and how many are certain (:meth:`PartyManager.same_as_review_counts`)."""
 
@@ -2475,6 +2486,67 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             if len(batch) >= limit:
                 break
         return batch[:limit]
+
+    SELECTION_LIMIT: ClassVar[int] = 1000
+    """The most records one ungrouped selection may hand :meth:`selection_duplicate_sets`."""
+
+    def selection_pairs(self, *, actor: Any, parties: Collection[Any]) -> list[tuple[Any, Any]]:
+        """Which two of these selected parties are one: the rule a selection's duplicate sets follow.
+
+        Two selected parties are one when ``actor`` may review a same-person pair
+        between them, by the review read's own scope and rules
+        (:meth:`PartyQuerySet.review_walk`): a proposed pair, certain or not, that no
+        person kept apart, whose parties ``actor`` reads and whose cited handles
+        ``actor`` reads. Whatever else should make two selected records one belongs here.
+        """
+
+        readable = apps.get_model("parties", "Party")._default_manager.with_actor(actor)
+        found: list[tuple[Any, Any]] = []
+        for window, _examined in readable.review_walk(parties=parties, size=500):
+            found.extend((pair.left.pk, pair.right.pk) for pair in readable.review_pairs(window))
+        return found
+
+    def selection_duplicate_sets(self, *, actor: Any, ids: Sequence[str]) -> SelectionDuplicateSets:
+        """The duplicate sets among records a person selected on an ungrouped list, under ``actor``'s own read.
+
+        The pairs between selected records (:meth:`selection_pairs`) join them; each
+        connected group is a set, a group over :attr:`SET_MEMBERS` kept whole, so the
+        merge refuses it with its reason rather than splitting what the person never
+        split. Selected records in no set are counted as left out. Three to ten
+        selected records with no pair among them are one explicit set, as selected:
+        the only way to merge records the system never paired. At most
+        :attr:`SELECTION_LIMIT` records.
+        """
+
+        named = list(dict.fromkeys(str(pk) for pk in ids))
+        if len(named) > self.SELECTION_LIMIT:
+            raise ValidationError(
+                {"ids": f"Select at most {self.SELECTION_LIMIT:,} records; {len(named):,} are selected."}
+            )
+        party_model = apps.get_model("parties", "Party")
+        found = instances_from_public_ids(party_model, named, queryset=party_model._default_manager.with_actor(actor))
+        public = {row.pk: public_id for public_id, row in found.items()}
+        root = {pk: pk for pk in public}
+
+        def find(pk: Any) -> Any:
+            while root[pk] != pk:
+                root[pk] = root[root[pk]]
+                pk = root[pk]
+            return pk
+
+        for left, right in self.selection_pairs(actor=actor, parties=list(public)):
+            root[find(left)] = find(right)
+        groups: defaultdict[Any, list[Any]] = defaultdict(list)
+        for pk in sorted(public):
+            groups[find(pk)].append(pk)
+        sets = tuple(
+            tuple(public[pk] for pk in members)
+            for members in sorted(groups.values(), key=lambda members: members[0])
+            if len(members) > 1
+        )
+        if not sets and 3 <= len(named) <= self.SET_MEMBERS:
+            return SelectionDuplicateSets((tuple(named),), 0, explicit=True)
+        return SelectionDuplicateSets(sets, len(named) - sum(len(members) for members in sets))
 
     REVIEW_COUNT_CAP: ClassVar[int] = 1000
     """The most pairs the Review page's totals count exactly (:meth:`same_as_review_counts`)."""

@@ -9,6 +9,7 @@ import {
   DuplicateSetPreviews,
   MergeDuplicates,
   PARTY_MERGE_INVALIDATES,
+  SelectionDuplicateSets,
   type DuplicateSetMember,
   type DuplicateSetOutcome,
   type DuplicateSetPreview,
@@ -16,6 +17,8 @@ import {
 import { usePartiesT } from "./i18n";
 
 const DateTimeRead = defaultWidgets.datetime.read;
+
+const NO_SETS: readonly DuplicateSetInput[] = [];
 
 /**
  * How many sets one merge request carries. A run sends the confirmed sets this
@@ -45,6 +48,12 @@ interface MergeRun {
 
 export interface DuplicatesDialogProps {
   sets: readonly DuplicateSetInput[];
+  /**
+   * Records selected on an ungrouped list: the server finds the duplicate sets
+   * among them (``selection_duplicate_sets``) and the dialog lists those, said
+   * what was left out; ``sets`` is then unused.
+   */
+  selection?: readonly string[];
   /** The Review page's certain pairs: each set is re-checked as still certain when merged. */
   certain?: boolean;
   /**
@@ -75,10 +84,31 @@ export interface DuplicatesDialogProps {
  * once, when it ends. The server judges and merges (`duplicate_set_previews`,
  * `merge_duplicates`); the dialog only shows.
  */
-export function DuplicatesDialog({ sets: opened, certain = false, notes = [], onClose }: DuplicatesDialogProps): React.ReactElement {
+export function DuplicatesDialog({
+  sets: opened, selection, certain = false, notes: given = [], onClose,
+}: DuplicatesDialogProps): React.ReactElement {
   const t = usePartiesT();
-  // The dialog lists the sets it opened with; a caller's later reads never change what is confirmed.
-  const [sets] = React.useState(opened);
+  // The dialog lists the sets it opened with, or those found once among a selection; a caller's later reads never
+  // change what is confirmed.
+  const [found, setFound] = React.useState<readonly DuplicateSetInput[] | null>(selection ? null : opened);
+  const derived = useAuthoredQuery(SelectionDuplicateSets, { ids: [...(selection ?? [])] }, {
+    enabled: selection !== undefined && found === null,
+  });
+  const among = derived.data?.selection_duplicate_sets;
+  React.useEffect(() => {
+    if (found === null && among) setFound(among.sets.map((members) => ({ members })));
+  }, [among, found]);
+  const sets = found ?? NO_SETS;
+  const notes = [
+    ...given,
+    ...(among?.explicit ? [t("duplicates.explicitSet")] : []),
+    ...(among && !among.explicit && among.sets.length === 0
+      ? [t("duplicates.noneFound", { count: String(selection?.length ?? 0) })]
+      : []),
+    ...(among && among.left_out > 0 && among.sets.length > 0
+      ? [t("duplicates.leftOutUnpaired", { count: String(among.left_out) })]
+      : []),
+  ];
   // The fields each set was grouped by, names only, when the list grouped any: the preview returns their rows.
   const groupings = React.useMemo(
     () => (sets.some((set) => set.grouping?.length) ? sets.map((set) => (set.grouping ?? []).map((level) => level.field)) : null),
@@ -197,9 +227,12 @@ export function DuplicatesDialog({ sets: opened, certain = false, notes = [], on
           <Dialog.Body className="space-y-4">
             <Alert tone="info">{t("duplicates.valueRule")} {t("duplicates.undo")}</Alert>
             {notes.map((note) => <Alert key={note} tone="info">{note}</Alert>)}
+            {derived.error ? <ErrorBanner description={derived.error.message || t("duplicates.error")} /> : null}
             {preview.error ? <ErrorBanner description={t("duplicates.error")} /> : null}
             {run ? <RunLine run={run} /> : null}
-            {preview.isFetching && previews.length === 0 ? <LoadingPanel loadingLabel={t("duplicates.loading")} /> : null}
+            {(preview.isFetching || derived.isFetching) && previews.length === 0
+              ? <LoadingPanel loadingLabel={t("duplicates.loading")} />
+              : null}
             {previews.map((row, index) => (
               <DuplicateSetSection
                 key={sets[index]?.members.join(":") ?? index}

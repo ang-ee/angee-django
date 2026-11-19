@@ -853,8 +853,14 @@ live in code docstrings.
   is the one batch surface: the Review page's "Merge certain pairs" action, and
   the People and Organizations lists' Merge…, where one selected record opens
   the person form's "Merge into…" (`useMergeIntoAction`, shared by both), two
-  open their compare page, and three or more open the dialog as one explicit
-  set, the whole selection.
+  open their compare page, and three or more on an ungrouped list open the dialog
+  with the duplicate sets the server finds among them
+  (`selection_duplicate_sets(ids)`, at most 1,000 ids, under the reader's own
+  read): the review's own pairs between selected records
+  (`PartyManager.selection_pairs`, the one rule of what makes two selected
+  records one), joined into connected groups, the rest left out and counted;
+  three to ten with no pair are one set, as selected, and above ten with none the
+  dialog says what to do.
 
 - Parties: `Party.objects.propose_same_person_as_system(left, right, *, evidence,
   reason)` lets an importer propose that two parties are one person, citing the

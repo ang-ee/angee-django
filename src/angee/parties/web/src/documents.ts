@@ -266,6 +266,16 @@ export const DuplicateSetPreviews = graphql(`
   }
 `);
 
+export const SelectionDuplicateSets = graphql(`
+  query SelectionDuplicateSets($ids: [ID!]!) {
+    selection_duplicate_sets(ids: $ids) {
+      sets
+      left_out
+      explicit
+    }
+  }
+`);
+
 export const MergeDuplicates = graphql(`
   mutation MergeDuplicates($sets: [[ID!]!]!, $digests: [String!]!, $certain: Boolean = false, $groupings: [[String!]!]) {
     merge_duplicates(sets: $sets, digests: $digests, certain: $certain, groupings: $groupings) {

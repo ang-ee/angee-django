@@ -17,7 +17,8 @@ const BATCH_SETS = 50;
 /**
  * Three or more ticked records as duplicate sets, by the list's grouping
  * (`selectedGroups`, the list's three states): the one place that reads it.
- * `undefined`: the list is not grouped, so the whole selection is one set.
+ * `undefined`: the list is not grouped, so the server finds the sets among the
+ * selection (``selection_duplicate_sets``, in the dialog).
  * `null`: the list is grouped but a ticked row cannot be placed (or the surface
  * places no rows), so there is no batch at all. An array: one set per innermost
  * group with two or more ticked rows, carrying its levels (parents, then the
@@ -67,8 +68,10 @@ export function selectionSplit(
  * verb), where the person chooses the other record; two open the compare page for
  * the pair (`parties.merge`), which owns the merge and its choices, whatever the
  * grouping. Three or more open the batch dialog (`DuplicatesDialog`) with the
- * sets `selectionSplit` reads from the list's grouping: one for an ungrouped
- * list, one per group of a grouped one. When there is no set (a grouping the list
+ * sets `selectionSplit` reads from the list's grouping: on an ungrouped list the
+ * duplicate sets the server finds among the selected records (the pairs between
+ * them; three to ten with none are one set, as selected), on a grouped one a set
+ * per group. When there is no set (a grouping the list
  * cannot place, or one that holds no group of two or more with a value), the verb
  * stays in the bar, disabled, with the reason (`disabledReason`). Navigation goes
  * through the router, whose app root keeps the current `?app=`.
@@ -92,7 +95,7 @@ export function MergeSelectionAction({
   const pair = first !== undefined && second !== undefined && rest.length === 0 ? { left: first, right: second } : null;
   const split = single || pair ? null : selectionSplit(ids, selectedGroups);
   const sets: readonly DuplicateSetInput[] = split?.kind === "ungrouped"
-    ? (split.ids.length > 2 ? [{ members: split.ids }] : [])
+    ? []
     : split?.kind === "grouped" ? split.sets.slice(0, BATCH_SETS) : [];
   const notes = split?.kind === "grouped"
     ? [
@@ -103,7 +106,9 @@ export function MergeSelectionAction({
       ...(split.sets.length > BATCH_SETS ? [t("duplicates.overCap", { count: BATCH_SETS, total: split.sets.length })] : []),
     ]
     : [];
-  const reason = single || pair || sets.length > 0
+  // An ungrouped selection of three or more: the server finds the duplicate sets among the selected records.
+  const among = split?.kind === "ungrouped" && split.ids.length > 2 ? split.ids : null;
+  const reason = single || pair || among || sets.length > 0
     ? undefined
     : t(split?.kind === "unplaceable" ? "merge.selection.unplaceable" : "merge.selection.noGroups");
   return (
@@ -112,7 +117,7 @@ export function MergeSelectionAction({
         onClick={() => {
           if (pair) void navigate({ to: routeHref("parties.merge", pair) });
           else if (single) setOpen("pick");
-          else if (sets.length > 0) setOpen("batch");
+          else if (among || sets.length > 0) setOpen("batch");
         }}>
         {t("merge.selection.action")}
       </SelectionBarAction>
@@ -127,6 +132,7 @@ export function MergeSelectionAction({
       {open === "batch" ? (
         <DuplicatesDialog
           sets={sets}
+          selection={among ?? undefined}
           notes={notes}
           onClose={(merged) => {
             setOpen(null);
