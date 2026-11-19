@@ -41,7 +41,7 @@ describe("RecordActionBar", () => {
     expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
   });
 
-  test("explicit menu placement beats primary and lone-verb promotion", async () => {
+  test("explicit menu placement beats primary and band filling", async () => {
     renderActionBar(<RecordActionBar record={record} fillBand actions={[
       { id: "review", label: "Review", placement: "menu", primary: true, run: vi.fn() },
     ]} />);
@@ -80,15 +80,22 @@ describe("RecordActionBar", () => {
       actions: [{ id: "review", label: "Review" }], toolbar: ["Review"], menu: [] },
     { name: "a lone danger verb stays in the menu", promote: true,
       actions: [{ id: "drop", label: "Drop", danger: true }], toolbar: [], menu: ["Drop"] },
-    { name: "two unmarked non-danger verbs stay in the menu", promote: true,
+    { name: "two unmarked non-danger verbs fill the band", promote: true,
       actions: [{ id: "review", label: "Review" }, { id: "inspect", label: "Inspect" }],
-      toolbar: [], menu: ["Review", "Inspect"] },
+      toolbar: ["Review", "Inspect"], menu: [] },
+    { name: "only the first two unmarked non-danger verbs fill the band", promote: true,
+      actions: [{ id: "review", label: "Review" }, { id: "inspect", label: "Inspect" }, { id: "export", label: "Export" }],
+      toolbar: ["Review", "Inspect"], menu: ["Export"] },
     { name: "a non-danger verb beside a danger verb is promoted", promote: true,
       actions: [{ id: "review", label: "Review" }, { id: "drop", label: "Drop", danger: true }],
       toolbar: ["Review"], menu: ["Drop"] },
-    { name: "an explicit toolbar verb prevents promotion", promote: true,
+    { name: "an explicit toolbar verb counts toward the two-button band", promote: true,
       actions: [{ id: "review", label: "Review" }, { id: "inspect", label: "Inspect", placement: "toolbar" }],
-      toolbar: ["Inspect"], menu: ["Review"] },
+      toolbar: ["Review", "Inspect"], menu: [] },
+    { name: "two explicit toolbar verbs leave unmarked verbs in the menu", promote: true,
+      actions: [{ id: "review", label: "Review" }, { id: "inspect", label: "Inspect", placement: "toolbar" },
+        { id: "export", label: "Export", placement: "toolbar" }],
+      toolbar: ["Inspect", "Export"], menu: ["Review"] },
     { name: "an explicitly placed menu verb does not count toward promotion", promote: true,
       actions: [{ id: "review", label: "Review" }, { id: "inspect", label: "Inspect", placement: "menu" }],
       toolbar: ["Review"], menu: ["Inspect"] },
@@ -109,15 +116,14 @@ describe("RecordActionBar", () => {
     }
   });
 
-  test("a primary verb prevents lone-verb promotion", async () => {
+  test("a primary verb leaves one secondary place in the band", () => {
     renderActionBar(<RecordActionBar record={record} fillBand actions={[
       { id: "review", label: "Review", primary: true },
       { id: "inspect", label: "Inspect" },
     ]} />);
     expect(screen.getByRole("button", { name: "Review" }).classList.contains("bg-brand")).toBe(true);
-    expect(screen.queryByRole("button", { name: "Inspect" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
-    expect(await screen.findByRole("menuitem", { name: "Inspect" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Inspect" }).classList.contains("bg-inset")).toBe(true);
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
   });
 
   test.each(["visibleWhen", "permission"] as const)("%s filters verbs before promotion and toolbar detection", (gate) => {

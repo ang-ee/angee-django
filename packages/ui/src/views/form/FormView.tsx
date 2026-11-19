@@ -217,7 +217,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     () => surfaceChromeContext && { ...surfaceChromeContext, toolbarHost },
     [surfaceChromeContext, toolbarHost],
   );
-  const actionAvailable = (action: ActionDescriptor) => !formReadOnly || action.run || action.submit;
+  const actionAvailable = (action: ActionDescriptor) => !isCreate && (!formReadOnly || action.run || action.submit);
   const availableDeclaredActions = declaredActions.filter(actionAvailable);
   const availableGenericActions = genericActions.filter(actionAvailable);
   useBreadcrumbLeafLabel(
@@ -355,7 +355,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
           onSave={() => { void submitForm(); }}
         />
         <span ref={setToolbarHost} className="contents" />
-        {!awaitingRecord && (
+        {!isCreate && !awaitingRecord && (
           availableDeclaredActions.length > 0 ||
           availableGenericActions.length > 0 ||
           visibleDeleteAction !== undefined ||

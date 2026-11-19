@@ -1,5 +1,5 @@
 import * as React from "react";
-import { allowsRecordPermission, archiveFlagField, fieldUpdatable, refineResourceName, rowPublicId, type ModelMetadata, type Row } from "@angee/metadata";
+import { archiveFlagField, fieldUpdatable, refineResourceName, rowPublicId, type ModelMetadata, type Row } from "@angee/metadata";
 import { useUpdate, type BaseRecord, type HttpError } from "@refinedev/core";
 
 import { Glyph } from "../../chrome/Glyph";
@@ -28,22 +28,25 @@ export function useArchiveActions(
         label: t("record.archive.action"),
         icon: "archive",
         placement: "menu",
+        permission: declaresPermissions ? "write" : undefined,
         set: { [flag]: true },
-        visibleWhen: (record) => record[flag] === false && allowsRecordPermission(record, "write", declaresPermissions),
+        visibleWhen: (record) => record[flag] === false,
       },
       {
         id: "unarchive",
         label: t("record.archive.unarchive"),
         icon: "undo-2",
         placement: "menu",
+        permission: declaresPermissions ? "write" : undefined,
         set: { [flag]: false },
-        visibleWhen: (record) => record[flag] === true && allowsRecordPermission(record, "write", declaresPermissions),
+        visibleWhen: (record) => record[flag] === true,
       },
     ];
   }, [available, declaresPermissions, flag, t]);
 }
 
-/** The selection composes the same admission, flag patches and row predicates as the form.
+/** The selection composes resource admission, flag patches and state predicates;
+ * the record bar alone applies each descriptor's projected permission.
  * @owner SelectionBar
  */
 export function BulkArchiveActions(props: BulkSelectionProps): React.ReactElement | null {

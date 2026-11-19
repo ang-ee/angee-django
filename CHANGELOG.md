@@ -12,17 +12,18 @@ live in code docstrings.
 
 - Record verbs, Delete, Archive and Trash are supplied by the shared views
   instead of each page.
-  - **Toolbar.** A form's verb is a button when it declares `primary` (which now
-    implies the toolbar; `placement="toolbar"` beside it is redundant) or is the
-    form's only visible, unplaced, non-danger verb on a saved record. The
-    2026-10-01 rule put every unplaced verb in `⋮`, which left most single-verb
-    forms with a bare menu. A verb contributed through `#sections` stays in the
-    menu unless it declares a placement.
+  - **Toolbar.** Explicit placement wins; `primary` implies the toolbar. On a
+    saved record, the form's own band then fills to two buttons with its visible,
+    unplaced, non-danger verbs in declaration order, counting verbs already on
+    that toolbar. Filled buttons stay secondary; the rest go to `⋮`.
+    A verb contributed through `#sections` stays in the menu unless it declares
+    a placement. Create forms show Save / Create without record verbs.
   - **Delete.** `hasura_model_resource(delete=True)` generates
     `<res>_delete(id, confirm): DeletePreview`, served by the write backend's
     `delete_preview`, which `delete` composes; a `delete=True` resource whose
-    backend lacks it fails at composition. The shared UI therefore offers Delete
-    on every deletable resource. **Upgrade:** authored previews are removed and
+    backend lacks it fails at composition. Delete is gated by the resource's
+    delete-preview root, including preview-only resources, without requiring a
+    projected row permission. **Upgrade:** authored previews are removed and
     their roots renamed (`delete_calendar` → `calendars_delete`,
     `delete_calendar_event` → `calendar_events_delete`, `delete_agent` →
     `agents_delete`, `delete_user` → `users_delete`, `delete_vault` →
@@ -43,14 +44,24 @@ live in code docstrings.
     pickers unless a filter names the flag; every such list offers an
     "Archived" filter. Pages drop their `is_archived` checkbox, grouping and
     picker filter.
-  - **Trash.** A trashable resource gets Move to trash / Restore the same way,
+  - **Flags and Trash.** Every resource whose model composes `TrashMixin` or
+    `ArchiveMixin` exposes its flag, including multi-table children. Trash verbs
+    act on the model storing the flag. A trashable resource gets Move to trash / Restore,
     and its Delete is offered only for a row already in the trash.
-    `useTrashActions` is no longer exported: the form supplies it. `trashable`
-    is advertised only by the resource whose model stores the flag.
+    Record Trash / Restore retain `allowsRecordPermission` gating.
+    `useTrashActions` is no longer exported: the form supplies it.
   - **Bulk.** A page's `bulkActions` are added to the generic actions and no
-    longer replace Delete. Bulk is a client fan-out over the single verb,
-    bounded at 25 rows a click.
-  - Deferred: permanent delete from the trash, a transactional bulk verb,
+    longer replace Delete. Every bulk action is gated by the resource's roots
+    and flag contract, without projected row permissions; the server authorizes
+    each write. Bulk is a client fan-out over the single verb, bounded at 25 rows
+    a click.
+  - **Public additions.** Metadata exports `archiveFlagField`,
+    `unarchivedFilter` (owned by `packages/metadata/src/fields.ts`) and
+    `allowsRecordPermission`. UI exports `useBulkAction` and `BulkActionRunner`;
+    `RecordActionBar` adds `fillBand` and `genericActions`. `useBulkDelete` takes
+    the shared runner; `useTrashPrompt` accepts a count, and `RemovedList` accepts
+    resource metadata for its permission contract.
+  - Deferred: permanent delete in `RemovedRecords`, a transactional bulk verb,
     `permissions` on master-data nodes, and a delete of their own for
     `parties.Directory`, `posts.Feed` and `calendar.CalendarSource`, which were
     deletable only through the inventory root.

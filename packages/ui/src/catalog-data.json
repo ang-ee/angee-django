@@ -7925,6 +7925,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "useBulkAction",
+    "source": "packages/ui/src/views/resource/bulk-action.ts",
+    "kind": "surface",
+    "owner": "@angee/ui:ListView",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "useBulkDelete",
     "source": "packages/ui/src/views/resource/useBulkDelete.ts",
     "kind": "surface",
@@ -8595,6 +8604,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "useRelationPickerSearch",
+    "source": "packages/ui/src/views/relation/relation-options.ts",
+    "kind": "contribution",
+    "owner": "@angee/ui:RelationFieldWidget",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "useRelationSelectedOption",
     "source": "packages/ui/src/views/relation/relation-options.ts",
     "kind": "contribution",
@@ -8879,16 +8897,6 @@
     "reason": "Provider infrastructure: Toast context.",
     "status": "stable",
     "storyId": null
-  },
-  {
-    "package": "@angee/ui",
-    "name": "useTrashActions",
-    "source": "packages/ui/src/views/resource/trash.tsx",
-    "kind": "region",
-    "owner": "@angee/ui:RecordActionBar",
-    "region": "command-band",
-    "status": "stable",
-    "storyId": "library-owners--hooks"
   },
   {
     "package": "@angee/ui",

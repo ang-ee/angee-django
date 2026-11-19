@@ -720,7 +720,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `placement: "menu"`. Secondary inline verbs appear on hover and focus.
 - A page's `bulkActions` render first, added to the generic actions derived from
   resource metadata; they never replace them. A list with a `source` receives
-  only its page's actions. Generic bulk actions share the bounded single-verb
+  only its page's actions. Generic bulk actions are gated by the resource's roots
+  and flag contract, without requiring projected row permissions; the server
+  authorizes each write. Generic bulk actions share the bounded single-verb
   fan-out in [the bulk owner](../../packages/ui/src/views/resource/bulk-action.ts),
   including the view-as write guard; they introduce no server bulk verb.
 - Editable lines are the data view in edit mode; compose `RowsListView` and its column, visibility, action, reorder and footer seams, never form-local tables.
@@ -961,21 +963,24 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   [FormView](../../packages/ui/src/views/form/form-view-surface.ts) selects
   required fields from the resolved children; authored fields and passive chrome
   remain host-owned.
-- **Record verbs compose the shared action owner.** On a saved record, a form's
-  only visible, unplaced non-danger verb of its own is a secondary button when no
-  declared verb is already on the toolbar. Among several verbs, mark `primary`
-  the subject model's lifecycle transition that its statusbar explains (post,
-  confirm, cancel); leave secondary lifecycle verbs and model-owned utilities
-  (pay, reverse, send, PDF, merge, download) unmarked so they live in the overflow
-  menu. `primary` needs no `placement`; explicit placement wins, including
+- **Record verbs compose the shared action owner.** On a saved record, the form's
+  own command band fills to two buttons with its visible, unplaced, non-danger
+  verbs in declaration order, counting verbs already placed on that toolbar;
+  the rest go to the overflow menu. These filled buttons stay secondary. Mark
+  `primary` the subject model's lifecycle transition that its statusbar explains
+  (post, confirm, cancel); secondary lifecycle verbs and model-owned utilities
+  (pay, reverse, send, PDF, merge, download) can fill the remaining places.
+  Declare `placement="menu"` for a utility that should always stay in overflow.
+  `primary` needs no `placement`; explicit placement wins, including
   `placement="menu"` on a primary verb.
-  Lone-verb promotion counts only the form's own declared verbs in its command
-  band on a saved record. Visibility and permission are checked before counting;
-  danger verbs, explicitly placed verbs and generic Archive/Trash actions never
-  count. `#sections` action contributions default to `placement="menu"`, so they
-  neither promote themselves nor demote the form's own lone verb. `#actions`
-  and `#actions-menu` container children do not count, and everything inside an
-  `ActionMenu` stays in the menu.
+  [RecordActionBar](../../packages/ui/src/views/form/RecordActionBar.tsx) owns
+  this rule through `fillBand`, which `FormView` enables. Visibility and permission
+  are checked first; danger verbs never fill an unassigned place. Generic actions
+  declare menu placement. `#sections` action contributions default to
+  `placement="menu"` unless they declare one; `#actions` and `#actions-menu`
+  container children are outside this count. Everything inside an `ActionMenu`
+  stays in the menu. A create form shows Save / Create without own, contributed
+  or generic record verbs.
   A capability contributed to another model (run a workflow, rate, generate a
   delivery, read a file again) uses that model's overflow menu, never its
   toolbar. Classify an action by the subject it changes and its semantic owner:
@@ -1020,13 +1025,17 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   require their flag to be selected as `false`; Unarchive and Restore require `true`.
   Trash requires a `trashable` flag and a resource type and composes
   [the shared trash verbs](../../packages/ui/src/views/resource/trash.tsx).
+  Every resource whose model composes `TrashMixin` or `ArchiveMixin` exposes its
+  flag, including multi-table children; trash verbs act on the model storing it.
   Delete requires the `deletePreview` root. On a trashable resource it is offered
   only for records whose trash flag is `true`; bulk Delete previews and deletes
   only those selected records. A resource without a trash flag keeps its existing
-  Delete rule. Trash and Delete require `delete`
-  when the model declares a `permissions` field, including when the read omits it;
-  for models without that field, the resource
-  capability gates the control and the server authorizes the write. These verbs
+  Delete rule. Delete is gated by the resource's roots, including a resource with
+  only a delete-preview root, without requiring projected row permissions.
+  Record Trash / Restore use `allowsRecordPermission`: `delete` is required
+  when the model declares `permissions`, including when the read omits it;
+  otherwise the resource capability gates the control. Every bulk action is
+  resource-gated, and the server authorizes each write. These verbs
   stay in the form's overflow menu after page and container verbs, with Delete
   last. Removed-record lists compose `RemovedRecords` (or `RemovedDisclosure`
   + `RemovedItem` over rows already held); list-row declarations compose
@@ -1037,7 +1046,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   supports an `exact` comparison on it, defaults to unarchived rows: shared
   resource lists (tables, grouped lists, boards, gantt collections, aggregate
   footers and facets), dashboard data and the relation picker's option search
-  apply [the scope](../../packages/metadata/src/query.ts) after combining their
+  apply [unarchivedFilter](../../packages/metadata/src/fields.ts) after combining their
   filters. Any predicate on the resource's own archive flag, in any `AND`, `OR`
   or `NOT` branch of the base, preset or editable filter, keeps the authored
   filter instead; a relation path ending in the same field name does not. The
@@ -1357,8 +1366,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   domain-owned transcript or detail surface. An all-read-only form never assembles
   an update mutation. The form supplies metadata-driven Archive and Trash;
   `ResourceList` binds its Delete through the shared preview owner. Delete
-  affordances require the `deletePreview` root, and record Delete also requires
-  `delete` when the model declares a `permissions` field. Pages declare no generic actions
+  affordances require the `deletePreview` root, without projected row permissions;
+  a trashable record must already be in the trash. Pages declare no generic actions
   and need no delete-only `crud(...)`.
 - **An addon contributes one menu root.** The app rail renders apps and their
   included, non-flattened sub-apps, at most two levels. The selected app's own

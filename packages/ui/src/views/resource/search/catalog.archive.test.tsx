@@ -106,7 +106,7 @@ test("the implicit archive predicate stays out of chips, URL state and persisted
   expect(view.state.filter).toEqual({});
   expect(view.queryDirty).toBe(false);
   expect(search.active).toEqual([]);
-  expect(within(screen.getByRole("toolbar", { name: "Active search" })).queryAllByRole("button")).toEqual([]);
+  expect(screen.queryByRole("toolbar", { name: "Active search" })).toBeNull();
   act(() => view.setPage(2));
   await waitFor(() => expect(router.state.location.search).toMatchObject({ page: 2 }));
   expect(JSON.stringify(router.state.location.search)).not.toContain("is_archived");

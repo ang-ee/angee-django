@@ -69,7 +69,7 @@ export function RecordActionBar({
   blocked?: boolean;
   /** Where the Actions menu sits: an icon-only `⋮` before the verbs (the command band), or a labeled menu after them. */
   menuPlacement?: "leading" | "trailing";
-  /** On a saved record, show up to two of the visible, unplaced, non-danger declared verbs as secondary buttons, in declaration order, beside the ones already on the toolbar. Off by default; ignored inside an Actions menu. */
+  /** On a saved record, fill the band to two buttons with its own visible, unplaced, non-danger verbs in declaration order, counting verbs already on the toolbar. Filled buttons stay secondary. Off by default; ignored inside an Actions menu. */
   fillBand?: boolean;
 }): React.ReactElement | null {
   const preview = useRuntimeViewAs();

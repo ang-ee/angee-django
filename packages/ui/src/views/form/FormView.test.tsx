@@ -219,17 +219,33 @@ describe("FormView", () => {
     expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
   });
 
-  test("a create form keeps a bare record verb in the menu beside Create", async () => {
+  test.each([null, undefined])("a create form offers only Create, without own, contributed or generic record verbs (id=%s)", async (id) => {
     sdkMocks.record = null;
-    renderWithProviders(<FormView resource="notes.Note">
+    const run = vi.fn();
+    renderWithProviders(<FormView resource="notes.Note" id={id}
+      deleteAction={{ canDelete: true, isPending: false, onDelete: run }}
+      actions={[{ id: "own-menu", label: "Own menu verb", placement: "menu", run }]}>
       <Field name="title" label="Title" title />
-      <Action id="refresh" label="Refresh skills" run={vi.fn()} />
-    </FormView>);
+      <Action id="refresh" label="Refresh" run={run} />
+      <Action id="review" label="Review" primary submit={run} />
+      <Action id="rename" label="Rename" placement="toolbar" set={{ title: "Renamed" }} />
+    </FormView>, recordActionsMetadata(), undefined, formChildren({
+      "notes.Note#sections": {
+        "notes.inspect": { content: <Action id="inspect" label="Inspect" run={run} /> },
+      },
+      "notes.Note#actions": { "notes.publish": { content: <ActionTrigger>Publish</ActionTrigger> } },
+      "notes.Note#actions-menu": { "notes.export": { content: <ActionTrigger>Export</ActionTrigger> } },
+    }));
 
-    expect(screen.getByRole("button", { name: "Create" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Refresh skills" })).toBeNull();
-    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
-    expect(await screen.findByRole("menuitem", { name: "Refresh skills" })).toBeTruthy();
+    const create = await screen.findByRole("button", { name: "Create" });
+    expect(create).toHaveProperty("disabled", false);
+    expect(within(create.closest('[role="toolbar"]')!).getAllByRole("button")).toEqual([create]);
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+    expect(run).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "New" } });
+    fireEvent.click(create);
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledWith({ data: { title: "New" } }));
+    expect(run).not.toHaveBeenCalled();
   });
 
   test.each([false, true])("a section verb stays in the menu without demoting the host's lone verb (primary: %s)", async (primary) => {
@@ -433,7 +449,7 @@ describe("FormView", () => {
   });
 
   test.each([undefined, null, [], ["read"], ["write"], ["delete"]].flatMap((permissions) =>
-    [false, true].map((trashed) => ({ permissions, trashed }))))("declared permissions gate form writes and removal ($permissions, trashed=$trashed)", async ({ permissions, trashed }) => {
+    [false, true].map((trashed) => ({ permissions, trashed }))))("record permissions gate writes and Trash, while Delete follows the resource and trash state ($permissions, trashed=$trashed)", async ({ permissions, trashed }) => {
     sdkMocks.record = { ...sdkMocks.record, is_archived: false, is_trashed: trashed,
       ...(permissions === undefined ? {} : { permissions }) };
     renderWithProviders(<FormView resource="notes.Note" id="note-1"
@@ -450,7 +466,7 @@ describe("FormView", () => {
     expect(Boolean(screen.queryByRole("menuitem", { name: "Archive" }))).toBe(Boolean(permissions?.includes("write")));
     for (const name of [trashed ? "Restore" : "Move to trash", "Delete"]) {
       const action = screen.queryByRole("menuitem", { name });
-      expect(Boolean(action)).toBe(Boolean(permissions?.includes("delete")) && (name !== "Delete" || trashed));
+      expect(Boolean(action)).toBe(name === "Delete" ? trashed : Boolean(permissions?.includes("delete")));
       if (action) expect(action.getAttribute("aria-disabled")).not.toBe("true");
     }
   });

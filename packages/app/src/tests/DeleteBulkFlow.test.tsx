@@ -128,7 +128,7 @@ describe("bulk delete flow", () => {
     expect(screen.getByRole("button", { name: "Delete" }).classList.contains("hover:text-danger-text")).toBe(true);
   });
 
-  test.each([false, true])("bulk Delete requires projected delete only when the model declares permissions (%s)", async (declaresPermissions) => {
+  test.each([false, true])("bulk Delete is resource-gated regardless of declared row permissions (%s)", async (declaresPermissions) => {
     const model = RECORD_METADATA.types.RecordType!;
     const metadata = withTestResourceInventory({ types: { RecordType: { ...model,
       fields: { ...model.fields, ...(declaresPermissions
@@ -139,11 +139,11 @@ describe("bulk delete flow", () => {
     </ModelMetadataProvider></TestUrlState>);
     fireEvent.click((await screen.findAllByRole("checkbox", { name: "Select row" }))[0]!);
     expect(screen.getByText("1 selected")).toBeTruthy();
-    expect(Boolean(screen.queryByRole("button", { name: "Delete" }))).toBe(!declaresPermissions);
+    expect(screen.getByRole("button", { name: "Delete" })).toBeTruthy();
     expect(sdkMocks.mutate).not.toHaveBeenCalled();
   });
 
-  test("bulk Delete previews and deletes only permitted rows, keeping omitted permissions selected", async () => {
+  test("bulk Delete previews and deletes selected rows even when permissions are not projected", async () => {
     sdkMocks.rows[0] = { ...sdkMocks.rows[0], permissions: ["delete"] };
     sdkMocks.mutate.mockImplementation(async ({ id }: { id: string }) => previewFor(id, id));
     const model = RECORD_METADATA.types.RecordType!;
@@ -156,13 +156,16 @@ describe("bulk delete flow", () => {
     for (const checkbox of await screen.findAllByRole("checkbox", { name: "Select row" })) fireEvent.click(checkbox);
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Delete 1 record?")).toBeTruthy();
-    expect(sdkMocks.mutate).toHaveBeenCalledExactlyOnceWith({ id: "record-1", confirm: false });
+    expect(within(dialog).getByText("Delete 2 records?")).toBeTruthy();
+    expect(sdkMocks.mutate.mock.calls).toEqual([
+      [{ id: "record-1", confirm: false }], [{ id: "record-2", confirm: false }],
+    ]);
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledWith({ id: "record-1", confirm: true }));
-    await screen.findByText("1 selected");
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(sdkMocks.mutate).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(screen.queryByText("2 selected")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Delete 2 records?" })).toBeNull());
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({ id: "record-2", confirm: true });
+    expect(sdkMocks.mutate).toHaveBeenCalledTimes(4);
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
   });
 
@@ -206,7 +209,7 @@ describe("bulk delete flow", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     const dialog = await screen.findByRole("dialog", { name: "Delete 1 record?" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Delete 1 record?" })).toBeNull());
     expect(sdkMocks.mutate.mock.calls).toEqual([[{ id: "record-1", confirm: false }], [{ id: "record-1", confirm: true }]]);
     expect(screen.getByText("1 selected")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
@@ -362,7 +365,7 @@ describe("bulk delete flow", () => {
     expect(screen.getAllByRole("checkbox", { name: "Select row" }).map((row) => row.getAttribute("aria-checked")))
       .toEqual(["true", "false"]);
     expect(sdkMocks.getList).toHaveBeenCalledTimes(2);
-    expect(screen.getAllByRole("button", { name: "Dismiss notification" })).toHaveLength(1);
+    expect(screen.getAllByRole("dialog", { name: "Deleted 1 record" })).toHaveLength(1);
   });
 
   test("a failed preview retains its row while the other row can still be deleted", async () => {

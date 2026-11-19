@@ -3,10 +3,9 @@
 import { act, cleanup, render as rtlRender, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { schemaFieldMetadataFromDataResources } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
-import type { ReactElement, ReactNode } from "react";
+import type { ReactElement } from "react";
+import { ToastProvider } from "../../feedback";
 import { createUiTestProviders } from "../../testing";
 
 import type { CalendarViewSpec } from "./resource-view-types";
@@ -77,7 +76,10 @@ vi.mock("./useBulkDelete", () => ({
 
 import { ResourceList } from "./ResourceList";
 
-const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://resource-list-calendar" });
+const { Provider, clearClients } = createUiTestProviders({
+  apiUrl: "test://resource-list-calendar",
+  resources: ["notes.Note", "agents.InferenceProvider", "calendar.Event", "pm.Task"].map((model) => testDataResource(model)),
+});
 
 const SPEC: ResourceListCalendarSpec = {
   sources: [{ document: {}, variables: () => ({}), select: () => [] } as never],
@@ -119,21 +121,17 @@ describe("ResourceList create action", () => {
 
   test("a successful create refreshes the resource and opens its returned record", () => {
     const onSelect = vi.fn();
-    const metadata = schemaFieldMetadataFromDataResources([testDataResource("notes.Note")]);
-    render(<Provider metadata={metadata}><ResourceList resource="notes.Note" columns={[]}
-      createAction={action} onSelect={onSelect} /></Provider>);
+    render(<ResourceList resource="notes.Note" columns={[]}
+      createAction={action} onSelect={onSelect} />);
     act(() => captured.onCreate?.());
     act(() => screen.getByRole("button", { name: "Save" }).click());
     expect(captured.invalidate).toHaveBeenCalled();
     expect(onSelect).toHaveBeenCalledWith("note-2");
   });
 });
-const clients: QueryClient[] = [];
-afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; clearClients(); });
+afterEach(() => { cleanup(); clearClients(); });
 function render(element: ReactElement) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  clients.push(client);
-  return rtlRender(element, { wrapper: ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
+  return rtlRender(element, { wrapper: ({ children }) => <Provider><ToastProvider>{children}</ToastProvider></Provider> });
 }
 
 describe("ResourceList calendar quick-create", () => {
