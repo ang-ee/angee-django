@@ -25,8 +25,9 @@ Google shows its account chooser on every connect.
    - **Internal** when only accounts of your Google Workspace organisation
      connect. Internal clients need no Google verification and have no user cap.
    - **External** when personal Google accounts connect. Set the publishing status
-     to **In production**. A client left in **Testing** issues refresh tokens that
-     expire after 7 days, so every connected account needs reconnecting weekly.
+     to **In production**. A client left in **Testing** connects only the accounts
+     listed as its test users, and issues refresh tokens that expire after 7
+     days, so every connected account needs reconnecting weekly.
      An unverified client in production shows users an "unverified app" warning
      and is limited to 100 users.
 4. Add the scopes the deployment uses under **Data Access**. Google classes them:
@@ -48,8 +49,9 @@ Google shows its account chooser on every connect.
 ## Configure the deployment
 
 Paste the client id and secret into the `google` OAuth client in the console
-(**Integrations > OAuth > OAuth providers**). The row reads `needs_client` until both are
-set, and `ready` afterwards. A host that keeps secrets in its environment declares
+(**Integrations > OAuth > OAuth providers**). The row reads `needs_client` until the client
+id is set, and `ready` afterwards; readiness never reads the secret, so paste both before
+anyone connects. A host that keeps secrets in its environment declares
 the client in `ANGEE_INTEGRATE_OAUTH_CLIENTS` instead and syncs it with
 `manage.py oauth_clients`.
 

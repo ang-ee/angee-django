@@ -174,11 +174,15 @@ calendar's events stream in the same sync.
   changed calendar zone re-reads the source's events instead of moving them.
 - **Lifecycle.** The source's owner syncs it now and unsubscribes it. Unsubscribing
   disconnects the source at once; a job then removes its events, archives its
-  calendar and retires its credential, and an hourly reconciler retries a purge
-  that failed. A sync already running ends quietly at its next page instead of
-  bringing events back. A source's calendar is never deleted on
-  its own. How many sources one user keeps, and how
-  fast they add them, are bounded (`ANGEE_CALENDAR_SOURCES_PER_OWNER`,
+  calendars and detaches its credential, and an hourly reconciler retries a purge
+  that failed. The credential is retired only once nothing holds it
+  (`CredentialManager.unattached()`, through `retire_unattached`): one the source
+  minted itself, an ICS feed's secret address, goes with the last subscription
+  sharing it, while one an account is bound to, such as a Google account's OAuth
+  grant, stays until that account is disconnected. A sync already running ends
+  quietly at its next page instead of bringing events back. A source's calendar is
+  never deleted on its own. How many sources one user keeps, and how fast they add
+  them, are bounded (`ANGEE_CALENDAR_SOURCES_PER_OWNER`,
   `ANGEE_CALENDAR_SUBSCRIBE_RATE`).
 - **ICS.** `calendar_integrate_ics` lets any signed-in user subscribe to a public
   feed (`webcal://` reads as `https://`); nothing is fetched until the first
@@ -187,9 +191,10 @@ calendar's events stream in the same sync.
   is the source's one remote calendar, polled hourly with a conditional GET; each
   event keeps its own `DTSTART` zone. Each fetched feed is a full snapshot; its
   module docstring lists the properties it maps.
-- **Google.** `calendar_integrate_google` syncs every calendar of one of the
-  user's connected Google accounts (the deployment's `google` OAuth client, with
-  `calendar.readonly` granted); each further account is a source of its own. Each
+- **Google.** [`calendar_integrate_google`](../calendar_integrate_google/README.md)
+  syncs every calendar of one of the user's connected Google accounts (the
+  deployment's `google` OAuth client, with `calendar.readonly` granted); each
+  further account is a source of its own. Each
   calendar's events sync with Google's sync tokens, and an expired token reads the
   calendar again in full. The calendars are read-only. Its module docstring lists
   the fields it maps.
