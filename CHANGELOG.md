@@ -10,6 +10,16 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.integrate`: one rule says which credential is derived. Once a source
+  grant was removed by a path that skips its disconnect, `Integration.derived_credential_id`
+  still called the attached credential derived while the manager's own query did
+  not: `CredentialManager.store_derived` refused an overwrite its contract allows,
+  and `reenter_secret` accepted re-entry of that credential into a discovery that
+  could only fail for want of its grant. The query is gone; the re-entry refusal
+  reads the property on the locked rows the credential serves, and `store_derived`
+  on the rows it serves. The refusal now also says to connect the integration
+  again when the grant is gone.
+
 - `angee.knowledge_integrate_notion`: a token of another workspace fails
   discovery. Notion's discovery called `GET /v1/users/me` and recorded nothing,
   so an internal token of another workspace, re-entered on a connection, passed
