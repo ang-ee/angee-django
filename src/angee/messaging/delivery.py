@@ -89,25 +89,30 @@ def run_message_delivery(model_label: str, pk: Any, external_id: str) -> dict[st
                     pk, token=external_id, claim=message.delivery_claim, error=refusal,
                 )
                 return {"ok": False, "delivered": False, "status": result}
+            unready: IntegrationError | None = None
             try:
                 channel.require_discovery_ready()
-            except IntegrationError as unready:
-                if not unready.transient:
-                    result = model.objects.record_delivery(
-                        pk, token=external_id, claim=message.delivery_claim, error=unready,
-                    )
-                    return {"ok": False, "delivered": False, "status": result}
-                admitted = False
-            else:
-                admitted = True
+            except IntegrationError as refusal:
+                unready = refusal
             with ExitStack() as contexts:
                 try:
                     # A pending discovery holds the send back as a held delivery lock does.
-                    locked = admitted and contexts.enter_context(backend.delivery_lock())
+                    locked = unready is None and contexts.enter_context(backend.delivery_lock())
                 except Exception as error:
                     logger.warning("Delivery lock unavailable (%s).", type(error).__name__)
                     locked = False
-                if not locked:
+                if locked:
+                    try:
+                        # Asked again under the lock on the channel as stored now: a secret
+                        # re-entered while the send waited for the lock holds it back.
+                        type(channel).require_stored_discovery_ready(channel.pk)
+                    except IntegrationError as refusal:
+                        unready, locked = refusal, False
+                if unready is not None and not unready.transient:
+                    result = model.objects.record_delivery(
+                        pk, token=external_id, claim=message.delivery_claim, error=unready,
+                    )
+                elif not locked:
                     result = model.objects.record_delivery(
                         pk, token=external_id, claim=message.delivery_claim,
                         error=(DeliveryUncertain("The prior delivery still needs reconciliation.")

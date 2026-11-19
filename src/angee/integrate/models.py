@@ -3510,6 +3510,17 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     )
     """The columns :meth:`require_discovery_ready` reads, so a check loads only them."""
 
+    @classmethod
+    def require_stored_discovery_ready(cls, pk: int) -> None:
+        """Ask :meth:`require_discovery_ready` of row ``pk`` as stored now, in one read of the columns it uses.
+
+        For a check just before a remote effect, under the lock that effect holds
+        (a send, a stream's write-back, a workflow step's IO), so a secret
+        re-entered while that work waited for its lock holds it back.
+        """
+
+        cls._base_manager.only(*cls.discovery_readiness_fields).get(pk=pk).require_discovery_ready()
+
     def require_discovery_ready(self) -> None:
         """Stop work already admitted once :attr:`discovery_ready` no longer holds.
 
