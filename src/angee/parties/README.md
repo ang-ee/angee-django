@@ -22,22 +22,26 @@ decides which way contacts sync, pull-only unless it declares otherwise.
 `DirectoryBackend.credential_blocker` is the one rule integrate raises on every
 attachment and the connect picker shows beside each account.
 Connecting a directory is one verb, `Directory.objects.connect`, which a vendor's
-connect mutation calls: it checks that its owner may create a directory, builds
-the credential and the directory unsaved, refuses a credential name already
-serving another integration (each directory gets a credential of its own), has
-the backend admit the credential and test the connection outside any
-transaction, refuses with the backend's own message before anything is saved,
-then creates both atomically and claims the address the account signs in as
-(`DirectoryBackend.account_address`) as the owner's own handle. The first sync is
-requested once that commits; a failure to queue it is logged. Each vendor's row
-is a master resource adopted by slug, and connecting before it is loaded is a
-refusal that says to load resources.
+connect mutation calls outside any transaction (it refuses to run inside one):
+it checks that its owner may create a directory, builds the credential and the
+directory unsaved, has the backend admit the credential and test the connection
+outside any transaction, refuses with the backend's own message before anything
+is saved, then atomically creates the directory and a credential of its own,
+named after the backend, the display name and the directory's id, so no
+connection or reconnect reuses another's, connects the one with the other and
+claims the address the account signs in as (`DirectoryBackend.account_address`)
+as the owner's own handle. The first sync is requested once that commits, when
+the directory is ready for work; a backend whose connection discovery is pending
+gets its first sync when discovery completes. A failure to queue it is logged.
+Each vendor's row is a master resource adopted by slug, and connecting before it
+is loaded is a refusal that says to load resources; any other configuration
+error stays itself.
 The [CardDAV backend](../parties_integrate_carddav/backend.py) syncs two-way and
 builds its own records: a card's `UID` is its key and its href rides in the
 link's metadata, and wire properties outside the projection stay in RecordLink
 history and survive conditional writes. Its configuration is a typed config
-model, validated whenever the directory is saved; a book's stream reads only the
-policy keys it knows.
+model: every save of the directory validates the keys it knows and drops the
+others, and a book's stream reads only the policy keys it knows.
 
 On a pull-only stream the local side of each comparison is what the source last
 applied, and the source's own projection becomes the applied base, as on the
@@ -96,13 +100,18 @@ admits it: `PartyManager.adoption_blocker` refuses unless the stream is pull-onl
 the person, loaded under the locks, is live and no account's own, no address the
 contact carries is a person account's sign-in address in any spelling, whether
 or not the account has a person, the directory's owner holds `adopt` on them
-(their owner or an editor, with no platform-admin arm, since every directory's
+(their owner, or an editor of their party or of the person, with no platform-admin arm, since every directory's
 owner is a platform admin; checked for that user though sync runs as system
 work), no other contact of the directory names them, a tombstoned one included,
 and no live link of a stream that writes back names them. The page's lookup keeps
 each verdict, so a person is admitted once per record. `ingest_contact` asks it
-for every person new to its link, so neither a vendor's own `apply_record` built
-on the ingest verbs nor another caller of them binds past it. Otherwise the contact mints
+for every person new to its link. What is enforced, and by whom: the directory
+base's target decision and its `apply_record`, and the ingest verbs, which every
+caller of them passes through. Integrate's own link writers bind a link to any
+record without asking (`promote` from an apply result's `target`, `revalidate`,
+`observe(target=...)`), so a vendor backend that overrides `apply_record` and
+returns a target of its own choosing is trusted code; moving the admission to the
+link's own binding owner is open with the architect. Otherwise the contact mints
 its own person; a two-way directory never adopts. The handle an adoption found
 the person by is the evidence of the directory's identity statement on them,
 restated on every later record, and the contact's spelling of that address lands
@@ -151,7 +160,8 @@ rule's reconciler withdraws only its own rule's pairs, so it leaves these
 standing, though no shared handle row supports them. A trashed person is
 nobody's target (`PartyManager.contact_people`), so its record lands on a new
 person or adopts one; the link first withdraws what it stated on the trashed
-person, and the proposals pairing the trashed person with the new one, or with
+person, never handing it to another link of its source that names them too, and
+the proposals pairing the trashed person with the new one, or with
 whom the contact's addresses name, are withdrawn with it. A record returning from
 a tombstone whose person is refused again lands on another person, and that
 person stays proposed as its same person. The ingest verbs

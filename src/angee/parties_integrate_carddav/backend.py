@@ -34,7 +34,7 @@ from django.core.exceptions import ValidationError
 from django.db.models import CharField
 from django.db.models.fields.json import KeyTextTransform
 from django.db.models.functions import Coalesce
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic import ValidationError as PydanticValidationError
 
 from angee.base.serialization import canonical_json_sha256
@@ -110,9 +110,9 @@ _COLLECTION_BODY = (
 
 
 class ContactsPolicy(BaseModel):
-    """One address book's contacts policy, ``config["streams"]["contacts"][<book key>]``."""
+    """One address book's contacts policy, ``config["streams"]["contacts"][<book key>]``; it ignores unknown keys."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     local_delete: Literal["conflict", "propagate"] = Field(
         default="conflict",
@@ -121,9 +121,14 @@ class ContactsPolicy(BaseModel):
 
 
 class CardDavConfig(BaseModel):
-    """A CardDAV directory's non-secret configuration, validated whenever the directory is saved."""
+    """A CardDAV directory's non-secret configuration, validated whenever the directory is saved.
 
-    model_config = ConfigDict(extra="forbid")
+    Every save validates the keys it knows and drops the rest, so a directory
+    stored before the write was validated, or carrying a key another version
+    knows, still saves; a known key with an invalid value is refused.
+    """
+
+    model_config = ConfigDict(extra="ignore")
 
     server_url: str = Field(
         default="", title="Server URL", description="The CardDAV server or account URL; discovery finds the books."
@@ -133,6 +138,13 @@ class CardDavConfig(BaseModel):
         exclude_if=lambda streams: not streams,
         description="Each address book's contacts policy, by the book's key.",
     )
+
+    @field_validator("streams", mode="before")
+    @classmethod
+    def _known_streams(cls, value: Any) -> Any:
+        """Keep only the streams the configuration knows (``contacts``); ignore the others."""
+
+        return {key: item for key, item in value.items() if key == CONTACTS} if isinstance(value, dict) else value
 
 
 class CardDavError(IntegrationError):
@@ -223,14 +235,13 @@ class CardDavDirectoryBackend(DirectoryBackend):
         The policy seeds from the directory's per-book config
         (``config["streams"]["contacts"][<book>]``, a :class:`ContactsPolicy`), which
         saving the directory validates (:class:`CardDavConfig`). Here it reads only
-        what the policy knows: an unknown key, or a value stored before the write
-        was validated, never fails the sync; such a value reads as the default.
+        what the policy knows (it ignores unknown keys): a value stored before the
+        write was validated never fails the sync, and reads as the default.
         """
 
         book = self.bridge.config.get("streams", {}).get(CONTACTS, {}).get(addressbook.external_key, {})
-        known = {name: book[name] for name in ContactsPolicy.model_fields if name in book}
         try:
-            policy = ContactsPolicy.model_validate(known)
+            policy = ContactsPolicy.model_validate(book)
         except PydanticValidationError:
             policy = ContactsPolicy()
         return replace(super().contacts_stream(addressbook), config=policy.model_dump())

@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 26
+// @rebac_schema_revision: 27
 
 // Parties, folders and circles are grant roots: each is owned through its
 // transferable `owner` column (OwnerMixin), which an insert defaults to the row's
@@ -95,9 +95,10 @@ definition parties/person {
     permission delete = owner + admin->member
     permission write__owner = party->transfer
     // Adopting the person binds a directory's contact to them: the directory becomes one of their statement
-    // sources and its contact readers read them. Only who holds the person lends them so; no platform-admin
-    // arm, since every directory's owner is a platform admin (`parties/directory#create`).
-    permission adopt = owner + editor
+    // sources and its contact readers read them. Only who holds the person lends them so: their owner (the
+    // column a transfer moves) and their editors, granted on the party; no platform-admin arm, since every
+    // directory's owner is a platform admin (`parties/directory#create`).
+    permission adopt = owner + editor + party->editor
 }
 
 definition parties/organization {

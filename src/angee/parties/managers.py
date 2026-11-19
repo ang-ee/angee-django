@@ -30,7 +30,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.prefetch import GenericPrefetch
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import IntegrityError, models, transaction
+from django.db import IntegrityError, connection, models, transaction
 from django.db.models import (
     Case,
     Count,
@@ -2228,7 +2228,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         and no account's own; no address the contact carries is a person
         account's sign-in address in any spelling (``lookup.sign_in``), whichever
         address found the person and whether or not the account has a person;
-        the directory's owner holds ``adopt`` on them (their owner or an editor:
+        the directory's owner holds ``adopt`` on them (their owner or an editor of their party:
         no platform-admin arm), checked for that user though sync runs as system
         work; no other contact of the directory names them, a tombstoned one
         included, since its statements are keyed by integration, not by link
@@ -2297,10 +2297,16 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         """Return the handle ``source``'s identity statement on ``party`` cites: the one an adoption found them by."""
 
         handle_model = apps.get_model("parties", "Handle")
+        statements = party.statements.model
         stated = (
-            party.statements.model._base_manager.filter(
-                subject_id=party.pk, aspect="identity", asserted_by=str(to_subject_ref(source)), superseded__isnull=True
+            statements._base_manager.filter(
+                subject_id=party.pk,
+                aspect="identity",
+                asserted_by=str(to_subject_ref(source)),
+                status=statements.StatementStatus.ASSERTED,
+                superseded__isnull=True,
             )
+            .order_by("pk")
             .values_list("evidence", flat=True)
             .first()
         )
@@ -2311,6 +2317,25 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         ]
         found = instances_from_public_ids(handle_model, ids[:1], queryset=handle_model._base_manager.all())
         return cast("Handle", found[ids[0]].canonical()) if ids and ids[0] in found else None
+
+    def _withdraw_link(self, link: RecordLink) -> int:
+        """Withdraw what ``link`` asserts on the person it leaves, their addresses and edges, never handing it on.
+
+        ``RecordLink.withdraw_statements`` moves a link's assertions to another
+        observing link of its source naming the same record; a contact link
+        leaving a person must withdraw them instead, or they stay asserted on
+        that person through the sibling. Every statement table a contact's link
+        states into is a person's (consumer groups included), an address's or a
+        relationship's. Returns how many it withdrew.
+        """
+
+        source = link.asserting_source()
+        tables = {
+            model: None
+            for owner in ("Person", "Address", "Relationship")
+            for model in apps.get_model("parties", owner).statement_models()
+        }
+        return sum(model.objects.withdraw(source, link=link) for model in tables)
 
     def contact_handle_ids(self, contacts: Iterable[ParsedContact | ParsedOrganization]) -> set[Any]:
         """Return the handles the contacts' emails and phones name, every spelling of each (by normalized value).
@@ -2702,7 +2727,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             gone = left is not None and self.contact_people([link])[link.pk] is None
             if left is not None:
                 # What the link stated on the person it leaves goes first.
-                link.withdraw_statements()
+                self._withdraw_link(link)
             apps.get_model("integrate", "RecordLink").objects.bind_target(link, parent)
             for subject, aspect, values, evidence in (
                 (
@@ -3063,26 +3088,33 @@ class DirectoryManager[DirectoryT: Directory](IntegrationManager[DirectoryT]):
     ) -> DirectoryT:
         """Connect ``owner``'s account at a contact source, tested before anything is saved, and queue its first sync.
 
-        ``owner`` must hold ``create`` on a directory (``parties/directory``),
-        checked first. The credential (``credential_kind`` and its secret
-        ``material``) and a directory of ``backend_class`` with its non-secret
-        ``config`` are built unsaved; a backend whose seeded vendor row is not
-        loaded yet is an operator refusal that says to load resources. Each
-        directory gets a credential of its own, named after the backend and
-        ``display_name``: a name already serving another integration of the
-        owner's is refused. The backend admits the credential and tests the
-        connection (``DirectoryBackend.test_connection``) outside any transaction,
-        and its refusal is a ``ValidationError`` carrying the backend's own operator
+        Called outside any transaction, since it reaches the network, and refused
+        inside one. ``owner`` must hold ``create`` on a directory
+        (``parties/directory``), checked first. The credential
+        (``credential_kind`` and its secret ``material``) and a directory of
+        ``backend_class`` with its non-secret ``config`` are built unsaved; a
+        backend whose seeded vendor row is not loaded yet is an operator refusal
+        that says to load resources, and any other configuration error stays
+        itself. The backend admits the credential and tests the connection
+        (``DirectoryBackend.test_connection``) outside any transaction, and its
+        refusal is a ``ValidationError`` carrying the backend's own operator
         message, so a directory that could never sync is never saved. Then one
-        transaction, as system work, creates the credential and the directory (its
-        vendor is the backend's seeded one, ``IntegrationManager.build``) and
-        claims the address the account signs in as as the owner's own handle
-        (``DirectoryBackend.account_address``). The first sync is requested once
-        that commits; a failure to queue it is logged, and the directory stays
+        transaction, as system work, creates the directory (its vendor is the
+        backend's seeded one, ``IntegrationManager.build``) and a credential of
+        its own, named after the backend, ``display_name`` and the directory's id
+        so no connection or reconnect ever reuses one, connects the directory
+        with it (``Integration.attach_connection``, which enters connection
+        discovery) and claims the address the account signs in as as the owner's
+        own handle (``DirectoryBackend.account_address``). Once that commits, the
+        first sync is requested if the directory is ready for work; a backend
+        whose discovery is pending gets its first sync from the discovery's
+        completion. A failure to queue it is logged, and the directory stays
         connected for its next scheduled sync. A vendor's connect mutation calls
         this; it has no GraphQL of its own.
         """
 
+        if connection.in_atomic_block:
+            raise RuntimeError("Connecting a directory runs outside any transaction: its connection test is remote.")
         resource_type = model_resource_type(self.model)
         if resource_type is None or not check_new(
             subject=to_subject_ref(owner), action="create", resource_type=resource_type
@@ -3094,19 +3126,19 @@ class DirectoryManager[DirectoryT: Directory](IntegrationManager[DirectoryT]):
             "owner": owner,
             "display_name": display_name,
             "config": dict(config or {}),
-            "lifecycle": IntegrationLifecycle.CONNECTED,
             "created_by_id": owner.pk,
         }
         try:
-            candidate = self.build(**fields)
+            candidate = self.build(**fields, lifecycle=IntegrationLifecycle.CONNECTED)
         except ImproperlyConfigured as error:
+            if self._vendor_loaded(backend_class):
+                raise
             # The backend's vendor is a seeded row (its master resource), absent until resources load.
             raise ValidationError(
                 "This directory's vendor is not loaded on this server: run `manage.py resources load`, "
                 "then connect again."
             ) from error
         name = f"{candidate.get_backend_class_impl().label} — {display_name}"
-        self._refuse_taken_credential_name(owner, name)
         unsaved = credentials.prepare_local_credential(owner, kind=credential_kind, name=name, material=material)
         candidate.attach_connection(unsaved)
         try:
@@ -3114,12 +3146,14 @@ class DirectoryManager[DirectoryT: Directory](IntegrationManager[DirectoryT]):
         except IntegrationError as error:
             raise ValidationError(error.public_message) from error
         with system_context(reason="parties.directory.connect"), transaction.atomic():
-            credential = credentials.create_local_credential(owner, kind=credential_kind, name=name, material=material)
-            # The upsert locks the credential row, so a concurrent connect of the same name waits and is refused here.
-            self._refuse_taken_credential_name(owner, name)
-            directory = self.build(**fields)
-            directory.attach_connection(credential)
+            directory = self.build(**fields, lifecycle=IntegrationLifecycle.DISCONNECTED)
             directory.save()
+            suffix = f" ({directory.sqid})"
+            limit = cast(int, credentials.model._meta.get_field("name").max_length) - len(suffix)
+            credential = credentials.create_local_credential(
+                owner, kind=credential_kind, name=f"{name[:limit]}{suffix}", material=material
+            )
+            directory.attach_connection(credential)
             if address := directory.backend.account_address():
                 handles = apps.get_model("parties", "Handle").objects
                 handles.claim_control(
@@ -3130,22 +3164,18 @@ class DirectoryManager[DirectoryT: Directory](IntegrationManager[DirectoryT]):
                     evidence=[directory],
                     display_name=display_name,
                 )
-        try:
-            directory.request_sync()
-        except Exception:  # noqa: BLE001 -- the committed directory stays connected; its next scheduled sync runs.
-            logger.warning("The first sync of directory %s could not be queued.", directory.pk, exc_info=True)
+        if directory.discovery_ready:
+            try:
+                directory.request_sync()
+            except Exception:  # noqa: BLE001 -- the committed directory stays connected; its next scheduled sync runs.
+                logger.warning("The first sync of directory %s could not be queued.", directory.pk, exc_info=True)
         return directory
 
-    @staticmethod
-    def _refuse_taken_credential_name(owner: Any, name: str) -> None:
-        """Refuse ``name`` when ``owner``'s provider-less credential of that name already serves an integration."""
+    def _vendor_loaded(self, backend_class: str) -> bool:
+        """Whether the seeded vendor row ``backend_class``'s defaults name is loaded (or it names none)."""
 
+        impl = self.model._meta.get_field("backend_class").resolve_class(backend_class)
+        slug = impl.effective_defaults().get("vendor")
+        vendors = self.model._meta.get_field("vendor").related_model
         with system_context(reason="parties.directory.connect"):
-            taken = (
-                apps.get_model("integrate", "Integration")
-                ._base_manager.filter(credential__user_id=owner.pk, credential__name=name)
-                .filter(credential__oauth_client__isnull=True)
-                .exists()
-            )
-        if taken:
-            raise ValidationError("An account is already connected under that name; choose another name.")
+            return not isinstance(slug, str) or vendors._base_manager.filter(slug=slug).exists()
