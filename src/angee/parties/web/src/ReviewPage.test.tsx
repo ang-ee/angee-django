@@ -7,12 +7,14 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const reads = vi.hoisted(() => ({
   calls: [] as { document: unknown; variables: unknown }[],
+  options: [] as { document: unknown; enabled: boolean }[],
   data: new Map<unknown, (variables: Record<string, unknown>) => unknown>(),
 }));
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
-  useAuthoredQuery: (document: unknown, variables: Record<string, unknown> | undefined) => {
+  useAuthoredQuery: (document: unknown, variables: Record<string, unknown> | undefined, options?: { enabled?: boolean }) => {
     reads.calls.push({ document, variables });
+    reads.options.push({ document, enabled: options?.enabled ?? true });
     return { data: reads.data.get(document)?.(variables ?? {}), isFetching: false, error: null };
   },
 }));
@@ -35,6 +37,7 @@ const readsOf = (document: unknown) => reads.calls.filter((call) => call.documen
 
 beforeEach(() => {
   reads.calls = [];
+  reads.options = [];
   reads.data.clear();
   reads.data.set(PartyReviewCounts, () => ({
     party_statements_aggregate: { aggregate: { count: 3 } },
@@ -102,6 +105,23 @@ describe("the Review page's possible duplicates", () => {
 
     expect(await screen.findByRole("button", { name: label })).toBeTruthy();
     expect(screen.getByText(bound(1000))).toBeTruthy();
+  });
+
+  test("while the batch dialog is open the page's own reads are held, and read again once it closes", async () => {
+    renderReview();
+    const label = enPartiesMessages["review.sameAs.mergeCertain"]!.replace("{count}", "50").replace("{total}", "180");
+    fireEvent.click(await screen.findByRole("button", { name: label }));
+    await screen.findByText(enPartiesMessages["duplicates.title"]!);
+
+    const page = [PartyReviewCounts, SameAsPairs, CertainSameAsPairs];
+    const whileOpen = reads.options.filter((call) => page.includes(call.document as never)).slice(-3);
+    expect(whileOpen.map((call) => call.enabled)).toEqual([false, false, false]);
+
+    fireEvent.click(screen.getByRole("button", { name: enPartiesMessages["duplicates.cancel"]! }));
+    await waitFor(() => {
+      const after = reads.options.filter((call) => page.includes(call.document as never)).slice(-3);
+      expect(after.map((call) => call.enabled)).toEqual([true, true, true]);
+    });
   });
 });
 

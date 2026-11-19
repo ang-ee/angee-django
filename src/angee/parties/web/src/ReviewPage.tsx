@@ -29,21 +29,26 @@ export function ReviewPage(): React.ReactElement {
   const t = usePartiesT();
   const routeHref = useRouteHref();
   const shared = useIdentityClaimColumns<SuggestionRow>();
+  // While the batch dialog is open its merges would refetch these reads per set; they are held and read once after
+  // it closes (the dialog invalidates the models once, when its run ends).
+  const [mergingCertain, setMergingCertain] = React.useState(false);
+  const held = { enabled: !mergingCertain };
   // The claims and pairs totals change with every statement, merge and keep-apart decision.
-  const counts = useAuthoredQuery(PartyReviewCounts, undefined, { models: PARTY_MERGE_INVALIDATES });
+  const counts = useAuthoredQuery(PartyReviewCounts, undefined, { models: PARTY_MERGE_INVALIDATES, ...held });
   // The first pair of each page seen so far: the next page continues after the last pair of this one.
   const [pageStarts, setPageStarts] = React.useState<readonly (string | null)[]>([null]);
   const page = pageStarts.length;
   const sameAs = useAuthoredQuery(SameAsPairs, { limit: SAME_AS_PAGE, after: pageStarts[page - 1] ?? null }, {
     models: ["parties.Party", "parties.Handle", "parties.PartySameAsPairStatement"],
+    ...held,
   });
   const rowActions = usePartyStatementRowActions<SuggestionRow>("all");
   // Each batch of certain pairs continues after the last pair of the batch before it.
   const [certainAfter, setCertainAfter] = React.useState<string | null>(null);
   const certain = useAuthoredQuery(CertainSameAsPairs, { limit: SAME_AS_PAGE, after: certainAfter }, {
     models: PARTY_MERGE_INVALIDATES,
+    ...held,
   });
-  const [mergingCertain, setMergingCertain] = React.useState(false);
   const certainPairs = certain.data?.certain_same_as_pairs;
   const certainSets = React.useMemo<readonly DuplicateSetInput[]>(
     () => (certainPairs ?? []).map((pair) => ({
