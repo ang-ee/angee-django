@@ -7,10 +7,13 @@ from collections.abc import Collection, Mapping, Sequence
 from django.apps import AppConfig, apps
 from django.conf import settings
 from django.core import checks
+from django.db import connections, models
+from django.db.models.functions import Cast
 from rebac.resources import model_resource_type
 from rebac.schema import FieldBinding, PermExpr, Schema
 from rebac.schema.parser import parse_zed
 
+from angee.base.fields.implementation import ImplClassField
 from angee.base.models.ownership import OwnerMixin
 from angee.base.origins import public_origin
 from angee.base.permissions import declared_rebac_definition, declared_rebac_schema, declared_schema_path
@@ -59,6 +62,60 @@ def check_public_origin(
             id="angee.E051",
         )
     ]
+
+
+def check_stored_impl_keys(
+    app_configs: Sequence[AppConfig] | None = None,
+    databases: Sequence[str] | None = None,
+    **kwargs: object,
+) -> list[checks.CheckMessage]:
+    """Name the stored rows whose implementation key nothing registers.
+
+    A row stores the key of the implementation it selected, and the class behind
+    a key comes from a setting that addons contribute to. When the addon that
+    contributed a key is no longer installed, or the key moved to an addon the
+    host has not installed, the rows that name it are stranded: nothing resolves
+    them, and the first use of one fails. This reads every concrete model's
+    ``ImplClassField`` columns, so it is registered under ``Tags.database``: it
+    runs with ``check --database`` and before ``migrate``, never in a plain
+    ``check``. ``ANGEE_IMPL_KEY_REMEDIES`` maps a registry setting and a key to
+    what an operator does about it.
+    """
+
+    del app_configs, kwargs
+    remedies: Mapping[str, Mapping[str, str]] = getattr(settings, "ANGEE_IMPL_KEY_REMEDIES", {})
+    errors: list[checks.CheckMessage] = []
+    for alias in databases or ():
+        tables = set(connections[alias].introspection.table_names())
+        for model in sorted(apps.get_models(), key=lambda candidate: candidate._meta.label):
+            options = model._meta
+            if options.proxy or not options.managed or options.db_table not in tables:
+                continue
+            for field in options.local_concrete_fields:
+                if not isinstance(field, ImplClassField) or field.base_class is None:
+                    continue
+                # Read the column as text: the field itself refuses a key it does not know.
+                stranded = (
+                    model._base_manager.using(alias)
+                    .annotate(stored_key=Cast(field.attname, models.CharField()))
+                    .exclude(stored_key__isnull=True)
+                    .exclude(stored_key__in=("", *field.registered_keys()))
+                    .values_list("stored_key")
+                    .annotate(rows=models.Count("pk"))
+                    .order_by("stored_key")
+                )
+                for key, rows in stranded:
+                    errors.append(
+                        checks.Error(
+                            f"{options.label}.{field.name}: {rows} row(s) store the implementation key {key!r}, "
+                            f"which {field.registry_setting} does not register.",
+                            hint=remedies.get(field.registry_setting, {}).get(key)
+                            or "Install the addon that registers this key, or move these rows to a registered one.",
+                            obj=model,
+                            id="angee.E052",
+                        )
+                    )
+    return errors
 
 
 def check_rebac_caveats(

@@ -448,7 +448,13 @@ Use these owners instead of maintaining another contract in an addon:
   therefore requires a **non-empty** registry: an addon whose impl set could
   otherwise be empty registers a noop/null-object default (storage's `local`;
   integrate's `none` VCS client), so a composition always has one selectable
-  impl and the enum is never empty.
+  impl and the enum is never empty. A key that leaves the registry (its addon
+  uninstalled, or the class moved to an addon the host has not installed)
+  strands the rows that store it: the database check `angee.E052`
+  ([`check_stored_impl_keys`](../../src/angee/base/checks.py)) names them by
+  model, field, key and count before `migrate` and under `check --database`,
+  and the addon that stopped providing a key states the remedy in
+  `ANGEE_IMPL_KEY_REMEDIES`.
 - **Rowless implementation catalogues compose the same registry owner.**
   [`angee.base.implementations`](../../src/angee/base/implementations.py) owns registry checks, choice
   metadata for fields and settings-selected uses. Native enum projection belongs
