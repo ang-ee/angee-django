@@ -939,8 +939,8 @@ class IntegrateExternalAccountMutation:
         )
         return cast(ExternalAccountType, account)
 
-    @strawberry.mutation(name="delete_external_account", permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def delete_external_account(self, id: PublicID, confirm: bool = False) -> DeletePreview:
+    @strawberry.mutation(name="external_accounts_delete", permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def external_accounts_delete(self, id: PublicID, confirm: bool = False) -> DeletePreview:
         """Delete the account; its ownership is a column and leaves with the row."""
 
         return delete_by_public_id(
@@ -1010,8 +1010,8 @@ class IntegrateCredentialMutation:
         )
         return cast(CredentialType, credential)
 
-    @strawberry.mutation(name="delete_credential", permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def delete_credential(self, id: PublicID, confirm: bool = False) -> DeletePreview:
+    @strawberry.mutation(name="credentials_delete", permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def credentials_delete(self, id: PublicID, confirm: bool = False) -> DeletePreview:
         """Delete the credential, then best-effort revoke remotely after commit."""
 
         with transaction.atomic():
@@ -1030,13 +1030,13 @@ attach_delete_preview_metadata(
     IntegrateExternalAccountMutation,
     model=ExternalAccount,
     node=ExternalAccountType,
-    field="delete_external_account",
+    field="external_accounts_delete",
 )
 attach_delete_preview_metadata(
     IntegrateCredentialMutation,
     model=Credential,
     node=CredentialType,
-    field="delete_credential",
+    field="credentials_delete",
 )
 
 

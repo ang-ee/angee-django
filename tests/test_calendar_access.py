@@ -378,17 +378,17 @@ def test_a_user_without_a_calendar_starts_their_own_once(world: SimpleNamespace)
         assert (created.owner_id, created.party_id) == (w.stranger.pk, Person.objects.get(user=w.stranger).pk)
 
 
-# --- deleting: the authored delete previews the UI's Delete composes -------------
+# --- deleting: the generated delete previews the UI's Delete composes -------------
 
 _DELETE_EVENT = """
 mutation ($id: ID!, $confirm: Boolean! = false) {
-  delete_calendar_event(id: $id, confirm: $confirm) { has_blockers refusals deleted { label count } }
+  calendar_events_delete(id: $id, confirm: $confirm) { has_blockers refusals deleted { label count } }
 }
 """
 
 _DELETE_CALENDAR = """
 mutation ($id: ID!, $confirm: Boolean! = false) {
-  delete_calendar(id: $id, confirm: $confirm) { has_blockers refusals deleted { label count } }
+  calendars_delete(id: $id, confirm: $confirm) { has_blockers refusals deleted { label count } }
 }
 """
 
@@ -396,7 +396,7 @@ mutation ($id: ID!, $confirm: Boolean! = false) {
 def test_calendars_and_events_declare_the_delete_preview_that_offers_delete() -> None:
     resources = {resource.model_label: resource for resource in _console().angee_resources}
 
-    for label, root in (("calendar.Calendar", "delete_calendar"), ("calendar.CalendarEvent", "delete_calendar_event")):
+    for label, root in (("calendar.Calendar", "calendars_delete"), ("calendar.CalendarEvent", "calendar_events_delete")):
         assert "deletePreview" in resources[label].capabilities
         assert resources[label].as_wire(schema_name="console")["roots"]["deletePreview"] == root
 
@@ -406,7 +406,7 @@ def test_an_events_writer_previews_then_deletes_it_and_a_reader_may_not(world: S
     event = {"id": w.default.sqid}
 
     refused = execute_schema(_console(), _DELETE_EVENT, {**event, "confirm": True}, user=w.reader)
-    preview = result_data(execute_schema(_console(), _DELETE_EVENT, event, user=w.editor))["delete_calendar_event"]
+    preview = result_data(execute_schema(_console(), _DELETE_EVENT, event, user=w.editor))["calendar_events_delete"]
     with system_context(reason="tests.calendar.access.read"):
         assert CalendarEvent.objects.filter(pk=w.default.pk).exists()
     confirmed = execute_schema(_console(), _DELETE_EVENT, {**event, "confirm": True}, user=w.editor)
@@ -417,7 +417,7 @@ def test_an_events_writer_previews_then_deletes_it_and_a_reader_may_not(world: S
     assert {group["label"]: group["count"] for group in preview["deleted"]} == {
         "calendar events": 1, "event attendees": 1,
     }
-    assert result_data(confirmed)["delete_calendar_event"]["has_blockers"] is False
+    assert result_data(confirmed)["calendar_events_delete"]["has_blockers"] is False
     with system_context(reason="tests.calendar.access.read"):
         assert not CalendarEvent.objects.filter(pk=w.default.pk).exists()
 
@@ -428,7 +428,7 @@ def test_a_calendars_holder_previews_its_events_going_with_it_and_an_editor_may_
     w = world
     calendar = {"id": w.calendar.sqid}
 
-    preview = result_data(execute_schema(_console(), _DELETE_CALENDAR, calendar, user=w.holder))["delete_calendar"]
+    preview = result_data(execute_schema(_console(), _DELETE_CALENDAR, calendar, user=w.holder))["calendars_delete"]
     refused = execute_schema(_console(), _DELETE_CALENDAR, {**calendar, "confirm": True}, user=w.editor)
 
     assert (preview["has_blockers"], preview["refusals"]) == (False, [])

@@ -15,6 +15,8 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
+import strawberry
+import strawberry_django
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
@@ -24,6 +26,7 @@ from django.db import close_old_connections, connection, connections, models, tr
 from django.db.models.signals import post_save
 from django.db.utils import OperationalError
 from django.test import Client, RequestFactory
+from django.test.utils import isolate_apps
 from django.utils import timezone
 from rebac import (
     RelationshipTuple,
@@ -40,9 +43,10 @@ from rebac.middleware import ActorMiddleware
 from rebac.roles import grant
 
 from angee.base.models.identity import public_id_of
-from angee.base.models.trash import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet
+from angee.base.models.trash import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet, TrashMixin
 from angee.base.permissions import DirectRecordAccess
 from angee.graphql import records
+from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.data.resource_fields import is_archive_field, is_trash_field
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, result_data
@@ -242,6 +246,66 @@ def test_archive_and_trash_columns_are_classified_in_resource_metadata() -> None
     assert is_archive_field(File._meta.get_field("is_trashed")) is False
     assert is_trash_field(File._meta.get_field("is_trashed")) is True
     assert is_trash_field(Drive._meta.get_field("is_archived")) is False
+
+
+@isolate_apps()
+def test_multi_table_child_does_not_advertise_its_parents_trash_capability() -> None:
+    """The parent owns trash; inherited archive fields keep their existing classification."""
+
+    class RemovalParent(ArchiveMixin, TrashMixin):
+        """Store the two independent removal flags."""
+
+        name = models.CharField(max_length=32)
+
+        class Meta:
+            app_label = "auth"
+
+    class RemovalChild(RemovalParent):
+        """Inherit the parent's flags without storing them on this table."""
+
+        class Meta:
+            app_label = "auth"
+
+    @strawberry_django.type(RemovalParent)
+    class RemovalParentType:
+        id: strawberry.ID
+        name: strawberry.auto
+        is_trashed: strawberry.auto
+        is_archived: strawberry.auto
+
+    @strawberry_django.type(RemovalChild)
+    class RemovalChildType:
+        id: strawberry.ID
+        name: strawberry.auto
+        is_trashed: strawberry.auto
+        is_archived: strawberry.auto
+
+    resources = [
+        hasura_model_resource(
+            node, model=model, name=name,
+            filterable=["id", "name"], sortable=["name"], aggregatable=["id"],
+            insert=False, update=False, delete=False, public_id_field="id",
+        )
+        for model, node, name in (
+            (RemovalParent, RemovalParentType, "removal_parents"),
+            (RemovalChild, RemovalChildType, "removal_children"),
+        )
+    ]
+    schema = addon_schema({"public": {
+        "query": [resource.query for resource in resources],
+        "types": [node for resource in resources for node in resource.types],
+    }}, "public")
+    fields = {
+        resource.model_label: {field.name: field for field in resource.fields}
+        for resource in schema.angee_resources
+    }
+    assert fields[RemovalParent._meta.label]["is_trashed"].trashable is True
+    assert fields[RemovalChild._meta.label]["is_trashed"].trashable is False
+    assert fields[RemovalParent._meta.label]["is_archived"].archivable is True
+    assert fields[RemovalChild._meta.label]["is_archived"].archivable is True
+    inherited = RemovalChild._meta.get_field("is_trashed")
+    assert inherited.model is RemovalParent
+    assert is_trash_field(inherited, model=RemovalChild) is False
 
 
 def test_detect_mime_falls_back_to_the_filename_when_libmagic_is_unsure() -> None:
@@ -777,8 +841,8 @@ def test_storage_resource_metadata_exposes_delete_previews() -> None:
     schema = addon_schema(storage_schema.schemas, "public")
     resources = {item.model_label: item for item in schema.angee_resources}
 
-    assert resources["storage.File"].roots.delete_preview_name == "delete_file"
-    assert resources["storage.Folder"].roots.delete_preview_name == "delete_folder"
+    assert resources["storage.File"].roots.delete_preview_name == "files_delete"
+    assert resources["storage.Folder"].roots.delete_preview_name == "folders_delete"
     assert resources["storage.File"].type_names.delete_payload == "DeletePreview"
     assert resources["storage.Folder"].type_names.delete_payload == "DeletePreview"
 
@@ -815,7 +879,7 @@ def test_storage_delete_preview_requires_delete_permission(drive: Any, resource:
     result = execute_schema(
         addon_schema(storage_schema.schemas, "public"),
         f"""mutation Delete($id: ID!, $confirm: Boolean!) {{
-          delete_{resource}(id: $id, confirm: $confirm) {{ total_deleted_count blocked {{ label count }} }}
+          {resource}s_delete(id: $id, confirm: $confirm) {{ total_deleted_count blocked {{ label count }} }}
         }}""",
         {"id": str(target.sqid), "confirm": confirm},
         user=reader,
@@ -875,13 +939,13 @@ def test_storage_graphql_custom_mutations_accept_public_ids(drive: Any) -> None:
             schema,
             """
             mutation Delete($id: ID!) {
-              delete_file(id: $id, confirm: true) { has_blockers }
+              files_delete(id: $id, confirm: true) { has_blockers }
             }
             """,
             {"id": str(row.sqid)},
             user=drive.alice,
         )
-    )["delete_file"]
+    )["files_delete"]
     assert deleted == {"has_blockers": False}
     row.refresh_from_db()
     assert row.is_trashed

@@ -54,7 +54,7 @@ from angee.graphql.actions import ActionResult, action_guard, authorized_permiss
 from angee.graphql.capabilities import permission_expression
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.data.pydantic_resource import hasura_pydantic_resource
-from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
+from angee.graphql.deletion import DeletePreview, delete_by_public_id
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.sharing import authorized_record_access
@@ -650,10 +650,15 @@ class IAMUserWriteBackend:
             user.update_account(payload, password=password, expected_revision=expected_revision)
             return user
 
+    def delete_preview(self, info: strawberry.Info, pk: str, *, confirm: bool) -> DeletePreview:
+        """Preview or confirm deletion through the user's write scope and delete permission."""
+
+        return delete_by_public_id(User, str(pk), confirm=confirm, queryset=User.objects.for_write())
+
     def delete(self, info: strawberry.Info, pk: str) -> Any | None:
         """Delete one user by public id through its ``delete`` permission and return the deleted row."""
 
-        preview = delete_by_public_id(User, str(pk), confirm=True, queryset=User.objects.for_write())
+        preview = self.delete_preview(info, pk, confirm=True)
         preview.require_no_blockers()
         return preview.deleted_instance
 
@@ -1087,25 +1092,6 @@ class IAMUserAccountMutation:
 
 
 @strawberry.type
-class IAMUserDeletePreviewMutation:
-    """Authored cascade delete preview for users."""
-
-    @strawberry.mutation(name="delete_user")
-    def delete_user(self, info: strawberry.Info, id: PublicID, confirm: bool = False) -> DeletePreview:
-        """Preview or confirm deletion of one user by public id through its ``delete`` permission."""
-
-        return delete_by_public_id(User, str(id), confirm=confirm, queryset=User.objects.for_write())
-
-
-attach_delete_preview_metadata(
-    IAMUserDeletePreviewMutation,
-    model=User,
-    node=UserType,
-    field="delete_user",
-)
-
-
-@strawberry.type
 class IAMPermissionHubMutation:
     """Admin mutations for tuple-backed IAM role grants."""
 
@@ -1206,7 +1192,6 @@ schemas = {
             IAMMutation,
             _USER_RESOURCE.mutation,
             _GROUP_RESOURCE.mutation,
-            IAMUserDeletePreviewMutation,
             IAMUserAccountMutation,
             IAMPermissionHubMutation,
             IAMGroupMembershipMutation,

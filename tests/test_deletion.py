@@ -5,8 +5,10 @@ from __future__ import annotations
 from typing import Any, Self, cast
 
 import pytest
+import strawberry
+import strawberry_django
 from django.contrib.auth.models import Group
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models, transaction
 from django.db.models.deletion import Collector
 from django.db.models.signals import pre_delete
@@ -16,7 +18,7 @@ from rebac import PermissionDenied, RebacMixin, SubjectRef, actor_context, syste
 
 import angee.graphql.deletion as deletion_module
 from angee.base.models.base import AngeeModel
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource
 from angee.graphql.deletion import (
     DeletePreview,
     DeletePreviewGroup,
@@ -24,8 +26,123 @@ from angee.graphql.deletion import (
     delete_by_public_id,
 )
 from angee.graphql.ids import RECORD_NOT_FOUND_MESSAGE
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.iam import signals as iam_signals
+from tests.conftest import addon_schema
 from tests.tables import model_tables
+
+
+@strawberry_django.type(Group)
+class DeleteGroupType:
+    """Plain Django rows exercise the generated resource deletion contract."""
+
+    id: strawberry.ID
+    name: strawberry.auto
+
+
+@pytest.mark.parametrize("delete", (False, True))
+def test_resource_delete_flag_controls_both_roots_and_preview_metadata(delete: bool) -> None:
+    """Opting out of deletion emits neither delete root nor preview capability."""
+
+    resource = hasura_model_resource(
+        DeleteGroupType, model=Group, name="delete_groups",
+        filterable=["id", "name"], sortable=["name"], aggregatable=["id"],
+        insert=False, update=False, delete=delete, public_id_field="id",
+    )
+    schema = addon_schema({"public": {
+        "query": [resource.query], "mutation": [resource.mutation], "types": resource.types,
+    }}, "public")
+    fields = schema._schema.mutation_type.fields if schema._schema.mutation_type else {}
+    assert ("delete_groups_delete" in fields) is delete
+    assert ("delete_delete_groups_by_pk" in fields) is delete
+    metadata = schema.angee_resources[0]
+    assert metadata.roots.delete_preview_name == ("delete_groups_delete" if delete else None)
+    assert metadata.type_names.delete_payload == ("DeletePreview" if delete else None)
+    assert ("deletePreview" in metadata.capabilities) is delete
+
+
+@pytest.mark.parametrize("backend_kind", ("missing", "override", "inherited_override"))
+def test_resource_rejects_backends_without_a_matching_delete_preview(backend_kind: str) -> None:
+    """A custom delete may never silently inherit the unrelated default preview."""
+
+    class NativeBackend:
+        """A native delete-only backend lacks the Angee preview extension."""
+
+        def delete(self, info: strawberry.Info, pk: str) -> None:
+            return None
+
+    class OverrideBackend(AngeeHasuraWriteBackend):
+        """A custom delete has not yet migrated into delete_preview."""
+
+        def delete(self, info: strawberry.Info, pk: str) -> None:
+            return None
+
+    class InheritedOverrideBackend(OverrideBackend):
+        """The incomplete override remains incomplete through inheritance."""
+
+    backend = {
+        "missing": NativeBackend(),
+        "override": OverrideBackend(Group),
+        "inherited_override": InheritedOverrideBackend(Group),
+    }[backend_kind]
+    with pytest.raises(ImproperlyConfigured, match=r"auth.Group.*implement delete_preview"):
+        hasura_model_resource(
+            DeleteGroupType, model=Group, name="invalid_delete_groups",
+            filterable=["id", "name"], sortable=["name"], aggregatable=["id"],
+            insert=False, update=False, write_backend=cast(Any, backend), public_id_field="id",
+        )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("native_delete", (False, True))
+def test_generated_deletes_share_custom_preview_and_write_scope(native_delete: bool) -> None:
+    """Both roots honor custom preview behavior and the backend's target restriction."""
+
+    class ScopedBackend(AngeeHasuraWriteBackend):
+        """Restrict the surface and expose its own refusal in both envelopes."""
+
+        def write_target_queryset(self) -> models.QuerySet[Any]:
+            return super().write_target_queryset().exclude(name="hidden")
+
+        def delete_preview(self, info: strawberry.Info, pk: str, *, confirm: bool) -> DeletePreview:
+            preview = super().delete_preview(info, pk, confirm=False)
+            if self.write_target_queryset().filter(pk=pk, name="retained").exists():
+                preview.has_blockers = True
+                preview.refusals = ["Retained by this surface."]
+                return preview
+            return super().delete_preview(info, pk, confirm=confirm)
+
+    resource = hasura_model_resource(
+        DeleteGroupType, model=Group, name="scoped_groups",
+        filterable=["id", "name"], sortable=["name"], aggregatable=["id"],
+        insert=False, update=False, write_backend=ScopedBackend(Group), public_id_field="id",
+    )
+    schema = addon_schema({"public": {
+        "query": [resource.query], "mutation": [resource.mutation], "types": resource.types,
+    }}, "public")
+    root = "delete_scoped_groups_by_pk" if native_delete else "scoped_groups_delete"
+    document = (
+        "mutation($id: String!) { delete_scoped_groups_by_pk(id: $id) { id } }"
+        if native_delete else
+        "mutation($id: ID!) { scoped_groups_delete(id: $id, confirm: true) { has_blockers refusals } }"
+    )
+    hidden, retained, removable = (Group.objects.create(name=name) for name in ("hidden", "retained", "removable"))
+    denied = execute_schema(schema, document, {"id": str(hidden.pk)})
+    assert denied.errors is not None
+    assert Group.objects.filter(pk=hidden.pk).exists()
+    refused = execute_schema(schema, document, {"id": str(retained.pk)})
+    if native_delete:
+        assert refused.errors is not None
+        assert refused.errors[0].message == "Retained by this surface."
+    else:
+        assert result_data(refused)[root] == {"has_blockers": True, "refusals": ["Retained by this surface."]}
+    assert Group.objects.filter(pk=retained.pk).exists()
+    deleted = result_data(execute_schema(schema, document, {"id": str(removable.pk)}))[root]
+    if native_delete:
+        assert deleted["id"] == str(removable.pk)
+    else:
+        assert deleted["has_blockers"] is False
+    assert not Group.objects.filter(pk=removable.pk).exists()
 
 
 @pytest.fixture(autouse=True)

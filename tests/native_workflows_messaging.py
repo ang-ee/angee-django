@@ -302,7 +302,7 @@ class MessageTriggerTests(TransactionTestCase):
             with actor_context(self.admin):
                 result = schema.execute_sync(
                     """mutation($id: ID!, $confirm: Boolean!) {
-                      delete_channel(id: $id, confirm: $confirm) {
+                      channels_delete(id: $id, confirm: $confirm) {
                         has_blockers root { children { children { object_id object_label } } }
                       }
                     }""",
@@ -310,7 +310,7 @@ class MessageTriggerTests(TransactionTestCase):
                     context_value=SimpleNamespace(request=SimpleNamespace(user=self.admin)),
                 )
             self.assertIsNone(result.errors, result.errors)
-            result_preview = result.data["delete_channel"]
+            result_preview = result.data["channels_delete"]
             self.assertTrue(result_preview["has_blockers"])
             self.assertEqual(result_preview["root"]["children"][0]["children"], [{
                 "object_id": trigger.sqid, "object_label": str(trigger),

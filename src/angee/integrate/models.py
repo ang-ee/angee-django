@@ -1077,7 +1077,7 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         the delete (an actor's ``with_action("delete")``). A credential an
         integration still attaches directly keeps its ``PROTECT``: detach it first,
         or use :meth:`retire_unattached`. Two other paths delete a credential
-        without it: the admin delete preview (``delete_credential``), which runs
+        without it: the admin delete preview (``credentials_delete``), which runs
         :meth:`prepare_disconnect` itself, and :meth:`delete_unattached_derived`,
         which drops discovery-created material without a remote revocation.
         """

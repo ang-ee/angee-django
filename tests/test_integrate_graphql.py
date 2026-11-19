@@ -697,7 +697,9 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
     }
     assert metadata.default_measures[0].op == "count"
     assert metadata.aggregate_measures == ()
-    assert metadata.capabilities == ("list", "detail", "aggregate", "groups", "update", "delete", "changes")
+    assert metadata.capabilities == (
+        "list", "detail", "aggregate", "groups", "update", "delete", "deletePreview", "changes",
+    )
     assert metadata.query.axes["vendor"].field == "vendor"
     assert metadata.query.fields["vendor"].relation.model == "integrate.Vendor"
     assert metadata.query.fields["vendor"].relation.identity_path == "vendor.id"
@@ -717,6 +719,7 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
     assert integration["roots"]["create"] is None
     assert integration["roots"]["update"] == "update_integrations_by_pk"
     assert integration["roots"]["delete"] == "delete_integrations_by_pk"
+    assert integration["roots"]["deletePreview"] == "integrations_delete"
     assert integration["roots"]["changes"] == "integrationChanged"
     assert integration["capabilities"] == [
         "list",
@@ -725,6 +728,7 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
         "groups",
         "update",
         "delete",
+        "deletePreview",
         "changes",
     ]
     assert list(integration["query"]["axes"]) == [

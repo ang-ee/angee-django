@@ -120,7 +120,7 @@ def test_console_resource_metadata_declares_message_surface() -> None:
     }
     # Status belongs to delivery; tags use their own tag/untag verbs.
     assert metadata.update_fields == ()
-    assert metadata.capabilities == ("list", "detail", "aggregate", "groups", "delete", "changes")
+    assert metadata.capabilities == ("list", "detail", "aggregate", "groups", "delete", "deletePreview", "changes")
     assert {
         name: (metadata.query.fields[name].relation.model, axis.server.label_key)
         for name, axis in metadata.query.axes.items()
@@ -182,7 +182,7 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
     assert channel.roots.detail_name == "channels_by_pk"
     assert channel.roots.create_name is None
     # Connect owns channel creation. Updates include the operator label, spaces'
-    # team and intake's configuration; the authored delete root previews the purge.
+    # team and intake's configuration; the generated preview forecasts the purge.
     assert channel.roots.update_name == "update_channels_by_pk"
     assert channel.update_fields == (
         "display_name",
@@ -192,7 +192,7 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
         "intake_requester_domains",
     )
     assert channel.roots.delete_name == "delete_channels_by_pk"
-    assert channel.roots.delete_preview_name == "delete_channel"
+    assert channel.roots.delete_preview_name == "channels_delete"
     assert channel.roots.changes_name == "channelChanged"
     assert channel.capabilities == (
         "list",
@@ -3106,13 +3106,14 @@ def test_channel_purge_spares_the_same_message_in_another_channel(db: None) -> N
     assert part_b.fragment_id == fragment.pk
 
 
-def test_delete_channel_preview_counts_purge_as_deleted(db: None) -> None:
+@pytest.mark.parametrize("native_delete", (False, True))
+def test_delete_channel_preview_counts_purge_as_deleted(db: None, native_delete: bool) -> None:
     """The channel delete preview forecasts threads/messages as deleted, then purges.
 
     The preview counts the channel + its Integration parent + the thread/message totals
     as ``deleted`` (never as ``updated``/orphaned) with ``.count()``, so it stays fast on
     a large channel and ``has_blockers`` is False; a bare preview deletes nothing. The
-    ``confirm`` mutation runs the purge and removes the channel + Integration row.
+    two generated delete roots each purge the channel + Integration row.
     """
 
     admin = _platform_admin("chan-delete-admin")
@@ -3132,7 +3133,7 @@ def test_delete_channel_preview_counts_purge_as_deleted(db: None) -> None:
             schema,
             """
             mutation Preview($id: ID!) {
-              delete_channel(id: $id) {
+              channels_delete(id: $id) {
                 total_deleted_count has_blockers
                 deleted { label count }
                 updated { label count }
@@ -3142,7 +3143,7 @@ def test_delete_channel_preview_counts_purge_as_deleted(db: None) -> None:
             {"id": channel.sqid},
             user=admin,
         )
-    )["delete_channel"]
+    )["channels_delete"]
     counts = {group["label"]: group["count"] for group in preview["deleted"]}
     assert counts["messages"] == 3
     assert counts["threads"] == 3
@@ -3154,24 +3155,34 @@ def test_delete_channel_preview_counts_purge_as_deleted(db: None) -> None:
     assert Channel._base_manager.filter(pk=channel.pk).exists()
     assert messaging_models.Message._base_manager.filter(channel_id=channel.pk).count() == 3
 
-    _data(
+    deleted = _data(
         execute_schema(
             schema,
             """
+            mutation Confirm($id: String!) {
+              delete_channels_by_pk(id: $id) { id }
+            }
+            """ if native_delete else """
             mutation Confirm($id: ID!) {
-              delete_channel(id: $id, confirm: true) { total_deleted_count has_blockers }
+              channels_delete(id: $id, confirm: true) { total_deleted_count has_blockers }
             }
             """,
             {"id": channel.sqid},
             user=admin,
         )
     )
+    if native_delete:
+        assert deleted["delete_channels_by_pk"]["id"] == str(channel.sqid)
+    else:
+        assert deleted["channels_delete"] == {"total_deleted_count": 8, "has_blockers": False}
     assert not Channel._base_manager.filter(pk=channel.pk).exists()
+    assert not Integration._base_manager.filter(pk=channel.pk).exists()
     assert not messaging_models.Message._base_manager.filter(channel_id=channel.pk).exists()
     assert not messaging_models.Thread._base_manager.filter(channel_id=channel.pk).exists()
 
 
-def test_delete_channel_denied_for_non_admin_reader(db: None) -> None:
+@pytest.mark.parametrize("native_delete", (False, True))
+def test_delete_channel_denied_for_non_admin_reader(db: None, native_delete: bool) -> None:
     """A non-admin who cannot write the channel cannot purge it; nothing is deleted."""
 
     admin = _platform_admin("chan-deny-admin")
@@ -3189,8 +3200,12 @@ def test_delete_channel_denied_for_non_admin_reader(db: None) -> None:
     result = execute_schema(
         schema,
         """
+        mutation Confirm($id: String!) {
+          delete_channels_by_pk(id: $id) { id }
+        }
+        """ if native_delete else """
         mutation Confirm($id: ID!) {
-          delete_channel(id: $id, confirm: true) { total_deleted_count }
+          channels_delete(id: $id, confirm: true) { total_deleted_count }
         }
         """,
         {"id": channel.sqid},
