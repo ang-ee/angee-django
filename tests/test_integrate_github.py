@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -17,6 +18,8 @@ import pytest
 from django.contrib.auth import get_user_model
 from rebac import system_context
 
+from angee.integrate.errors import is_transient_failure, safe_integration_failure
+from angee.integrate.http import JSON_MAX_BYTES
 from angee.integrate.testing.http import mock_transport
 from angee.integrate_github import backend as gh
 from tests.conftest import Credential, OAuthClient, VcsBridge
@@ -109,8 +112,51 @@ def test_ls_tree_filters_by_path_and_rejects_truncation() -> None:
         entries = gh.GitHubBackend(_integration()).ls_tree(repository, ref="main", path="templates", recursive=True)
         assert {entry.path for entry in entries} == {"templates/dev/copier.yml", "templates/dev/README.md"}
         tree = {"tree": [], "truncated": True}
-        with pytest.raises(gh.GitHubApiError):
+        with pytest.raises(gh.GitHubApiError) as refused:
             gh.GitHubBackend(_integration()).ls_tree(repository, ref="main", path="templates", recursive=True)
+    # The backend's own refusals reach the operator in its words.
+    assert "is truncated" in safe_integration_failure(refused.value).message
+
+
+@pytest.mark.parametrize(("answer", "transient", "wait", "message"), [
+    pytest.param(
+        httpx2.Response(403, json={"message": "vendor text"}), False, None, "GitHub refused the request (HTTP 403).",
+        id="a-refusal-is-an-integration-error-in-the-backends-words",
+    ),
+    pytest.param(
+        httpx2.Response(503, headers={"Retry-After": "30"}), True, timedelta(seconds=30),
+        "GitHub is temporarily unavailable (HTTP 503).", id="an-outage-is-transient-and-waits",
+    ),
+    pytest.param(
+        httpx2.Response(429, headers={"Retry-After": "30"}), True, timedelta(seconds=30),
+        "GitHub is rate limiting requests (HTTP 429).", id="a-rate-limit-is-transient-and-waits",
+    ),
+    pytest.param(httpx2.ReadTimeout("slow"), True, None, "GitHub could not be reached.", id="a-transport-failure"),
+    pytest.param(
+        httpx2.Response(200, text="not json"), False, None, "GitHub returned an unreadable response.",
+        id="an-unreadable-answer-is-permanent",
+    ),
+    pytest.param(
+        httpx2.Response(200, json={"pad": "x" * JSON_MAX_BYTES}), False, None, "GitHub returned an oversized response.",
+        id="json-answers-are-capped",
+    ),
+])
+def test_github_refusals_are_integration_errors_classified_by_the_shared_rule(
+    answer: httpx2.Response | Exception, transient: bool, wait: timedelta | None, message: str,
+) -> None:
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    with mock_transport(respond) as requests, pytest.raises(gh.GitHubApiError) as refused:
+        gh.GitHubBackend(_integration()).get_repo("acme/widgets")
+
+    error = refused.value
+    assert (is_transient_failure(error), getattr(error, "retry_after", None)) == (transient, wait)
+    assert safe_integration_failure(error).message == message
+    # A capped answer is asked for unencoded.
+    assert requests[0].headers["accept-encoding"] == "identity"
 
 
 def test_cat_file_decodes_base64_and_404_is_filenotfound():

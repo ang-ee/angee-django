@@ -86,6 +86,22 @@ live in code docstrings.
   `parties.Address`. The permission is schema revision 23: `rebac sync` after
   compose.
 
+- `angee.integrate.http` owns a vendor's typed JSON request
+  (`HttpClient.request_model`) and one rule for a refused answer
+  (`HttpRefusal`): a transport failure, a 429 or a 5xx is transient and waits
+  for `Retry-After`; an oversized or unreadable answer is permanent, and one
+  record's oversized answer is that record's refusal. `HttpRefusal.as_error`
+  builds the vendor's `IntegrationError`, and a refusal's `cause` tells a
+  request not sent from one whose outcome is uncertain. Notion, the Google
+  client (Drive and Calendar), ICS, GitHub and OAuth's JSON reads (discovery,
+  userinfo, JWKS) moved onto it, and `HttpClient.get_json` is removed. GitHub's
+  refusals are now `IntegrationError`s, a 429 or 5xx transient; OIDC discovery
+  keeps a provider's 5xx or 429 transient instead of a permanent configuration
+  error; Google's oversized and unreadable answers are no longer retried; a
+  Notion page over the cap is quarantined instead of stalling its stream.
+  Capped JSON requests, GitHub's and OAuth's included, ask for an unencoded
+  answer, and `is_transient_status` reads only 500–599 as server errors.
+
 - Addons require django-compose 0.1.0.dev13, whose snapshot digest covers each
   addon's resolved path. A host that changes its sync from `--no-editable` to
   editable, or moves a source checkout, now recomposes on `compose --if-stale`;

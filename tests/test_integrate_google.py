@@ -16,6 +16,8 @@ from django.db.models.fields import NOT_PROVIDED
 from rebac import system_context
 
 from angee.iam_integrate_oidc import identity
+from angee.integrate.errors import RequestNotSentError
+from angee.integrate.http import JSON_MAX_BYTES, HttpRefusal
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import OAuthFlowError
@@ -279,7 +281,7 @@ def test_the_google_transport_names_account_refusals_and_asks_for_the_clients_sc
     with mock_transport(lambda request: next(answers)) as requests:
         api = GoogleApi(key, service="Google Calendar", grant="Calendar", scopes=("calendar.events",))
         url = "https://www.googleapis.com/calendar/v3/users/me/calendarList"
-        refusals = [api.refusal(api.send("GET", url)) for _answer in range(4)]
+        refusals = [api.account_error(HttpRefusal.of(api.send("GET", url))) for _answer in range(4)]
         own = api.send("GET", url)
 
     rate, grant, outage, rejected = refusals
@@ -290,6 +292,49 @@ def test_the_google_transport_names_account_refusals_and_asks_for_the_clients_sc
     assert outage is not None and outage.transient
     # A key that cannot refresh is not retried: the 401 asks for a reconnect at once.
     assert rejected is not None and "reconnect the Google account" in str(rejected) and len(requests) == 5
-    assert api.refusal(own) is None
+    assert api.account_error(HttpRefusal.of(own)) is None
     with pytest.raises(GoogleApiError, match="Google Calendar refused the request"):
         api.raise_for_status(own)
+
+
+@pytest.mark.parametrize(("answer", "transient", "wait", "message"), [
+    pytest.param(
+        httpx2.Response(200, content=b" " * (JSON_MAX_BYTES + 1)), False, None,
+        "Google Calendar returned an oversized response.", id="an-oversized-answer-is-permanent",
+    ),
+    pytest.param(
+        httpx2.Response(200, text="not json"), False, None,
+        "Google Calendar returned an unreadable response.", id="an-unreadable-answer-is-permanent",
+    ),
+    pytest.param(
+        httpx2.Response(200, json=["not", "an", "object"]), False, None,
+        "Google Calendar returned an unreadable response.", id="an-answer-that-is-not-an-object-is-permanent",
+    ),
+    pytest.param(
+        RequestNotSentError(), True, None, "Google Calendar could not be reached.",
+        id="a-request-not-sent-is-the-apis-transient-refusal",
+    ),
+    pytest.param(
+        httpx2.Response(503, headers={"Retry-After": "30"}), True, timedelta(seconds=30),
+        "Google Calendar is temporarily unavailable (HTTP 503).", id="an-outage-waits-for-its-retry-after",
+    ),
+    pytest.param(
+        httpx2.Response(400), False, None, "Google Calendar refused the request (HTTP 400).",
+        id="the-requests-own-refusal-names-its-status",
+    ),
+])
+def test_the_google_transport_classifies_each_refusal_by_the_shared_rule(
+    answer: httpx2.Response | Exception, transient: bool, wait: timedelta | None, message: str,
+) -> None:
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    api = GoogleApi(_MintingKey(), service="Google Calendar", grant="Calendar")
+    with mock_transport(respond), pytest.raises(GoogleApiError) as refused:
+        response = api.send("GET", "https://www.googleapis.com/calendar/v3/users/me/calendarList")
+        api.raise_for_status(response)
+        api.json(response)
+
+    assert (refused.value.transient, refused.value.retry_after, str(refused.value)) == (transient, wait, message)

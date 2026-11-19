@@ -118,14 +118,21 @@ class NotionSnapshot(BaseModel):
     node: NotionNode
     content: NotionMarkdown | None = None
     unavailable: bool = False
+    oversized: bool = Field(default=False, exclude_if=lambda value: not value)
+    """Notion answered this page's content over the byte cap; left out of an observation without it."""
 
     @property
     def failure(self) -> SemanticError | None:
-        """Incomplete or inaccessible observations must never replace a good body."""
+        """Incomplete, inaccessible or oversized observations must never replace a good body."""
         if self.unavailable:
             return SemanticError(
                 "notion_page_unavailable",
                 details={"message": "Notion could not return this page. Check that it is shared with the connection."},
+            )
+        if self.oversized:
+            return SemanticError(
+                "notion_page_oversized",
+                details={"message": "Notion returned more content for this page than one sync reads."},
             )
         if self.content is not None and (self.content.truncated or self.content.unknown_block_ids):
             return SemanticError(
@@ -149,21 +156,26 @@ class NotionCursor(BaseModel):
     after: str = ""
 
 
-class NotionResponseError(IntegrationError):
-    """A Notion refusal composed from the facts of its answer (``status``, ``None`` without one), never its body."""
+_PUBLIC_MESSAGES = {
+    401: "Notion rejected this credential. Reconnect Notion or check that the API token has not been revoked.",
+    403: "The Notion connection needs read-content capability and access to the source pages.",
+    404: "The Notion page is unavailable or is no longer shared with this connection.",
+}
+"""The statuses Notion's error words itself; every other refusal takes integrate's public message."""
 
-    def __init__(self, refusal: HttpRefusal) -> None:
-        self.status = refusal.status
-        messages: dict[int | None, str] = {
-            401: "Notion rejected this credential. Reconnect Notion or check that the API token has not been revoked.",
-            403: "The Notion connection needs read-content capability and access to the source pages.",
-            404: "The Notion page is unavailable or is no longer shared with this connection.",
-        }
-        super().__init__(
-            messages.get(refusal.status) or refusal.message("Notion"),
-            transient=refusal.transient,
-            retry_after=refusal.retry_after,
-        )
+
+class NotionResponseError(IntegrationError):
+    """A Notion refusal whose ``refusal`` keeps the facts of its answer; its message never repeats the answer."""
+
+    refusal: HttpRefusal
+
+    @classmethod
+    def of(cls, refusal: HttpRefusal) -> NotionResponseError:
+        """Return Notion's error for ``refusal``, in Notion's words for a refused credential, grant or page."""
+
+        error = refusal.as_error(cls, "Notion", public_message=_PUBLIC_MESSAGES.get(refusal.status or 0))
+        error.refusal = refusal
+        return error
 
 
 class NotionBackend(BridgeImpl, HttpClientMixin):
@@ -197,9 +209,9 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
             "GET" if payload is None else "POST",
             f"https://api.notion.com/v1/{path}",
             headers={**credential.auth_headers(), "Notion-Version": "2026-03-11"},
-            payload=payload,
+            json=payload,
             model=model,
-            error=NotionResponseError,
+            error=NotionResponseError.of,
         )
 
     def probe(self, credential: Any) -> NotionUser:
@@ -248,9 +260,9 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
             try:
                 listing = self._request(NotionListing, path, payload=payload)
             except NotionResponseError as error:
-                if error.status == 400 and cursor.start_cursor:
+                if error.refusal.status == 400 and cursor.start_cursor:
                     raise CursorInvalid() from error
-                if source is None or error.status not in {403, 404}:
+                if source is None or error.refusal.status not in {403, 404}:
                     raise
                 source_snapshot = NotionSnapshot.model_validate(source.source_payload)
                 snapshots.append(NotionSnapshot(node=source_snapshot.node, unavailable=True))
@@ -291,7 +303,10 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
             try:
                 content = self._request(NotionMarkdown, f"pages/{node.id}/markdown")
             except NotionResponseError as error:
-                if error.status not in {403, 404}:
+                # An oversized page, like an unavailable one, is that page's refusal: its neighbours continue.
+                if error.refusal.cause == "oversized":
+                    return NotionSnapshot(node=node, oversized=True)
+                if error.refusal.status not in {403, 404}:
                     raise
                 return NotionSnapshot(node=node, unavailable=True)
             if content.id != node.id:
@@ -308,7 +323,7 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
                 path = "pages" if node.object == "page" else "data_sources"
                 node = self._request(NotionNode, f"{path}/{node.id}")
             except NotionResponseError as error:
-                if error.status not in {403, 404}:
+                if error.refusal.status not in {403, 404}:
                     raise
                 yield from self._changes(stream, [NotionSnapshot(node=previous.node, unavailable=True)])
                 continue

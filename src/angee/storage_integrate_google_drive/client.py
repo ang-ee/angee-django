@@ -11,7 +11,7 @@ Refusals keep their reach. One file's refusal (not found, not downloadable, a
 broken download) is an ``OSError`` (:class:`DriveFileError`,
 ``FileNotFoundError``), which a sync counts against that file and moves past.
 An account-wide refusal is a :class:`GoogleDriveError`, as the transport names it
-(``GoogleApi.refusal``).
+(``GoogleApi.account_error``).
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from urllib.parse import quote, urlencode
 
 import httpx2
 
+from angee.integrate.http import HttpRefusal
 from angee.integrate_google.api import GoogleApi, GoogleApiError, bounded_body, error_reason
 
 DRIVE_API = "https://www.googleapis.com/drive/v3"
@@ -41,9 +42,13 @@ _FILE_FIELDS = (
 _LIST_FIELDS = f"nextPageToken,files({_FILE_FIELDS})"
 _PAGE_SIZE = 1000
 _MEDIA_CHUNK_BYTES = 256 * 1024
-_FILE_REFUSALS = frozenset(
-    {"cannotDownloadFile", "cannotDownloadAbusiveFile", "downloadQuotaExceeded", "insufficientFilePermissions"}
-)
+_FILE_REASONS = {
+    "cannotDownloadFile": "Google Drive does not allow downloading this file.",
+    "cannotDownloadAbusiveFile": "Google Drive flagged this file as abusive and does not allow downloading it.",
+    "downloadQuotaExceeded": "Google Drive has exhausted this file's download quota.",
+    "insufficientFilePermissions": "This Google account may not read this file.",
+}
+"""The reasons that refuse one file, each in this addon's words; any other file refusal names only its status."""
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
@@ -206,19 +211,21 @@ class GoogleDriveClient:
         """Map a Drive refusal onto the error of its reach.
 
         ``per_file`` marks a request about one file, whose refusals other than
-        the account-wide ones (``GoogleApi.refusal``) are that file's.
+        the account-wide ones (``GoogleApi.account_error``) are that file's.
         """
 
         if response.is_success:
             return
         if response.status_code == 404:
             raise FileNotFoundError("Google Drive item not found.")
-        account = self.api.refusal(response, body)
+        refusal = HttpRefusal.of(response, body)
+        account = self.api.account_error(refusal)
         if account is not None:
             raise account
-        if response.status_code == 416 or error_reason(body) in _FILE_REFUSALS or per_file:
-            raise DriveFileError(f"Google Drive refused this file ({error_reason(body) or response.status_code}).")
-        self.api.raise_for_status(response, body)
+        reason = error_reason(refusal.body)
+        if refusal.status == 416 or reason in _FILE_REASONS or per_file:
+            raise DriveFileError(_FILE_REASONS.get(reason, f"Google Drive refused this file (HTTP {refusal.status})."))
+        raise refusal.as_error(self.api.error, self.api.service)
 
 
 class _MediaStream(io.RawIOBase):

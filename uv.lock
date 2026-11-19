@@ -950,11 +950,15 @@ name = "angee-integrate-github"
 version = "3.0.0"
 source = { editable = "src/angee/integrate_github" }
 dependencies = [
+    { name = "angee-integrate" },
     { name = "angee-integrate-vcs" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "angee-integrate-vcs", editable = "src/angee/integrate_vcs" }]
+requires-dist = [
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-integrate-vcs", editable = "src/angee/integrate_vcs" },
+]
 
 [[package]]
 name = "angee-integrate-google"

@@ -326,10 +326,7 @@ class IcsCalendarBackend(CalendarBackend):
             raise IcsError("The calendar feed could not be read within its size, time and redirect limits.")
         if (result.status_code == 304 and len(headers) > 1) or 200 <= result.status_code < 300:
             return result
-        refusal = HttpRefusal.of(result)
-        raise IcsError(
-            refusal.message("The calendar feed"), transient=refusal.transient, retry_after=refusal.retry_after
-        )
+        raise HttpRefusal.of(result).as_error(IcsError, "The calendar feed")
 
     # --- snapshot ---
 
