@@ -968,7 +968,10 @@ def test_positive_relation_matches_seek_the_raw_key(relation_grouping_case: Any)
         with CaptureQueriesContext(connection) as queries:
             data = result_data(execute_schema(case.schema, document, {"where": where}, user=case.alice))
         counts = {row["key"]["metric_target_id"]: row["aggregate"]["count"] for row in data["group_parents_groups"]}
-        return counts, [query["sql"] for query in queries if "GROUP BY" in query["sql"]]
+        # The document's own grouping statement: django-zed-rebac 0.35.2 counts an actor's grant
+        # profile by key, so its statement groups too, over no table of this test.
+        table = f'"{GroupParent._meta.db_table}"'
+        return counts, [query["sql"] for query in queries if "GROUP BY" in query["sql"] and table in query["sql"]]
 
     counts, sql = grouped({"target": {"_eq": alpha}})
     assert counts == {alpha: 2}
