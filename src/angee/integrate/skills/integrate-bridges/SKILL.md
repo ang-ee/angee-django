@@ -148,9 +148,11 @@ source addon contributes one adapter class, its registry key and its tests. Refe
    (`ImapError` in `src/angee/messaging_integrate_imap/backend.py`); pass `transient=`/`retry_after=` for throttling.
    Over HTTP, `HttpRefusal` (`src/angee/integrate/http.py`) classifies every failed answer once: send with
    `self.http.request_model(method, url, model=..., error=lambda refusal: refusal.as_error(VendorError, "Vendor"))`.
-   The vendor words only its own cases before that hand-off (`public_message=`, or a status it adds as transient
-   built by hand), never a status table of its own; one record's oversized or unreadable answer is that
-   record's refusal.
+   The vendor states only its own cases, never a status table of its own: through that hand-off
+   (`as_error(error, service, *, public_message=None, retry_after=None)`: its words, and a wait its error body names,
+   used instead of the answer's `Retry-After`), or by building a status it adds as transient by hand. A refused
+   answer keeps its status even when its body is over the cap or cannot be decoded; one record's oversized or
+   unreadable answer is that record's refusal.
    Record-level refusals raise `SemanticError` (quarantined, page continues); infrastructure errors propagate
    (page rolls back) (`BridgeImpl.apply_record` in `src/angee/integrate/impl.py`). **Owner rule:** [Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts)
    "An integration failure reaches the operator only as an IntegrationError".

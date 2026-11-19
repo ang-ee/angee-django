@@ -373,24 +373,44 @@ def test_capped_request_requires_positive_limit(max_bytes: int) -> None:
         HttpClient().request("REPORT", URL, max_bytes=max_bytes)
 
 
+class _Chunks(httpx2.SyncByteStream):
+    """A 320-byte body in 16-byte chunks that counts the chunks read and records its closing."""
+
+    def __init__(self) -> None:
+        self.reads, self.closed = 0, False
+
+    def __iter__(self) -> Iterator[bytes]:
+        for _index in range(20):
+            self.reads += 1
+            yield b"x" * 16
+
+    def close(self) -> None:
+        self.closed = True
+
+
 @pytest.mark.parametrize("follow_redirects", [False, True])
-def test_capped_request_refuses_oversized_redirect_before_next_hop(
+def test_capped_request_follows_a_redirect_without_reading_its_body_past_the_cap(
     follow_redirects: bool,
 ) -> None:
-    requests: list[httpx2.Request] = []
+    """A redirect hop's body over the cap is absent, as a refusing answer's is: unread past the cap, the hop taken."""
+
+    hop = _Chunks()
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        requests.append(request)
-        return httpx2.Response(302, headers={"Location": "/target"}, stream=httpx2.ByteStream(b"oversized"))
+        if request.url.path == "/target":
+            return httpx2.Response(200, content=b"ok")
+        return httpx2.Response(302, headers={"Location": "/target"}, stream=hop)
 
-    with mock_transport(handler):
-        with pytest.raises(ResponseTooLargeError, match="byte limit"):
-            HttpClient().request(
-                "REPORT", URL, max_bytes=5,
-                follow_redirects=follow_redirects,
-                same_origin_redirects=0 if follow_redirects else 3,
-            )
-        assert len(requests) == 1
+    with mock_transport(handler) as requests:
+        response = HttpClient().request(
+            "REPORT", URL, max_bytes=5,
+            follow_redirects=follow_redirects,
+            same_origin_redirects=0 if follow_redirects else 3,
+        )
+
+    assert (response.status_code, response.content) == (200, b"ok")
+    assert [request.url.path for request in requests] == ["/path", "/target"]
+    assert hop.closed and hop.reads < 20
 
 
 def test_redirect_to_an_unsafe_host_is_rejected_at_the_hop() -> None:
@@ -750,11 +770,125 @@ def test_the_typed_request_raises_the_callers_error_from_the_facts_of_each_refus
         assert facts.failure is answer
 
 
+def _answer_with(status: int, body: str, headers: dict[str, str] | None = None) -> tuple[Any, _Chunks]:
+    """Answer ``status`` with a body httpx2 cannot decode (``"undecodable"``), or with :class:`_Chunks`.
+
+    The chunks are over the tests' 64-byte cap.
+    """
+
+    chunks = _Chunks()
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        del request
+        if body == "undecodable":
+            return httpx2.Response(
+                status, headers={"Content-Encoding": "gzip", **(headers or {})}, stream=httpx2.ByteStream(b"not gzip"),
+            )
+        return httpx2.Response(status, headers=headers, stream=chunks)
+
+    return respond, chunks
+
+
+@pytest.mark.parametrize("body", ["undecodable", "over-the-cap"])
+@pytest.mark.parametrize(
+    ("status", "headers", "transient", "wait", "message"),
+    [
+        pytest.param(
+            503, {"Retry-After": "30"}, True, timedelta(seconds=30),
+            "Example API is temporarily unavailable (HTTP 503).", id="an-outage-is-transient-and-waits",
+        ),
+        pytest.param(
+            429, {"Retry-After": "30"}, True, timedelta(seconds=30),
+            "Example API is rate limiting requests (HTTP 429).", id="a-rate-limit-is-transient-and-waits",
+        ),
+        pytest.param(404, {}, False, None, "Example API refused the request (HTTP 404).", id="a-refusal-is-permanent"),
+    ],
+)
+def test_a_refusing_status_decides_before_its_body_does(
+    status: int, headers: dict[str, str], transient: bool, wait: timedelta | None, message: str, body: str,
+) -> None:
+    """The status is the stronger fact: the refusal keeps it and its wait, and a body httpx2 cannot decode, or one
+    over the cap, is absent. Reading still stops at the cap.
+
+    Only a success's such body is an unreadable or oversized answer (``a-body-httpx2-cannot-decode`` and
+    ``oversized-is-permanent`` above).
+    """
+
+    respond, chunks = _answer_with(status, body, headers)
+    with mock_transport(respond), pytest.raises(_VendorError) as refused:
+        HttpClient().request_model("GET", URL, model=_Page, error=_vendor_error, max_bytes=64)
+
+    facts = refused.value.refusal
+    assert (facts.cause, facts.status, facts.body, facts.failure) == ("status", status, None, None)
+    assert (refused.value.transient, refused.value.retry_after, str(refused.value)) == (transient, wait, message)
+    if body == "over-the-cap":
+        assert chunks.closed and chunks.reads < 20
+
+
+@pytest.mark.parametrize("max_bytes", [64, None], ids=["capped", "uncapped"])
+def test_a_raw_request_returns_a_refusing_answer_whose_body_httpx2_cannot_decode(max_bytes: int | None) -> None:
+    """Capped or not, with a factory or without, a refusing answer comes back with no body.
+
+    A success's undecodable body is still the factory's unreadable refusal.
+    """
+
+    with mock_transport(_answer_with(503, "undecodable")[0]):
+        response = HttpClient().request("GET", URL, max_bytes=max_bytes)
+    with mock_transport(_answer_with(200, "undecodable")[0]), pytest.raises(_VendorError) as unreadable:
+        HttpClient().request("GET", URL, max_bytes=max_bytes, error=_vendor_error)
+
+    assert (response.status_code, response.content) == (503, b"")
+    assert unreadable.value.refusal.cause == "unreadable"
+    assert isinstance(unreadable.value.__cause__, httpx2.DecodingError)
+
+
+@pytest.mark.parametrize("declared", [False, True], ids=["streamed", "declared-length"])
+def test_a_raw_request_returns_a_refusing_answer_over_the_cap_without_reading_past_it(declared: bool) -> None:
+    """A 502 whose error page is over a small cap is a 502 with no body, retried like any other 502.
+
+    A 200 over the cap is still oversized. Neither body is read past the cap; a declared length is not read at all.
+    """
+
+    headers = {"Content-Length": "320"} if declared else {}
+    gateway, page = _answer_with(502, "over-the-cap", headers)
+    with mock_transport(gateway):
+        response = HttpClient().request("GET", URL, max_bytes=64, error=_vendor_error)
+    with mock_transport(_answer_with(200, "over-the-cap", headers)[0]), pytest.raises(_VendorError) as oversized:
+        HttpClient().request("GET", URL, max_bytes=64, error=_vendor_error)
+
+    assert (response.status_code, response.content) == (502, b"")
+    assert HttpRefusal.of(response).transient
+    assert page.closed and page.reads < (1 if declared else 20)
+    assert oversized.value.refusal.cause == "oversized"
+    assert isinstance(oversized.value.__cause__, ResponseTooLargeError)
+
+
 def test_a_refusal_has_a_status_or_a_failure() -> None:
     with pytest.raises(ValueError):
         HttpRefusal()
     with pytest.raises(ValueError):
         HttpRefusal(status=503, failure=RequestNotSentError())
+
+
+@pytest.mark.parametrize(
+    ("header", "own", "wait"),
+    [
+        pytest.param(None, timedelta(minutes=1), timedelta(minutes=1), id="a-wait-only-the-vendor-states"),
+        pytest.param("30", timedelta(minutes=1), timedelta(minutes=1), id="the-vendors-own-wait-when-given"),
+        pytest.param("30", None, timedelta(seconds=30), id="else-the-answers-retry-after"),
+    ],
+)
+def test_the_hand_off_takes_the_vendors_own_wait_and_the_refusal_keeps_the_answers(
+    header: str | None, own: timedelta | None, wait: timedelta,
+) -> None:
+    """A vendor whose error body names its wait states it at the hand-off; the refusal claims no header it lacked."""
+
+    refusal = HttpRefusal.of(httpx2.Response(429, headers={} if header is None else {"Retry-After": header}))
+    error = refusal.as_error(_VendorError, "Example API", retry_after=own)
+
+    assert (error.transient, error.retry_after) == (True, wait)
+    assert str(error) == "Example API is rate limiting requests (HTTP 429)."
+    assert refusal.retry_after == (None if header is None else timedelta(seconds=30))
 
 
 def test_the_typed_request_sends_native_json_and_returns_the_validated_model_or_the_parsed_json() -> None:
@@ -779,8 +913,11 @@ def test_a_request_with_an_error_factory_returns_any_status_and_refuses_what_it_
 
     with mock_transport(lambda request: httpx2.Response(404, content=b"xy")):
         assert HttpClient().request("GET", URL, max_bytes=2, error=_vendor_error).status_code == 404
-        with pytest.raises(_VendorError) as oversized:
-            HttpClient().request("GET", URL, max_bytes=1, error=_vendor_error)
+        over_the_cap = HttpClient().request("GET", URL, max_bytes=1, error=_vendor_error)
+    with mock_transport(lambda request: httpx2.Response(200, content=b"xy")), pytest.raises(_VendorError) as oversized:
+        HttpClient().request("GET", URL, max_bytes=1, error=_vendor_error)
+    # Over the cap a refusing status is still the answer, with no body; only a success is oversized.
+    assert (over_the_cap.status_code, over_the_cap.content) == (404, b"")
     causes = {}
     for failure in (httpx2.ReadTimeout("slow"), RequestNotSentError()):
         with mock_transport(_answer(failure)), pytest.raises(_VendorError) as refused:
