@@ -12,8 +12,13 @@ from rebac import actor_context, system_context, to_subject_ref
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
 from angee.graphql.testing import capture_broadcasts
-from angee.messaging.testing.models import Handle, Party, Person
-from tests.conftest import create_user
+from angee.integrate.states import StreamKind
+from angee.integrate.testing.models import RecordLink
+from angee.messaging.backends import ManualChannelBackend, ParsedHandle
+from angee.messaging.testing.models import Channel, Handle, Organization, Party, Person, RelationshipKind
+from angee.parties.connections import ParsedConnection
+from angee.provenance.statements import SourceKind
+from tests.conftest import create_user, current_stream, make_integration
 
 
 def _same_as_pair(owner: Any) -> set[Any]:
@@ -190,6 +195,101 @@ def test_links_parties_infer_from_a_shared_name_pair_nobody(db: None) -> None:
 
     assert _reconcile() == 0
     assert _pairs() == []
+
+
+def test_two_people_an_export_records_by_name_alone_are_not_paired(
+    db: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two users' friends of one name share a name-only handle; a name identifies no account."""
+
+    del db
+    monkeypatch.setattr(ManualChannelBackend, "source_kind", SourceKind.IMPORT)
+    friend = ParsedConnection(handle=ParsedHandle(platform="facebook", value="Ada Example", display_name="Ada Example"))
+    with system_context(reason="same_as name-only friends"):
+        for slug in ("acquaintance", "employee"):
+            RelationshipKind.objects.get_or_create(slug=slug, defaults={"name": slug.title()})
+        for name in ("first-exporter", "second-exporter"):
+            user = create_user(name)
+            channel = make_integration(name, model=Channel, backend_class="manual")
+            stream = current_stream(channel, "connections", kind=StreamKind.RECORD_REPLICA)
+            Party.objects.ingest_connections(
+                [(friend, RecordLink.objects.observe(stream, "1"))],
+                created_by_id=user.pk,
+                asserted_by=channel.integration_ptr,
+            )
+        handle = Handle._base_manager.get(platform="facebook", value="Ada Example")
+        assert Party.statements.model._base_manager.filter(handle=handle, confidence=0.4).count() == 2
+
+    assert _reconcile() == 0
+    assert _pairs() == []
+
+
+def test_a_rule_the_link_allowlist_does_not_name_links_nobody(db: None) -> None:
+    """Only a source stating its own record links; any other rule's statement of the address is a guess."""
+
+    del db
+    owner = create_user("same-as-unnamed-rule")
+    handle = _address(owner)
+    _holder(owner, handle)
+    with system_context(reason="same_as unnamed rule"):
+        guessed = Party._base_manager.create(display_name="A. Example", created_by=owner)
+        Party.objects.assert_handle(guessed, handle, asserted_by=Party.objects.rule_source("same_as"), confidence=0.4)
+
+    assert _reconcile() == 0
+    assert _pairs() == []
+
+
+def _person(owner: Any, name: str, *, user: Any = None) -> Any:
+    with system_context(reason="same_as person"):
+        if user is not None:
+            return Person.objects.for_user(user)
+        return Person._base_manager.create(display_name=name, created_by=owner)
+
+
+def test_a_person_and_an_organization_are_never_paired(db: None) -> None:
+    del db
+    owner = create_user("same-as-person-organization")
+    handle = _address(owner, "office@example.com")
+    with system_context(reason="same_as organization"):
+        person = _person(owner, "Ada Example")
+        Party.objects.assert_handle(person, handle, asserted_by=owner)
+        organization = Organization._base_manager.create(display_name="Example Ltd", created_by=owner)
+        Party.objects.propose_claimed_handle_as_system(organization, handle, evidence=handle, reason="tests.claim")
+
+    assert _reconcile() == 0
+    assert _pairs() == []
+
+
+def test_two_account_persons_are_never_paired(db: None) -> None:
+    """Each account's own person is that account's identity: two of them are never one person."""
+
+    del db
+    ada, bob = create_user("ada-account"), create_user("bob-account")
+    handle = _address(ada, "family@example.com")
+    first, second = (_person(user, "", user=user) for user in (ada, bob))
+    with system_context(reason="same_as account persons"):
+        Party.objects.assert_handle(first, handle, asserted_by=ada)
+        Party.objects.propose_claimed_handle_as_system(second, handle, evidence=handle, reason="tests.claim")
+
+    assert _reconcile() == 0
+    assert _pairs() == []
+
+
+def test_a_contested_control_claim_links_nobody(db: None) -> None:
+    """An account claiming an address another account controls records a claim that pairs it with no one."""
+
+    del db
+    controller, contender = create_user("same-as-controller"), create_user("same-as-contender")
+    Handle.objects.claim_control(controller, platform="email", value="shared@example.com")
+    Handle.objects.claim_control(contender, platform="email", value="shared@example.com")
+    with system_context(reason="same_as contested claim"):
+        handle = Handle._base_manager.get(value="shared@example.com")
+        contact = _person(controller, "Ada Example")
+        Party.objects.propose_claimed_handle_as_system(contact, handle, evidence=handle, reason="tests.claim")
+        holder = Person.objects.for_user(controller)
+
+    assert _reconcile() == 1
+    assert _pairs() == [({holder.pk, contact.pk}, (handle,))]
 
 
 def test_a_link_a_person_dismissed_pairs_nobody(db: None) -> None:

@@ -997,13 +997,21 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
         return apps.get_model("parties", "Party").statements.handles()
 
-    SUGGESTER_RULES: ClassVar[tuple[str, ...]] = ("normalized_twin", "email_domain", "display_name", "signature_phone")
-    """Parties' rules that infer a handle link from other evidence, by :meth:`rule_source` key.
+    LINKING_SOURCE_KINDS: ClassVar[tuple[SourceKind, ...]] = (
+        SourceKind.PERSON,
+        SourceKind.SYSTEM_OF_RECORD,
+        SourceKind.DIRECTORY,
+        SourceKind.IMPORT,
+    )
+    """Kinds of source whose handle statement links a party to an address: each states its own record."""
 
-    A twin spelling (:meth:`suggest_for`), an organization's mail domain
-    (:meth:`suggest_for`), a shared full name and a signature
-    (:meth:`reconcile_suggestions`): their links are guesses, never a source's
-    statement about its own record, so they link nobody to an address
+    LINKING_RULES: ClassVar[tuple[str, ...]] = ("source_sender", "stored_holder")
+    """Parties' rules, by :meth:`rule_source` key, whose handle statement links a party to an address.
+
+    A source's claim (:meth:`propose_claimed_handle_as_system`) and a holder found
+    on its row (:meth:`HandleManager.state_stored_holders`) state a record's own
+    address. Every other rule or extraction, parties' suggesters included, infers
+    a link from other evidence and links nobody until it is named here
     (:meth:`same_person_links`).
     """
 
@@ -1012,28 +1020,36 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         with system_context(reason="parties.rule"):
             return apps.get_model("provenance", "Rule").objects.get(key=f"parties.{key}")
 
+    @classmethod
+    def linking_rule_refs(cls) -> list[str]:
+        """The asserting references of :attr:`LINKING_RULES`, in one read."""
+
+        rules = apps.get_model("provenance", "Rule")._base_manager.filter(
+            key__in=[f"parties.{key}" for key in cls.LINKING_RULES]
+        )
+        return [str(to_subject_ref(rule)) for rule in rules.order_by("pk")]
+
     def same_person_links(self) -> Any:
         """Each link of a live party to an address, as ``(platform, normalized value, party id, handle id)``.
 
-        A party is linked to an address when it holds a handle row of that
-        normalized value, or when a source states that handle for it and the
-        statement stands (asserted, current, a value, not dismissed by a person),
-        whatever its confidence: an importer's claim, a directory's or an import's
-        statement, a person's own. A link one of parties' own
-        :attr:`SUGGESTER_RULES` inferred is no link. Live means neither trashed nor
-        merged away. Rows come ordered by address, then party and handle, so one
-        address's links are adjacent; a held and stated link repeats its row.
+        A link is a holding or a standing statement (asserted, current, a value, not
+        dismissed by a person), whatever its confidence, by a source that states its
+        own record: :attr:`LINKING_SOURCE_KINDS` or :attr:`LINKING_RULES`. A holding
+        is the applied statement that decides a handle's holder, whatever its
+        source, or a holder written onto its row with no statement behind it
+        (:meth:`HandleQuerySet.stored_holders`); a holder whose statements no longer
+        decide it is stale and links nothing. Only a handle that names one account
+        links (:meth:`~angee.parties.models.Handle.identifies_account`), and a
+        contested control claim (an account's person claiming an address another
+        account controls, :meth:`HandleManager.claim_control`) does not. Live means
+        neither trashed nor merged away. Rows come ordered by address, then party
+        and handle, so one address's links are adjacent.
         """
 
         handle_model = apps.get_model("parties", "Handle")
+        person_model = apps.get_model("parties", "Person")
         statements = self.handle_statements()
         stance = statements.model
-        suggesters = [
-            str(to_subject_ref(rule))
-            for rule in apps.get_model("provenance", "Rule")
-            ._base_manager.filter(key__in=[f"parties.{key}" for key in self.SUGGESTER_RULES])
-            .order_by("pk")
-        ]
         dismissed = statements.filter(
             subject_id=OuterRef("subject_id"),
             handle_id=OuterRef("handle_id"),
@@ -1041,10 +1057,19 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             rank=stance.StatementRank.PREFERRED,
             snak=stance.StatementSnak.NO_VALUE,
         )
+        contested = Q(handle__controller__isnull=False) & Exists(
+            person_model._base_manager.filter(pk=OuterRef("subject_id"), user__isnull=False).exclude(
+                user_id=OuterRef("handle__controller_id")
+            )
+        )
+        stated = Q(source_kind__in=self.LINKING_SOURCE_KINDS) | Q(asserted_by__in=self.linking_rule_refs())
         columns = ("link_platform", "link_value", "link_party", "link_handle")
-        held = (
-            handle_model._base_manager.exclude(normalized_value="")
-            .filter(merged_into__isnull=True, party__is_trashed=False, party__merged_into__isnull=True)
+        bare = (
+            handle_model.objects.system_context(reason="parties.same_person_links")
+            .stored_holders()
+            .filter(handle_model.identifies_account_filter())
+            .exclude(normalized_value="")
+            .filter(party__is_trashed=False, party__merged_into__isnull=True)
             .annotate(
                 link_platform=F("platform"), link_value=F("normalized_value"), link_party=F("party_id"),
                 link_handle=F("pk"),
@@ -1052,8 +1077,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             .values_list(*columns)
             .order_by()
         )
-        stated = (
+        links = (
             statements.filter(
+                handle_model.identifies_account_filter("handle__"),
                 status=stance.StatementStatus.ASSERTED,
                 snak=stance.StatementSnak.VALUE,
                 handle__merged_into__isnull=True,
@@ -1061,8 +1087,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 subject__merged_into__isnull=True,
             )
             .exclude(handle__normalized_value="")
-            .exclude(asserted_by__in=suggesters)
-            .exclude(Exists(dismissed))
+            .filter(Q(applied=True, subject_id=F("handle__party_id")) | (stated & ~contested & ~Exists(dismissed)))
             .annotate(
                 link_platform=F("handle__platform"), link_value=F("handle__normalized_value"),
                 link_party=F("subject_id"), link_handle=F("handle_id"),
@@ -1070,16 +1095,48 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             .values_list(*columns)
             .order_by()
         )
-        return held.union(stated, all=True).order_by(*columns)
+        return bare.union(links, all=True).order_by(*columns)
+
+    @staticmethod
+    def party_kinds(party_ids: Iterable[Any]) -> tuple[dict[Any, Any], frozenset[Any]]:
+        """Read which parties are people, with each person's account, and which are organizations.
+
+        Returns ``({person id: user id or None}, organization ids)``; a party in
+        neither is of no concrete kind.
+        """
+
+        ids = sorted(set(party_ids))
+        people: dict[Any, Any] = {}
+        organizations: set[Any] = set()
+        for batch in by_key(apps.get_model("parties", "Person")._base_manager.all(), ids):
+            people.update(batch.values_list("pk", "user_id"))
+        for batch in by_key(apps.get_model("parties", "Organization")._base_manager.all(), ids):
+            organizations.update(batch.values_list("pk", flat=True))
+        return people, frozenset(organizations)
 
     def _same_person_candidates(self) -> Iterable[tuple[Any, Any, tuple[Any, ...]]]:
-        """Yield every two parties linked to one address, ordered, with the handle ids that link them."""
+        """Yield every two parties of one kind linked to one address, ordered, with the handle ids that link them.
 
+        A person is never paired with an organization, and two people who are each
+        an account's own person are never paired.
+        """
+
+        addresses: list[defaultdict[Any, dict[Any, None]]] = []
         for _address, rows in groupby(self.same_person_links().iterator(), key=lambda row: row[:2]):
             linked: defaultdict[Any, dict[Any, None]] = defaultdict(dict)
             for _platform, _value, party_id, handle_id in rows:
                 linked[party_id][handle_id] = None
+            if len(linked) > 1:
+                addresses.append(linked)
+        people, organizations = self.party_kinds(party_id for linked in addresses for party_id in linked)
+
+        def kind(party_id: Any) -> str:
+            return "person" if party_id in people else "organization" if party_id in organizations else ""
+
+        for linked in addresses:
             for left_id, right_id in combinations(sorted(linked), 2):
+                if kind(left_id) != kind(right_id) or (people.get(left_id) and people.get(right_id)):
+                    continue
                 yield left_id, right_id, tuple(dict.fromkeys((*linked[left_id], *linked[right_id])))
 
     def assert_handle(

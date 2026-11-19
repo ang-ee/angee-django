@@ -726,17 +726,37 @@ class Handle(
 
         return self.value
 
+    ACCOUNT_PLATFORMS: ClassVar[tuple[str, ...]] = ("email", "phone")
+    """Platforms whose value is itself an account's address: an email address, a phone number."""
+
+    @classmethod
+    def identifies_account(cls, platform: str, external_id: str = "") -> bool:
+        """Whether a handle names one account: an email address, a phone number or a platform id.
+
+        A value on any other platform without a platform id is only a name (a
+        friend an export records by name), which many accounts share.
+        :meth:`identifies_account_filter` is the same rule over stored rows.
+        """
+
+        return bool(external_id) or platform in cls.ACCOUNT_PLATFORMS
+
+    @classmethod
+    def identifies_account_filter(cls, prefix: str = "") -> models.Q:
+        """The handle rows :meth:`identifies_account` admits, through the relation path ``prefix``."""
+
+        return models.Q(**{f"{prefix}platform__in": cls.ACCOUNT_PLATFORMS}) | ~models.Q(**{f"{prefix}external_id": ""})
+
     @classmethod
     def identified_connection(cls, parsed: ConnectionHandle) -> bool:
         """Whether a connection names its account by a real identifier, not by a display name only.
 
-        An email address, a phone number or a platform id identifies one account.
-        An adapter may override that inference with its typed confidence.
+        :meth:`identifies_account` decides, unless the adapter overrides that
+        inference with its typed confidence.
         """
 
         if parsed.confidence is not None:
             return parsed.confidence >= 1.0
-        return bool(parsed.external_id) or parsed.platform in {cls.Platform.EMAIL, cls.Platform.PHONE}
+        return cls.identifies_account(parsed.platform, parsed.external_id)
 
     @classmethod
     def normalize_value(cls, platform: str, value: str) -> str:

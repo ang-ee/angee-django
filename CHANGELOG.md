@@ -20,16 +20,22 @@ live in code docstrings.
   or a keep-separate decision; it never merges. The job now states its own pairs
   through it.
 
-- Parties proposes a same-person pair for every two live parties linked to one
-  address (`PartyManager.reconcile_same_as`, over `same_person_links`). A party
-  is linked when it holds a handle of that normalized value or when a source's
-  standing statement names one for it, a claim below review confidence
-  included; before, only two holders of two spellings were proposed, so one
-  address claimed by a second source's party was never proposed. Links parties'
-  own suggester rules infer (`PartyManager.SUGGESTER_RULES`: a shared name, a
-  mail domain, a twin spelling, a signature) link nobody. The job now reads every
-  link in one pass and the existing pairs in one query, and withdraws exactly the
-  rule's pairs no link supports.
+- Parties proposes a same-person pair for every two live parties of one kind
+  linked to one address (`PartyManager.reconcile_same_as`, over
+  `same_person_links`). A party is linked when it holds a handle of that
+  normalized value or when a source that states its own record names one for it
+  in a standing statement, a claim below review confidence included; before,
+  only two holders of two spellings were proposed, so one address claimed by a
+  second source's party was never proposed. The linking sources are an
+  allowlist: `PartyManager.LINKING_SOURCE_KINDS` (a person, a system of record,
+  a directory, an import) and `PartyManager.LINKING_RULES` (a source's claim, a
+  holder found on its row); any other rule or extraction, parties' suggesters
+  included, links nobody until it is named. Only a handle that names one account
+  links (`Handle.identifies_account`: an email address, a phone number, or a
+  platform id), so two friends an export records by one name are never one
+  person. A person is never paired with an organization, nor two accounts' own
+  persons with each other, and a contested control claim links nothing. The job
+  withdraws exactly the rule's pairs no link supports.
 
 - Parties: a handle's holder is always the projection of a statement. A holder
   written onto the row with no statement behind it lost its address the moment

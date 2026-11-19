@@ -71,11 +71,18 @@ Sources gain no private reads. Imports supply their
 Integration and observed links; parties binds targets in the application transaction.
 
 Identity matching (`PartyManager.reconcile_same_as`) writes normal RULE same_as
-statements on the ordered Party pair for every two live parties linked to one
-address: a party holds a handle of that normalized value, or a source's standing
-statement names one for it (a claim below review confidence counts). A link
-parties' own suggester rules inferred (a shared name, a domain, a twin spelling, a
-signature) counts for nothing, so a shared name alone proposes no one. The job
+statements on the ordered Party pair for every two live parties of one kind linked
+to one address (`PartyManager.same_person_links`). A party is linked when it holds
+a handle of that normalized value, or when a source that states its own record (a
+person, a system of record, a directory, an import, a source's claim) names one for
+it in a standing statement, a claim below review confidence included. Any other
+rule or extraction, parties' own suggesters among them (a shared name, a domain, a
+twin spelling, a signature), links nobody until it is named, so a shared name alone
+proposes no one. Only an address that names one account links: an email address, a
+phone number, or a handle with a platform id, never a name-only handle. A person is
+never paired with an organization, nor two accounts' own persons with each other,
+and an account's contested claim to an address another account controls links
+nothing. The job
 skips current assertions and dismissals before each run's cap without
 continuation state, and withdraws its statements no link supports any more. An
 importer that lands its own party and claim proposes the same pair at once with
