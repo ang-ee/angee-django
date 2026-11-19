@@ -843,3 +843,88 @@ def test_the_merge_judges_a_grouped_set_with_the_previews_groupings(db: None) ->
     (outcome,) = Party.objects.merge_duplicates(actor=owner, sets=ids, digests=[preview.digest], groupings=groupings)
 
     assert str(outcome.outcome) == "merged"
+
+
+def _sent_parties(sent: list[dict[str, Any]]) -> list[tuple[str, str]]:
+    return sorted((event["model"], event["id"]) for event in sent)
+
+
+def test_a_batch_publishes_each_merged_record_once_after_its_sets(
+    db: None, django_capture_on_commit_callbacks: Any,
+) -> None:
+    """Changes are muted while the request's sets merge; then each record of a merged set is published once."""
+
+    del db
+    from angee.graphql.testing import capture_broadcasts
+
+    owner = create_user("duplicates-batch-broadcast")
+    sets = [_people(owner, f"Zoe Example {i}", f"Zoe Example {i}", value=f"cast{i}@example.com") for i in range(3)]
+
+    with capture_broadcasts() as sent, django_capture_on_commit_callbacks(execute=True):
+        outcomes = _merge(owner, *sets)
+
+    assert [outcome for outcome, _survivor, _reason in outcomes] == ["merged"] * 3
+    assert _sent_parties(sent) == sorted(("parties.Party", person.public_id) for members in sets for person in members)
+
+
+def test_a_partly_failed_batch_still_publishes_what_merged(db: None, django_capture_on_commit_callbacks: Any) -> None:
+    del db
+    from angee.graphql.testing import capture_broadcasts
+
+    owner = create_user("duplicates-partial-broadcast")
+    first = _people(owner, "Zoë Example", "Zoe Example", value="partial-a@example.com")
+    second = _people(owner, "Yan Example", "yan example", value="partial-b@example.com")
+    failed: list[str] = []
+
+    def time_out_once(execute: Any, sql: str, params: Any, many: bool, context: Any) -> Any:
+        if not failed and sql.lstrip().upper().startswith("UPDATE") and '"merged_into_id"' in sql:
+            failed.append(sql)
+            raise _lock_conflict("57014")
+        return execute(sql, params, many, context)
+
+    with capture_broadcasts() as sent, django_capture_on_commit_callbacks(execute=True):
+        with connection.execute_wrapper(time_out_once):
+            outcomes = _merge(owner, first, second)
+
+    assert [outcome for outcome, _survivor, _reason in outcomes] == ["failed", "merged"]
+    assert _sent_parties(sent) == sorted(("parties.Party", person.public_id) for person in second)
+
+
+def test_a_batch_mutes_only_its_own_writes(db: None, django_capture_on_commit_callbacks: Any) -> None:
+    """The mute is context-local and ends with the request: another context and a later write still publish."""
+
+    del db
+    import contextvars
+
+    from angee.base.signals import changes_muted, mute_changes
+    from angee.graphql.testing import capture_broadcasts
+
+    with mute_changes():
+        assert changes_muted() and not contextvars.Context().run(changes_muted)
+    owner = create_user("duplicates-mute-scope")
+    members = _people(owner, "Zoe Example", "Zoe Example", value="scope@example.com")
+    _merge(owner, members)
+    assert not changes_muted()
+
+    with capture_broadcasts() as sent, django_capture_on_commit_callbacks(execute=True):
+        with system_context(reason="duplicates later write"):
+            survivor = Party._base_manager.get(pk=members[0].pk)
+            survivor.display_name = "Zoe Renamed"
+            survivor.save(update_fields=["display_name"])
+
+    assert ("parties.Party", members[0].public_id) in _sent_parties(sent)
+
+
+def test_a_hand_merge_publishes_its_own_changes_as_before(db: None, django_capture_on_commit_callbacks: Any) -> None:
+    del db
+    from angee.graphql.testing import capture_broadcasts
+
+    owner = create_user("duplicates-hand-broadcast")
+    survivor, merged = _people(owner, "Zoe Example", "Zoe Example", value="hand@example.com")
+
+    with capture_broadcasts() as sent, django_capture_on_commit_callbacks(execute=True):
+        with actor_context(owner):
+            Party.objects.get(pk=survivor.pk).merge(records=[merged.public_id])
+
+    # The record merge's own writes publish row by row, as they always have: the merged record's trash and redirect.
+    assert _sent_parties(sent) == [("parties.Party", merged.public_id)] * 2

@@ -939,7 +939,12 @@ live in code docstrings.
   (`MERGE_CHUNK`), each set's outcome showing as its chunk answers; Stop ends
   the run after the chunk in flight, a failed request ends it with what
   answered kept, closing mid-run asks first and sends nothing more, and the
-  models are invalidated once, when the run ends. A disagreement is a field the records
+  models are invalidated once, when the run ends. On the server each request's
+  sets merge with their per-row changes muted (`mute_changes`), and once its
+  last set is done each record of a merged set is published once, as its
+  concrete row, so a chunk is one change for every viewer of those pages; a
+  set that was refused, stopped or failed rolled back and publishes nothing,
+  and a hand merge publishes as before. A disagreement is a field the records
   state at least two different values for; a field one value is stated for,
   the rest empty, is a fill (`DuplicateSetPreview.fills`, the same
   `MergeFieldValues` rows), which the merge gives the survivor and which warns

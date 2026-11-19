@@ -66,7 +66,7 @@ from rebac.resources import model_resource_type
 
 from angee.base.fields.identity import SqidField
 from angee.base.hooks import resolve_hooks
-from angee.base.lineage import concrete_child
+from angee.base.lineage import concrete_child, concrete_child_models
 from angee.base.models.hierarchy import HierarchyQuerySet
 from angee.base.models.identity import instances_from_public_ids, public_id_for
 from angee.base.models.trash import ArchiveQuerySet
@@ -74,6 +74,7 @@ from angee.base.pagination import clamp_page_size
 from angee.base.permissions import actor_user_id, reader_queryset
 from angee.base.querysets import MergeableQuerySet, by_key, query_batch_size
 from angee.base.serialization import canonical_json
+from angee.base.signals import mute_changes, publish_change
 from angee.integrate.errors import IntegrationError
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager
 from angee.integrate.states import LinkStatus, StreamDirection
@@ -2636,43 +2637,72 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         readable = self._readable_members(actor, confirmed)
         permitted = self.batch_mergeable(actor, sorted({row.pk for row in readable.values()}))
         outcomes = []
-        for index, ids in enumerate(confirmed):
-            if refusal := self._admission(ids, readable, permitted):
-                outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.REFUSED, reason=refusal))
-                continue
-            try:
-                with transaction.atomic():
-                    rows = instances_from_public_ids(party_model, ids, queryset=party_model._base_manager.all())
-                    if rows:
-                        party_model.lock_merge_records(sorted(rows.values(), key=lambda row: row.pk))
-                    (preview,) = self._judge_sets(
-                        actor, [ids], certain=certain, groupings=None if groupings is None else [groupings[index]],
-                    )
-                    if preview.outcome is not None:
-                        outcomes.append(DuplicateSetOutcome(ids, preview.outcome, reason=preview.reason))
-                        continue
-                    if digests is not None and preview.digest != digests[index]:
-                        outcomes.append(
-                            DuplicateSetOutcome(ids, DuplicateMergeOutcome.REFUSED, reason=self.CHANGED_REASON)
+        changed: set[Any] = set()
+        # Each set's own writes would publish row by row, a stream of changes every viewer refetches on;
+        # the request's sets merge muted and each merged set's records are published once, after the last.
+        with mute_changes():
+            for index, ids in enumerate(confirmed):
+                if refusal := self._admission(ids, readable, permitted):
+                    outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.REFUSED, reason=refusal))
+                    continue
+                try:
+                    with transaction.atomic():
+                        rows = instances_from_public_ids(party_model, ids, queryset=party_model._base_manager.all())
+                        if rows:
+                            party_model.lock_merge_records(sorted(rows.values(), key=lambda row: row.pk))
+                        (preview,) = self._judge_sets(
+                            actor, [ids], certain=certain, groupings=None if groupings is None else [groupings[index]],
                         )
-                        continue
-                    survivor, *merged = preview.members
-                    kept = survivor.with_actor(actor).merge(
-                        records=[row.public_id for row in merged],
-                        fill_empty=True,
-                        confirmed_fields=self.BATCH_CONFIRMED_FIELDS,
-                    )
-            except (PermissionDenied, ValidationError) as error:
-                outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.REFUSED, reason=_refusal(error)))
-            except DatabaseError as error:
-                if _lock_conflict(error):
-                    outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.STOPPED, reason=self.STOPPED_REASON))
+                        if preview.outcome is not None:
+                            outcomes.append(DuplicateSetOutcome(ids, preview.outcome, reason=preview.reason))
+                            continue
+                        if digests is not None and preview.digest != digests[index]:
+                            outcomes.append(
+                                DuplicateSetOutcome(ids, DuplicateMergeOutcome.REFUSED, reason=self.CHANGED_REASON)
+                            )
+                            continue
+                        survivor, *merged = preview.members
+                        kept = survivor.with_actor(actor).merge(
+                            records=[row.public_id for row in merged],
+                            fill_empty=True,
+                            confirmed_fields=self.BATCH_CONFIRMED_FIELDS,
+                        )
+                except (PermissionDenied, ValidationError) as error:
+                    outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.REFUSED, reason=_refusal(error)))
+                except DatabaseError as error:
+                    if _lock_conflict(error):
+                        outcomes.append(
+                            DuplicateSetOutcome(ids, DuplicateMergeOutcome.STOPPED, reason=self.STOPPED_REASON)
+                        )
+                    else:
+                        logger.exception("parties.merge_duplicates: the database failed one set; nothing of it merged")
+                        outcomes.append(
+                            DuplicateSetOutcome(ids, DuplicateMergeOutcome.FAILED, reason=self.FAILED_REASON)
+                        )
                 else:
-                    logger.exception("parties.merge_duplicates: the database failed one set; nothing of it merged")
-                    outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.FAILED, reason=self.FAILED_REASON))
-            else:
-                outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.MERGED, survivor=kept))
+                    outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.MERGED, survivor=kept))
+                    changed.update(row.pk for row in preview.members)
+        self._publish_merged(changed)
         return outcomes
+
+    @staticmethod
+    def _publish_merged(pks: Collection[Any]) -> None:
+        """Publish each record of the merged sets once, as its concrete row: the change readers observe.
+
+        :meth:`merge_duplicates` mutes the per-row changes of the request's sets;
+        a set that was refused, stopped or failed rolled back and is not published.
+        """
+
+        if not pks:
+            return
+        party_model = apps.get_model("parties", "Party")
+        rows: list[Any] = []
+        for child in concrete_child_models(party_model):
+            rows.extend(child._base_manager.filter(pk__in=pks).order_by("pk"))
+        concrete = {row.pk for row in rows}
+        rows.extend(party_model._base_manager.filter(pk__in=set(pks) - concrete).order_by("pk"))
+        for row in rows:
+            publish_change(row, action="update", update_fields=None)
 
     def _readable_members(
         self, actor: Any, confirmed: Sequence[tuple[str, ...]], *, statements: bool = False,
