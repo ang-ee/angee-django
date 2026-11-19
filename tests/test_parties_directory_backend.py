@@ -18,7 +18,7 @@ from django.core.exceptions import ValidationError
 from rebac import system_context
 
 from angee.integrate.states import LinkStatus, StreamDirection
-from angee.integrate.streams import PushPreview, StreamPage, advance_stream, preview_push, reconcile_stream
+from angee.integrate.streams import StreamPage, advance_stream, reconcile_stream
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.testing.models import Directory, Organization, Party, Person, RelationshipKind
 from angee.parties.backends import DirectoryBackend, ManualDirectoryBackend, ParsedAddressbook, ParsedContact
@@ -95,8 +95,8 @@ class Pull:
     source: Source
     stream: Any
 
-    def sync(self) -> Any:
-        result = advance_stream(self.stream, self.backend)
+    def sync(self, *, page_bound: int = 100) -> Any:
+        result = advance_stream(self.stream, self.backend, page_bound=page_bound)
         self.stream = result.stream
         return result
 
@@ -163,7 +163,6 @@ def test_a_second_sync_of_an_unchanged_source_applies_nothing(pull: Pull) -> Non
     assert pull.sweep() == 0
     assert applied_history().count() == applications
     assert not _failures(pull)
-    assert preview_push(pull.stream, pull.backend) == PushPreview()
 
 
 def test_a_persons_edit_survives_the_next_pull_and_holds_no_conflict(pull: Pull) -> None:
@@ -247,32 +246,137 @@ def test_a_record_the_sweep_confirms_absent_is_withdrawn_and_applies_again_when_
     assert _asserted(party_id, grace).exists()
 
 
-def test_a_merge_at_the_source_lands_on_the_replaced_records_person_and_moves_its_statements(pull: Pull) -> None:
+_PHONE = "+15550100"
+
+
+def _handle_claims(party_id: Any, value: str) -> list[tuple[Any, str]]:
+    """Each current claim this directory's statements make of ``value`` on the party: its link and status."""
+
+    return sorted(
+        Party.statements.filter(subject_id=party_id, handle__value=value).current().values_list("link_id", "status")
+    )
+
+
+def test_a_merge_at_the_source_lands_on_the_replaced_records_person_and_withdraws_what_only_it_stated(
+    pull: Pull,
+) -> None:
+    """The survivor restates what it keeps, through its own link; a fact only the merged-away record had is withdrawn.
+
+    The replaced record is no record of the survivor's page: it leaves the source's
+    key walk, so the absence sweep tombstones its link, and an identity read of it
+    answers it gone. A page of one record stays one record (``page_bound=1``).
+    """
+
+    pull.source.put("ada", replace(_ADA, phones=((_PHONE, "cell", False),)))
     pull.sync()
     ada = pull.link("ada")
     party_id = ada.target_object_id
     people = Person.objects.count()
+    assert _handle_claims(party_id, _PHONE) == [(ada.pk, "asserted")]
 
     del pull.source.contacts["ada"]
     pull.source.put("ada-2", replace(_ADA, notes="Merged at the source."), replaces=("ada", "never-linked"))
-    # The page orders the survivor first, then the replaced record a link names, as a tombstone.
     records = pull.backend.record_changes(pull.stream, {"ada-2": pull.backend._payload("ada-2")})
-    assert [(record.external_key, record.tombstone) for record in records] == [("ada-2", False), ("ada", True)]
-    # An identity read returns only the key it was asked for.
-    assert [record.external_key for record in pull.backend.read_keys(pull.stream, ["ada-2"])] == ["ada-2"]
+    assert [(record.external_key, record.tombstone) for record in records] == [("ada-2", False)]
+    assert records[0].source_payload["replaces"] == ["ada", "never-linked"]
+    # An identity read of the merged-away key answers it gone.
+    assert [(record.external_key, record.tombstone) for record in pull.backend.read_keys(pull.stream, ["ada"])] == [
+        ("ada", True)
+    ]
 
-    result = pull.sync()
+    result = pull.sync(page_bound=1)
 
-    assert (result.count, result.failure_ids) == (2, ())
+    assert (result.count, result.failure_ids) == (1, ())
     survivor = pull.link("ada-2")
     ada.refresh_from_db()
     assert survivor.target_object_id == party_id
     assert Person.objects.count() == people
     assert Person.objects.get(pk=party_id).notes == "Merged at the source."
-    assert ada.status == LinkStatus.TOMBSTONE
+    # The email the survivor restates is its own claim now; the phone only the merged-away record carried
+    # is withdrawn, not handed to the survivor's link.
+    assert _handle_claims(party_id, "ada@example.com") == [(survivor.pk, "asserted")]
+    assert _handle_claims(party_id, _PHONE) == [(ada.pk, "withdrawn")]
+    assert ada.status == LinkStatus.CURRENT
     assert not _asserted(party_id, ada).exists()
-    assert _asserted(party_id, survivor).exists()
     assert not RecordLink.objects.filter(stream=pull.stream, external_key="never-linked").exists()
+
+    # The sweep finds the merged-away key gone and tombstones its link; nothing moves back.
+    pull.sweep()
+    pull.sweep()
+    ada.refresh_from_db()
+    assert ada.status == LinkStatus.TOMBSTONE
+    assert [status for _link, status in _handle_claims(party_id, _PHONE)] == ["withdrawn"]
+    assert _handle_claims(party_id, "ada@example.com") == [(survivor.pk, "asserted")]
+
+    # Re-reading the survivor after its replaced link's tombstone applies nothing and emits nothing else.
+    applications = applied_history().count()
+    pull.source.changed.add("ada-2")
+    assert [record.external_key for record in pull.backend.record_changes(
+        pull.stream, {"ada-2": pull.backend._payload("ada-2")}
+    )] == ["ada-2"]
+    assert pull.sync().count == 0
+    assert applied_history().count() == applications
+    assert not _failures(pull)
+
+
+def test_the_survivor_of_a_merge_takes_the_first_replaced_records_person_in_the_sources_order(pull: Pull) -> None:
+    """Replaced records linked to different people: the source's first names the survivor's person, not key order."""
+
+    pull.sync()
+    ada, grace = (pull.link(key).target_object_id for key in ("ada", "grace"))
+    for key in ("ada", "grace"):
+        del pull.source.contacts[key]
+    pull.source.put("merged", replace(_GRACE, notes="Merged at the source."), replaces=("grace", "ada"))
+
+    assert pull.sync().count == 1
+
+    assert pull.link("merged").target_object_id == grace
+    assert Person.objects.filter(pk__in=[ada, grace]).count() == 2
+
+
+def test_a_trashed_person_is_nobodys_target_and_the_record_mints_another(pull: Pull) -> None:
+    """A link bound to a trashed person lands its next record on a new person; a live bound link keeps its own."""
+
+    pull.sync()
+    link = pull.link("ada")
+    trashed = Person.objects.get(pk=link.target_object_id)
+    with pytest.raises(ValidationError, match="never rebinds"):
+        Party.objects.ingest_contact(
+            _ADA, stream=pull.stream, link=link, created_by_id=pull.directory.owner_id, target=None
+        )
+    trashed.trash(reason="Removed by its holder")
+    pull.source.put("ada", replace(_ADA, notes="Still at the source."))
+
+    result = pull.sync()
+
+    assert (result.count, result.failure_ids) == (1, ())
+    link.refresh_from_db()
+    assert link.target_object_id not in (None, str(trashed.pk))
+    assert Person.objects.get(pk=link.target_object_id).notes == "Still at the source."
+
+
+def test_a_persons_edit_holds_its_whole_aspect_against_a_later_source_edit(pull: Pull) -> None:
+    """Resolution is per aspect: a person's name holds every name field, so a source's family name waits behind it.
+
+    The source's statement stays asserted, inspectable and ready to apply once the
+    person's own is withdrawn; a source edit of another aspect lands beside it.
+    """
+
+    pull.sync()
+    link = pull.link("ada")
+    person = Person.objects.get(pk=link.target_object_id)
+    fields = Person.statements.model.statement_aspects["name"].fields
+    person.with_actor(pull.directory.owner).statements.set(
+        aspect="name", values={**{name: getattr(person, name) for name in fields}, "given_name": "Augusta"}
+    )
+    pull.source.put("ada", replace(_ADA, family_name="King", notes="Countess of Lovelace."))
+
+    assert pull.sync().count == 1
+
+    person.refresh_from_db()
+    assert (person.given_name, person.family_name, person.notes) == ("Augusta", "Lovelace", "Countess of Lovelace.")
+    stated = Person.statements.filter(subject=person, aspect="name", link=link).current().get()
+    assert (stated.status, stated.stated_value("family_name")) == ("asserted", "King")
 
 
 def test_contact_ingest_never_rebinds_a_link(pull: Pull) -> None:

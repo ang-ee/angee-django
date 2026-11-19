@@ -18,8 +18,6 @@ from datetime import date, timedelta
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
-from django.contrib.contenttypes.prefetch import GenericPrefetch
-from django.db.models import prefetch_related_objects
 
 from angee.base.serialization import canonical_json_sha256
 from angee.integrate.errors import IntegrationError
@@ -164,7 +162,7 @@ def contact_points_projection(value: ParsedContact | ParsedOrganization) -> dict
 
 
 def contact_projection(contact: ParsedContact) -> dict[str, Any]:
-    """Return the same JSON comparison shape for a remote card and a local person.
+    """Return the same JSON comparison shape for a source's contact and a local person.
 
     Collection ordering is immaterial (:func:`contact_points_projection`). Photos
     compare their content addresses. A fetched contact arrives in its stored form
@@ -243,7 +241,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
     makes each payload with :meth:`observe`. This base routes the
     ``addressbooks`` stream itself, builds every record and applies it. A backend
     that maps a wire identity of its own onto the keys builds its records itself,
-    binds them through :meth:`_local_states`, and reads keys through its own
+    binds them through :meth:`local_states`, and reads keys through its own
     :meth:`read_keys`.
     """
 
@@ -356,7 +354,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
                 raise IntegrationError("The address-book listing came back empty; retrying later.", transient=True)
             return self._addressbook_changes(stream, books, keys=keys)
         payloads = self.read_contacts(stream, keys)
-        return self._contact_records(stream, {key: payloads.get(key) for key in keys})
+        return self.record_changes(stream, {key: payloads.get(key) for key in keys})
 
     def enumerate_keys(self, stream: Any, *, after: str | None = None) -> Iterable[str]:
         """Return the contact keys the source serves now, seeking past ``after`` (integrate's absence sweep).
@@ -397,48 +395,30 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         The contact takes its stored form first (photo stored, addresses as
         stored: ``PartyManager.prepare_contact``), so an unchanged source compares
         unchanged. ``replaces`` names the keys of the records a merge at the source
-        folded into this one (:meth:`record_changes`); the payload keeps them in
-        key order. Call it while extracting, outside any transaction.
+        folded into this one, in the source's order (the first one's person is the
+        survivor's: :meth:`apply_record`); the payload keeps each once. Call it
+        while extracting, outside any transaction.
         """
 
         payload: dict[str, Any] = {"contact": contact_projection(self._prepare_contact(contact))}
-        if replaced := sorted(set(replaces)):
+        if replaced := list(dict.fromkeys(replaces)):
             payload["replaces"] = replaced
         return payload
 
     def record_changes(self, stream: Any, payloads: Mapping[str, Mapping[str, Any] | None]) -> list[RecordChange]:
-        """Turn one page's payloads, keyed by external key, into records bound to their linked people.
+        """Turn one page's payloads, keyed by external key, into one record each, bound to its linked person.
 
         ``None`` is a record the source removed (a tombstone). A payload carrying
         ``error`` is one the backend could not map; the driver quarantines it under
         its key. Any other payload is one :meth:`observe` made: its ``contact``
         projection is the remote side, and the source hash covers the whole payload.
-
-        A payload's ``replaces`` names the records a merge at the source folded into
-        it. Each one with a link follows its survivor in the page as a tombstone: the
-        survivor lands first, on the person a replaced link names
-        (:meth:`_contact_target`), and the replaced link's statements then move to the
-        survivor's link (``RecordLink.withdraw_statements``). Identity reads keep only
-        the keys they were asked for (:meth:`read_keys`).
+        A record the source merged away (a key another payload ``replaces``) is no
+        record here: it leaves the source's key walk, so the absence sweep
+        tombstones its link, and an identity read of it answers it gone.
         """
 
-        ordered: dict[str, Mapping[str, Any] | None] = {}
-        for key, payload in payloads.items():
-            ordered[key] = payload
-            for replaced in (payload or {}).get("replaces", ()):
-                if replaced not in payloads:
-                    ordered.setdefault(replaced, None)
-        followers = [key for key in ordered if key not in payloads]
-        linked = set(stream.links.filter(external_key__in=followers).values_list("external_key", flat=True))
-        return self._contact_records(
-            stream, {key: payload for key, payload in ordered.items() if key in payloads or key in linked}
-        )
-
-    def _contact_records(self, stream: Any, payloads: Mapping[str, Mapping[str, Any] | None]) -> list[RecordChange]:
-        """Build one record per payload, each bound to its linked person and the local side of its comparison."""
-
         links = stream.links.filter(external_key__in=list(payloads)).with_sync_evidence()
-        states = self._local_states(stream, payloads, links=links)
+        states = self.local_states(stream, payloads, links=links)
         records = []
         for key, payload in payloads.items():
             target, projection = states[key]
@@ -517,29 +497,34 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
 
         return cast(C, apps.get_model("parties", "Party").objects.prepare_contact(parsed))
 
-    def _local_states(
+    def local_states(
         self, stream: Any, keys: Iterable[str], *, links: Iterable[Any]
     ) -> dict[str, tuple[Any | None, dict[str, Any] | None]]:
-        """Return each key's linked person and the local side of its comparison, read once for the batch.
+        """Return each contact key's linked person and the local side of its comparison, read once for the batch.
 
-        A two-way stream compares the person's projection. A pull-only stream
-        compares what this source last applied (the link's applied base), as the
-        address-book stream does: a person's own edit is a statement that outranks
-        the source, never a local change, and an unchanged re-read applies nothing.
-        ``links`` carry their sync evidence on a pull-only stream. A key without a
-        link has neither; a trashed person is no target.
+        The binding seam for a backend that builds its own contact records (CardDAV
+        does): each record takes its key's pair as its ``target`` and
+        ``projection``. ``links`` are the stream's links among ``keys``, read with
+        their sync evidence (``with_sync_evidence``). A two-way stream compares the
+        person's projection. A pull-only stream compares what this source last
+        applied (the link's applied base), as the address-book stream does: a
+        person's own edit is a statement that outranks the source, never a local
+        change, and an unchanged re-read applies nothing. A key without a link has
+        neither; a trashed person is nobody's target (``PartyManager.contact_people``).
         """
 
         keys = set(keys)
         if not keys:
             return {}
         linked = [link for link in links if link.external_key in keys]
-        targets = self._contact_targets(linked)
+        people = apps.get_model("parties", "Party").objects.contact_people(linked)
+        targets = {link.external_key: people[link.pk] for link in linked}
         if stream.direction == StreamDirection.PULL:
             applied = {link.external_key: link.applied_base.mapped_payload for link in linked if link.applied_base_id}
             return {key: (targets.get(key), applied.get(key)) for key in keys}
-        people = [person for person in targets.values() if person is not None]
-        parsed = apps.get_model("parties", "Party").objects.project_contacts(people)
+        parsed = apps.get_model("parties", "Party").objects.project_contacts(
+            [person for person in targets.values() if person is not None]
+        )
         projections = {pk: contact_projection(contact) for pk, contact in parsed.items()}
         states = {}
         for key in keys:
@@ -547,49 +532,31 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             states[key] = person, projections.get(person.pk) if person is not None else None
         return states
 
-    def _contact_targets(self, links: Sequence[Any]) -> dict[str, Any | None]:
-        """Return each link's untrashed person by external key, read once for the batch; ``None`` while unbound."""
+    def _contact_target(self, stream: Any, link: Any, replaced: Sequence[Any]) -> Any | None:
+        """Return the person a contact lands on, ``None`` to mint one: the one place its target is decided.
 
-        parties = apps.get_model("parties", "Party").objects
-        prefetch_related_objects(
-            list(links),
-            GenericPrefetch("target", [
-                parties.model._base_manager.select_related("person"),
-            ]),
-        )
-        targets = {link.external_key: parties.contact_person(link) for link in links}
-        people = (
-            apps.get_model("parties", "Person")
-            .objects.untrashed()
-            .filter(pk__in=[person.pk for person in targets.values() if person is not None])
-        )
-        by_id = {str(person.pk): person for person in people}
-        return {key: by_id.get(str(person.pk)) if person is not None else None for key, person in targets.items()}
-
-    def _contact_target(self, stream: Any, record: RecordChange) -> Any | None:
-        """Return the person a contact record lands on: the first one this resolution order finds.
-
-        Its own link's person; then, for a merge at the source, the person a link
-        it replaces names (``replaces`` in its payload, in that order). Matching
-        an existing person through its handles would be a later step of this
-        order; it is not one yet.
+        In order: its own link's person; then, for a merge at the source, the
+        person of the first link it ``replaced``, in the source's order. A trashed
+        person is nobody's target (``PartyManager.contact_people``). Call it once,
+        under the contact locks (:meth:`apply_record`).
         """
 
-        keys = [record.external_key, *record.source_payload.get("replaces", ())]
-        targets = self._contact_targets(tuple(stream.links.filter(external_key__in=keys)))
-        return next((targets[key] for key in keys if targets.get(key) is not None), None)
+        people = apps.get_model("parties", "Party").objects.contact_people([link, *replaced])
+        return next((people[row.pk] for row in (link, *replaced) if people[row.pk] is not None), None)
 
     def apply_record(self, stream: Any, record: RecordChange) -> ApplyResult:
         """Revalidate under domain locks, then use the single folder or contact ingest verb.
 
         An address book states its folder's name, and its tombstone withdraws that
         statement while the folder stays. A contact lands through
-        ``PartyManager.ingest_contact`` from its payload's ``contact`` projection,
-        on the person :meth:`_contact_target` resolves under the contact locks, and
-        its tombstone withdraws the link's statements while the party stays. A
-        two-way stream's applied base is the person's projection; a pull-only
-        stream's is the source's own (none for a tombstone), the side its
-        comparison reads (:meth:`_local_states`). The fixed contact projection has
+        ``PartyManager.ingest_contact`` from its payload's ``contact`` projection:
+        the people its own link and the links it replaces name, and its handles,
+        are locked first, then :meth:`_contact_target` decides its person once, and
+        the ingest withdraws what neither its link nor a replaced link still
+        supports. A tombstone withdraws the link's statements while the party
+        stays. A two-way stream's applied base is the person's projection; a
+        pull-only stream's is the source's own (none for a tombstone), the side its
+        comparison reads (:meth:`local_states`). The fixed contact projection has
         no dependency digest. The driver stamps the observation's mapping version
         independently of the apply result.
         """
@@ -604,42 +571,53 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             folder = apps.get_model("parties", "Folder").objects.ingest_addressbook(link, name=name)
             return ApplyResult(target=folder, mapped_payload={"name": name})
         parties = apps.get_model("parties", "Party").objects
-        parsed = None if record.tombstone else contact_from_projection(record.source_payload["contact"])
-        parties.lock_contact(self._contact_target(stream, record), parsed=parsed)
-        target = self._contact_target(stream, record)
-        if parsed is None:
+        if record.tombstone:
+            target = self._contact_target(stream, link, ())
+            parties.lock_contact(target)
             link.withdraw_statements()
         else:
+            parsed = contact_from_projection(record.source_payload["contact"])
+            order = record.source_payload.get("replaces", ())
+            replaced = sorted(
+                stream.links.filter(external_key__in=order).exclude(pk=link.pk),
+                key=lambda row: order.index(row.external_key),
+            )
+            parties.lock_contact(*(row.target for row in (link, *replaced)), parsed=parsed)
             target = parties.ingest_contact(
-                parsed, stream=stream, target=target, created_by_id=self.bridge.owner_id, link=link
+                parsed,
+                stream=stream,
+                link=link,
+                replaces=replaced,
+                target=self._contact_target(stream, link, replaced),
+                created_by_id=self.bridge.owner_id,
             )
         if stream.direction == StreamDirection.PULL:
-            return ApplyResult(target=target, mapped_payload=None if parsed is None else record.mapped_payload)
+            return ApplyResult(target=target, mapped_payload=None if record.tombstone else record.mapped_payload)
         return ApplyResult(
             target=target,
             mapped_payload=contact_projection(parties.project_contact(target)) if target is not None else None,
         )
 
     def on_absent(self, stream: Any, links: Sequence[Any]) -> dict[Any, ApplyResult] | None:
-        """A confirmed removal withdraws the statements its link made, as a read tombstone does.
+        """Withdraw what a confirmed-absent address book, or a pull-only stream's contact, stated.
 
-        An address book and a pull-only stream's contact report each withdrawal as a
-        read tombstone's evidence (no projection, the folder or party kept), so a
-        record that returns applies and states its facts again. An unavailable
-        record keeps them. A two-way stream's contacts keep the sweep's existing
-        absence behaviour: the link is tombstoned and its statements stay.
+        Each withdrawal is reported as a read tombstone's evidence (no projection,
+        the folder or party kept), so a record that returns applies and states its
+        facts again; an unavailable record keeps them. No other stream withdraws on
+        absence: a two-way stream's contacts (and any stream a subclass adds) keep
+        the sweep's tombstone and their statements.
         """
 
-        contacts = stream.key == CONTACTS
-        if contacts and stream.direction != StreamDirection.PULL:
+        contacts = stream.key == CONTACTS and stream.direction == StreamDirection.PULL
+        if stream.key != ADDRESSBOOKS and not contacts:
             return None
         gone = [link for link in links if link.status == LinkStatus.TOMBSTONE]
-        people = self._contact_targets(gone) if contacts else {}
         parties = apps.get_model("parties", "Party").objects
+        people = parties.contact_people(gone) if contacts else {}
         withdrawn: dict[Any, ApplyResult] = {}
         for link in gone:
             if contacts:
-                parties.lock_contact(people.get(link.external_key))
+                parties.lock_contact(people[link.pk])
             link.withdraw_statements()
             withdrawn[link.pk] = ApplyResult(mapped_payload=None)
         return withdrawn
@@ -652,7 +630,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         if keys is not None:
             links_query = links_query.filter(external_key__in=keys)
         links = tuple(links_query.with_sync_evidence().order_by("pk"))
-        states = self._local_states(stream, (link.external_key for link in links), links=links)
+        states = self.local_states(stream, (link.external_key for link in links), links=links)
         for link in links:
             target, projection = states[link.external_key]
             if link.local_changed(projection):

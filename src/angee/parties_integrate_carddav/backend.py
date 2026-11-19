@@ -35,6 +35,7 @@ from django.db.models.fields.json import KeyTextTransform
 from django.db.models.functions import Coalesce
 
 from angee.base.serialization import canonical_json_sha256
+from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import RedirectOriginError, ResponseTooLargeError, same_origin
 from angee.integrate.states import LinkStatus, StreamDefinition, StreamDirection
@@ -155,7 +156,8 @@ class CardDavDirectoryBackend(DirectoryBackend):
         Raises :class:`CardDavError` if the server URL is missing, unreachable, or
         rejects the credentials, so the connect mutation never saves a directory
         whose first sync would fail. An empty (but reachable, authenticated)
-        account passes.
+        account passes. The message names the server by host name and port only,
+        never by a URL part that can carry credentials.
         """
 
         base = self._base_url()
@@ -167,7 +169,14 @@ class CardDavDirectoryBackend(DirectoryBackend):
             raise
         except Exception as error:  # noqa: BLE001 — surface any transport/SSRF failure as a connect error.
             raise CardDavError("Could not connect to the CardDAV server.") from error
-        return f"Connected to {urlsplit(base).netloc}."
+        parts = urlsplit(base)
+        return f"Connected to {parts.hostname}{f':{parts.port}' if parts.port else ''}."
+
+    def admit_credential(self, credential: Any) -> None:
+        """Admit only Basic-auth material, the username and password this backend signs in with."""
+
+        if credential.kind != CredentialKind.BASIC_AUTH:
+            raise ValidationError({"credential": "A CardDAV directory signs in with a username and password."})
 
     def contacts_stream(self, addressbook: Any) -> StreamDefinition:
         """Declare a book's two-way contacts stream with its deletion policy.
@@ -175,12 +184,13 @@ class CardDavDirectoryBackend(DirectoryBackend):
         ``local_delete`` seeds from the directory's per-book config
         (``config["streams"]["contacts"][<book>]``): ``conflict`` (the default)
         holds a locally deleted contact for a choice, ``propagate`` deletes its card.
+        It is the only per-book setting; any other key is refused.
         """
 
-        policy = {
-            "local_delete": "conflict",
-            **self.bridge.config.get("streams", {}).get(CONTACTS, {}).get(addressbook.external_key, {}),
-        }
+        book = self.bridge.config.get("streams", {}).get(CONTACTS, {}).get(addressbook.external_key, {})
+        if set(book) - {"local_delete"}:
+            raise ValueError("Unknown Directory contacts setting.")
+        policy = {"local_delete": book.get("local_delete", "conflict")}
         if policy["local_delete"] not in {"conflict", "propagate"}:
             raise ValueError("Unknown Directory deletion policy.")
         return replace(super().contacts_stream(addressbook), config=policy)
@@ -432,7 +442,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
         their tombstones. A parsed UID remains metadata on those identities. Each
         record retains ``{"href", "raw_vcard", "contact"}``, hashes the contact
         projection and carries the card's ETag as its remote version; the base binds
-        the linked people (``DirectoryBackend._local_states``).
+        the linked people (``DirectoryBackend.local_states``).
         """
 
         if not contacts:
@@ -502,7 +512,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
                 )
             # A live UID observation supersedes its old locator's tombstone.
             records[key] = record
-        states = self._local_states(stream, records, links=links)
+        states = self.local_states(stream, records, links=links)
         return [
             replace(
                 record,

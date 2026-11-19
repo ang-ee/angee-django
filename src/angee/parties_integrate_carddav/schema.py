@@ -18,7 +18,7 @@ class CardDavMutation:
     def connect_card_dav_directory(
         self, info: strawberry.Info, name: str, server_url: str, username: str, password: str,
     ) -> DirectoryType:
-        """Probe and retain a Basic-auth directory through its connection owner."""
+        """Test a Basic-auth CardDAV account's connection, then retain it as a directory."""
 
         return cast(DirectoryType, connect_directory(
             session_user(info), name=name, server_url=server_url, username=username, password=password,

@@ -44,6 +44,24 @@ live in code docstrings.
   `remote_delete` stream option, validated and never read, is removed. CardDAV
   links need no migration and no re-download.
 
+- A merge at the source keeps a pull-only directory's pages to one record per
+  payload: `record_changes` no longer appends the replaced keys, which leave the
+  source's key walk so the absence sweep tombstones their links, and an identity
+  read of one answers it gone. The survivor lands on the first replaced record's
+  person in the source's order (`observe` now keeps `replaces` in that order), and
+  what only a replaced record stated on that person is withdrawn rather than moved
+  to the survivor's link (`ingest_contact(..., replaces=...)`). One function
+  decides a contact's target (`DirectoryBackend._contact_target`), once, under the
+  contact locks; a trashed person is nobody's target
+  (`PartyManager.contact_people`), so its record lands on a new person instead of
+  quarantining. `ingest_contact` and `ingest_organization` decide nothing: they
+  land on the target given or mint one, and refuse to move a link off a live
+  party, `target=None` included. `DirectoryBackend._local_states` is public as
+  `local_states`, the binding seam for a backend that builds its own records, and
+  `lock_contact` takes several parties. CardDAV admits only Basic-auth
+  credentials, names its server by host name and port in its connection message,
+  and refuses a per-book contacts setting other than `local_delete`.
+
 - Parties land organizations and employment from a source.
   `PartyManager.ingest_organization(parsed, *, stream, link, created_by_id,
   target=None)` lands a `ParsedOrganization` (comparison shape:
