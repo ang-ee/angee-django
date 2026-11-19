@@ -63,6 +63,19 @@ live in code docstrings.
   work; `Integration.lock_for_record_access` now takes the capability lock
   first, for a transfer and a record grant alike.
 
+- `angee.integrate`: a static token is clean, and dead when revoked. A token was
+  stored exactly as typed, so a pasted trailing space or an invisible character
+  made a header value no request could carry, failing every request. The
+  `static_token` handler now strips surrounding whitespace on creation and
+  re-entry and otherwise stores the value as entered, since some static tokens
+  are never a header (a calendar feed subscription keeps its feed address as
+  one). Where it builds the bearer header, a token with a space, a control
+  character or a character outside printable ASCII is refused with a permanent
+  `IntegrationError` saying the stored token cannot be sent and must be
+  re-entered, without quoting it. A revoked or expired static-token credential no
+  longer produces authorization headers: it fails closed through
+  `Credential.require_active`, as the scoped-token path does.
+
 - `angee.graphql`, `angee.base`, `angee.integrate`: an integration's refusal
   reaches the operator as its message. An action guarded by `action_guard` let
   an `IntegrationError` propagate, so resolving or retrying a sync failure,

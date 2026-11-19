@@ -230,6 +230,14 @@ metadata discovery resolves OAuth endpoints independently of connection
 discovery. Host
 settings are applied through `oauth_clients` after resources load.
 `Credential.is_reconnect_required` uses status, failed refresh or mint, and expiry.
+A `static_token` is stored without the whitespace a paste brings around it and
+otherwise as entered, since not every one becomes a header (a calendar feed
+subscription keeps its feed address as one). Where it becomes a bearer header,
+a token with a space, a control character or anything outside printable ASCII is
+refused with a permanent `IntegrationError` asking for it to be re-entered, which
+never quotes it; connect and attach meet that when they test the connection. An
+inactive static token produces no headers: it fails closed through
+`Credential.require_active`, as a minted scoped token does.
 A `jwt_bearer` credential holds a provider signing key (a pasted key file, such as a
 Google service-account key) and mints one access token per scope set through the
 JWT bearer grant (RFC 7523); consumers call `Credential.auth_headers(scopes=...)`.

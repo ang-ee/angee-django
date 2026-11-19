@@ -240,11 +240,36 @@ class StaticTokenCredentialHandler(CredentialKindHandler):
 
         del material
 
+    def clean(self, material: Mapping[str, Any]) -> dict[str, Any]:
+        """Store the token without the whitespace a paste brings around it, and otherwise as entered.
+
+        Not every static token becomes a header (a calendar feed subscription keeps
+        its feed address as one), so what a header cannot carry is refused where the
+        header is built (:meth:`auth_headers`), not here.
+        """
+
+        cleaned = super().clean(material)
+        if isinstance(token := cleaned.get(self.material_field), str):
+            cleaned[self.material_field] = token.strip()
+        return cleaned
+
     def auth_headers(self, credential: Any, *, scopes: Collection[str] = ()) -> dict[str, str]:
-        """Return static-token bearer authorization headers; a static token has no scopes to choose."""
+        """Return static-token bearer authorization headers; a static token has no scopes to choose.
+
+        An inactive credential (revoked, expired) fails closed, as a minted token does
+        (``Credential.require_active``). A stored token with a space, a control
+        character or anything outside printable ASCII cannot be sent in a header: it
+        is refused permanently, asking for it to be re-entered, and never quoted.
+        """
 
         del scopes
-        return {"Authorization": f"Bearer {self.secret_value(credential)}"}
+        credential.require_active()
+        token = self.secret_value(credential)
+        if any(not "!" <= character <= "~" for character in token):
+            raise IntegrationError(
+                "The stored token contains a character that cannot be sent in a request header; re-enter the token."
+            )
+        return {"Authorization": f"Bearer {token}"}
 
 
 class SshKeyCredentialHandler(CredentialKindHandler):
