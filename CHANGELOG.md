@@ -36,7 +36,11 @@ live in code docstrings.
   (`Party.comparable_name`); a name that is one of the pair's cited addresses
   (`Party.names_an_address`) is no name. Every party merge now refuses a person
   with an organization (`Party.validate_merge`). A person's `anniversary` is a
-  merge choice (the Merge page shows it).
+  merge choice (the Merge page shows it). The web fragment's `DuplicatesDialog`
+  is the one batch surface: the Review page's "Merge certain pairs" action, and
+  the People and Organizations lists' Merge…, where two selected records of an
+  ungrouped list open their compare page and three or more, or a grouped
+  selection (one set per group of two or more), open the dialog.
 
 - Parties: `Party.objects.propose_same_person_as_system(left, right, *, evidence,
   reason)` lets an importer propose that two parties are one person, citing the
