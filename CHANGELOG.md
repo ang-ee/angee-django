@@ -10,6 +10,15 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.knowledge`: a party (a person or an organization) is a record-binding
+  target, read through the party's `read` and written through its `write`.
+  Parties cannot name knowledge (knowledge depends on messaging, which depends
+  on parties), so knowledge declares the arm in its own
+  `permissions.extends.zed` (revision 4) and now requires `angee-parties`
+  directly; a person's and an organization's records list
+  `knowledge.RecordBinding` and show knowledge's Pages group. A merge moves the
+  merged party's bindings to the survivor, collapsing one page bound to both
+  under one role. Upgrade: `rebac sync`.
 - `angee.parties`: a person has `languages`, the ISO 639 codes they use with
   us, most preferred first (`LanguageCodesField`: a JSON list that stores a
   two-letter code where one exists and refuses a region subtag), and

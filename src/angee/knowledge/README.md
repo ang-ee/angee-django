@@ -37,7 +37,10 @@ definition knowledge/record_binding {
 }
 ```
 
-An undeclared type cannot be bound under an actor and its bindings stay
+A record owner knowledge itself depends on cannot name knowledge, so knowledge
+declares its arm in its own `permissions.extends.zed`: a party (a person or an
+organization) is bindable, read through the party's `read` and written through
+its `write`. An undeclared type cannot be bound under an actor and its bindings stay
 unreadable; the binding grants no access by itself. The Pages group shows only on
 record views of declared types (their resource metadata lists
 `knowledge.RecordBinding` in `recordEdges`), and `record_knowledge_can_bind`
