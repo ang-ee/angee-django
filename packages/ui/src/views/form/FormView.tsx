@@ -24,6 +24,7 @@ import { RecordActionBar } from "./RecordActionBar";
 import { SaveDiscardActions, dirtyControlBandClassName } from "./SaveDiscardActions";
 import { ActionFormProvider } from "./ActionFormProvider";
 import type {
+  ActionDescriptor,
   FieldDescriptor,
   PageFieldKind,
 } from "../page";
@@ -185,6 +186,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     saveError,
     saveConflict,
     declaredActions,
+    genericActions,
     actionsBlocked,
     recordChromeContext: surfaceChromeContext,
     recordActions,
@@ -215,9 +217,9 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     () => surfaceChromeContext && { ...surfaceChromeContext, toolbarHost },
     [surfaceChromeContext, toolbarHost],
   );
-  const availableDeclaredActions = readOnly
-    ? declaredActions.filter((action) => action.run || action.submit)
-    : declaredActions;
+  const actionAvailable = (action: ActionDescriptor) => !formReadOnly || action.run || action.submit;
+  const availableDeclaredActions = declaredActions.filter(actionAvailable);
+  const availableGenericActions = genericActions.filter(actionAvailable);
   useBreadcrumbLeafLabel(
     isCreate ? t("resourceToolbar.create") : titleText(
       recordRepresentationValue(displayRecord, surface.modelMetadata),
@@ -355,12 +357,14 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
         <span ref={setToolbarHost} className="contents" />
         {!awaitingRecord && (
           availableDeclaredActions.length > 0 ||
+          availableGenericActions.length > 0 ||
           visibleDeleteAction !== undefined ||
           (!readOnly && menuRecordActions.length > 0)
         ) ? (
           <RecordActionBar
             record={displayRecord ?? null}
             actions={availableDeclaredActions}
+            genericActions={availableGenericActions}
             applyPatch={applyPatch}
             reload={reload}
             deleteAction={visibleDeleteAction}

@@ -36,7 +36,7 @@ vi.mock("@refinedev/core", async (importOriginal) => ({
 }));
 
 import { RestoreRecord, TrashRecord } from "./documents";
-import { RemovedList, RemovedRecords, useTrashRecord, useTrashRowActions } from "./trash";
+import { RemovedList, RemovedRecords, useTrashActions, useTrashRecord, useTrashRowActions } from "./trash";
 
 const flag: DataResourceFieldMetadata = {
   name: "is_trashed",
@@ -135,10 +135,33 @@ describe("shared trash verbs", () => {
   });
 
   test("an untrashable resource offers no verbs", () => {
-    const { result } = renderHook(() => ({ record: useTrashRecord(TAGS), rows: useTrashRowActions(TAGS) }));
+    const { result } = renderHook(() => ({ record: useTrashRecord(TAGS), actions: useTrashActions(TAGS), rows: useTrashRowActions(TAGS) }));
 
     expect(result.current.record.available).toBe(false);
+    expect(result.current.actions).toEqual([]);
     expect(result.current.rows).toEqual([]);
+  });
+
+  test("record trash needs a resource type as well as the flag", () => {
+    const { result } = renderHook(() => useTrashActions({ ...PAGES, resourceType: undefined }));
+    expect(result.current).toEqual([]);
+  });
+
+  test("record verbs stay in the menu and require delete when permissions are projected", () => {
+    const { result } = renderHook(() => useTrashActions(PAGES));
+    const [trash, restore] = result.current;
+    expect(result.current.map((action) => action.placement)).toEqual(["menu", "menu"]);
+    for (const is_trashed of [false, true]) {
+      const record = { id: "pg_1", is_trashed };
+      for (const permissions of [[], ["write"], null, ["delete"]]) {
+        const row = { ...record, permissions };
+        const manages = permissions?.includes("delete") ?? false;
+        expect([trash!.visibleWhen!(row), restore!.visibleWhen!(row)]).toEqual([
+          manages && !is_trashed, manages && is_trashed,
+        ]);
+      }
+      expect([trash!.visibleWhen!(record), restore!.visibleWhen!(record)]).toEqual([!is_trashed, is_trashed]);
+    }
   });
 
   test("row verbs follow the delete permission and the trash flag", () => {

@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Controller, get, useFormState, useWatch, type Control } from "react-hook-form";
-import { rowValueAtPath } from "@angee/metadata";
+import { archiveFlagField, rowValueAtPath } from "@angee/metadata";
 
 // Render-only bindings for the headless FormView surface.
 
@@ -298,7 +298,10 @@ export function FormViewRecordHeader({
   } else {
     titleNode = titleText(recordRepresentationValue(displayRecord, modelMetadata), t("form.record"));
   }
+  const archiveFlag = archiveFlagField(modelMetadata?.resource);
   const adornments = <>
+    {!surface.isCreate && archiveFlag && displayRecord?.[archiveFlag] === true
+      ? <Chip tone="neutral">{t("record.archive.archived")}</Chip> : null}
     {currentTitleField ? <RecordFieldMarkControl field={currentTitleField.name} label={currentTitleField.label}
       restricted={titleRestricted} /> : null}
     {titlePlacementField && displayRecord && !titlePlacementRestricted ? <FieldDescriptorControl

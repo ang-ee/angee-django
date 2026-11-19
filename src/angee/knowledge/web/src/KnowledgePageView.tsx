@@ -1,8 +1,7 @@
-import { useModelMetadata } from "@angee/metadata";
 import { useAuthoredQuery } from "@angee/refine";
 import {
-  Action, Button, EmptyState, ErrorBanner, Field, Form, RecordPager, Skeleton, SkeletonStatus, SkeletonText,
-  WikilinkProvider, errorMessage, useRouteHref, useTrashActions, useUiT, type RecordNavigation,
+  Button, EmptyState, ErrorBanner, Field, Form, RecordPager, Skeleton, SkeletonStatus, SkeletonText,
+  WikilinkProvider, errorMessage, useRouteHref, useUiT, type RecordNavigation,
 } from "@angee/ui";
 import { KnowledgePage, PAGE_MODEL, PAGE_READ_MODELS } from "./data/documents";
 import { usePageSubmit } from "./data/use-page-submit";
@@ -20,8 +19,6 @@ export function KnowledgePageView({ pageId, navigation }: KnowledgePageViewProps
   const uiT = useUiT();
   const href = useRouteHref();
   const query = useAuthoredQuery(KnowledgePage, { id: pageId }, { models: PAGE_READ_MODELS });
-  const resource = useModelMetadata(PAGE_MODEL)?.resource;
-  const actions = useTrashActions(resource);
   const submit = usePageSubmit();
   const readError = query.error ? <ErrorBanner
     description={errorMessage(query.error, t("page.loadError"))}
@@ -44,7 +41,7 @@ export function KnowledgePageView({ pageId, navigation }: KnowledgePageViewProps
     {readError}
     <Form key={pageId} resource={PAGE_MODEL} id={pageId} headerDensity="compact"
       acknowledgedSource={{ record: detail,
-        values: { title: detail.title, body: detail.markdown?.body ?? "", is_trashed: detail.is_trashed },
+        values: { title: detail.title, body: detail.markdown?.body ?? "" },
         reload: async () => (await query.refetch()).data?.pages_by_pk ?? null }}
       submit={detail.markdown ? submit : undefined}
       eyebrow={[detail.vault_label, ...detail.ancestors.map((page) => page.title)].filter(Boolean).join(" / ")}
@@ -52,9 +49,7 @@ export function KnowledgePageView({ pageId, navigation }: KnowledgePageViewProps
       recordExtras={() => !detail.is_trashed && (detail.kind === "folder" || detail.has_children)
         ? <PageChildren page={detail.id} vault={detail.vault} /> : null}>
       <Field name="title" title label={t("editor.titleLabel")} />
-      <Field name="is_trashed" hidden readOnly />
       {detail.markdown ? <Field name="body" body="document" widget="markdown.editor" /> : null}
-      {actions.map((action) => <Action key={action.id} {...action} />)}
     </Form>
   </WikilinkProvider>;
 }

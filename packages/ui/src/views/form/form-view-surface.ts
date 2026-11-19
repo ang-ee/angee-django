@@ -3,10 +3,12 @@ import { useWatch } from "react-hook-form";
 import { developmentMode } from "../../lib/development-mode";
 import { useLatestRef } from "../../lib/use-latest-ref";
 import {
+  archiveFlagField,
   lineReadSelectionPaths,
   modelFieldForPath,
   refineResourceName,
   relationRepresentationForPath,
+  trashFlagField,
   useModelMetadata,
   useSchemaFieldMetadata,
   type DataResourceMetadata,
@@ -43,6 +45,8 @@ import {
   type RelationFieldInfo,
 } from "../resource/model-metadata-defaults";
 import type { RecordActionDescriptor, RecordDeleteAction } from "./RecordActionBar";
+import { useArchiveActions } from "../resource/archive";
+import { useTrashActions } from "../resource/trash";
 import { recordRailGroups, visibleRecordRailGroups, type RecordRailGroupProps } from "./form-view-rail";
 import { rowDependentChildren, useContainerAdmission } from "./container-admission";
 import { resolveFieldLabels, resolveGroupLabels } from "./field-labels";
@@ -219,6 +223,7 @@ export interface FormViewSurface
   subtitleParts: readonly React.ReactNode[];
   lineRowErrors: readonly (ValidationErrors | undefined)[] | undefined;
   declaredActions: readonly RecordActionDescriptor[];
+  genericActions: readonly RecordActionDescriptor[];
   actionsBlocked: boolean;
   recordPanelContext: RecordPanelContext | null;
   recordToolbarContext: RecordToolbarContext;
@@ -555,6 +560,11 @@ export function useFormViewSurface({
     if (!isCreate && modelMetadata?.fields.permissions?.readable !== false && modelMetadata?.fields.permissions) {
       paths.add("permissions");
     }
+    if (!isCreate) {
+      for (const flag of [archiveFlagField(dataResource), trashFlagField(dataResource)]) {
+        if (flag) paths.add(flag);
+      }
+    }
     if (!isCreate && modelMetadata?.fields.redacted_fields?.readable !== false && modelMetadata?.fields.redacted_fields) {
       // The record queryset already owns this actor-specific ledger; selecting
       // it beside the row avoids a field-by-field permission query.
@@ -639,7 +649,7 @@ export function useFormViewSurface({
       if (path) paths.add(path);
     }
     return [...paths];
-  }, [attributionFields, canonicalTabFields, contributionFields, formFields, isCreate, modelMetadata, relationByField, resolvedContextFields, returning, schemaMetadata]);
+  }, [attributionFields, canonicalTabFields, contributionFields, dataResource, formFields, isCreate, modelMetadata, relationByField, resolvedContextFields, returning, schemaMetadata]);
   const refineFields = React.useMemo(
     () => refineFieldsFromPaths(selection),
     [selection],
@@ -737,6 +747,12 @@ export function useFormViewSurface({
     ],
     [contributedActions, pageActions, save.displayRecord, sectionAdmits],
   );
+  const archiveActions = useArchiveActions(dataResource);
+  const trashActions = useTrashActions(dataResource);
+  const genericActions = React.useMemo(
+    () => isCreate || readOnly ? [] : [...archiveActions, ...trashActions],
+    [archiveActions, isCreate, readOnly, trashActions],
+  );
   const { titleField, titlePlacementField, statusField, bodyField, gridFields, gridGroups } =
     fieldLayout;
   const titleFieldMessages = titleField
@@ -810,6 +826,7 @@ export function useFormViewSurface({
   const linesTrailing = save.linesActive && !linesDeclared;
   const visibleDeleteAction =
     readOnly || deleteAction === undefined ||
+    (save.displayRecord != null && "permissions" in save.displayRecord && !holdsPermission(save.displayRecord, "delete")) ||
     (deleteVisibleWhen !== undefined &&
       (save.displayRecord == null || !deleteVisibleWhen(save.displayRecord)))
       ? undefined
@@ -906,6 +923,7 @@ export function useFormViewSurface({
     subtitleParts,
     lineRowErrors,
     declaredActions,
+    genericActions,
     actionsBlocked,
     recordPanelContext,
     recordToolbarContext,

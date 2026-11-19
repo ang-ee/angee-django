@@ -143,8 +143,8 @@ export interface TrashActionOptions<TRow extends Row = Row> {
 
 /**
  * Record-form verbs for a trashable resource: Trash on an untrashed record,
- * Restore on a trashed one, each offered only when the record projects the
- * `delete` permission. The form must read the trash flag (a hidden field).
+ * Restore on a trashed one, requiring `delete` when the record projects
+ * permissions. The form supplies these menu verbs and selects the trash flag.
  * @owner RecordActionBar
  */
 export function useTrashActions(
@@ -157,13 +157,14 @@ export function useTrashActions(
   const { name } = options;
   return React.useMemo<readonly ActionDescriptor[]>(() => {
     if (!available || flag === null) return [];
+    const manages = (record: Row) => !("permissions" in record) || holdsPermission(record, TRASH_PERMISSION);
     return [
       {
         id: "trash",
         label: t("trash.action"),
         icon: "trash",
-        permission: TRASH_PERMISSION,
-        visibleWhen: (record) => record[flag] !== true,
+        placement: "menu",
+        visibleWhen: (record) => manages(record) && record[flag] !== true,
         run: async (context) => {
           const id = rowPublicId(context.record);
           if (id && context.record && await trash(id, name?.(context.record))) context.refresh();
@@ -173,8 +174,8 @@ export function useTrashActions(
         id: "restore",
         label: t("trash.restore"),
         icon: "undo-2",
-        permission: TRASH_PERMISSION,
-        visibleWhen: (record) => record[flag] === true,
+        placement: "menu",
+        visibleWhen: (record) => manages(record) && record[flag] === true,
         run: async (context) => {
           const id = rowPublicId(context.record);
           if (id && await restore(id)) context.refresh();

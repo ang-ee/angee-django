@@ -151,10 +151,11 @@ describe("RecordActionBar", () => {
     const onDelete = vi.fn();
     const bar = <RecordActionBar record={record} blocked={!inParent}
       actions={[{ id: "inspect", label: "Inspect", run }]}
+      genericActions={[{ id: "archive", label: "Archive", placement: "menu", set: { is_archived: true } }]}
       deleteAction={{ canDelete: true, isPending: false, onDelete }} />;
     renderActionBar(inParent ? <ActionMenu blocked>{bar}</ActionMenu> : bar);
     fireEvent.click(screen.getByRole("button", { name: "Actions" }));
-    for (const name of ["Inspect", "Delete"]) {
+    for (const name of ["Inspect", "Archive", "Delete"]) {
       const item = await screen.findByRole("menuitem", { name });
       expect(item.tagName).toBe("BUTTON");
       expect(item.getAttribute("aria-disabled")).toBe("true");
@@ -162,6 +163,25 @@ describe("RecordActionBar", () => {
     }
     expect(run).not.toHaveBeenCalled();
     expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  test.each([false, true])("generic actions follow page and container verbs, with Delete last (parent menu: %s)", async (inParent) => {
+    const bar = <RecordActionBar record={record}
+      actions={[{ id: "inspect", label: "Inspect", placement: "menu", run: vi.fn() }]}
+      contributedActions={<ActionTrigger>Export</ActionTrigger>}
+      genericActions={[
+        { id: "archive", label: "Archive", placement: "menu", set: { is_archived: true } },
+        { id: "trash", label: "Move to trash", placement: "menu", run: vi.fn() },
+      ]}
+      deleteAction={{ canDelete: true, isPending: false, onDelete: vi.fn() }} />;
+    renderActionBar(inParent ? <ActionMenu>{bar}</ActionMenu> : bar);
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    await screen.findByRole("menuitem", { name: "Archive" });
+    const menu = within(screen.getByRole("menu"));
+    expect(menu.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Inspect", "Export", "Archive", "Move to trash", "Delete",
+    ]);
+    expect(menu.getAllByRole("separator")).toHaveLength(1);
   });
 
   test("Escape from a menu-originated args dialog restores focus to Actions", async () => {

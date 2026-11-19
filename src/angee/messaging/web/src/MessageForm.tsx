@@ -1,13 +1,12 @@
 import * as React from "react";
 import {
-  Action, Field, Form, Group, ListView, LoadingPanel, ErrorBanner,
+  Field, Form, Group, ListView, LoadingPanel, ErrorBanner,
   NavLink, registerForm, useResourceRecordHrefLookup,
   type ListColumn, type RecordPanelContext, type RecordTabDescriptor,
-  type RegisteredFormProps, useTrashActions,
+  type RegisteredFormProps,
   useMimeLabel,
   useResolvedWidget,
 } from "@angee/ui";
-import { useModelMetadata } from "@angee/metadata";
 import { useAuthoredQuery } from "@angee/refine";
 
 import { useMessagingT } from "./i18n";
@@ -163,9 +162,6 @@ function MessageForm({ resource: _resource, readOnly, ...props }: RegisteredForm
   const t = useMessagingT();
   const recordTabs = React.useMemo(() => messageRecordTabs(t), [t]);
   const RecordTags = useResolvedWidget("angee.tags.recordTags")?.edit;
-  // Moderation is the shared trash: channel managers move a message there and
-  // back, offered by the message's projected `delete` permission.
-  const trashActions = useTrashActions(useModelMetadata(MODEL)?.resource);
   const returning = React.useMemo(() => [...(props.returning ?? []), ...MESSAGE_TAG_FIELDS], [props.returning]);
   return <Form
     {...props}
@@ -187,8 +183,6 @@ function MessageForm({ resource: _resource, readOnly, ...props }: RegisteredForm
       <Field name="platform" readOnly />
       <Field name="direction" readOnly />
     </Group>
-    <Field name="is_trashed" hidden readOnly />
-    {!readOnly ? trashActions.map((action) => <Action key={action.id} {...action} />) : null}
   </Form>;
 }
 

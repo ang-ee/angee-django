@@ -47,6 +47,7 @@ interface ActionMutationVariables {
 export function RecordActionBar({
   record,
   actions,
+  genericActions = [],
   applyPatch = unavailablePatch,
   reload = noop,
   deleteAction,
@@ -57,6 +58,8 @@ export function RecordActionBar({
 }: {
   record: Row | null;
   actions: readonly RecordActionDescriptor[];
+  /** Metadata-owned menu verbs, after declared and contributed verbs and before Delete. */
+  genericActions?: readonly RecordActionDescriptor[];
   applyPatch?: (patch: Record<string, unknown>) => Promise<Row | null>;
   reload?: () => void | Promise<Row | null>;
   deleteAction?: RecordDeleteAction;
@@ -126,14 +129,15 @@ export function RecordActionBar({
   const recordId = rowPublicId(record);
 
   // Count only admitted verbs: a predicate needs a loaded record to match.
-  const visibleActions = actions.filter(
+  const visibleActions = [...actions, ...genericActions].filter(
     (action) =>
       (!action.permission || holdsPermission(record, action.permission))
       && (!action.visibleWhen || (record != null && action.visibleWhen(record))),
   );
   const placements = effectiveActionPlacements(visibleActions, promoteLoneAction, menu !== null);
   const toolbarActions = visibleActions.filter((action) => placements.get(action) === "toolbar");
-  const menuActions = visibleActions.filter((action) => placements.get(action) === "menu");
+  const menuActions = visibleActions.filter((action) => placements.get(action) === "menu" && !genericActions.includes(action));
+  const genericMenuActions = visibleActions.filter((action) => placements.get(action) === "menu" && genericActions.includes(action));
   const primaryAction = toolbarActions.find((action) => action.primary);
 
   const runAction = React.useCallback(
@@ -221,24 +225,26 @@ export function RecordActionBar({
     </React.Fragment>;
   };
 
-  const actionMenu = menuActions.length > 0 || visibleDeleteAction !== undefined || contributedActions != null || formAction?.fromMenu ? (
+  const menuContents = <>
+    {menuActions.map(renderAction)}
+    {contributedActions}
+    {(menuActions.length > 0 || contributedActions != null) && (genericMenuActions.length > 0 || deleteTrigger) ? (
+      <DropdownMenu.Separator className="first:hidden" />
+    ) : null}
+    {genericMenuActions.map(renderAction)}
+    {deleteTrigger}
+  </>;
+  const actionMenu = menuActions.length > 0 || genericMenuActions.length > 0 || visibleDeleteAction !== undefined || contributedActions != null || formAction?.fromMenu ? (
     <ActionMenu blocked={blocked} loading={pendingId !== null}
       {...(menuPlacement === "leading" ? { label: null, "aria-label": t("list.actions"), size: "iconSm" as const } : {})}>
-      {deleteTrigger}
-      {visibleDeleteAction !== undefined && menuActions.length > 0 ? (
-        <DropdownMenu.Separator />
-      ) : null}
-      {menuActions.map(renderAction)}
-      {contributedActions}
+      {menuContents}
       {formAction?.fromMenu ? formDialog : null}
     </ActionMenu>
   ) : null;
   return (
     <>
       {menu ? <>
-        {deleteTrigger}
-        {visibleActions.map(renderAction)}
-        {contributedActions}
+        {menuContents}
         {formDialog}
       </> : <>
         {menuPlacement === "leading" ? actionMenu : null}

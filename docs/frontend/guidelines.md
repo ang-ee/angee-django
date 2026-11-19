@@ -991,12 +991,19 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   band. The command band itself takes no row while none of its items renders
   (a contribution that offers nothing renders `null`), and returns with the
   first one, an edit's Save and Discard included. Collection and transcript controls remain in their owning pane toolbar.
-- **Trash composes the shared owner.** A resource whose metadata marks a field
-  `trashable` gets Trash and Restore from [the trash module](../../packages/ui/src/views/resource/trash.tsx):
-  `useTrashActions` for record forms, `useTrashRowActions` for lists, and
-  `RemovedRecords` (or `RemovedDisclosure` + `RemovedItem` over rows a surface
-  already holds) for its "Removed (n)" list. Each offers its control by the
-  row's projected `delete`. A domain verb with its own transport, such as record
+- **The form supplies generic record actions from metadata.** Pages declare
+  nothing for Archive / Unarchive, Move to trash / Restore, or Delete. Archive
+  patches the `archivable` flag only when the resource's update root accepts it
+  and the form is writable; an archived record carries an Archived header chip.
+  Trash requires a `trashable` flag and a resource type and composes
+  [the shared trash verbs](../../packages/ui/src/views/resource/trash.tsx).
+  Delete requires the `deletePreview` root. Trash and Delete require `delete`
+  when the record projects permissions; without that projection, the resource
+  capability gates the control and the server authorizes the write. These verbs
+  stay in the form's overflow menu after page and container verbs, with Delete
+  last. Removed-record lists compose `RemovedRecords` (or `RemovedDisclosure`
+  + `RemovedItem` over rows already held); list-row declarations compose
+  `useTrashRowActions`. A domain verb with its own transport, such as record
   chatter moderation, still asks through `useTrashPrompt`.
 - **Record rails reuse form fields.** Contribute a `FormView.RailGroup` as a
   `<model>#rail` child with standard field descriptors and optional
@@ -1303,9 +1310,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **`ResourceList` owns the record surface.** Use a `<Form>` child or `formFields`
   for generated forms, including read-only records; use `renderRecord` for a
   domain-owned transcript or detail surface. An all-read-only form never assembles
-  an update mutation. Delete affordances are
-  schema-capability gated: if the resource has no `delete` root, `ResourceList`/`ListView`
-  omit record and bulk delete instead of requiring a delete-only `crud(...)`.
+  an update mutation. The form supplies metadata-driven Archive and Trash;
+  `ResourceList` binds its Delete through the shared preview owner. Delete
+  affordances require the `deletePreview` root, and record Delete also requires
+  `delete` when the row projects permissions. Pages declare no generic actions
+  and need no delete-only `crud(...)`.
 - **An addon contributes one menu root.** The app rail renders apps and their
   included, non-flattened sub-apps, at most two levels. The selected app's own
   items live in [`AppMenu`](../../packages/ui/src/chrome/AppMenu.tsx) in the top
