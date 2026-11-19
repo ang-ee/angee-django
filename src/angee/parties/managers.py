@@ -676,7 +676,7 @@ class EmailBasis(StrEnum):
     HELD = "held"
     """The person holds the address: it is their resolved email handle."""
     CLAIM = "claim"
-    """The one person a current asserted contact claim proposes the address for; nobody holds it as theirs yet."""
+    """The one person a current asserted contact claim proposes the address for; no live person holds it yet."""
 
 
 class EmailHolder(NamedTuple):
@@ -1299,6 +1299,53 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             changed += 1
         return changed
 
+    def propose_directory_match(self, person: Any, other: Any, *, evidence: Sequence[Any]) -> Any | None:
+        """Propose, as the ``directory_match`` rule, that a directory's ``person`` and ``other`` are one person.
+
+        A directory proposes it for each person its decision of a contact's target
+        passed over (``DirectoryBackend.apply_record``): an existing person a limit
+        refused the contact's adoption of, or the person of another record the source
+        merged into it. ``evidence`` names what ties them (the contact's link, then
+        the handle its email found ``other`` by, or the merged record's link). The
+        pair joins the same-as review (:meth:`PartyQuerySet.same_as_pairs`), where a
+        person merges or dismisses it. A pair kept separate is not proposed again,
+        and proposing an unchanged pair again changes nothing (``StatementManager.set``).
+        The ``same_as`` rule's reconciler withdraws only its own rule's pairs
+        (:meth:`reconcile_same_as`), so it leaves these, which no shared handle row
+        supports, standing. Returns the rule's statement, ``None`` when nothing is
+        proposed.
+        """
+
+        party = apps.get_model("parties", "Party")
+        if person.pk == other.pk or party.same_as.kept_separate(person, other):
+            return None
+        with system_context(reason="parties.directory_match"):
+            rule = self.rule_source("directory_match")
+            left, right = (party._base_manager.get(pk=row.pk) for row in (person, other))
+            pair = party.same_as.for_pair(left.with_actor(to_subject_ref(rule)), right)
+            return pair.statements.set(
+                aspect="same_as",
+                values={},
+                asserted_by=rule,
+                evidence=[EvidenceReference.of(row) for row in evidence],
+            )
+
+    def withdraw_directory_match(self, person: Any, other: Any) -> int:
+        """Withdraw the ``directory_match`` rule's proposal that ``person`` and ``other`` are one person.
+
+        Called when the proposal is moot: the two are merged (``Party.merge_fields``),
+        or the contact whose link moved off ``person`` adopts ``other``
+        (``DirectoryBackend.apply_record``). Returns how many statements it withdrew.
+        """
+
+        party = apps.get_model("parties", "Party")
+        left_id, right_id = sorted((person.pk, other.pk))
+        pair = party.same_as.model._base_manager.filter(left_id=left_id, right_id=right_id).first()
+        if pair is None:
+            return 0
+        with system_context(reason="parties.directory_match"):
+            return party.same_as.model.statements.withdraw(self.rule_source("directory_match"), [pair.pk])
+
     def reconcile_suggestions(self) -> int:
         """Reconcile the evidence-backed suggestions with every registered evidence provider.
 
@@ -1844,12 +1891,16 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         1. ``ACCOUNT``: the user account with that address is its user's Person
            (``UserManager.person_for_email``'s rule: an address two accounts share
            names nobody);
-        2. ``HELD``: the first email handle of the address that has a party names
-           the person holding it, through merge survivors;
-        3. ``CLAIM``: when nobody holds the address, the one person a current
-           asserted contact claim proposes a handle of it for; two claimants name
-           nobody.
+        2. ``HELD``: the first email handle of the address that a live Person
+           holds names them, through merge survivors;
+        3. ``CLAIM``: whenever no live Person holds the address, the one live
+           person a current asserted contact claim proposes a handle of it for;
+           two claimants name nobody.
 
+        A holder that is no live Person (an organization, a trashed person) does
+        not count as holding the address: the next handle a live Person holds
+        answers ``HELD``, and with none the claims answer, so a person minted
+        earlier for an organization's address is found again by their claim.
         Handles compare by ``Handle.normalized_value``, so another spelling of the
         address is the same address whichever row its exact value made (the account
         compares by the account's own normalization). A trashed person, an
@@ -1890,10 +1941,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 ).order_by("pk")
             )
             holders = self._holders(known)
-            held: dict[str, tuple[Any, Any | None]] = {}
+            held: dict[str, tuple[Any, Any]] = {}
             for handle in known:
-                if handle.pk in holders:
-                    held.setdefault(handle.normalized_value, holders[handle.pk])
+                if (holding := holders.get(handle.pk)) is not None and holding[1] is not None:
+                    held.setdefault(handle.normalized_value, holding)
             statements = self.handle_statements()
             claims: defaultdict[str, dict[Any, Any]] = defaultdict(dict)
             for value, subject_id, handle_id in (

@@ -99,6 +99,34 @@ def test_a_trashed_person_an_organization_and_a_merged_away_row_are_nobodys_answ
     assert _answer("ada@example.com") == [("ada@example.com", survivor.pk, EmailBasis.HELD, handle.pk)]
 
 
+def test_a_holder_that_is_no_live_person_leaves_the_claims_to_answer(owner: Any) -> None:
+    """An organization's or a trashed person's address names its one claimant; two claimants name nobody.
+
+    That is how a person minted earlier for such an address is found again. A
+    live person holding another spelling of it holds the address.
+    """
+
+    company = Organization.objects.create(display_name="Example Ltd", created_by=owner)
+    handle = _holds(company, "info@example.com", owner)
+    assert handle.party_id == company.pk
+    ada, grace = _person(owner, "Ada Example"), _person(owner, "Grace Example")
+    _holds(ada, "info@example.com", owner, confidence=0.4)
+    trashed = _person(owner, "Trashed Example")
+    old = _holds(trashed, "old@example.com", owner)
+    trashed.trash(reason="Removed by its holder")
+    _holds(ada, "old@example.com", owner, confidence=0.4)
+
+    assert _answer("info@example.com", "old@example.com") == [
+        ("info@example.com", ada.pk, EmailBasis.CLAIM, handle.pk),
+        ("old@example.com", ada.pk, EmailBasis.CLAIM, old.pk),
+    ]
+    _holds(grace, "info@example.com", owner, confidence=0.4)
+    assert _answer("info@example.com") == []
+    spelling = _holds(grace, "INFO@example.com", owner)
+    assert spelling.pk != handle.pk and spelling.party_id == grace.pk
+    assert _answer("info@example.com") == [("info@example.com", grace.pk, EmailBasis.HELD, spelling.pk)]
+
+
 def test_the_answer_keeps_the_callers_preference_order_and_reads_any_batch_in_bounded_queries(owner: Any) -> None:
     people = [_person(owner, f"Person {index}") for index in range(5)]
     for index, person in enumerate(people):

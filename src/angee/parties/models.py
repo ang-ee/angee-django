@@ -521,6 +521,8 @@ class Party(
             self.keep_merge_fields(row, field_overrides)
             pair = self.same_as.for_pair(self, row).with_actor(instance_actor(self))
             pair.confirm_statement(aspect="same_as", values={})
+            # The merge decides the pair, so a directory's proposal of it is moot.
+            apps.get_model("parties", "Party").objects.withdraw_directory_match(self, row)
 
 
 class Person(Composable, metaclass=RebacModelBase, inherits="parties.Party"):

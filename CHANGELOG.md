@@ -83,15 +83,29 @@ live in code docstrings.
   integration names; otherwise it mints its own. A two-way directory, CardDAV
   included, never adopts. The link's `adopted_through` metadata
   (`angee.parties.backends.ADOPTED_THROUGH`) names the handle the person was found by.
-  The same-as review pair a refused adoption should record awaits a ruling on
-  which source asserts it.
+
+- A directory proposes for the same-as review each person its decision of a
+  contact's target passed over: a candidate an adoption limit refused, and the
+  other people the records a source merge replaced were linked to. The new
+  install rule `parties.directory_match` (a `parties_statement_source`) states
+  the pair (`PartyManager.propose_directory_match`), citing the contact's link
+  and the handle or the replaced link; the Review page lists it and its merge
+  and keep-separate verbs act on it. A pair kept separate is not proposed again,
+  an unchanged one is not restated, and merging the two (`Party.merge_fields`)
+  or the contact later adopting the refused person withdraws it
+  (`withdraw_directory_match`). `reconcile_same_as` withdraws only its own rule's
+  pairs, so it leaves these standing; that it never proposes two people who
+  claim one handle row by itself stays open. Load the install tier before a
+  directory's next sync, since the rule is looked up by key.
 
 - `PartyManager.people_for_emails(emails)` answers who email addresses name: per
   address, in the caller's preference order, an `EmailHolder(email, person,
   basis, handle)` for each basis that names someone (`EmailBasis.ACCOUNT`, the
-  account's own person; `HELD`, the person holding a handle of the address through
-  merge survivors; `CLAIM`, when nobody holds it, the one person a current asserted
-  contact claim proposes it for). Handles compare by `normalized_value`; a trashed
+  account's own person; `HELD`, the live person holding a handle of the address
+  through merge survivors; `CLAIM`, whenever no live person holds it, the one
+  person a current asserted contact claim proposes it for, so an address an
+  organization or a trashed person holds still finds the person claimed for it).
+  Handles compare by `normalized_value`; a trashed
   person, an organization and a merged-away row are nobody's answer; any batch
   reads in a bounded number of queries. The connections import finds a handle's
   holder by the same rule, so a handle an organization or a trashed person holds
