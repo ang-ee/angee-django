@@ -4,7 +4,9 @@ import {
   Outlet, RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter, retainSearchParams, useRouter,
 } from "@tanstack/react-router";
 import * as React from "react";
-import { AppRuntimeProvider, InAppLinkProvider, createRouteHref, routerNavigator } from "@angee/ui";
+import {
+  AppRuntimeProvider, InAppLinkProvider, createRouteHref, routerNavigator, type AllMatchingGroups,
+} from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -19,7 +21,7 @@ const mocks = vi.hoisted(() => ({
   // Reads answered per document when a test sets them: the certain pairs' pages, and each page of previews.
   documents: { certain: undefined as unknown, previews: undefined as unknown, groups: undefined as unknown },
   certainRead: undefined as ((variables: { after: string | null }) => Read) | undefined,
-  groupsRead: undefined as ((variables: { offset: number; limit: number }) => Read) | undefined,
+  groupsRead: undefined as ((variables: { where?: unknown; limit: number; offset?: number }) => Read) | undefined,
   previewRead: undefined as ((variables: { sets: string[][] }) => Read) | undefined,
 }));
 vi.mock("@angee/metadata", async (importOriginal) => ({
@@ -690,47 +692,70 @@ describe("the batch merge dialog", () => {
   });
 
   describe("every group a list matched", () => {
-    // The People list grouped by name, repeated: its read as the list hands it over. Group n is "Person n", p<n> and q<n>.
-    const read = {
+    // The People list grouped by name, repeated: its read as the list's own groups request sent it, order included.
+    // Group n is "Person 000n" (the keys sort as their numbers), its records p<n> and q<n>.
+    const read: AllMatchingGroups["read"] = {
       where: { display_name: { _is_null: false } },
       dimensions: [{ input: "DISPLAY_NAME", key: "display_name" }],
       having: { count_gt: 1 },
+      orderBy: [{ field: "display_name", direction: "ASC", nulls: "LAST" }],
     };
+    // Group 5055, a number no listing here reaches, sorts between groups 55 and 56.
+    const keyOf = (number: number) => (number === 5055 ? "Person 0055a" : `Person ${String(number).padStart(4, "0")}`);
     const group = (number: number) => ({
-      key: { display_name: `Person ${number}`, given_name: null, family_name: null },
+      key: { display_name: keyOf(number), given_name: null, family_name: null },
       aggregate: { count: 2 },
       rows: [{ id: `p${number}` }, { id: `q${number}` }],
     });
-    /** ``total`` groups, a page by offset, one stable result a page; ``shape`` may change a group. */
-    const groupPages = (total: number, shape: (number: number) => unknown = group) => {
-      const cache = new Map<number, Read>();
-      return (variables: { offset: number; limit: number }): Read => {
-        if (!cache.has(variables.offset)) {
-          const count = Math.max(0, Math.min(variables.limit, total - variables.offset));
-          cache.set(variables.offset, {
-            data: { groups: Array.from({ length: count }, (_value, index) => shape(variables.offset + index + 1)) },
-            isFetching: false, isFetchedAfterMount: true, error: null,
-          });
+    /** The key a page continues after: the `_gt` the dialog adds to the list's `where`, none on the first page. */
+    const cursorOf = (variables: unknown): string | null => {
+      const where = (variables as { where?: { _and?: readonly { display_name?: { _gt?: string } }[] } }).where;
+      return where?._and?.at(-1)?.display_name?._gt ?? null;
+    };
+    /** The live groups in key order, a page past the cursor and offset, one stable result a page; ``shape`` may change one. */
+    const groupPages = (live: number | (() => readonly number[]), shape: (number: number) => unknown = group) => {
+      const cache = new Map<string, Read>();
+      return (variables: { where?: unknown; limit: number; offset?: number }): Read => {
+        const numbers = typeof live === "number" ? Array.from({ length: live }, (_value, index) => index + 1) : live();
+        const after = cursorOf(variables);
+        const offset = variables.offset ?? 0;
+        const page = JSON.stringify([after, offset, numbers]);
+        if (!cache.has(page)) {
+          const listed = [...numbers].sort((left, right) => (keyOf(left) < keyOf(right) ? -1 : 1))
+            .filter((number) => after === null || keyOf(number) > after).slice(offset, offset + variables.limit);
+          cache.set(page, { data: { groups: listed.map(shape) }, isFetching: false, isFetchedAfterMount: true, error: null });
         }
-        return cache.get(variables.offset)!;
+        return cache.get(page)!;
       };
     };
     const groupsOf = (total: number) => ({ document: PeopleGroupSets, read, total, field: "display_name" });
-    const groupReads = () => mocks.variables.filter((variables) => (variables as { rows_limit?: number }).rows_limit === 11);
+    /** Each groups read the dialog sent, once, in the order sent. */
+    const groupReads = () => [...new Map(mocks.variables
+      .filter((variables) => (variables as { rows_limit?: number }).rows_limit === 11)
+      .map((variables) => [JSON.stringify(variables), variables])).values()];
+    /** The first record of every set a preview was asked for, once each. */
+    const previewed = () => [...new Set(mocks.variables.flatMap((variables) =>
+      (variables as { sets?: string[][] }).sets?.map(([first]) => first!) ?? []))];
     const confirmButton = () => screen.getByRole("button", { name: /^Merge \(/ });
     const mergedAll = async (variables: { sets: string[][] }) => ({
       merge_duplicates: variables.sets.map((ids) => merged(ids[0]!, `Person ${ids[0]!.slice(1)}`)),
     });
 
-    test("lists every group page after page through the list's own read, then one confirm runs them in chunks", async () => {
+    test("lists every group page after page past the last key, in the list's order, then confirms in chunks", async () => {
       mocks.groupsRead = groupPages(120);
       mocks.previewRead = answering();
       mocks.merge.mockImplementation(mergedAll);
       renderDialog(vi.fn(), [], false, undefined, undefined, groupsOf(120));
 
       expect(await screen.findByText(message("duplicates.totals", { count: "120", merge: "108", look: "12" }))).toBeTruthy();
-      expect([...new Set(groupReads().map((variables) => (variables as { offset: number }).offset))]).toEqual([0, 50, 100]);
-      for (const variables of groupReads()) expect(variables).toMatchObject(groupByVariables(read));
+      expect(groupReads().map(cursorOf)).toEqual([null, keyOf(50), keyOf(100)]);
+      // The list's own request on the first page; each next page its `where` narrowed past the last listed key.
+      const wire = groupByVariables(read);
+      expect(groupReads()[0]).toEqual({ ...groupByVariables({ ...read, pageSize: 50 }), rows_limit: 11 });
+      for (const variables of groupReads()) {
+        expect(variables).toMatchObject({ group_by: wire.group_by, having: wire.having, order_by: wire.order_by, offset: 0 });
+      }
+      expect(groupReads()[1]).toMatchObject({ where: { _and: [read.where, { display_name: { _gt: keyOf(50) } }] } });
       // Each set is one group, named by its value and grouped by the field, for the mark and the digest.
       expect(mocks.variables).toContainEqual(expect.objectContaining({
         groupings: Array.from({ length: 50 }, () => ["display_name"]),
@@ -746,9 +771,43 @@ describe("the batch merge dialog", () => {
       })).toBe(true);
     }, PAGED_RUN_TIMEOUT_MS);
 
+    test("a group added and a group removed between two pages is neither repeated nor skipped", async () => {
+      let live: readonly number[] = Array.from({ length: 70 }, (_value, index) => index + 1);
+      const listed = groupPages(() => live);
+      let first: string | undefined;
+      mocks.groupsRead = (variables) => {
+        const request = JSON.stringify(variables);
+        first ??= request;
+        // Once the next page is asked for: group 10, listed, and group 60, not yet, leave; group 5055 arrives past the
+        // last listed key. Paged by offset, the next page would start a group late and skip group 51.
+        if (request !== first && !live.includes(5055)) {
+          live = [...live.filter((number) => number !== 10 && number !== 60), 5055];
+        }
+        return listed(variables);
+      };
+      mocks.previewRead = answering();
+      renderDialog(vi.fn(), [], false, undefined, undefined, groupsOf(70));
+
+      expect(await screen.findByText(message("duplicates.totals", { count: "70", merge: "64", look: "6" }))).toBeTruthy();
+      const expected = [...Array.from({ length: 70 }, (_value, index) => index + 1).filter((number) => number !== 60), 5055];
+      expect([...previewed()].sort()).toEqual(expected.map((number) => `p${number}`).sort());
+      expect(screen.queryByText(message("duplicates.listChanged", { count: "70" }))).toBeNull();
+    }, PAGED_RUN_TIMEOUT_MS);
+
+    test("a short page ends the listing though the list counted more, and says the list changed", async () => {
+      mocks.groupsRead = groupPages(70);
+      mocks.previewRead = answering();
+      renderDialog(vi.fn(), [], false, undefined, undefined, groupsOf(120));
+
+      expect(await screen.findByText(message("duplicates.listChanged", { count: "70" }))).toBeTruthy();
+      expect(groupReads().map(cursorOf)).toEqual([null, keyOf(50)]);
+      expect(screen.getByRole("button", { name: message("duplicates.confirm", { count: "63" }) })
+        .hasAttribute("disabled")).toBe(false);
+    }, PAGED_RUN_TIMEOUT_MS);
+
     test("Confirm stays disabled until the last page of groups is listed", async () => {
       const listed = groupPages(120);
-      mocks.groupsRead = (variables) => (variables.offset === 50
+      mocks.groupsRead = (variables) => (cursorOf(variables) === keyOf(50)
         ? { data: undefined, isFetching: true, error: null }
         : listed(variables));
       mocks.previewRead = answering();
@@ -782,14 +841,13 @@ describe("the batch merge dialog", () => {
 
       // One wait per read: twenty pages of groups, then twenty of previews.
       for (let page = 0; page < 20; page += 1) {
-        await waitFor(() => expect(groupReads()).toContainEqual(expect.objectContaining({ offset: page * 50 })));
+        await waitFor(() => expect(groupReads().map(cursorOf)).toContain(page === 0 ? null : keyOf(page * 50)));
       }
       for (let page = 0; page < 20; page += 1) {
-        await waitFor(() => expect(mocks.variables.some((variables) =>
-          (variables as { sets?: string[][] }).sets?.[0]?.[0] === `p${page * 50 + 1}`)).toBe(true));
+        await waitFor(() => expect(previewed()).toContain(`p${page * 50 + 1}`));
       }
       expect(await screen.findByText(message("duplicates.firstOfGroups", { count: "1,000", total: "1,200" }))).toBeTruthy();
-      expect(groupReads()).not.toContainEqual(expect.objectContaining({ offset: 1000 }));
+      expect(groupReads().map(cursorOf)).not.toContain(keyOf(1000));
     }, PAGED_RUN_TIMEOUT_MS);
 
     test("a group of one or without a value is never a set, and is counted", async () => {
@@ -798,7 +856,7 @@ describe("the batch merge dialog", () => {
         : number === 2 ? { ...group(2), key: { display_name: "", given_name: null, family_name: null } } : group(number)));
       mocks.previewRead = answering();
       // A level that is not "repeated" reads its groups of one too: the dialog skips them.
-      const flat = { where: read.where, dimensions: read.dimensions };
+      const flat = { where: read.where, dimensions: read.dimensions, orderBy: read.orderBy };
       renderDialog(vi.fn(), [], false, undefined, undefined, { ...groupsOf(5), read: flat });
 
       expect(await screen.findByText(message("duplicates.unpairedAll", { count: "1" }))).toBeTruthy();

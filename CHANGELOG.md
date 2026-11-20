@@ -10,6 +10,16 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: the batch dialog lists every group a list's "Select all N"
+  matched by key, not by offset. It forwards the list's own groups read as the
+  list sent it, order included (`AllMatchingGroups.read.orderBy`, always the
+  group's own key, ascending, nulls last), and each next page is that read with
+  its `where` narrowed to the groups past the last listed key, so a group added
+  or removed while the list is read neither repeats nor skips another. The
+  listing ends on a short page, not on the list's count, and says so when the
+  number of groups it listed differs from that count. The reader takes the named
+  `AllMatching` types from `@angee/ui` and refuses an order of more than the
+  grouped field, which has no one-field cursor.
 - `angee.base`, `angee.resources`, `angee.workflows`: a merge refusal's reason
   names the record by its public id ("This record (tag_…) is loaded from
   angee.tags resources, which would recreate it; keep it instead.", "Workflow

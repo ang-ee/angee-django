@@ -257,6 +257,7 @@ export const enPartiesMessages: Record<string, string> = {
   "duplicates.firstOfAll": "This lists the first {count} of {total} certain pairs; run again for the rest.",
   "duplicates.firstOfGroups": "This lists the first {count} of {total} groups; select all again after the merge for the rest.",
   "duplicates.loadedGroupsOf": "Loaded {loaded} of {total} groups…",
+  "duplicates.listChanged": "The list changed while it was read: {count} groups listed.",
   "duplicates.unpairedAll": "Left out, with no one else in their group: {count}.",
   "duplicates.pagerUnit": "sets",
   "duplicates.progress": "{done} of {total} done.",

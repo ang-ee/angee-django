@@ -9,6 +9,7 @@ import {
   createRouteHref,
   pageChildren,
   pageElementProps,
+  type AllMatchingGroups,
   type ListProps,
   type SelectedGroup,
 } from "@angee/ui";
@@ -253,14 +254,15 @@ describe("Merge in a parties list's selection bar", () => {
   });
 
   describe("under Select all", () => {
-    // The People list grouped by name, repeated: its read as the list hands it over.
-    const byName = {
-      unit: "groups" as const,
+    // The People list grouped by name, repeated: its read as the list's own groups request sent it, order included.
+    const byName: AllMatchingGroups = {
+      unit: "groups",
       total: 120,
       read: {
         where: { display_name: { _is_null: false } },
         dimensions: [{ input: "DISPLAY_NAME", key: "display_name" }],
         having: { count_gt: 1 },
+        orderBy: [{ field: "display_name", direction: "ASC", nulls: "LAST" }],
       },
     };
 
@@ -270,12 +272,13 @@ describe("Merge in a parties list's selection bar", () => {
       fireEvent.click(await screen.findByRole("button", { name: MERGE }));
 
       expect(await screen.findByText(enPartiesMessages["duplicates.title"]!)).toBeTruthy();
+      // The list's own request, its order included, with the first page and each group's rows: no order of the reader's.
       expect(reads.variables).toContainEqual({
-        ...groupByVariables(byName.read),
-        order_by: [{ field: "display_name", direction: "ASC", nulls: "LAST" }],
-        limit: 50,
-        offset: 0,
+        ...groupByVariables({ ...byName.read, pageSize: 50 }),
         rows_limit: 11,
+      });
+      expect(groupByVariables(byName.read)).toMatchObject({
+        order_by: [{ field: "display_name", direction: "ASC", nulls: "LAST" }],
       });
       // The loaded ticked row is not a selection of its own: no "Merge into…" for it.
       expect(screen.queryByText("Comparison")).toBeNull();
@@ -317,6 +320,23 @@ describe("Merge in a parties list's selection bar", () => {
       const verb = await screen.findByRole("button", { name: MERGE });
       expect(verb.getAttribute("aria-disabled")).toBe("true");
       expect(description(verb)).toBe(enPartiesMessages["merge.selection.allRepeated"]);
+    });
+
+    test("an order of more than the grouped field is refused: the dialog pages by one field", async () => {
+      renderMountedSelection(["ada"], "peopleScope=UNASSIGNED", [], {
+        ...byName,
+        read: {
+          ...byName.read,
+          orderBy: [
+            { field: "display_name", direction: "ASC", nulls: "LAST" },
+            { field: "given_name", direction: "ASC", nulls: "LAST" },
+          ],
+        },
+      });
+
+      const verb = await screen.findByRole("button", { name: MERGE });
+      expect(verb.getAttribute("aria-disabled")).toBe("true");
+      expect(description(verb)).toBe(enPartiesMessages["merge.selection.allGrouping"]);
     });
   });
 });
