@@ -417,7 +417,7 @@ class WebRuntime:
             ):
                 raise ImproperlyConfigured(
                     f"{here}.paths must be a non-empty list of absolute lower-case prefixes ending in '/*', "
-                    "such as '/forms/w/*'"
+                    "such as '/forms/*'"
                 )
             for path in paths:
                 if not any(path.startswith(prefix.removesuffix("*")) for prefix in PAGE_PREFIXES):

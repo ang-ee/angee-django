@@ -89,7 +89,7 @@ public vault id. See the [knowledge addon](../../src/angee/knowledge/README.md).
 - A **standalone page** is a static HTML entry of the web build that loads none
   of the app. The addon that owns it declares it once in `web/package.json`
   (`"angee": { "pages": { "suite.form": { "entry": "./src/standalone/form.html",
-  "paths": ["/forms/w/*"], "accept": "text/html" } } }`), and the composer
+  "paths": ["/forms/*"], "accept": "text/html" } } }`), and the composer
   ([`WebRuntime`](../../src/angee/web/build.py)) projects that declaration twice:
   on the package's entry in `runtime/web/manifest.json` for the web build, and as
   the ingress routes in `runtime/web/pages.caddy`, which the stack's static

@@ -13,7 +13,7 @@ live in code docstrings.
 - `angee.web`: an addon's web package declares **standalone pages**, static HTML
   entries of the web build that load none of the app, in `web/package.json`:
   `"angee": {"pages": {"<id>": {"entry": "./src/standalone/form.html", "paths":
-  ["/forms/w/*"], "accept": "text/html"}}}`. `WebRuntime` validates the
+  ["/forms/*"], "accept": "text/html"}}}`. `WebRuntime` validates the
   declaration beside `angee.assets` (a dotted lower-case id unique across
   packages, an existing entry file inside the package, absolute path prefixes
   ending in `/*` that overlap no other page's and sit under a prefix the ingress
