@@ -18,6 +18,7 @@ from hypothesis import strategies as st
 from rebac import actor_context, system_context
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
+from angee.base.querysets import query_batch_size
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
 from angee.messaging.testing.models import Channel, Handle, Organization, Party, Person
@@ -598,25 +599,52 @@ def test_the_number_is_held_with_the_address_before_any_claim_is_read(source: So
         assert " FOR " in statements[held]
 
 
-def test_whether_a_claim_is_the_sources_own_is_asked_by_key_and_never_reads_its_records(source: Source) -> None:
-    """One existence read per standing claim: what a call reads does not grow with the source's records."""
+def test_one_read_by_key_says_which_claims_are_the_sources_own_whoever_else_claims_the_address(
+    owner: Any, source: Source,
+) -> None:
+    """What a call reads of the source's records is their keys, once: not per claimant, and never the records."""
 
-    source.given(email=ADDRESS, phone=NUMBER, display_name="Ada Example")
+    first = source.given(email=ADDRESS, phone=NUMBER, display_name="Ada Example")
     links = connection.ops.quote_name(RecordLink._meta.db_table)
 
     def reads() -> list[str]:
         record = source.record()
         with CaptureQueriesContext(connection) as queries:
-            source.given(email=ADDRESS, phone=NUMBER, evidence=record)
+            assert source.given(email=ADDRESS, phone=NUMBER, evidence=record).person.pk == first.person.pk
         return [query["sql"] for query in queries if f"FROM {links}" in query["sql"]]
 
-    few = reads()
+    alone = reads()
+    other = _source("another", owner)
+    for index in range(6):
+        _claimed_for(_person(owner, f"Claimant {index}"), first.email, other.record())
     for _ in range(25):
         source.record()
-    many = reads()
+    crowded = reads()
 
-    assert len(few) == len(many) == 2
-    assert all(sql.startswith("SELECT 1 ") for sql in many)
+    assert len(alone) == len(crowded) == 1
+    assert re.match(rf'SELECT {re.escape(links)}\."id"( AS "pk")? FROM {re.escape(links)} ', crowded[0])
+
+
+def test_more_records_behind_one_claim_than_one_read_holds_are_asked_for_in_batches(source: Source) -> None:
+    """A claim gains a reference per record: past the database's parameter budget their keys are read in parts."""
+
+    ada = source.given(email=ADDRESS, display_name="Ada Example")
+    size = query_batch_size(source.own)
+    elsewhere = [RecordLink(pk=1_000_000 + index) for index in range(size)]
+    with system_context(reason="tests.parties.claimants"):
+        Party.objects.assert_handle(
+            ada.person, ada.email, asserted_by=Party.objects.rule_source("source_sender"),
+            confidence=Party.CLAIM_CONFIDENCE, evidence=[*elsewhere, ada.record],
+        )
+    links = connection.ops.quote_name(RecordLink._meta.db_table)
+    record = source.record()
+
+    with CaptureQueriesContext(connection) as queries:
+        found = source.given(email=ADDRESS, evidence=record)
+
+    reads = [query["sql"] for query in queries if f"FROM {links}" in query["sql"]]
+    assert found.person.pk == ada.person.pk
+    assert [sql.count(",") < size for sql in reads] == [True, True]
 
 
 def test_the_verb_proposes_no_pair_and_the_pairing_pass_proposes_the_claimant(
@@ -638,6 +666,15 @@ def test_the_verb_proposes_no_pair_and_the_pairing_pass_proposes_the_claimant(
 def test_a_claimant_needs_a_named_reason(source: Source) -> None:
     with pytest.raises(ValueError, match="named reason"):
         Party.objects.claimant_as_system(email=ADDRESS, evidence=source.record(), own=source.own, reason="  ")
+
+    assert (_people(), Handle._base_manager.count()) == (0, 0)
+
+
+def test_evidence_of_another_kind_than_the_sources_own_records_is_refused(owner: Any, source: Source) -> None:
+    """No record of the source's could ever stand behind that claim, so its person would never be found again."""
+
+    with pytest.raises(TypeError, match="own kind"):
+        source.given(email=ADDRESS, display_name="Ada Example", evidence=owner)
 
     assert (_people(), Handle._base_manager.count()) == (0, 0)
 

@@ -66,9 +66,10 @@ from rebac.resources import model_resource_type
 
 from angee.base.fields.identity import SqidField
 from angee.base.hooks import resolve_hooks
+from angee.base.identity import public_data_id_field
 from angee.base.lineage import concrete_child
 from angee.base.models.hierarchy import HierarchyQuerySet
-from angee.base.models.identity import instances_from_public_ids, public_id_for, public_id_lookup
+from angee.base.models.identity import instances_from_public_ids, public_id_for
 from angee.base.models.trash import ArchiveQuerySet
 from angee.base.pagination import clamp_page_size
 from angee.base.permissions import actor_user_id, reader_queryset
@@ -1908,6 +1909,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
         if not reason.strip():
             raise ValueError("A system claimant requires a named reason.")
+        if not isinstance(evidence, own.model):
+            raise TypeError("A claimant's evidence is a record of the caller's own kind.")
         handle_model = apps.get_model("parties", "Handle")
         person_model = apps.get_model("parties", "Person")
         platforms = handle_model.Platform
@@ -1934,24 +1937,18 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 if party_id in survivors:
                     claims[survivors[party_id], handle_id] |= records
 
-            def held(person_id: Any, rows: Sequence[Any]) -> Any | None:
-                return next((row for row in rows if row.party_id == person_id), None)
+            # One read of ``own`` says which of these claims are the caller's, however many parties claim the rows.
+            vouched = self._vouched(claims, own)
 
-            def vouched(person_id: Any, rows: Sequence[Any]) -> Any | None:
-                # One existence read per standing claim of this person, by the keys its evidence names.
-                return next(
-                    (row for row in rows if self._evidence_names(claims.get((person_id, row.pk), ()), own)), None
-                )
+            def carried(person_id: Any, rows: Sequence[Any]) -> Any | None:
+                held = next((row for row in rows if row.party_id == person_id), None)
+                return held or next((row for row in rows if (person_id, row.pk) in vouched), None)
 
-            person = email_handle = None
             address_ids = {row.pk for row in emails}
-            claimants = {party_id for party_id, handle_id in claims if handle_id in address_ids}
-            for candidate in person_model._base_manager.filter(pk__in=claimants, is_trashed=False).order_by("pk"):
-                if (claimed := vouched(candidate.pk, emails)) is not None:
-                    person, email_handle = candidate, held(candidate.pk, emails) or claimed
-                    break
+            claimants = {party_id for party_id, handle_id in vouched if handle_id in address_ids}
+            person = person_model._base_manager.filter(pk__in=claimants, is_trashed=False).order_by("pk").first()
             if person is not None:
-                phone_handle = held(person.pk, numbers) or vouched(person.pk, numbers)
+                email_handle, phone_handle = carried(person.pk, emails), carried(person.pk, numbers)
             else:
                 person = person_model.objects.create(
                     display_name=name or person_model.PLACEHOLDER_NAME,
@@ -1994,21 +1991,34 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         )
 
     @staticmethod
-    def _evidence_names(references: Collection[EvidenceReference], records: models.QuerySet[Any]) -> bool:
-        """Whether one of ``references`` names a row of ``records``, asked as one existence read by key.
+    def _vouched(
+        claims: Mapping[tuple[Any, Any], Collection[EvidenceReference]], own: models.QuerySet[Any]
+    ) -> set[tuple[Any, Any]]:
+        """Return the claims a row of ``own`` stands behind, from one read of ``own`` by key for all of them.
 
         A reference names a record by the model its generic pointers resolve to
-        and its public id (``EvidenceReference.of``); labels compare without
-        case, as provenance compares them. No row is loaded, ``records`` is never
-        read as a whole, and nothing is read when no reference is of its model.
+        and its public id (``EvidenceReference.of``): labels compare without
+        case, as provenance compares them, and the id decodes to the row's key
+        through the model's public id field. Only the keys the references name
+        are asked for, in batches within the database's parameter budget
+        (``by_key``), and only keys are read: ``own`` is never read as a whole,
+        and nothing is read when no reference is of its model.
         """
 
-        model = generic_pointer_model(records.model)
-        named = Q(pk__in=[])
-        for reference in references:
-            if reference.model.lower() == model._meta.label_lower:
-                named |= Q(**public_id_lookup(model, reference.id))
-        return records.filter(named).exists()
+        model = generic_pointer_model(own.model)
+        field = public_data_id_field(model)
+        named: dict[tuple[Any, Any], set[Any]] = {}
+        for claim, references in claims.items():
+            for reference in references:
+                if reference.model.lower() != model._meta.label_lower:
+                    continue
+                key = field.public_id_to_value(reference.id) if field else model._meta.pk.to_python(reference.id)
+                if key is not None:
+                    named.setdefault(claim, set()).add(key)
+        ours: set[Any] = set()
+        for batch in by_key(own.order_by(), sorted(set().union(*named.values()))):
+            ours.update(batch.values_list("pk", flat=True))
+        return {claim for claim, keys in named.items() if keys & ours}
 
     def suggest_for(self, handle: Any) -> Any:
         """Propose a party for a freshly-seen, unresolved ``handle`` (the EMAIL_MATCH producer).
