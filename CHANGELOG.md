@@ -64,7 +64,11 @@ live in code docstrings.
       messaging (the message's envelope and body, with the claimed address),
       which erasing the response does not reach, because messaging has no verb
       that redacts an ingested message; the fix, a target erase hook and a
-      messaging redaction verb, is a follow-up.
+      messaging redaction verb, is a follow-up. The bridge's refusal of a
+      removal of the channel's form columns at `migrate` (below), with its
+      check `angee.E054`, is interim: deleted once the framework pins
+      django-compose 0.1.0.dev14, whose drop guard judges pending removals at
+      migrate time.
   - **A response posted as a message** is the bridge `angee.webforms_messaging`,
     which requires both addons; neither depends on the other. Its `message`
     target posts a response on a `webform` channel through
@@ -105,9 +109,12 @@ live in code docstrings.
     back means restoring that backup and running the previous code.
     - Every host that composes `angee.webforms` runs `makemigrations webforms`.
     - A host that holds channels with the `webform` backend adds
-      `angee.webforms_messaging` to its roots. Until it does, the database check
-      `angee.E052` names those rows under `check --database`, which a plain
-      `migrate` runs first and `provision` runs only after its migrations.
+      `angee.webforms_messaging` to its roots before it provisions. Until it
+      does, the database check `angee.E052` names those rows under
+      `check --database`, which a plain `migrate` runs first and `provision`
+      runs only after its migrations: without the bridge nothing refuses a
+      removal of the channel's form columns under `provision`, and the forms
+      are dropped before `angee.E052` is reached.
     - A host whose webform channels hold a form (a slug, a published flag or a
       schema) moves them with the bridge's migration template, in this order:
       delete any autodetected migration that removes `Channel.slug`,
@@ -119,13 +126,20 @@ live in code docstrings.
       `makemigrations messaging`, which must report no changes; run
       `manage.py check_webform_channels`, which prints what the move would
       refuse and leave out and changes nothing; then `migrate` and `rebac sync`.
-    - The drop guard does not make a host take that path. It refuses an
-      autodetected removal of those columns at `makemigrations`, and only when
-      the database that command runs on holds a form in them. It never judges a
-      removal that is already on disk: authored where no channel held a form
-      and applied where one does, such a migration drops the forms. Hence the
-      first step above. A host whose channels hold no form anywhere needs no
-      template: `makemigrations messaging` removes the empty columns.
+    - `migrate` refuses the wrong order by itself, also under `provision`,
+      which skips system checks: the bridge listens to `pre_migrate`, and a run
+      whose plan removes those columns with a migration that neither is the
+      move nor follows it is stopped before anything is applied, while a webform
+      channel of that database holds a form. The refusal names the migration,
+      counts the channels and names a few by public id, and gives the remedy;
+      `check --database` says the same beforehand as `angee.E054`. Until now
+      nothing did: the composer's drop guard judges authoring only, at
+      `makemigrations` and on the database that command runs on, so a removal
+      authored where no channel held a form was applied where channels did, and
+      dropped their forms. The order above stays the instruction. A host whose
+      channels hold no form anywhere needs no template: `makemigrations
+      messaging` removes the empty columns, nothing refuses that, and
+      `check_webform_channels` says there is nothing to move.
     - The template makes one form per channel, named after it, with the
       channel's slug as its address and as the slug of its `message` target, so
       its conversation continues. The FormSpec becomes the form's first version
@@ -161,7 +175,10 @@ live in code docstrings.
       applies the template through a 3.x release first.
   - Check ids: `angee.E052` is new (`check_stored_impl_keys`: stored rows whose
     implementation key nothing registers, with the remedy an addon states in
-    `ANGEE_IMPL_KEY_REMEDIES`). Provenance's merge-history check is now
+    `ANGEE_IMPL_KEY_REMEDIES`). `angee.E054` is new and interim (the bridge's
+    `check_form_columns_leave_with_the_move`: a pending migration that removes
+    the form columns of webform channels that hold a form and is not the move).
+    Provenance's merge-history check is now
     `angee.E053`; it shared `angee.E051` with base's `ANGEE_PUBLIC_ORIGIN`
     check, which keeps that id. A host that silences the merge-history check
     silences `angee.E053`.

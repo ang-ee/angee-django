@@ -43,7 +43,12 @@ on is left as it is. The upgrade is **irreversible**: a definition is not
 written back as a FormSpec.
 
 ``manage.py check_webform_channels`` runs the same judgment (:func:`planned_moves`)
-before ``migrate`` and prints what would be refused, changing nothing.
+before ``migrate`` and prints what would be refused, changing nothing. The
+``Migration`` below says it is the move (``moves_webform_channels``, read by
+:func:`is_move`), under whatever name a project gives its copy: the command
+finds it by that, and so does the bridge when it refuses a migration that would
+remove the form columns of channels that hold a form without being the move or
+following it.
 
 Every row is read and written through historical models, as a data migration's
 are, so no verb of a form runs here. The template applies the rule the verbs
@@ -57,10 +62,12 @@ not carry, so every query here orders by the primary key.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from html import escape
 from typing import Any, NamedTuple, cast
 
 from django.apps import apps as installed_apps
+from django.apps.registry import Apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import connections, migrations
@@ -72,6 +79,7 @@ from angee.base.fields.identity import SqidField
 from angee.webforms.validators import validate_publishable, validate_version
 
 FORM_COLUMNS = ("slug", "is_published", "form_schema_version", "form_schema", "max_body_bytes", "max_field_bytes")
+CHANNEL_FACTS = ("pk", "display_name", *FORM_COLUMNS)
 EMPTY_SCHEMA = {"type": "object", "properties": {}}
 DEFAULT_BYTE_LIMITS = (65_536, 4_096)
 SCHEMA_KEYS = frozenset({"type", "properties", "required", "propertyOrder", "success"})
@@ -275,11 +283,36 @@ def _checked(row: Any, *, exclude: tuple[str, ...] = ()) -> Any:
     return row
 
 
-def _public_id(pk: Any) -> str:
+def public_id(pk: Any) -> str:
     """Return a channel's public id. ``sqid`` is no column, so migration state has no field for it."""
 
     field = cast(SqidField, installed_apps.get_model("messaging", "Channel")._meta.get_field("sqid"))
     return field.public_id_from_value(pk)
+
+
+def is_move(migration: migrations.Migration) -> bool:
+    """Whether ``migration`` is a project's copy of this template, which says so itself."""
+
+    return bool(getattr(migration, "moves_webform_channels", False))
+
+
+def holds_form(channel: Mapping[str, Any]) -> bool:
+    """Whether a channel's form columns say anything: a slug, a published flag or a schema of its own."""
+
+    return bool(channel["slug"] or channel["is_published"] or channel["form_schema"] != EMPTY_SCHEMA)
+
+
+def channels_holding_forms(apps: Apps, using: str) -> list[dict[str, Any]]:
+    """Return the form columns of every webform channel that holds a form, oldest first.
+
+    These are the channels the move judges, and whose forms are lost when the
+    columns are removed by anything else. ``apps`` is a migration state in which
+    ``messaging.Channel`` still has its form columns.
+    """
+
+    channels = apps.get_model("messaging", "Channel")._base_manager.using(using)
+    webform = channels.filter(backend_class="webform").order_by("pk").values(*CHANNEL_FACTS)
+    return [channel for channel in webform if holds_form(channel)]
 
 
 def planned_moves(apps: StateApps, using: str) -> Plan:
@@ -307,23 +340,20 @@ def planned_moves(apps: StateApps, using: str) -> Plan:
     if aliases.model._meta.db_table in tables:
         taken = set(aliases.order_by("pk").values_list("slug", flat=True))
     language = settings.LANGUAGE_CODE
-    facts = ("pk", "display_name", *FORM_COLUMNS)
     plan = Plan([], [], [])
 
-    for channel in channels.exclude(backend_class="webform").order_by("pk").values(*facts):
-        if channel["slug"] or channel["is_published"] or channel["form_schema"] != EMPTY_SCHEMA:
+    for channel in channels.exclude(backend_class="webform").order_by("pk").values(*CHANNEL_FACTS):
+        if holds_form(channel):
             plan.reports.append(
-                f"Channel {_public_id(channel['pk'])} ({channel['display_name']}) is not a webform channel and "
+                f"Channel {public_id(channel['pk'])} ({channel['display_name']}) is not a webform channel and "
                 "never served a form: its form columns are dropped."
             )
 
-    for channel in channels.filter(backend_class="webform").order_by("pk").values(*facts):
+    for channel in channels_holding_forms(apps, using):
         slug, schema, published = channel["slug"], channel["form_schema"], bool(channel["is_published"])
-        if not (slug or published or schema != EMPTY_SCHEMA):
-            continue
-        public_id = _public_id(channel["pk"])
-        named = f"{public_id} ({channel['display_name'] or slug})"
-        if public_id in moved:
+        channel_id = public_id(channel["pk"])
+        named = f"{channel_id} ({channel['display_name'] or slug})"
+        if channel_id in moved:
             plan.reports.append(
                 f"Channel {named} already has a form that posts on it: the form it holds is left behind."
             )
@@ -335,7 +365,7 @@ def planned_moves(apps: StateApps, using: str) -> Plan:
                 raise FormNotMovable(f"the address forms/{slug} already belongs to a form")
             form = _checked(forms.model(
                 name=channel["display_name"] or f"Public form {slug}", target_class="message",
-                target_config={"channel": public_id, "slug": slug},
+                target_config={"channel": channel_id, "slug": slug},
             ))
             address = _checked(aliases.model(slug=slug), exclude=("form",))
             version = None
@@ -384,6 +414,8 @@ def move_webform_channels(apps: StateApps, schema_editor: BaseDatabaseSchemaEdit
 
 
 class Migration(migrations.Migration):
+    # This migration is the move, under whatever name a project gives its copy.
+    moves_webform_channels = True
     # Placeholders: replace with this project's explicit leaves, the messaging migration this
     # follows (its channel still has the form columns) and the webforms migration that creates
     # the form, version and alias tables.
