@@ -63,6 +63,8 @@ export async function openPage({ render, wear }: PageParts): Promise<void> {
   let choices = 0;
   /** Takes the survey on screen down: its elements first, then the model they read. */
   let takeDown: (() => void) | undefined;
+  /** Whether the visitor turned to the page being drawn, and so follows it with the focus. */
+  let turned = false;
 
   /** The page's own sentences: in the form's language once one is shown, else in the visitor's. */
   const text = (): PageMessages => pageMessages(language ? [language] : [asked, ...navigator.languages]);
@@ -121,6 +123,8 @@ export async function openPage({ render, wear }: PageParts): Promise<void> {
     const first = refused[0];
     if (first) {
       asking.currentPage = first.page;
+      // The refused question takes the focus on the page it is on, not that page's title.
+      turned = false;
       first.focus(true);
     }
     return general.join(" ");
@@ -168,6 +172,19 @@ export async function openPage({ render, wear }: PageParts): Promise<void> {
     // The one hook SurveyJS passes its markup through: `html` elements and the completed page.
     next.onProcessHtml.add((_survey, options) => {
       options.html = linksInNewTab(options.html);
+    });
+    // SurveyJS scrolls a page the visitor turns to up to its top, and leaves the focus on the
+    // button that turned it. The focus follows to the page's title, or to the page when it has
+    // none: reading continues from there, and no keyboard opens over a phone's screen.
+    next.onCurrentPageChanged.add(() => {
+      turned = true;
+    });
+    next.onAfterRenderPage.add((_survey, options) => {
+      if (!turned) return;
+      turned = false;
+      const start = document.getElementById(options.page.ariaTitleId) ?? options.htmlElement;
+      start.tabIndex = -1;
+      start.focus({ preventScroll: true });
     });
     // SurveyJS shows its completed page only when the answers were kept; a refusal returns to the form.
     // SurveyJS holds its navigation until this handler answers, so it answers whatever happens.

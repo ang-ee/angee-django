@@ -216,3 +216,13 @@
 .sjs-theme-overrides .sd-title {
   text-wrap: balance;
 }
+
+/* Pages. Previous, Next and Complete are SurveyJS's large action, a 24px line
+ * in 16px of padding: 56px under a thumb. The progress bar is its brand colour
+ * on its tertiary surface, and the page steps its secondary surface and
+ * tertiary text: all of them are set from the theme above, in light and dark,
+ * so nothing here restates them. The title a turned page hands the focus to
+ * (see page.ts) is a place to read from, not a control: it shows no ring. */
+.sjs-theme-overrides :is(.sd-page, .sd-page__title):focus {
+  outline: none;
+}

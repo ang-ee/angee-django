@@ -32,6 +32,18 @@ const SECOND = {
   }],
 };
 
+/** A form in two pages, with the progress the server's subset admits. */
+const PAGED = {
+  title: { default: "Encuesta", en: "Survey" },
+  showProgressBar: true,
+  progressBarLocation: "belowHeader",
+  progressBarType: "pages",
+  pages: [
+    { name: "one", title: { default: "Primera", en: "First things" }, elements: [{ type: "text", name: "name", title: { default: "Nombre", en: "Name" } }] },
+    { name: "two", title: { default: "Segunda", en: "Second things" }, elements: [{ type: "text", name: "city", title: { default: "Ciudad", en: "City" } }] },
+  ],
+};
+
 const described = (version: number, definition: object) => ({
   version, definition, languages: ["es", "en"], default_language: "es", language: "", theme: "house.theme", honeypot_field: "website",
 });
@@ -179,6 +191,42 @@ describe("changing the language while filling in", () => {
     expect(document.documentElement.lang).toBe("en");
     expect(picker().value).toBe("en");
     expect(survey().getQuestionByName("name")?.title).toBe("Name");
+  });
+});
+
+describe("a form in several pages", () => {
+  test("shows its progress, and a page the visitor turns to takes the focus at its title", async () => {
+    serve({ get: [() => json(200, described(1, PAGED))], post: [] });
+    await opened("/forms/semilla?lang=en", { drawn: true });
+    await vi.waitFor(() => expect(mount().textContent).toContain("First things"));
+    expect(mount().querySelector('[class*="progress"]')).not.toBeNull();
+    // Opening the form moves no focus: nothing asks for a keyboard before the visitor does.
+    expect(mount().contains(document.activeElement)).toBe(false);
+    survey().nextPage();
+    await vi.waitFor(() => expect(document.activeElement?.textContent).toBe("Second things"));
+    expect(survey().currentPageNo).toBe(1);
+    expect(mount().textContent).toContain("City");
+    survey().prevPage();
+    await vi.waitFor(() => expect(document.activeElement?.textContent).toBe("First things"));
+  });
+
+  test("a refusal of an answer on an earlier page returns to that page and shows it on its question", async () => {
+    serve({
+      get: [() => json(200, described(1, PAGED))],
+      post: [() => json(400, { error: "invalid_submission", message: "Check the answers.", fields: { name: ["Too short."] } })],
+    });
+    await opened("/forms/semilla?lang=en", { drawn: true });
+    survey().setValue("name", "A");
+    survey().nextPage();
+    await vi.waitFor(() => expect(document.activeElement?.textContent).toBe("Second things"));
+    const focus = vi.spyOn(HTMLElement.prototype, "focus");
+    await complete();
+    expect(survey().currentPageNo).toBe(0);
+    await vi.waitFor(() => expect(mount().textContent).toContain("Too short."));
+    expect(survey().getQuestionByName("name")?.errors.map((error) => error.text)).toEqual(["Too short."]);
+    // The question is what the visitor is brought back to: the page's title never takes the focus on the way.
+    await vi.waitFor(() => expect(document.activeElement?.tagName).toBe("INPUT"));
+    expect(focus.mock.contexts.map((element) => (element as HTMLElement).textContent)).not.toContain("First things");
   });
 });
 
