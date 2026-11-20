@@ -164,7 +164,7 @@ def test_a_package_without_pages_emits_no_pages_key_and_an_importable_snippet(
     assert projection.manifest["pageAccept"] == {"text/html": PAGE_ACCEPT_PATTERN}
     assert projection.manifest["pageCsp"] == build_policy(PAGE_CSP)
     # The ingress imports the file unconditionally, so it holds its sentinel comment and no route.
-    assert projection.pages_caddy() == f"# {GENERATED_SENTINEL}\n"
+    assert projection.pages_caddy() == f"{GENERATED_SENTINEL}\n"
     assert Path("web/pages.caddy") in projection.render_sources()
 
 
@@ -324,6 +324,7 @@ def test_web_pages_admit_prefixes_that_share_only_leading_segments(tmp_path: Pat
         pytest.param("text/html", True, id="text-html-alone"),
         pytest.param("TEXT/HTML; charset=UTF-8, */*", True, id="any-case-with-parameters"),
         pytest.param(" text/html ;q=0.9", True, id="optional-whitespace"),
+        pytest.param("text/html;q=0", True, id="weight-is-not-read"),
         pytest.param("application/json", False, id="json"),
         pytest.param("*/*", False, id="wildcard"),
         pytest.param("text/*", False, id="type-wildcard"),
@@ -347,7 +348,7 @@ def test_the_page_ingress_snippet_routes_each_page_by_method_path_and_leading_ac
     })
     projection = WebRuntime((config,), dependencies={config.name: ()})
     preamble, _, routes = projection.pages_caddy().partition("\n\n")
-    assert preamble.startswith(f"# {GENERATED_SENTINEL}\n")
+    assert preamble.startswith(f"{GENERATED_SENTINEL}\n")
     assert all(line.startswith("#") for line in preamble.splitlines())
     accept = projection.manifest["pageAccept"]["text/html"]
     # One fixed policy for every page: no inline script, never framed; inline styles are the one loosened directive.

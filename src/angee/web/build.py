@@ -81,7 +81,8 @@ lists another type first reaches Django however its header is folded. The ingres
 snippet and the Vite dev server apply this one string, published as the manifest's
 top-level ``pageAccept`` (each admitted ``accept`` media type to its pattern); it
 therefore uses only syntax Go RE2, JavaScript and Python read alike without flags,
-which is why each letter spells out both cases.
+which is why each letter spells out both cases. Parameters are not read: a leading
+``text/html;q=0`` still selects the page, which is known and accepted.
 """
 
 PAGE_CSP: dict[str, list[str]] = {
@@ -282,7 +283,7 @@ class WebRuntime:
         pages = {
             name: page for entry in self.manifest["addonPackages"] for name, page in entry.get("pages", {}).items()
         }
-        lines = [f"# {GENERATED_SENTINEL}"]
+        lines = [GENERATED_SENTINEL]  # already a "#" comment, which is Caddy's own
         if pages:
             lines += [
                 "#",
