@@ -343,11 +343,18 @@ saves each again through the handle's own save, under its row lock: an earlier
 version, 0, or a later one that newer code wrote before a rollback. A row
 whose key is already what the rule gives has it written again unchanged beside
 its version, and leaves the selection. With no row behind, the repair is that
-one indexed query. One run saves at most `HandleManager.REPAIR_LIMIT` (500)
-rows; past the cap the command, and so the provision log, ends with "Stopped
-at the cap of N handle(s); M more await the next provision or
-renormalize_handles run", and the next run continues (`--limit` sets another
-cap). Nothing is stated in full:
+one indexed query. A run takes the whole backlog, because a row left with a
+stale key is one the lookups that read keys miss, and a writer that misses it
+makes a second row. It saves in batches of `HandleManager.REPAIR_LIMIT` (500)
+rows, each in its own transaction, so an interrupted provision keeps what it
+saved and the next one resumes. Every batch starts after the last key the run
+selected, so a run selects no row twice and ends: a row deleted or already
+saved by another process is passed, and a row whose save raises is rolled
+back alone, logged, counted ("The comparison key of N handle(s) could not be
+saved; ...") and left for the next run while the rest are saved.
+`renormalize_handles --limit N` saves a share instead, and only then ends
+with "Stopped at the cap of N handle(s); M more await the next provision or
+renormalize_handles run". Nothing is stated in full:
 each handle the person does not hold is recorded as a claim for review
 (`propose_claimed_handle_as_system`)
 with the record behind it, which decides nothing and moves nothing. A claim

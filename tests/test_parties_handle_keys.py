@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from io import StringIO
 from typing import Any
 
@@ -12,13 +15,14 @@ from django.apps import apps
 from django.core.management import call_command
 from django.core.management.base import OutputWrapper
 from django.db import connection
+from django.db.models.signals import pre_save
 from django.test.utils import CaptureQueriesContext
 from django_compose.provision import ProvisionContext
 from rebac import system_context
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
 from angee.messaging.testing.models import Handle, Party, Person
-from angee.parties.managers import EmailBasis
+from angee.parties.managers import EmailBasis, KeyRepair
 from tests.conftest import create_user
 
 pytestmark = pytest.mark.django_db
@@ -50,6 +54,32 @@ def _row(handle: Any) -> tuple[str, int, str, int]:
 
 def _keyed(handle: Any) -> tuple[str, int]:
     return _row(handle)[:2]
+
+
+def _behind() -> int:
+    return Handle._base_manager.exclude(normalized_version=Handle.NORMALIZATION_VERSION).count()
+
+
+@contextmanager
+def _unsaveable(handle: Any) -> Iterator[None]:
+    """While it lasts, a save of ``handle`` raises; a second attempt at it fails the test instead of spinning."""
+
+    attempts = []
+
+    def refuse(sender: Any, instance: Any, **kwargs: Any) -> None:
+        del sender, kwargs
+        if instance.pk != handle.pk:
+            return
+        if attempts:
+            pytest.fail("One run attempted the same row twice.")
+        attempts.append(instance.pk)
+        raise RuntimeError("This row cannot be saved.")
+
+    pre_save.connect(refuse, sender=Handle)
+    try:
+        yield
+    finally:
+        pre_save.disconnect(refuse, sender=Handle)
 
 
 def test_every_write_of_the_key_writes_the_rules_version_beside_it(owner: Any) -> None:
@@ -98,21 +128,23 @@ def test_a_handle_stored_with_a_punycode_domain_key_is_found_by_its_unicode_spel
 
     assert found() == []
 
-    assert Handle.objects.renormalize_handles() == (1, 0)
+    assert Handle.objects.renormalize_handles() == KeyRepair(saved=1)
 
     assert found() == [(ada.pk, EmailBasis.HELD)]
     assert _row(stale) == ("ada@bücher.example", Handle.NORMALIZATION_VERSION, value, versions + 1)
-    assert Handle.objects.renormalize_handles() == (0, 0)
+    assert Handle.objects.renormalize_handles() == KeyRepair(saved=0)
     assert _row(stale) == ("ada@bücher.example", Handle.NORMALIZATION_VERSION, value, versions + 1)
 
 
-def test_the_repair_stops_at_its_cap_and_the_next_run_takes_the_rest(owner: Any) -> None:
+def test_a_run_given_a_cap_stops_at_it_and_the_next_run_takes_the_rest(owner: Any) -> None:
+    """An operator's share of the backlog: the cap is on the rows the run saves, and what it left is counted."""
+
     stale = [_stored_with(owner, f"ada-{index}@xn--bcher-kva.example", "behind") for index in range(3)]
 
     first = Handle.objects.renormalize_handles(limit=2)
     second = Handle.objects.renormalize_handles(limit=2)
 
-    assert (first, second) == ((2, 1), (1, 0))
+    assert (first, second) == (KeyRepair(saved=2, remaining=1), KeyRepair(saved=1))
     assert [_keyed(handle) for handle in stale] == [
         (f"ada-{index}@bücher.example", Handle.NORMALIZATION_VERSION) for index in range(3)
     ]
@@ -132,7 +164,7 @@ def test_a_row_keyed_under_the_rules_version_is_left_as_it_is_on_every_platform(
     with CaptureQueriesContext(connection) as queries:
         repaired = Handle.objects.renormalize_handles()
 
-    assert repaired == (0, 0)
+    assert repaired == KeyRepair(saved=0)
     assert [_row(handle) for handle in current] == before
     assert not [query["sql"] for query in queries if query["sql"].startswith("UPDATE")]
 
@@ -146,7 +178,7 @@ def test_with_no_row_behind_the_repair_reads_one_indexed_query_and_loads_no_row(
     table = connection.ops.quote_name(Handle._meta.db_table)
 
     with CaptureQueriesContext(connection) as queries:
-        assert Handle.objects.renormalize_handles() == (0, 0)
+        assert Handle.objects.renormalize_handles() == KeyRepair(saved=0)
 
     (selection,) = [query["sql"] for query in queries if table in query["sql"]]
     assert re.match(rf'SELECT {re.escape(table)}\."id"( AS "pk")? FROM {re.escape(table)} WHERE ', selection)
@@ -159,10 +191,10 @@ def test_a_row_whose_key_the_rule_still_gives_has_its_version_written_and_leaves
     unchanged = _stored_with(owner, "ada@example.test", "ada@example.test")
     assert _keyed(unchanged) == ("ada@example.test", 0)
 
-    assert Handle.objects.renormalize_handles() == (1, 0)
+    assert Handle.objects.renormalize_handles() == KeyRepair(saved=1)
 
     assert _keyed(unchanged) == ("ada@example.test", Handle.NORMALIZATION_VERSION)
-    assert Handle.objects.renormalize_handles() == (0, 0)
+    assert Handle.objects.renormalize_handles() == KeyRepair(saved=0)
 
 
 def test_the_repair_keys_every_platform_by_its_rule_as_it_is_now(owner: Any) -> None:
@@ -171,7 +203,7 @@ def test_the_repair_keys_every_platform_by_its_rule_as_it_is_now(owner: Any) -> 
     number = _stored_with(owner, "+1 787 555 0100", "17875550100", platform="phone")
     name = _stored_with(owner, "Ada Example", "Ada Example", platform="other")
 
-    assert Handle.objects.renormalize_handles() == (2, 0)
+    assert Handle.objects.renormalize_handles() == KeyRepair(saved=2)
 
     assert (_keyed(number), _keyed(name)) == (
         ("+17875550100", Handle.NORMALIZATION_VERSION), ("ada example", Handle.NORMALIZATION_VERSION),
@@ -185,7 +217,7 @@ def test_a_row_stamped_by_a_later_version_is_selected_and_keyed_by_the_rule_as_i
         owner, "ada@xn--bcher-kva.example", "a key of the later rule", version=Handle.NORMALIZATION_VERSION + 1,
     )
 
-    assert Handle.objects.renormalize_handles() == (1, 0)
+    assert Handle.objects.renormalize_handles() == KeyRepair(saved=1)
 
     assert _keyed(later) == ("ada@bücher.example", Handle.NORMALIZATION_VERSION)
 
@@ -196,17 +228,17 @@ def test_a_bumped_version_selects_every_row_keyed_before_it(owner: Any, monkeypa
             Handle.objects.upsert(platform="email", value=f"ada-{index}@example.test", created_by_id=owner.pk)
             for index in range(2)
         ]
-    assert Handle.objects.renormalize_handles() == (0, 0)
+    assert Handle.objects.renormalize_handles() == KeyRepair(saved=0)
     bumped = Handle.NORMALIZATION_VERSION + 1
     monkeypatch.setattr(Handle, "NORMALIZATION_VERSION", bumped)
 
-    assert Handle.objects.renormalize_handles() == (2, 0)
+    assert Handle.objects.renormalize_handles() == KeyRepair(saved=2)
 
     assert [_keyed(handle) for handle in rows] == [(f"ada-{index}@example.test", bumped) for index in range(2)]
 
 
-def test_rows_past_one_batch_are_reached_in_one_run(owner: Any) -> None:
-    """The selection is saved in key batches: a run without a cap goes on, batch after batch, until none is behind."""
+def test_a_run_without_a_cap_saves_batch_after_batch_until_no_row_is_behind(owner: Any) -> None:
+    """The whole backlog in one run: a row left with a stale key is one the lookups that read keys would miss."""
 
     count = Handle.objects.REPAIR_LIMIT + 1
     with system_context(reason="tests.parties.handle_keys"):
@@ -214,29 +246,108 @@ def test_rows_past_one_batch_are_reached_in_one_run(owner: Any) -> None:
             Handle(platform="other", value=f"name-{index}", normalized_value=f"name-{index}", created_by=owner)
             for index in range(count)
         )
+    assert _behind() == count
 
-    assert Handle.objects.renormalize_handles() == (count, 0)
+    assert Handle.objects.renormalize_handles() == KeyRepair(saved=count)
 
-    assert not Handle._base_manager.exclude(normalized_version=Handle.NORMALIZATION_VERSION).exists()
+    assert _behind() == 0
 
 
-def test_an_operator_sees_how_many_keys_were_saved_and_where_a_capped_repair_stopped(owner: Any) -> None:
+def test_a_row_whose_save_raises_is_counted_and_left_behind_while_every_other_row_is_saved(
+    owner: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """One row never stops the backlog and is never selected again in the run; the next run takes it."""
+
+    monkeypatch.setattr(Handle.objects, "REPAIR_LIMIT", 2)
+    stale = [_stored_with(owner, f"ada-{index}@xn--bcher-kva.example", "behind") for index in range(5)]
+    refused = stale[2]
+    before = _row(refused)
+
+    with _unsaveable(refused), caplog.at_level(logging.ERROR, logger="angee.parties.managers"):
+        repair = Handle.objects.renormalize_handles()
+
+    assert repair == KeyRepair(saved=4, failed=1, remaining=1)
+    assert _row(refused) == before
+    assert [_keyed(handle) for handle in stale if handle.pk != refused.pk] == [
+        (f"ada-{index}@bücher.example", Handle.NORMALIZATION_VERSION) for index in (0, 1, 3, 4)
+    ]
+    (failure,) = caplog.records
+    assert failure.getMessage() == f"The comparison key of handle {refused.pk} could not be saved again."
+    assert failure.exc_info is not None and str(failure.exc_info[1]) == "This row cannot be saved."
+
+    assert Handle.objects.renormalize_handles() == KeyRepair(saved=1)
+    assert _keyed(refused) == ("ada-2@bücher.example", Handle.NORMALIZATION_VERSION)
+
+
+def test_a_capped_run_passes_a_row_whose_save_raises_and_still_saves_its_share(
+    owner: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cap counts saved rows, so a row that cannot be saved neither uses it up nor holds the run on itself."""
+
+    monkeypatch.setattr(Handle.objects, "REPAIR_LIMIT", 2)
+    stale = [_stored_with(owner, f"ada-{index}@xn--bcher-kva.example", "behind") for index in range(4)]
+
+    with _unsaveable(stale[0]):
+        repair = Handle.objects.renormalize_handles(limit=2)
+
+    assert repair == KeyRepair(saved=2, failed=1, remaining=2)
+    assert [_keyed(handle)[1] for handle in stale] == [0, Handle.NORMALIZATION_VERSION, Handle.NORMALIZATION_VERSION, 0]
+
+
+def test_an_operator_who_asks_for_a_share_sees_where_the_cap_stopped_the_run(owner: Any) -> None:
     for index in range(2):
         _stored_with(owner, f"ada-{index}@xn--bcher-kva.example", "behind")
-    output = StringIO()
 
-    call_command("renormalize_handles", limit=1, stdout=output)
+    def run() -> list[str]:
+        output = StringIO()
+        call_command("renormalize_handles", limit=1, stdout=output)
+        return output.getvalue().splitlines()
 
-    assert output.getvalue().splitlines() == [
+    assert run() == [
         "Saved the comparison key of 1 handle(s) again.",
         "Stopped at the cap of 1 handle(s); 1 more await the next provision or renormalize_handles run.",
     ]
+    # The cap line is for rows the cap left: a capped run that reached the end of the backlog has none.
+    assert run() == ["Saved the comparison key of 1 handle(s) again."]
 
 
-def test_every_provision_runs_the_key_repair(owner: Any) -> None:
+def test_without_a_cap_the_command_saves_every_batch_and_never_prints_the_cap_line(
+    owner: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(Handle.objects, "REPAIR_LIMIT", 2)
+    for index in range(5):
+        _stored_with(owner, f"ada-{index}@xn--bcher-kva.example", "behind")
+    output, errors = StringIO(), StringIO()
+
+    call_command("renormalize_handles", stdout=output, stderr=errors)
+
+    assert output.getvalue().splitlines() == ["Saved the comparison key of 5 handle(s) again."]
+    assert errors.getvalue() == ""
+    assert _behind() == 0
+
+
+def test_an_operator_sees_how_many_rows_could_not_be_saved(owner: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rows that failed are reported apart from rows a cap left: without a cap there is no cap line for them."""
+
+    monkeypatch.setattr(Handle.objects, "REPAIR_LIMIT", 2)
+    stale = [_stored_with(owner, f"ada-{index}@xn--bcher-kva.example", "behind") for index in range(3)]
+    output, errors = StringIO(), StringIO()
+
+    with _unsaveable(stale[1]):
+        call_command("renormalize_handles", stdout=output, stderr=errors)
+
+    assert output.getvalue().splitlines() == ["Saved the comparison key of 2 handle(s) again."]
+    assert errors.getvalue().splitlines() == [
+        "The comparison key of 1 handle(s) could not be saved; the log has each error, "
+        "and the next provision or renormalize_handles run tries them again.",
+    ]
+
+
+def test_every_provision_saves_the_whole_backlog(owner: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """A deployment never depends on someone running the command, and a provision with nothing behind says so."""
 
-    stale = _stored_with(owner, "ada@xn--bcher-kva.example", "behind")
+    monkeypatch.setattr(Handle.objects, "REPAIR_LIMIT", 2)
+    stale = [_stored_with(owner, f"ada-{index}@xn--bcher-kva.example", "behind") for index in range(5)]
     parties: Any = apps.get_app_config("parties")
 
     def provision() -> str:
@@ -244,8 +355,13 @@ def test_every_provision_runs_the_key_repair(owner: Any) -> None:
         parties.compose_provision(ProvisionContext("default", OutputWrapper(output), OutputWrapper(StringIO())))
         return output.getvalue()
 
-    assert "Saved the comparison key of 1 handle(s) again." in provision()
-    assert _keyed(stale) == ("ada@bücher.example", Handle.NORMALIZATION_VERSION)
+    first = provision()
+
+    assert "Saved the comparison key of 5 handle(s) again." in first
+    assert "renormalize_handles run" not in first
+    assert [_keyed(handle) for handle in stale] == [
+        (f"ada-{index}@bücher.example", Handle.NORMALIZATION_VERSION) for index in range(5)
+    ]
     assert "Saved the comparison key of 0 handle(s) again." in provision()
 
 

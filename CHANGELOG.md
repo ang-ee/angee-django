@@ -86,17 +86,27 @@ live in code docstrings.
   rows are then at version 0, so the provision repair `renormalize_handles`
   (`HandleManager.renormalize_handles`), which every provision runs, selects
   them by the column's index and saves each again through the handle's own
-  save, at most `HandleManager.REPAIR_LIMIT` (500) a run: the provision log
-  prints "Saved the comparison key of N handle(s) again." and, while rows
-  remain, "Stopped at the cap of N handle(s); M more await the next provision
-  or renormalize_handles run". Each later provision continues, and
-  `manage.py renormalize_handles --limit N` takes a larger share at once. Each
-  saved row gets `updated_at` stamped and one history version, as any save
-  of a handle does. Once no row is behind, the repair is one indexed query
-  per provision and prints "Saved the comparison key of 0 handle(s) again."
-  A handle stored with a punycode-domain key is found by its Unicode spelling
-  after the run that reaches it. A row newer code stamped with a later
-  version is selected too, so a rollback keys it again by the older rule.
+  save. It takes the whole backlog in that provision, because a row left with
+  a stale key is one the lookups that read keys miss, and a writer that
+  misses it makes a second row. So the first provision after the migration
+  saves every existing handle once (`updated_at` stamped, one history version
+  each); its time grows with the table: about 65 rows per second on
+  PostgreSQL 17 in a local container, measured twice with 10,000 handles
+  (155 and 149 seconds) on an 18-core development machine that other work
+  kept under heavy load (load average 75 to 87). The repair saves in batches
+  of `HandleManager.REPAIR_LIMIT` (500) rows, each in its own transaction, so
+  an interrupted provision keeps what it saved and the next one resumes. The
+  provision log prints "Saved the comparison key of N handle(s) again." A row
+  whose save raises is rolled back alone, logged with its error, counted in
+  "The comparison key of N handle(s) could not be saved; ..." and tried again
+  by the next run, while the rest are saved. `manage.py renormalize_handles
+  --limit N` saves a share instead, and only then prints "Stopped at the cap
+  of N handle(s); M more await the next provision or renormalize_handles
+  run". Once no row is behind, the repair is one indexed query per provision
+  and prints "Saved the comparison key of 0 handle(s) again." A handle stored
+  with a punycode-domain key is found by its Unicode spelling after that
+  first provision. A row newer code stamped with a later version is selected
+  too, so a rollback keys it again by the older rule.
   Limits: two callers that meet two spellings of
   one new address at once each make its row, and so its person, which the
   pairing job then proposes; a handle is unique by its value as typed, not by

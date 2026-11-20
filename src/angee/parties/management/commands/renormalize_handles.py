@@ -9,7 +9,7 @@ from django.core.management.base import BaseCommand, CommandParser
 
 
 class Command(BaseCommand):
-    """Run the explicit handle-key repair; a second run saves nothing."""
+    """Run the handle-key repair over the whole backlog, or a share of it; a second run saves nothing."""
 
     help = (
         "Save again the comparison key of each handle, of any platform, whose key was computed under another "
@@ -17,28 +17,35 @@ class Command(BaseCommand):
     )
 
     def add_arguments(self, parser: CommandParser) -> None:
-        """Accept the cap on the keys one run saves."""
+        """Accept a cap on the rows one run saves."""
 
         parser.add_argument(
             "--limit",
             type=int,
             default=None,
-            help="The most keys this run saves (default: the Handle manager's REPAIR_LIMIT); "
-            "the next run continues where it stopped.",
+            help="Save at most this many rows and stop; the next run continues where it stopped. "
+            "Without it the run takes every row that is behind.",
         )
 
     def handle(self, *args: Any, **options: Any) -> None:
-        """Dispatch to the Handle manager and report what it saved and where it stopped."""
+        """Dispatch to the Handle manager and report what it saved, what it could not, and where a cap stopped it."""
 
         del args
-        handles = apps.get_model("parties", "Handle").objects
-        limit = handles.REPAIR_LIMIT if options["limit"] is None else options["limit"]
-        saved, remaining = handles.renormalize_handles(limit=limit)
-        self.stdout.write(self.style.SUCCESS(f"Saved the comparison key of {saved} handle(s) again."))
-        if remaining:
+        limit = options["limit"]
+        repair = apps.get_model("parties", "Handle").objects.renormalize_handles(limit=limit)
+        self.stdout.write(self.style.SUCCESS(f"Saved the comparison key of {repair.saved} handle(s) again."))
+        if repair.failed:
+            self.stderr.write(
+                self.style.ERROR(
+                    f"The comparison key of {repair.failed} handle(s) could not be saved; the log has each error, "
+                    "and the next provision or renormalize_handles run tries them again."
+                )
+            )
+        unreached = repair.remaining - repair.failed
+        if limit is not None and unreached:
             self.stdout.write(
                 self.style.WARNING(
-                    f"Stopped at the cap of {limit} handle(s); {remaining} more await the next provision "
+                    f"Stopped at the cap of {limit} handle(s); {unreached} more await the next provision "
                     "or renormalize_handles run."
                 )
             )

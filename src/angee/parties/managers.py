@@ -358,13 +358,24 @@ class HandleQuerySet[HandleT: Handle](MergeableQuerySet[HandleT], AngeeHistoryQu
 _HandleManagerBase = AngeeHistoryManager.from_queryset(HandleQuerySet)
 
 
+class KeyRepair(NamedTuple):
+    """What a key repair did (:meth:`HandleManager.renormalize_handles`)."""
+
+    saved: int
+    """Rows whose comparison key was saved again, with the rule's version beside it."""
+    failed: int = 0
+    """Rows whose save raised: logged, left as they were, and still behind."""
+    remaining: int = 0
+    """Rows still behind when the run ended: the failed ones, and those a capped run did not reach."""
+
+
 class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
     """Factory + upsert for handles (the contact-point write path)."""
 
     REPAIR_LIMIT: ClassVar[int] = 500
-    """The most rows a handle repair writes by default (``resolve_stale_owners``, ``renormalize_handles``).
+    """The most holders one holder repair writes by default (``resolve_stale_owners``); the next run continues.
 
-    The next run continues.
+    Also the most rows the key repair saves in one transaction (``renormalize_handles``), which has no cap of its own.
     """
 
     def for_user(self, user: Any) -> Any:
@@ -809,27 +820,37 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             remaining += stale.count()
         return repair._replace(resolved=resolved, remaining=remaining)
 
-    def renormalize_handles(self, *, limit: int | None = None) -> tuple[int, int]:
-        """Save again each comparison key computed under another version of its rule; return ``(saved, remaining)``.
+    def renormalize_handles(self, *, limit: int | None = None) -> KeyRepair:
+        """Save again every comparison key computed under another version of its rule; return what the run did.
 
         ``normalized_value`` is what ``Handle.normalize_value`` gave when a row
         was last saved, and ``normalized_version`` the version the rule had then.
         A change of the rule (``Handle.NORMALIZATION_VERSION``) leaves stored keys
-        behind and the lookups that read them miss those rows. This repair
-        selects the rows whose version is not the rule's, of every platform: an
-        earlier one, 0 for a row stored before the rule had a version, or a
-        later one that newer code wrote before a rollback. Each is read again
-        under its lock and saved through the handle's own save, which derives
-        the key and writes both key columns together, so a row whose key is
-        already what the rule gives has it written again unchanged beside its
-        version and leaves the selection. ``value`` is never written,
-        ``updated_at`` is stamped as every save of an audited row stamps it, and
-        the row's history records the save as any other. Rows are selected by
-        the version's index in key batches of at most :attr:`REPAIR_LIMIT`, each
-        saved in its own transaction; with nothing behind, that one query is all
-        the repair reads. A run saves at most ``limit`` rows and counts the rest
-        as ``remaining``, which the next run takes. Named system work.
-        Idempotent.
+        behind, the lookups that read keys miss those rows, and a writer that
+        misses a row makes a second one. So a run takes the whole backlog;
+        ``limit`` is for an operator who wants a share of it, the most rows the
+        run saves. The run selects the rows whose version is not the rule's, of
+        every platform, by the version's index: an earlier one, 0 for a row
+        stored before the rule had a version, or a later one that newer code
+        wrote before a rollback. Each is read again under its lock and saved
+        through the handle's own save, which derives the key and writes both key
+        columns together, so a row whose key is already what the rule gives has
+        it written again unchanged beside its version and leaves the selection.
+        ``value`` is never written, ``updated_at`` is stamped as every save of an
+        audited row stamps it, and the row's history records the save as any
+        other.
+
+        Rows are taken in key batches of at most :attr:`REPAIR_LIMIT`, each batch
+        in its own transaction, so an interrupted run keeps what it saved and
+        the next one resumes. The run ends because every batch starts after the
+        last key the run selected, whatever became of that row: no row is
+        selected twice in one run. A row deleted before its lock is not there to
+        save, one another process saved meanwhile is read at the rule's version
+        and skipped, and a save that raises is rolled back to its own savepoint,
+        logged with its traceback and counted in ``failed``. That row stays
+        behind for the next run and the rest of the backlog is still saved. With
+        nothing behind, the selection is the one query the repair issues. Named
+        system work. Idempotent.
         """
 
         version = self.model.NORMALIZATION_VERSION
@@ -838,7 +859,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             Q(normalized_version__lt=version) | Q(normalized_version__gt=version)
         ).order_by("pk")
         size = min(query_batch_size(behind), self.REPAIR_LIMIT)
-        saved = 0
+        saved = failed = 0
         last: Any = None
         with system_context(reason="parties.handle.renormalize"):
             while limit is None or saved < limit:
@@ -846,14 +867,22 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                 batch = behind if last is None else behind.filter(pk__gt=last)
                 keys = list(batch.values_list("pk", flat=True)[:reach])
                 if not keys:
-                    return saved, 0
+                    # Every row that was behind has been selected once: the failed ones are what is left.
+                    return KeyRepair(saved, failed, remaining=failed)
                 last = keys[-1]
                 with transaction.atomic():
                     for handle in self.filter(pk__in=keys).order_by("pk").lock_if_supported():
-                        if handle.normalized_version != version:
-                            handle.save(update_fields=["normalized_value", "normalized_version"])
+                        if handle.normalized_version == version:
+                            continue
+                        try:
+                            with transaction.atomic():
+                                handle.save(update_fields=["normalized_value", "normalized_version"])
+                        except Exception:  # noqa: BLE001 -- one row never stops the backlog; it is logged and counted.
+                            logger.exception("The comparison key of handle %s could not be saved again.", handle.pk)
+                            failed += 1
+                        else:
                             saved += 1
-            return saved, behind.count()
+            return KeyRepair(saved, failed, remaining=behind.count())
 
     def fill_avatar(self, report: AvatarReport) -> bool:
         """Set the avatar a source reports on its handle; return whether it changed.
