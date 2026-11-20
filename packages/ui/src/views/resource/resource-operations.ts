@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { useInvalidate } from "@refinedev/core";
 import { useToast } from "../../feedback";
 import { useUiT } from "../../i18n";
@@ -44,7 +44,8 @@ export function requireDataResource(
  * Capability probe for one generated resource operation: absent root or
  * absent generated document reads as "capability unavailable" (null target)
  * so an unconditional hook call never fails a render; executing paths gate on
- * the returned target.
+ * the returned target. One operation per resource and documents, so what a
+ * caller derives from its target holds across renders.
  */
 function useResourceOperation(
   resource: DataResourceMetadata | null,
@@ -52,15 +53,17 @@ function useResourceOperation(
   kind: OperationDocumentKind,
 ): ResourceOperation {
   const documents = useOperationDocuments();
-  if (!resource || !resource.roots[root]) return ABSENT_OPERATION;
-  const document = maybeOperationDocument(
-    documents,
-    resource.schemaName,
-    kind,
-    resource.modelLabel,
-  );
-  if (!document) return ABSENT_OPERATION;
-  return { target: resourceOperationTarget(resource, root), document };
+  return useMemo(() => {
+    if (!resource || !resource.roots[root]) return ABSENT_OPERATION;
+    const document = maybeOperationDocument(
+      documents,
+      resource.schemaName,
+      kind,
+      resource.modelLabel,
+    );
+    if (!document) return ABSENT_OPERATION;
+    return { target: resourceOperationTarget(resource, root), document };
+  }, [documents, kind, resource, root]);
 }
 
 export function useAggregateOperation(

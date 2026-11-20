@@ -1,10 +1,16 @@
 // @vitest-environment happy-dom
 
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { createRefineTestProviders } from "../testing";
+import { listQueryMeta } from "../list-query";
 import { useAngeeListBatch, type AngeeListBatchScope, type ListBatchTarget } from "./hooks";
+
+vi.mock("../list-query", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../list-query")>();
+  return { ...actual, listQueryMeta: vi.fn(actual.listQueryMeta) };
+});
 
 const target: ListBatchTarget = {
   root: "notes", aggregateRoot: "notes_aggregate", filterType: "NoteBoolExp", orderType: "NoteOrderBy",
@@ -35,6 +41,16 @@ describe("native list batch structural sharing", () => {
     expect(result.current.get("1")?.rows).toBe(settled.get("1")?.rows);
     expect(result.current.get("1")?.refetch).toBe(settled.get("1")?.refetch);
     expect(dataProvider.getList).toHaveBeenCalledTimes(2);
+  });
+
+  test("a target declared afresh with the same names builds no request again", async () => {
+    dataProvider.getList.mockResolvedValue({ data: [{ id: "note-a" }], total: 12 });
+    const declared = scopes();
+    const { result, rerender } = renderHook(() => useAngeeListBatch({ ...target }, declared, { fields: ["id"] }), { wrapper: Provider });
+    await waitFor(() => expect([...result.current.values()].every((entry) => entry.total === 12 && !entry.fetching)).toBe(true));
+    const built = vi.mocked(listQueryMeta).mock.calls.length;
+    rerender();
+    expect(vi.mocked(listQueryMeta).mock.calls.length).toBe(built);
   });
 
   test("updates changed data through refetch without issuing a second sibling read", async () => {

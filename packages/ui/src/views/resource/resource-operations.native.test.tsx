@@ -10,7 +10,7 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import { createUiTestProviders } from "../../testing";
 import { ToastProvider } from "../../feedback";
-import { useDeleteWithPreview } from "./resource-operations";
+import { useDeletePreviewOperation, useDeleteWithPreview } from "./resource-operations";
 
 const resource = testDataResource("notes.Note", { roots: { deletePreview: "delete_note_preview" } });
 const unrelated = testDataResource("storage.File");
@@ -22,6 +22,19 @@ const { Provider, clearClients } = createUiTestProviders({
   queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity }, mutations: { retry: false } } },
 });
 afterEach(() => { cleanup(); clearClients(); });
+
+test("a resource's operation keeps its target across renders, so what a caller derives from it holds", () => {
+  const documents = { console: { deletePreviews: { "notes.Note": DELETE } } };
+  const { result, rerender } = renderHook(() => useDeletePreviewOperation(resource), {
+    wrapper: ({ children }: { children: ReactNode }) => (
+      <Provider><OperationDocumentsProvider documents={documents}>{children}</OperationDocumentsProvider></Provider>
+    ),
+  });
+  const operation = result.current;
+  expect(operation.target).toMatchObject({ root: "delete_note_preview", modelLabel: "notes.Note" });
+  rerender();
+  expect(result.current).toBe(operation);
+});
 
 test.each(["success", "refused", "blocked"] as const)("delete preview refreshes the native resource caches only after success (%s)", async (outcome) => {
   const refused = outcome === "refused";

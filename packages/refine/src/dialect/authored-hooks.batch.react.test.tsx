@@ -120,6 +120,51 @@ describe("useAuthoredQueryBatch", () => {
     expect(result.current.get("folder-a")?.refetch).toBe(settledRefetch);
   });
 
+  test("keeps the Map and its entries while nothing changed, and shares every unchanged entry when one did", async () => {
+    const alpha = deferred<ProbeData>();
+    const beta = deferred<ProbeData>();
+    batchMock.handlers.set("drive-a/folder-a", () => alpha.promise);
+    batchMock.handlers.set("drive-a/folder-b", () => beta.promise);
+    batchMock.handlers.set("drive-a/folder-c", async () => data("child-c", "drive-a", "folder-c"));
+    const client = createQueryClient();
+    // Equal scopes declared afresh on every render, as a caller's derivation does.
+    const { result, rerender } = renderHook(
+      ({ parents }) => useAuthoredQueryBatch(parents.map((parent) => scope(parent, "drive-a", parent))),
+      {
+        initialProps: { parents: ["folder-a", "folder-b"] },
+        wrapper: ({ children }) => <Providers client={client}>{children}</Providers>,
+      },
+    );
+    await waitFor(() => expect(batchMock.calls).toHaveLength(2));
+    const pending = result.current;
+    rerender({ parents: ["folder-a", "folder-b"] });
+    expect(result.current).toBe(pending);
+    expect(result.current.get("folder-a")).toBe(pending.get("folder-a"));
+
+    await act(async () => {
+      beta.resolve(data("child-b", "drive-a", "folder-b"));
+    });
+    await waitFor(() => {
+      expect(result.current.get("folder-b")?.data?.folders[0]?.id).toBe("child-b");
+    });
+    const settled = result.current;
+    expect(settled).not.toBe(pending);
+    expect(settled.get("folder-b")).not.toBe(pending.get("folder-b"));
+    expect(settled.get("folder-a")).toBe(pending.get("folder-a"));
+    rerender({ parents: ["folder-a", "folder-b"] });
+    expect(result.current).toBe(settled);
+    expect(result.current.get("folder-b")).toBe(settled.get("folder-b"));
+
+    rerender({ parents: ["folder-a", "folder-b", "folder-c"] });
+    const added = result.current;
+    expect(added).not.toBe(settled);
+    expect([...added.keys()]).toEqual(["folder-a", "folder-b", "folder-c"]);
+    expect(added.get("folder-b")).toBe(settled.get("folder-b"));
+    rerender({ parents: ["folder-a", "folder-b"] });
+    expect(result.current).not.toBe(added);
+    expect([...result.current.keys()]).toEqual(["folder-a", "folder-b"]);
+  });
+
   test("keys same-parent reads by drive and never exposes the previous key as placeholder data", async () => {
     batchMock.handlers.set("drive-a/shared", async () =>
       data("drive-a-child", "drive-a", "shared"),

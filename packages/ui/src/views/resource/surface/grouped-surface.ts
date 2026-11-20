@@ -356,7 +356,8 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   );
 
   // Persist corrections from settled native counts for both subgroup and leaf
-  // pages. Otherwise a later count increase could revive an obsolete old page.
+  // pages, when a count settles or a page is set past it (which may read the last
+  // page again). Otherwise a later count increase could revive an obsolete old page.
   React.useEffect(() => {
     setPaginationByScope((current) => {
       let next = current;
@@ -380,7 +381,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
       }
       return next;
     });
-  }, [groupByResults, requestedLeafResults, setPaginationByScope]);
+  }, [groupByResults, requestedLeafResults, paginationByScope, setPaginationByScope]);
 
   // One table over the in-display-order concatenation of loaded leaf rows: row
   // ids stay the bare public id so selection identity matches the flat surface.

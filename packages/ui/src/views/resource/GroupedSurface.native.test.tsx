@@ -204,6 +204,22 @@ test("native grouped root and leaf pagination clamp oversized page sizes", async
   expect(f.surface.groupedItems.find((item) => item.kind === "record")?.nav.pageSize).toBe(100);
 });
 
+test("a group page set past its last page is corrected though it asks the server for nothing new", async () => {
+  const f = fixture();
+  await waitFor(() => expect(f.header(1)).toBeDefined());
+  const leaf = f.header(1)!;
+  if (leaf.kind !== "groupHeader") throw new Error("missing leaf header");
+  act(() => f.surface.toggleGroup(leaf.bucketKey));
+  await waitFor(() => expect(f.header(1)?.pager).toBeTruthy());
+  act(() => f.surface.setScopePageSize(leaf.bucketKey, 50));
+  act(() => f.surface.setScopePage(leaf.bucketKey, 3));
+  await waitFor(() => expect(f.surface.groupedItems.some((item) =>
+    item.kind === "record" && item.nav.page === 3 && !item.nav.fetching)).toBe(true));
+  // The last of its three pages shows already, so a later one reads that page again.
+  act(() => f.surface.setScopePage(leaf.bucketKey, 9));
+  await waitFor(() => expect(f.view.paginationByScope[leaf.bucketKey]).toEqual({ pageIndex: 2, pageSize: 50 }));
+});
+
 test("a native grouped header sort updates the leaf query and preserves the parent filter", async () => {
   const f = fixture();
   act(() => f.view.setFilter({ title: { iContains: "kept" } }));
@@ -852,6 +868,26 @@ test("in the mode a render that changes nothing, as a scroll frame does, copies 
       clone.mockRestore();
     }
     cleanup();
+  }
+});
+
+test("a render that changes nothing the grouped list reads, as a parent's state change, rebuilds no group model", async () => {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status" }] });
+  await f.select("Task 3");
+  await waitFor(() => expect(f.selectedGroups).toEqual([status("closed", "closed", ["t3"])]));
+  await waitFor(() => expect(f.fetching).toBe(false));
+  const rows = () => f.first().getAllByRole("row").map((row) => row.textContent);
+  const shown = rows();
+  const handed = f.collections.length;
+  // A build walks each level of groups once, asking the resource query for its read.
+  const build = vi.spyOn(ResourceQuery.prototype, "toGroupRead");
+  try {
+    f.rerender();
+    expect(f.collections.length).toBeGreaterThan(handed);
+    expect(build).not.toHaveBeenCalled();
+    expect(rows()).toEqual(shown);
+  } finally {
+    build.mockRestore();
   }
 });
 

@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import {
   useCustomMutation,
   useDataProvider,
@@ -115,7 +115,11 @@ export function useAuthoredQuery<TDocument extends AuthoredDocument>(
   return result;
 }
 
-/** Native query results addressed by a domain label; labels never key the cache. */
+/**
+ * Native query results addressed by a domain label; labels never key the cache.
+ * The Map, and each result in it, keeps its identity until a result or a label's
+ * request changes; a change replaces only the results it touched.
+ */
 export function useAuthoredQueryBatch<TDocument extends AuthoredDocument>(
   scopes: readonly AuthoredQueryBatchScope<TDocument>[],
   options: AuthoredOperationOptions & Pick<AuthoredQueryOptions, "enabled" | "errorNotification" | "refetchInterval"> = {},
@@ -137,11 +141,24 @@ export function useAuthoredQueryBatch<TDocument extends AuthoredDocument>(
     enabled: options.enabled ?? true,
     refetchInterval: options.refetchInterval,
   }));
-  const results = useQueries({ queries });
+  const results = useQueries({ queries, combine: shareQueryResults });
   const models = useStableArray([...new Set(scopes.flatMap((scope) => scope.models ?? []))].sort());
   useAuthoredLiveInterest(options.enabled ?? true, models);
   useAuthoredErrorPolicy(queries.map((query) => query.queryKey), { notify: options.errorNotification !== false });
-  return new Map(scopes.map((scope, index) => [scope.key, results[indexByHash.get(hashes[index]!)!]!]));
+  // Each label's request among the unique ones: with the shared results, all the Map holds.
+  const slots = useStableValue<readonly (readonly [string, number])[]>(
+    scopes.map((scope, index) => [scope.key, indexByHash.get(hashes[index]!)!]), [],
+  );
+  return useMemo(() => new Map(slots.map(([key, index]) => [key, results[index]!])), [results, slots]);
+}
+
+/**
+ * Query re-runs a stable `combine` only when a result or a query hash changes, and
+ * structurally shares what it returns, so an unchanged result keeps its identity.
+ * Sharing compares every property of a result, so each one counts as a change.
+ */
+function shareQueryResults<TResults>(results: TResults): TResults {
+  return results;
 }
 
 /** Invalidate every authored read registered against any supplied model. */

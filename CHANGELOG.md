@@ -112,6 +112,19 @@ live in code docstrings.
   its `Checkbox`. `@angee/ui/views/resource-view-context` no longer exports the
   lists' internal selection channel (`useSelectionPlaces`, `SelectionPlaces`).
 
+- `@angee/refine`: `useAuthoredQueryBatch` hands back the same Map, and the same
+  result objects, until a result or a label's request changes, and a change
+  replaces only the results it touched: native `useQueries` `combine`, which Query
+  re-runs only on such a change and shares structurally. The batch reads built on
+  it inherit that (`useAngeeGroupByBatch`, `useAngeeFacets`, a source's
+  `useCollectionQueryBatch`), `useAngeeGroupBy` and `useAngeeAggregate` decode once
+  per read, `useAngeeListBatch` keys its requests on the target's names, and a
+  resource's operations (`useGroupOperation`, `useAggregateOperation`,
+  `useDeletePreviewOperation`) keep their target across renders, so a grouped
+  list's render that changes nothing it reads (a scroll frame) rebuilds no group
+  model. Sharing compares every property of a result, so a batch also re-renders
+  when only one nobody reads changes (a read going stale, a retry's count).
+
 - `angee.parties`: one owner proposes same-person pairs. A pull-only
   directory's contact that may only claim an address another live party is
   linked to proposes them through `Party.objects.propose_same_person_as_system`

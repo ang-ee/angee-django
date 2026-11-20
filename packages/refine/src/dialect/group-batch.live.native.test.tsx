@@ -313,6 +313,45 @@ test("aggregate totals register shared model interests and retain success after 
   expect(result.current.aggregate?.count).toBe(5);
 });
 
+test("a render that changes nothing keeps every group and aggregate result; changed data changes it", async () => {
+  const totals = (groups: number, count: number) => ({ data: {
+    ...response(groups).data, messages_aggregate: { aggregate: { count } },
+  } });
+  const custom = vi.fn(async () => totals(1, 4));
+  const f = fixture(custom);
+  // Targets and scopes declared afresh on every render, as a surface's derivation does.
+  const { result, rerender } = renderHook(({ title }) => ({
+    title,
+    batch: useAngeeGroupByBatch({ ...TARGET }, SCOPES.map((scope) => ({ ...scope })), { document: DOCUMENT }),
+    single: useAngeeGroupBy({ ...TARGET }, { document: DOCUMENT, ...SCOPES[0]!.query }),
+    aggregate: useAngeeAggregate({ ...TARGET, root: "messages_aggregate" }, {
+      document: "query Total { messages_aggregate { aggregate { count } } }",
+    }),
+  }), { initialProps: { title: "First" }, wrapper: f.wrapper });
+  await waitFor(() => {
+    expect(result.current.batch.get("channels")?.totalCount).toBe(1);
+    expect(result.current.single.totalCount).toBe(1);
+    expect(result.current.aggregate.aggregate?.count).toBe(4);
+  });
+  const settled = result.current;
+  rerender({ title: "Unrelated title" });
+  expect(result.current.batch).toBe(settled.batch);
+  expect(result.current.batch.get("channels")).toBe(settled.batch.get("channels"));
+  expect(result.current.single).toBe(settled.single);
+  expect(result.current.aggregate).toBe(settled.aggregate);
+
+  custom.mockResolvedValue(totals(2, 5));
+  await act(async () => { await invalidateAuthoredQueries(f.client, [TARGET.modelLabel]); });
+  await waitFor(() => {
+    expect(result.current.batch.get("channels")?.totalCount).toBe(2);
+    expect(result.current.single.totalCount).toBe(2);
+    expect(result.current.aggregate.aggregate?.count).toBe(5);
+  });
+  expect(result.current.batch).not.toBe(settled.batch);
+  expect(result.current.single).not.toBe(settled.single);
+  expect(result.current.aggregate).not.toBe(settled.aggregate);
+});
+
 test("native aggregate and group polling survives unrelated renders, pauses without focus, and stops on unmount", async () => {
   vi.useFakeTimers();
   focusManager.setFocused(true);

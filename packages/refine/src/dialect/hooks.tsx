@@ -226,13 +226,15 @@ export function useAngeeAggregate(
     dataProviderName: request?.dataProviderName,
     refetchInterval,
   }).get("single");
-  return {
-    aggregate: request ? extractAggregate(run?.data, request.root) : null,
+  const root = request?.root;
+  // Decoded once per read, so a render that changes nothing hands back the same result.
+  return useMemo(() => ({
+    aggregate: root === undefined ? null : extractAggregate(run?.data, root),
     fetching: run?.isFetching ?? false,
     error: run?.error ?? null,
     updatedAt: run?.dataUpdatedAt || null,
     refetch: () => { void run?.refetch(); },
-  };
+  }), [root, run]);
 }
 
 export function useAngeeGroupBy(
@@ -247,22 +249,26 @@ export function useAngeeGroupBy(
   );
   const run = useGroupByRequestBatch(target, scopes, { document, enabled, refetchInterval, relatedModels });
   const entry = run.get("single");
-  let result = EMPTY_GROUP_BY_RESULT;
-  let decodeError: Error | null = null;
-  if (target && entry?.data != null) {
-    try {
-      result = extractGroupBy(entry.data, target.root);
-    } catch (cause) {
-      decodeError = cause instanceof Error ? cause : new Error(String(cause));
+  const root = target?.root;
+  // Decoded once per read, so a render that changes nothing hands back the same result.
+  return useMemo(() => {
+    let result = EMPTY_GROUP_BY_RESULT;
+    let decodeError: Error | null = null;
+    if (root !== undefined && entry?.data != null) {
+      try {
+        result = extractGroupBy(entry.data, root);
+      } catch (cause) {
+        decodeError = cause instanceof Error ? cause : new Error(String(cause));
+      }
     }
-  }
-  return {
-    ...result,
-    fetching: entry?.fetching ?? false,
-    error: entry?.error ?? decodeError,
-    updatedAt: entry?.updatedAt ?? null,
-    refetch: () => entry?.refetch(),
-  };
+    return {
+      ...result,
+      fetching: entry?.fetching ?? false,
+      error: entry?.error ?? decodeError,
+      updatedAt: entry?.updatedAt ?? null,
+      refetch: () => entry?.refetch(),
+    };
+  }, [entry, root]);
 }
 
 export function useAngeeFacets(
@@ -407,6 +413,8 @@ export function useAngeeListBatch(
   const resourceName = target?.resourceName ?? "";
   const identifier = target?.resourceIdentifier ?? "";
   const schemaName = target?.dataProviderName;
+  // A caller derives its target per render: its names, not the object, key the requests.
+  const targetKey = stableKey(target);
   const fieldsKey = stableKey(options.fields);
   const scopesKey = stableKey(activeScopes);
   const requests = useMemo(
@@ -420,7 +428,7 @@ export function useAngeeListBatch(
           pageSize: scope.pageSize,
         },
       })),
-    [activeScopes, scopesKey, target, fieldsKey],
+    [activeScopes, scopesKey, targetKey, fieldsKey],
   );
   // One static, resource-level live subscription re-opens the websocket changes()
   // feed for these rows: refine's auto liveMode invalidates the resource list cache
