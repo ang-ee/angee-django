@@ -4,24 +4,29 @@
  * application: no React, no GraphQL, no session. The page runs under a content
  * security policy with no inline script, so everything it does starts here.
  */
-import { applyAppearanceRoot } from "@angee/ui/theme-runtime";
+import { applyAppearanceRoot, readAppearancePayload, resolveAppearance } from "@angee/ui/theme-runtime";
 import { renderSurvey, unmountComponentAtNode } from "survey-js-ui";
-import { appearance } from "virtual:angee-appearance";
 
 import "survey-core/survey-core.css";
 import "./surveyjs-bridge.css";
 import { openPage } from "./page";
 
 const dark = matchMedia("(prefers-color-scheme: dark)");
+// The deployment's appearance, which the build writes into the document as data.
+const deployment = readAppearancePayload();
 let theme = "";
 
-/** Wear the form's theme, else the deployment's default, in the visitor's colour scheme. */
+/**
+ * Wear the form's theme, else the deployment's, as the application itself
+ * resolves it: under the deployment's colour scheme when it pins one, the
+ * visitor's when it follows the system, and with the deployment's own tokens.
+ */
 function wear(themeId: string = theme): void {
   theme = themeId;
-  applyAppearanceRoot({
-    themeId: themeId || appearance.themeId || null,
-    colorScheme: dark.matches ? "dark" : "light",
-  });
+  applyAppearanceRoot(deployment
+    ? resolveAppearance(deployment, { themeId: themeId || undefined, prefersDark: () => dark.matches })
+    // A document the build did not prepare names only the theme and the visitor's scheme.
+    : { themeId: themeId || null, colorScheme: dark.matches ? "dark" : "light" });
 }
 
 dark.addEventListener("change", () => wear());

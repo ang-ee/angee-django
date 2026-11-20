@@ -20,3 +20,10 @@ stylesheets (`@angee/ui/tokens.css`, a new export of the token sheet alone, and
 security policy of its own: the ingress sends the manifest's `pageCsp` as a
 header, preview does the same, and development writes it into the document
 after Vite's own head scripts. A host needs no change.
+
+`@angee/ui/theme-runtime` exports `resolveAppearance`, the one resolution of
+what a document wears from the build's appearance payload (the host's theme,
+its forced or system color scheme and its token layers, or a named installed
+theme), which `bootstrapAppearance` now uses, and `readAppearancePayload` for a
+page, which is given that payload as a JSON data block in place of the inline
+first-paint script.

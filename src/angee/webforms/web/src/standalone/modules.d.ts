@@ -12,9 +12,3 @@ declare module "*?raw" {
 
 // SurveyJS's interface strings; each module registers its locale when it loads and ships no types.
 declare module "survey-core/i18n/*";
-
-// The host's appearance defaults, provided by `@angee/app/vite`.
-declare module "virtual:angee-appearance" {
-  import type { HostAppearanceDefaults } from "@angee/ui/theme";
-  export const appearance: HostAppearanceDefaults;
-}

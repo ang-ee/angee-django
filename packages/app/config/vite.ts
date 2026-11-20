@@ -7,6 +7,7 @@ import react from "@vitejs/plugin-react";
 import { build, defineConfig, mergeConfig, normalizePath, send, type Connect, type HtmlTagDescriptor, type Plugin, type UserConfig, type ViteDevServer } from "vite";
 import { generateWebRuntime, type StandalonePage, type WebCodegenInputs, type WebCodegenResult } from "@angee/app/web-codegen";
 import {
+  APPEARANCE_PAYLOAD_ATTRIBUTE,
   resolveThemeOptions,
   type AppearanceBootstrapPayload,
   type ThemeDefinition,
@@ -926,9 +927,19 @@ function angeeAppearancePlugin(
     transformIndexHtml: {
       order: "pre",
       async handler(_html, context) {
-        // The bootstrap restores the signed-in person's own appearance, as an inline
-        // script. A standalone page has no session and applies its theme itself.
-        if (!payload || standalone(context.filename)) return;
+        if (!payload) return;
+        if (standalone(context.filename)) {
+          // A standalone page has no session, and the policy it is served under runs no inline
+          // script. It is given the same payload as data, and applies it itself.
+          return [{
+            tag: "script",
+            attrs: { type: "application/json", [APPEARANCE_PAYLOAD_ATTRIBUTE]: "" },
+            // Keep HTML's parser from reading markup inside the data.
+            children: JSON.stringify(payload).replaceAll("<", "\\u003c"),
+            injectTo: "head",
+          }];
+        }
+        // The bootstrap restores the signed-in person's own appearance, as an inline script.
         bootstrap ??= appearanceBootstrapScript(payload);
         return [{
           tag: "script",

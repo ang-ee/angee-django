@@ -691,10 +691,12 @@ test("build emits a declared page as <id>.html beside index.html, with its own f
   const source = Buffer.from(page.source).toString();
   const chunk = outputs.find((entry) => entry.type === "chunk" && entry.code.includes("standalone page module"));
   expect(source).toContain(`src="/${chunk?.fileName}"`);
-  // The app's document keeps its first-paint script; a page applies its own theme, and the
-  // content security policy the ingress sends it runs no inline script.
+  // The app's document keeps its first-paint script. A page applies its own theme: the content
+  // security policy the ingress sends it runs no inline script, so it is given the appearance as data.
   expect(html).toContain("data-angee-appearance-bootstrap");
-  expect(source).not.toMatch(/<script(?![^>]*\ssrc=)/);
+  const inline = [...source.matchAll(/<script(?![^>]*\ssrc=)([^>]*)>([\s\S]*?)<\/script>/g)];
+  expect(inline.map((script) => script[1]!.trim())).toEqual(['type="application/json" data-angee-appearance=""']);
+  expect(JSON.parse(inline[0]![2]!)).toMatchObject({ host: { themeId: "demo.theme", colorScheme: "light" }, catalogue: { themes: [{ id: "demo.theme" }] } });
   // The ingress sends the policy as a header: the built document repeats none of it.
   expect(source).not.toContain("Content-Security-Policy");
   // The page is given the design tokens and the installed themes, and never the host's own stylesheet.
@@ -735,6 +737,7 @@ test("dev serves a declared page at its paths to a document request, and nothing
   expect(page.headers.get("vary")?.split(", ")).toContain("Accept");
   const html = await page.text();
   expect(html).not.toContain("data-angee-appearance-bootstrap");
+  expect(html).toContain('<script type="application/json" data-angee-appearance="">');
   const module = encodeURI(`/@fs${join(addon, "pages", "demo.ts")}`);
   expect(html).toContain(`<script type="module" src="${module}">`);
   expect(await (await get(module)).text()).toContain("standalone page module");
