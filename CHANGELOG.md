@@ -22,7 +22,12 @@ live in code docstrings.
   grouped field, which has no one-field cursor, and an order with nulls first or
   descending (one rule, `cursorField`, shared by the reader and the dialog). A
   page that ends on a key no `_gt` can step past (null, or not text) ends the
-  listing rather than starting it again from the first page.
+  listing rather than starting it again from the first page. A paged dialog says
+  how far it has read ("Loaded N of M …", with the loading indicator) from its
+  first render until every page is listed and previewed, and every dialog uses a
+  preview only as it read it itself, fetched since it opened and not being read
+  again: a reopened dialog reads its previews again rather than ticking from
+  cached ones.
 - `angee.base`, `angee.resources`, `angee.workflows`: a merge refusal's reason
   names the record by its public id ("This record (tag_…) is loaded from
   angee.tags resources, which would recreate it; keep it instead.", "Workflow

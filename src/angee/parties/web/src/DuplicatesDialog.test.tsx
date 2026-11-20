@@ -42,7 +42,7 @@ vi.mock("@angee/refine", async (importOriginal) => ({
     if (document === mocks.documents.previews && mocks.previewRead) return mocks.previewRead(variables);
     return {
       data: { duplicate_set_previews: mocks.previews, selection_duplicate_sets: mocks.selection },
-      isFetching: false, error: null,
+      isFetching: false, isFetchedAfterMount: true, error: null,
     };
   },
   useAuthoredMutation: () => [mocks.merge, { fetching: false, error: null, reset: () => undefined }],
@@ -186,7 +186,9 @@ const answering = () => {
   return (variables: { sets: string[][] }): Read => {
     const key = JSON.stringify(variables.sets);
     if (!cache.has(key)) {
-      cache.set(key, { data: { duplicate_set_previews: previewsOf(variables) }, isFetching: false, error: null });
+      cache.set(key, {
+        data: { duplicate_set_previews: previewsOf(variables) }, isFetching: false, isFetchedAfterMount: true, error: null,
+      });
     }
     return cache.get(key)!;
   };
@@ -230,6 +232,25 @@ describe("the batch merge dialog", () => {
     expect(await screen.findByText("Lovelace")).toBeTruthy();
     expect(screen.queryByRole("button", { name: message("duplicates.retry") })).toBeNull();
     expect(screen.queryByText(message("duplicates.error"))).toBeNull();
+  });
+
+  test("a dialog reopened within the cache window reads its previews again and ticks from that answer", async () => {
+    // An earlier dialog left these sets' previews in the cache: then Ada's records agreed; read now, they disagree.
+    let reread = false;
+    const cached: Read = {
+      data: { duplicate_set_previews: [{ ...PREVIEWS[0]!, disagreements: [] }, PREVIEWS[1]!, PREVIEWS[2]!] },
+      isFetching: false, isFetchedAfterMount: false, error: null,
+      refetch: () => { reread = true; mocks.rerender?.(); },
+    };
+    const fresh: Read = {
+      data: { duplicate_set_previews: PREVIEWS }, isFetching: false, isFetchedAfterMount: true, error: null,
+    };
+    mocks.previewRead = () => (reread ? fresh : cached);
+    renderDialog();
+
+    // Built from the fresh answer: Ada's set is warned and waits for a tick, so only Joan's is included.
+    expect(await screen.findByRole("button", { name: message("duplicates.confirm", { count: "1" }) })).toBeTruthy();
+    expect(reread).toBe(true);
   });
 
   test("one confirm merges only the included sets, then shows each outcome and the sets left out", async () => {
@@ -831,6 +852,22 @@ describe("the batch merge dialog", () => {
       expect(groupReads()).toHaveLength(1);
       expect(screen.getByText(message("duplicates.totals", { count: "49", merge: "45", look: "4" }))).toBeTruthy();
     }, PAGED_RUN_TIMEOUT_MS);
+
+    test("a paged dialog says it is loading from its first render, before any page has answered", async () => {
+      // Nothing has answered and nothing reports itself fetching: the dialog still says how far it has read.
+      mocks.groupsRead = () => ({ data: undefined, isFetching: false, error: null });
+      renderDialog(vi.fn(), [], false, undefined, undefined, groupsOf(120));
+
+      expect(await screen.findByText(message("duplicates.loadedGroupsOf", { loaded: "0", total: "120" }))).toBeTruthy();
+      expect(screen.getByText(message("duplicates.loading"))).toBeTruthy();
+      cleanup();
+
+      mocks.certainRead = () => ({ data: undefined, isFetching: false, error: null });
+      renderDialog(vi.fn(), [], false, undefined, { total: "120" });
+
+      expect(await screen.findByText(message("duplicates.loadedOf", { loaded: "0", total: "120" }))).toBeTruthy();
+      expect(screen.getByText(message("duplicates.loading"))).toBeTruthy();
+    });
 
     test("Confirm stays disabled until the last page of groups is listed", async () => {
       const listed = groupPages(120);

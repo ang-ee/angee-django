@@ -339,12 +339,24 @@ export function DuplicatesDialog({
   // Once confirmed the dialog keeps showing the sets as they were confirmed, each with its outcome; the preview is
   // held so the merges in flight do not refetch it.
   const [run, setRun] = React.useState<MergeRun | null>(null);
+  const previewEnabled = variables.sets.length > 0 && pageListed && run === null;
   const preview = useAuthoredQuery(DuplicateSetPreviews, variables, {
-    enabled: variables.sets.length > 0 && pageListed && run === null,
+    enabled: previewEnabled,
     models: PARTY_MERGE_INVALIDATES,
     errorNotification: false,
   });
-  const previewPage = preview.data?.duplicate_set_previews;
+  // A preview is used only as this dialog read it, as a listed page is: fetched since it opened and not being read
+  // again. One an earlier dialog left in the cache (fresh for the app's stale time) is read again first, so a reopened
+  // dialog's ticks and totals come from previews made after it opened.
+  const previewFresh = preview.isFetchedAfterMount && !preview.isFetching;
+  const previewPage = previewFresh ? preview.data?.duplicate_set_previews : undefined;
+  const cachedPreview = preview.data;
+  const previewReadHere = preview.isFetchedAfterMount;
+  const previewReading = preview.isFetching;
+  const readPreview = preview.refetch;
+  React.useEffect(() => {
+    if (previewEnabled && cachedPreview !== undefined && !previewReadHere && !previewReading) void readPreview();
+  }, [cachedPreview, previewEnabled, previewReadHere, previewReading, readPreview]);
   React.useEffect(() => {
     if (!previewPage) return;
     setPreviewPages((pages) => (pages[previewing] === previewPage
@@ -473,16 +485,22 @@ export function DuplicatesDialog({
               />
             ) : null}
             {run ? <RunLine run={run} /> : null}
-            {!run && !loaded && allGroups && !pagesDone && itemsRead > 0 ? (
-              <Alert tone="info">
-                {t("duplicates.loadedGroupsOf", { loaded: formatNumber(itemsRead), total: formatNumber(allGroups.total) })}
-              </Alert>
+            {/* A paged dialog says how far it has read from its first render until every page is listed and previewed. */}
+            {!run && paged && !loaded ? (
+              <>
+                <Alert tone="info">
+                  {allGroups && !pagesDone
+                    ? t("duplicates.loadedGroupsOf", { loaded: formatNumber(itemsRead), total: formatNumber(allGroups.total) })
+                    : t("duplicates.loadedOf", {
+                      loaded: formatNumber(live.length),
+                      total: allCertain && !pagesDone ? allCertain.total : formatNumber(sets.length),
+                    })}
+                </Alert>
+                {preview.error || pageError ? null : <LoadingPanel density="inline" loadingLabel={t("duplicates.loading")} />}
+              </>
             ) : !run && !loaded && live.length > 0 ? (
               <Alert tone="info">
-                {t("duplicates.loadedOf", {
-                  loaded: formatNumber(live.length),
-                  total: allCertain ? allCertain.total : formatNumber(sets.length),
-                })}
+                {t("duplicates.loadedOf", { loaded: formatNumber(live.length), total: formatNumber(sets.length) })}
               </Alert>
             ) : null}
             {!run && loaded && live.length > 0 && (paged || live.length > SETS_PAGE) ? (
@@ -494,7 +512,7 @@ export function DuplicatesDialog({
                 })}
               </Alert>
             ) : null}
-            {(preview.isFetching || derived.isFetching || pageRead.isFetching) && previews.length === 0
+            {!paged && (preview.isFetching || derived.isFetching) && previews.length === 0
               ? <LoadingPanel loadingLabel={t("duplicates.loading")} />
               : null}
             {previews.length > SHOWN_SETS ? (
