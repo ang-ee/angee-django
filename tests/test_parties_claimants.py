@@ -792,6 +792,25 @@ def test_evidence_of_another_kind_than_the_sources_own_records_is_refused(owner:
     assert (_people(), Handle._base_manager.count()) == (0, 0)
 
 
+def test_a_reference_names_the_sources_record_whatever_the_labels_case_or_a_pointer(owner: Any, source: Source) -> None:
+    """The verb asks which record a reference names (``EvidenceReference.named_record``), not how it was written."""
+
+    ada, row = _person(owner, "Ada Example"), _row(owner, ADDRESS)
+    written = behind(source.record())
+    cited = EvidenceReference(model=written.model.lower(), id=written.id, pointer="/display_name")
+    with system_context(reason="tests.parties.claimants"):
+        subject: Any = Party._base_manager.get(pk=ada.pk)
+        subject.statements.set(
+            aspect="handle", handle=row, values={}, asserted_by=Party.objects.rule_source("source_sender"),
+            confidence=Party.CLAIM_CONFIDENCE, evidence=[cited],
+        )
+    assert cited != written
+
+    found = source.given(email=ADDRESS)
+
+    assert (found.person.pk, found.email.pk) == (ada.pk, row.pk)
+
+
 def test_standing_claims_narrow_by_handle_or_by_party_and_keep_each_claims_records(owner: Any, source: Source) -> None:
     """The read a caller's own rules compose: who still claims these handles, and which records said so."""
 

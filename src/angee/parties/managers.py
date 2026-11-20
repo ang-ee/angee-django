@@ -908,7 +908,8 @@ class PartyStatementQuerySet[StatementT: PartyStatementMixin](StatementQuerySet[
         parties' claims by one source collapse into one when the parties merge,
         and the records that carried the address for either still stand behind
         it. Evidence is parsed here, reference by reference, for the caller to
-        compare in Python: a party and a handle share a handful of stances, and
+        compare in Python (``EvidenceReference.named_record`` says which record
+        a reference names): a party and a handle share a handful of stances, and
         asking a database whether a JSON list contains an entry is not portable.
         Narrow the statements first, by handle or by party.
         """
@@ -2002,8 +2003,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         """Return the claims a row of ``own`` stands behind, from one read of ``own`` by key for all of them.
 
         A reference names a record by the model its generic pointers resolve to
-        and its public id (``EvidenceReference.of``): labels compare without
-        case, as provenance compares them, and the id decodes to the row's key
+        and its public id (``EvidenceReference.named_record``, the one comparison
+        of which record a reference names), and the id decodes to the row's key
         through the model's public id field. Only the keys the references name
         are asked for, in batches within the database's parameter budget
         (``by_key``), and only keys are read: ``own`` is never read as a whole,
@@ -2015,9 +2016,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         named: dict[tuple[Any, Any], set[Any]] = {}
         for claim, references in claims.items():
             for reference in references:
-                if reference.model.lower() != model._meta.label_lower:
+                label, public_id = reference.named_record
+                if label != model._meta.label_lower:
                     continue
-                key = field.public_id_to_value(reference.id) if field else model._meta.pk.to_python(reference.id)
+                key = field.public_id_to_value(public_id) if field else model._meta.pk.to_python(public_id)
                 if key is not None:
                     named.setdefault(claim, set()).add(key)
         ours: set[Any] = set()

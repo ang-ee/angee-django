@@ -26,7 +26,7 @@ from rebac import (
 
 from angee.base.models.base import AngeeModel
 from angee.provenance.context import changeset
-from angee.provenance.evidence import FactAuthority
+from angee.provenance.evidence import EvidenceReference, FactAuthority
 from angee.provenance.schema import RecordHistory
 from angee.provenance.statements import (
     Aspect,
@@ -73,6 +73,18 @@ def test_a_statement_owns_its_shared_fact_authority(source_kind: SourceKind, aut
     statement = Claimed.statements.model(source_kind=source_kind)
 
     assert statement.fact_authority is authority
+
+
+def test_two_references_name_the_same_record_whatever_the_labels_case_or_a_pointer() -> None:
+    """``named_record`` is the one comparison of which record a reference names; whole references differ."""
+
+    stored = EvidenceReference(model="integrate.RecordLink", id="rlk_one")
+    cited = EvidenceReference(model="integrate.recordlink", id="rlk_one", pointer="/display_name")
+    another = EvidenceReference(model="integrate.RecordLink", id="rlk_two")
+
+    assert stored != cited
+    assert stored.named_record == cited.named_record == ("integrate.recordlink", "rlk_one")
+    assert stored.named_record != another.named_record
 
 
 def test_a_donor_aspect_asserts_and_resolves_through_the_subject(db: None) -> None:

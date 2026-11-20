@@ -60,7 +60,11 @@ live in code docstrings.
   names, those of a claim a merge superseded under it included: two sources'
   claimants of one address, once merged, are each found as the survivor, where
   a read of current stances alone had one of the two sources make a new person
-  after every merge. No migration, resource or permission change. Limits: two
+  after every merge. `angee.provenance`: `EvidenceReference.named_record` is
+  the one comparison of which record a reference names (the model's label
+  without case and the public id, the pointer aside); the verb reads it, and a
+  consumer compares the references `standing_claims()` returns with its own
+  the same way. No migration, resource or permission change. Limits: two
   callers that meet two spellings of one new address at once each make its
   row, and so its person, which the pairing job then proposes; a number that
   is no valid international number is read as its digits.

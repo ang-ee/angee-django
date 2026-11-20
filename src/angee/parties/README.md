@@ -347,7 +347,10 @@ caller that asks only who still claims what reads no evidence.
 them. When two parties merge, the claims one source made for each collapse into
 one and the superseded one's records stay behind it, so two sources' claimants
 of one address, once merged, are each found as the survivor. A caller's own
-rule about which of its records may name a claimed address composes that read.
+rule about which of its records may name a claimed address composes that read,
+and compares the references it returns with its own by the record each names
+(`EvidenceReference.named_record`: the label without case and the public id,
+the pointer aside), as the verb does.
 
 [PartyManager.ingest_organization](managers.py) lands a `ParsedOrganization`
 from a directory stream the same way: it binds the link, mints an Organization
