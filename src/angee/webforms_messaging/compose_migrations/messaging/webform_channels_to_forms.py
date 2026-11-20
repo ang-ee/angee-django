@@ -44,11 +44,12 @@ written back as a FormSpec.
 
 ``manage.py check_webform_channels`` runs the same judgment (:func:`planned_moves`)
 before ``migrate`` and prints what would be refused, changing nothing. The
-``Migration`` below says it is the move (``moves_webform_channels``, read by
-:func:`is_move`), under whatever name a project gives its copy: the command
-finds it by that, and so does the bridge when it refuses a migration that would
-remove the form columns of channels that hold a form without being the move or
-following it.
+``Migration`` below says it is the move (``moves_webform_channels``), under
+whatever name a project gives its copy: the command finds it by that, and so
+does messaging when it refuses a migration that would remove the form columns
+of channels that hold a form without being the move or following it. Which
+channels hold a form is messaging's judgment, imported here
+(``angee.messaging.webforms``), so the move and that refusal never differ.
 
 Every row is read and written through historical models, as a data migration's
 are, so no verb of a form runs here. The template applies the rule the verbs
@@ -62,12 +63,9 @@ not carry, so every query here orders by the primary key.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
 from html import escape
-from typing import Any, NamedTuple, cast
+from typing import Any, NamedTuple
 
-from django.apps import apps as installed_apps
-from django.apps.registry import Apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import connections, migrations
@@ -75,12 +73,16 @@ from django.db.backends.base.schema import BaseDatabaseSchemaEditor
 from django.db.migrations.state import StateApps
 from django.utils import timezone
 
-from angee.base.fields.identity import SqidField
+from angee.messaging.webforms import (
+    FORM_COLUMNS,
+    channel_public_id,
+    channels_holding_forms,
+    default_webform_schema,
+    holds_form,
+)
 from angee.webforms.validators import validate_publishable, validate_version
 
-FORM_COLUMNS = ("slug", "is_published", "form_schema_version", "form_schema", "max_body_bytes", "max_field_bytes")
-CHANNEL_FACTS = ("pk", "display_name", *FORM_COLUMNS)
-EMPTY_SCHEMA = {"type": "object", "properties": {}}
+EMPTY_SCHEMA = default_webform_schema()
 DEFAULT_BYTE_LIMITS = (65_536, 4_096)
 SCHEMA_KEYS = frozenset({"type", "properties", "required", "propertyOrder", "success"})
 FIELD_KEYS = frozenset({
@@ -283,38 +285,6 @@ def _checked(row: Any, *, exclude: tuple[str, ...] = ()) -> Any:
     return row
 
 
-def public_id(pk: Any) -> str:
-    """Return a channel's public id. ``sqid`` is no column, so migration state has no field for it."""
-
-    field = cast(SqidField, installed_apps.get_model("messaging", "Channel")._meta.get_field("sqid"))
-    return field.public_id_from_value(pk)
-
-
-def is_move(migration: migrations.Migration) -> bool:
-    """Whether ``migration`` is a project's copy of this template, which says so itself."""
-
-    return bool(getattr(migration, "moves_webform_channels", False))
-
-
-def holds_form(channel: Mapping[str, Any]) -> bool:
-    """Whether a channel's form columns say anything: a slug, a published flag or a schema of its own."""
-
-    return bool(channel["slug"] or channel["is_published"] or channel["form_schema"] != EMPTY_SCHEMA)
-
-
-def channels_holding_forms(apps: Apps, using: str) -> list[dict[str, Any]]:
-    """Return the form columns of every webform channel that holds a form, oldest first.
-
-    These are the channels the move judges, and whose forms are lost when the
-    columns are removed by anything else. ``apps`` is a migration state in which
-    ``messaging.Channel`` still has its form columns.
-    """
-
-    channels = apps.get_model("messaging", "Channel")._base_manager.using(using)
-    webform = channels.filter(backend_class="webform").order_by("pk").values(*CHANNEL_FACTS)
-    return [channel for channel in webform if holds_form(channel)]
-
-
 def planned_moves(apps: StateApps, using: str) -> Plan:
     """Judge every channel that holds a form and return what the move would do, writing nothing.
 
@@ -342,16 +312,17 @@ def planned_moves(apps: StateApps, using: str) -> Plan:
     language = settings.LANGUAGE_CODE
     plan = Plan([], [], [])
 
-    for channel in channels.exclude(backend_class="webform").order_by("pk").values(*CHANNEL_FACTS):
+    others = channels.exclude(backend_class="webform").order_by("pk").values("pk", "display_name", *FORM_COLUMNS)
+    for channel in others:
         if holds_form(channel):
             plan.reports.append(
-                f"Channel {public_id(channel['pk'])} ({channel['display_name']}) is not a webform channel and "
+                f"Channel {channel_public_id(channel['pk'])} ({channel['display_name']}) is not a webform channel and "
                 "never served a form: its form columns are dropped."
             )
 
     for channel in channels_holding_forms(apps, using):
         slug, schema, published = channel["slug"], channel["form_schema"], bool(channel["is_published"])
-        channel_id = public_id(channel["pk"])
+        channel_id = channel_public_id(channel["pk"])
         named = f"{channel_id} ({channel['display_name'] or slug})"
         if channel_id in moved:
             plan.reports.append(

@@ -1,0 +1,9 @@
+// The record a response becomes when its form posts on a channel, contributed
+// to the web forms' link definition.
+// @rebac_package: webforms_messaging
+// @rebac_schema_revision: 1
+
+// A response posted on a channel becomes a message.
+definition webforms/response_record {
+    relation message: messaging/message // rebac:field=record
+}

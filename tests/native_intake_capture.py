@@ -210,6 +210,15 @@ class FormCaptureTests(TransactionTestCase):
         with system_context(reason="test form setup"), self.assertRaises(IntegrityError), transaction.atomic():
             second.save()
 
+    def test_the_composed_link_takes_the_message_as_a_type_a_response_becomes(self):
+        """The composer merges the bridge's declaration into the web forms' link, as on a real project."""
+
+        link = apps.get_model("webforms", "ResponseRecord")
+        self.assertIn("messaging.message", link.accepted_target_models())
+        channel = self.webform()
+        message = self.submit(channel)
+        self.assertEqual(link._base_manager.get().record, message)
+
     def test_webform_captures_claims_and_mapped_fields_on_an_ownerless_task(self):
         channel = self.webform()
         message = self.submit(channel)
