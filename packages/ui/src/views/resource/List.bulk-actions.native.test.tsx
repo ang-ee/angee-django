@@ -18,6 +18,7 @@ import { collectionQuery } from "./collection-source";
 import { List } from "./List";
 import type { ListViewProps } from "./resource-view-types";
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "./resource-view-context";
+import { ListSelectionBar } from "./resource-view-list-body";
 
 const flags: DataResourceFieldMetadata[] = [
   { name: "archived", kind: "scalar", scalar: "Boolean", readable: true, aggregatable: false,
@@ -46,18 +47,21 @@ afterEach(() => { cleanup(); clearClients(); });
 const sourceDocument: TypedDocumentNode<{ rows: Row[] }, Record<string, never>> = gql`query SelectedNotes { rows { id title archived removed } }`;
 const note = (id: string, archived = false, removed = false): Row => ({ id, title: `Note ${id}`, archived, removed });
 
-async function fixture({ rows = [note("one"), note("two")], metadata = resource, source = false,
-  preview, update: write, custom: authored, selectable = true, bulkActions }: {
+async function fixture({ rows = [note("one"), note("two")], total = rows.length, metadata = resource, source = false,
+  preview, update: write, custom: authored, selectable = true, selectAllMatching, bulkActions }: {
   rows?: Row[];
+  /** The records the read matches, beyond the loaded page when larger. */
+  total?: number;
   metadata?: DataResourceMetadata;
   source?: boolean;
   selectable?: boolean | "default";
+  selectAllMatching?: boolean;
   bulkActions?: ListViewProps["bulkActions"];
   preview?: RuntimeViewAs;
   update?: (id: BaseKey | undefined, values: unknown) => Promise<{ data: Row }>;
   custom?: (variables: Record<string, unknown>) => Promise<unknown>;
 } = {}) {
-  const getList = vi.fn(async () => ({ data: rows, total: rows.length }));
+  const getList = vi.fn(async () => ({ data: rows, total }));
   const update = vi.fn(async ({ id, variables }: { id?: BaseKey; variables?: unknown }) =>
     write ? write(id, variables) : { data: { id } });
   const custom = vi.fn(async ({ meta }: { meta?: MetaQuery }) => ({ data: source ? { rows }
@@ -75,7 +79,8 @@ async function fixture({ rows = [note("one"), note("two")], metadata = resource,
       }}><ModalsHost><ToastProvider>
         <ResourceViewProvider resource={metadata.modelLabel} scope="local">
           <Probe />
-          <List resource={metadata.modelLabel} scope="inherit" selectable={selectable === "default" ? undefined : selectable} bulkActions={bulkActions} source={sourceRows}>
+          <List resource={metadata.modelLabel} scope="inherit" selectable={selectable === "default" ? undefined : selectable}
+            selectAllMatching={selectAllMatching} bulkActions={bulkActions} source={sourceRows}>
             <Column field="title" />
           </List>
         </ResourceViewProvider>
@@ -345,6 +350,64 @@ test("a source list has no generic actions, even with archivable and trashable m
   expect(f.update).not.toHaveBeenCalled();
 });
 
+/** A verb's accessible description: the text of the nodes its aria-describedby names. */
+function description(element: HTMLElement): string {
+  return (element.getAttribute("aria-describedby") ?? "").split(" ").filter(Boolean)
+    .map((id) => document.getElementById(id)?.textContent ?? "").join(" ");
+}
+
+test("a list that has not opted in, or whose page holds every record, offers no select-all", async () => {
+  const collections: unknown[] = [];
+  const bulkActions: ListViewProps["bulkActions"] = (_ids, _clear, collection) => { collections.push(collection); return null; };
+  const f = await fixture({ total: 30, bulkActions });
+  f.selectAll();
+  expect(screen.getByText("2 selected")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /^Select (all|the) / })).toBeNull();
+  expect(collections.at(-1)).not.toHaveProperty("allMatching");
+  // Its generic verbs carry no reason, nor a reason's tooltip wrapper.
+  const bar = screen.getByText("2 selected").closest<HTMLElement>("[aria-live]")!;
+  expect(within(bar).getByRole("button", { name: "Archive" }).hasAttribute("aria-describedby")).toBe(false);
+  expect(bar.querySelectorAll("span[hidden]")).toHaveLength(0);
+  cleanup();
+  // Opted in, but the loaded page is every record the list's read matches.
+  await fixture({ selectAllMatching: true, bulkActions });
+  for (const box of screen.getAllByRole("checkbox", { name: "Select row" })) fireEvent.click(box);
+  expect(screen.getByText("2 selected")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /^Select (all|the) / })).toBeNull();
+});
+
+test("while every matching record is selected the generic verbs are disabled with the reason, and act again after", async () => {
+  const f = await fixture({ rows: [note("one"), note("two", true, true)], total: 30, selectAllMatching: true,
+    metadata: { ...resource, roots: { ...resource.roots, deletePreview: "notes_delete" } },
+    bulkActions: () => <span>Page verb</span> });
+  const verbs = ["Archive", "Unarchive", "Move to trash", "Restore", "Delete"];
+  fireEvent.click(screen.getAllByRole("checkbox", { name: "Select row" })[0]!);
+  // Only once every loaded row is selected.
+  expect(screen.queryByRole("button", { name: "Select all 30 records" })).toBeNull();
+  fireEvent.click(screen.getAllByRole("checkbox", { name: "Select row" })[1]!);
+  fireEvent.click(screen.getByRole("button", { name: "Select all 30 records" }));
+  expect(screen.getByText("All 30 records selected")).toBeTruthy();
+  for (const name of verbs) {
+    const verb = screen.getByRole("button", { name });
+    expect(description(verb)).toBe("This acts on the rows you select, not on all 30 records");
+    expect(verb.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(verb);
+  }
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(f.update).not.toHaveBeenCalled();
+  expect(f.custom).not.toHaveBeenCalled();
+  // Unselecting a row returns to the selected ids, which the verbs act on again.
+  fireEvent.click(screen.getAllByRole("checkbox", { name: "Select row" })[1]!);
+  expect(screen.getByText("1 selected")).toBeTruthy();
+  const archive = screen.getByRole<HTMLButtonElement>("button", { name: "Archive" });
+  expect(archive.hasAttribute("aria-describedby")).toBe(false);
+  expect(archive.disabled).toBe(false);
+  fireEvent.click(archive);
+  await screen.findByText("Updated archive status for 1 record.");
+  expect(f.update).toHaveBeenCalledTimes(1);
+  expect(f.update).toHaveBeenCalledWith(expect.objectContaining({ id: "one", variables: { archived: true } }));
+});
+
 const preview: RuntimeViewAs = {
   viewAs: { userId: "person" }, currentUser: { id: "person", name: "Person" }, realUser: null,
   viewablePeople: [], enter: () => undefined, exit: () => undefined,
@@ -360,6 +423,18 @@ test.each([preview, { ...preview, viewAs: null, pending: true }])("view-as block
   }
   expect(f.update).not.toHaveBeenCalled();
   expect(f.custom).not.toHaveBeenCalled();
+});
+
+test("the list's selection bar refuses its own Delete under view-as, without a list's bulk runner", () => {
+  const onDelete = vi.fn();
+  render(<Provider><AppRuntimeProvider runtime={{ icons: baseIcons,
+    auth: { user: preview.currentUser, status: "authenticated", hasRole: () => false, viewAs: preview } }}>
+    <ListSelectionBar count={1} onClear={() => undefined} onDelete={onDelete} />
+  </AppRuntimeProvider></Provider>);
+  const remove = screen.getByRole<HTMLButtonElement>("button", { name: "Delete" });
+  expect(remove.disabled).toBe(true);
+  fireEvent.click(remove);
+  expect(onDelete).not.toHaveBeenCalled();
 });
 
 test("entering view-as while the trash prompt is open blocks its confirmed writes", async () => {

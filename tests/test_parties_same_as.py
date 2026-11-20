@@ -401,14 +401,16 @@ def test_the_review_list_fills_its_page_with_pairs_the_reader_can_read(db: None)
     assert [{pair.left.pk, pair.right.pk} for pair in page] == readable
 
 
-def _review_pairs(reader: Any, count: int, *, hidden: int = 0, other: Any = None) -> list[frozenset[Any]]:
+def _review_pairs(
+    reader: Any, count: int, *, hidden: int = 0, other: Any = None, tag: str = "",
+) -> list[frozenset[Any]]:
     """``count`` pairs ``reader`` may review, in creation order, with ``hidden`` more interleaved whose cited
     address only ``other`` reads; return the reviewable ones."""
 
     reviewable = []
     concealed = {index * (count + hidden) // hidden for index in range(hidden)} if hidden else set()
     for index in range(count + hidden):
-        handle = _address(other if index in concealed else reader, f"pair{index}@example.com")
+        handle = _address(other if index in concealed else reader, f"pair{tag}{index}@example.com")
         pair = frozenset({_holder(reader, handle).pk, _claimant(reader, handle).pk})
         if index not in concealed:
             reviewable.append(pair)
@@ -464,31 +466,75 @@ def test_a_pair_that_leaves_while_a_person_pages_moves_no_other_pair(db: None) -
     assert seen == after_first[2:]
 
 
-def test_the_review_list_costs_the_same_however_many_pairs_the_reader_cannot_read(db: None) -> None:
-    """Pairs whose cited addresses the reader cannot read are filtered in one batch, not page by page: one
-    or nine of them ahead of the reader's own pair cost the same, and the reader's pair is on the first page."""
+def _page_cost(reader: Any, *, limit: int) -> tuple[int, int, int]:
+    """Queries, pairs judged and rows returned for ``reader``'s first review page of ``limit`` pairs."""
+
+    review = Party.objects.with_actor(reader)
+    judged = found = 0
+    for window, examined in review.review_walk(size=2 * limit):
+        judged += examined
+        found += len(window)
+        if found >= limit:
+            break
+    with CaptureQueriesContext(connection) as queries:
+        page = review.same_as_pairs(limit=limit)
+    return len(queries.captured_queries), judged, len(page)
+
+
+def test_an_ordinary_readers_page_costs_the_same_at_two_sizes(db: None) -> None:
+    """A reader who reads the cited handles reads one window whatever the number of pairs."""
 
     del db
-    other = create_user("same-as-review-cost-other")
+    small, large = create_user("same-as-flat-small"), create_user("same-as-flat-large")
+    _review_pairs(small, 25, tag="small")
+    _review_pairs(large, 75, tag="large")
 
-    def cost(hidden: int) -> tuple[int, int]:
-        reader = create_user(f"same-as-review-cost-{hidden}")
-        for index in range(hidden):
-            handle = _address(other, f"hidden{hidden}-{index}@example.com")
+    small_cost, large_cost = _page_cost(small, limit=10), _page_cost(large, limit=10)
+
+    assert small_cost == large_cost == (small_cost[0], 20, 10)
+
+
+def test_a_reader_of_both_endpoints_but_not_the_cited_handles_walks_their_run(db: None) -> None:
+    """The residual worst case, measured: a run of pairs whose cited handles the reader cannot read is walked."""
+
+    del db
+    other = create_user("same-as-run-other")
+
+    def cost(run: int) -> tuple[int, int, int]:
+        reader = create_user(f"same-as-run-{run}")
+        for index in range(run):
+            handle = _address(other, f"run{run}-{index}@example.com")
             _holder(reader, handle)
             _claimant(reader, handle)
         _reconcile()
-        handle = _address(reader, f"own{hidden}@example.com")
+        handle = _address(reader, f"own{run}@example.com")
         _holder(reader, handle)
         _claimant(reader, handle)
         _reconcile()
-        with CaptureQueriesContext(connection) as queries:
-            page = Party.objects.with_actor(reader).same_as_pairs(limit=1)
-        return len(queries.captured_queries), len(page)
+        return _page_cost(reader, limit=1)
 
-    one = cost(1)
+    short, long = cost(10), cost(30)
 
-    assert cost(9) == one == (one[0], 1)
+    # One window of twenty judges the short run and the reader's pair; the long run takes a second window.
+    assert (short[1:], long[1:]) == ((11, 1), (31, 1))
+    assert long[0] > short[0]
+
+
+def test_a_pair_whose_party_merged_between_the_reviews_reads_is_dropped_not_raised(db: None) -> None:
+    """The walk lists a pair, its party is merged before the members' read: the pair is moot and left out."""
+
+    del db
+    reader = create_user("same-as-merged-mid-read")
+    _review_pairs(reader, 3, tag="mid")
+    review = Party.objects.with_actor(reader)
+    ((entries, _examined),) = list(review.review_walk())
+    first = Party.same_as.model._base_manager.get(pk=entries[0][0])
+    with actor_context(reader):
+        Party.objects.get(pk=first.left_id).merge(records=[Party._base_manager.get(pk=first.right_id).public_id])
+
+    pairs = review.review_pairs(entries)
+
+    assert [pair.id for pair in pairs] == [Party.same_as.model.public_id_from_pk(pk) for pk, _cited in entries[1:]]
 
 
 def test_a_link_a_person_dismissed_pairs_nobody(db: None) -> None:

@@ -862,7 +862,7 @@ def unfinished_run_merge_guard(record: Any) -> str | None:
     with system_context(reason="workflows.unfinished_run_merge_guard"):
         if not apps.get_model("workflows", "WorkflowRun").objects.working_on(record).exists():
             return None
-    return f"Workflow runs still working on {record} must finish or be canceled first."
+    return f"Workflow runs still working on this record ({public_id_of(record)}) must finish or be canceled first."
 
 
 class StepWatchManager[T: StepWatch](AngeeHistoryManager[T]):

@@ -1,11 +1,12 @@
 import { describe, expect, test, vi } from "vitest";
-import { MAX_PAGE_SIZE, type UseAngeeGroupByResult } from "@angee/refine";
+import { MAX_PAGE_SIZE, type AngeeListBatchEntry, type UseAngeeGroupByResult } from "@angee/refine";
 import { ResourceQuery, schemaFieldMetadataFromDataResources, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { enUiMessages } from "../../i18n";
 
 import {
   buildGroupedRenderModel,
+  type GroupedRenderModel,
   type GroupedRenderParams,
 } from "./resource-view-grouped-model";
 
@@ -199,7 +200,7 @@ describe("buildGroupedRenderModel", () => {
     const failed = buildGroupedRenderModel<Row>(
       results,
       new Map([[header.bucketKey, {
-        rows: [], total: undefined, fetching: false, refetch: vi.fn(),
+        rows: [], total: undefined, fetching: false, updatedAt: null, refetch: vi.fn(),
         error: Object.assign(new Error(`variables secret=${secret}`), {
           request: { variables: { secret } }, response: { status: 500 },
         }),
@@ -432,4 +433,52 @@ test("only the leaf group level asks the groups read to carry rows", () => {
   expect(expanded.groupScopes[0]!.query.rows).toBeUndefined();
   expect(expanded.groupScopes[0]!.leafPageSize).toBeUndefined();
   expect(expanded.groupScopes[1]).toMatchObject({ leafPageSize: 20, query: { rows: { limit: 20 } } });
+});
+
+test("a page of groups lists what it last settled with while it refetches; one that never settled is unknown", () => {
+  const { rootKey, bucketKey } = rootFixture();
+  const pages = (overrides: Partial<UseAngeeGroupByResult>) => [...buildGroupedRenderModel<Row>(
+    new Map([[rootKey, result([{ key: { status: "ACTIVE" }, count: 4 }], overrides)]]), EMPTY_LEAVES, EMPTY_ROWS, params(),
+  ).shown.pages.values()];
+  expect(pages({ fetching: true, updatedAt: 1 })).toEqual([new Set([bucketKey])]);
+  // Groups a read shows before it first settles are not its own.
+  expect(pages({ fetching: true, updatedAt: null })).toEqual([null]);
+  expect(pages({ updatedAt: 1, error: new Error("Group query unavailable") })).toEqual([null]);
+});
+
+test("a page of records lists what it last settled with while it refetches; one that never settled is unknown", () => {
+  const leafParams = params({ groupStack: [{ field: "status" }], leafPageSize: 1 });
+  const rootKey = buildGroupedRenderModel<Row>(new Map(), EMPTY_LEAVES, EMPTY_ROWS, leafParams).groupScopes[0]!.key;
+  const groups = (overrides: Partial<UseAngeeGroupByResult>) => new Map([[rootKey,
+    result([{ key: { status: "ACTIVE" }, count: 3, rows: [{ id: "r1" }] }], { updatedAt: 1, ...overrides })]]);
+  const bucketKey = buildGroupedRenderModel<Row>(groups({}), EMPTY_LEAVES, EMPTY_ROWS, leafParams)
+    .items.find((item) => item.kind === "groupHeader")!.bucketKey;
+  const expanded = { ...leafParams, expandedKeys: new Set([bucketKey]) };
+  // The group's own page of records, last in the render's pages.
+  const leafPage = (model: GroupedRenderModel<Row>) => [...model.shown.pages.values()].at(-1);
+  // The first page rides on the groups read and settles with it.
+  const carried = (overrides: Partial<UseAngeeGroupByResult>) =>
+    leafPage(buildGroupedRenderModel<Row>(groups(overrides), EMPTY_LEAVES, EMPTY_ROWS, expanded));
+  expect(carried({ fetching: true })).toEqual(new Set());
+  expect(carried({ fetching: true, updatedAt: null })).toBeNull();
+  // A later page has a read of its own; its total alone does not make it settled.
+  const second = { ...expanded, paginationByScope: { [bucketKey]: { pageIndex: 1, pageSize: 1 } } };
+  const requested = (entry: Partial<AngeeListBatchEntry>) => leafPage(buildGroupedRenderModel<Row>(groups({}),
+    new Map([[bucketKey, { rows: [], total: 3, fetching: false, error: null, updatedAt: null, refetch: vi.fn(), ...entry }]]), EMPTY_ROWS, second));
+  expect(requested({ fetching: true, updatedAt: 1 })).toEqual(new Set());
+  expect(requested({ fetching: true, updatedAt: null })).toBeNull();
+  expect(requested({ updatedAt: 1, error: new Error("Rows unavailable") })).toBeNull();
+  expect(requested({ updatedAt: null })).toBeNull();
+});
+
+test("a page of groups lists its groups only from the answer to its own request, not the previous page's", () => {
+  const { rootKey, bucketKey } = rootFixture();
+  const results = new Map([[rootKey, result([{ key: { status: "ACTIVE" }, count: 4 }], { updatedAt: 1 })]]);
+  const first = buildGroupedRenderModel<Row>(results, EMPTY_LEAVES, EMPTY_ROWS, params()).groupScopes[0]!.query;
+  const pages = (overrides: Partial<GroupedRenderParams>) =>
+    [...buildGroupedRenderModel<Row>(results, EMPTY_LEAVES, EMPTY_ROWS, params(overrides)).shown.pages.values()];
+  expect(pages({ requested: new Map([[rootKey, first]]) })).toEqual([new Set([bucketKey])]);
+  // The batch still answers page 1 while the list shows page 2: its groups are not page 2's.
+  expect(pages({ rootPage: 2, requested: new Map([[rootKey, first]]) })).toEqual([null]);
+  expect(pages({ requested: new Map() })).toEqual([null]);
 });

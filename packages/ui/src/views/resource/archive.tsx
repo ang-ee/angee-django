@@ -77,7 +77,7 @@ function ArchiveSelectionActions({ modelMetadata, selectedRows, unprocessedCount
       return id && action.visibleWhen?.(row) ? [id] : [];
     });
     if (!ids.length) return null;
-    return <SelectionBar.Action key={action.id} surface="brand" pending={bulk.pending} disabled={bulk.blocked}
+    return <SelectionBar.Action key={action.id} surface="brand" pending={bulk.pending} disabled={bulk.blocked} {...bulk.reason}
       onClick={() => void bulk.run({
         ids, unprocessedCount,
         perform: async (id) => {

@@ -7,9 +7,11 @@ Handle, Party order resolution keeps, and the two would deadlock.
 """
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
+from typing import Any
 
 import pytest
-from django.db import connection, transaction
+from django.db import OperationalError, connection, transaction
 from rebac import actor_context, system_context
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
@@ -141,8 +143,17 @@ def test_a_reader_who_may_not_merge_is_refused_before_any_lock() -> None:
     ]
 
 
-def test_a_set_a_statement_timeout_stops_is_its_own_outcome_and_the_next_set_merges() -> None:
-    """A real statement timeout on rows held elsewhere fails that set alone; the free set after it merges."""
+@pytest.mark.parametrize("outer", [False, True], ids=["own-transactions", "inside-an-outer-transaction"])
+def test_a_set_a_statement_timeout_stops_is_its_own_outcome_and_the_next_set_merges(outer: bool) -> None:
+    """A real statement timeout on rows held elsewhere fails that set alone; the free set after it merges.
+
+    The timeout is the first set's own: ``SET LOCAL`` inside that set's transaction, just before its first row lock,
+    so it ends with that set's rollback (or its savepoint's, when the request runs inside an outer transaction). A
+    session-wide ``SET`` would bound every statement of the sets after it too, and on a loaded server one of the free
+    set's reads outlasted it, failing a set the verb had left sound. The free set's first statement here takes longer
+    than that timeout (``pg_sleep``), so a timeout that outlived its set fails this test every time, not only under
+    load.
+    """
 
     from angee.messaging.testing.models import Person
 
@@ -160,13 +171,34 @@ def test_a_set_a_statement_timeout_stops_is_its_own_outcome_and_the_next_set_mer
                 pair.append(person)
             sets.append(pair)
 
-    def merge() -> list[str]:
+    def merge() -> tuple[list[str], str]:
+        timed = timed_out = slowed = False
+
+        def first_set_timeout(execute: Any, sql: str, params: Any, many: bool, context: Any) -> Any:
+            nonlocal timed, timed_out, slowed
+            if not timed and connection.in_atomic_block and "FOR UPDATE" in sql:
+                timed = True
+                execute("SET LOCAL statement_timeout = '500ms'", None, False, context)
+            # The free set's first statement (not the rollback to the timed set's savepoint) outlasts that timeout.
+            if timed_out and not slowed and connection.in_atomic_block and not sql.lstrip().upper().startswith(
+                ("ROLLBACK", "RELEASE", "SAVEPOINT"),
+            ):
+                slowed = True
+                execute("SELECT pg_sleep(0.6)", None, False, context)
+            try:
+                return execute(sql, params, many, context)
+            except OperationalError:
+                timed_out = timed
+                raise
+
+        with connection.execute_wrapper(first_set_timeout), (transaction.atomic() if outer else nullcontext()):
+            outcomes = Party.objects.merge_duplicates(
+                actor=owner, sets=[[person.public_id for person in pair] for pair in sets],
+            )
         with connection.cursor() as cursor:
-            cursor.execute("SET statement_timeout = '500ms'")
-        outcomes = Party.objects.merge_duplicates(
-            actor=owner, sets=[[person.public_id for person in pair] for pair in sets],
-        )
-        return [str(row.outcome) for row in outcomes]
+            cursor.execute("SHOW statement_timeout")
+            left = cursor.fetchone()[0]
+        return [str(row.outcome) for row in outcomes], left
 
     held = [person.pk for person in sets[0]]
     with ThreadPoolExecutor(max_workers=1) as pool:
@@ -175,6 +207,8 @@ def test_a_set_a_statement_timeout_stops_is_its_own_outcome_and_the_next_set_mer
             list(Handle._base_manager.filter(party_id__in=held).select_for_update())
             future, pid = submit(pool, merge)
             wait_for_lock(pid, future)
-            outcomes = future.result(timeout=10)
+            outcomes, left = future.result(timeout=10)
 
     assert outcomes == ["failed", "merged"]
+    # The session is as it was: no timeout outlived the first set.
+    assert left == "0"

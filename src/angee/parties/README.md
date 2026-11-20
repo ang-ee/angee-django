@@ -435,11 +435,22 @@ records disagree on a merge field, the merging person confirms the value kept
 
 Nothing merges unattended. A person may also merge in a batch: confirmed sets of
 two to ten records each (`PartyManager.merge_duplicates`, the `merge_duplicates`
-mutation; at most 50 sets), either the certain pairs the Review page lists
-(`certain_same_as_pairs`) or a selection from the People or Organizations list.
+mutation; at most 50 sets a request), either every certain pair awaiting review
+(`certain_same_as_pairs`, listed page by page, at most 1,000 a confirm, from the
+Review page's "Merge all certain pairs") or a selection from the People or
+Organizations list.
 There, one selected record opens "Merge into…" to choose the other, two open
-their compare page, and three or more are one explicit set, the whole
-selection, which the dialog lists before anything merges. Only an active person account that writes every record may (the party's
+their compare page, and three or more on an ungrouped list are the duplicate
+sets the server finds among them (`PartyManager.selection_duplicate_sets`, under
+the person's own read): the same-person pairs the person may review between
+selected records (`selection_pairs`, the one rule), joined into connected groups,
+with the records that have no duplicate selected left out and counted; three to
+ten with no pair among them are one set, as selected, and above ten with none the
+dialog says what to do. A grouped list gives a set per group. Under the list's
+"Select all N" (`selectAllMatching`), a list grouped by one text merge field
+gives every group its read matches, each a set, listed page by page through the
+list resource's own groups read (at most 1,000 a confirm). The dialog lists the
+sets before anything merges. Only an active person account that writes every record may (the party's
 `batch_merge` permission, `write & person->active_member`); a service or agent
 account merges nothing, and no agent tool offers it. A set never holds an account's
 own person (merged by hand, on the compare page), records of two kinds, a trashed

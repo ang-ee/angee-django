@@ -56,7 +56,9 @@ export function OverviewPage(): React.ReactElement {
       />
       <Metric
         label={t("overview.metric.sameAs")}
-        value={data?.same_as_pair_counts.pairs}
+        // A capped count reads as "<count>+": one over the count with the count as the bound.
+        value={data && (data.same_as_pair_counts.pairs + (data.same_as_pair_counts.capped ? 1 : 0))}
+        max={data?.same_as_pair_counts.capped ? data.same_as_pair_counts.pairs : undefined}
         format="count"
         loading={overview.isFetching}
         icon="users"

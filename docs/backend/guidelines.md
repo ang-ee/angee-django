@@ -1901,7 +1901,10 @@ open fresh evaluator scopes for authorization and change-feed reads.
   inherited sources and the core's bounded `bulk_updated` batches use the same
   seam. A verb completing a conditional or bulk write publishes after its
   related rows are ready. `change_batch_targets` may coalesce publications;
-  local observers still receive original bulk batches where needed.
+  local observers still receive original bulk batches where needed. A verb that
+  mutes a long block (`mute_changes`) publishes its own summary after it, or
+  collects what the block wrote (`collect=MutedChanges()`) and observes each
+  committed row once with `publish()`, after the outermost commit.
 - **Publisher wiring reads prebuilt server metadata.** The ready-phase
   [schema integration](../../src/angee/graphql/sdl.py) emits `schemas/publishers.json`
   from finalized resources: published model labels and readable concrete fields,

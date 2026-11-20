@@ -76,6 +76,8 @@ export interface ManageAccessDialogProps {
   onOpenChange: (open: boolean) => void;
   /** Omit for the Share button; null when opened by an existing action. */
   trigger?: React.ReactElement | null;
+  /** Why the Share button cannot open (`Button.disabledReason`); null is no reason yet, absent none ever. */
+  disabledReason?: React.ReactNode;
   label?: string;
   compact?: boolean;
   targetIds: readonly string[];
@@ -112,6 +114,7 @@ export function ManageAccessDialog(props: ManageAccessDialogProps): React.ReactE
       aria-label={t(props.compact ? "access.people" : "access.share")}
       title={props.compact ? undefined : t("access.share")}
       disabled={props.targetIds.length === 0}
+      {...(props.disabledReason === undefined ? {} : { disabledReason: props.disabledReason })}
     >
       <Glyph name="share" />
       {props.compact ? <span>{t("access.people")}{props.peopleLoaded ? ` · ${props.people?.length ?? 0}` : null}</span> : null}

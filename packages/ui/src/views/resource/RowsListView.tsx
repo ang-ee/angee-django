@@ -41,12 +41,13 @@ import {
   type ResourceTableHeaderVisibility,
   type ResourceTableLayout,
   type ListViewProps,
-  type PlacedBulkCollection,
 } from "./resource-view-types";
 import { useResourceSearch } from "./search/use-resource-search";
 import { useSearchCatalog } from "./search/catalog";
 import type { ResourceToolbarProps } from "../../toolbars";
 import { declaredGroupDefaults, useAppliedRepeated, validateDeclaredGroupDefaults, withoutRepeated } from "./search/group-defaults";
+import { renderBulkActions, type WithPlacedBulkActions } from "./bulk-action";
+import { useSelectionPlaces } from "./selection-channel";
 import {
   useRowActionsSurface,
   type RowActionDeclaration,
@@ -134,13 +135,13 @@ export function RowsListView<TRow extends StringIdRow = StringIdRow>(
     presentation: props.presentation,
     initialState,
     children: (scopedResourceView) => (
-      <ValidatedRowsListView {...props} resourceView={scopedResourceView} />
+      <ValidatedRowsListView<TRow> {...props} resourceView={scopedResourceView} />
     ),
   });
 }
 
 function ValidatedRowsListView<TRow extends StringIdRow>(
-  props: RowsListViewProps<TRow> & { resourceView: ResourceViewContextValue },
+  props: WithPlacedBulkActions<RowsListViewProps<TRow>, TRow> & { resourceView: ResourceViewContextValue },
 ): React.ReactElement {
   const t = useUiT();
   const defaults = React.useMemo(() => declaredGroupDefaults(props.defaultGroup), [props.defaultGroup]);
@@ -203,7 +204,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   bulkActions,
   draggableRow,
   resourceView,
-}: RowsListViewProps<TRow> & {
+}: WithPlacedBulkActions<RowsListViewProps<TRow>, TRow> & {
   resourceView: ResourceViewContextValue;
 }): React.ReactElement {
   const t = useUiT();
@@ -239,6 +240,8 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
     textFilterField: DEFAULT_TEXT_FILTER_FIELD,
   });
   const selectedIds = selectable ? surface.selectedIds : EMPTY_SELECTED_IDS;
+  // Rows held in the browser never offer "Select all N", so under another list's they hand the page nothing.
+  const { allMatching } = useSelectionPlaces();
   const galleryRows = useGalleryRows(surface.rowModels);
   const interactive = Boolean(onRowClick || rowHref);
   const filtered = Object.keys(resourceView.state.filter).length > 0;
@@ -274,15 +277,13 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
           ? {
               count: selectedIds.size,
               onClear: resourceView.clearSelectedIds,
-              actions: selectedIds.size > 0
-                ? bulkActions?.(selectedIds, resourceView.clearSelectedIds, {
-                  filter: surface.mergedFilter,
-                  // Scope snapshots are shared Rows; narrow to the declared row type (see bulkActions).
-                  selectedRows: resourceView.selectedRows as readonly TRow[],
-                  // Rows grouped in the browser are never placed: a grouped list reports null.
-                  selectedGroups: selectedGroupsOf(selectedIds, effectiveGroupStack, null),
-                } satisfies PlacedBulkCollection<TRow>)
-                : undefined,
+              actions: renderBulkActions(bulkActions, selectedIds, {
+                selectedRows: resourceView.selectedRows, clearSelectedIds: resourceView.clearSelectedIds, allMatching,
+              }, {
+                filter: surface.mergedFilter,
+                // Rows grouped in the browser are never placed: a grouped list reports null.
+                selectedGroups: selectedGroupsOf(selectedIds, effectiveGroupStack, null),
+              }),
             }
           : undefined
       }

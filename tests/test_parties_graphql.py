@@ -624,6 +624,60 @@ def test_a_merged_away_party_is_no_row_group_count_or_candidate_and_its_id_names
     assert result["addresses"] == [{"id": address.sqid, "party": {"id": survivor.sqid}}]
 
 
+def test_a_reader_who_cannot_see_a_survivor_reads_one_people_total_in_every_read(db: None) -> None:
+    """The People list, its total, the workbench count and the grouped reads agree for a restricted reader.
+
+    The list resource and the workbench chain ``canonical()`` with the actor's
+    scope applied at different points, and ``MergeableQuerySet.canonical`` builds
+    its "survivor these rows do not reach" subquery from the queryset it is called
+    on. For parties that subquery never decides: a party merge trashes the merged
+    record, which the trash scope of ``canonical()`` drops first in either order,
+    so a reader who could see only the merged copy reads it nowhere.
+    """
+
+    owner = User.objects.create_user(username="people-restricted-owner")
+    reader = User.objects.create_user(username="people-restricted-reader")
+    with system_context(reason="test.parties.restricted_reader.seed"):
+        survivor = Person._base_manager.create(display_name="Ada Lovelace", created_by=owner)
+        merged = Person._base_manager.create(display_name="Ada Lovelace", created_by=owner)
+        namesake = Person._base_manager.create(display_name="Ada Lovelace", created_by=owner)
+        other = Person._base_manager.create(display_name="Grace Hopper", created_by=owner)
+    with actor_context(owner):
+        for party in messaging_models.Party.objects.filter(pk__in=[merged.pk, namesake.pk, other.pk]):
+            party.grant_record_access("identity_reader", reader)
+        messaging_models.Party.objects.get(pk=survivor.pk).merge(records=[merged.public_id])
+
+    result = _data(
+        execute_schema(
+            _schema("public"),
+            """
+            query RestrictedPeople {
+              people { id }
+              people_aggregate { aggregate { count } }
+              groups: people_groups(group_by: [{field: DISPLAY_NAME}], limit: 10) {
+                key { display_name }
+                aggregate { count }
+              }
+              repeated: people_groups(group_by: [{field: DISPLAY_NAME}], having: {count_gt: 1}, limit: 10) {
+                key { display_name }
+              }
+              repeated_count: people_groups_count(group_by: [{field: DISPLAY_NAME}], having: {count_gt: 1})
+              workbench: people_workbench { all_count }
+            }
+            """,
+            user=reader,
+        )
+    )
+
+    listed = {row["id"] for row in result["people"]}
+    groups = {group["key"]["display_name"]: group["aggregate"]["count"] for group in result["groups"]}
+    assert listed == {namesake.sqid, other.sqid}
+    assert result["people_aggregate"]["aggregate"]["count"] == len(listed)
+    assert result["workbench"]["all_count"] == len(listed)
+    assert groups == {"Ada Lovelace": 1, "Grace Hopper": 1}
+    assert result["repeated"] == [] and result["repeated_count"] == 0
+
+
 def test_a_repeated_name_counts_its_live_records_beside_a_merged_away_one(db: None) -> None:
     """A name stays repeated through a merge exactly while two live records share it.
 
