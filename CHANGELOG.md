@@ -13,9 +13,12 @@ live in code docstrings.
 - `angee.base`, `angee.parties`, `angee.knowledge`, `angee.parties_integrate_hubspot`:
   a record a bridge creates carries its source's creation date. `created_at` is a
   `CreatedAtField` (`angee.base.models.timestamps`): Django's `auto_now_add`, except
-  that an insert keeps a time its creating owner states (a future one clamped to
-  now). It deconstructs as Django's `DateTimeField`, so no host migrates, and its
-  column types as one in expressions. What changes, in plain words:
+  that an insert keeps a time its creating owner stated for it with
+  `TimestampMixin.stamp_created_at` (a future one clamped to now), once. Every other
+  insert stamps now, whatever the attribute holds, a cloned or re-inserted row's
+  included, and fixtures loaded raw keep their values, as before. It deconstructs as
+  Django's `DateTimeField`, so no host migrates, and its column types as one in
+  expressions. What changes, in plain words:
   - A person a directory contact makes is dated by the source (HubSpot's
     `createdAt`), and a party's date is the earliest its provenance states: a
     contact landing on a younger person, or a merge folding an older record into a
