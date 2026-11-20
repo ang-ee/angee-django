@@ -59,7 +59,10 @@
 
           handle {
             try_files {path} /index.html
-            file_server
+            # A sidecar the build wrote beside a file answers a client that accepts it; with none, encode compresses.
+            file_server {
+              precompressed br zstd gzip
+            }
           }
         }
         CADDY

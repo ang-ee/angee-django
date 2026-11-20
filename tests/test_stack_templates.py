@@ -1027,6 +1027,26 @@ def test_static_ingress_caches_for_good_only_what_the_build_names_by_content() -
             assert not hashed.search(path), path
 
 
+def test_static_ingress_serves_precompressed_sidecars_in_the_declared_order() -> None:
+    """The template's own file server and the composed page routes read sidecars alike, brotli first."""
+
+    from angee.web.build import INGRESS_PRECOMPRESSED
+
+    assert INGRESS_PRECOMPRESSED == ("br", "zstd", "gzip")
+    for stack in (
+        _render_local_stack(),
+        _render_staging_stack(),
+        _render_dev_stack(_runtime_mode="docker", serve_mode="production"),
+    ):
+        frontend = stack["services"]["frontend" if "frontend" in stack["services"] else "caddy"]
+        lines = [line.strip() for line in _rendered_caddyfile(frontend).splitlines()]
+        # Its one file server: the app's, which also answers every built file by its own name.
+        assert [line for line in lines if line.startswith("file_server")] == ["file_server {"]
+        assert lines[lines.index("file_server {") + 1] == f"precompressed {' '.join(INGRESS_PRECOMPRESSED)}"
+        # On-the-fly compression stays for a file without a sidecar.
+        assert "encode zstd gzip" in lines
+
+
 def test_static_ingress_sends_django_exactly_the_declared_paths() -> None:
     """The template cannot read Python, so its ``@django`` matcher is pinned to the list the page rule reads."""
 

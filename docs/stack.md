@@ -204,7 +204,11 @@ the build names by its content: Vite writes all it emits under `assets/` as
 `<name>-<hash>.<ext>`, a deployment's selected named asset among them. The app
 document, a standalone page's `<id>.html`, `.angee/pages.json` and a host's
 public-directory files keep their names and are revalidated, so a host keeps its
-public files out of `assets/`. It sets the operator allowed origin to the
+public files out of `assets/`. When the build wrote a sidecar beside a file
+(`<file>.br`, `.zst`, `.gz`) and the client accepts that encoding, the ingress
+sends the sidecar, brotli first (`INGRESS_PRECOMPRESSED`, for the app's files
+and the standalone pages alike); a file without one is compressed on the fly as
+before. It sets the operator allowed origin to the
 stack's browser origin. The inner Caddy waits for the edge's Compose alias on
 public ingress and trusts its connected Compose network CIDRs with strict
 right-to-left client IP parsing. It forwards the verified client IP as a single

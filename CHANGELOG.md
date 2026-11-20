@@ -17,6 +17,10 @@ live in code docstrings.
   visit no longer transfers them. Documents (`index.html`, a standalone page's
   `<id>.html`), `.angee/pages.json` and public-directory files keep their names
   and are revalidated, as is the app document a missing asset falls back to.
+  The ingress serves precompressed sidecars when a build provides them: a
+  `<file>.br`, `.zst` or `.gz` beside a file answers a client that accepts it,
+  brotli first, for the app's files and the standalone pages; without one the
+  file is compressed on the fly as before.
 - `angee.web`: an addon's web package declares **standalone pages**, static HTML
   entries of the web build that load none of the app, in `web/package.json`:
   `"angee": {"pages": {"<id>": {"entry": "./src/standalone/form.html", "paths":
