@@ -312,6 +312,18 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
+name = "Web forms and messaging meet only in their bridge"
+type = "forbidden"
+source_modules = ["angee.messaging", "angee.intake"]
+forbidden_modules = ["angee.webforms", "angee.webforms_messaging"]
+
+[[tool.importlinter.contracts]]
+name = "Web forms do not import messaging, intake or the bridge"
+type = "forbidden"
+source_modules = ["angee.webforms"]
+forbidden_modules = ["angee.messaging", "angee.intake", "angee.webforms_messaging"]
+
+[[tool.importlinter.contracts]]
 name = "OAuth and its vendor presets do not import the login addon"
 type = "forbidden"
 source_modules = ["angee.integrate", "angee.integrate_google"]
