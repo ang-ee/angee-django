@@ -299,7 +299,7 @@ jobs:
             tests/test_integrate_scheduler.py::test_scheduled_admission_uses_the_schedulers_single_row_lock \
             tests/test_integrate_scheduler.py::test_scheduler_skips_row_locked_bridge_and_enqueues_other_due_bridges \
             tests/test_knowledge_clone_concurrency_campaign.py tests/test_knowledge_search.py \
-            tests/test_postgresql_extensions.py \
+            tests/test_postgresql_extensions.py tests/test_prepared_statements.py \
             tests/test_knowledge_graph_pgvector_extraction.py tests/test_knowledge_graph_pgvector_local.py \
             tests/test_knowledge_graph_pgvector_index.py tests/test_knowledge_graph_pgvector_jobs.py \
             tests/test_knowledge_graph_pgvector_evaluation.py \

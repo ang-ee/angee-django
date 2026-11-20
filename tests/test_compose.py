@@ -704,6 +704,110 @@ def test_database_pool_follows_authored_settings_and_native_environment(tmp_path
     assert _configured_namespace(tmp_path, DATABASES=explicit)["DATABASES"] == explicit
 
 
+# DATABASE_URL inputs whose parse ANGEE_DB_PREPARED_STATEMENTS must leave alone while it is unset.
+DATABASE_URLS = (
+    "postgres://u:p@h:5432/db",
+    "postgresql://u:p@h:5432/db",
+    "pgsql://u:p@h:5432/db",
+    "postgis://u:p@h:5432/db",
+    "postgres://u:p@h:5432/db?conn_max_age=600",
+    "postgres://u:p@h:5432/db?sslmode=require",
+    "postgres://u:p@h:5432/db?options=-c%20statement_timeout%3D5000",
+    *(f"postgres://u:p@h:5432/db?server_side_binding={value}" for value in ("true", "True", "1", "0", "false", "")),
+    *(f"postgres://u:p@h:5432/db?prepare_threshold={value}" for value in ("0", "1", "5", "-1", "007", "None", "")),
+    "postgres://u:p@h:5432/db?server_side_binding=true&prepare_threshold=5",
+    "sqlite:////tmp/app.sqlite3?server_side_binding=true",
+    "mysql://u:p@h:3306/db?server_side_binding=true",
+)
+
+
+def _deployed_urls(monkeypatch, url: str, **environment: str) -> dict[str, Any]:
+    import environ
+
+    from angee.base.conf import _deployment_urls
+
+    monkeypatch.setenv("DATABASE_URL", url)
+    for name in ("ANGEE_DB_PREPARED_STATEMENTS", "ANGEE_DB_POOL"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    namespace: dict[str, Any] = {}
+    _deployment_urls(namespace, environ.Env())
+    return namespace
+
+
+@pytest.mark.parametrize("unset", [{}, {"ANGEE_DB_PREPARED_STATEMENTS": "false"}], ids=["unset", "false"])
+def test_prepared_statements_off_leave_every_database_url_as_django_environ_parses_it(monkeypatch, unset):
+    """Off, every URL builds the database django-environ parses, plus ``-c jit=off`` on PostgreSQL.
+
+    ``repr`` compares types too: ``1`` and ``True`` are equal under ``==``.
+    """
+
+    import environ
+
+    for url in DATABASE_URLS:
+        expected = environ.Env.db_url_config(url)
+        if "postgresql" in expected.get("ENGINE", ""):
+            expected.setdefault("OPTIONS", {}).setdefault("options", "-c jit=off")
+        namespace = _deployed_urls(monkeypatch, url, **unset)
+        assert repr(namespace) == repr({"DATABASES": {"default": expected}}), url
+
+
+def test_prepared_statements_follow_authored_settings_and_native_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("DJANGO_COMPOSE_MODE", "write")
+    monkeypatch.setenv("DATABASE_URL", "postgres://user:password@localhost:5432/db")
+    monkeypatch.delenv("ANGEE_DB_PREPARED_STATEMENTS", raising=False)
+    assert repr(_configured_namespace(tmp_path)["DATABASES"]["default"]["OPTIONS"]) == repr({"options": "-c jit=off"})
+    monkeypatch.setenv("ANGEE_DB_PREPARED_STATEMENTS", "true")
+    assert repr(_configured_namespace(tmp_path)["DATABASES"]["default"]["OPTIONS"]) == repr(
+        {"options": "-c jit=off", "server_side_binding": True, "prepare_threshold": 1}
+    )
+    monkeypatch.delenv("ANGEE_DB_PREPARED_STATEMENTS")
+    authored = _configured_namespace(tmp_path, ANGEE_DB_PREPARED_STATEMENTS=True)
+    assert authored["DATABASES"]["default"]["OPTIONS"]["server_side_binding"] is True
+    assert _configured_namespace(tmp_path, ANGEE_DB_PREPARED_STATEMENTS="false")[
+        "DATABASES"]["default"]["OPTIONS"] == {"options": "-c jit=off"}
+
+
+@pytest.mark.parametrize(
+    ("url", "named"),
+    [
+        ("postgres://u:p@h/db?server_side_binding=true", "server_side_binding"),
+        ("postgres://u:p@h/db?server_side_binding=false", "server_side_binding"),
+        ("postgres://u:p@h/db?prepare_threshold=1", "prepare_threshold"),
+        ("postgres://u:p@h/db?server_side_binding=1&prepare_threshold=0", "server_side_binding or prepare_threshold"),
+    ],
+)
+def test_prepared_statements_refuse_a_database_url_that_names_their_options(monkeypatch, url, named):
+    refusal = f"ANGEE_DB_PREPARED_STATEMENTS cannot be used with DATABASE_URL {named}$"
+    with pytest.raises(ImproperlyConfigured, match=refusal):
+        _deployed_urls(monkeypatch, url, ANGEE_DB_PREPARED_STATEMENTS="true")
+
+
+def test_prepared_statements_apply_where_the_pool_applies(monkeypatch):
+    """The setting applies where ``ANGEE_DB_POOL`` applies: a PostgreSQL ``DATABASE_URL``. A project's own
+    ``DATABASES`` and other URL schemes are left alone, while a URL naming the setting's options still fails."""
+
+    import environ
+
+    from angee.base.conf import _deployment_urls
+
+    on = {"ANGEE_DB_PREPARED_STATEMENTS": "true"}
+    for url in ("sqlite:////tmp/app.sqlite3?server_side_binding=true", "mysql://u:p@h:3306/db", "postgis://u:p@h/db"):
+        expected = {"DATABASES": {"default": environ.Env.db_url_config(url)}}
+        assert repr(_deployed_urls(monkeypatch, url, **on)) == repr(expected), url
+    explicit = {"default": {"ENGINE": "django.db.backends.postgresql", "NAME": "x", "OPTIONS": {}}}
+
+    monkeypatch.setenv("DATABASE_URL", "postgres://u:p@h/db")
+    monkeypatch.setenv("ANGEE_DB_PREPARED_STATEMENTS", "true")
+    namespace = {"DATABASES": explicit}
+    _deployment_urls(namespace, environ.Env())
+    assert namespace["DATABASES"] is explicit and explicit["default"]["OPTIONS"] == {}
+    monkeypatch.setenv("DATABASE_URL", "postgres://u:p@h/db?prepare_threshold=1")
+    with pytest.raises(ImproperlyConfigured, match="ANGEE_DB_PREPARED_STATEMENTS"):
+        _deployment_urls({"DATABASES": explicit}, environ.Env())
+
+
 @pytest.fixture
 def postgres_pool_connection() -> Any:
     from django.db import connections

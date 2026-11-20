@@ -67,5 +67,8 @@ when editing existing project declarations.
 
 `ANGEE_DB_POOL` is for production Django workers; database URLs with
 `CONN_MAX_AGE` conflict with native pooling. Celery and management jobs retain
-short-lived connections. The shared Python runtime include owns the process
-`.venv` or Docker shared `data/.venv-linux` selector.
+short-lived connections. `ANGEE_DB_PREPARED_STATEMENTS` belongs beside the pool on
+web workers only; when it pays, what it costs and where it must stay off are in
+[prepared statements](../../../docs/stack.md#prepared-statements).
+The shared Python runtime include owns the process `.venv` or Docker shared
+`data/.venv-linux` selector.

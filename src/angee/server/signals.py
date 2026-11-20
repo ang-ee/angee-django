@@ -11,6 +11,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db.backends.signals import connection_created
 
 WEB_STATEMENT_TIMEOUT_UID = "angee.server.web_statement_timeout"
+PREPARED_STATEMENTS_MAX_UID = "angee.server.prepared_statements_max"
 
 
 def web_statement_timeout_ms() -> int:
@@ -58,3 +59,41 @@ def connect_web_statement_timeout() -> None:
             weak=False,
             dispatch_uid=WEB_STATEMENT_TIMEOUT_UID,
         )
+
+
+def bound_prepared_statements(*, connection: Any, limit: int, **_signal: Any) -> None:
+    """Bound the statements psycopg keeps prepared on a web-process connection that prepares any.
+
+    psycopg keeps at most ``prepared_max`` prepared statements, and as many
+    execution counts, per connection, least recently used first. A connection
+    whose options set no ``prepare_threshold`` prepares nothing and is left alone.
+    """
+
+    if connection.vendor == "postgresql" and connection.settings_dict["OPTIONS"].get("prepare_threshold") is not None:
+        connection.connection.prepared_max = limit
+
+
+def prepared_statements_max() -> int:
+    """Read ``ANGEE_DB_PREPARED_STATEMENTS_MAX`` once, at boot: a whole number of statements, at least 1."""
+
+    raw = settings.ANGEE_DB_PREPARED_STATEMENTS_MAX
+    if isinstance(raw, bool) or not isinstance(raw, (int, str)) or not str(raw).strip().isdigit() or int(raw) < 1:
+        raise ImproperlyConfigured(
+            f"ANGEE_DB_PREPARED_STATEMENTS_MAX must be a whole number of statements, at least 1, not {raw!r}."
+        )
+    return int(raw)
+
+
+def connect_prepared_statements_max() -> None:
+    """Apply ``ANGEE_DB_PREPARED_STATEMENTS_MAX`` to each connection the ASGI host opens that prepares statements.
+
+    ``ANGEE_DB_PREPARED_STATEMENTS`` decides whether a connection prepares any.
+    Celery workers and management commands keep psycopg's own bound.
+    ``docs/stack.md`` (Prepared statements) says how to size it.
+    """
+
+    connection_created.connect(
+        partial(bound_prepared_statements, limit=prepared_statements_max()),
+        weak=False,
+        dispatch_uid=PREPARED_STATEMENTS_MAX_UID,
+    )

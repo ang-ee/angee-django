@@ -90,6 +90,7 @@ It has no task or scheduler dependency.
 | django-yamlconf | Native YAML overlays, merge syntax and source provenance | `angee.base.conf` loads bounded authored/deployment settings; `django_compose.conf` composes ordered app contributions and owns strict error handling without losing structural provenance |
 | django-environ | Typed boot environment access and URL parsers | `angee.base.conf` reads Angee deployment env vars and honors the standard service URLs a deployment injects — `DATABASE_URL`→`DATABASES`, `CACHE_URL`→`CACHES` — override-safe (an explicit project setting wins), falling back to the SQLite/Django floor when unset. |
 | psycopg pool | Bounded PostgreSQL connections per process through Django's native `OPTIONS.pool` | `angee.base.conf` maps `ANGEE_DB_POOL`, `ANGEE_DB_POOL_MIN_SIZE`, `ANGEE_DB_POOL_MAX_SIZE`, and `ANGEE_DB_POOL_TIMEOUT` into the PostgreSQL database config when enabled. The stack template enables it only for production Django workers; Celery and management jobs keep Django's short-lived connection default. |
+| psycopg prepared statements | Statements a PostgreSQL connection prepares and plans once, through Django's native `server_side_binding` and `prepare_threshold` options, and psycopg's per-connection bound on them | `angee.base.conf` sets both options on a PostgreSQL `DATABASE_URL` when `ANGEE_DB_PREPARED_STATEMENTS` is on (off by default) and refuses a URL that names them; the ASGI server applies `ANGEE_DB_PREPARED_STATEMENTS_MAX` to each connection it opens. [Prepared statements](#prepared-statements) says when it pays, what it costs and where it must stay off. |
 | sentry-sdk >= 2.71 | Error and event transport; its Django, Celery and logging integrations; `SENTRY_DSN` / `SENTRY_ENVIRONMENT` / `SENTRY_RELEASE` read from the environment | [`angee.base.conf`](../src/angee/base/conf/__init__.py) starts it when `SENTRY_DSN` is set (stack input `sentry_dsn`), after addon settings compose or before a composition failure propagates. Native integrations retain PII, frame locals and request bodies in the process. GraphQL's [autoconfig](../src/angee/graphql/autoconfig.py) excludes native Strawberry HTTP error capture through `SENTRY_DISABLED_INTEGRATIONS`; [`GraphQLConfig`](../src/angee/graphql/apps.py) suppresses its duplicate logger. Unexpected resolver errors arrive once through the logging integration as the schema sanitizer's record (class, path, frames; no exception value) |
 | django-silk >= 5.6, < 6 | Live request recording: headers, bodies, responses, each ORM statement with its traceback and timing, optional cProfile profiling, and the inspection UI; its own middleware, models, migrations and `SILKY_*` settings | Opt-in at the [server](../src/angee/server/autoconfig.py): the `profiling` extra installs it and a project roots `silk` in `INSTALLED_APPS`. The server then prepends silk's middleware, mounts its UI at `profiling/` (assets through Django's DEBUG-only static view) for actors the `ANGEE_PROFILING_PERMISSION` hook admits (IAM contributes platform admins) and refuses it with `DEBUG` off unless `ANGEE_PROFILING_ALLOW_PRODUCTION` is true (`angee.server.E002`). Off by default: no app, middleware, route or tables |
 | django-anymail | Vendor-neutral Django email backend API across transactional ESPs, plus the deterministic test backend | `angee.messaging` renders outbound `Message` parts and envelopes into `AnymailMessage`; deployments select an ESP through Django's native `MAILERS["default"]` plus `ANYMAIL`/`ANYMAIL_*` settings, while an unconfigured stack logs and declines delivery without touching Django's implicit localhost SMTP backend |
@@ -259,6 +260,109 @@ serving process opens, in development and production. Celery workers,
 migrations, imports, the operator's jobs and other management commands never
 load that entrypoint and keep the server's own timeout. Change it in project
 settings or through the `ANGEE_WEB_STATEMENT_TIMEOUT` environment variable.
+
+#### Prepared statements
+
+`ANGEE_DB_PREPARED_STATEMENTS` (off by default) makes a PostgreSQL connection prepare
+the statements it repeats, through Django's native `server_side_binding` and
+`prepare_threshold` options
+([`enable_prepared_statements`](../src/angee/base/conf/__init__.py)). psycopg prepares a
+statement on its second execution on a connection. PostgreSQL plans a prepared
+statement for its values on its first five executions, may then build a generic plan,
+and keeps reusing it without planning again while its estimated cost is no higher than
+the plans it replaced (`plan_cache_mode = auto`, which the framework never changes).
+
+**Set it on the web service only.** In a stack, put it in the Django web service's
+environment, beside the `ANGEE_DB_POOL` the stack template sets there. Set as a project
+setting or in an environment shared by every service, it also reaches Celery workers and
+management jobs (see *Workers and jobs* below).
+
+**Where it applies.** Only the `default` database that a `DATABASE_URL` builds with a
+Django PostgreSQL backend (an engine whose dotted path contains `postgresql`), as with
+`ANGEE_DB_POOL`; a project-defined `DATABASES` and other engines, PostGIS among them, are
+left alone. While the setting is on, a `DATABASE_URL` that names `server_side_binding` or
+`prepare_threshold` stops the boot, as the pool refuses a URL's `CONN_MAX_AGE`, even where
+a project-defined `DATABASES` takes precedence. While it is off, the URL builds exactly
+what django-environ parses, plus `-c jit=off`.
+
+**It pays only while each connection's working set stays under its cap.** psycopg keeps
+at most `ANGEE_DB_PREPARED_STATEMENTS_MAX` prepared statements per connection (default
+100, psycopg's own), and as many execution counts, dropping the least recently used; one
+statement over the cap survives until the connection's next new statement. A statement
+used less often than once per cap of other distinct statements loses its count before
+its second execution and is never prepared: above the cap only the statements a session
+repeats most are prepared, and the gain shrinks to theirs. The
+ASGI server applies the cap to every connection it opens, pooled or not, and stops at
+boot on a value that is not a whole number of at least 1; Celery workers and management
+commands keep psycopg's 100. Statement text differs between actors with different grant
+profiles, so the working set grows with the number of such actors a connection serves.
+On the composed console host, one kept connection held:
+
+| Session on one connection | Cap | Prepared statements | Plan memory |
+|---|---|---|---|
+| A member's eight console documents (77 distinct statements) | 100 or 200 | 78 | 235 MiB |
+| The same documents as a member and as an administrator (145) | 100 | 37 | 46 MiB |
+| | 200 | 146 | 250 MiB |
+
+On that host's small seeded database about three quarters of the time of a member's
+documents was PostgreSQL planning, which is what the setting removes. With the cap
+holding the working set, the member's documents were served three to seven times faster
+once their statements ran on generic plans (from a statement's seventh execution on a
+connection), and the documents of both actors together 2.7 times faster, for about
+250 MiB of plans per connection. With the 145 statements of both actors against a cap of
+100, 1.6 times faster.
+
+**Generic plans can be slower.** PostgreSQL chooses a generic plan on estimated cost, not
+on the values of the request, and for skewed values (one very large tenant, one very
+active user) it can be much slower than a plan made for those values. The measurements
+here come from a small seeded database. If reads slow down with the setting on, turn it
+off.
+
+**It costs PostgreSQL memory.** A prepared statement holds its query tree, and its
+generic plan once chosen, in the backend: typically 235 MiB for the member's 77
+statements above and 250 MiB for the 145 of two actors. Single statements measured up to
+9.3 MiB. The bound is **`serve_workers × db_pool_max_size × ANGEE_DB_PREPARED_STATEMENTS_MAX × statement size`**;
+with the stack templates' defaults (`serve_workers: 0`, one worker per CPU and at least
+two; `db_pool_max_size: 2`; the default cap) and the largest statement measured, two web
+workers can hold 3.6 GiB and an eight-CPU host 14.6 GiB. A typical connection holds what
+its working set needs, about 250 MiB in the sessions above, so 1 GiB for two web workers
+and 4 GiB for eight. Raising the cap raises the bound in proportion.
+
+**Schema changes need the operator's chained restart.** A migration that changes the
+type of a column a prepared statement returns (a `CharField`'s `max_length`, a
+`DecimalField`'s precision, an integer to a big integer) makes that statement fail with
+"cached plan must not change result type", on every request on each connection that
+prepared it, until that connection rolls back, the pool closes it as idle (`max_idle`,
+600 s by default) or old (`max_lifetime`, 3,600 s by default), or the service restarts. A
+statement that only filters on the changed column plans again and keeps working; adding
+a column, a default or an index, or dropping `NOT NULL`, is harmless. Apply schema
+changes through the operator's chained restart, which holds the services stopped while
+migrations run; never migrate against serving workers with the setting on.
+
+**A rollback or a DDL statement discards a connection's prepared statements.** psycopg
+deallocates every statement a connection prepared on any rollback, including a rollback
+to a savepoint and a failed `atomic` block (a permission denial or an integrity error
+inside one), and after any `ALTER` or `DROP` on that connection. Those statements pay
+their planned executions again.
+
+**Keep it off behind PgBouncer older than 1.22, or with `max_prepared_statements = 0`.**
+psycopg sends `DEALLOCATE ALL` on every rollback, which PgBouncer accepts from 1.22, and
+PgBouncer routes a session's named prepared statements in transaction pooling only while
+`max_prepared_statements` is above 0. psycopg's own pool (`ANGEE_DB_POOL`) is fine.
+
+**Raw SQL must give every parameter a type.** Under server-side binding PostgreSQL
+receives each parameter apart from the statement text, so an untyped one fails: `%s IS
+NULL` raises "could not determine data type of parameter". An addon's raw SQL casts it
+(`%s::text IS NULL`).
+
+**Workers and jobs.** Where the setting reaches them, Celery workers and management jobs
+(the provision job's `migrate` among them) bind parameters on the server and prepare
+repeated statements under psycopg's cap of 100. Their connections close after each task
+or command, so preparing gains them nothing and holds memory while they run. Migrations
+still pass: a statement carrying several commands, as Django's schema editor sends to add
+a foreign-key column, is never prepared, and a single-command DDL statement is prepared
+only if the same text runs twice on one connection, which is harmless. Raw SQL with an
+untyped parameter fails there too.
 
 ## Frontend
 

@@ -487,6 +487,22 @@ def test_server_statement_timeout_preserves_project_and_environment_policy(
     assert float(namespace["ANGEE_WEB_STATEMENT_TIMEOUT"]) == expected
 
 
+@pytest.mark.parametrize(
+    ("project", "environment", "expected"), [(None, None, 100), (200, None, 200), (200, "400", 400)],
+)
+def test_server_prepared_statements_max_preserves_project_and_environment_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, project: int | None, environment: str | None, expected: int,
+) -> None:
+    monkeypatch.delenv("ANGEE_DB_PREPARED_STATEMENTS_MAX", raising=False)
+    if environment is not None:
+        monkeypatch.setenv("ANGEE_DB_PREPARED_STATEMENTS_MAX", environment)
+    namespace = {"INSTALLED_APPS": ["angee.server"]}
+    if project is not None:
+        namespace["ANGEE_DB_PREPARED_STATEMENTS_MAX"] = project
+    _configure(namespace, tmp_path)
+    assert int(namespace["ANGEE_DB_PREPARED_STATEMENTS_MAX"]) == expected
+
+
 SILK_MIDDLEWARE = "silk.middleware.SilkyMiddleware"
 
 

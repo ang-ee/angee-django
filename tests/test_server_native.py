@@ -35,6 +35,7 @@ settings.configure(
     INSTALLED_APPS=['django.contrib.contenttypes', 'django.contrib.auth', 'rebac',
                     'angee.base', 'angee.server'],
     SECRET_KEY='server-bootstrap', ANGEE_MERGE_GUARDS=[], ANGEE_WEB_STATEMENT_TIMEOUT=0,
+    ANGEE_DB_PREPARED_STATEMENTS_MAX=100,
     LOGGING_CONFIG='native_logging_probe.configure', LOGGING={'version': 1},
 )
 if already_populated:
@@ -60,6 +61,7 @@ settings.configure(
     **MCP_SETTINGS,
     INSTALLED_APPS=['django.contrib.contenttypes', 'django.contrib.auth', 'rebac', 'angee.base', 'angee.mcp'],
     SECRET_KEY='native-mcp-mount', ANGEE_MERGE_GUARDS=[], ANGEE_WEB_STATEMENT_TIMEOUT=0,
+    ANGEE_DB_PREPARED_STATEMENTS_MAX=100,
     ALLOWED_HOSTS=['localhost'], CSRF_TRUSTED_ORIGINS=['http://localhost'],
     ANGEE_MCP_ACTOR_VERIFIER='native_mcp_verifier.resolve_actor',
 )

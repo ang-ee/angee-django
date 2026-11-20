@@ -32,12 +32,13 @@ from django.core.exceptions import ImproperlyConfigured
 from django.core.handlers.asgi import ASGIHandler
 
 from angee.base.addons import addon_contribution, addon_modules
-from angee.server.signals import connect_web_statement_timeout
+from angee.server.signals import connect_prepared_statements_max, connect_web_statement_timeout
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "settings")
 if not apps.ready:
     django.setup(set_prefix=False)
 connect_web_statement_timeout()
+connect_prepared_statements_max()
 
 type _Lifespan = Callable[[], AbstractAsyncContextManager[object]]
 

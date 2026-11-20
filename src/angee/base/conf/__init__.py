@@ -80,13 +80,53 @@ def configure(namespace: MutableMapping[str, Any]) -> None:
         _start_error_reporting(namespace, env)
 
 
+PREPARE_THRESHOLD = 1
+"""Executions of a statement on a connection before psycopg prepares it under ``ANGEE_DB_PREPARED_STATEMENTS``.
+
+At 1 a statement is prepared on its second execution, so one that runs once, such
+as a migration's DDL, is never prepared. Neither is one carrying several commands,
+such as Django's schema editor's ``ALTER TABLE …; SET CONSTRAINTS …``: psycopg sends
+it unprepared and drops its count, because it returned more than one result. At 0
+psycopg would prepare that statement on its first execution and PostgreSQL would
+refuse it. ``docs/stack.md`` (Prepared statements) owns the operating guidance.
+"""
+
+
+def enable_prepared_statements(options: MutableMapping[str, Any]) -> None:
+    """Set Django's native options that make a PostgreSQL connection prepare its repeated statements.
+
+    ``server_side_binding`` sends parameters apart from the statement text, without
+    which psycopg prepares nothing; ``prepare_threshold`` is :data:`PREPARE_THRESHOLD`.
+    PostgreSQL's ``plan_cache_mode`` is left at ``auto``. It must stay off behind a
+    PgBouncer that cannot route named prepared statements or ``DEALLOCATE ALL``.
+    ``docs/stack.md`` (Prepared statements) says when this pays, what it costs and
+    where else it must stay off.
+    """
+
+    options["server_side_binding"] = True
+    options["prepare_threshold"] = PREPARE_THRESHOLD
+
+
 def _deployment_urls(namespace: MutableMapping[str, Any], env: environ.Env) -> None:
-    """Project URL environment inputs through django-environ's native parsers."""
+    """Project URL environment inputs through django-environ's native parsers.
+
+    ``ANGEE_DB_PREPARED_STATEMENTS`` applies to a PostgreSQL ``DATABASE_URL`` and
+    refuses a URL that names the options it sets.
+    """
     if "DATABASE_URL" in os.environ:
         database = env.db()
         if "postgresql" in database.get("ENGINE", ""):
             options = database.setdefault("OPTIONS", {})
             options.setdefault("options", "-c jit=off")
+            if env.bool(
+                "ANGEE_DB_PREPARED_STATEMENTS",
+                default=environ.Env.parse_value(namespace.get("ANGEE_DB_PREPARED_STATEMENTS", False), bool),
+            ):
+                if named := [name for name in ("server_side_binding", "prepare_threshold") if name in options]:
+                    raise ImproperlyConfigured(
+                        f"ANGEE_DB_PREPARED_STATEMENTS cannot be used with DATABASE_URL {' or '.join(named)}"
+                    )
+                enable_prepared_statements(options)
             if env.bool("ANGEE_DB_POOL", default=environ.Env.parse_value(namespace.get("ANGEE_DB_POOL", False), bool)):
                 if database.get("CONN_MAX_AGE"):
                     raise ImproperlyConfigured("ANGEE_DB_POOL cannot be used with DATABASE_URL CONN_MAX_AGE")

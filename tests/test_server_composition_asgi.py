@@ -26,7 +26,7 @@ angee.base.addons.optional_addon_module = (
 )
 from django.conf import settings
 settings.configure(
-    INSTALLED_APPS=[], ANGEE_WEB_STATEMENT_TIMEOUT=0,
+    INSTALLED_APPS=[], ANGEE_WEB_STATEMENT_TIMEOUT=0, ANGEE_DB_PREPARED_STATEMENTS_MAX=100,
     DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
 )
 import django
@@ -48,7 +48,7 @@ def contributor(name, mounts=(), lifespans=(), protocols=None):
 def test_post_setup_url_import_guard():
     run("""
 from django.conf import settings
-settings.configure(INSTALLED_APPS=[], ANGEE_WEB_STATEMENT_TIMEOUT=0)
+settings.configure(INSTALLED_APPS=[], ANGEE_WEB_STATEMENT_TIMEOUT=0, ANGEE_DB_PREPARED_STATEMENTS_MAX=100)
 from django.core.exceptions import AppRegistryNotReady
 try:
     __import__("angee.server.urls")
@@ -222,7 +222,7 @@ from importlib import import_module
 from importlib.machinery import ModuleSpec
 from types import ModuleType
 from django.conf import settings
-settings.configure(INSTALLED_APPS=[], ANGEE_WEB_STATEMENT_TIMEOUT=0)
+settings.configure(INSTALLED_APPS=[], ANGEE_WEB_STATEMENT_TIMEOUT=0, ANGEE_DB_PREPARED_STATEMENTS_MAX=100)
 import django
 django.setup()
 from asgiref.testing import ApplicationCommunicator

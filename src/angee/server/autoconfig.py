@@ -16,6 +16,7 @@ _Settings = TypedDict(
         "MIDDLEWARE:prepend": list[str],
         "MIDDLEWARE:append": list[str],
         "ANGEE_WEB_STATEMENT_TIMEOUT": int,
+        "ANGEE_DB_PREPARED_STATEMENTS_MAX": int,
         "ANGEE_SERVER_COMMAND_CONTEXT": list[str],
         "ANGEE_PROFILING_ALLOW_PRODUCTION": bool,
     },
@@ -30,6 +31,8 @@ SETTINGS: _Settings = {
         "django.middleware.csp.ContentSecurityPolicyMiddleware",
     ],
     "ANGEE_WEB_STATEMENT_TIMEOUT": 60,
+    # psycopg's own bound on the statements a connection keeps prepared; see ``angee.server.signals``.
+    "ANGEE_DB_PREPARED_STATEMENTS_MAX": 100,
     # Enabled addons append dotted command-context factories; see ``angee.server.management``.
     "ANGEE_SERVER_COMMAND_CONTEXT": [],
     # ``angee.server.E002`` refuses django-silk with DEBUG off unless this is the boolean True.

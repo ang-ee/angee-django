@@ -1,8 +1,10 @@
-"""Angee serving timeout and GraphQL WebSocket origin/auth middleware policy."""
+"""Angee serving connection policy and GraphQL WebSocket origin/auth middleware policy."""
 
 from __future__ import annotations
 
 import asyncio
+import importlib
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -17,7 +19,12 @@ from django.urls import path
 
 from angee.graphql import asgi
 from angee.graphql.consumers import AngeeGraphQLWSConsumer
-from angee.server.signals import WEB_STATEMENT_TIMEOUT_UID, connect_web_statement_timeout
+from angee.server.signals import (
+    PREPARED_STATEMENTS_MAX_UID,
+    WEB_STATEMENT_TIMEOUT_UID,
+    connect_prepared_statements_max,
+    connect_web_statement_timeout,
+)
 from tests.conftest import make_addon
 
 
@@ -59,6 +66,54 @@ def test_only_the_web_entrypoint_bounds_postgresql_statements(settings: Any) -> 
     finally:
         connection_created.disconnect(dispatch_uid=WEB_STATEMENT_TIMEOUT_UID)
     assert statements == []
+
+
+def test_only_the_web_entrypoint_bounds_the_statements_a_connection_prepares(settings: Any) -> None:
+    """``ANGEE_DB_PREPARED_STATEMENTS_MAX`` reaches the connections that prepare, in the web process alone."""
+
+    def open_connection(vendor: str = "postgresql", **options: object) -> Any:
+        driver = SimpleNamespace(prepared_max=100)
+        connection_created.send(
+            sender=None,
+            connection=SimpleNamespace(vendor=vendor, settings_dict={"OPTIONS": options}, connection=driver),
+        )
+        return driver.prepared_max
+
+    prepares = {"server_side_binding": True, "prepare_threshold": 1}
+    settings.ANGEE_DB_PREPARED_STATEMENTS_MAX = "300"  # an environment value
+    connection_created.disconnect(dispatch_uid=PREPARED_STATEMENTS_MAX_UID)
+    assert open_connection(**prepares) == 100  # a worker or command does not register the ASGI receiver
+    try:
+        connect_prepared_statements_max()
+        assert open_connection(**prepares) == 300
+        assert open_connection() == 100  # a connection that prepares nothing is left alone
+        assert open_connection("sqlite", **prepares) == 100
+    finally:
+        connection_created.disconnect(dispatch_uid=PREPARED_STATEMENTS_MAX_UID)
+
+
+@pytest.mark.parametrize("value", [0, -3, "0", "abc", "2.5", 2.5, True, None])
+def test_an_invalid_prepared_statements_max_fails_at_boot(settings: Any, value: object) -> None:
+    """A cap that is not a whole number of at least one stops the web app from starting, not a request."""
+
+    settings.ANGEE_DB_PREPARED_STATEMENTS_MAX = value
+    with pytest.raises(ImproperlyConfigured, match="ANGEE_DB_PREPARED_STATEMENTS_MAX"):
+        connect_prepared_statements_max()
+
+
+def test_the_asgi_entrypoint_applies_the_web_connection_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Importing the ASGI application connects both per-connection policies, timeout first."""
+
+    import angee.server.signals
+
+    connected: list[str] = []
+    monkeypatch.setattr(angee.server.signals, "connect_web_statement_timeout", lambda: connected.append("timeout"))
+    monkeypatch.setattr(angee.server.signals, "connect_prepared_statements_max", lambda: connected.append("cap"))
+    if (module := sys.modules.get("angee.server.asgi")) is None:
+        importlib.import_module("angee.server.asgi")
+    else:
+        importlib.reload(module)
+    assert connected == ["timeout", "cap"]
 
 
 @pytest.mark.parametrize("value", ["60s", "-5", "nan", None])
