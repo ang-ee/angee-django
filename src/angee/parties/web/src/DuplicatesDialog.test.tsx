@@ -805,6 +805,33 @@ describe("the batch merge dialog", () => {
         .hasAttribute("disabled")).toBe(false);
     }, PAGED_RUN_TIMEOUT_MS);
 
+    test("a full page ending on a group without a key ends the listing, with no repeated request", async () => {
+      // The fiftieth group, last on a full page, has no key: nulls sort last, so nothing follows it. Read as "from the
+      // start" the next request would be the first page's again and the listing would never end.
+      mocks.groupsRead = groupPages(50, (number) => (number === 50
+        ? { ...group(50), key: { display_name: null, given_name: null, family_name: null } }
+        : group(number)));
+      mocks.previewRead = answering();
+      renderDialog(vi.fn(), [], false, undefined, undefined, groupsOf(50));
+
+      expect(await screen.findByText(message("duplicates.totals", { count: "49", merge: "45", look: "4" }))).toBeTruthy();
+      expect(groupReads()).toHaveLength(1);
+      expect(confirmButton().hasAttribute("disabled")).toBe(false);
+    }, PAGED_RUN_TIMEOUT_MS);
+
+    test("a full page ending on a key that is not text ends the listing and says the list changed", async () => {
+      // No `_gt` cursor steps past a key that is not text: the listing ends there, though the list counted more.
+      mocks.groupsRead = groupPages(120, (number) => (number === 50
+        ? { ...group(50), key: { display_name: 42, given_name: null, family_name: null } }
+        : group(number)));
+      mocks.previewRead = answering();
+      renderDialog(vi.fn(), [], false, undefined, undefined, groupsOf(120));
+
+      expect(await screen.findByText(message("duplicates.listChanged", { count: "50" }))).toBeTruthy();
+      expect(groupReads()).toHaveLength(1);
+      expect(screen.getByText(message("duplicates.totals", { count: "49", merge: "45", look: "4" }))).toBeTruthy();
+    }, PAGED_RUN_TIMEOUT_MS);
+
     test("Confirm stays disabled until the last page of groups is listed", async () => {
       const listed = groupPages(120);
       mocks.groupsRead = (variables) => (cursorOf(variables) === keyOf(50)

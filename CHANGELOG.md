@@ -19,7 +19,10 @@ live in code docstrings.
   listing ends on a short page, not on the list's count, and says so when the
   number of groups it listed differs from that count. The reader takes the named
   `AllMatching` types from `@angee/ui` and refuses an order of more than the
-  grouped field, which has no one-field cursor.
+  grouped field, which has no one-field cursor, and an order with nulls first or
+  descending (one rule, `cursorField`, shared by the reader and the dialog). A
+  page that ends on a key no `_gt` can step past (null, or not text) ends the
+  listing rather than starting it again from the first page.
 - `angee.base`, `angee.resources`, `angee.workflows`: a merge refusal's reason
   names the record by its public id ("This record (tag_…) is loaded from
   angee.tags resources, which would recreate it; keep it instead.", "Workflow

@@ -338,5 +338,16 @@ describe("Merge in a parties list's selection bar", () => {
       expect(verb.getAttribute("aria-disabled")).toBe("true");
       expect(description(verb)).toBe(enPartiesMessages["merge.selection.allGrouping"]);
     });
+
+    test("a nulls-first order is refused: its null key would come first and no cursor steps past it", async () => {
+      renderMountedSelection(["ada"], "peopleScope=UNASSIGNED", [], {
+        ...byName,
+        read: { ...byName.read, orderBy: [{ field: "display_name", direction: "ASC", nulls: "FIRST" }] },
+      });
+
+      const verb = await screen.findByRole("button", { name: MERGE });
+      expect(verb.getAttribute("aria-disabled")).toBe("true");
+      expect(description(verb)).toBe(enPartiesMessages["merge.selection.allGrouping"]);
+    });
   });
 });

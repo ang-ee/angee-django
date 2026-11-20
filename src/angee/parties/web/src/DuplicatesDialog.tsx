@@ -95,20 +95,24 @@ interface ListedPage {
   sets: readonly DuplicateSetInput[];
   /** What the next page continues after: the last certain pair, or the last listed group's key. */
   after: string | null;
+  /** Nothing can follow this page, full or not: a group page ending on a key no `_gt` cursor can step past. */
+  ended: boolean;
   /** Records in a group of one, and in a group without a value: never a set. */
   unpaired: number;
   blank: number;
 }
 
 /**
- * The field the list's groups are paged by: its own order's one field. The list orders a level's groups by the
- * group's own key or keys, ascending, nulls last (`GroupAxis.groupBy()`); a one-field order is a plain column's,
- * the dimensions a batch merges by. Any other order has no cursor here, and the reader refuses it
- * (`allMatchingField`).
+ * The field the list's groups are paged by: its own order's one field, the one rule of which orders a batch can
+ * page by key. The list orders a level's groups by the group's own key or keys, ascending, nulls last
+ * (`GroupAxis.groupBy()`); a one-field order is a plain column's, the dimensions a batch merges by. Any other order
+ * has no cursor: more than one field, a descending one, or nulls first, which would put a key no `_gt` can step past
+ * ahead of the others. The reader refuses those (`allMatchingField`).
  */
-function cursorField(read: AllMatchingGroups["read"]): string | null {
+export function cursorField(read: AllMatchingGroups["read"]): string | null {
   const [order, ...others] = read.orderBy ?? [];
-  return order && others.length === 0 && order.direction !== "DESC" ? order.field : null;
+  if (!order || others.length > 0 || order.direction === "DESC") return null;
+  return (order.nulls ?? "LAST") === "LAST" ? order.field : null;
 }
 
 /**
@@ -134,7 +138,7 @@ function listedPage(
   if ("certain_same_as_pairs" in data) {
     const pairs = data.certain_same_as_pairs;
     return {
-      request, items: pairs.length, after: pairs.at(-1)?.id ?? null, unpaired: 0, blank: 0,
+      request, items: pairs.length, after: pairs.at(-1)?.id ?? null, ended: false, unpaired: 0, blank: 0,
       sets: pairs.map((pair) => ({
         members: [pair.left.id, pair.right.id],
         heading: t("review.sameAs.certainHeading", {
@@ -156,7 +160,10 @@ function listedPage(
   }
   const cursor = groups ? cursorField(groups.read) : null;
   const last = cursor ? (data.groups.at(-1)?.key as Record<string, unknown> | undefined)?.[cursor] : undefined;
-  return { request, items: data.groups.length, after: typeof last === "string" ? last : null, unpaired, blank, sets };
+  // Fail closed: a page whose last key is null (nulls sort last, so nothing follows it) or not text (no `_gt` cursor
+  // here) ends the listing, as a page without a cursor does; it never restarts from the first page.
+  const after = typeof last === "string" ? last : null;
+  return { request, items: data.groups.length, after, ended: after === null, unpaired, blank, sets };
 }
 
 /** One confirmed run: the sets as confirmed, their outcomes as the chunks answer, and how it ended. */
@@ -246,7 +253,8 @@ export function DuplicatesDialog({
   const pagedSets = React.useMemo(() => pages.flatMap((page) => page.sets).slice(0, CONFIRM_SETS), [pages]);
   const itemsRead = pages.reduce((count, page) => count + page.items, 0);
   // A listing ends on a short page, or at the bound; never on a count, which the list may have moved past.
-  const pagesDone = lastPage !== undefined && (lastPage.items < SETS_PAGE || pagedSets.length >= CONFIRM_SETS);
+  const pagesDone = lastPage !== undefined
+    && (lastPage.ended || lastPage.items < SETS_PAGE || pagedSets.length >= CONFIRM_SETS);
   const pageVariables = allGroups
     ? groupSetsVariables(allGroups, lastPage?.after ?? null)
     : { limit: SETS_PAGE, after: lastPage?.after ?? null };
@@ -298,11 +306,12 @@ export function DuplicatesDialog({
     ...(allCertain && pagesDone && pagedSets.length >= CONFIRM_SETS && lastPage?.items === SETS_PAGE
       ? [t("duplicates.firstOfAll", { count: formatNumber(CONFIRM_SETS), total: allCertain.total })]
       : []),
-    ...(allGroups && pagesDone && pagedSets.length >= CONFIRM_SETS && lastPage?.items === SETS_PAGE
+    ...(allGroups && pagesDone && pagedSets.length >= CONFIRM_SETS && lastPage?.items === SETS_PAGE && !lastPage.ended
       ? [t("duplicates.firstOfGroups", { count: formatNumber(itemsRead), total: formatNumber(allGroups.total) })]
       : []),
     // Listed to its end, the list held another number of groups than it counted when "Select all" was chosen.
-    ...(allGroups && pagesDone && lastPage !== undefined && lastPage.items < SETS_PAGE && itemsRead !== allGroups.total
+    ...(allGroups && pagesDone && lastPage !== undefined && (lastPage.ended || lastPage.items < SETS_PAGE)
+      && itemsRead !== allGroups.total
       ? [t("duplicates.listChanged", { count: formatNumber(itemsRead) })]
       : []),
   ];

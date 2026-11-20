@@ -3,7 +3,7 @@ import { ActionFormDialog, SelectionBarAction, useRouteHref, type AllMatching, t
 import { useNavigate } from "@tanstack/react-router";
 
 import { OrganizationGroupSets, PeopleGroupSets, type GroupSetsDocument } from "./documents";
-import { DuplicatesDialog, type DuplicateSetInput } from "./DuplicatesDialog";
+import { DuplicatesDialog, cursorField, type DuplicateSetInput } from "./DuplicatesDialog";
 import { usePartiesT } from "./i18n";
 import { useMergeIntoAction } from "./merge-into";
 
@@ -58,11 +58,8 @@ export function allMatchingField(
   if (!field || others.length > 0 || dimension?.granularity || !groups.fields.includes(field)) {
     return { refused: "grouping" };
   }
-  // The dialog pages by the list's own order, one field at a time; an order of more than that field has no cursor.
-  const [order, ...laterOrder] = allMatching.read.orderBy ?? [];
-  if (!order || laterOrder.length > 0 || order.field !== field || order.direction === "DESC") {
-    return { refused: "grouping" };
-  }
+  // The dialog pages by the list's own order on that field alone (`cursorField`, the one rule of what it can page).
+  if (cursorField(allMatching.read) !== field) return { refused: "grouping" };
   return { field };
 }
 
