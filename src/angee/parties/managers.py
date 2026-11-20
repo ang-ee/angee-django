@@ -31,6 +31,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.prefetch import GenericPrefetch
 from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
 from django.db import DatabaseError, IntegrityError, connection, models, transaction
 from django.db.models import (
     Case,
@@ -1868,16 +1869,20 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         Each source creates its own people. ``evidence`` is the caller's record
         that carried the contact. Which records are the caller's own is the
         caller's rule, and ``own`` carries it: a queryset of them, the record
-        links of its integration. The email decides. The person found again is
-        one whose standing claim on a handle of that address has a row of ``own``
-        behind it (:meth:`PartyStatementQuerySet.standing_claims`), never one a
-        column names: another spelling of the address is the same address, a
-        trashed person is nobody's answer, a merged one is found as its survivor
+        links of its integration. The email decides, and a contact without one
+        is decided by its number. The person found again is one whose standing
+        claim on a handle of that address has a row of ``own`` behind it
+        (:meth:`PartyStatementQuerySet.standing_claims`), never one a column
+        names: another spelling of the address is the same address, a trashed
+        person is nobody's answer, a merged one is found as its survivor
         (``Party.canonical_ids``), and of several the earliest. Nobody else's
         person is taken, whoever holds or claims the address, an account's own
         person included; otherwise a new ``Person`` is made, named as given
         (``Party.PLACEHOLDER_NAME`` without a name) and created by ``owner_id``.
-        A contact without an email finds nobody again.
+        A contact with neither finds nobody again. An email the email validator
+        refuses is no address, and a number the handle owner reads nothing in,
+        or refuses, is no number: each is left out, so two contacts that gave
+        the same non-address are never one person for it.
 
         Nothing is stated in full. Each returned handle the person does not hold
         is recorded as a claim for review with ``evidence`` behind it
@@ -1885,10 +1890,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         nothing away from whoever holds the address. A claim gains one evidence
         reference per record that carried the address, deduplicated, which is how
         the next record finds the person. A person found again has nothing new
-        stated of them: they carry a phone only when they hold it or a row of
+        stated of them: they carry a handle only when they hold it or a row of
         ``own`` stands behind their claim on it, since a number given beside a
         known address may be someone else's. A new person's number is known or
-        made; one the handle owner reads nothing in, or refuses, is left out.
+        made.
 
         The rows of the address and of the number, the parties they name and
         their statements are locked in one :meth:`lock_identity_rows` call before
@@ -1916,6 +1921,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         platforms = handle_model.Platform
         name = " ".join(display_name.split()) or " ".join(f"{given_name} {family_name}".split())
         address = email.strip()
+        try:
+            validate_email(address)
+        except ValidationError:
+            address = ""
         number = phone.strip() if handle_model.normalize_value(platforms.PHONE, phone) else ""
         with system_context(reason=reason), transaction.atomic():
             emails = self._address_handles(platforms.EMAIL, address)
@@ -1944,8 +1953,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 held = next((row for row in rows if row.party_id == person_id), None)
                 return held or next((row for row in rows if (person_id, row.pk) in vouched), None)
 
-            address_ids = {row.pk for row in emails}
-            claimants = {party_id for party_id, handle_id in vouched if handle_id in address_ids}
+            deciding = {row.pk for row in (emails if address else numbers)}
+            claimants = {party_id for party_id, handle_id in vouched if handle_id in deciding}
             person = person_model._base_manager.filter(pk__in=claimants, is_trashed=False).order_by("pk").first()
             if person is not None:
                 email_handle, phone_handle = carried(person.pk, emails), carried(person.pk, numbers)

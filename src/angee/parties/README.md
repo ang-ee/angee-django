@@ -302,27 +302,33 @@ email address, a phone number), makes its person through one verb,
 source creates its own people. The caller hands over the record that carried
 the contact (`evidence`). Which records are its own is the caller's rule, and
 `own` carries it: a queryset of them, the record links of its integration.
-The email decides. The person found again is one whose standing claim on a
-handle of that address has a row of `own` behind it, never one a column names:
-a person a record of the source merely points at (one it adopted from someone
-else) is not its own. Another spelling is the same address, a trashed person is
-nobody's answer, a merged one is found as its survivor, and of several the
-earliest. Nobody else's person is taken, whoever holds or claims the address, an
-account's own person included; the verb makes a new person instead, named as
-given and created by the owner the caller names. Nothing is stated in full: each
-handle the person does not hold is recorded as a claim for review
-(`propose_claimed_handle_as_system`) with the record behind it, which decides
-nothing and moves nothing. A claim gains one evidence reference per record that
-carried the address, deduplicated, and that is how the next record finds the
-person. A person found again has nothing new stated of them and carries a phone
-only when they hold it or a record of the source stands behind their claim on
-it; a new person's number is known or made, and one the handle owner reads
-nothing in, or refuses, is left out. A contact without an email finds nobody
-again. The rows of the address and of the number, their parties and their
-statements are locked in one `lock_identity_rows` call before any claim is read.
-The verb proposes no pair, and no caller needs to: a claim links its person to
-the address, so identity matching (below) proposes the claimant and whoever else
-is linked to it.
+The email decides, and a contact without one is decided by its number. The
+person found again is one whose standing claim on a handle of that address has
+a row of `own` behind it, never one a column names: a person a record of the
+source merely points at (one it adopted from someone else) is not its own.
+Another spelling is the same address, a trashed person is nobody's answer, a
+merged one is found as its survivor, and of several the earliest. Nobody else's
+person is taken, whoever holds or claims the address, an account's own person
+included; the verb makes a new person instead, named as given and created by
+the owner the caller names. A contact with neither an address nor a number finds
+nobody again. An email the email validator refuses is no address, and a number
+the handle owner reads nothing in, or refuses, is no number: each is left out
+and makes no handle, so two contacts that gave the same non-address are never
+one person for it. Nothing is stated in full: each handle the person does not
+hold is recorded as a claim for review (`propose_claimed_handle_as_system`)
+with the record behind it, which decides nothing and moves nothing. A claim
+gains one evidence reference per record that carried the address, deduplicated,
+and that is how the next record finds the person. A person found again has
+nothing new stated of them and carries a handle only when they hold it or a
+record of the source stands behind their claim on it; a new person's number is
+known or made. The rows of the address and of the number, their parties and
+their statements are locked in one `lock_identity_rows` call before any claim
+is read, and which claims are the source's own is then one read of its records
+by key, in batches within the database's parameter budget, however many
+records stand behind a claim and however many parties claim the address. The
+verb proposes no pair, and no caller needs to: a claim links its person to the
+address, so identity matching (below) proposes the claimant and whoever else is
+linked to it.
 
 Which claims still stand is one scope,
 [PartyStatementQuerySet.standing](managers.py), over handle statements the

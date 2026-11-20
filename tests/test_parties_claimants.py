@@ -523,17 +523,87 @@ def test_a_contact_with_no_address_and_no_number_states_nothing(source: Source) 
     assert not _stance_model()._base_manager.exists()
 
 
-def test_a_contact_without_an_address_finds_nobody_again(source: Source) -> None:
-    """The email decides: a number alone names a new person each time, and each only claims it."""
+@pytest.mark.parametrize(
+    "address",
+    [
+        pytest.param("n/a", id="words-that-are-no-address"),
+        pytest.param("ada@", id="half-an-address"),
+        pytest.param("a" * 600 + "@example.test", id="longer-than-an-address-may-be"),
+    ],
+)
+def test_an_address_that_is_no_email_address_is_no_address(source: Source, address: str) -> None:
+    """Two contacts that gave the same non-address are not one person for it, and it makes no handle."""
 
-    first = source.given(phone=NUMBER, display_name="Bo Example")
-    second = source.given(phone=NUMBER, display_name="Bo Example")
+    first = source.given(email=address, display_name="Ada Example")
+    second = source.given(email=address, display_name="Bo Example")
 
     assert first.person.pk != second.person.pk
-    assert (first.email, second.email, second.phone.pk) == (None, None, first.phone.pk)
-    assert (_claims(first.person), _claims(second.person)) == (
-        {NUMBER: {behind(first.record)}}, {NUMBER: {behind(second.record)}},
+    assert (first.email, second.email) == (None, None)
+    assert not Handle._base_manager.exists()
+    assert not _stance_model()._base_manager.exists()
+
+
+def test_a_contact_whose_address_is_no_email_address_is_decided_by_its_number(source: Source) -> None:
+    first = source.given(email="n/a", phone=NUMBER, display_name="Bo Example")
+
+    second = source.given(email="n/a", phone=NUMBER)
+
+    assert (second.person.pk, second.phone.pk, second.email) == (first.person.pk, first.phone.pk, None)
+    assert not Handle._base_manager.filter(platform="email").exists()
+
+
+def test_a_contact_with_only_a_number_is_found_again_by_the_sources_claim_on_it(source: Source) -> None:
+    """The same evidence rule as for the address: the number's claim has one of the source's records behind it."""
+
+    first = source.given(phone=NUMBER, display_name="Bo Example")
+
+    second = source.given(phone="+17875550100", display_name="B. Example")
+
+    assert (second.person.pk, second.phone.pk, second.email, _people()) == (first.person.pk, first.phone.pk, None, 1)
+    assert Person._base_manager.get(pk=first.person.pk).display_name == "Bo Example"
+    assert _claims(first.person) == {NUMBER: {behind(first.record), behind(second.record)}}
+
+
+def test_another_sources_contact_with_only_the_number_makes_its_own_person(owner: Any, source: Source) -> None:
+    other = _source("another", owner)
+    theirs = other.given(phone=NUMBER, display_name="Bo Example")
+
+    ours = source.given(phone=NUMBER, display_name="B. Example")
+
+    assert ours.person.pk != theirs.person.pk
+    assert (ours.phone.pk, _holder_of(ours.phone)) == (theirs.phone.pk, None)
+    assert (_claims(theirs.person), _claims(ours.person)) == (
+        {NUMBER: {behind(theirs.record)}}, {NUMBER: {behind(ours.record)}},
     )
+    assert (other.given(phone=NUMBER).person.pk, source.given(phone=NUMBER).person.pk) == (
+        theirs.person.pk, ours.person.pk,
+    )
+
+
+def test_a_number_someone_else_holds_is_not_taken_by_a_contact_with_only_the_number(
+    owner: Any, source: Source,
+) -> None:
+    holder = _person(owner, "Bo Example")
+    held = _holds(holder, NUMBER, owner, platform="phone")
+
+    made = source.given(phone=NUMBER, display_name="B. Example")
+
+    assert made.person.pk != holder.pk
+    assert (made.phone.pk, _holder_of(held)) == (held.pk, holder.pk)
+    assert _claims(made.person) == {NUMBER: {behind(made.record)}}
+    assert source.given(phone=NUMBER).person.pk == made.person.pk
+
+
+def test_the_email_decides_when_a_contact_gives_both(source: Source) -> None:
+    """A number the source's person claims does not find them for a record that carries another address."""
+
+    first = source.given(email=ADDRESS, phone=NUMBER, display_name="Ada Example")
+
+    second = source.given(email="bo@example.test", phone=NUMBER, display_name="Bo Example")
+
+    assert second.person.pk != first.person.pk
+    assert (second.phone.pk, _holder_of(second.phone)) == (first.phone.pk, None)
+    assert source.given(email=ADDRESS, phone=NUMBER).person.pk == first.person.pk
 
 
 def test_two_records_in_one_transaction_decide_one_after_the_other(source: Source) -> None:
@@ -548,7 +618,10 @@ def test_two_records_in_one_transaction_decide_one_after_the_other(source: Sourc
 _ARRIVALS = st.lists(
     st.tuples(
         st.sampled_from(("first", "second")),
-        st.sampled_from((ADDRESS, "Ada@Example.TEST", "bo@example.test")),
+        st.sampled_from(
+            (("email", ADDRESS), ("email", "Ada@Example.TEST"), ("email", "bo@example.test"), ("phone", NUMBER),
+             ("phone", "+17875550100"))
+        ),
     ),
     min_size=1,
     max_size=5,
@@ -558,18 +631,18 @@ _ARRIVALS = st.lists(
 @settings(deadline=None, max_examples=12, suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(arrivals=_ARRIVALS)
 def test_the_order_records_arrive_in_never_changes_whom_each_source_finds(
-    db: None, arrivals: list[tuple[str, str]],
+    db: None, arrivals: list[tuple[str, tuple[str, str]]],
 ) -> None:
-    """One person per source and address, whoever met it first, and nobody holds it; each example rolls back."""
+    """One person per source and address or number, whoever met it first, and nobody holds it; examples roll back."""
 
     del db
     with transaction.atomic():
         owner = create_user("claimant-arrivals-owner")
         sources = {name: _source(name, owner) for name in ("first", "second")}
-        found: defaultdict[tuple[str, str], set[Any]] = defaultdict(set)
-        for name, address in arrivals:
-            ada = sources[name].given(email=address, display_name="Ada Example")
-            found[name, address.casefold()].add(ada.person.pk)
+        found: defaultdict[tuple[str, str, str], set[Any]] = defaultdict(set)
+        for name, (kind, value) in arrivals:
+            ada = sources[name].given(**{kind: value}, display_name="Ada Example")
+            found[name, kind, value.replace(" ", "").casefold()].add(ada.person.pk)
         assert [len(people) for people in found.values()] == [1] * len(found)
         assert len(set().union(*found.values())) == len(found)
         assert not Handle._base_manager.filter(party__isnull=False).exists()
