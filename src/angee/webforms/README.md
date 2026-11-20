@@ -43,6 +43,11 @@ accepts.
   spelling; nothing is rewritten. Curly brackets are refused in markup: the
   page's library fills `{name}` with an answer, which markup would then read as
   markup. Every other text is plain and is shown as written.
+- A `text` question may carry `autocomplete`, the browser's autofill hint
+  (`name`, `given-name`, `family-name`, `email`, `tel`, `organization`, the
+  address hints, `off`); payment and credential hints are not offered. A form
+  with pages may show its progress (`showProgressBar`, `progressBarLocation`,
+  `progressBarType`).
 - A choice is `{"value": <code>, "text": <text>}`. Answers store the code, never
   the label, so they do not depend on language. "Other" is the code `other`,
   with its text in `<name>-Comment`.

@@ -109,7 +109,7 @@ def test_a_definition_inside_the_subset_is_admitted_and_its_questions_keep_their
 @pytest.mark.parametrize(("definition", "where"), [
     pytest.param(changed((*FIRST, 0, "type"), "matrix"), "$.pages[0].elements[0].type", id="a-type-outside-the-subset"),
     pytest.param(changed((*FIRST, 0, "visibleIf"), "{email} notempty"), "$.pages[0].elements[0]", id="an-expression"),
-    pytest.param(changed(("showProgressBar",), "top"), "$", id="a-presentation-switch"),
+    pytest.param(changed(("showQuestionNumbers",), "onPage"), "$", id="a-presentation-switch"),
     pytest.param(changed((*FIRST, 3, "choices", 1), "talks"), "$.pages[0].elements[3].choices[1]", id="a-bare-choice"),
     pytest.param(
         changed((*FIRST, 4, "choices", 0, "value"), "other"), "$.pages[0].elements[4].choices[0].value",
@@ -222,6 +222,24 @@ def test_no_element_carries_a_name_of_the_submission_itself(name: str) -> None:
     form = changed((*PANEL, 0, "name"), name)
 
     assert any("the submission's own" in message for message in refusal(form))
+
+
+def test_a_text_question_takes_an_autofill_hint_and_never_one_for_a_card_or_a_password() -> None:
+    hinted = changed((*FIRST, 1, "autocomplete"), "email")
+
+    validate_definition(hinted, languages=LANGUAGES, default_language="en")
+    for hint in ("cc-number", "current-password", "one-time-code", "anything"):
+        assert refusal(changed((*FIRST, 1, "autocomplete"), hint)), hint
+    assert refusal(changed((*FIRST, 2, "autocomplete"), "email")), "only a text question takes the hint"
+
+
+def test_a_form_with_pages_may_show_its_progress() -> None:
+    shown = changed(("showProgressBar",), True)
+    shown["progressBarLocation"], shown["progressBarType"] = "bottom", "questions"
+
+    validate_definition(shown, languages=LANGUAGES, default_language="en")
+    assert refusal(changed(("progressBarType",), "correctQuestions"))
+    assert refusal(changed(("showProgressBar",), "top"))
 
 
 def test_a_title_is_plain_text_and_is_not_read_as_markup() -> None:
