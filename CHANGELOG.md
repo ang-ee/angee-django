@@ -255,6 +255,22 @@ live in code docstrings.
     `angee.E053`; it shared `angee.E051` with base's `ANGEE_PUBLIC_ORIGIN`
     check, which keeps that id. A host that silences the merge-history check
     silences `angee.E053`.
+- Stack templates: the static ingress answers with `Cache-Control: public,
+  max-age=31536000, immutable` for an existing file the build names by its
+  content, `/assets/<name>-<hash>.<ext>`: Vite's emitted scripts, stylesheets,
+  locale and metadata files and the emission of a deployment's selected named
+  asset. A repeat visit no longer transfers them. The rule reads the hash in
+  the file name, never the directory alone. Documents are revalidated,
+  content-hashed assets are kept: the app document however it is reached, a
+  missing asset's fallback to it included, and each standalone page answer
+  `Cache-Control: no-cache`, stored but checked by ETag before each use, so no
+  visitor holds a document naming hashed files a deploy has deleted. The
+  build's `.vite/` manifests and every file kept or rewritten under a stable
+  name carry no cache header.
+  The ingress serves precompressed sidecars when a build provides them: a
+  `<file>.br`, `.zst` or `.gz` beside a file answers a client that accepts it,
+  brotli first, for the app's files and the standalone pages; without one the
+  file is compressed on the fly as before.
 - `angee.web`: an addon's web package declares **standalone pages**, static HTML
   entries of the web build that load none of the app, in `web/package.json`:
   `"angee": {"pages": {"<id>": {"entry": "./src/standalone/form.html", "paths":

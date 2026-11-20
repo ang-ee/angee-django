@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, matchesGlob, posix, relative, resolve } from "node:path";
+import { readFile, writeFile } from "node:fs/promises";
+import { availableParallelism, cpus } from "node:os";
+import { basename, dirname, extname, join, matchesGlob, posix, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { brotliCompress, constants as zlib, gzip } from "node:zlib";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { build, defineConfig, mergeConfig, normalizePath, send, type Connect, type HtmlTagDescriptor, type Plugin, type UserConfig, type ViteDevServer } from "vite";
@@ -273,6 +277,16 @@ export interface AngeeWebViteConfig extends UserConfig {
    * direct `vite` usage, but `angee dev` may launch Vite from the repo root.
    */
   webRoot?: string;
+  /**
+   * How many emitted files a build compresses at once when it writes their
+   * brotli and gzip sidecars. Defaults to the machine's parallelism, between 1
+   * and 4. Each file in flight costs its own size and a brotli encoder (some
+   * tens of megabytes for a file larger than the encoder's block), so a builder
+   * short of memory may lower it; raising it past 4 gains nothing unless
+   * `UV_THREADPOOL_SIZE` is raised with it. The sidecars are the same bytes at
+   * any value.
+   */
+  precompressConcurrency?: number;
   /** Build-owned appearance defaults injected into first paint and the app. */
   appearance?: {
     themeId?: string | null;
@@ -286,6 +300,7 @@ export async function defineAngeeWebViteConfig({
   gqlRuntimeDir,
   webRoot = process.cwd(),
   appearance,
+  precompressConcurrency,
   ...overrides
 }: AngeeWebViteConfig): Promise<UserConfig> {
   const pagesPlugin = angeePagesPlugin(join(dirname(gqlRuntimeDir), "web", "themes.css"));
@@ -301,6 +316,7 @@ export async function defineAngeeWebViteConfig({
       preloadSchemaMetadata(pagesPlugin.owns),
       react(),
       tailwindcss(),
+      angeePrecompressedPlugin(precompressConcurrency),
     ],
     // The alias for this project's generated typed operations, pointing at the
     // project's OWN `runtime/gql/<name>/` tree (the web package generates it via
@@ -679,6 +695,88 @@ function angeePagesPlugin(themesSheet: string): Plugin & {
           request.url = `${server.config.base}${page.id}.html`;
         }
         next();
+      });
+    },
+  };
+}
+
+/** The text a build emits that an ingress compresses on the way out; images and fonts are compressed already. */
+const PRECOMPRESSED_TEXT = new Set([".js", ".mjs", ".css", ".html", ".svg", ".json"]);
+/** Below this a response fits one packet either way, and a sidecar is one more file to keep. */
+const PRECOMPRESSED_MINIMUM = 1024;
+
+/**
+ * The most files compressed at once, however many processors the builder has.
+ * Node runs zlib's work on libuv's pool of four threads, so a wider pool
+ * compresses no faster: it only holds more files in memory, waiting.
+ */
+const PRECOMPRESSED_POOL_LIMIT = 4;
+
+/**
+ * Run `work` over `items` with at most `size` of them in flight at once, in
+ * their order. Resolves when every item is done and rejects with the first
+ * failure. What `work` produces does not depend on `size`: only how much runs
+ * together does.
+ */
+export async function runInPool<TItem>(items: readonly TItem[], size: number, work: (item: TItem) => Promise<void>): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) await work(items[next++]!);
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(Math.floor(size), items.length)) }, worker));
+}
+
+/**
+ * Write a brotli and a gzip sidecar beside every text file the build emits
+ * (`<file>.br`, `<file>.gz`), for an ingress that serves a precompressed file
+ * when a browser accepts it. Brotli at its highest quality is a quarter smaller
+ * than gzip on a script and too slow to do per request, so the build does it
+ * once. A sidecar that is not smaller than its source is not written, and the
+ * output is the same for the same input: neither format carries a time here.
+ *
+ * Brotli at that quality holds a 4 MiB window and the tree it searches it
+ * with for each file it works on (Node's default window; the size hint does
+ * not shrink it), so the files go through a small pool: a build with hundreds
+ * of assets uses no more memory or processors at once than one with a handful.
+ *
+ * Why the build does this, and does it itself. The ingress compresses on the
+ * way out (`encode zstd gzip`), but stock Caddy has no brotli encoder and
+ * Safari accepts no zstd, so a phone gets gzip unless a sidecar is there to
+ * serve. The work is two calls into `node:zlib` and a rule for which files, so
+ * it stays here without a dependency, with the properties the ingress relies
+ * on pinned by this module's tests: the same bytes for the same input, a
+ * bounded pool, the 1 kB floor, and never a sidecar larger than its source.
+ * `vite-plugin-compression2` is the maintained plugin for the same job and the
+ * one to swap in if zstd sidecars, per-file patterns or archives are wanted.
+ */
+function angeePrecompressedPlugin(concurrency?: number): Plugin {
+  // The processors this process may use, where Node can say; else the machine's count.
+  const processors = typeof availableParallelism === "function" ? availableParallelism() : cpus().length;
+  const pool = concurrency ?? Math.max(1, Math.min(PRECOMPRESSED_POOL_LIMIT, processors));
+  const compressors = {
+    br: (source: Buffer) => promisify(brotliCompress)(source, {
+      params: { [zlib.BROTLI_PARAM_QUALITY]: zlib.BROTLI_MAX_QUALITY, [zlib.BROTLI_PARAM_SIZE_HINT]: source.length },
+    }),
+    gz: (source: Buffer) => promisify(gzip)(source, { level: zlib.Z_BEST_COMPRESSION }),
+  };
+  return {
+    name: "angee:precompressed",
+    apply: "build",
+    // A browser fetches the client's files; no other build's output is served.
+    applyToEnvironment: (environment) => environment.config.consumer === "client",
+    async writeBundle(options, bundle) {
+      const directory = options.dir;
+      if (!directory) return;
+      const files = Object.keys(bundle).filter((file) => PRECOMPRESSED_TEXT.has(extname(file))).sort();
+      await runInPool(files, pool, async (file) => {
+        // What was written, byte for byte, is what a sidecar must decompress to.
+        const source = await readFile(join(directory, file));
+        if (source.length < PRECOMPRESSED_MINIMUM) return;
+        // One format after the other: a file in the pool is one compression at a time.
+        for (const [suffix, compress] of Object.entries(compressors)) {
+          const compressed = await compress(source);
+          if (compressed.length < source.length) await writeFile(join(directory, `${file}.${suffix}`), compressed);
+        }
       });
     },
   };

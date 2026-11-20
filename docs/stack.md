@@ -200,7 +200,28 @@ fallback, answers the composed standalone pages (`runtime/web/pages.caddy`)
 ahead of the declared Django paths it proxies (`INGRESS_DJANGO_PATHS` in
 [`angee.web.build`](../src/angee/web/build.py), published in the web manifest as
 `ingressDjangoPaths`), and strips `/operator` only for the
-narrow `/operator/graphql` route. It sets the operator allowed origin to the
+narrow `/operator/graphql` route. It answers with
+`Cache-Control: public, max-age=31536000, immutable` only for an existing file
+the build names by its content: Vite writes all it emits under `assets/` as
+`<name>-<hash>.<ext>` (the app's Vite config changes neither the directory nor
+the name patterns), the composed themes sheet inside the app's stylesheet and
+the emission of a deployment's selected named asset among them. The rule reads
+the hash in the file name, never the directory alone, and takes an
+eight-character tail without an upper-case letter for a word or a date: the
+rare hash without one is not kept. Documents are revalidated, content-hashed
+assets are kept: the app document however it is reached (`/`, its own name, a
+route or a missing file that falls back to it) and each standalone page, by its
+paths and by its built file, answer `Cache-Control: no-cache`
+(`INGRESS_DOCUMENT_CACHE_CONTROL`), stored but checked by ETag before each use,
+so no visitor holds a document naming hashed files a deploy has deleted. No
+answer carries both headers, and what Django answers keeps its own. The build's
+`.vite/` manifests and every file kept or rewritten under a stable name (a
+host's public-directory files, a named asset under its own name) carry no cache
+header. When the build wrote a sidecar beside a file
+(`<file>.br`, `.zst`, `.gz`) and the client accepts that encoding, the ingress
+sends the sidecar, brotli first (`INGRESS_PRECOMPRESSED`, for the app's files
+and the standalone pages alike); a file without one is compressed on the fly as
+before. It sets the operator allowed origin to the
 stack's browser origin. The inner Caddy waits for the edge's Compose alias on
 public ingress and trusts its connected Compose network CIDRs with strict
 right-to-left client IP parsing. It forwards the verified client IP as a single
@@ -266,6 +287,7 @@ settings or through the `ANGEE_WEB_STATEMENT_TIMEOUT` environment variable.
 | tailwind-merge | Safe class merging | `cn()` helper |
 | lucide-react | Icons | Name-referenced icon registry |
 | Vite | Bundling, dev server, HMR | Project integration |
+| `node:zlib` (Node's standard library) | Brotli and gzip encoding of a build's emitted text | [`angee:precompressed`](../packages/app/config/vite.ts) writes `<file>.br` (quality 11) and `<file>.gz` (level 9) beside each `.js`, `.mjs`, `.css`, `.html`, `.svg` and `.json` file a build emits of 1 kB or more, never a sidecar that is not smaller than its source, through a pool of at most four files at once (`precompressConcurrency`). The ingress serves a sidecar a browser accepts. Its on-the-fly `encode zstd gzip` cannot do this: stock Caddy has no brotli encoder and Safari accepts no zstd, so without sidecars a phone gets gzip. The output is the same bytes for the same input, and no dependency is added: `vite-plugin-compression2` is the maintained plugin for the same job, and the swap if zstd sidecars, per-file patterns or archives are wanted. |
 | @sentry/react >= 11.4 | Browser error capture and the React 19 root error handler (`reactErrorHandler`) | `bootApp` takes `errorReporting`; [`startErrorReporting`](../packages/app/src/error-reporting.ts) imports the SDK only for a non-empty DSN (`VITE_SENTRY_DSN`, stack input `sentry_web_dsn`) and gives the app root uncaught, caught and recoverable handlers that keep React's console output |
 | @agentclientprotocol/sdk | ACP v1/v2 clients — JSON-RPC sessions, list/load/resume, prompt/cancel, permissions and session updates | [One chat runtime](../src/angee/agents/web/src/useAcpRuntime.ts) selects the SDK client from the endpoint's protocol version; v2 uses the SDK's `experimental` surface, pinned together with the Python SDK. [WebSocket transport](../src/angee/agents/web/src/acp-transport.ts) composes the SDK stream with routed tokens or same-origin cookies |
 | @assistant-ui/react | Chat thread UI — message store, composer, tool-call rendering | ACP-streaming runtime adapter and styled thread surface |

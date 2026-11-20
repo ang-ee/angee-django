@@ -367,6 +367,7 @@ def test_the_page_ingress_snippet_routes_each_page_by_method_path_and_leading_ac
     policy = f'Content-Security-Policy "{projection.manifest["pageCsp"]}"'
     # Pages and their paths are sorted; page <id> is the web build's /<id>.html under the importing site's root.
     # The Accept condition reads the header's joined field lines, never one line alone.
+    # A page is a document: revalidated before each use, like the app's own.
     assert routes == (
         "@page_site_form {\n"
         "\tmethod GET HEAD\n"
@@ -376,8 +377,11 @@ def test_the_page_ingress_snippet_routes_each_page_by_method_path_and_leading_ac
         "handle @page_site_form {\n"
         "\theader +Vary Accept\n"
         f"\theader {policy}\n"
+        "\theader Cache-Control no-cache\n"
         "\trewrite * /site.form.html\n"
-        "\tfile_server\n"
+        "\tfile_server {\n"
+        "\t\tprecompressed br zstd gzip\n"
+        "\t}\n"
         "}\n"
         f"header /site.form.html {policy}\n"
         "\n"
@@ -389,8 +393,11 @@ def test_the_page_ingress_snippet_routes_each_page_by_method_path_and_leading_ac
         "handle @page_site_list {\n"
         "\theader +Vary Accept\n"
         f"\theader {policy}\n"
+        "\theader Cache-Control no-cache\n"
         "\trewrite * /site.list.html\n"
-        "\tfile_server\n"
+        "\tfile_server {\n"
+        "\t\tprecompressed br zstd gzip\n"
+        "\t}\n"
         "}\n"
         f"header /site.list.html {policy}\n"
     )

@@ -1,14 +1,15 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
+import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { Window } from "happy-dom";
 import { afterEach, beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import { build, createServer, preview, resolveConfig, type UserConfig, type ViteDevServer } from "vite";
 import * as codegen from "@angee/app/web-codegen";
-import { defineAngeeWebViteConfig } from "../config/vite";
+import { defineAngeeWebViteConfig, runInPool } from "../config/vite";
 
 let root: string;
 let runtime: string;
@@ -826,3 +827,86 @@ test("preview serves a built page at its paths as the ingress does, under the ma
   expect(json.headers.get("content-security-policy")).toBeNull();
   expect(await json.text()).not.toContain("<title>Demo</title>");
 }, 30_000);
+
+test("build writes a brotli and a gzip sidecar beside each text file it emits, and none for a small file or a font", async () => {
+  declarePage();
+  // A script worth compressing, and a font the page's sheet brings: a font is compressed already.
+  write(join(addon, "pages", "demo.ts"), `document.title = "standalone page module"; console.log(${JSON.stringify("a line of the page's script. ".repeat(200))});`);
+  write(join(addon, "pages", "face.woff2"), Buffer.from(Array.from({ length: 6000 }, (_value, index) => (index * 31) % 251)));
+  write(join(addon, "pages", "demo.css"), '@font-face { font-family: Demo; src: url("./face.woff2"); } .demo-page { color: var(--text-primary); }');
+  await build({ ...await config(), configFile: false, logLevel: "silent", build: { assetsInlineLimit: 0 } });
+  const dist = join(web, "dist");
+  const emitted = (directory: string): string[] => readdirSync(join(dist, directory), { withFileTypes: true }).flatMap((entry) =>
+    entry.isDirectory() ? emitted(join(directory, entry.name)) : [join(directory, entry.name)]);
+  const files = emitted("");
+  const page = readFileSync(join(dist, "demo.page.html"), "utf8");
+  const script = page.match(/<script type="module"[^>]*src="\/([^"]+)"/)![1]!;
+  const sheet = page.match(/<link rel="stylesheet"[^>]*href="\/([^"]+)"/)![1]!;
+  for (const file of [script, sheet]) {
+    const source = readFileSync(join(dist, file));
+    expect(source.length, file).toBeGreaterThanOrEqual(1024);
+    const brotli = readFileSync(join(dist, `${file}.br`));
+    const gzipped = readFileSync(join(dist, `${file}.gz`));
+    expect(brotliDecompressSync(brotli).equals(source), `${file}.br`).toBe(true);
+    expect(gunzipSync(gzipped).equals(source), `${file}.gz`).toBe(true);
+    expect(brotli.length).toBeLessThan(source.length);
+    expect(gzipped.length).toBeLessThan(source.length);
+    // A gzip header's four bytes of time are zero: the same input gives the same file.
+    expect([...gzipped.subarray(4, 8)]).toEqual([0, 0, 0, 0]);
+  }
+  const sidecar = (file: string) => existsSync(join(dist, `${file}.br`)) || existsSync(join(dist, `${file}.gz`));
+  const font = files.find((file) => file.endsWith(".woff2"))!;
+  expect(readFileSync(join(dist, font)).length).toBeGreaterThan(1024);
+  expect(sidecar(font)).toBe(false);
+  const small = files.filter((file) => /\.(js|css|html|json)$/.test(file) && readFileSync(join(dist, file)).length < 1024);
+  expect(small.length).toBeGreaterThan(0);
+  expect(small.filter(sidecar)).toEqual([]);
+  // Nothing is compressed twice.
+  expect(files.filter((file) => /\.(br|gz)\.(br|gz)$/.test(file))).toEqual([]);
+}, 60_000);
+
+test("the pool that compresses a build's files never runs more of them at once than its size", async () => {
+  const items = Array.from({ length: 20 }, (_value, index) => index);
+  for (const size of [1, 3, 8]) {
+    const done: number[] = [];
+    let running = 0;
+    let peak = 0;
+    // A compressor that takes a while: what overlaps is what the pool lets through.
+    await runInPool(items, size, async (item) => {
+      peak = Math.max(peak, ++running);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      running -= 1;
+      done.push(item);
+    });
+    expect(peak, `a pool of ${size}`).toBe(size);
+    expect([...done].sort((left, right) => left - right)).toEqual(items);
+  }
+  // A pool wider than its work starts no more workers than there is work, and a failure is the pool's.
+  let started = 0;
+  await runInPool([1, 2], 8, async () => { started += 1; });
+  expect(started).toBe(2);
+  await expect(runInPool(items, 2, async (item) => { if (item === 5) throw new Error("no"); })).rejects.toThrow("no");
+});
+
+test("a build's sidecars are the same bytes whatever the size of the pool that wrote them", async () => {
+  declarePage();
+  write(join(addon, "pages", "demo.ts"), `document.title = "standalone page module"; console.log(${JSON.stringify("a line of the page's script. ".repeat(200))});`);
+  const dist = join(web, "dist");
+  const sidecars = async (precompressConcurrency: number) => {
+    await build({
+      ...await defineAngeeWebViteConfig({
+        webRoot: web, gqlRuntimeDir: join(runtime, "gql"), prebundleAngeePackages: false, precompressConcurrency,
+        appearance: { themeId: "demo.theme", colorScheme: "light", options: { version: 1, value: {} } },
+      }),
+      configFile: false, logLevel: "silent",
+    });
+    const walk = (directory: string): string[] => readdirSync(join(dist, directory), { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory() ? walk(join(directory, entry.name)) : [join(directory, entry.name)]);
+    return Object.fromEntries(walk("").filter((file) => /\.(br|gz)$/.test(file)).sort()
+      .map((file) => [file, readFileSync(join(dist, file)).toString("base64")]));
+  };
+  const one = await sidecars(1);
+  const four = await sidecars(4);
+  expect(Object.keys(one).length).toBeGreaterThan(2);
+  expect(four).toEqual(one);
+}, 60_000);
