@@ -24,7 +24,7 @@ import {
   type Fields,
   type HttpError,
 } from "@refinedev/core";
-import { set, useForm, type FieldErrors } from "react-hook-form";
+import { get, set, useForm, type FieldErrors } from "react-hook-form";
 import { replaceEqualDeep, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import type { UiTranslate } from "../../i18n";
@@ -791,7 +791,13 @@ export function useFormViewSave({
       userEditedFieldsRef.current.add(scoped(field.name));
       clearErrors(scoped(field.name));
       if (isCreate || !field.createOnly) {
-        const seeds = field.prefill?.(value, (scope ? form.getValues(scope) : form.getValues()) as Row);
+        // What the form compares itself against: a preset may give a sibling its loaded value back.
+        const loaded = form.formState.defaultValues;
+        const seeds = field.prefill?.(
+          value,
+          (scope ? form.getValues(scope) : form.getValues()) as Row,
+          ((scope ? get(loaded, scope) : loaded) ?? undefined) as Row | undefined,
+        );
         if (seeds) {
           const replacements = new Set(field.prefillReplace ?? []);
           for (const [name, seed] of Object.entries(seeds)) {

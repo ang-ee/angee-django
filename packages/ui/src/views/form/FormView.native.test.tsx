@@ -647,6 +647,37 @@ test("bound descriptors scope prefill, null, errors and readonly to the declarin
   expect(screen.queryByLabelText("Configuration")).toBeNull();
 });
 
+test("a preset that gives a sibling its loaded value back leaves the form clean, and one that replaces it leaves it dirty", async () => {
+  const source = {
+    record: { id: "note-1", title: "First" },
+    values: { title: "First", kind: "letter", config: { paper: "A4" } },
+  } satisfies FormViewAcknowledgedSource;
+  const loadedSeen: unknown[] = [];
+  const kind: DescriptorField = {
+    name: "kind",
+    label: "Kind",
+    // Another kind starts its configuration empty; the loaded kind gets its loaded configuration back.
+    prefill: (value, _values, loaded) => {
+      loadedSeen.push(loaded);
+      return { config: loaded !== undefined && value === loaded.kind ? loaded.config : {} };
+    },
+    prefillReplace: ["config"],
+  };
+  const f = await fixture({
+    acknowledgedSource: source,
+    mountedFields: [],
+    boundFields: [{ field: kind }, { field: { name: "config", label: "Configuration", widget: "json" }, readOnly: true }],
+  });
+  expect(f.surface().form.formState.isDirty).toBe(false);
+  edit("Kind", "card");
+  expect(loadedSeen.at(-1)).toMatchObject({ kind: "letter", config: { paper: "A4" } });
+  expect(f.surface().form.getValues("config")).toEqual({});
+  expect(f.surface().form.formState.isDirty).toBe(true);
+  edit("Kind", "letter");
+  expect(f.surface().form.getValues()).toMatchObject({ kind: "letter", config: { paper: "A4" } });
+  expect(f.surface().form.formState.isDirty).toBe(false);
+});
+
 test("a stateful bound widget remounts when its nested scope changes", async () => {
   const until: DescriptorField = { name: "until", label: "Until", widget: "datetime" };
   const f = await fixture({
