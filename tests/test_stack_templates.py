@@ -1008,23 +1008,40 @@ def test_static_ingress_caches_for_good_only_what_the_build_names_by_content() -
         start = lines.index("@hashed {")
         # ``file``: a missing asset falls back to the app document, which must never be kept for a year.
         conditions = lines[start + 1 : lines.index("}", start)]
-        assert conditions == [r"path_regexp ^/assets/.+-[A-Za-z0-9_-]{8}(\.[A-Za-z0-9]+)+$", "file"]
+        assert conditions == [
+            r"path_regexp ^/assets/.+-[A-Za-z0-9_-]{8}(\.[A-Za-z0-9]+)+$",
+            r"not path_regexp -[a-z0-9_-]{8}(\.[A-Za-z0-9]+)+$",
+            "file",
+        ]
         assert [line for line in lines if "Cache-Control" in line] == [
             'header @hashed Cache-Control "public, max-age=31536000, immutable"'
         ]
-        hashed = re.compile(conditions[0].removeprefix("path_regexp "))
-        # Vite writes all it emits under assets/ as <name>-<hash>.<ext>, a selected named asset among them.
+        named, word = (re.compile(condition.rpartition("path_regexp ")[2]) for condition in conditions[:2])
+
+        def kept(path: str) -> bool:
+            return bool(named.search(path)) and not word.search(path)
+
+        # Vite writes all it emits under assets/ as <name>-<hash>.<ext>, the emission of a selected named asset too.
+        # A precompressed sidecar is its source's name with one more extension, hashed exactly when its source is.
         for path in (
             "/assets/open-C37wqrGN.js", "/assets/index-BX1a2b3c.css", "/assets/inter-latin-400-normal-C38fXH4l.woff2",
-            "/assets/en-D4_x-9Qa.json", "/assets/icon-Zy98_-Ab.svg", "/assets/app-AbCd1234.js.map",
+            "/assets/en-D4_x-9Qa.json", "/assets/icon & mark-Zy98_-Ab.svg", "/assets/app-AbCd1234.js.map",
+            "/assets/open-C37wqrGN.js.br", "/assets/open-C37wqrGN.js.gz",
         ):
-            assert hashed.search(path), path
-        # Documents, the build's page list and public-directory files keep their names and are revalidated.
+            assert kept(path), path
         for path in (
-            "/index.html", "/webforms.form.html", "/.angee/pages.json", "/favicon.svg", "/assets/logo.svg",
-            "/assets/app-AbCd123.js", "/forms/assets/app-AbCd1234.js", "/static/app-AbCd1234.js",
+            # Documents and the build's own manifests.
+            "/", "/index.html", "/site.page.html", "/.vite/angee-pages.json", "/.vite/manifest.json",
+            # A file rewritten in place under a stable name, at the root or under assets/: a sheet, a named asset.
+            "/themes.css", "/assets/themes.css", "/runtime/web/themes.css", "/assets/icon.svg", "/favicon.svg",
+            # A hand-named file whose tail is a word or a date, and a hash-shaped name outside assets/.
+            "/assets/logo-inverted.svg", "/assets/chunk-settings.js", "/assets/report-20240115.pdf",
+            "/assets/app-AbCd123.js", "/static/app-AbCd1234.js", "/pages/assets/app-AbCd1234.js",
+            "/index.html.br", "/site.page.html.gz",
+            # A real hash without an upper-case letter: revalidated, the price of never keeping a word.
+            "/assets/low-abcd1234.js",
         ):
-            assert not hashed.search(path), path
+            assert not kept(path), path
 
 
 def test_static_ingress_serves_precompressed_sidecars_in_the_declared_order() -> None:
