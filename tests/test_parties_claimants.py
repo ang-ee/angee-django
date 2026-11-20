@@ -526,12 +526,16 @@ def test_a_contact_with_no_address_and_no_number_states_nothing(source: Source) 
 @pytest.mark.parametrize(
     "address",
     [
-        pytest.param("n/a", id="words-that-are-no-address"),
-        pytest.param("ada@", id="half-an-address"),
+        pytest.param("n/a", id="n-a"),
+        pytest.param("ada", id="a-bare-word"),
+        pytest.param("@example.test", id="no-name-before-the-at"),
+        pytest.param("ada@", id="no-domain-after-the-at"),
+        pytest.param("a b@example.test", id="whitespace-in-the-name"),
+        pytest.param("ada\x07@example.test", id="a-control-character-in-the-name"),
         pytest.param("a" * 600 + "@example.test", id="longer-than-an-address-may-be"),
     ],
 )
-def test_an_address_that_is_no_email_address_is_no_address(source: Source, address: str) -> None:
+def test_what_cannot_be_an_email_address_is_no_address(source: Source, address: str) -> None:
     """Two contacts that gave the same non-address are not one person for it, and it makes no handle."""
 
     first = source.given(email=address, display_name="Ada Example")
@@ -541,6 +545,42 @@ def test_an_address_that_is_no_email_address_is_no_address(source: Source, addre
     assert (first.email, second.email) == (None, None)
     assert not Handle._base_manager.exists()
     assert not _stance_model()._base_manager.exists()
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        pytest.param("jörg@example.test", id="jorg-with-an-umlaut"),
+        pytest.param("peña@example.test", id="pena-with-a-tilde"),
+    ],
+)
+def test_a_name_part_in_any_script_is_an_address_that_finds_its_person_again(source: Source, address: str) -> None:
+    """An address is not only plain ASCII: its handle is made as typed, and the same spelling finds the person."""
+
+    first = source.given(email=address, display_name="Ada Example")
+
+    second = source.given(email=address)
+
+    assert (first.email.platform, first.email.value) == ("email", address)
+    assert (second.person.pk, second.email.pk, _people()) == (first.person.pk, first.email.pk, 1)
+    assert _claims(first.person) == {address: {behind(first.record), behind(second.record)}}
+
+
+def test_an_internationalised_domain_is_an_address_stored_as_typed(source: Source) -> None:
+    """The handle keeps the domain as typed and compares it lower-cased; the handle owner never punycodes it.
+
+    So another letter case of it is the same address, and its punycode spelling is another row.
+    """
+
+    first = source.given(email="Ada@Exämple.test", display_name="Ada Example")
+
+    second = source.given(email="ada@exämple.test")
+    punycoded = source.given(email="ada@xn--exmple-cua.test")
+
+    assert (first.email.value, first.email.normalized_value) == ("Ada@Exämple.test", "ada@exämple.test")
+    assert (second.person.pk, second.email.pk) == (first.person.pk, first.email.pk)
+    assert punycoded.person.pk != first.person.pk
+    assert punycoded.email.normalized_value == "ada@xn--exmple-cua.test"
 
 
 def test_a_contact_whose_address_is_no_email_address_is_decided_by_its_number(source: Source) -> None:

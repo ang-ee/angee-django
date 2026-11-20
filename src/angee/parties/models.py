@@ -30,6 +30,7 @@ from typing import Any, ClassVar, cast
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
 from django.db import models, transaction
 from django_compose.models import Composable
 from phonenumbers import (
@@ -1019,6 +1020,33 @@ class Handle(
                 return format_number(number, PhoneNumberFormat.E164)
             return "".join(character for character in normalized if character.isdigit())
         return normalized
+
+    EMAIL_ADDRESS_LIMIT: ClassVar[int] = 320
+    """The longest an email address may be (RFC 3696 section 3): the bound Django's ``EmailValidator`` applies."""
+
+    @classmethod
+    def is_email_address(cls, value: str) -> bool:
+        """Whether ``value`` can be an email address at all, read as :meth:`normalize_value` reads it.
+
+        What cannot be an address is no address; anything else is one, however
+        unusual. Surrounding whitespace aside, the value has exactly one ``@``,
+        a non-empty name part with no whitespace and no control character in
+        any script (``jörg@``, ``peña@``), and a domain that passes the domain
+        rule of Django's ``EmailValidator``, which reads an internationalised
+        domain as typed or in its punycode form. A value longer than an address
+        may be (:attr:`EMAIL_ADDRESS_LIMIT`) or than the ``value`` column holds
+        is none. It says nothing of whether the mailbox exists.
+        """
+
+        column = cls._meta.get_field("value")
+        assert isinstance(column, models.Field) and column.max_length is not None
+        address = (value or "").strip()
+        if not address or len(address) > min(cls.EMAIL_ADDRESS_LIMIT, column.max_length) or address.count("@") != 1:
+            return False
+        name, domain = address.split("@")
+        if not name or any(character.isspace() or unicodedata.category(character) == "Cc" for character in name):
+            return False
+        return domain in validate_email.domain_allowlist or bool(validate_email.validate_domain_part(domain))
 
     @staticmethod
     def normalize_display_name(value: str) -> str:

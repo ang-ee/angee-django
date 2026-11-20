@@ -35,10 +35,15 @@ live in code docstrings.
   a handle of that address has a row of `own` behind it, never a person
   another source, a user or a person made, whoever holds or claims the
   address. A trashed person is nobody's answer, a merged one is found as its
-  survivor, of several the earliest. An email the email validator refuses is
-  no address and a number the handle owner reads nothing in, or refuses, is no
-  number: each is left out and makes no handle, so two contacts that gave the
-  same non-address are never one person for it. What the person does not hold
+  survivor, of several the earliest. An email that cannot be an address at
+  all is no address and a number the handle owner reads nothing in, or
+  refuses, is no number: each is left out and makes no handle, so two contacts
+  that gave the same non-address are never one person for it. What can be an
+  email address is one predicate on the handle owner,
+  `Handle.is_email_address`: exactly one `@`, a non-empty name part with no
+  whitespace or control character in any script, a domain that passes the
+  domain rule of Django's `EmailValidator`, and no longer than an address may
+  be or the handle's value holds. What the person does not hold
   is recorded as a claim for review with the record behind it
   (`propose_claimed_handle_as_system`) and moves nothing; a person found again
   has nothing new stated of them and carries a handle only when they hold it
@@ -57,10 +62,8 @@ live in code docstrings.
   a read of current stances alone had one of the two sources make a new person
   after every merge. No migration, resource or permission change. Limits: two
   callers that meet two spellings of one new address at once each make its
-  row, and so its person, which the pairing job then proposes; an address
-  whose name part is not plain ASCII is one the email validator refuses, so
-  its contact is decided by its number or is new each time; a number that is
-  no valid international number is read as its digits.
+  row, and so its person, which the pairing job then proposes; a number that
+  is no valid international number is read as its digits.
 - `angee.parties`: a merged-away party is no longer a row. The `people`,
   `organizations` and `parties` resources read `canonical()` parties, as
   handles, addresses and relationships already did, so a party merged into

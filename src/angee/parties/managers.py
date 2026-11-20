@@ -31,7 +31,6 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.prefetch import GenericPrefetch
 from django.core.exceptions import ValidationError
-from django.core.validators import validate_email
 from django.db import DatabaseError, IntegrityError, connection, models, transaction
 from django.db.models import (
     Case,
@@ -1879,10 +1878,11 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         person is taken, whoever holds or claims the address, an account's own
         person included; otherwise a new ``Person`` is made, named as given
         (``Party.PLACEHOLDER_NAME`` without a name) and created by ``owner_id``.
-        A contact with neither finds nobody again. An email the email validator
-        refuses is no address, and a number the handle owner reads nothing in,
-        or refuses, is no number: each is left out, so two contacts that gave
-        the same non-address are never one person for it.
+        A contact with neither finds nobody again. An email that cannot be an
+        address at all (``Handle.is_email_address``) is no address, and a number
+        the handle owner reads nothing in, or refuses, is no number: each is
+        left out, so two contacts that gave the same non-address are never one
+        person for it.
 
         Nothing is stated in full. Each returned handle the person does not hold
         is recorded as a claim for review with ``evidence`` behind it
@@ -1920,11 +1920,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         person_model = apps.get_model("parties", "Person")
         platforms = handle_model.Platform
         name = " ".join(display_name.split()) or " ".join(f"{given_name} {family_name}".split())
-        address = email.strip()
-        try:
-            validate_email(address)
-        except ValidationError:
-            address = ""
+        address = email.strip() if handle_model.is_email_address(email) else ""
         number = phone.strip() if handle_model.normalize_value(platforms.PHONE, phone) else ""
         with system_context(reason=reason), transaction.atomic():
             emails = self._address_handles(platforms.EMAIL, address)

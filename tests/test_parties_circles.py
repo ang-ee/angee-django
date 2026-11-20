@@ -877,6 +877,34 @@ def test_handle_persists_normalized_value_on_create_and_value_update(db: None) -
     assert handle.normalized_value == "alicesmith@googlemail.com"
 
 
+@pytest.mark.parametrize(
+    ("value", "address"),
+    [
+        pytest.param("ada@example.test", True, id="a-plain-address"),
+        pytest.param("  Ada.Example@Example.TEST ", True, id="surrounding-whitespace-aside"),
+        pytest.param("jörg@example.test", True, id="jorg-with-an-umlaut"),
+        pytest.param("peña@example.test", True, id="pena-with-a-tilde"),
+        pytest.param("ada@exämple.test", True, id="an-internationalised-domain-as-typed"),
+        pytest.param("ada@xn--exmple-cua.test", True, id="an-internationalised-domain-punycoded"),
+        pytest.param("a" * 300 + "@example.test", True, id="as-long-as-an-address-may-be"),
+        pytest.param("", False, id="nothing"),
+        pytest.param("n/a", False, id="n-a"),
+        pytest.param("ada", False, id="a-bare-word"),
+        pytest.param("@example.test", False, id="no-name-before-the-at"),
+        pytest.param("ada@", False, id="no-domain-after-the-at"),
+        pytest.param("a@b@example.test", False, id="two-ats"),
+        pytest.param("a b@example.test", False, id="whitespace-in-the-name"),
+        pytest.param("ada\x07@example.test", False, id="a-control-character-in-the-name"),
+        pytest.param("ada@example", False, id="a-domain-the-validator-refuses"),
+        pytest.param("a" * 310 + "@example.test", False, id="longer-than-an-address-may-be"),
+    ],
+)
+def test_handle_says_what_can_be_an_email_address(value: str, address: bool) -> None:
+    """What cannot be an address at all is none; the name part may be in any script."""
+
+    assert Handle.is_email_address(value) is address
+
+
 def test_suggest_for_exact_match_autolinks_at_full_confidence(db: None) -> None:
     """An exact normalized-value match to a resolved handle auto-links (gmail dot/plus)."""
 
