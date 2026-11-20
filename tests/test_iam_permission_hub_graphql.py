@@ -1,9 +1,9 @@
 """Tests for IAM permission-hub GraphQL surfaces.
 
 IAM reads the active relationship model directly, so its grant, read and
-revocation cases here run under both local relationship stores. This is the
-suite's one cross-storage contract; every other module runs Angee's configured
-``registry`` store.
+revocation cases here run under both local relationship stores, each switched
+through ``relationship_storage``, which carries the session baseline into it;
+the other modules run Angee's configured ``registry`` store.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.test import override_settings
 from rebac import (
     ObjectRef,
     RelationshipTuple,
@@ -30,6 +29,7 @@ from rebac.resources import model_for_resource_type
 from rebac.roles import ROLE_RELATION, grant, revoke
 
 from angee.base.pagination import MAX_PAGE_SIZE
+from angee.base.testing.fixtures import relationship_storage
 from angee.graphql.data.metadata import _grantable_relations
 from angee.graphql.testing.documents import execute_schema
 from angee.graphql.testing.documents import result_data as _data
@@ -54,7 +54,7 @@ def test_platform_admin_is_grantable_without_django_superuser(
 ) -> None:
     """Direct and group admin grants control both the hub and resource arrows."""
 
-    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=storage):
+    with relationship_storage(storage):
         admin = _platform_admin(f"grant-admin-{storage}-{via_group}")
         recipient = User.objects.create_user(username=f"recipient-{storage}-{via_group}")
         unrelated = User.objects.create_user(username=f"unrelated-{storage}-{via_group}")
@@ -763,7 +763,7 @@ def test_caveated_grants_have_distinct_identity_and_revoke_exact_selected_tuple(
 ) -> None:
     """Caveat identity and selected-row deletion use the native tuple key in both stores."""
 
-    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=storage):
+    with relationship_storage(storage):
         admin = _platform_admin(f"hub-caveat-{storage}-admin")
         target = User.objects.create_user(username=f"hub-caveat-{storage}-target")
         subject = to_subject_ref(target)
@@ -862,7 +862,7 @@ def test_group_members_and_bindings_preserve_canonical_tuple_identity(
 ) -> None:
     """Group detail projects direct members and group-set bindings in both stores."""
 
-    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=storage):
+    with relationship_storage(storage):
         admin = _platform_admin(f"group-detail-{storage}-admin")
         member = User.objects.create_user(username=f"group-detail-{storage}-member")
         with system_context(reason="test group detail setup"):
@@ -943,7 +943,7 @@ def test_recipient_resources_follow_user_and_group_read_permissions(
 ) -> None:
     """A non-admin sharer discovers readable service users and its member groups."""
 
-    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=storage):
+    with relationship_storage(storage):
         actor = User.objects.create_user(username=f"recipient-{storage}")
         service = User.objects.create_user(
             username=f"recipient-service-{storage}", kind="service", first_name="Research agent",

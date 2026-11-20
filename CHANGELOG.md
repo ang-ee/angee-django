@@ -31,6 +31,13 @@ live in code docstrings.
   collecting mute, so the callers that mute on purpose and publish their own
   summary (workflows settlement, decisions, messaging teardown and fan-out) are
   untouched; `publish_bulk_update` coalesces under a collecting mute only.
+- `angee.base.testing.fixtures`: `relationship_storage(mode)` runs a block on the
+  other REBAC relationship storage with the session baseline carried there (copied
+  with `rebac migrate-storage`), restoring the setting and that table on exit. A
+  test that sets `REBAC_LOCAL_BACKEND_STORAGE` alone reads a table without the
+  baseline's grants and is refused what they grant; storage-parametrized tests
+  switch through it. Parties claims through a rule source are covered in both
+  storages.
 - `@angee/ui`: `FormView` (and so `Form` and every registered form) takes an
   optional `renderUnavailable(id, unavailable)`: what a saved record's form
   shows when its id reads no record, given the default "Record unavailable"
