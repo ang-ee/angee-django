@@ -81,6 +81,7 @@ members = [
     "angee-timeline",
     "angee-uom",
     "angee-web",
+    "angee-webforms",
     "angee-work",
     "angee-workflows",
     "angee-workflows-agents",
@@ -206,6 +207,7 @@ dependencies = [
     { name = "angee-timeline" },
     { name = "angee-uom" },
     { name = "angee-web" },
+    { name = "angee-webforms" },
     { name = "angee-work" },
     { name = "angee-workflows" },
     { name = "angee-workflows-agents" },
@@ -318,6 +320,7 @@ requires-dist = [
     { name = "angee-timeline", editable = "src/angee/timeline" },
     { name = "angee-uom", editable = "src/angee/uom" },
     { name = "angee-web", editable = "src/angee/web" },
+    { name = "angee-webforms", editable = "src/angee/webforms" },
     { name = "angee-work", editable = "src/angee/work" },
     { name = "angee-workflows", editable = "src/angee/workflows" },
     { name = "angee-workflows-agents", editable = "src/angee/workflows_agents" },
@@ -1994,6 +1997,33 @@ requires-dist = [
     { name = "angee-base", editable = "src/angee/base" },
     { name = "angee-server", editable = "src/angee/server" },
     { name = "django-compose", specifier = ">=0.1.0.dev13,<0.2" },
+]
+
+[[package]]
+name = "angee-webforms"
+version = "3.0.0"
+source = { editable = "src/angee/webforms" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-graphql" },
+    { name = "angee-iam" },
+    { name = "angee-jobs" },
+    { name = "angee-provenance" },
+    { name = "angee-resources" },
+    { name = "angee-server" },
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-jobs", editable = "src/angee/jobs" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-resources", editable = "src/angee/resources" },
+    { name = "angee-server", editable = "src/angee/server" },
+    { name = "angee-web", editable = "src/angee/web" },
 ]
 
 [[package]]
