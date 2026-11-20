@@ -194,7 +194,8 @@ fanout, and Celery beat runs embedded in the single shared `worker` service
 
 Production framework stacks build the frontend after codegen with
 `pnpm --dir <web_path> build`. Caddy serves `dist` with an `index.html` SPA
-fallback, proxies declared Django paths, and strips `/operator` only for the
+fallback, answers the composed standalone pages (`runtime/web/pages.caddy`)
+ahead of the declared Django paths it proxies, and strips `/operator` only for the
 narrow `/operator/graphql` route. It sets the operator allowed origin to the
 stack's browser origin. The inner Caddy waits for the edge's Compose alias on
 public ingress and trusts its connected Compose network CIDRs with strict

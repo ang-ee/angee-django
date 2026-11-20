@@ -964,6 +964,33 @@ def test_local_stack_renders_single_caddy_frontend_ingress() -> None:
     assert "runtime/schemas" not in frontend_command
 
 
+def test_static_ingress_imports_the_composed_standalone_pages_ahead_of_django() -> None:
+    """Every static ingress answers the composer's page routes first, from the one site root the app shares."""
+
+    from angee.web.build import WebRuntime
+
+    # The file the composer publishes, under the project's composed output in the ingress mount.
+    snippet = next(path for path in WebRuntime((), dependencies={}).render_sources() if path.suffix == ".caddy")
+    runtime = _render_project_settings()["COMPOSE_OUTPUT_DIR"].replace("{BASE_DIR}", "/srv/project")
+    for stack in (
+        _render_local_stack(),
+        _render_staging_stack(),
+        _render_dev_stack(_runtime_mode="docker", serve_mode="production"),
+    ):
+        frontend = stack["services"]["frontend" if "frontend" in stack["services"] else "caddy"]
+        assert frontend["mounts"] == ["source://app:/srv/project"]
+        site = _rendered_caddyfile(frontend).partition(":80 {")[2]
+        root, pages, django, app = (
+            site.index(directive)
+            for directive in (
+                "root * /srv/project/web/dist", f"import {runtime}/{snippet.as_posix()}", "handle @django", "handle {",
+            )
+        )
+        # The imported routes carry no root of their own: the site declares it once, ahead of every handler.
+        assert root < pages < django < app
+        assert site.count("root *") == 1
+
+
 def test_local_stack_uses_operator_backed_addon_installer() -> None:
     """Containerized local stacks edit project files through the host operator."""
 

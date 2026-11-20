@@ -86,6 +86,24 @@ public vault id. See the [knowledge addon](../../src/angee/knowledge/README.md).
   resolving workspace links to real directories so the dev watcher sees edits.
   Runtime CSS is never hand-edited; every addon web package enters that manifest
   and the stack-owned dependency graph.
+- A **standalone page** is a static HTML entry of the web build that loads none
+  of the app. The addon that owns it declares it once in `web/package.json`
+  (`"angee": { "pages": { "suite.form": { "entry": "./src/standalone/form.html",
+  "paths": ["/forms/w/*"], "accept": "text/html" } } }`), and the composer
+  ([`WebRuntime`](../../src/angee/web/build.py)) projects that declaration twice:
+  on the package's entry in `runtime/web/manifest.json` for the web build, and as
+  the ingress routes in `runtime/web/pages.caddy`, which the stack's static
+  ingress imports ahead of its Django routes. Page `<id>` is the build output's
+  `<id>.html`. An id is a dotted lower-case name; a path is an absolute prefix
+  ending in `/*`, and no two pages' paths overlap. A page answers `GET` and `HEAD`
+  only when `text/html` is the first media type of the request's `Accept` header,
+  so `fetch` and API clients reach Django on the same path; the manifest's
+  `pageAccept` carries that one pattern for the dev server. The ingress sends
+  every page with one fixed content security policy (`PAGE_CSP`): a page renders
+  staff-written markup on the application's origin, so it loads only from that
+  origin, runs no inline script, submits no form natively and is never framed;
+  inline styles are the one loosened directive. Never route a page in a
+  stack template or a Vite config by hand.
 - Installed `@angee/*` packages are prebundled by source signature. Vite's
   optimizer hash covers only the lockfile and manifests, so
   `defineAngeeWebViteConfig` (`@angee/app/vite`) hashes each package's on-disk
