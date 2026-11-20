@@ -44,7 +44,10 @@ live in code docstrings.
   `contact_manager`, `contact_admin`); a contact admin removes the vault's
   pages through the new `knowledge/vault#page_delete`, never the vault.
   Knowledge revision 11, extends revision 9. Nobody holds a role until
-  a deployment grants it. Upgrade: `rebac sync`; load the install tier.
+  a deployment grants it. Upgrade: a host generates one state-only `CreateModel`
+  for `PartiesRole` with `makemigrations parties` (the anchor is
+  `managed = False`, so Django issues no SQL), runs `rebac sync` for the raised
+  revisions and loads the install tier.
 - `angee.parties`: the batch dialog lists every group a list's "Select all N"
   matched by key, not by offset. It forwards the list's own groups read as the
   list sent it, order included (`AllMatchingGroups.read.orderBy`, always the
