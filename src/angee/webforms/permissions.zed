@@ -1,0 +1,68 @@
+// Authorization schema for the web forms addon.
+// @rebac_package: webforms
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 1
+
+// Named roles grant membership directly; platform admins reach every role.
+definition webforms/role {
+    relation member:   auth/user | auth/group#member | angee/role:admin#member
+    relation admin:    angee/role // rebac:const=admin
+
+    permission effective_member = member + admin->member
+}
+
+// A form is managed by platform admins and the web forms managers. The public
+// never reads one under an actor: the curated endpoint serves a published
+// version as named system work, after its guard.
+definition webforms/form {
+    relation admin:    angee/role     // rebac:const=admin
+    relation manager:  webforms/role  // rebac:const=webforms_admin
+
+    permission create = admin->member + manager->effective_member
+    permission read   = admin->member + manager->effective_member
+    permission write  = admin->member + manager->effective_member
+    permission delete = admin->member + manager->effective_member
+}
+
+// A version and an alias are parts of their form.
+definition webforms/form_version {
+    relation form: webforms/form // rebac:field=form
+
+    permission create = form->write
+    permission read   = form->read
+    permission write  = form->write
+    permission delete = form->write
+}
+
+definition webforms/form_alias {
+    relation form: webforms/form // rebac:field=form
+
+    permission create = form->write
+    permission read   = form->read
+    permission write  = form->write
+    permission delete = form->write
+}
+
+// A response is read by whoever manages its form. Its write and delete are the
+// form's write, and the append-only queryset reserves both for the owner's
+// verbs (dismiss, erase). Nobody creates one under an actor: the endpoint keeps
+// a submission as named system work.
+definition webforms/response {
+    relation form: webforms/form // rebac:field=form
+
+    permission create = nil
+    permission read   = form->read
+    permission write  = form->write
+    permission delete = form->write
+}
+
+// The link from a response to the record it became is written by delivery
+// alone, and read with its response.
+definition webforms/response_record {
+    relation response: webforms/response // rebac:field=response
+
+    permission create = nil
+    permission read   = response->read
+    permission write  = nil
+    permission delete = nil
+}

@@ -65,13 +65,15 @@ export interface ImplConfigFields {
  * Project backend-owned implementation config specs into ordinary dotted form
  * fields. The existing FormSpec parser/widget registry remain the only schema
  * engine; choices without a declaration continue to use their native raw JSON
- * field.
+ * field. The fields are named under `configField`, the model's JSON field that
+ * holds the chosen implementation's configuration (`config` unless it names another).
  * @owner RelationFieldWidget
  */
 export function useImplConfigFields(
   resource: string,
   field: string,
   supplied?: readonly ImplChoice[],
+  configField = "config",
 ): ImplConfigFields {
   const choices = useImplChoices(resource, field, supplied);
   const { widgets } = useAppRuntime();
@@ -96,20 +98,20 @@ export function useImplConfigFields(
     return {
       fields: [...byName.values()].map(({ descriptor, variants }) => ({
         ...descriptor,
-        name: `config.${descriptor.name}`,
+        name: `${configField}.${descriptor.name}`,
         showWhen: (values) => variants.has(choiceKey(values[field])),
         resolve: (values) => {
           const selected = variants.get(choiceKey(values[field])) ?? descriptor;
           return {
             ...selected,
-            name: `config.${selected.name}`,
+            name: `${configField}.${selected.name}`,
             showWhen: (current) => variants.has(choiceKey(current[field])),
           };
         },
       })),
       hasSchema: (value: unknown) => schemaKeys.has(choiceKey(value)),
     };
-  }, [choices, field, widgets]);
+  }, [choices, configField, field, widgets]);
 }
 
 /**

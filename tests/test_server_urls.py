@@ -11,9 +11,9 @@ from django.apps import apps
 from django.urls import Resolver404, resolve
 
 from angee.graphql.apps import GraphQLConfig
-from angee.messaging.apps import MessagingConfig
 from angee.server.apps import ServerConfig
 from angee.storage.apps import StorageConfig
+from angee.webforms.apps import WebformsConfig
 
 
 def run(script):
@@ -156,7 +156,7 @@ def test_enabled_framework_urls_share_the_server_urlconf(monkeypatch):
             (ServerConfig, "angee.server"),
             (StorageConfig, "angee.storage"),
             (GraphQLConfig, "angee.graphql"),
-            (MessagingConfig, "angee.messaging"),
+            (WebformsConfig, "angee.webforms"),
         )
     ]
     configs.append(apps.get_app_config("auth"))
@@ -167,14 +167,14 @@ def test_enabled_framework_urls_share_the_server_urlconf(monkeypatch):
     root = ModuleType("composed_server_urls")
     root.urlpatterns = [pattern for _, pattern in contributions()]
     assert [owner for owner, _ in contributions()] == [
-        "angee.server", "angee.storage", "angee.graphql", "angee.messaging",
+        "angee.server", "angee.storage", "angee.graphql", "angee.webforms",
     ]
     assert check_url_collisions() == []
     for route, name in (
         ("/health/ready", "angee-server-readiness"),
         ("/storage/upload", "storage_upload"),
         ("/graphql/public/", None),
-        ("/forms/example", "messaging_public_webform"),
+        ("/forms/example", "webforms_public_form"),
     ):
         assert resolve(route, urlconf=root).url_name == name
     with pytest.raises(Resolver404):
