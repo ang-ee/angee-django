@@ -32,17 +32,6 @@ live in code docstrings.
   scheme, resolved as if the app were not locked, so a scheme chosen there
   paints on the next load instead of only once React applies the saved
   preference.
-- **Public web forms have an addon of their own, `angee.webforms`; messaging's
-  public form path is removed.** A form (`Form`) holds versions of its questions
-  in every language it is written in (`FormVersion`, a checked subset of a
-  SurveyJS definition), its public addresses (`FormAlias`) and the responses it
-  keeps as rows before anything is made from them (`Response`). A target the
-  form selects turns a response into a record of the addon that owns it
-  (`FormTarget`, `ANGEE_WEBFORM_TARGET_CLASSES`; `store` keeps the response as
-  the record). The anonymous-submission guard is HTTP policy and lives in
-  `angee.server.ingress`.
-  - **The public address** of a form is `forms/<alias>`. `GET` describes the
-    version the form serves; `POST` keeps one submission
 - **Public web forms: the new addon `angee.webforms`, and its bridge to
   messaging, `angee.webforms_messaging`.**
   - **What it holds.** A form (`Form`) is what staff manage: whether it takes
