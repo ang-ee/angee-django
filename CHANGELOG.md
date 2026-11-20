@@ -10,6 +10,24 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: the batch dialog lists every group a list's "Select all N"
+  matched by key, not by offset. It forwards the list's own groups read as the
+  list sent it, order included (`AllMatchingGroups.read.orderBy`, always the
+  group's own key, ascending, nulls last), and each next page is that read with
+  its `where` narrowed to the groups past the last listed key, so a group added
+  or removed while the list is read neither repeats nor skips another. The
+  listing ends on a short page, not on the list's count, and says so when the
+  number of groups it listed differs from that count. The reader takes the named
+  `AllMatching` types from `@angee/ui` and refuses an order of more than the
+  grouped field, which has no one-field cursor, and an order with nulls first or
+  descending (one rule, `cursorField`, shared by the reader and the dialog). A
+  page that ends on a key no `_gt` can step past (null, or not text) ends the
+  listing rather than starting it again from the first page. A paged dialog says
+  how far it has read ("Loaded N of M …", with the loading indicator) from its
+  first render until every page is listed and previewed, and every dialog uses a
+  preview only as it read it itself, fetched since it opened and not being read
+  again: a reopened dialog reads its previews again rather than ticking from
+  cached ones.
 - `@angee/ui`: a record form's rail shows a field exactly when the sheet would:
   visible for the form's current values (`showWhen`, resolved through
   `resolve`) and not `hidden`, decided by the same `visibleFields` the draft
