@@ -49,7 +49,15 @@ PAGE_PATH_RE = re.compile(r"^/(?:[a-z0-9][a-z0-9._~-]*/)+\*$")
 """A path a standalone page answers: an absolute lower-case prefix of whole segments ending in ``/*``."""
 
 PAGE_PREFIXES: tuple[str, ...] = ("/forms/*",)
-"""The prefixes the ingress sends to Django under which an addon may declare a standalone page."""
+"""The prefixes the ingress sends to Django under which an addon may declare a standalone page.
+
+The web forms addon's page declares the whole of ``/forms/*``, the only page prefix
+today, so a second addon's page anywhere under ``/forms/`` is refused as overlapping.
+A second page needs its own prefix added here, which also adds it to the paths the
+ingress sends to Django. The prefix is the same fact as the web forms addon's public
+URL prefix (``angee.webforms.urls.PUBLIC_PREFIX``), which a test of that addon pins
+against its page declaration.
+"""
 
 INGRESS_DJANGO_PATHS: tuple[str, ...] = (
     "/graphql/*", "/acp/*", "/auth/csrf", "/auth/csrf/", *PAGE_PREFIXES,
