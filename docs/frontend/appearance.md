@@ -302,8 +302,11 @@ each addon contribution references its canonical discovered definition.
 Projects created before this feature need a template update. Re-render the
 project template, review the explicit `/src/index.css` head link and virtual
 `virtual:angee-appearance` wiring, then run the runtime build and production
-web build. Import `ColorSchemePreference` and `useColorSchemePreference` and
-target `data-color-scheme`.
+web build. Read and set a person's color scheme through `useAppearance`
+(`useOptionalAppearance` where a provider may be absent) and target
+`data-color-scheme`; `useColorSchemePreference` is the browser-local scheme of a
+tree with no appearance provider, and mounting it under one writes over the saved
+scheme.
 
 `angee.appearance_integrate` is optional. It adds a signed-in GraphQL analysis
 operation and a tool on the Appearance page, as an `appearance.settings#tools`

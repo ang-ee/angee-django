@@ -49,12 +49,16 @@ async function config() {
     appearance: { themeId: "demo.theme", colorScheme: "light", options: { version: 1, value: {} } },
   });
 }
+/** How long a dev server may take to react to an edit: its file watcher runs late on a busy machine. */
+const WATCHER_ALLOWANCE = 10_000;
+/** Wait for what an edit causes, for as long as the watcher itself is allowed. */
+const settled = <T>(assertion: () => T | Promise<T>): Promise<T> => vi.waitFor(assertion, { timeout: WATCHER_ALLOWANCE });
 async function editSource(server: ViteDevServer, file: string, edit: () => void): Promise<void> {
   let acknowledge!: () => void;
   let timer: ReturnType<typeof setTimeout>;
   const observed = new Promise<void>((resolve, reject) => {
     acknowledge = resolve;
-    timer = setTimeout(() => reject(new Error(`No watcher event for ${file}`)), 10_000);
+    timer = setTimeout(() => reject(new Error(`No watcher event for ${file}`)), WATCHER_ALLOWANCE);
   });
   const onEvent = (event: string, changed: string) => {
     if (["add", "change", "unlink"].includes(event) && changed === file) acknowledge();
@@ -178,23 +182,23 @@ test("dev refreshes direct and transitive themes, CSS/assets, first paint and vi
   await editSource(server, join(addon, "src", "palette.mjs"), () => {
     write(join(addon, "src", "palette.mjs"), 'export const brand = "#abcdef";');
   });
-  await vi.waitFor(() => expect(catalogue().themes[0]?.defaultTokens.light["--brand"]).toBe("#abcdef"));
-  await vi.waitFor(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
+  await settled(() => expect(catalogue().themes[0]?.defaultTokens.light["--brand"]).toBe("#abcdef"));
+  await settled(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
   expect(await firstPaintBrand(server)).toBe("#abcdef");
   expect((await server.transformRequest("virtual:angee-appearance"))?.code).not.toBe(initialModule?.code);
   expect(catalogue().fingerprint).not.toBe(initial);
   await editSource(server, join(addon, "src", "themes.mjs"), () => theme(2));
-  await vi.waitFor(() => expect(catalogue().themes[0]?.revision).toBe(2));
+  await settled(() => expect(catalogue().themes[0]?.revision).toBe(2));
   const beforeCss = catalogue().fingerprint;
   await editSource(server, join(addon, "src", "theme.css"), () => {
     write(join(addon, "src", "theme.css"), '.demo { color: red; background-image: url("./mark.svg"); }');
   });
-  await vi.waitFor(() => expect(catalogue().fingerprint).not.toBe(beforeCss));
+  await settled(() => expect(catalogue().fingerprint).not.toBe(beforeCss));
   const beforeAsset = catalogue().fingerprint;
   await editSource(server, join(addon, "src", "mark.svg"), () => {
     write(join(addon, "src", "mark.svg"), '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0"/></svg>');
   });
-  await vi.waitFor(() => expect(catalogue().fingerprint).not.toBe(beforeAsset));
+  await settled(() => expect(catalogue().fingerprint).not.toBe(beforeAsset));
 }, 30_000);
 
 test("dev watches manifest-owned documents and newly arriving preferred external SDL", async () => {
@@ -206,16 +210,16 @@ test("dev watches manifest-owned documents and newly arriving preferred external
   const document = join(addon, "src", "headless", "documents.demo.ts");
   const generated = join(runtime, "gql", "demo", "graphql.ts");
   await editSource(server, document, () => write(document, "export const Ping = /* GraphQL */ `query Ping { ping }`;"));
-  await vi.waitFor(() => expect(readFileSync(generated, "utf8")).toContain("PingDocument"));
+  await settled(() => expect(readFileSync(generated, "utf8")).toContain("PingDocument"));
   await editSource(server, document, () => write(document, "export const Again = /* GraphQL */ `query Again { ping }`;"));
-  await vi.waitFor(() => expect(readFileSync(generated, "utf8")).toContain("AgainDocument"));
+  await settled(() => expect(readFileSync(generated, "utf8")).toContain("AgainDocument"));
   await editSource(server, document, () => rmSync(document));
-  await vi.waitFor(() => expect(readFileSync(generated, "utf8")).not.toContain("AgainDocument"));
+  await settled(() => expect(readFileSync(generated, "utf8")).not.toContain("AgainDocument"));
   await editSource(server, document, () => {
     write(join(runtime, "schemas", "external", "demo.graphql"), "type Query { ping: String! pong: String! }");
     write(document, "export const Pong = /* GraphQL */ `query Pong { pong }`;");
   });
-  await vi.waitFor(() => expect(readFileSync(generated, "utf8")).toContain("PongDocument"));
+  await settled(() => expect(readFileSync(generated, "utf8")).toContain("PongDocument"));
   expect(sent).toHaveBeenCalledWith(expect.objectContaining({ type: "full-reload" }));
 }, 30_000);
 
@@ -230,15 +234,15 @@ test("dev discovers direct Django SDL and metadata after startup and tracks thei
     write(metadata, "{}\n");
     write(schema, "type Query { ping: String! }");
   });
-  await vi.waitFor(() => expect(readFileSync(generated, "utf8")).toContain("PingDocument"));
+  await settled(() => expect(readFileSync(generated, "utf8")).toContain("PingDocument"));
   await editSource(server, schema, () => write(schema, "type Query { ping: Int! }"));
-  await vi.waitFor(() => expect(readFileSync(generated, "utf8")).toMatch(/type PingQuery = \{\s*ping: number/));
-  await vi.waitFor(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
+  await settled(() => expect(readFileSync(generated, "utf8")).toMatch(/type PingQuery = \{\s*ping: number/));
+  await settled(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
   sent.mockClear();
   await editSource(server, metadata, () => write(metadata, "{ }\n"));
-  await vi.waitFor(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
+  await settled(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
   await editSource(server, schema, () => rmSync(schema));
-  await vi.waitFor(() => expect(readFileSync(join(runtime, "web", "app.ts"), "utf8")).not.toContain('"console":'));
+  await settled(() => expect(readFileSync(join(runtime, "web", "app.ts"), "utf8")).not.toContain('"console":'));
 }, 30_000);
 
 test("generation failures show an overlay and a repaired newly declared theme input retries", async () => {
@@ -248,12 +252,12 @@ test("generation failures show an overlay and a repaired newly declared theme in
   await editSource(server, manifestPath, () => {
     write(manifestPath, JSON.stringify({ name: "@demo/theme", exports: { "./themes": "./src/repaired.mjs" } }));
   });
-  await vi.waitFor(() => expect(sent).toHaveBeenCalledWith(expect.objectContaining({ type: "error" })));
+  await settled(() => expect(sent).toHaveBeenCalledWith(expect.objectContaining({ type: "error" })));
   sent.mockClear();
   await editSource(server, join(addon, "src", "repaired.mjs"), () => {
     write(join(addon, "src", "repaired.mjs"), readFileSync(join(addon, "src", "themes.mjs"), "utf8"));
   });
-  await vi.waitFor(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
+  await settled(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
   expect(await firstPaintBrand(server)).toBe("#123456");
 }, 30_000);
 
@@ -276,7 +280,7 @@ test("bursts coalesce, concurrent changes get one serial follow-up, outputs stay
   const palette = join(addon, "src", "palette.mjs");
   hold = new Promise<void>((resolve) => { release = resolve; });
   for (let index = 0; index < 8; index += 1) server.watcher.emit("all", "change", palette);
-  await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(initialCalls + 1));
+  await settled(() => expect(generate).toHaveBeenCalledTimes(initialCalls + 1));
   for (let index = 0; index < 8; index += 1) server.watcher.emit("all", "change", palette);
   // Every generated tree and jj churn stays outside the declared source allowlist.
   for (const output of [join(runtime, "gql", "demo", "documents.demo.ts"), join(runtime, "web", "themes.catalog.json"), join(addon, ".jj", "store")]) {
@@ -284,8 +288,8 @@ test("bursts coalesce, concurrent changes get one serial follow-up, outputs stay
   }
   release!();
   hold = undefined;
-  await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(initialCalls + 2));
-  await vi.waitFor(() => expect(active).toBe(0));
+  await settled(() => expect(generate).toHaveBeenCalledTimes(initialCalls + 2));
+  await settled(() => expect(active).toBe(0));
   expect(maxActive).toBe(1);
   const beforeClose = generate.mock.calls.length;
   server.watcher.emit("all", "change", palette);
@@ -408,16 +412,16 @@ test("dev asset edits reload, missing newly selected files retry, and only this 
   const image = join(addon, siteAssets["demo.image"]);
   expect((await get(encodeURI(`/@fs${image}`))).status).toBe(200);
   await editSource(server, image, () => write(image, "changed bytes"));
-  await vi.waitFor(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
+  await settled(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
   sent.mockClear();
   await editSource(server, join(runtime, "web/manifest.json"), () => {
     declareSite("demo.repaired", { ...siteAssets, "demo.repaired": "./new-art/repaired.png" });
   });
-  await vi.waitFor(() => expect(sent).toHaveBeenCalledWith(expect.objectContaining({ type: "error" })));
+  await settled(() => expect(sent).toHaveBeenCalledWith(expect.objectContaining({ type: "error" })));
   sent.mockClear();
   const repaired = join(addon, "new-art/repaired.png");
   await editSource(server, repaired, () => write(repaired, tinyPng));
-  await vi.waitFor(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
+  await settled(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
   const html = head(await server.transformIndexHtml("/", "<html><head></head></html>"));
   expect(html.querySelectorAll("title")).toHaveLength(1);
   const repairedUrl = html.querySelector('meta[property="og:image"]')?.getAttribute("content");
@@ -438,7 +442,7 @@ test("dev keeps a selected file the host's own list allows when regeneration dro
   await editSource(server, join(runtime, "web/manifest.json"), () => {
     declareSite("demo.other", { ...siteAssets, "demo.other": "./art/other.png" });
   });
-  await vi.waitFor(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
+  await settled(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
   expect((await get(encodeURI(`/@fs${other}`))).status).toBe(200);
   expect((await get(encodeURI(`/@fs${image}`))).status).toBe(200);
 }, 30_000);
