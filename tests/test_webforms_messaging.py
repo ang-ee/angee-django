@@ -12,10 +12,12 @@ from unittest.mock import patch
 import pytest
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.db import IntegrityError, transaction
 from django.test import override_settings
 from rebac import system_context
 
 from angee.base.checks import check_stored_impl_keys
+from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedThread
 from angee.messaging.models import WebformSubmission
 from angee.messaging.testing.models import Channel, Message
 from angee.webforms.models import Delivery, DeliveryFailed
@@ -80,7 +82,8 @@ def test_a_response_becomes_one_message_on_its_forms_channel_under_the_submissio
     form = form_on(target)
 
     row, message = delivered(form)
-    again = row.form.target().deliver(row)
+    with system_context(reason="webforms.response.deliver"):  # A target runs as the response's system work.
+        again = row.form.target().deliver(row)
 
     with system_context(reason="webforms messaging tests read"):
         (stored,) = Message._base_manager.filter(channel=target)
@@ -179,6 +182,62 @@ def test_a_message_messaging_will_not_take_is_refused_by_its_code_and_keeps_no_a
         Delivery.FAILED, "refused: message_refused", None,
     )
     assert not Message._base_manager.filter(channel=target).exists()
+
+
+def test_a_message_the_response_did_not_make_is_never_replaced_under_its_submissions_id() -> None:
+    """A message received before forms had responses keeps its answers when its submission id is sent again."""
+
+    target = channel()
+    form = form_on(target, slug="moved")
+    stable_id = "webform:moved:before-1"
+    with system_context(reason="webforms messaging tests setup"):
+        (earlier,) = Message.objects.ingest(
+            [ParsedMessage(
+                external_id=stable_id, platform="other",
+                sender=ParsedHandle(platform="other", value=stable_id, external_id=stable_id, display_name="Anonymous"),
+                thread=ParsedThread(external_id="webform:moved", title="Enquiry form"),
+                body=ParsedPart(type="text/plain", role="body", text="## Your name\n\nAn earlier answer"),
+                metadata={"webform": {"answers": {"name": "An earlier answer"}}},
+            )],
+            channel=target, quote_edges=False,
+        )
+    row, _made = Response.objects.receive(form, version=1, submission_id="before-1", language="en", answers=ANSWERS)
+
+    with pytest.raises(DeliveryFailed) as failed:
+        row.deliver()
+
+    with system_context(reason="webforms messaging tests read"):
+        (kept,) = Message._base_manager.filter(channel=target)
+    stored = Response._base_manager.get(pk=row.pk)
+    assert (failed.value.reason, stored.delivery_error, stored.retry_at) == (
+        "refused: message_exists", "refused: message_exists", None,
+    )
+    assert (kept.pk, kept.metadata["webform"]["answers"]) == (earlier.pk, {"name": "An earlier answer"})
+    assert not ResponseRecord._base_manager.filter(response=row).exists()
+
+
+def test_a_second_form_on_one_channel_and_slug_is_refused_at_its_configuration_and_by_the_table() -> None:
+    """Two forms on one channel and slug would share message ids: the second is refused, checked or not."""
+
+    target = channel()
+    first = form_on(target, slug="shared", name="First form")
+    config = {"channel": target.sqid, "slug": "shared"}
+    second = Form(name="Second form", target_class="message", target_config=config)
+
+    with pytest.raises(ValidationError) as refused:
+        second.full_clean()
+    with system_context(reason="webforms messaging tests setup"), pytest.raises(IntegrityError), transaction.atomic():
+        second.save()
+
+    assert refused.value.message_dict == {
+        "target_config": ["Another form already posts on this channel under this slug."],
+    }
+    first.full_clean()  # A form is never refused for the conversation it holds itself.
+    with system_context(reason="webforms messaging tests setup"):
+        Form.objects.create(name="Other slug", target_class="message", target_config={**config, "slug": "other"})
+        Form.objects.create(name="A survey", target_class="store")
+        Form.objects.create(name="Another survey", target_class="store")
+        assert Form._base_manager.filter(target_class="message", target_config__channel=target.sqid).count() == 2
 
 
 def test_any_other_error_of_messaging_is_a_failure_that_is_tried_again() -> None:

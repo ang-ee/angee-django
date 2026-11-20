@@ -322,6 +322,10 @@ name = "Web forms do not import messaging, intake or the bridge"
 type = "forbidden"
 source_modules = ["angee.webforms"]
 forbidden_modules = ["angee.messaging", "angee.intake", "angee.webforms_messaging"]
+ignore_imports = [
+  # The bare test host's one concrete form folds the bridge's same-row rule, as the composer does.
+  "angee.webforms.testing.models -> angee.webforms_messaging.models",
+]
 
 [[tool.importlinter.contracts]]
 name = "OAuth and its vendor presets do not import the login addon"

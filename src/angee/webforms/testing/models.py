@@ -10,10 +10,15 @@ from angee.webforms.models import FormVersion as AbstractFormVersion
 from angee.webforms.models import Response as AbstractResponse
 from angee.webforms.models import ResponseRecord as AbstractResponseRecord
 from angee.webforms.models import WebformsRole as AbstractWebformsRole
+from angee.webforms_messaging.models import FormConversation
 
 
-class Form(AbstractForm):
-    """Concrete form used by web forms tests."""
+class Form(FormConversation, AbstractForm):
+    """Concrete form used by web forms tests.
+
+    Folds the messaging bridge's same-row rule onto the one table, mirroring the
+    composer output for the installed bridge.
+    """
 
     class Meta(AbstractForm.Meta):
         """Django model options for the canonical test form."""
@@ -22,6 +27,7 @@ class Form(AbstractForm):
         app_label = "webforms"
         db_table = "test_webforms_form"
         rebac_resource_type = "webforms/form"
+        constraints = FormConversation.Meta.constraints
 
 
 class FormVersion(AbstractFormVersion):

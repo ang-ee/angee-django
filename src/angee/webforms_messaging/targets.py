@@ -87,14 +87,17 @@ class MessageTarget(FormTarget):
     def deliver(self, response: Any) -> Any:
         """Post ``response`` on the form's channel and return its message.
 
-        Messaging refuses a response in two ways, and neither is tried again by
+        A response is refused in three ways, and none is tried again by
         itself: ``channel_missing`` when the channel the form names is gone or
-        is no webform channel, and ``message_refused`` when messaging will not
-        take the message as it is (an envelope past its size bound). Any other
-        error is a failure.
+        is no webform channel; ``message_exists`` when the channel already holds
+        a message under this submission's id that this response did not make
+        (one received before forms had responses), which posting would replace;
+        and ``message_refused`` when messaging will not take the message as it
+        is (an envelope past its size bound). Any other error is a failure.
         """
 
         config = cast(MessageTargetConfig, self.config)
+        messages = apps.get_model("messaging", "Message").objects
         try:
             channel = apps.get_model("messaging", "Channel").objects.require_backend_target(
                 config.channel, backend_class=WebformChannelBackend.key,
@@ -103,10 +106,12 @@ class MessageTarget(FormTarget):
             channel = None
         if channel is None:
             raise DeliveryRefused("channel_missing")
+        parsed = self.message(response)
+        held = messages.with_external_ids([parsed.external_id]).filter(channel=channel).first()
+        if held is not None and not type(response).objects.for_record(held).filter(pk=response.pk).exists():
+            raise DeliveryRefused("message_exists")
         try:
-            landed = apps.get_model("messaging", "Message").objects.ingest(
-                [self.message(response)], channel=channel, quote_edges=WebformChannelBackend.quote_edges,
-            )
+            landed = messages.ingest([parsed], channel=channel, quote_edges=WebformChannelBackend.quote_edges)
         except ValidationError:
             landed = None
         if landed is None:
