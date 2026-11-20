@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { get, set } from "react-hook-form";
+import { replaceEqualDeep } from "@tanstack/react-query";
 import {
   publicIdLabel,
   relationModelLabelForField,
@@ -318,45 +319,45 @@ export function draftHoldsPath(values: FormValues, fields: readonly FieldDescrip
 }
 
 /**
- * The paths of `values` a draft for them does not hold (see `emptyDraft`): a field hidden for
- * them and whatever lies within it, short of what a visible field holds, and a `seeded` path
- * holding declared fields none of which is visible. A value no field declares stays.
+ * Of the `targets` a preset set, the paths a draft for `values` does not hold (see `emptyDraft`):
+ * a target a declared field relates to and no visible field holds, or, under a target whose own
+ * visible fields remain, what they do not hold. Nothing outside the targets is touched.
  */
 export function hiddenDraftPaths(
   values: FormValues,
   fields: readonly FieldDescriptor[],
-  seeded: readonly string[] = [],
+  targets: readonly string[],
 ): string[] {
   const visible = visibleFields(fields, values).map((field) => field.name);
-  const declared = fields.map((field) => field.name);
   const walk = (value: unknown, path: string): string[] => {
     if (visible.some((name) => holdsPath(name, path))) return [];
-    const holdsDeclared = declared.some((name) => name.startsWith(`${path}.`));
-    const owned = declared.some((name) => holdsPath(name, path)) || (holdsDeclared && seeded.includes(path));
-    const nested = owned ? visible.some((name) => name.startsWith(`${path}.`)) : holdsDeclared;
-    if (nested && value !== null && typeof value === "object" && !Array.isArray(value)) {
-      return Object.entries(value).flatMap(([key, child]) => walk(child, `${path}.${key}`));
-    }
-    return owned ? [path] : [];
+    if (!visible.some((name) => name.startsWith(`${path}.`)) || value === null || typeof value !== "object"
+      || Array.isArray(value)) return [path];
+    return Object.entries(value).flatMap(([key, child]) => walk(child, `${path}.${key}`));
   };
-  return Object.entries(values).flatMap(([key, value]) => walk(value, key));
+  return targets
+    .filter((target) => fields.some(({ name }) => holdsPath(name, target) || name.startsWith(`${target}.`)))
+    .flatMap((target) => walk(dottedValue(values, target), target));
 }
 
 /**
- * The stored value a draft compares `path` against when it does not hold it: the baseline's
- * when that holds it, else the record's, read as `recordToValues` reads the field declared there.
+ * What a save writes for the fields a preset hid (see `FieldDescriptor.prefill`): each remembered
+ * reset whose path a field the save writes owns, the draft holds nothing at, and the form was
+ * loaded with a different value for.
  */
-export function storedDraftValue(
-  path: string,
-  baseline: FormValues,
-  record: Row,
+export function hiddenResetWrites(
+  values: FormValues,
   fields: readonly FieldDescriptor[],
-): unknown {
-  if (hasDottedValue(baseline, path)) return dottedValue(baseline, path);
-  const declared = fields.find((field) => field.name === path);
-  if (!declared) return dottedValue(record, path);
-  const value = recordFormValue(record, resolveField(declared, record));
-  return value === MISSING_DOTTED_VALUE ? undefined : value;
+  resets: ReadonlyMap<string, unknown>,
+  options: FieldSaveOptions & { baseline: FormValues },
+): ReadonlyMap<string, unknown> {
+  return new Map([...resets].filter(([path, reset]) => {
+    const declared = fields.find((field) => field.name === path);
+    if (!declared || !savesField(resolveField(declared, values), options)) return false;
+    if (draftHoldsPath(values, fields, path) || !hasDottedValue(options.baseline, path)) return false;
+    const loaded = dottedValue(options.baseline, path);
+    return replaceEqualDeep(loaded, reset) !== loaded;
+  }));
 }
 
 /** A field named `name` holds `path` when the path is that field or lies within it. */
@@ -381,22 +382,16 @@ export function recordToValues(
 ): FormValues {
   const values: FormValues = {};
   for (const field of visibleFields(fields, record)) {
-    const value = recordFormValue(record, field);
-    if (value !== MISSING_DOTTED_VALUE) setDottedValue(values, field.name, value);
+    const present = hasDottedValue(record, field.name);
+    if (!present && (field.omittable || field.presenceRequired)) continue;
+    const raw = dottedValue(record, field.name);
+    const value = isRelationIdField(field)
+      ? raw ?? null
+      : recordFieldValue({ ...record, [field.name]: raw }, field);
+    setDottedValue(values, field.name, value === undefined ? emptyValue(field) : value);
   }
   if (lines) values[lines.field] = lines.rows;
   return values;
-}
-
-/** A record's value for one field as the form holds it, or the missing marker for an omitted one. */
-function recordFormValue(record: Row, field: FieldDescriptor): unknown {
-  const present = hasDottedValue(record, field.name);
-  if (!present && (field.omittable || field.presenceRequired)) return MISSING_DOTTED_VALUE;
-  const raw = dottedValue(record, field.name);
-  const value = isRelationIdField(field)
-    ? raw ?? null
-    : recordFieldValue({ ...record, [field.name]: raw }, field);
-  return value === undefined ? emptyValue(field) : value;
 }
 
 export function baselineLineRows(
@@ -450,34 +445,41 @@ export function visibleSections(
   return sections.map((section) => ({ ...section, fields: visibleFields(section.fields, values) }));
 }
 
+/** What decides whether a save writes a field at all. */
+export interface FieldSaveOptions {
+  isCreate: boolean;
+  seededFieldNames?: ReadonlySet<string> | null;
+  writableFields?: ReadonlySet<string> | null;
+}
+
+/** A create seed, written on create even when the field is read-only. */
+function createSeeded(field: FieldDescriptor, options: FieldSaveOptions): boolean {
+  return options.isCreate && !field.editOnly
+    && (field.defaultValue !== undefined || (options.seededFieldNames?.has(field.name) ?? false));
+}
+
+/** Whether a save may write `field`: one the record lets it write, editable or a create seed. */
+function savesField(field: FieldDescriptor, options: FieldSaveOptions): boolean {
+  return (!options.writableFields || isWritableDottedField(options.writableFields, field.name))
+    && (!field.readOnly || createSeeded(field, options));
+}
+
 export function mutationData(
   values: FormValues,
   fields: readonly FieldDescriptor[],
-  options: {
+  options: FieldSaveOptions & {
     dirtyFields: Record<string, unknown>;
     id?: string | null;
-    isCreate: boolean;
     fieldMetadata?: Readonly<Record<string, ModelFieldMetadata>> | null;
-    seededFieldNames?: ReadonlySet<string> | null;
-    writableFields?: ReadonlySet<string> | null;
-    /** What a preset that hid a field writes over its differing stored value (see `FieldDescriptor.prefill`). */
+    /** The resets `hiddenResetWrites` decided this save writes for the fields a preset hid. */
     hiddenResets?: ReadonlyMap<string, unknown> | null;
   },
 ): FormValues {
   const data: FormValues = {};
   for (const declared of fields) {
     const field = resolveField(declared, values);
-    if (options.writableFields && !isWritableDottedField(options.writableFields, field.name)) continue;
-    const seededDefault =
-      options.isCreate &&
-      !field.editOnly &&
-      (field.defaultValue !== undefined ||
-        (options.seededFieldNames?.has(field.name) ?? false));
-    if (field.readOnly && !seededDefault) continue;
-    if (!isFieldVisible(field, values)) {
-      if (options.hiddenResets?.has(field.name)) setDottedValue(data, field.name, options.hiddenResets.get(field.name));
-      continue;
-    }
+    if (!savesField(field, options) || !isFieldVisible(field, values)) continue;
+    const seededDefault = createSeeded(field, options);
     const next = mutationFieldValue(field, dottedValue(values, field.name));
     const dirty = Boolean(dottedValue(options.dirtyFields, field.name));
     const structuredRootDirty = field.name.includes(".") && isDirtyValue(
@@ -500,6 +502,7 @@ export function mutationData(
     if (!options.isCreate && !dirty && !structuredRootDirty) continue;
     setDottedValue(data, field.name, next);
   }
+  for (const [path, reset] of options.hiddenResets ?? []) setDottedValue(data, path, cloneFormValue(reset));
   if (!options.isCreate && options.id != null) data.id = options.id;
   return data;
 }

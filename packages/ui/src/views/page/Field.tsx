@@ -67,9 +67,8 @@ export interface FieldDescriptor extends FieldPresentation {
    * Load the chosen preset onto sibling fields when this field changes, from its new value, the
    * form's current values and the values the form was loaded with (this field's scope in a nested
    * form), so a preset may derive from siblings or give a sibling its loaded value back.
-   * After a preset a record form holds only the fields visible for its new values, as it did when
-   * loaded, and saves a field the preset hid with the preset's value only where that differs from
-   * the field's stored value, so a form brought back to what is stored is clean.
+   * In a record form, a field a preset hides is dropped from the draft; if the form was loaded with
+   * a different value for it, the save writes the preset's value.
    */
   prefill?: (value: unknown, values: Row, loaded?: Row) => Record<string, unknown> | null | undefined;
   /** Keep dirty sibling values when applying a preset, except for names explicitly replaced below. */
