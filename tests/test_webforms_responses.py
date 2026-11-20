@@ -113,6 +113,62 @@ def test_publishing_freezes_a_version_and_opens_a_draft_form() -> None:
     assert stored(version).definition == DEFINITION
 
 
+def test_publishing_judges_the_stored_version_not_the_instance_it_was_asked_through() -> None:
+    """An edit that landed after the publisher loaded the version is what gets judged."""
+
+    form, version = form_with()
+    with system_context(reason="webforms tests setup"):
+        publisher = FormVersion.objects.get(pk=version.pk)
+        editor = FormVersion.objects.get(pk=version.pk)
+        editor.personal_questions = None
+        editor.save()
+        with pytest.raises(ValidationError) as refused:
+            publisher.publish()
+
+    assert "personal_questions" in refused.value.message_dict
+    assert stored(version).published_at is None
+
+
+def test_a_save_that_began_before_the_publication_finds_the_version_frozen() -> None:
+    form, version = form_with()
+    with system_context(reason="webforms tests setup"):
+        editor = FormVersion.objects.get(pk=version.pk)
+        FormVersion.objects.get(pk=version.pk).publish()
+        editor.definition = {"elements": [{"type": "text", "name": "name"}]}
+        with pytest.raises(ValidationError):
+            editor.save()
+
+    kept = stored(version)
+    assert (kept.definition, kept.published_at is not None) == (DEFINITION, True)
+    form.refresh_from_db()
+    assert form.published_version_id == version.pk
+
+
+def test_a_published_version_is_closed_to_collection_edits_through_every_manager() -> None:
+    form, version = published()
+    with system_context(reason="webforms tests setup"):
+        for manager in (FormVersion.objects, FormVersion._base_manager):
+            with pytest.raises(ValidationError):
+                manager.filter(pk=version.pk).update(definition={"elements": [{"type": "text", "name": "x"}]})
+
+    assert stored(version).definition == DEFINITION
+
+
+def test_a_version_is_never_born_published_and_names_only_questions_as_personal() -> None:
+    form, _version = form_with()
+    with system_context(reason="webforms tests setup"):
+        born = FormVersion.objects.create(
+            form=form, definition=DEFINITION, languages=["en", "es"], default_language="en",
+            published_at=timezone.now(),
+        )
+        born.personal_questions = [["name"]]
+        with pytest.raises(ValidationError) as refused:
+            born.full_clean()
+
+    assert stored(born).published_at is None
+    assert "personal_questions" in refused.value.message_dict
+
+
 @pytest.mark.parametrize(("change", "field"), [
     pytest.param({"definition": {"elements": [{"type": "matrix", "name": "g"}]}}, "definition", id="not-in-the-subset"),
     pytest.param(

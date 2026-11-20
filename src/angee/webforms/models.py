@@ -49,7 +49,7 @@ from angee.base.models.refs import RecordRefMixin
 from angee.base.models.roles import role_anchor
 from angee.base.models.transitions import StateTransitions, save_state, transition
 from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet
-from angee.base.querysets import AngeeQuerySet, ClosedUpdateQuerySet
+from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet, ClosedUpdateQuerySet
 from angee.base.refs import generic_pointer_target
 from angee.jobs.enqueue import enqueue_task
 from angee.provenance.contrib.angee.history import HistoryMixin
@@ -192,6 +192,13 @@ class FormVersionQuerySet(ClosedUpdateQuerySet[Any], AngeeQuerySet):
 FormVersionManager = AngeeManager.from_queryset(FormVersionQuerySet)
 
 
+class FormVersionBaseQuerySet(ClosedUpdateQuerySet[Any], AngeeUnscopedQuerySet):
+    """Unscoped rows for Django's own relation reads, closed to collection edits like the default manager."""
+
+
+FormVersionBaseManager = models.Manager.from_queryset(FormVersionBaseQuerySet)
+
+
 class FormVersion(ImmutableFieldsMixin, AngeeDataModel, concrete=True):
     """The questions of a form at one moment, in every language it is written in.
 
@@ -220,12 +227,14 @@ class FormVersion(ImmutableFieldsMixin, AngeeDataModel, concrete=True):
     """The question whose answer finds a person's responses, typically their email address."""
     published_at = models.DateTimeField(null=True, blank=True, editable=False)
 
+    _angee_base = FormVersionBaseManager()
     objects = FormVersionManager()
 
     class Meta:
         """Django model options for a form version."""
 
         abstract = True
+        base_manager_name = "_angee_base"
         ordering = ("form", "-number")
         rebac_resource_type = "webforms/form_version"
         constraints = (
@@ -246,7 +255,8 @@ class FormVersion(ImmutableFieldsMixin, AngeeDataModel, concrete=True):
         errors: dict[str, str] = {}
         personal = self.personal_questions
         if personal is not None and (
-            not isinstance(personal, list) or any(name not in asked for name in personal)
+            not isinstance(personal, list)
+            or any(not isinstance(name, str) or name not in asked for name in personal)
         ):
             errors["personal_questions"] = "Name questions this version asks."
         if self.contact_question and self.contact_question not in asked:
@@ -260,24 +270,43 @@ class FormVersion(ImmutableFieldsMixin, AngeeDataModel, concrete=True):
         return validate_answers(self.definition, answers)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Number a new version after its form's last, and keep an unpublished one open to revision."""
+        """Number a new version after its form's last, and keep only an unpublished one open to revision.
 
-        if self._state.adding:
-            with transaction.atomic(using=kwargs.get("using")):
+        A new version is never born published. An existing row is locked first
+        and its STORED publication decides, whatever this instance says: a save
+        that began before a publish committed finds the version frozen.
+        """
+
+        with transaction.atomic(using=kwargs.get("using")):
+            if self._state.adding:
+                self.published_at = None
                 if not self.number:
                     _model("Form").system_queryset(lock=("self",)).filter(pk=self.form_id).first()
                     last = type(self)._base_manager.filter(form_id=self.form_id).aggregate(last=models.Max("number"))
                     self.number = (last["last"] or 0) + 1
-                super().save(*args, **kwargs)
-            return
-        if not self._published():
-            self.allow_immutable_save(*self.CONTENT_FIELDS)
-        super().save(*args, **kwargs)
+            else:
+                stored = list(
+                    type(self).system_queryset(lock=("self",)).filter(pk=self.pk).values_list("published_at", flat=True)
+                )
+                if stored == [None]:
+                    self.allow_immutable_save(*self.CONTENT_FIELDS)
+            super().save(*args, **kwargs)
 
-    def _published(self) -> bool:
-        """Whether the stored row is published, whatever this instance says."""
+    def _refuse_unready(self) -> None:
+        """Refuse publication while the definition, its translations or its personal-data statement fall short."""
 
-        return bool(type(self)._base_manager.filter(pk=self.pk, published_at__isnull=False).exists())
+        self.clean()
+        missing = missing_translations(
+            self.definition, languages=self.languages, default_language=self.default_language,
+        )
+        if missing:
+            raise ValidationError({
+                "definition": [f"{pointer}: not written in every language of the form." for pointer in missing],
+            })
+        if self.personal_questions is None:
+            raise ValidationError({
+                "personal_questions": "State which questions hold personal data, even if none do.",
+            })
 
     def publish(self) -> None:
         """Publish this version: its form serves it from now on, and it never changes again.
@@ -290,23 +319,16 @@ class FormVersion(ImmutableFieldsMixin, AngeeDataModel, concrete=True):
 
         self.require_access("write")
         with transaction.atomic():
+            # The form, then the version: the stored row is judged and stamped under its own lock,
+            # so what is published is what was checked, whatever this instance was loaded as.
             form = _model("Form").system_queryset(lock=("self",)).get(pk=self.form_id)
-            if not self._published():
-                self.clean()
-                missing = missing_translations(
-                    self.definition, languages=self.languages, default_language=self.default_language,
-                )
-                if missing:
-                    raise ValidationError({
-                        "definition": [f"{pointer}: not written in every language of the form." for pointer in missing],
-                    })
-                if self.personal_questions is None:
-                    raise ValidationError({
-                        "personal_questions": "State which questions hold personal data, even if none do.",
-                    })
-                self.allow_immutable_save("published_at")
-                self.published_at = timezone.now()
-                self.save(update_fields=["published_at", "updated_at"])
+            row = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+            if row.published_at is None:
+                row._refuse_unready()
+                row.allow_immutable_save("published_at")
+                row.published_at = timezone.now()
+                row.save(update_fields=["published_at", "updated_at"])
+            self.published_at = row.published_at
             if form.published_version_id != self.pk:
                 form.published_version_id = self.pk
                 form.save(update_fields=["published_version", "updated_at"])
