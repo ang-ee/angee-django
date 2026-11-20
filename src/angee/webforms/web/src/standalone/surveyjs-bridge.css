@@ -104,3 +104,59 @@
     padding-block: max(calc(var(--sjs2-layout-component-labeled-group-box-gap-vertical) / 2), 12px);
   }
 }
+
+/* Text that staff write as markup: an `html` element and the completed page.
+ * The page carries no reset, and SurveyJS sizes only some of these elements
+ * (`p`, `div`, `span` and `td`, at a 28px line), so a paragraph, a list item and
+ * a link could each come out differently. Stated once here: everything in a
+ * block reads at the body size on one line height, blocks are spaced by the
+ * block before them, and a link looks like one. A completed page that is one
+ * plain sentence keeps SurveyJS's own larger size. */
+.sjs-theme-overrides :is(.sd-html, .sd-completedpage:has(> *)) {
+  font-size: var(--sjs2-typography-font-size-default);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.sjs-theme-overrides :is(.sd-html, .sd-completedpage) :where(p, ul, ol, li, blockquote, div, span, td, a, strong, em) {
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.sjs-theme-overrides :is(.sd-html, .sd-completedpage) :where(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6) {
+  margin-block: 0;
+}
+
+.sjs-theme-overrides :is(.sd-html, .sd-completedpage) :where(p, ul, ol, blockquote) + :where(p, ul, ol, blockquote) {
+  margin-block-start: 0.75em;
+}
+
+.sjs-theme-overrides :is(.sd-html, .sd-completedpage) :where(ul, ol) {
+  padding-inline-start: 1.5em;
+}
+
+.sjs-theme-overrides :is(.sd-html, .sd-completedpage) ul {
+  list-style: disc;
+}
+
+.sjs-theme-overrides :is(.sd-html, .sd-completedpage) ol {
+  list-style: decimal;
+}
+
+.sjs-theme-overrides :is(.sd-html, .sd-completedpage) li + li {
+  margin-block-start: 0.25em;
+}
+
+.sjs-theme-overrides :is(.sd-html, .sd-completedpage) a {
+  color: var(--text-link);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.sjs-theme-overrides :is(.sd-html, .sd-completedpage) strong {
+  font-weight: var(--fw-semibold);
+}
+
+.sjs-theme-overrides :is(.sd-html, .sd-completedpage) em {
+  font-style: italic;
+}
