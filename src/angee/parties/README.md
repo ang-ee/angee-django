@@ -446,8 +446,11 @@ the person's own read): the same-person pairs the person may review between
 selected records (`selection_pairs`, the one rule), joined into connected groups,
 with the records that have no duplicate selected left out and counted; three to
 ten with no pair among them are one set, as selected, and above ten with none the
-dialog says what to do. A grouped list gives a set per group. The dialog lists
-the sets before anything merges. Only an active person account that writes every record may (the party's
+dialog says what to do. A grouped list gives a set per group. Under the list's
+"Select all N" (`selectAllMatching`), a list grouped by one text merge field
+gives every group its read matches, each a set, listed page by page through the
+list resource's own groups read (at most 1,000 a confirm). The dialog lists the
+sets before anything merges. Only an active person account that writes every record may (the party's
 `batch_merge` permission, `write & person->active_member`); a service or agent
 account merges nothing, and no agent tool offers it. A set never holds an account's
 own person (merged by hand, on the compare page), records of two kinds, a trashed

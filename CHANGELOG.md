@@ -889,7 +889,18 @@ live in code docstrings.
   (`PartyManager.selection_pairs`, the one rule of what makes two selected
   records one), joined into connected groups, the rest left out and counted;
   three to ten with no pair are one set, as selected, and above ten with none the
-  dialog says what to do.
+  dialog says what to do. Both lists opt in to the list's "Select all N"
+  (`selectAllMatching`): on a list grouped by one text merge field (People's
+  display, given or family name, Organizations' display name), Merge… opens the
+  dialog on every group the list's read matches, each group of two or more
+  records with a value one set grouped by that field. The dialog pages the list
+  resource's own groups read (`PeopleGroupSets`, `OrganizationGroupSets`, under
+  the reader's own read) with the list's read forwarded through
+  `groupByVariables`, fifty groups a request with each group's first eleven ids,
+  saying "Loaded N of M groups…"; it skips and counts groups of one and groups
+  without a value, previews the sets as any others and enables Confirm once every
+  page is listed and previewed, at most 1,000 sets with the rest stated. A flat
+  list, a date bucket, a relation or another field is refused with what to do.
 
 - Parties: `Party.objects.propose_same_person_as_system(left, right, *, evidence,
   reason)` lets an importer propose that two parties are one person, citing the

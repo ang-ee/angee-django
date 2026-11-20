@@ -254,6 +254,45 @@ export const CertainSameAsPairs = graphql(`
   }
 `);
 
+/**
+ * Every group of the People list's own groups read (`people_groups`, under the
+ * reader's read), a page at a time, each with its record count and first rows:
+ * the sets "Select all" merges. The variables are the list's read as
+ * `groupByVariables` turns it into wire variables, plus `rows_limit`. The key
+ * selects the text merge fields a set may be grouped by
+ * (`PEOPLE_MERGE_GROUPS.fields`).
+ */
+export const PeopleGroupSets = graphql(`
+  query PeopleGroupSets(
+    $group_by: [peopleGroupBySpec!]!, $where: people_bool_exp, $having: peopleHaving,
+    $order_by: [peopleGroupOrder!], $limit: Int, $offset: Int, $rows_limit: Int!
+  ) {
+    groups: people_groups(
+      group_by: $group_by, where: $where, having: $having, order_by: $order_by, limit: $limit, offset: $offset
+    ) {
+      key { display_name given_name family_name }
+      aggregate { count }
+      rows(limit: $rows_limit) { id }
+    }
+  }
+`);
+
+/** The Organizations list's own groups read, as `PeopleGroupSets` (`ORGANIZATION_MERGE_GROUPS.fields`). */
+export const OrganizationGroupSets = graphql(`
+  query OrganizationGroupSets(
+    $group_by: [organizationsGroupBySpec!]!, $where: organizations_bool_exp, $having: organizationsHaving,
+    $order_by: [organizationsGroupOrder!], $limit: Int, $offset: Int, $rows_limit: Int!
+  ) {
+    groups: organizations_groups(
+      group_by: $group_by, where: $where, having: $having, order_by: $order_by, limit: $limit, offset: $offset
+    ) {
+      key { display_name }
+      aggregate { count }
+      rows(limit: $rows_limit) { id }
+    }
+  }
+`);
+
 export const DuplicateSetPreviews = graphql(`
   query DuplicateSetPreviews($sets: [[ID!]!]!, $certain: Boolean = false, $groupings: [[String!]!]) {
     duplicate_set_previews(sets: $sets, certain: $certain, groupings: $groupings) {
@@ -367,6 +406,9 @@ export type MergePersonRecord = NonNullable<
 >;
 
 export type CertainSameAsPair = DocumentType<typeof CertainSameAsPairs>["certain_same_as_pairs"][number];
+/** A parties list's authored groups read, the one its "Select all" merges by. */
+export type GroupSetsDocument = typeof PeopleGroupSets | typeof OrganizationGroupSets;
+export type GroupSetsBucket = DocumentType<GroupSetsDocument>["groups"][number];
 export type DuplicateSetPreview = DocumentType<typeof DuplicateSetPreviews>["duplicate_set_previews"][number];
 export type DuplicateSetMember = DuplicateSetPreview["members"][number];
 export type DuplicateSetOutcome = DocumentType<typeof MergeDuplicates>["merge_duplicates"][number];

@@ -1,7 +1,9 @@
 import * as React from "react";
-import { ActionFormDialog, SelectionBarAction, useRouteHref, type SelectedGroup } from "@angee/ui";
+import type { Row } from "@angee/metadata";
+import { ActionFormDialog, SelectionBarAction, useRouteHref, type ListViewProps, type SelectedGroup } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 
+import { OrganizationGroupSets, PeopleGroupSets, type GroupSetsDocument } from "./documents";
 import { DuplicatesDialog, type DuplicateSetInput } from "./DuplicatesDialog";
 import { usePartiesT } from "./i18n";
 import { useMergeIntoAction } from "./merge-into";
@@ -13,6 +15,44 @@ import { useMergeIntoAction } from "./merge-into";
  * the review counts read (``same_as_pair_counts``), not a query of its own.
  */
 const BATCH_SETS = 50;
+
+/** "Select all N" as a list's `bulkActions` receives it (`collection.allMatching`). */
+type AllMatching = NonNullable<Parameters<NonNullable<ListViewProps<Row>["bulkActions"]>>[2]["allMatching"]>;
+
+/**
+ * What a parties list's "Select all" merges by: the list resource's own groups
+ * read, authored here (`PeopleGroupSets`, `OrganizationGroupSets`), and the
+ * fields a set may be grouped by, the text merge fields the dialog shows and
+ * marks (``Party.merge_scalar_fields_of``), which that read's `key` selects.
+ */
+export interface MergeGroupsRead {
+  document: GroupSetsDocument;
+  fields: readonly string[];
+}
+
+export const PEOPLE_MERGE_GROUPS: MergeGroupsRead = {
+  document: PeopleGroupSets, fields: ["display_name", "given_name", "family_name"],
+};
+
+export const ORGANIZATION_MERGE_GROUPS: MergeGroupsRead = { document: OrganizationGroupSets, fields: ["display_name"] };
+
+/**
+ * Whether "Select all" can merge what the list matched, and by which field: one
+ * group level whose single dimension is one of ``groups.fields`` (no date
+ * bucket, no relation, no other field), since each set is the records that share
+ * a value the dialog can show and mark. A flat list is refused with what to do.
+ */
+export function allMatchingField(
+  allMatching: AllMatching, groups: MergeGroupsRead,
+): { field: string } | { refused: "records" | "grouping" } {
+  if (allMatching.unit === "records") return { refused: "records" };
+  const [dimension, ...others] = allMatching.read.dimensions;
+  const field = dimension?.key ?? dimension?.input;
+  if (!field || others.length > 0 || dimension?.granularity || !groups.fields.includes(field)) {
+    return { refused: "grouping" };
+  }
+  return { field };
+}
 
 /**
  * Three or more ticked records as duplicate sets, by the list's grouping
@@ -71,18 +111,28 @@ export function selectionSplit(
  * sets `selectionSplit` reads from the list's grouping: on an ungrouped list the
  * duplicate sets the server finds among the selected records (the pairs between
  * them; three to ten with none are one set, as selected), on a grouped one a set
- * per group. When there is no set (a grouping the list
- * cannot place, or one that holds no group of two or more with a value), the verb
- * stays in the bar, disabled, with the reason (`disabledReason`). Navigation goes
- * through the router, whose app root keeps the current `?app=`.
+ * per group. Under "Select all N" (`allMatching`) the loaded ids do not count:
+ * a list grouped by one text merge field (`allMatchingField`) opens the dialog on
+ * every group its read matches, each group one set (`GroupListing`), and a flat
+ * list or another grouping is refused with what to do. When there is no set (a
+ * grouping the list cannot place, or one that holds no group of two or more with
+ * a value), the verb stays in the bar, disabled, with the reason
+ * (`disabledReason`). Navigation goes through the router, whose app root keeps
+ * the current `?app=`.
  */
 export function MergeSelectionAction({
   ids,
   selectedGroups,
+  allMatching,
+  groups,
   onMerged,
 }: {
   ids: ReadonlySet<string>;
   selectedGroups?: readonly SelectedGroup[] | null;
+  /** "Select all N": the selection is every record or group the list's read matches, not ``ids``. */
+  allMatching?: AllMatching;
+  /** What this list's "Select all" merges by. */
+  groups: MergeGroupsRead;
   onMerged?: () => void;
 }): React.ReactElement {
   const t = usePartiesT();
@@ -90,10 +140,12 @@ export function MergeSelectionAction({
   const routeHref = useRouteHref();
   const mergeInto = useMergeIntoAction();
   const [open, setOpen] = React.useState<"pick" | "batch" | null>(null);
-  const [first, second, ...rest] = ids;
+  // "Select all N" merges every group the list's read matches, each group one set; the loaded ids do not count.
+  const everyGroup = allMatching ? allMatchingField(allMatching, groups) : null;
+  const [first, second, ...rest] = allMatching ? [] : ids;
   const single = first !== undefined && second === undefined ? first : null;
   const pair = first !== undefined && second !== undefined && rest.length === 0 ? { left: first, right: second } : null;
-  const split = single || pair ? null : selectionSplit(ids, selectedGroups);
+  const split = single || pair || allMatching ? null : selectionSplit(ids, selectedGroups);
   const sets: readonly DuplicateSetInput[] = split?.kind === "ungrouped"
     ? []
     : split?.kind === "grouped" ? split.sets.slice(0, BATCH_SETS) : [];
@@ -108,16 +160,20 @@ export function MergeSelectionAction({
     : [];
   // An ungrouped selection of three or more: the server finds the duplicate sets among the selected records.
   const among = split?.kind === "ungrouped" && split.ids.length > 2 ? split.ids : null;
-  const reason = single || pair || among || sets.length > 0
-    ? undefined
-    : t(split?.kind === "unplaceable" ? "merge.selection.unplaceable" : "merge.selection.noGroups");
+  const reason = everyGroup
+    ? "refused" in everyGroup
+      ? t(everyGroup.refused === "records" ? "merge.selection.allRecords" : "merge.selection.allGrouping")
+      : undefined
+    : single || pair || among || sets.length > 0
+      ? undefined
+      : t(split?.kind === "unplaceable" ? "merge.selection.unplaceable" : "merge.selection.noGroups");
   return (
     <>
       <SelectionBarAction surface="brand" disabledReason={reason}
         onClick={() => {
           if (pair) void navigate({ to: routeHref("parties.merge", pair) });
           else if (single) setOpen("pick");
-          else if (among || sets.length > 0) setOpen("batch");
+          else if (everyGroup || among || sets.length > 0) setOpen("batch");
         }}>
         {t("merge.selection.action")}
       </SelectionBarAction>
@@ -133,6 +189,9 @@ export function MergeSelectionAction({
         <DuplicatesDialog
           sets={sets}
           selection={among ?? undefined}
+          allGroups={allMatching?.unit === "groups" && everyGroup && "field" in everyGroup
+            ? { document: groups.document, read: allMatching.read, total: allMatching.total, field: everyGroup.field }
+            : undefined}
           notes={notes}
           onClose={(merged) => {
             setOpen(null);
@@ -144,11 +203,26 @@ export function MergeSelectionAction({
   );
 }
 
-/** The selection verbs a parties list adds before the generic ones: Merge, told the list's grouping. */
-export function mergeSelectionActions(
-  ids: ReadonlySet<string>,
-  clear?: () => void,
-  collection?: { selectedGroups?: readonly SelectedGroup[] | null },
-): React.ReactElement {
-  return <MergeSelectionAction ids={ids} selectedGroups={collection?.selectedGroups} onMerged={clear} />;
+/**
+ * The selection verbs a parties list adds before the generic ones: Merge, told
+ * the list's grouping and, under "Select all N", the read it matched, merged by
+ * ``groups``. After a merge the selection clears, "Select all" with it.
+ */
+export function mergeSelectionActions(groups: MergeGroupsRead) {
+  return function mergeSelection(
+    ids: ReadonlySet<string>,
+    clear?: () => void,
+    collection?: { selectedGroups?: readonly SelectedGroup[] | null; allMatching?: AllMatching },
+  ): React.ReactElement {
+    return (
+      <MergeSelectionAction ids={ids} selectedGroups={collection?.selectedGroups} allMatching={collection?.allMatching}
+        groups={groups} onMerged={clear} />
+    );
+  };
 }
+
+/** The People list's selection verbs (`selectAllMatching`), merging by its own groups read. */
+export const peopleMergeSelectionActions = mergeSelectionActions(PEOPLE_MERGE_GROUPS);
+
+/** The Organizations list's selection verbs (`selectAllMatching`), merging by its own groups read. */
+export const organizationMergeSelectionActions = mergeSelectionActions(ORGANIZATION_MERGE_GROUPS);

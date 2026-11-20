@@ -211,6 +211,9 @@ export const enPartiesMessages: Record<string, string> = {
   "merge.selection.unplaceable":
     "This view cannot tell which group each selected record is in. Merge three or more from a grouped list, or clear the grouping.",
   "merge.selection.noGroups": "No group holds two or more selected records.",
+  "merge.selection.allRecords": "Group the list by what the duplicates share, then select all.",
+  "merge.selection.allGrouping":
+    "Select all merges records that share a name: group the list by a name field, not a date, a relation or another field, then select all.",
   "duplicates.title": "Merge duplicates",
   "duplicates.description": "Each set becomes one record: the oldest survives and the others fold into it.",
   "duplicates.valueRule":
@@ -251,6 +254,9 @@ export const enPartiesMessages: Record<string, string> = {
   "duplicates.loadedOf": "Loaded {loaded} of {total} sets…",
   "duplicates.totals": "{count} sets: {merge} will merge, {look} need a look.",
   "duplicates.firstOfAll": "This lists the first {count} of {total} certain pairs; run again for the rest.",
+  "duplicates.firstOfGroups": "This lists the first {count} of {total} groups; select all again after the merge for the rest.",
+  "duplicates.loadedGroupsOf": "Loaded {loaded} of {total} groups…",
+  "duplicates.unpairedAll": "Left out, with no one else in their group: {count}.",
   "duplicates.pagerUnit": "sets",
   "duplicates.progress": "{done} of {total} done.",
   "duplicates.runStopped": "Stopped: {done} of {total} done; the rest were not sent and nothing of them merged.",

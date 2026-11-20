@@ -1,6 +1,9 @@
 import * as React from "react";
 import { useResourceInvalidates } from "@angee/metadata";
-import { useAuthoredMutation, useAuthoredQuery, useInvalidateAuthoredModels } from "@angee/refine";
+import {
+  groupByVariables, useAuthoredMutation, useAuthoredQuery, useInvalidateAuthoredModels, type AuthoredDocument,
+  type GroupByRequestOptions,
+} from "@angee/refine";
 import { useInvalidate } from "@refinedev/core";
 import {
   Alert, Button, Checkbox, Chip, Dialog, ErrorBanner, LoadingPanel, NavLink, Pager, RowsListView, defaultWidgets,
@@ -16,6 +19,8 @@ import {
   SelectionDuplicateSets,
   type CertainSameAsPair,
   type DuplicateSetMember,
+  type GroupSetsBucket,
+  type GroupSetsDocument,
   type DuplicateSetOutcome,
   type DuplicateSetPreview,
 } from "./documents";
@@ -58,10 +63,85 @@ export interface DuplicateSetInput {
   grouping?: readonly { field: string; key: string | null }[];
 }
 
-/** One page of certain pairs as listed: the pair it continued after, and its pairs. */
-interface CertainPage {
+/**
+ * Every group a list's "Select all N" matched (`allMatching.read`, one group
+ * level): the dialog pages the list resource's own groups read with it, each
+ * group of two or more records with a value one set grouped by ``field``.
+ */
+export interface GroupListing {
+  /** The list resource's own groups read (`MergeGroupsRead.document`). */
+  document: GroupSetsDocument;
+  /** The list's read, forwarded as it is through `groupByVariables`. */
+  read: Readonly<Pick<GroupByRequestOptions, "where" | "dimensions" | "having">>;
+  /** How many groups the list matched (`allMatching.total`). */
+  total: number;
+  /** The text merge field the groups share: each set's grouping. */
+  field: string;
+}
+
+/**
+ * Each group's first rows: one more than the server's member cap
+ * (``PartyManager.SET_MEMBERS``, ten), so a larger group reaches the preview
+ * whole enough to be refused there, as any set over the cap is.
+ */
+const GROUP_ROWS = 11;
+
+/** What one page of a paged source answers: certain pairs, or a list's groups. */
+type ListedData = { certain_same_as_pairs: readonly CertainSameAsPair[] } | { groups: readonly GroupSetsBucket[] };
+
+/** One page a paged source listed: what it read, how many items it held, the sets they gave and who was left out. */
+interface ListedPage {
+  request: string;
+  items: number;
+  sets: readonly DuplicateSetInput[];
+  /** The last certain pair, which the next page continues after. */
   after: string | null;
-  pairs: readonly CertainSameAsPair[];
+  /** Records in a group of one, and in a group without a value: never a set. */
+  unpaired: number;
+  blank: number;
+}
+
+/** The wire variables of one page of the list's groups: its read as it is, in the list's order, with each group's rows. */
+function groupSetsVariables(groups: GroupListing, page: number): Record<string, unknown> {
+  return {
+    ...groupByVariables({
+      ...groups.read,
+      orderBy: [{ field: groups.field, direction: "ASC", nulls: "LAST" }],
+      page: page + 1,
+      pageSize: SETS_PAGE,
+    }),
+    rows_limit: GROUP_ROWS,
+  };
+}
+
+/** One answered page as sets: each certain pair, or each group of two or more records with a value. */
+function listedPage(
+  data: ListedData, request: string, field: string | undefined, t: ReturnType<typeof usePartiesT>,
+): ListedPage {
+  if ("certain_same_as_pairs" in data) {
+    const pairs = data.certain_same_as_pairs;
+    return {
+      request, items: pairs.length, after: pairs.at(-1)?.id ?? null, unpaired: 0, blank: 0,
+      sets: pairs.map((pair) => ({
+        members: [pair.left.id, pair.right.id],
+        heading: t("review.sameAs.certainHeading", {
+          left: pair.left.display_name, right: pair.right.display_name, address: pair.normalized_value,
+        }),
+      })),
+    };
+  }
+  const sets: DuplicateSetInput[] = [];
+  let unpaired = 0;
+  let blank = 0;
+  for (const group of data.groups) {
+    const value = field ? (group.key as Record<string, unknown>)[field] : null;
+    const key = typeof value === "string" ? value : null;
+    // A blank-looking key is left out as blank, as a ticked group's is: everyone without a value sits in it.
+    if (key === null || key.trim() === "") blank += group.aggregate.count;
+    else if (group.aggregate.count < 2) unpaired += group.aggregate.count;
+    else sets.push({ members: group.rows.map((row) => row.id), heading: key, grouping: [{ field: field!, key }] });
+  }
+  return { request, items: data.groups.length, after: null, unpaired, blank, sets };
 }
 
 /** One confirmed run: the sets as confirmed, their outcomes as the chunks answer, and how it ended. */
@@ -87,6 +167,8 @@ export interface DuplicatesDialogProps {
    * is then unused and each set is re-checked as certain.
    */
   allCertain?: { total: string };
+  /** Every group a list's "Select all N" matched (`GroupListing`); ``sets`` is then unused. */
+  allGroups?: GroupListing;
   /** The Review page's certain pairs: each set is re-checked as still certain when merged. */
   certain?: boolean;
   /**
@@ -122,15 +204,15 @@ export interface DuplicatesDialogProps {
  * `merge_duplicates`); the dialog only shows.
  */
 export function DuplicatesDialog({
-  sets: opened = NO_SETS, selection, allCertain, certain: certainOnly = false, notes: given = [], onClose,
+  sets: opened = NO_SETS, selection, allCertain, allGroups, certain: certainOnly = false, notes: given = [], onClose,
 }: DuplicatesDialogProps): React.ReactElement {
   const t = usePartiesT();
   const everyCertain = allCertain !== undefined;
   const certain = certainOnly || everyCertain;
-  // The dialog lists the sets it opened with, those found once among a selection, or every certain pair page by page;
-  // a caller's later reads never change what is confirmed.
+  // The dialog lists the sets it opened with, those found once among a selection, or every certain pair or every
+  // group a list matched, page by page; a caller's later reads never change what is confirmed.
   const [found, setFound] = React.useState<readonly DuplicateSetInput[] | null>(
-    selection || everyCertain ? null : opened,
+    selection || everyCertain || allGroups ? null : opened,
   );
   const derived = useAuthoredQuery(SelectionDuplicateSets, { ids: [...(selection ?? [])] }, {
     enabled: selection !== undefined && found === null,
@@ -139,36 +221,40 @@ export function DuplicatesDialog({
   React.useEffect(() => {
     if (found === null && among) setFound(among.sets.map((members) => ({ members })));
   }, [among, found]);
-  // Every certain pair: one page after another, each continuing after the last pair of the page before.
-  const [pairPages, setPairPages] = React.useState<readonly CertainPage[]>([]);
-  const lastPairs = pairPages.at(-1);
-  const listedPairs = pairPages.reduce((count, page) => count + page.pairs.length, 0);
-  const pairsDone = lastPairs !== undefined && (lastPairs.pairs.length < SETS_PAGE || listedPairs >= CONFIRM_SETS);
-  const pairsAfter = lastPairs ? lastPairs.pairs.at(-1)?.id ?? null : null;
-  const pairs = useAuthoredQuery(CertainSameAsPairs, { limit: SETS_PAGE, after: pairsAfter }, {
-    enabled: everyCertain && !pairsDone, errorNotification: false,
+  // Every certain pair, or every group the list's read matched: one page after another, at most CONFIRM_SETS sets.
+  const paged = everyCertain || allGroups !== undefined;
+  const [pages, setPages] = React.useState<readonly ListedPage[]>([]);
+  const lastPage = pages.at(-1);
+  const pagedSets = React.useMemo(() => pages.flatMap((page) => page.sets).slice(0, CONFIRM_SETS), [pages]);
+  const itemsRead = pages.reduce((count, page) => count + page.items, 0);
+  const pagesDone = lastPage !== undefined && (
+    lastPage.items < SETS_PAGE || pagedSets.length >= CONFIRM_SETS || (allGroups !== undefined && itemsRead >= allGroups.total)
+  );
+  const pageVariables = allGroups
+    ? groupSetsVariables(allGroups, pages.length)
+    : { limit: SETS_PAGE, after: lastPage?.after ?? null };
+  const request = JSON.stringify(pageVariables);
+  const listingDocument: AuthoredDocument = allGroups?.document ?? CertainSameAsPairs;
+  // The one cast at the schema boundary: a resource's groups read takes its own `group_by` enum, as the list sends it.
+  const pageRead = useAuthoredQuery(listingDocument, pageVariables as never, {
+    enabled: paged && !pagesDone, errorNotification: false,
   });
-  const pairsPage = pairs.data?.certain_same_as_pairs;
+  // Only a paged dialog lists pages: a disabled read may still answer from the cache.
+  const pageData = paged ? pageRead.data as ListedData | undefined : undefined;
+  const groupField = allGroups?.field;
   React.useEffect(() => {
-    if (!pairsPage || pairsDone) return;
-    setPairPages((pages) => (pages.some((page) => page.after === pairsAfter) ? pages : [
-      ...pages, { after: pairsAfter, pairs: pairsPage },
-    ]));
-  }, [pairsAfter, pairsDone, pairsPage]);
-  const certainSets = React.useMemo<readonly DuplicateSetInput[]>(
-    () => pairPages.flatMap((page) => page.pairs).slice(0, CONFIRM_SETS).map((pair) => ({
-      members: [pair.left.id, pair.right.id],
-      heading: t("review.sameAs.certainHeading", {
-        left: pair.left.display_name, right: pair.right.display_name, address: pair.normalized_value,
-      }),
-    })),
-    [pairPages, t],
-  );
+    if (!pageData || pagesDone) return;
+    setPages((listed) => (listed.some((page) => page.request === request)
+      ? listed
+      : [...listed, listedPage(pageData, request, groupField, t)]));
+  }, [groupField, pageData, pagesDone, request, t]);
   const sets = React.useMemo(
-    () => (everyCertain ? certainSets : (found ?? NO_SETS).slice(0, CONFIRM_SETS)),
-    [certainSets, everyCertain, found],
+    () => (paged ? pagedSets : (found ?? NO_SETS).slice(0, CONFIRM_SETS)),
+    [found, paged, pagedSets],
   );
-  const listed = everyCertain ? pairsDone : found !== null;
+  const listed = paged ? pagesDone : found !== null;
+  const unpaired = pages.reduce((count, page) => count + page.unpaired, 0);
+  const blank = pages.reduce((count, page) => count + page.blank, 0);
   const notes = [
     ...given,
     ...(among?.explicit ? [t("duplicates.explicitSet")] : []),
@@ -178,9 +264,14 @@ export function DuplicatesDialog({
     ...(among && among.left_out > 0 && among.sets.length > 0
       ? [t("duplicates.leftOutUnpaired", { count: String(among.left_out) })]
       : []),
-    // At the bound with a full last page, more certain pairs may wait: the next run lists them.
-    ...(allCertain && pairsDone && listedPairs >= CONFIRM_SETS && lastPairs?.pairs.length === SETS_PAGE
+    ...(unpaired > 0 ? [t("duplicates.unpairedAll", { count: formatNumber(unpaired) })] : []),
+    ...(blank > 0 ? [t("duplicates.blank", { count: formatNumber(blank) })] : []),
+    // At the bound with more left to read, the next run lists the rest.
+    ...(allCertain && pagesDone && pagedSets.length >= CONFIRM_SETS && lastPage?.items === SETS_PAGE
       ? [t("duplicates.firstOfAll", { count: formatNumber(CONFIRM_SETS), total: allCertain.total })]
+      : []),
+    ...(allGroups && pagesDone && pagedSets.length >= CONFIRM_SETS && itemsRead < allGroups.total
+      ? [t("duplicates.firstOfGroups", { count: formatNumber(CONFIRM_SETS), total: formatNumber(allGroups.total) })]
       : []),
   ];
   // The fields each set was grouped by, names only, when the list grouped any: the preview returns their rows.
@@ -329,19 +420,23 @@ export function DuplicatesDialog({
             <Alert tone="info">{t("duplicates.valueRule")} {t("duplicates.undo")}</Alert>
             {notes.map((note) => <Alert key={note} tone="info">{note}</Alert>)}
             {derived.error ? <ErrorBanner description={derived.error.message || t("duplicates.error")} /> : null}
-            {preview.error || pairs.error ? (
+            {preview.error || pageRead.error ? (
               <ErrorBanner
                 description={t(live.length > 0 ? "duplicates.pageError" : "duplicates.error")}
                 actions={
                   <Button type="button" size="sm" variant="secondary"
-                    onClick={() => void (pairs.error ? pairs.refetch() : preview.refetch())}>
+                    onClick={() => void (pageRead.error ? pageRead.refetch() : preview.refetch())}>
                     {t("duplicates.retry")}
                   </Button>
                 }
               />
             ) : null}
             {run ? <RunLine run={run} /> : null}
-            {!run && !loaded && live.length > 0 ? (
+            {!run && !loaded && allGroups && !pagesDone && itemsRead > 0 ? (
+              <Alert tone="info">
+                {t("duplicates.loadedGroupsOf", { loaded: formatNumber(itemsRead), total: formatNumber(allGroups.total) })}
+              </Alert>
+            ) : !run && !loaded && live.length > 0 ? (
               <Alert tone="info">
                 {t("duplicates.loadedOf", {
                   loaded: formatNumber(live.length),
@@ -349,7 +444,7 @@ export function DuplicatesDialog({
                 })}
               </Alert>
             ) : null}
-            {!run && loaded && live.length > 0 && (everyCertain || live.length > SETS_PAGE) ? (
+            {!run && loaded && live.length > 0 && (paged || live.length > SETS_PAGE) ? (
               <Alert tone="info">
                 {t("duplicates.totals", {
                   count: formatNumber(live.length),
@@ -358,7 +453,7 @@ export function DuplicatesDialog({
                 })}
               </Alert>
             ) : null}
-            {(preview.isFetching || derived.isFetching || pairs.isFetching) && previews.length === 0
+            {(preview.isFetching || derived.isFetching || pageRead.isFetching) && previews.length === 0
               ? <LoadingPanel loadingLabel={t("duplicates.loading")} />
               : null}
             {previews.length > SHOWN_SETS ? (

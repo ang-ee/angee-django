@@ -1,12 +1,12 @@
 import * as React from "react";
 import { Column, ResourceList, List } from "@angee/ui";
-import { mergeSelectionActions } from "./merge-selection";
+import { organizationMergeSelectionActions } from "./merge-selection";
 import { organizationForm } from "./OrganizationForm";
 
 const MODEL = "parties.Organization";
 
 const organizationsList = (
-  <List resource={MODEL} bulkActions={mergeSelectionActions}>
+  <List resource={MODEL} bulkActions={organizationMergeSelectionActions} selectAllMatching>
     <Column field="display_name" />
     <Column field="domain" />
     <Column field="created_at" />
