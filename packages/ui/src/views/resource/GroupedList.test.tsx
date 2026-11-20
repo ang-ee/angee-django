@@ -9,6 +9,7 @@ import { expect, test, vi } from "vitest";
 
 import { GroupedListBody } from "./GroupedList";
 import { ResourceViewProvider, useResourceView } from "./resource-view-context";
+import { idsFromRowSelectionState } from "./resource-view-codecs";
 import { estimateGroupedItemSize, groupMeasuresFromColumns, RecordRow, type GroupedListItem } from "./resource-view-list-body";
 import type { ColumnDescriptor } from "../page";
 
@@ -47,7 +48,7 @@ function Harness({ pending = false, actions = false, columns = defaultColumns, o
       table={table} tableColumns={tableColumns} visibleColumnCount={columns.length}
       resourceView={resourceView} listItems={listItems} tableScrollRef={tableScrollRef}
       rowVirtualizer={rowVirtualizer} footerAggregate={null} measures={groupMeasuresFromColumns(columns)} expandedKeys={new Set(["january"])}
-      toggleGroup={onToggle} setGroupsExpanded={() => undefined} setScopePage={onPageChange} setScopePageSize={onPageSizeChange} selectedIds={new Set()} interactive
+      toggleGroup={onToggle} setGroupsExpanded={() => undefined} setScopePage={onPageChange} setScopePageSize={onPageSizeChange} selectedIds={idsFromRowSelectionState(resourceView.state.rowSelection)} interactive
       renderRowActions={actions ? () => null : undefined} emptyContent="Empty" fetching={false} error={null}
     />
   );
@@ -183,7 +184,7 @@ function GroupedRecordHarness({ selectable, expanded = true, onSetExpanded = () 
       resourceView={resourceView} listItems={listItems} tableScrollRef={tableScrollRef}
       rowVirtualizer={rowVirtualizer} footerAggregate={null} measures={[]} expandedKeys={new Set(["january"])}
       toggleGroup={() => undefined} setGroupsExpanded={onSetExpanded} setScopePage={() => undefined} setScopePageSize={() => undefined}
-      selectedIds={new Set()} interactive emptyContent="Empty" fetching={false} error={null}
+      selectedIds={idsFromRowSelectionState(resourceView.state.rowSelection)} interactive emptyContent="Empty" fetching={false} error={null}
     />
   );
 }
@@ -266,7 +267,7 @@ test("grouped lists select a whole group or every loaded row, and a near miss on
   expect(view.state.rowSelection).toEqual({ r1: true });
 });
 
-test("a collapsed group's checkbox is disabled until its rows are loaded", () => {
+test("a collapsed group's checkbox is disabled until its rows are loaded, and says why", () => {
   render(
     <ResourceViewProvider scope="local">
       <GroupedRecordHarness selectable expanded={false} />
@@ -274,4 +275,6 @@ test("a collapsed group's checkbox is disabled until its rows are loaded", () =>
   );
   const group = screen.getByRole("checkbox", { name: "Select the loaded rows in January" });
   expect(group.getAttribute("aria-disabled") ?? group.getAttribute("data-disabled")).not.toBeNull();
+  expect(document.getElementById(group.getAttribute("aria-describedby") ?? "")?.textContent)
+    .toBe("Expand the group to change its selection");
 });

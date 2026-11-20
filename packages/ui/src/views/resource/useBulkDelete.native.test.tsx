@@ -22,6 +22,33 @@ const { Provider, clearClients } = createUiTestProviders({
 });
 afterEach(() => { cleanup(); clearClients(); });
 
+test("a runner given a reason refuses to run, so no verb acts on the rows while every match is selected", async () => {
+  const custom = vi.fn(async () => ({ data: { notes_delete: preview } }));
+  const perform = vi.fn(async () => undefined);
+  let bulk!: ReturnType<typeof useBulkAction>;
+  let deletion!: UseBulkDeleteResult;
+  function Record({ reason }: { reason: string | null }) {
+    bulk = useBulkAction(resource, vi.fn(), reason);
+    deletion = useBulkDelete(resource.modelLabel, new Set(["one"]), bulk);
+    return null;
+  }
+  const tree = (reason: string | null) => <Provider dataProvider={{ custom }}><OperationDocumentsProvider documents={documents}>
+    <ToastProvider><Record reason={reason} /></ToastProvider>
+  </OperationDocumentsProvider></Provider>;
+  const mounted = render(tree("Every note is selected, not these rows."));
+  expect(bulk.reason).toEqual({ disabledReason: "Every note is selected, not these rows." });
+  await act(async () => {
+    deletion.deleteInitiate();
+    await bulk.run({ ids: ["one"], perform, done: () => "Done", failed: () => "Failed" });
+  });
+  expect(custom).not.toHaveBeenCalled();
+  expect(perform).not.toHaveBeenCalled();
+  // Without a reason it runs again.
+  mounted.rerender(tree(null));
+  await act(async () => { await bulk.run({ ids: ["one"], perform, done: () => "Done", failed: () => "Failed" }); });
+  expect(perform).toHaveBeenCalledWith("one");
+});
+
 test.each(["preview", "success", "refusal", "failure"])("a late delete %s after unmount cannot close the record or notify", async (outcome) => {
   let finish!: () => void;
   const pending = new Promise<void>((resolve) => { finish = resolve; });

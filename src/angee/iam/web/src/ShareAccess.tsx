@@ -165,10 +165,11 @@ export function ShareListChrome(): React.ReactElement | null {
   return <ShareAccess
     resource={list.resource}
     targetIds={[...(list.selectedIds ?? [])].sort()}
+    disabledReason={list.disabledReason}
   />;
 }
 
-export interface ShareAccessDialogProps extends Pick<ManageAccessDialogProps, "open" | "onOpenChange" | "trigger" | "compact"> {
+export interface ShareAccessDialogProps extends Pick<ManageAccessDialogProps, "open" | "onOpenChange" | "trigger" | "compact" | "disabledReason"> {
   resource: string;
   targetIds: readonly string[];
   record?: Row | null;
@@ -196,7 +197,7 @@ export function ShareAccessDialog({ resource, targetIds, ...props }: ShareAccess
   />;
 }
 
-function BoundShareAccess({ resource, targetIds, record, label: suppliedLabel, open, onOpenChange, trigger, compact, roleEntries, visibilityEntries }: Omit<ShareAccessDialogProps, "resource"> & {
+function BoundShareAccess({ resource, targetIds, record, label: suppliedLabel, open, onOpenChange, trigger, compact, disabledReason, roleEntries, visibilityEntries }: Omit<ShareAccessDialogProps, "resource"> & {
   resource: DataResourceMetadata;
   roleEntries: ReturnType<typeof useContainer<AccessRoleContribution>>;
   visibilityEntries: ReturnType<typeof useContainer>;
@@ -337,6 +338,7 @@ function BoundShareAccess({ resource, targetIds, record, label: suppliedLabel, o
     <ManageAccessDialog
     open={open}
     compact={compact}
+    disabledReason={disabledReason}
     onOpenChange={onOpenChange}
     {...(trigger === undefined ? {} : { trigger })}
     {...(label === undefined ? {} : { label })}

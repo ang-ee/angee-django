@@ -20,6 +20,7 @@ from rebac import PermissionDenied, RelationshipTuple, actor_context, system_con
 from rebac.actors import to_subject_ref
 from rebac.roles import grant as grant_role
 
+from angee.base.hooks import resolve_hooks
 from angee.base.models import merge as merge_module
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.identity import public_id_of
@@ -639,6 +640,44 @@ def test_a_record_an_unfinished_run_works_on_refuses_its_merge(execution: Any) -
     with actor_context(curator):
         Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
     assert _tagged_parties(mobile) == sorted([ada.pk, bob.pk])
+
+
+@pytest.mark.usefixtures("workflow_step_classes")
+def test_no_registered_merge_guard_names_the_record_in_its_reason(execution: Any) -> None:
+    """A guard's reason reaches the merge dialog and any log of the refusal: it names the record by public id.
+
+    Every guard ``ANGEE_MERGE_GUARDS`` registers on this host is triggered here, on a record whose name is personal
+    data; a guard added later fails this test until its refusal is triggered here too, and then meets the same rule.
+    """
+
+    actor, _ = execution
+    name = "Zephyrine Quillfeather"
+    with system_context(reason="merge guard reasons"):
+        record = Tag.objects.create(name=name)
+    workflow = Workflow.objects.install_definition(
+        key="merge_guard_reasons", name="Merge guard reasons", draft=document("entry"), actor=actor,
+    )
+
+    def seeded() -> None:
+        with system_context(reason="merge guard reasons ledger"):
+            Resource.objects.create(
+                source_addon="angee.tags", source_path="resources/install/tags.yaml", tier=Resource.Tier.INSTALL,
+                xref="zephyrine", content_hash="sha256:" + "0" * 64,
+                target_model=Tag._meta.label, target_id=public_id_of(record),
+            )
+
+    def working() -> None:
+        WorkflowRun.objects.start(workflow, actor=actor, subject=record)
+
+    triggers = {"seeded_record_merge_guard": seeded, "unfinished_run_merge_guard": working}
+    guards = resolve_hooks("ANGEE_MERGE_GUARDS")
+    assert sorted(guard.__name__ for guard in guards) == sorted(triggers)
+    for guard in guards:
+        assert guard(record) is None
+        triggers[guard.__name__]()
+        reason = guard(record)
+        assert reason is not None and public_id_of(record) in reason
+        assert name not in reason and "Zephyrine" not in reason
 
 
 def test_the_shared_verb_merges_a_mergeable_type_and_refuses_another() -> None:

@@ -23,6 +23,18 @@ import { ALIGN_CLASS, GROUP_ROW_HEIGHT, RECORD_ROW_HEIGHT } from "./types";
 import type { GroupMeasure, VisibleFieldOption } from "./types";
 import { useVirtualWindow, VirtualPaddingRow } from "./virtualization";
 import { useRuntimeViewAs } from "../../../runtime";
+import type { ResourceListResult } from "../surface/types";
+/** "Select all N" in the list's bar (`ListViewProps.selectAllMatching`). */
+export interface ListSelectionMatching {
+  /** The records or groups the list's read matches, as its pager counts them. */
+  total: number;
+  unit: ResourceListResult["pageUnit"];
+  /** The selection is all of them: the bar reads "All N selected". */
+  selected: boolean;
+  /** Offers "Select all N"; absent when it is not offered. */
+  onSelectAll?: () => void;
+}
+
 /** The list's bulk-selection band over the shared `SelectionBar`, flush with the table top.
  * @owner SelectionBar
  */
@@ -31,22 +43,36 @@ export function ListSelectionBar({
   onClear,
   onDelete,
   deletePending = false,
+  deleteDisabledReason,
   pending = false,
   actions: extraActions,
+  matching,
 }: {
   count: number;
   onClear: () => void;
   onDelete?: () => void;
   deletePending?: boolean;
+  /** Why Delete must not run (`Button.disabledReason`); null is none yet, keeping its tree for one to come. */
+  deleteDisabledReason?: React.ReactNode;
   pending?: boolean;
   /** Caller-supplied bulk actions rendered before the built-in Delete/Clear. */
   actions?: React.ReactNode;
+  matching?: ListSelectionMatching;
 }): React.ReactElement {
   const t = useUiT();
   const preview = useRuntimeViewAs();
   const previewBlocked = Boolean(preview.viewAs || preview.pending);
+  const groups = matching?.unit === "groups";
+  // Choosing "Select all N" unmounts it: focus stays in the bar, on Clear.
+  const clear = React.useRef<HTMLElement>(null);
   const actions = (
     <>
+      {matching?.onSelectAll ? (
+        <SelectionBarPrimitive.Action surface="brand" disabled={pending}
+          onClick={() => { matching.onSelectAll?.(); clear.current?.focus(); }}>
+          {t(groups ? "list.selectAllMatchingGroups" : "list.selectAllMatchingRecords", { count: matching.total })}
+        </SelectionBarPrimitive.Action>
+      ) : null}
       {extraActions}
       {onDelete ? (
         <SelectionBarPrimitive.Action
@@ -54,13 +80,14 @@ export function ListSelectionBar({
           tone="danger"
           pending={deletePending}
           disabled={previewBlocked || pending}
+          {...(deleteDisabledReason === undefined ? {} : { disabledReason: deleteDisabledReason })}
           onClick={() => { if (!previewBlocked) onDelete(); }}
         >
           <Glyph name="trash" />
           {t("selection.delete")}
         </SelectionBarPrimitive.Action>
       ) : null}
-      <SelectionBarPrimitive.Action surface="brand" disabled={pending} onClick={onClear}>
+      <SelectionBarPrimitive.Action ref={clear} surface="brand" disabled={pending} onClick={onClear}>
         {t("selection.clear")}
       </SelectionBarPrimitive.Action>
     </>
@@ -69,7 +96,9 @@ export function ListSelectionBar({
     <SelectionBarPrimitive
       className="min-h-11 w-full rounded-none border-b border-border-subtle shadow-none"
       count={count}
-      countLabel={t("selection.countSelected", { count })}
+      countLabel={matching?.selected
+        ? t(groups ? "list.allMatchingGroupsSelected" : "list.allMatchingRecordsSelected", { count: matching.total })
+        : t("selection.countSelected", { count })}
       actions={actions}
     />
   );

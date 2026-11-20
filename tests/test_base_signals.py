@@ -6,7 +6,7 @@ from collections.abc import Iterator, Mapping
 from typing import Any
 
 import pytest
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 
 from angee.base import signals
@@ -112,3 +112,78 @@ def test_published_changes_copy_mutable_values_and_keep_immutable_ones() -> None
     assert values is not None
     assert values["settlements"] == [{"status": "done"}]
     assert values["updated_at"] is stamped
+
+
+def _stored(*titles: str) -> list[TrashRow]:
+    return [TrashRow._base_manager.create(title=title) for title in titles]
+
+
+def test_a_collecting_mute_observes_each_committed_row_once_after_the_outermost_commit(
+    db: None,
+    observed: list[tuple[str, tuple[str, ...] | None]],
+    django_capture_on_commit_callbacks: Any,
+) -> None:
+    """The block keeps keys, not rows; ``publish`` observes each once, in pk order, as a full update, after commit."""
+
+    del db
+    first, second = _stored("first", "second")
+    observed.clear()
+    written = signals.MutedChanges()
+
+    with django_capture_on_commit_callbacks(execute=True):
+        with transaction.atomic():
+            with signals.mute_changes(collect=written):
+                for row in (second, first, second):
+                    signals.publish_change(row, action="update", update_fields=("title",))
+                signals.publish_bulk_update(TrashRow, instances=(first,), update_fields=("title",))
+            written.publish()
+            assert observed == []
+
+    assert observed == [(str(first.pk), None), (str(second.pk), None)]
+
+
+def test_a_collecting_mute_drops_the_rows_of_a_block_that_rolled_back(
+    db: None,
+    observed: list[tuple[str, tuple[str, ...] | None]],
+    django_capture_on_commit_callbacks: Any,
+) -> None:
+    del db
+    kept, undone = _stored("kept", "undone")
+    observed.clear()
+    written = signals.MutedChanges()
+
+    with django_capture_on_commit_callbacks(execute=True):
+        with signals.mute_changes(collect=written):
+            signals.publish_change(kept, action="update", update_fields=None)
+            with pytest.raises(RuntimeError), transaction.atomic():
+                signals.publish_change(undone, action="update", update_fields=None)
+                raise RuntimeError("the set rolled back")
+        written.publish()
+
+    assert observed == [(str(kept.pk), None)]
+
+
+def test_an_ordinary_mute_still_collects_nothing_even_inside_a_collecting_one(
+    db: None,
+    observed: list[tuple[str, tuple[str, ...] | None]],
+    django_capture_on_commit_callbacks: Any,
+) -> None:
+    """A caller that mutes on purpose and publishes its own summary is unchanged; no-transport writes stay muted."""
+
+    del db
+    inner, outer, silent, plain = _stored("inner", "outer", "silent", "plain")
+    observed.clear()
+    written = signals.MutedChanges()
+
+    with django_capture_on_commit_callbacks(execute=True):
+        with signals.mute_changes(collect=written):
+            with signals.mute_changes():
+                signals.publish_change(inner, action="update", update_fields=None)
+            signals.publish_change(outer, action="update", update_fields=None)
+            signals.publish_change(silent, action="update", update_fields=None, broadcast=False)
+        with signals.mute_changes():
+            signals.publish_change(plain, action="update", update_fields=None)
+        written.publish()
+
+    assert observed == [(str(outer.pk), None)]
+

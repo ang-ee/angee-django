@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useResourceInvalidates } from "@angee/metadata";
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import {
   Avatar, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Chip, Collapsible, ComparisonRows, CountBadge, EmptyState, ErrorBanner,
@@ -10,6 +11,7 @@ import { useCanGoBack, useNavigate, useRouter } from "@tanstack/react-router";
 import {
   MergeParties,
   PARTY_MERGE_INVALIDATES,
+  PARTY_MERGE_RESOURCES,
   PartyMergeComparison,
   DismissSameAs,
   type MergePartyRecord,
@@ -172,11 +174,15 @@ export function MergePage(): React.ReactElement {
     enabled: Boolean(leftId && rightId && leftId !== rightId),
     models: PARTY_MERGE_INVALIDATES,
   });
+  // A merge or a keep-apart moves the authored reads and the resource lists (rows and totals) of these models.
+  const invalidates = useResourceInvalidates(PARTY_MERGE_RESOURCES);
   const [merge, mergeState] = useAuthoredMutation(MergeParties, {
     invalidateModels: PARTY_MERGE_INVALIDATES,
+    invalidates,
   });
   const [dismiss, dismissState] = useAuthoredMutation(DismissSameAs, {
     invalidateModels: PARTY_MERGE_INVALIDATES,
+    invalidates,
   });
   const [survivor, setSurvivor] = React.useState<MergeSide>("left");
   const [fieldChoices, setFieldChoices] = React.useState<Partial<Record<string, MergeSide>>>({});

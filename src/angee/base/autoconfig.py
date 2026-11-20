@@ -44,7 +44,8 @@ SETTINGS: _Settings = {
     "STATIC_URL": "/static/",
     "MEDIA_URL": "/media/",
     "ANGEE_REBAC_FORCE_OVERWRITE": False,
-    # Additive guards refuse removal before one record is folded into another.
+    # Additive guards refuse removal before one record is folded into another; a guard's
+    # reason names the record by public id, never by name (``angee.base.models.merge``).
     "ANGEE_MERGE_GUARDS": [],
     "REBAC_LOCAL_BACKEND_STORAGE": "registry",
     "REBAC_STRICT_MODE": True,
