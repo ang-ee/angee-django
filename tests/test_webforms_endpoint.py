@@ -10,6 +10,7 @@ import json
 from typing import Any
 
 import pytest
+from django.conf import settings
 from django.core.cache import cache
 from django.http import Http404
 from django.test import RequestFactory, override_settings
@@ -29,7 +30,14 @@ DEFINITION = {
     ],
 }
 ANSWERS = {"name": "Ada Example", "email": "ada@example.test"}
-ADDRESS = "/forms/w/semilla"
+ADDRESS = "/forms/semilla"
+BOUNDS = {
+    "ANGEE_WEBFORM_MAX_BODY_BYTES": 65_536,
+    "ANGEE_WEBFORM_RATE_LIMIT_BURST": 10,
+    "ANGEE_WEBFORM_RATE_LIMIT_WINDOW": 60,
+    "ANGEE_WEBFORM_HONEYPOT_FIELD": "_website",
+    "ANGEE_WEBFORM_TOKEN_HOOK": "",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -56,12 +64,12 @@ def form() -> Any:
 
 
 def describe(alias: str = "semilla") -> Any:
-    return views.public_form(RequestFactory().get(f"/forms/w/{alias}", HTTP_ACCEPT="application/json"), alias=alias)
+    return views.public_form(RequestFactory().get(f"/forms/{alias}", HTTP_ACCEPT="application/json"), alias=alias)
 
 
 def submit(body: Any, alias: str = "semilla", **extra: Any) -> Any:
     request = RequestFactory().post(
-        f"/forms/w/{alias}", data=json.dumps(body) if not isinstance(body, str) else body,
+        f"/forms/{alias}", data=json.dumps(body) if not isinstance(body, str) else body,
         content_type=extra.pop("content_type", "application/json"), **extra,
     )
     return views.public_form(request, alias=alias)
@@ -69,6 +77,13 @@ def submit(body: Any, alias: str = "semilla", **extra: Any) -> Any:
 
 def envelope(**changed: Any) -> dict[str, Any]:
     return {"submission_id": "r-1", "version": 1, "language": "en", "answers": ANSWERS, **changed}
+
+
+def admits_the_first_receipt(request: Any, payload: Any) -> bool:
+    """A token hook, named by dotted path in the tests below."""
+
+    del request
+    return bool(payload["submission_id"] == "r-1")
 
 
 def kept(form: Any) -> list[Any]:
@@ -113,7 +128,7 @@ def test_a_submission_is_kept_once_and_a_resend_is_accepted_again(form: Any) -> 
     again = submit(envelope(answers={**ANSWERS, "name": "Someone Else"}))
 
     assert (first.status_code, again.status_code) == (202, 202)
-    assert json.loads(first.content) == {"submission_id": "r-1"}
+    assert json.loads(first.content) == json.loads(again.content) == {"submission_id": "r-1"}
     (row,) = kept(form)
     assert (row.answers, row.language, row.submission_id) == (ANSWERS, "en", "r-1")
 
@@ -183,21 +198,30 @@ def test_a_body_past_the_bound_is_refused(form: Any) -> None:
     assert kept(form) == []
 
 
-def test_each_bound_of_the_endpoint_is_declared_by_exactly_one_addon() -> None:
-    """The interim, and how it ends.
+def test_a_declared_token_hook_decides_which_submissions_are_kept(form: Any) -> None:
+    with override_settings(ANGEE_WEBFORM_TOKEN_HOOK=f"{__name__}.admits_the_first_receipt"):
+        admitted = submit(envelope())
+        refused = submit(envelope(submission_id="r-2"))
 
-    While messaging has a public form path of its own it declares these settings,
-    and the view carries the same values only for a host without messaging. The
-    commit that removes messaging's path moves the declarations to this addon and
-    deletes the view's copy: the addon must not read another addon's settings on
-    a main. This fails if either half is done without the other.
-    """
+    assert (admitted.status_code, refused.status_code) == (202, 403)
+    assert json.loads(refused.content)["error"] == "invalid_token"
+    assert [row.submission_id for row in kept(form)] == ["r-1"]
+
+
+def test_a_token_hook_that_cannot_be_loaded_closes_the_form(form: Any) -> None:
+    with override_settings(ANGEE_WEBFORM_TOKEN_HOOK="builtins.Ellipsis"):
+        response = submit(envelope())
+
+    assert (response.status_code, json.loads(response.content)["error"]) == (503, "guard_unavailable")
+    assert kept(form) == []
+
+
+def test_each_bound_of_the_endpoint_is_declared_by_exactly_one_addon() -> None:
+    """The addon whose address reads a bound declares it; messaging, which has no form address, declares none."""
 
     from angee.messaging import autoconfig as messaging
     from angee.webforms import autoconfig as webforms
 
-    moved = [name in webforms.SETTINGS for name in views._BOUNDS] if hasattr(views, "_BOUNDS") else []
-    for name in getattr(views, "_BOUNDS", ()):
-        assert (name in messaging.SETTINGS) != (name in webforms.SETTINGS), name
-    assert not any(moved), "the addon declares its bounds now: delete the view's interim copy"
-
+    assert {name: value for name, value in webforms.SETTINGS.items() if name in BOUNDS} == BOUNDS
+    assert not BOUNDS.keys() & messaging.SETTINGS.keys()
+    assert {name: getattr(settings, name) for name in BOUNDS} == BOUNDS

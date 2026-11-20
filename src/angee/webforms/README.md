@@ -106,9 +106,7 @@ last one the response stays failed until staff deliver or dismiss it.
 
 ## The public address
 
-A form answers at `forms/w/<alias>` (`PUBLIC_PREFIX` in [`urls.py`](urls.py)).
-The prefix is an interim one: `forms/<slug>` is messaging's public form path
-until that path is removed, and one path has one owner.
+A form answers at `forms/<alias>` (`PUBLIC_PREFIX` in [`urls.py`](urls.py)).
 
 - `GET` describes the version the form serves now: `form`, `alias`, `version`
   (its number), `definition`, `languages`, `default_language`, `language` (the
@@ -119,8 +117,9 @@ until that path is removed, and one path has one owner.
   The shared guard (`angee.server.ingress`) runs first: JSON only, a body cap, a
   rate limit per sender and address, no undeclared key, the honeypot, an
   optional token hook. Then `Response.objects.receive` keeps it.
-  - `202 {"submission_id"}`: kept, or already kept under that id. A filled
-    honeypot gets the same answer and keeps nothing.
+  - `202 {"submission_id"}`: kept, or already kept under that id. A resend gets
+    this answer and nothing more: never the answers it sent before, nor an id of
+    the response. A filled honeypot gets the same answer and keeps nothing.
   - `400 {"error": "invalid_submission", "fields": {<name>: [messages]}}`: each
     refusal under its question's name, or under `version` or `submission_id`.
   - `409 {"error": "form_changed"}`: the answers are to a version the form no
@@ -128,8 +127,18 @@ until that path is removed, and one path has one owner.
   - A refusal by the guard is `{"error": <code>, "message"}` with its status
     (`413`, `415`, `429` with `Retry-After`, `403`, `503`).
 
-The bounds are the `ANGEE_WEBFORM_*` settings (body bytes, rate-limit burst and
-window, honeypot field, token hook).
+The addon declares the bounds, and a deployment may change them:
+
+| Setting | Default | Bounds |
+|---|---|---|
+| `ANGEE_WEBFORM_MAX_BODY_BYTES` | `65536` | The size of one request body |
+| `ANGEE_WEBFORM_RATE_LIMIT_BURST` | `10` | Submissions per sender and address in one window |
+| `ANGEE_WEBFORM_RATE_LIMIT_WINDOW` | `60` | The window, in seconds |
+| `ANGEE_WEBFORM_HONEYPOT_FIELD` | `_website` | The decoy field; empty turns it off |
+| `ANGEE_WEBFORM_TOKEN_HOOK` | empty | A dotted `(request, payload) -> bool` that admits a submission |
+
+A token hook that cannot be loaded closes every form (`503`) and fails the
+system check `angee.E033`.
 
 ## What a response becomes
 

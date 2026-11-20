@@ -101,7 +101,7 @@ also covers [review waiters](../tests/test_workflows_review.py), their
 [locking races](../tests/test_agent_sessions_concurrency.py), plus
 [connection discovery races](../tests/test_integrate_discovery_concurrency.py),
 [cross-addon reply and inbound joins](../tests/test_framework_integration.py),
-[delivery contracts with their sweep, claim-fence and held-action races and webform submission
+[delivery contracts with their sweep, claim-fence and held-action
 races](../tests/test_composed_messaging.py), and the
 [comment reply workflow and scheduling races](../tests/test_composed_workflows.py). The selection
 also runs every remaining PostgreSQL-only contract: row locks, hierarchy, IAM,

@@ -3,8 +3,8 @@
 One address serves two requests. ``GET`` describes the version the form serves
 now, for the public page to render. ``POST`` keeps one submission, and is the
 only anonymous write: the shared guard runs in full before anything is read,
-then :meth:`~angee.webforms.models.ResponseManager.receive` rechecks the form
-under its lock, judges the answers by the published version and keeps the
+then :meth:`~angee.webforms.models.ResponseManager.receive` decides whether the
+form takes it, judges the answers by the published version and keeps the
 response. Nothing here decides what a submission becomes.
 """
 
@@ -33,21 +33,6 @@ from angee.server.ingress import (
 from angee.webforms.models import FormChanged, FormUnavailable
 from angee.webforms.validators import ENVELOPE_FIELDS, validate_submission_id
 
-# The endpoint's bounds are the ``ANGEE_WEBFORM_*`` settings. Messaging's autoconfig declares
-# them while its own public form path exists, and one setting has one declaring addon, so
-# until that path is removed these are only the values a host without messaging gets.
-_BOUNDS = {
-    "ANGEE_WEBFORM_MAX_BODY_BYTES": 65_536,
-    "ANGEE_WEBFORM_RATE_LIMIT_BURST": 10,
-    "ANGEE_WEBFORM_RATE_LIMIT_WINDOW": 60,
-    "ANGEE_WEBFORM_HONEYPOT_FIELD": "_website",
-    "ANGEE_WEBFORM_TOKEN_HOOK": "",
-}
-
-
-def _bound(name: str) -> Any:
-    return getattr(settings, name, _BOUNDS[name])
-
 
 @csrf_exempt
 @require_http_methods(["GET", "POST"])
@@ -55,7 +40,7 @@ def public_form(request: HttpRequest, alias: str) -> JsonResponse:
     """Describe the form at ``alias``, or keep one submission to it."""
 
     if request.method == "GET":
-        served = _serving(alias)
+        served = _address(alias, serving=True)
         version = served.form.published_version
         response = JsonResponse(
             {
@@ -86,10 +71,11 @@ def public_form(request: HttpRequest, alias: str) -> JsonResponse:
     if checked.dropped:
         return JsonResponse({"submission_id": submission_id}, status=202)
 
-    served = _serving(alias)
+    # Whether the form takes this submission is its owner's to say, so the address alone is resolved here.
+    form = _address(alias, serving=False).form
     try:
         apps.get_model("webforms", "Response").objects.receive(
-            served.form, version=number, submission_id=submission_id,
+            form, version=number, submission_id=submission_id,
             language=checked.payload.get("language"), answers=checked.payload.get("answers"),
         )
     except ValidationError as error:
@@ -103,37 +89,37 @@ def public_form(request: HttpRequest, alias: str) -> JsonResponse:
     return JsonResponse({"submission_id": submission_id}, status=202)
 
 
-def _serving(alias: str) -> Any:
-    """Return the alias of a form that takes submissions now, with its form and published version."""
+def _address(alias: str, *, serving: bool) -> Any:
+    """Return the address ``alias`` with its form; with ``serving``, only while that form takes submissions."""
 
-    aliases = apps.get_model("webforms", "FormAlias")
+    aliases = apps.get_model("webforms", "FormAlias").objects
     with system_context(reason=f"webforms.public_form.{alias}.resolve"):
-        served = aliases.objects.serving().select_related("form", "form__published_version").filter(
-            slug=alias,
-        ).first()
-    if served is None:
+        found = (aliases.serving() if serving else aliases.all()).select_related(
+            "form", "form__published_version",
+        ).filter(slug=alias).first()
+    if found is None:
         raise Http404
-    return served
+    return found
 
 
 def _policy(alias: str) -> AnonymousIngressPolicy:
-    honeypot = str(_bound("ANGEE_WEBFORM_HONEYPOT_FIELD") or "")
+    """Return the guard's bounds for one address, from the ``ANGEE_WEBFORM_*`` settings."""
+
+    honeypot = str(settings.ANGEE_WEBFORM_HONEYPOT_FIELD or "")
     return AnonymousIngressPolicy(
-        max_body_bytes=int(_bound("ANGEE_WEBFORM_MAX_BODY_BYTES")),
+        max_body_bytes=int(settings.ANGEE_WEBFORM_MAX_BODY_BYTES),
         allowed_fields=frozenset({*ENVELOPE_FIELDS, honeypot} if honeypot else ENVELOPE_FIELDS),
         honeypot_field=honeypot or None,
         rate_limit=AnonymousIngressRateLimit(
             scope=f"webforms.public_form.{alias}",
-            burst=int(_bound("ANGEE_WEBFORM_RATE_LIMIT_BURST")),
-            window_seconds=int(_bound("ANGEE_WEBFORM_RATE_LIMIT_WINDOW")),
+            burst=int(settings.ANGEE_WEBFORM_RATE_LIMIT_BURST),
+            window_seconds=int(settings.ANGEE_WEBFORM_RATE_LIMIT_WINDOW),
         ),
         token_hook=_token_hook(),
     )
 
 
 def _token_hook() -> AnonymousIngressTokenHook | None:
-    if not _bound("ANGEE_WEBFORM_TOKEN_HOOK"):
-        return None
     try:
         return resolve_hook("ANGEE_WEBFORM_TOKEN_HOOK")
     except ImproperlyConfigured as error:

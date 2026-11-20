@@ -24,6 +24,7 @@ from angee.base.exceptions import RecordAccessSubjectRefused
 from angee.base.models.locks import StaleRevisionError
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import authored_documents, graphql_request
+from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 
 
@@ -106,7 +107,50 @@ class ChannelIntakeCaptureTests(TransactionTestCase):
         self.assertIs(type(channel), apps.get_model("messaging", "Channel"))
         self.assertEqual(channel.pk, self.channel.pk)
 
+    def test_refused_confirmed_sender_retains_capture_and_source_attachment(self):
+        with system_context(reason="test confirmed sender"):
+            self.channel.intake_queue = self.queue
+            self.channel.save(update_fields=("intake_queue",))
+            party = apps.get_model("parties", "Party").objects.for_user(self.actor)
+            handle = apps.get_model("parties", "Handle").objects.upsert(
+                platform="email",
+                value="customer@example.com",
+                created_by_id=self.actor.pk,
+            )
+            party.with_actor(self.actor).confirm_statement(aspect="handle", handle=handle, values={})
+        task_model = apps.get_model("projects", "Task")
+        with patch.object(
+            task_model, "validate_record_access_subject", side_effect=RecordAccessSubjectRefused()
+        ) as hook:
+            (message,) = self.ingest()
+        hook.assert_called()
+        need = self.Need._base_manager.get()
+        self.assertEqual(need.source_message_id, message.pk)
+        self.assertIsNone(need.party_id)
+        self.assertTrue(task_model._base_manager.filter(pk=need.task_id).exists())
+        self.assertTrue(
+            apps.get_model("messaging", "ThreadAttachment")
+            ._base_manager.filter(
+                thread_id=message.thread_id,
+            )
+            .exists()
+        )
+
+
+FORM_ANSWERS = {"name": "Alex Requester", "subject": "New request", "email": "alex@example.com", "size": 3}
+
+
+class FormCaptureTests(TransactionTestCase):
+    """A web form's responses, posted on a webform channel by the bridge, captured as requests."""
+
+    def setUp(self):
+        ChannelIntakeCaptureTests.setUp(self)
+        # A received response enqueues its delivery after commit; the tests deliver it themselves.
+        self.enterContext(patch.object(celery_app, "send_task"))
+
     def webform(self, *, domains=()):
+        """A webform channel with an intake queue, and the published form that posts on it."""
+
         with system_context(reason="test form setup"):
             apps.get_model("integrate", "Vendor").objects.get_or_create(
                 slug="webform",
@@ -116,42 +160,48 @@ class ChannelIntakeCaptureTests(TransactionTestCase):
                 self.actor,
                 name="Request form",
                 backend_class="webform",
-                slug="request-form",
-                form_schema={
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string"},
-                        "subject": {"type": "string"},
-                        "email": {"type": "string", "widget": "email"},
-                        "size": {"type": "integer"},
-                    },
-                },
             )
             channel.intake_queue = self.queue
             channel.intake_field_map = {"title": "subject", "claimed_name": "name", "estimate": "size"}
             channel.intake_requester_domains = list(domains)
             channel.full_clean()
             channel.save()
+            self.form = apps.get_model("webforms", "Form").objects.create(
+                name="Request form",
+                target_class="message",
+                target_config={"channel": channel.sqid, "slug": "request-form"},
+            )
+            apps.get_model("webforms", "FormVersion").objects.create(
+                form=self.form,
+                definition={
+                    "elements": [
+                        {"type": "text", "name": "name"},
+                        {"type": "text", "name": "subject"},
+                        {"type": "text", "name": "email", "inputType": "email"},
+                        {"type": "text", "name": "size", "inputType": "number"},
+                    ],
+                },
+                languages=["en"],
+                default_language="en",
+                personal_questions=["name", "email"],
+                contact_question="email",
+            ).publish()
         return channel
 
-    def submit(self, channel, key="form-1"):
-        parsed = channel.webform_message(
-            submission_id=key,
-            answers={
-                "name": "Alex Requester",
-                "subject": "New request",
-                "email": "alex@example.com",
-                "size": 3,
-            },
+    def submit(self, channel, key="form-1", answers=None):
+        """Receive one submission to the channel's form and deliver it; return its message."""
+
+        response, _made = apps.get_model("webforms", "Response").objects.receive(
+            self.form, version=1, submission_id=key, language="en", answers=answers or FORM_ANSWERS,
         )
-        with system_context(reason="test form ingest"):
-            return self.Message.objects.ingest([parsed], channel=channel)
+        return response.deliver()
 
     def test_webform_captures_claims_and_mapped_fields_on_an_ownerless_task(self):
         channel = self.webform()
-        (message,) = self.submit(channel)
+        message = self.submit(channel)
         self.submit(channel)
         need = self.Need._base_manager.get()
+        self.assertEqual(message.channel_id, channel.pk)
         self.assertEqual(need.source_message_id, message.pk)
         self.assertEqual((need.claimed_name, need.claimed_email), ("Alex Requester", "alex@example.com"))
         self.assertEqual((need.task.title, need.task.estimate), ("New request", 3))
@@ -207,42 +257,17 @@ class ChannelIntakeCaptureTests(TransactionTestCase):
         self.assertTrue(task_model._base_manager.filter(pk=need.task_id).exists())
         self.assertFalse(get_user_model()._base_manager.filter(email="alex@example.com").exists())
 
-    def test_refused_confirmed_sender_retains_capture_and_source_attachment(self):
-        with system_context(reason="test confirmed sender"):
-            self.channel.intake_queue = self.queue
-            self.channel.save(update_fields=("intake_queue",))
-            party = apps.get_model("parties", "Party").objects.for_user(self.actor)
-            handle = apps.get_model("parties", "Handle").objects.upsert(
-                platform="email",
-                value="customer@example.com",
-                created_by_id=self.actor.pk,
-            )
-            party.with_actor(self.actor).confirm_statement(aspect="handle", handle=handle, values={})
-        task_model = apps.get_model("projects", "Task")
-        with patch.object(
-            task_model, "validate_record_access_subject", side_effect=RecordAccessSubjectRefused()
-        ) as hook:
-            (message,) = self.ingest()
-        hook.assert_called()
-        need = self.Need._base_manager.get()
-        self.assertEqual(need.source_message_id, message.pk)
-        self.assertIsNone(need.party_id)
-        self.assertTrue(task_model._base_manager.filter(pk=need.task_id).exists())
-        self.assertTrue(
-            apps.get_model("messaging", "ThreadAttachment")
-            ._base_manager.filter(
-                thread_id=message.thread_id,
-            )
-            .exists()
-        )
-
-    def test_programming_error_rolls_back_ingest(self):
+    def test_programming_error_rolls_back_the_message_and_its_request(self):
         channel = self.webform()
         with patch.object(self.Message, "webform_submission", side_effect=TypeError("Invalid contract")):
-            with self.assertRaisesMessage(TypeError, "Invalid contract"):
+            # The response's own verb raises what its owner makes of a failed delivery.
+            with self.assertRaises(Exception):
                 self.submit(channel)
         self.assertEqual(self.Message._base_manager.count(), 0)
         self.assertEqual(self.Need._base_manager.count(), 0)
+        response = apps.get_model("webforms", "Response")._base_manager.get()
+        self.assertEqual(response.delivery, "failed")
+        self.assertIn("TypeError", response.delivery_error)
 
 
 class IntakeAccessCase(TransactionTestCase):
