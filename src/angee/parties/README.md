@@ -68,12 +68,19 @@ carries the time its source says the record was created (`ParsedContact.created_
 kept in the payload beside the compared projection, so it is never a change to
 apply); a person the contact makes takes it, and a contact landing on a person that
 exists moves the person's earlier when it is earlier, never later, as a merge moves
-its survivor's to the earliest of what it folds in (`Party.backdate_creation`, the
-one writer). Every provision runs `backdate_parties_from_sources`
-(`PartyManager.backdate_from_sources`): each party takes the earliest of its own
-and its directory records' stored times, and a record whose payload states none is
-counted and left for its next read from the source. Its line gives those counts and,
-when it moved any, the earliest and latest new time: no name or id.
+its survivor's to the earliest of what it folds in (`Party.backdate_creation`, through
+the one rule `PartyManager.backdate_creation`). A contact re-read unchanged, which
+integrate settles without applying it, moves its person too
+(`DirectoryBackend.on_revalidated`, from the payload just stored; a merged record's
+link names its survivor). So on an instance whose contacts were read before they
+carried their time, people move as the directory reads them again: the daily sweep
+re-reads every contact, and a Resync or a change at the source reads one sooner.
+Every provision runs `backdate_parties_from_sources`
+(`PartyManager.backdate_from_sources`), the catch-up for payloads already holding a
+time: each party takes the earliest of its own and its directory records' stored
+times, and a record whose payload states none is counted and left for its next read
+from the source. Its line gives those counts and, when it moved any, the earliest
+and latest new time: no name or id.
 
 A consumer addon fills its own person columns from a pull-only directory's
 source fields in code, with a [directory mapping](backends.py)

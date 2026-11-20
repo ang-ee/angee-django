@@ -84,9 +84,12 @@ A contact's person carries the time HubSpot says the record was created (its
 `createdAt`, which every read states): a person the contact makes takes it as its
 `created_at`, and a contact landing on a person that exists moves the person's
 earlier when it is earlier, never later (`Party.backdate_creation`). A record read
-before a contact carried that time has none in its stored payload; provision's
-`backdate_parties_from_sources` counts it, and the record's next read from HubSpot
-stores it.
+before a contact carried that time has none in its stored payload. Its next read
+from HubSpot stores it and moves the person, changed or not: the daily sweep
+re-reads every contact by id, so within a day of a deploy every person carries
+HubSpot's time, and a Resync of the contacts stream (a baseline) or a change at
+HubSpot reads a contact sooner. Provision's `backdate_parties_from_sources` is the
+catch-up for payloads that already hold a time.
 
 ## Mapping custom properties
 

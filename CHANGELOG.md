@@ -10,7 +10,7 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
-- `angee.base`, `angee.parties`, `angee.knowledge`, `angee.parties_integrate_hubspot`:
+- `angee.base`, `angee.integrate`, `angee.parties`, `angee.knowledge`, `angee.parties_integrate_hubspot`:
   a record a bridge creates carries its source's creation date. `created_at` is a
   `CreatedAtField` (`angee.base.models.timestamps`): Django's `auto_now_add`, except
   that an insert keeps a time its creating owner stated for it with
@@ -22,7 +22,10 @@ live in code docstrings.
   - A person a directory contact makes is dated by the source (HubSpot's
     `createdAt`), and a party's date is the earliest its provenance states: a
     contact landing on a younger person, or a merge folding an older record into a
-    younger survivor, moves it earlier, never later (`Party.backdate_creation`).
+    younger survivor, moves it earlier, never later (`Party.backdate_creation`). A
+    contact re-read unchanged moves its person the same way: an adapter's
+    `on_revalidated` may now project, from the payload just stored, a fact its change
+    comparison leaves out, idempotently and without applying the record.
   - A batch merge's "oldest record survives" now means the record its sources have
     known longest, not the one imported here first.
   - The People and Organizations lists' Created column, its sort and its grouping
@@ -36,12 +39,16 @@ live in code docstrings.
   - Handles, statements and record links keep the moment they were recorded;
     registrations and orders state no date until their owner reads an arrival
     stamp of its own.
-  Upgrade: no migration. Every provision runs `backdate_parties_from_sources`,
-  moving each party back to the earliest creation time its directory records'
-  stored payloads state; a record stored before a contact carried its time is
-  counted and gains it on its next read from the source. Its provision line gives
-  the counts (moved, already as old, records stating no time) and, when it moved
-  any, the earliest and latest new time, never a name or an id. Requires
+  Upgrade: no migration. A contact read before this release has no time in its
+  stored payload: its next read from the source stores it and moves its person,
+  changed or not. The daily sweep re-reads every contact, so within a day of the
+  deploy, while the directory syncs, every person carries the earliest time its
+  sources state; a Resync of the contacts stream, or a change at the source, reads
+  a contact sooner. Every provision also runs `backdate_parties_from_sources`, the
+  catch-up for payloads already holding a time; its line gives the counts (moved,
+  already as old, records stating no time) and, when it moved any, the earliest and
+  latest new time, never a name or an id, so it is not the total of what moved.
+  Requires
   `strawberry-django-aggregates` 0.15.0 (the GraphQL manifest's floor), which
   aggregates the created-time field as the `DateTimeField` it stores: with
   0.14.1 a grouping by `created_at` loses its type and date buckets.
