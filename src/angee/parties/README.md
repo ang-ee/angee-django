@@ -465,26 +465,26 @@ directory, whose owner is a platform admin, adopts the people it names), keeping
 separate), but merges none: a merge retires the party merged away to the
 trash, so `Party.MERGED_PERMISSION` is `merge_away`, which is that party's
 write with `role_merge_away` (the contact admin) in place of `role_manage`
-(pending the architect's ruling; `role_manage` there lets a manager merge, and
-so trash, without restoring); a
+(`role_manage` there would let a manager merge, and so trash, without
+restoring); a
 **contact admin** (`contact_admin`) also deletes and transfers as an owner
 does, which is where trashing a party sits (its `delete`), grants per-record
 reads on a party or handle (their `share`, which backs `rebac_grantable`: a
-grant outlives its granter's role, so `role_share` is the contact admin, pending
-the architect's ruling; `role_manage` there lets a manager grant), reads every directory
+grant outlives its granter's role, so `role_share` is the contact admin;
+`role_manage` there would let a manager grant), reads every directory
 and shares who reads its contacts (`parties/directory#share`). Connecting,
 changing and removing a directory stay with its integration's writers and
 platform admins. Each choice a deployment's architect may flip is one line in
 `parties/party`: `role_private` (whether a contact reader reads private fields)
 and `role_delete` (whether a contact manager trashes, and with it deletes, a
 party, person or organization; the dependent rows, folders and circles stay with
-the contact admin through `role_admin` and their own constants), and
-the four pending rulings named here, `role_write_as_subject`,
-`role_merge_away`, `role_share` and `role_withheld`. A role holder also reads the record tasks about every party
+the contact admin through `role_admin` and their own constants), and the four
+decided here, `role_write_as_subject`, `role_merge_away`, `role_share` and
+`role_withheld`. A role holder also reads the record tasks about every party
 (`read_as_subject`) and sees people with an account in pickers, but writes,
 shares, deletes and transfers none of those tasks: `role_write_as_subject` is
-empty (pending the architect's ruling; `role_manage` there would lend a contact
-manager and admin the tasks' write). Parties grants
+empty (`role_manage` there would lend a contact manager and admin the tasks'
+write). Parties grants
 the roles to nobody: a deployment grants membership in the Permissions Hub, which
 lists them as Contact Reader, Contact Manager and Contact Admin, or with a
 `kind = "grants"` resource row (`{resource: "parties/role:contact_manager",
@@ -493,9 +493,9 @@ colleague's, `Person.user` set) the roles read the identity and no more:
 `parties/party#role_withheld` subtracts that person from every role arm beyond
 `role_identity`, so no role reads their private fields, handles, addresses,
 relationships, circle memberships or record tasks, or writes, merges, shares,
-deletes, transfers or adopts them; pickers still show them (pending the architect's
-ruling: the person is the user's own, which adoption lends no directory either;
-`nil` there gives an account's person the same reach as any other). A
+deletes, transfers or adopts them; pickers still show them. The person is the
+user's own, which adoption lends no directory either; `nil` there gives an
+account's person the same reach as any other. A
 directory's contact readers keep exactly what they read without the roles.
 Adding an address or relationship to a party takes write on that party
 (`create` on `parties/address` and `parties/relationship` in [permissions.zed](permissions.zed)):

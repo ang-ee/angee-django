@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 40
+// @rebac_schema_revision: 41
 
 // Parties, folders and circles are grant roots: each is owned through its
 // transferable `owner` column (OwnerMixin), which an insert defaults to the row's
@@ -73,10 +73,10 @@ definition parties/party {
     permission role_admin_any = contact_admin->effective_member
     permission role_manage_any = contact_manager->effective_member + role_admin_any
     permission role_identity = contact_reader->effective_member + role_manage_any
-    // Pending ruling: an account's own person is the user's, which adoption lends no directory either, so
-    // the roles read their identity and no more: no private field, handle, address, relationship, circle
-    // membership or record task of theirs, and no write, merge, share, delete or transfer. `nil` here lets
-    // the roles hold on an account's person what they hold on any other.
+    // An account's own person is the user's, which adoption lends no directory either, so the roles read
+    // their identity and no more: no private field, handle, address, relationship, circle membership or
+    // record task of theirs, and no write, merge, share, delete or transfer. One line a deployment's
+    // architect may flip: `nil` here lets the roles hold on an account's person what they hold on any other.
     permission role_withheld = account_person->free
     permission role_admin = role_admin_any - role_withheld
     permission role_manage = role_manage_any - role_withheld
@@ -91,14 +91,17 @@ definition parties/party {
     // (`parties/person#adopt`): the roles' stored members, without the admin reach of `effective_member`,
     // and never an account's own person (`role_withheld`), whom adoption refuses anyway.
     permission role_adopt = (contact_manager->member + contact_admin->member) - role_withheld
-    // Pending ruling: the roles read the record tasks about a party (`read_as_subject`) and write none;
-    // `role_manage` here lets a contact manager and admin write, share, delete and transfer them.
+    // The roles read the record tasks about a party (`read_as_subject`) and write none. One line a
+    // deployment's architect may flip: `role_manage` here lets a contact manager and admin write, share,
+    // delete and transfer them.
     permission role_write_as_subject = nil
-    // Pending ruling: merging a party away retires it to the trash (`Party.MERGED_PERMISSION`), which the
-    // roles leave to the contact admin (`role_admin`); `role_manage` here lets a contact manager merge, and so trash.
+    // Merging a party away retires it to the trash (`Party.MERGED_PERMISSION`), which the roles leave to
+    // the contact admin (`role_admin`). One line a deployment's architect may flip: `role_manage` here lets
+    // a contact manager merge, and so trash.
     permission role_merge_away = role_admin
-    // Pending ruling: a per-record grant outlives the role of whoever made it, so the roles leave granting
-    // reads on a party or handle (`share`) to the contact admin; `role_manage` here lets a contact manager grant.
+    // A per-record grant outlives the role of whoever made it, so the roles leave granting reads on a party
+    // or handle (`share`) to the contact admin. One line a deployment's architect may flip: `role_manage`
+    // here lets a contact manager grant.
     permission role_share = role_admin
 
     permission create = authenticated

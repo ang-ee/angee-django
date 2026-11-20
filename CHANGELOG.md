@@ -25,16 +25,20 @@ live in code docstrings.
   connecting a directory stays with platform admins. Each choice is one line in
   `parties/party`: `role_private` (a contact reader reads private fields: yes),
   `role_delete` (a contact manager trashes a party, person or organization,
-  which is `delete`: no), and, pending
-  the architect's ruling, `role_write_as_subject`, `role_merge_away`,
-  `role_share` and `role_withheld`. The batch merge's gate becomes
+  which is `delete`: no), `role_write_as_subject` (the roles read record tasks
+  about a party and write none), `role_merge_away` and `role_share` (merging a
+  party away and granting per-record reads are a contact admin's) and
+  `role_withheld` (of an account's own person the roles read the identity
+  alone). The batch merge's gate becomes
   `batch_merge = merge_away & person->active_member`, so a contact manager, who
-  merges no party away, is offered no set. Revision 40.
+  merges no party away, is offered no set. A deployment that grants the platform
+  admins' set onto a contact role makes every directory adopt, as documented and
+  tested. Revision 41.
   `angee.knowledge`: the people vault takes the roles by install grant rows on
   `knowledge/vault` relations named for them (`contact_reader`,
   `contact_manager`, `contact_admin`); a contact admin removes the vault's
-  pages through the new `knowledge/vault#page_delete`, never the vault (pending
-  ruling). Knowledge revision 11, extends revision 8. Nobody holds a role until
+  pages through the new `knowledge/vault#page_delete`, never the vault.
+  Knowledge revision 11, extends revision 9. Nobody holds a role until
   a deployment grants it. Upgrade: `rebac sync`; load the install tier.
 - `angee.parties`: the batch dialog lists every group a list's "Select all N"
   matched by key, not by offset. It forwards the list's own groups read as the

@@ -139,7 +139,7 @@ MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
         "read__notes": (*ROLE_HOLDERS, "owner", "editor", "platform"),
         "read__birthday": (*ROLE_HOLDERS, "owner", "editor", "platform"),
         "write": (*WRITERS, "editor"),
-        # Merging away retires to the trash: through the roles, the contact admin's (pending ruling).
+        # Merging away retires to the trash: through the roles, the contact admin's.
         "merge_away": (*ADMINS, "editor"),
         "delete": ADMINS,
         # The person's owner column moves with its party's transfer.
@@ -180,7 +180,7 @@ MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
     "vault": {
         "read": (*ROLE_HOLDERS, "platform"),
         "write": ("manager", "admin", "group manager", "platform"),
-        # A contact admin removes the vault's pages, never the vault (pending ruling, knowledge/vault#page_delete).
+        # A contact admin removes the vault's pages, never the vault (knowledge/vault#page_delete).
         "delete": ("platform",),
         "share": ("platform",),
         "transfer": ("platform",),
@@ -192,7 +192,7 @@ MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
         "delete": ("admin", "platform"),
     },
     # A record task about the party (its own owner is someone else): the party lends its per-record holders what
-    # they hold on it, and the roles read it but write none (pending ruling, parties/party#role_write_as_subject).
+    # they hold on it, and the roles read it but write none (parties/party#role_write_as_subject).
     "task": {
         "read": (*ROLE_HOLDERS, "owner", "editor", "platform"),
         "write": ("owner", "editor", "platform"),
@@ -201,7 +201,7 @@ MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
         "transfer": ("owner", "editor", "platform"),
     },
     # A colleague's own person (the contacts' owner keeps it): the roles read their identity and no more
-    # (pending ruling, parties/party#role_withheld).
+    # (parties/party#role_withheld).
     "account person": {
         "read": (*ROLE_HOLDERS, "owner", "platform"),
         "read_private": ("owner", "platform"),
@@ -269,7 +269,7 @@ def test_a_role_holder_sees_a_person_nobody_shared_with_them_and_their_pages(wor
 
 def test_a_manager_keeps_people_separate_and_confirms_and_a_contact_admin_merges(world: SimpleNamespace) -> None:
     """The review verbs ride the party's write; a merge trashes the party merged away, so the roles leave it to the
-    contact admin (pending ruling, parties/party#role_merge_away)."""
+    contact admin (parties/party#role_merge_away)."""
 
     w = world
     reader, manager, admin = (w.holders[role] for role in ROLES)
@@ -343,7 +343,7 @@ def test_a_merge_is_refused_to_whoever_does_not_write_both_parties(world: Simple
 
 def test_a_contact_admin_grants_a_per_record_reader_and_a_manager_cannot(world: SimpleNamespace) -> None:
     """A per-record grant outlives its granter's role, so the roles lend sharing to the contact admin alone
-    (pending ruling, parties/party#role_share)."""
+    (parties/party#role_share)."""
 
     w = world
     admin, manager = w.holders["contact_admin"], w.holders["contact_manager"]
