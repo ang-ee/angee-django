@@ -43,7 +43,10 @@ live in code docstrings.
   `Handle.is_email_address`: exactly one `@`, a non-empty name part in any
   script with no whitespace, control or format character, a domain that
   passes the domain rule of Django's `EmailValidator`, and no longer than an
-  address may be or the handle's value holds. What the person does not hold
+  address may be or the handle's value holds. Both spellings of an
+  internationalised domain are one address: `Handle.normalize_value` reads a
+  domain's punycode labels (`xn--`) as Unicode in the comparison key, while
+  `value` keeps what was typed. What the person does not hold
   is recorded as a claim for review with the record behind it
   (`propose_claimed_handle_as_system`) and moves nothing; a person found again
   has nothing new stated of them and carries a handle only when they hold it
@@ -64,9 +67,17 @@ live in code docstrings.
   the one comparison of which record a reference names (the model's label
   without case and the public id, the pointer aside); the verb reads it, and a
   consumer compares the references `standing_claims()` returns with its own
-  the same way. No migration, resource or permission change. Limits: two
-  callers that meet two spellings of one new address at once each make its
-  row, and so its person, which the pairing job then proposes; a number that
+  the same way. No migration, resource or permission change. Upgrade: a
+  handle saved before this change whose domain was typed in punycode keeps the
+  comparison key it was saved with until it is next saved (an upsert of the
+  same spelling re-reads it); until then the Unicode spelling of its domain
+  does not find it. No repair is built here. Limits: two callers that meet two
+  spellings of one new address at once each make its row, and so its person,
+  which the pairing job then proposes; a handle is unique by its value as
+  typed, not by its comparison key, so writers that key on the exact value
+  can still make two rows of one address, which every lookup by the key reads
+  together; a punycode label the standard library's IDNA 2003 codec cannot
+  read (one that carries `ß`, `ς` or a joiner) stays as typed; a number that
   is no valid international number is read as its digits.
 - `angee.parties`: a merged-away party is no longer a row. The `people`,
   `organizations` and `parties` resources read `canonical()` parties, as

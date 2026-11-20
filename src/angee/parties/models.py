@@ -996,7 +996,10 @@ class Handle(
 
         Every platform strips surrounding whitespace and lowercases. Email keeps
         that rule and additionally collapses dots and plus-tags in Gmail local
-        parts for both ``gmail.com`` and ``googlemail.com`` domains. Phone and
+        parts for both ``gmail.com`` and ``googlemail.com`` domains, and compares
+        a domain in one spelling: its punycode labels (``xn--``) are read as
+        Unicode, so both spellings of an internationalised domain are one
+        address while ``value`` keeps what was typed. Phone and
         WhatsApp values parse without an assumed region and format as E.164; values
         require a leading country code and must be possible and valid. Anything
         unparseable, invalid, or region-unknown falls back to its digits so
@@ -1010,7 +1013,7 @@ class Handle(
             local, _, domain = normalized.rpartition("@")
             if domain in ("gmail.com", "googlemail.com"):
                 local = local.split("+", 1)[0].replace(".", "")
-            return f"{local}@{domain}"
+            return f"{local}@{cls._unicode_domain(domain)}"
         if platform in (cls.Platform.PHONE, cls.Platform.WHATSAPP, cls.Platform.IMESSAGE):
             try:
                 number = parse(normalized, None)
@@ -1020,6 +1023,25 @@ class Handle(
                 return format_number(number, PhoneNumberFormat.E164)
             return "".join(character for character in normalized if character.isdigit())
         return normalized
+
+    @staticmethod
+    def _unicode_domain(domain: str) -> str:
+        """Return ``domain`` with each punycode label read as Unicode and lower-cased: the one spelling to compare by.
+
+        The standard library's ``idna`` codec reads an ``xn--`` label, as Django's
+        ``punycode`` writes one with it. A label the codec cannot read stays as
+        typed.
+        """
+
+        labels = []
+        for label in domain.split("."):
+            if label.startswith("xn--"):
+                try:
+                    label = label.encode("ascii").decode("idna").lower()
+                except UnicodeError:
+                    pass
+            labels.append(label)
+        return ".".join(labels)
 
     # Django hard-codes it in django/core/validators.py, EmailValidator.__call__ (len(value) > 320): RFC 3696 section 3.
     EMAIL_ADDRESS_LIMIT: ClassVar[int] = 320

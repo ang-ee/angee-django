@@ -568,21 +568,26 @@ def test_a_name_part_in_any_script_is_an_address_that_finds_its_person_again(sou
     assert _claims(first.person) == {address: {behind(first.record), behind(second.record)}}
 
 
-def test_an_internationalised_domain_is_an_address_stored_as_typed(source: Source) -> None:
-    """The handle keeps the domain as typed and compares it lower-cased; the handle owner never punycodes it.
+@pytest.mark.parametrize(
+    ("first_typed", "then_typed"),
+    [
+        pytest.param("ada@xn--bcher-kva.example", "Ada@Bücher.example", id="punycode-first"),
+        pytest.param("Ada@Bücher.example", "ada@xn--bcher-kva.example", id="unicode-first"),
+    ],
+)
+def test_both_spellings_of_an_internationalised_domain_are_one_address(
+    source: Source, first_typed: str, then_typed: str,
+) -> None:
+    """The handle compares the domain in one spelling, punycode read as Unicode, and shows what was typed first."""
 
-    So another letter case of it is the same address, and its punycode spelling is another row.
-    """
+    first = source.given(email=first_typed, display_name="Ada Example")
 
-    first = source.given(email="Ada@Exämple.test", display_name="Ada Example")
+    second = source.given(email=then_typed)
 
-    second = source.given(email="ada@exämple.test")
-    punycoded = source.given(email="ada@xn--exmple-cua.test")
-
-    assert (first.email.value, first.email.normalized_value) == ("Ada@Exämple.test", "ada@exämple.test")
-    assert (second.person.pk, second.email.pk) == (first.person.pk, first.email.pk)
-    assert punycoded.person.pk != first.person.pk
-    assert punycoded.email.normalized_value == "ada@xn--exmple-cua.test"
+    assert (second.person.pk, second.email.pk, _people()) == (first.person.pk, first.email.pk, 1)
+    kept = Handle._base_manager.get(platform="email")
+    assert (kept.value, kept.normalized_value) == (first_typed, "ada@bücher.example")
+    assert _claims(first.person) == {first_typed: {behind(first.record), behind(second.record)}}
 
 
 def test_a_contact_whose_address_is_no_email_address_is_decided_by_its_number(source: Source) -> None:

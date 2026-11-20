@@ -878,6 +878,22 @@ def test_handle_persists_normalized_value_on_create_and_value_update(db: None) -
 
 
 @pytest.mark.parametrize(
+    ("value", "key"),
+    [
+        pytest.param("ada@example.test", "ada@example.test", id="a-plain-domain"),
+        pytest.param("Ada@Bücher.Example", "ada@bücher.example", id="the-unicode-spelling-lower-cased"),
+        pytest.param("Ada@XN--BCHER-KVA.example", "ada@bücher.example", id="a-punycode-label-read-as-unicode"),
+        pytest.param("ada@mail.xn--bcher-kva.example", "ada@mail.bücher.example", id="one-label-among-several"),
+        pytest.param("ada@xn--9.example", "ada@xn--9.example", id="a-label-the-codec-cannot-read-stays-as-typed"),
+    ],
+)
+def test_handle_compares_an_email_domain_in_one_spelling(value: str, key: str) -> None:
+    """Both spellings of an internationalised domain are one comparison key; the value itself is never rewritten."""
+
+    assert Handle.normalize_value(Handle.Platform.EMAIL, value) == key
+
+
+@pytest.mark.parametrize(
     ("value", "address"),
     [
         pytest.param("ada@example.test", True, id="a-plain-address"),

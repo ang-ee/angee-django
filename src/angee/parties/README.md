@@ -317,12 +317,15 @@ left out and makes no handle, so two contacts that gave the same non-address
 are never one person for it. What can be an email address is the handle owner's
 one predicate, `Handle.is_email_address`: exactly one `@`, a non-empty name
 part in any script (`jörg@`, `peña@`) with no whitespace, control or format
-character (a zero-width space, a direction mark),
-a domain that passes the domain rule of Django's `EmailValidator` (an
-internationalised one as typed or punycoded; the handle stores it as typed and
-compares it lower-cased), and no longer than an address may be or the handle's
-value holds. Nothing is stated in full: each handle the person does not
-hold is recorded as a claim for review (`propose_claimed_handle_as_system`)
+character (a zero-width space, a direction mark), a domain that passes the
+domain rule of Django's `EmailValidator` (an internationalised one as typed or
+punycoded), and no longer than an address may be or the handle's value holds.
+Both spellings of an internationalised domain are one address: the handle keeps
+its `value` as typed, and `Handle.normalize_value` reads the punycode labels of
+a domain as Unicode in the comparison key (`normalized_value`), the column
+every lookup of an address reads. A label the standard library's `idna` codec
+cannot read stays as typed. Nothing is stated in full: each handle the person
+does not hold is recorded as a claim for review (`propose_claimed_handle_as_system`)
 with the record behind it, which decides nothing and moves nothing. A claim
 gains one evidence reference per record that carried the address, deduplicated,
 and that is how the next record finds the person. A person found again has
