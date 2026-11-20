@@ -10,6 +10,26 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: dialog descriptor fields (`DescriptorFieldList`, under
+  `MutationDialog`, `ActionFormDialog` and the workflow studio) use the record
+  form's owners. Which fields a set of values shows is `visibleFields`, and a
+  `resolve` never renames a field's value path, in a dialog or a record form
+  (`resolveField` keeps the declared `name`). What a changed preset writes is one
+  decision, `seedPreset`, over one `PresetMemory` per form: a dialog now honours
+  `prefillPreserveDirty` and `prefillReplace` as the record form does. With
+  `prefillPreserveDirty`, a target whose value is the person's own (they changed
+  it, or it is dirty and no longer the seed written there) is kept unless
+  `prefillReplace` names it, a named target is replaced and marked dirty, and any
+  other target is written without marking it dirty; without it, every seed
+  replaces its target and marks it dirty. `createOnly` never withholds a dialog's
+  preset, since a dialog has no edit mode that locks a `createOnly` field.
+  `DescriptorFieldList` now requires an `ActionFormProvider`, which holds the
+  form's memory for as long as it is mounted (a dialog mounts a fresh one for
+  each session); a host with its own form takes both from `useActionForm`. A
+  record rail field the sheet also declares is visible by the sheet's
+  declaration (`showWhen`, `resolve`); its rail row decides only how it
+  presents, and one rail row never decides another's. The module-level
+  `resolveDescriptorFields`, never exported from `@angee/ui`, is removed.
 - `angee.parties`: roles of its own, `parties/role` (`PartiesRole`):
   `contact_reader`, `contact_manager` and `contact_admin` hold on every party,
   and on the handles, addresses, relationships and circle memberships it holds
