@@ -33,6 +33,13 @@ type SearchItem = SearchActiveItem | SearchSuggestion;
 type SuggestionGroup = { label: string; items: SearchSuggestion[] };
 type RemoteFacetOptions = { facet: SearchFacet; options: readonly SearchFacetOption[] };
 
+// Base UI syncs the root's value, items and item callbacks into its store whenever
+// their identity changes, then renders the input and chips again on their own; with
+// nothing typed and the search unchanged, every one of them is the same object.
+const NO_SUGGESTIONS: readonly SuggestionGroup[] = [];
+const sameSearchItem = (item: SearchItem, value: SearchItem): boolean => item.id === value.id;
+const searchItemId = (item: SearchItem): string => item.id;
+
 /** Presentation only: the model owns every active item and query transition. */
 export function SearchBox({ search, box = true, toolbar = false }: { search: ResourceSearch; box?: true | "collapsed"; toolbar?: boolean }): React.ReactElement {
   const [inputValue, setInputValue] = React.useState("");
@@ -86,9 +93,11 @@ function SearchBoxContent({ search, box, toolbar, remote, inputValue, setInputVa
   const inputRef = React.useRef<HTMLInputElement>(null);
   const text = inputValue.trim();
   const groups = suggestionsFor(search, text, remote, t);
-  const suggestions = groups.flatMap((group) => group.items);
+  const suggestions = React.useMemo(() => groups.flatMap((group) => group.items), [groups]);
   const collapsed = box === "collapsed";
   const active = search.active;
+  const items = React.useMemo(() => [...active, ...suggestions], [active, suggestions]);
+  const itemLabel = React.useCallback((item: SearchItem) => item.kind === "suggest" ? item.label : activeLabel(item, t), [t]);
   // The box keeps one line: the chips that fit stay in it and the rest collapse
   // into "+N", which opens the panel. The input is the last entry and is always
   // kept, so the row reserves its minimum width. Visible chips are a prefix of the
@@ -113,11 +122,10 @@ function SearchBoxContent({ search, box, toolbar, remote, inputValue, setInputVa
     if (!open) setInputValue("");
   }}>
     <Combobox.Root<SearchItem, true> multiple autoHighlight
-      value={[...active]} items={[...active, ...suggestions]} filteredItems={suggestions} filter={null}
+      value={active} items={items} filteredItems={suggestions} filter={null}
       inputValue={inputValue} onInputValueChange={setInputValue}
       open={suggestionsOpen && Boolean(text)} onOpenChange={setSuggestionsOpen}
-      isItemEqualToValue={(item, value) => item.id === value.id}
-      itemToStringValue={(item) => item.id} itemToStringLabel={(item) => item.kind === "suggest" ? item.label : activeLabel(item, t)}
+      isItemEqualToValue={sameSearchItem} itemToStringValue={searchItemId} itemToStringLabel={itemLabel}
       onValueChange={(next, details) => {
         // Native Escape clears all selections when already closed. In a search
         // box Escape dismisses drafts/popups; explicit model commands clear facts.
@@ -168,8 +176,8 @@ function SearchBoxContent({ search, box, toolbar, remote, inputValue, setInputVa
   </PopoverRoot>;
 }
 
-function suggestionsFor(search: ResourceSearch, text: string, remote: readonly RemoteFacetOptions[], t: UiTranslate): SuggestionGroup[] {
-  if (!text) return [];
+function suggestionsFor(search: ResourceSearch, text: string, remote: readonly RemoteFacetOptions[], t: UiTranslate): readonly SuggestionGroup[] {
+  if (!text) return NO_SUGGESTIONS;
   const { catalog } = search;
   const matches = (label: React.ReactNode) => (labelText(label) ?? "").toLocaleLowerCase().includes(text.toLocaleLowerCase());
   const suggest = (id: string, label: string, apply: () => void): SearchSuggestion => ({ id: `suggest:${id}`, kind: "suggest", label, apply });

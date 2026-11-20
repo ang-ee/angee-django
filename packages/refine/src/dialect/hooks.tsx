@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import {
   useCustomMutation,
@@ -41,7 +41,6 @@ import {
   useOperationDocuments,
 } from "../operation-documents";
 import { useActiveDataProviderName } from "./data-provider-context";
-import { useRefusedReadReport } from "./authored-query-options";
 import {
   useAuthoredMutation,
   useAuthoredQueryBatch,
@@ -51,7 +50,7 @@ import {
 } from "./authored-hooks";
 import type { TypedDocumentNode } from "../typed-document";
 import { graphqlDocumentIdentity } from "./wire";
-import { labelBatchResults, projectQueryBatch, useDerivedBatch, type QueryBatchEntry } from "./query-batch";
+import { labelBatchResults, projectQueryBatch, useDerivedBatch, useReportRefusedReads, type QueryBatchEntry } from "./query-batch";
 import { stableKey } from "../stable-deps";
 
 type Row = Record<string, unknown>;
@@ -269,24 +268,6 @@ function groupByResult(entry: QueryBatchEntry<unknown> | undefined, root: string
     updatedAt: entry?.dataUpdatedAt || null,
     refetch: () => { void entry?.refetch(); },
   };
-}
-
-/**
- * Report each read whose payload a derivation refused (its derived error is not the
- * read's own) as a failed read is, once per settle: an empty facet or group list
- * then says why.
- */
-function useReportRefusedReads(
-  batch: ReadonlyMap<string, QueryBatchEntry<unknown>>,
-  derived: ReadonlyMap<string, { error: unknown }>,
-): void {
-  const report = useRefusedReadReport();
-  useEffect(() => {
-    for (const [key, output] of derived) {
-      const entry = batch.get(key);
-      if (entry && output.error instanceof Error && output.error !== entry.error) report(entry, output.error);
-    }
-  }, [batch, derived, report]);
 }
 
 export function useAngeeFacets(
