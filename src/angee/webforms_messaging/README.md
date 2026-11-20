@@ -16,9 +16,12 @@ target_config:
   slug: enquiries
 ```
 
-- `channel` is a channel with the `webform` backend. A response whose form
-  names another kind of channel, or one that does not exist, fails its delivery,
-  and the failure is recorded on the response where staff see it.
+- `channel` is a channel with the `webform` backend. Posting on a channel is
+  messaging's to allow, so someone may point a form at one only if they may
+  write on it ([`MessageTarget.permits`](targets.py) asks the channel's own
+  `write` check). A response whose form names another kind of channel, or one
+  that is gone, fails its delivery as `MessageChannelMissing`, which the
+  response keeps where staff see it.
 - `slug` names the form's messages on that channel. Each response is the message
   `webform:<slug>:<submission id>`, so delivering one again finds the message it
   posted. All of them share the conversation `webform:<slug>`, titled with the
@@ -49,6 +52,13 @@ stays an answer.
 The body lists each answer under its question's title in the form's default
 language, in the order the form asks them. A choice is shown by its code; the
 text a respondent gave for "Other" stands in for that code.
+
+## The `webform` channel backend
+
+[`WebformChannelBackend`](backends.py) is a channel that pulls nothing and
+delivers nothing: the target is its one source. A channel row stores the key
+`webform`, so a host that holds such a channel composes this bridge. Without it
+the database check `angee.E052` names the rows and says to install it.
 
 ## Channels that held their own form
 

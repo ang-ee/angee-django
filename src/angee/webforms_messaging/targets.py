@@ -18,10 +18,11 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedThread, WebformChannelBackend
+from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedThread
 from angee.webforms.models import SLUG
 from angee.webforms.targets import FormTarget
 from angee.webforms.validators import OTHER, OTHER_SUFFIX, questions
+from angee.webforms_messaging.backends import WebformChannelBackend
 
 
 class MessageTargetConfig(BaseModel):
@@ -56,6 +57,14 @@ class MessageTargetConfig(BaseModel):
         return slug
 
 
+class MessageChannelMissing(LookupError):
+    """The channel a form's ``message`` target names is gone, or is no webform channel.
+
+    A response keeps the name of what failed its delivery, so this class is what
+    staff read. Point the form at a webform channel and deliver the response again.
+    """
+
+
 class MessageTarget(FormTarget):
     """Post each response as a message on a channel with the ``webform`` backend.
 
@@ -69,13 +78,30 @@ class MessageTarget(FormTarget):
     label = "Post to a messaging channel"
     config_model = MessageTargetConfig
 
+    def permits(self, actor: Any) -> bool:
+        """Whether ``actor`` may post on the channel this configuration names.
+
+        Messaging decides: the answer is the channel's own ``write`` check, on a
+        webform channel the actor can read.
+        """
+
+        config = cast(MessageTargetConfig, self.config)
+        channel = (
+            apps.get_model("messaging", "Channel").objects.with_actor(actor)
+            .for_backend(WebformChannelBackend.key).from_public_id(config.channel)
+        )
+        return channel is not None and bool(channel.with_actor(actor).has_access("write"))
+
     def deliver(self, response: Any) -> Any:
         """Post ``response`` on the form's channel and return its message."""
 
         config = cast(MessageTargetConfig, self.config)
-        channel = apps.get_model("messaging", "Channel").objects.require_backend_target(
-            config.channel, backend_class=WebformChannelBackend.key,
-        )
+        try:
+            channel = apps.get_model("messaging", "Channel").objects.require_backend_target(
+                config.channel, backend_class=WebformChannelBackend.key,
+            )
+        except ValidationError as error:
+            raise MessageChannelMissing(config.channel) from error
         (message,) = apps.get_model("messaging", "Message").objects.ingest(
             [self.message(response)], channel=channel, quote_edges=WebformChannelBackend.quote_edges,
         )

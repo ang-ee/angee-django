@@ -152,11 +152,11 @@ def test_hook_check_accepts_unset_optional_hook_and_declared_list_order() -> Non
 
 def test_single_hook_owner_checks_reject_multiple_valid_callables() -> None:
     from angee.mcp.apps import check_settings as mcp_settings
-    from angee.messaging.apps import check_settings as messaging_settings
+    from angee.webforms.apps import check_settings as webforms_settings
 
     for owner_check, name in (
         (mcp_settings, "ANGEE_MCP_ACTOR_VERIFIER"),
-        (messaging_settings, "ANGEE_WEBFORM_TOKEN_HOOK"),
+        (webforms_settings, "ANGEE_WEBFORM_TOKEN_HOOK"),
     ):
         with override_settings(**{name: ["builtins.len", "builtins.sorted"]}):
             [error] = owner_check()
@@ -169,16 +169,16 @@ def test_installed_hook_owners_register_their_checks(monkeypatch) -> None:
     from angee.graphql.apps import GraphQLConfig
     from angee.graphql.apps import check_settings as graphql_settings
     from angee.mcp.apps import check_settings as mcp_settings
-    from angee.messaging.apps import check_settings as messaging_settings
     from angee.parties.apps import check_settings as parties_settings
     from angee.timeline.apps import check_settings as timeline_settings
+    from angee.webforms.apps import check_settings as webforms_settings
 
     # The source test host deliberately uses BareGraphQLConfig; exercise its
     # production ready hook explicitly without leaking check registrations.
     monkeypatch.setattr(registry, "registered_checks", registry.registered_checks.copy())
     GraphQLConfig("angee.graphql", apps.get_app_config("graphql").module).ready()
     for owner_check in (
-        base_settings, graphql_settings, mcp_settings, messaging_settings, parties_settings, timeline_settings,
+        base_settings, graphql_settings, mcp_settings, parties_settings, timeline_settings, webforms_settings,
     ):
         assert owner_check in registry.registered_checks
         assert owner_check() == []

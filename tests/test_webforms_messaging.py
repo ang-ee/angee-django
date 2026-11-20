@@ -1,4 +1,4 @@
-"""A form's responses posted as messages: the ``message`` target.
+"""A form's responses posted as messages: the ``message`` target and the ``webform`` channel backend.
 
 A response is received and delivered through the web forms' own verbs; what the
 target made is read back from messaging. Every name and address is invented.
@@ -9,14 +9,18 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.test import override_settings
 from rebac import system_context
 
+from angee.base.checks import check_stored_impl_keys
 from angee.messaging.models import WebformSubmission
 from angee.messaging.testing.models import Channel, Message
 from angee.webforms.models import Delivery
-from angee.webforms.testing.models import Form, FormVersion, Response
-from tests.conftest import Vendor, create_user
+from angee.webforms.testing.models import Form, FormVersion, Response, ResponseRecord
+from angee.webforms_messaging.targets import MessageChannelMissing
+from tests.conftest import Vendor, create_platform_admin, create_user
 
 pytestmark = pytest.mark.django_db
 
@@ -81,7 +85,8 @@ def test_a_response_becomes_one_message_on_its_forms_channel_under_the_submissio
         (stored,) = Message._base_manager.filter(channel=target)
         body = stored.body_text()
         title = stored.thread.title.text
-    assert (message.pk, again.pk, row.record().pk) == (stored.pk, stored.pk, stored.pk)
+        became = ResponseRecord._base_manager.get(response=row).record
+    assert (message.pk, again.pk, became.pk) == (stored.pk, stored.pk, stored.pk)
     assert stored.external_id == "webform:enquiries:r-1"
     assert title == "Enquiry form"
     assert body == (
@@ -128,18 +133,38 @@ def test_the_claimed_address_is_the_answer_to_a_contact_question_that_asks_for_a
     assert envelope.answers["phone"] == "555 0100"
 
 
-def test_a_target_that_names_no_webform_channel_fails_the_delivery_where_staff_see_it() -> None:
+def test_a_target_that_names_no_webform_channel_fails_the_delivery_under_a_name_staff_can_read() -> None:
     mailbox = channel("manual", "Mailbox")
     form = form_on(mailbox)
 
     row, _made = Response.objects.receive(form, version=1, submission_id="r-1", language="en", answers=ANSWERS)
-    with pytest.raises(ValidationError):
+    with pytest.raises(MessageChannelMissing):
+        form.target().deliver(row)
+    # The response's own verb raises what its owner makes of a failure; what it keeps is pinned below.
+    with pytest.raises(Exception):
         row.deliver()
 
     stored = Response._base_manager.get(pk=row.pk)
     assert stored.delivery == Delivery.FAILED
-    assert f"No Public Webform channel '{mailbox.sqid}'" in stored.delivery_error
+    assert "MessageChannelMissing" in stored.delivery_error
     assert not Message._base_manager.filter(channel=mailbox).exists()
+
+
+def test_only_someone_who_may_write_on_the_webform_channel_may_point_a_form_at_it() -> None:
+    target = channel()
+    mailbox = channel("manual", "Mailbox")
+    with system_context(reason="webforms messaging tests setup"):
+        outsider = create_user("form-manager-without-the-channel")
+        admin = create_platform_admin("form-platform-admin")
+
+    def permits(actor: Any, named: str) -> bool:
+        form = Form(name="Enquiry form", target_class="message", target_config={"channel": named, "slug": "enquiries"})
+        return form.target().permits(actor)
+
+    assert (permits(target.owner, target.sqid), permits(admin, target.sqid)) == (True, True)
+    assert permits(outsider, target.sqid) is False
+    assert permits(mailbox.owner, mailbox.sqid) is False, "a channel of another backend takes no form"
+    assert permits(admin, "int_missing") is False
 
 
 @pytest.mark.parametrize("config", [
@@ -157,3 +182,19 @@ def test_a_form_is_refused_a_message_target_that_does_not_name_its_channel_and_s
 
     assert "target_config" in refused.value.message_dict
 
+
+def test_the_bridge_registers_the_webform_backend_and_messaging_says_so_to_a_host_without_it() -> None:
+    """Stored rows keep the key ``webform``; without the bridge the database check names them and the remedy."""
+
+    stranded = channel()
+    registry = dict(settings.ANGEE_CHANNEL_BACKEND_CLASSES)
+    assert registry.pop("webform") == "angee.webforms_messaging.backends.WebformChannelBackend"
+    assert type(stranded.backend).__module__ == "angee.webforms_messaging.backends"
+
+    assert [error for error in check_stored_impl_keys(databases=["default"]) if error.obj is Channel] == []
+    with override_settings(ANGEE_CHANNEL_BACKEND_CLASSES=registry):
+        (error,) = [error for error in check_stored_impl_keys(databases=["default"]) if error.obj is Channel]
+
+    assert error.id == "angee.E052"
+    assert all(part in error.msg for part in ("messaging.Channel.backend_class", "1 row(s)", "'webform'"))
+    assert "angee.webforms_messaging" in (error.hint or "")

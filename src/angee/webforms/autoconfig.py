@@ -11,6 +11,11 @@ _Settings = TypedDict(
     {
         "CELERY_BEAT_SCHEDULE:append": dict[str, dict[str, object]],
         "ANGEE_WEBFORM_TARGET_CLASSES": dict[str, str],
+        "ANGEE_WEBFORM_MAX_BODY_BYTES": int,
+        "ANGEE_WEBFORM_RATE_LIMIT_BURST": int,
+        "ANGEE_WEBFORM_RATE_LIMIT_WINDOW": int,
+        "ANGEE_WEBFORM_HONEYPOT_FIELD": str,
+        "ANGEE_WEBFORM_TOKEN_HOOK": str,
     },
 )
 
@@ -24,4 +29,13 @@ SETTINGS: _Settings = {
     "ANGEE_WEBFORM_TARGET_CLASSES": {
         "store": "angee.webforms.targets.StoreTarget",
     },
+    # The bounds of a form's public address. It is safe with no project settings:
+    # a deployment may lower a bound, rename or drop the honeypot field, or name
+    # one dotted token hook, and the shared guard fails closed when its cache or
+    # the hook does.
+    "ANGEE_WEBFORM_MAX_BODY_BYTES": 65_536,
+    "ANGEE_WEBFORM_RATE_LIMIT_BURST": 10,
+    "ANGEE_WEBFORM_RATE_LIMIT_WINDOW": 60,
+    "ANGEE_WEBFORM_HONEYPOT_FIELD": "_website",
+    "ANGEE_WEBFORM_TOKEN_HOOK": "",
 }

@@ -17,11 +17,7 @@ _Settings = TypedDict(
         "ANGEE_TIMELINE_KINDS:append": list[str],
         "ANGEE_GRAPHQL_RELATED_COUNTS:append": list[str],
         "ANGEE_CHANNEL_BACKEND_CLASSES": dict[str, str],
-        "ANGEE_WEBFORM_MAX_BODY_BYTES": int,
-        "ANGEE_WEBFORM_RATE_LIMIT_BURST": int,
-        "ANGEE_WEBFORM_RATE_LIMIT_WINDOW": int,
-        "ANGEE_WEBFORM_HONEYPOT_FIELD": str,
-        "ANGEE_WEBFORM_TOKEN_HOOK": str,
+        "ANGEE_IMPL_KEY_REMEDIES.ANGEE_CHANNEL_BACKEND_CLASSES.webform": str,
         "ANGEE_EMAIL_DELIVERY_CONFIGURED": bool,
         "ANGEE_MESSAGING_PROTECTED_LOCAL_KEYS": list[str],
     },
@@ -42,16 +38,12 @@ SETTINGS: _Settings = {
     "ANGEE_CHANNEL_BACKEND_CLASSES": {
         "email": "angee.messaging.email.AnymailEmailChannelBackend",
         "manual": "angee.messaging.backends.ManualChannelBackend",
-        "webform": "angee.messaging.backends.WebformChannelBackend",
     },
-    # Public form ingress remains safe with no project settings. Deployments may
-    # lower these bounds or contribute a dotted token hook; the reusable guard
-    # fails closed if its cache/token dependency fails.
-    "ANGEE_WEBFORM_MAX_BODY_BYTES": 65_536,
-    "ANGEE_WEBFORM_RATE_LIMIT_BURST": 10,
-    "ANGEE_WEBFORM_RATE_LIMIT_WINDOW": 60,
-    "ANGEE_WEBFORM_HONEYPOT_FIELD": "_website",
-    "ANGEE_WEBFORM_TOKEN_HOOK": "",
+    # A channel that stores ``webform`` needs the web forms bridge, which registers
+    # that backend; ``angee.E052`` gives this to a host that holds one without it.
+    "ANGEE_IMPL_KEY_REMEDIES.ANGEE_CHANNEL_BACKEND_CLASSES.webform": (
+        "Install angee.webforms_messaging, which registers the webform channel backend."
+    ),
     # Only an explicitly declared native default mailer configures delivery;
     # Django's legacy implicit localhost SMTP backend is not a transport choice.
     "ANGEE_EMAIL_DELIVERY_CONFIGURED": False,

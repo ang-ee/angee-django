@@ -37,8 +37,13 @@ Running it again makes nothing twice: a channel whose form exists is left as it
 is. The upgrade is **irreversible**: a definition is not written back as a
 FormSpec.
 
-Historical models keep ``Meta.ordering`` on ``sqid``, which migration state does
-not carry, so every query here orders by the primary key.
+Every row is read and written through historical models, as a data migration's
+are: the permissions a web form's own verbs need are synchronized only after
+``migrate``. So the template judges each definition with the addon's
+``validate_definition``, holds each row to its fields' rules, and writes the
+published state itself. Historical models keep ``Meta.ordering`` on ``sqid``,
+which migration state does not carry, so every query here orders by the primary
+key.
 """
 
 from __future__ import annotations
@@ -72,6 +77,8 @@ TEXT_QUESTIONS: dict[str, dict[str, Any]] = {
     "email": {"type": "text", "inputType": "email"},
     "textarea": {"type": "comment"},
 }
+ENVELOPE_NAMES = frozenset({"version", "submission_id"})
+"""The names a form's address answers a refused submission under, which no question may take."""
 CHOICE_WIDGETS = frozenset({"", "select", "selection", "combobox"})
 NUMBER_WIDGETS = frozenset({"", "number"})
 BOOLEAN_WIDGETS = frozenset({"", "boolean", "switch"})
@@ -96,8 +103,9 @@ def definition_from_form_spec(schema: Any, *, title: str, language: str) -> dict
 
     Anything else raises :class:`FormNotMovable`: an ``integer`` (a number
     question also admits fractions), a read-only, hidden or defaulted field, a
-    pattern, a second email field, and whatever the definition's own check
-    refuses, such as a choice whose value is not a code.
+    pattern, a second email field, a field named ``version`` or
+    ``submission_id``, and whatever the definition's own check refuses, such as
+    a choice whose value is not a code or markup a form does not store.
     """
 
     if not isinstance(schema, dict) or schema.get("type", "object") != "object":
@@ -147,6 +155,8 @@ def _question(name: str, field: Any, *, required: bool) -> dict[str, Any]:
 
     if not isinstance(field, dict):
         raise FormNotMovable(f"field {name!r} is not an object")
+    if name in ENVELOPE_NAMES:
+        raise FormNotMovable(f"field {name!r} has a name a form's address keeps for the submission itself")
     _only(field, FIELD_KEYS, f"field {name!r}")
     choices = _choices(name, field)
     kind, widget = field.get("type", "string" if choices is not None else None), field.get("widget", "")
