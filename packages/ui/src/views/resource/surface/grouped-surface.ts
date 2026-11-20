@@ -523,20 +523,26 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   });
   const selectedIds = React.useMemo(() => idsFromRowSelectionState(resourceView.state.rowSelection), [resourceView.state.rowSelection]);
   // The pager counts the root level's groups, which a verb acts on only when that is
-  // the one level: under nested grouping a root group holds records the person never saw.
-  const rootQuery = selectAllMatching && !source && rowGroupStack.length === 1 ? scopeModel.rootQuery : undefined;
-  const matching = React.useMemo<SurfaceMatching | undefined>(() => {
+  // the one level, whose one scope is the root's: under nested grouping a root group
+  // holds records the person never saw.
+  const root = selectAllMatching && !source && rowGroupStack.length === 1 ? scopeModel.groupScopes[0] : undefined;
+  // The level's read as its groups request sent it, which holds while the list renders
+  // or refetches; until that request goes out, as this render asks for it.
+  const rootQuery = root ? requested.get(root.key) ?? root.query : undefined;
+  // Its order included: what the groups are, not which page of them shows.
+  const selects = React.useMemo<SurfaceMatching["selects"] | undefined>(() => {
     if (!rootQuery) return undefined;
-    const { where, dimensions, having } = rootQuery;
+    const { where, dimensions, having, orderBy } = rootQuery;
+    return { unit: "groups", read: { where, dimensions, ...(having ? { having } : {}), ...(orderBy ? { orderBy } : {}) } };
+  }, [rootQuery]);
+  const matching = React.useMemo<SurfaceMatching | undefined>(() => {
+    if (!selects) return undefined;
     const loaded = [...new Set(groupedItems.flatMap((item) => item.kind === "record" ? [item.row.id] : []))];
     // Every record the read holds is loaded only when this page lists all its groups and their records.
     const held = !settledRoot ? 0 : rootPage === 1 && settledRoot.totalCount <= settledRoot.buckets.length
       ? settledRoot.buckets.reduce((count, bucket) => count + bucket.count, 0) : Infinity;
-    return {
-      selects: { unit: "groups", read: { where, dimensions, ...(having ? { having } : {}) } },
-      total: settledRoot?.totalCount, loaded, more: held > loaded.length,
-    };
-  }, [rootQuery, settledRoot, groupedItems, rootPage]);
+    return { selects, total: settledRoot?.totalCount, loaded, more: held > loaded.length };
+  }, [selects, settledRoot, groupedItems, rootPage]);
   return {
     kind: "grouped",
     list,

@@ -8,9 +8,9 @@ import { dragSourceProps, useDropTarget, type DndPayload } from "../../../lib/dn
 import { Glyph } from "../../../chrome/Glyph";
 import { Button } from "../../../ui/button";
 import { cn } from "../../../lib/cn";
+import { shownContent } from "../../../lib/shown-content";
 import { Checkbox } from "../../../ui/checkbox";
 import { TableCell, TableHead, TableRow } from "../../../ui/table";
-import { Tooltip } from "../../../ui/tooltip";
 import type { ResourceViewContextValue } from "../resource-view-context";
 import type { ResourceViewGroup } from "../resource-view-model";
 import {
@@ -438,8 +438,9 @@ export interface SelectionToggleProps {
   indeterminate?: boolean;
   disabled?: boolean;
   /**
-   * Why the box cannot change; a reason disables it. The reason is its tooltip and its
-   * accessible description; null is none yet, keeping its tree for one to come.
+   * Why the box cannot change (`Checkbox.disabledReason`): a reason disables it, and the
+   * box stays focusable with the reason as its tooltip and accessible description; null
+   * is none yet, keeping its tree for one to come.
    */
   disabledReason?: string | null;
   onCheckedChange: (checked: boolean) => void;
@@ -459,10 +460,8 @@ export function SelectionToggle({
   onCheckedChange,
   className,
 }: SelectionToggleProps): React.ReactElement {
-  const reasonId = React.useId();
-  const reason = disabledReason || null;
-  const disabled = disabledProp || reason !== null;
-  const toggle = (
+  const disabled = disabledProp || shownContent(disabledReason) !== null;
+  return (
     <div
       className={cn("flex items-center justify-center", disabled ? "cursor-not-allowed" : "cursor-pointer", className)}
       onClick={(event) => {
@@ -474,16 +473,14 @@ export function SelectionToggle({
       <Checkbox
         size="sm"
         aria-label={label}
-        aria-describedby={reason === null ? undefined : reasonId}
         checked={checked}
         indeterminate={indeterminate}
-        disabled={disabled}
+        disabled={disabledProp}
+        {...(disabledReason === undefined ? {} : { disabledReason })}
         onCheckedChange={(next) => onCheckedChange(next)}
       />
-      {reason === null ? null : <span id={reasonId} hidden>{reason}</span>}
     </div>
   );
-  return disabledReason === undefined ? toggle : <Tooltip label={reason} disabled={reason === null}>{toggle}</Tooltip>;
 }
 
 /**

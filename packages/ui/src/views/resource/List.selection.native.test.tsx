@@ -16,7 +16,14 @@ import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } 
 import { RowsListView, type RowsListViewProps } from "./RowsListView";
 import { ganttResources, ganttLane, ganttLanes, ganttRecord, scheduledRecord } from "../../../tests/gantt-fixtures";
 import type { GanttViewProps } from "../gantt/GanttView";
+import type { groupByVariables } from "@angee/refine";
 import type { ListViewProps } from "./resource-view-types";
+import type { AllMatching, AllMatchingGroups, AllMatchingRecords } from "./ListView";
+import type {
+  AllMatching as PublicAllMatching,
+  AllMatchingGroups as PublicAllMatchingGroups,
+  AllMatchingRecords as PublicAllMatchingRecords,
+} from "../index";
 import type { PlacedBulkActions, PlacedBulkCollection, WithPlacedBulkActions } from "./bulk-action";
 
 const drawing = vi.hoisted(() => ({ props: null as GanttViewProps | null }));
@@ -63,6 +70,19 @@ test("a page's bulkActions takes a collection built by hand without the split or
   expectTypeOf<RowsListViewProps<{ id: string }>>().toExtend<WithPlacedBulkActions<RowsListViewProps<{ id: string }>, { id: string }>>();
   expectTypeOf<HandBuilt>().not.toExtend<Parameters<Held<ListViewProps<{ id: string }>>>[2]>();
   expectTypeOf<HandBuilt>().not.toExtend<Parameters<Held<RowsListViewProps<{ id: string }>>>[2]>();
+});
+
+test("the collection's allMatching is the public AllMatching, a union of its two named arms", () => {
+  type Collection = Parameters<NonNullable<ListViewProps<{ id: string }>["bulkActions"]>>[2];
+  expectTypeOf<Collection["allMatching"]>().toEqualTypeOf<AllMatching | undefined>();
+  expectTypeOf<AllMatching>().toEqualTypeOf<AllMatchingRecords | AllMatchingGroups>();
+  // The package's entry exports the same names as the list's own modules.
+  expectTypeOf<PublicAllMatching>().toEqualTypeOf<AllMatching>();
+  expectTypeOf<PublicAllMatchingRecords>().toEqualTypeOf<AllMatchingRecords>();
+  expectTypeOf<PublicAllMatchingGroups>().toEqualTypeOf<AllMatchingGroups>();
+  // A groups read carries the level's order, which refine's producer turns into `order_by`.
+  expectTypeOf<AllMatchingGroups["read"]>().toHaveProperty("orderBy");
+  expectTypeOf<AllMatchingGroups["read"]>().toExtend<Parameters<typeof groupByVariables>[0]>();
 });
 
 test("List resolves selection and bulk actions against the current view", async () => {
