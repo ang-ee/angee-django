@@ -10,6 +10,41 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: roles of its own, `parties/role` (`PartiesRole`):
+  `contact_reader`, `contact_manager` and `contact_admin` hold on every party,
+  and on the handles, addresses, relationships and circle memberships it holds
+  (through the party: a handle no party holds is no role's), and on every folder
+  and circle, what a per-record `reader`, `editor` and owner hold on one, but
+  for what a role's side effects would lend: a party merge takes the new
+  `merge_away` (`Party.MERGED_PERMISSION`) and a per-record read grant the new
+  `share` (`rebac_grantable` on parties and handles), which a contact admin
+  holds and a manager does not; no role writes a record task about a party;
+  and of an account's own person the roles read the identity alone. A contact
+  admin also reads every directory and shares its contacts
+  (`parties/directory#share`, which now manages `contact_reader`), and
+  connecting a directory stays with platform admins. Each choice is one line in
+  `parties/party`: `role_private` (a contact reader reads private fields: yes),
+  `role_delete` (a contact manager trashes a party, person or organization,
+  which is `delete`: no), `role_write_as_subject` (the roles read record tasks
+  about a party and write none), `role_merge_away` and `role_share` (merging a
+  party away and granting per-record reads are a contact admin's) and
+  `role_withheld` (of an account's own person the roles read the identity
+  alone). The batch merge's gate becomes
+  `batch_merge = merge_away & person->active_member`, so a contact manager, who
+  merges no party away, is offered no set. A deployment that grants the platform
+  admins' set onto a contact role makes every directory adopt, as documented and
+  tested. An actor who holds no contact role plans exactly as before; a contact
+  role holder plans one more `EXISTS` (on its role membership) in four of the five
+  planner-gate documents and the account exclusion once in each person, party and
+  organization statement, and stays within the gate's one-block allowance on every
+  document: cheaper than an `editor` grant on every party row for the person and
+  selected documents, a few percent dearer for connections and related. Revision 41.
+  `angee.knowledge`: the people vault takes the roles by install grant rows on
+  `knowledge/vault` relations named for them (`contact_reader`,
+  `contact_manager`, `contact_admin`); a contact admin removes the vault's
+  pages through the new `knowledge/vault#page_delete`, never the vault.
+  Knowledge revision 11, extends revision 9. Nobody holds a role until
+  a deployment grants it. Upgrade: `rebac sync`; load the install tier.
 - `angee.parties`: the batch dialog lists every group a list's "Select all N"
   matched by key, not by offset. It forwards the list's own groups read as the
   list sent it, order included (`AllMatchingGroups.read.orderBy`, always the
@@ -1017,7 +1052,7 @@ live in code docstrings.
   page with that address no longer claims an address nobody holds. The
   PostgreSQL lane runs the directory backend's lock tests by node (a page
   against mail ingestion, a merge, a confirmation and an account's adoption);
-  the module's strict expected failure (open decision O15) would read as a skip
+  the module's strict expected failure would read as a skip
   in that lane's zero-skip gate.
 
 - `angee.parties`: the confirm rule is keyed on the address, at the owner of the
@@ -1101,7 +1136,7 @@ live in code docstrings.
   used to bind any organization it was handed, unadmitted, before locking, and
   state its addresses in full there. A link keeps its own organization, and an
   unbound one mints. Matching an existing organization, and its admission rule,
-  come with the organizations stream (open decision O9). No caller outside the
+  come with the organizations stream. No caller outside the
   tests passes one today; no vendor stream lands organizations yet.
 
 - `angee.parties`: a claim stays a claim. An address a pull-only directory
@@ -1227,7 +1262,7 @@ live in code docstrings.
   `credential_blocker` (CardDAV's Basic-auth rule moved there), and an
   `admit_credential` override on a directory backend is no longer called.
 
-- A pull-only directory adopts an existing person (rulings R2 and R9; an option,
+- A pull-only directory adopts an existing person (an option,
   off by default, since the entry above): a contact
   with no person of its own or of a record it replaced lands on the first person
   its emails name (`people_for_emails`, preferred email first) whose adoption
@@ -1314,7 +1349,7 @@ live in code docstrings.
   directory's next sync, since the rule is looked up by key.
 
 - A person's merge never sets two live contacts of one pull-only directory on
-  one person (default pending ruling O16). A survivor takes every link of the
+  one person. A survivor takes every link of the
   records merged into it, and two bound, live links of one pull-only directory
   from different records would put two records the source keeps separate on one
   person, whose statements overwrite each other on every sync:

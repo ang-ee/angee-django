@@ -132,23 +132,34 @@ merge reversal.
 Knowledge's install tier provisions one vault for people, `Vault.PEOPLE`
 (`knowledge.vault_people`, resolved by `Vault.objects.for_resource`). It is
 unowned: platform admins administer it (read, write, delete, share and
-transfer) and members of knowledge's `vault_admin` and `knowledge_admin` roles
-read, write and delete it, as on every vault; a platform admin may transfer it
-to a person, who then owns it. Nobody else reads it until a deployment grants
-it, with a vault's ordinary grants: an operator shares it as viewers with a user
+transfer), and knowledge's own vault roles reach it as they reach every vault: a
+`vault_viewer` reads it, a `vault_editor` writes it, a `vault_admin` or
+`knowledge_admin` also deletes it; a platform admin may transfer it to a person,
+who then owns it. Parties' roles reach it by grant rows its install tier writes
+beside it (`install/020_knowledge.vault_grants.yaml`), each on the vault relation
+named for the parties role it holds: a contact reader reads it
+(`contact_reader`), a contact manager writes it (`contact_manager`), a contact
+admin also removes its pages (`contact_admin`,
+through `knowledge/vault#page_delete`, which also keeps a trashed page readable
+to restore it, and lends nothing while the vault itself is trashed) but never
+the vault, whose removal would refuse every importer its `for_resource`
+(`delete` in place of `page_delete` in the extension, one line a deployment's
+architect may flip, lets a contact admin remove the vault); share and
+transfer stay with its owner and platform admins. A deployment may grant more
+with a vault's ordinary grants: an operator shares it as viewers with a user
 or a group's members through the vault's share surface (`viewer` is the vault's
 grantable relation, managed by whoever may `share` it), and grants `editor`
 administratively, through the Permissions Hub or a consumer addon's
 `kind = "grants"` install resource (`{resource: knowledge.vault_people,
 relation: editor, subject: <a user's xref, or auth/group:<id>#member>}`).
-Knowledge's own vault roles reach it too.
 
 A person's pages sit in a folder page bound to their party under the `folder`
 role (`RecordBindingManager.party_folder`); people add pages below it with the
 page tree's own create-under. **Whoever can read the people vault reads every
 person's pages, including the pages of people they cannot read in parties**, and
 whoever can write it writes them; finer control between readers is a later
-version, by ruling. A binding places a page on the person's record, in its Pages
+version, by ruling. By default those readers are platform admins and the
+holders of parties' roles. A binding places a page on the person's record, in its Pages
 group under the page's own title, and grants nothing. The verb locks the party
 first, so two requests make one folder. A person makes it by the vault's
 permissions and the binding's (write on the page and on the party); an import,

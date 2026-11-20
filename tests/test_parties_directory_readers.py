@@ -536,11 +536,12 @@ def test_the_repair_grants_each_directorys_owner_the_read_of_its_contacts_once(c
     assert "Granted 0 directory owner(s)" in again.getvalue() and "2 already held it" in again.getvalue()
 
 
-def test_the_share_surface_grants_contact_reader_under_the_directory_write(contacts: SimpleNamespace) -> None:
-    """The directory declares ``contact_reader`` grantable; its writers share it, a contact reader cannot."""
+def test_the_share_surface_grants_contact_reader_under_the_directory_share(contacts: SimpleNamespace) -> None:
+    """The directory declares ``contact_reader`` grantable under ``share``: its writers share it (a contact admin
+    too), a contact reader cannot."""
 
     c = contacts
-    assert Directory.get_rebac_grantable() == AbstractDirectory.rebac_grantable == {"contact_reader": "write"}
+    assert Directory.get_rebac_grantable() == AbstractDirectory.rebac_grantable == {"contact_reader": "share"}
     assert not Directory._check_rebac_grantable()
     grantee = get_user_model().objects.create_user(username="contacts-shared")
     with actor_context(c.owner):

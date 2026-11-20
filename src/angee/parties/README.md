@@ -95,7 +95,7 @@ is compared, versioned and stated by the ingest like the source's own, a
 person's own value still wins by rank, and removing the mapping replays the
 contact, whose ingest then states the source's own value. The preferred mark of
 the channel a contact chose is such a refinement when the contact brings that
-address (R20), so the ingest writes it once. A mapping may also write through
+address, so the ingest writes it once. A mapping may also write through
 other owners' verbs in its `apply_record`, declaring nothing for them: tags
 (`TagAssignment.objects.attach`) and the preferred mark of a handle the contact
 does not bring, a messenger's (`Handle.objects.upsert(..., is_preferred=True)`).
@@ -245,7 +245,7 @@ card names included, except two live contacts of one pull-only directory: the
 source keeps them separate, and the directory's statements would overwrite each
 other on every sync. A tombstoned link does not count, so once the source has
 merged or removed one of them, the two merge (`PartyManager.directory_merge_blocker`,
-from `Party.validate_merge`; default pending ruling O16). A trashed person is
+from `Party.validate_merge`). A trashed person is
 nobody's target (`PartyManager.contact_people`), so its record lands on a new
 person or adopts one; the link first withdraws what it stated on the trashed
 person, never handing it to another link of its source that names them too, and
@@ -447,6 +447,56 @@ the handle count, the birthday and the anniversary (`read_private`); the name
 parts and the nickname are identity, read by whoever reads the person, as are
 the languages and the occupation. The existing `reader` relation includes private Party reads; use it only
 when that wider access is intended. Both use the native record-access owner.
+
+Parties' roles (`parties/role`, anchored by `PartiesRole`) say once, for every
+party, what a per-record grant says for one: a **contact reader**
+(`contact_reader`) reads every party, and the handles, addresses, relationships
+and circle memberships that party holds (through the party, so a handle no party
+holds yet, a mailbox's sender or a calendar's attendee, is no role's), and every
+address-book folder and circle (they hold no party: their arms are constants), as
+a `reader` does, private fields included; a **contact
+manager** (`contact_manager`) also writes them as an `editor` does (correcting
+and confirming addresses, adopting where adoption applies (through the role's
+own members: a platform admin's reach of every role lends no adoption, as
+`parties/person#adopt` has no admin arm; but a role's member may be a set, and
+granting the platform admins' set, `angee/role:admin#member`, onto the contact
+manager or admin role makes every platform admin a member, and so every
+directory, whose owner is a platform admin, adopts the people it names), keeping two people
+separate), but merges none: a merge retires the party merged away to the
+trash, so `Party.MERGED_PERMISSION` is `merge_away`, which is that party's
+write with `role_merge_away` (the contact admin) in place of `role_manage`
+(`role_manage` there would let a manager merge, and so trash, without
+restoring); a
+**contact admin** (`contact_admin`) also deletes and transfers as an owner
+does, which is where trashing a party sits (its `delete`), grants per-record
+reads on a party or handle (their `share`, which backs `rebac_grantable`: a
+grant outlives its granter's role, so `role_share` is the contact admin;
+`role_manage` there would let a manager grant), reads every directory
+and shares who reads its contacts (`parties/directory#share`). Connecting,
+changing and removing a directory stay with its integration's writers and
+platform admins. Each choice a deployment's architect may flip is one line in
+`parties/party`: `role_private` (whether a contact reader reads private fields)
+and `role_delete` (whether a contact manager trashes, and with it deletes, a
+party, person or organization; the dependent rows, folders and circles stay with
+the contact admin through `role_admin` and their own constants), and the four
+decided here, `role_write_as_subject`, `role_merge_away`, `role_share` and
+`role_withheld`. A role holder also reads the record tasks about every party
+(`read_as_subject`) and sees people with an account in pickers, but writes,
+shares, deletes and transfers none of those tasks: `role_write_as_subject` is
+empty (`role_manage` there would lend a contact manager and admin the tasks'
+write). Parties grants
+the roles to nobody: a deployment grants membership in the Permissions Hub, which
+lists them as Contact Reader, Contact Manager and Contact Admin, or with a
+`kind = "grants"` resource row (`{resource: "parties/role:contact_manager",
+relation: member, subject: <a user's xref>}`). Of an account's own person (a
+colleague's, `Person.user` set) the roles read the identity and no more:
+`parties/party#role_withheld` subtracts that person from every role arm beyond
+`role_identity`, so no role reads their private fields, handles, addresses,
+relationships, circle memberships or record tasks, or writes, merges, shares,
+deletes, transfers or adopts them; pickers still show them. The person is the
+user's own, which adoption lends no directory either; `nil` there gives an
+account's person the same reach as any other. A
+directory's contact readers keep exactly what they read without the roles.
 Adding an address or relationship to a party takes write on that party
 (`create` on `parties/address` and `parties/relationship` in [permissions.zed](permissions.zed)):
 the row changes the party's projection, which a two-way directory writes to its
@@ -541,8 +591,12 @@ dialog says what to do. A grouped list gives a set per group. Under the list's
 "Select all N" (`selectAllMatching`), a list grouped by one text merge field
 gives every group its read matches, each a set, listed page by page through the
 list resource's own groups read (at most 1,000 a confirm). The dialog lists the
-sets before anything merges. Only an active person account that writes every record may (the party's
-`batch_merge` permission, `write & person->active_member`); a service or agent
+sets before anything merges. Only an active person account that may merge every record away may (the party's
+`batch_merge` permission, `merge_away & person->active_member`: a set's oldest
+survives, so each member may be the one merged; a contact manager, who writes but
+merges nothing away, is offered no set, and a set where exactly one record lacks
+`merge_away` is not offered though it could merge with that record surviving, on
+the compare page); a service or agent
 account merges nothing, and no agent tool offers it. A set never holds an account's
 own person (merged by hand, on the compare page), records of two kinds, a trashed
 or merged record, or two records a person kept apart; each is refused for that set
