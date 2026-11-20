@@ -5,7 +5,10 @@ record contributes its target with one settings line,
 ``"ANGEE_WEBFORM_TARGET_CLASSES.<key>": "<dotted path>"``, and maps answers to
 its own fields in the target's ``config_model``. The web forms addon never names
 another addon's model: a target calls its owner's own verb, and says who may
-choose it (:meth:`FormTarget.permits`).
+choose it (:meth:`FormTarget.permits`). The addon also declares the type its
+target makes, as a relation on ``webforms/response_record`` in its
+``permissions.extends.zed`` (``relation enquiry: acme/enquiry //
+rebac:field=record``): a response becomes only a record of a declared type.
 """
 
 from __future__ import annotations
