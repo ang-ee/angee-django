@@ -41,7 +41,7 @@ from angee.integrate.states import (
 from angee.integrate.streams import ApplyResult, LocalChange, RecordChange, SemanticError, StreamPage
 
 if TYPE_CHECKING:
-    from angee.parties.managers import EmailLookup
+    from angee.parties.managers import EmailLookup, PartyManager
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,9 @@ CREATED_AT = "created_at"
 
 A payload carries it only when the source states one. It sits beside the
 compared ``contact`` projection, never inside it, so no record is a change to
-apply for it, and the link's source payload keeps it.
+apply for it, and the link's source payload keeps it: an applied contact's ingest
+moves its person earlier, and a re-read settled as unchanged does through
+:meth:`DirectoryBackend.on_revalidated`.
 """
 
 
@@ -1103,6 +1105,29 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             if aspects := sorted(set(live.values_list("aspect", flat=True))):
                 found.append((manager, aspects))
         return found
+
+    def on_revalidated(self, stream: Any, links: Sequence[Any]) -> None:
+        """Move a re-read contact's person back to the creation time its payload states, when that is earlier.
+
+        Integrate settles a contact whose ``contact`` projection is unchanged without
+        applying it, after storing the payload just read on its link
+        (:meth:`BridgeImpl.on_revalidated`). The creation time sits beside that
+        projection (:data:`CREATED_AT`), so a re-read that brings one, a contact read
+        before contacts carried it caught by the daily sweep, a resync or a delta's
+        overlap, moves the person the link names (a merged record's link follows
+        its survivor) through the one rule, :meth:`PartyManager.backdate_creation`:
+        earlier only, one read when the person is already as old, nothing for a
+        payload stating no time. The record is not applied and its statements are
+        untouched.
+        """
+
+        if stream.key != CONTACTS:
+            return
+        parties = cast("PartyManager[Any]", apps.get_model("parties", "Party").objects)
+        for link in links:
+            payload = link.source_payload
+            if link.target_object_id and isinstance(payload, dict) and "contact" in payload:
+                parties.backdate_creation(link.target_object_id, payload_created_at(payload))
 
     def on_absent(self, stream: Any, links: Sequence[Any]) -> dict[Any, ApplyResult] | None:
         """Withdraw what a confirmed-absent address book, or a pull-only stream's contact, stated.

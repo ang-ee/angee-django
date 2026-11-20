@@ -443,6 +443,170 @@ def test_the_repair_moves_each_party_back_to_its_sources_earliest_creation_time_
     assert Party._base_manager.get(pk=people[mary]).created_at == imported
 
 
+
+def read_before_creation_times(hubspot: HubSpot, keys: list[str]) -> tuple[list[Any], datetime]:
+    """Leave ``keys``' people and links as an import from before contacts carried their creation time left them.
+
+    Each person takes the import's time and each stored payload loses its ``created_at``.
+    Returns the people's primary keys, in ``keys``' order, and the import's time.
+    """
+
+    people = [hubspot.person(key).pk for key in keys]
+    imported = timezone.now()
+    Party._base_manager.filter(pk__in=people).update(created_at=imported)
+    for key in keys:
+        link = hubspot.link(key)
+        RecordLink._base_manager.filter(pk=link.pk).update(
+            source_payload={name: value for name, value in link.source_payload.items() if name != CREATED_AT}
+        )
+    return people, imported
+
+
+def repair_line() -> str:
+    """Run the provision repair by hand and return what it printed."""
+
+    from io import StringIO
+
+    from django.core.management import call_command
+
+    out = StringIO()
+    call_command("backdate_parties_from_sources", stdout=out)
+    return out.getvalue()
+
+
+def test_contacts_read_before_they_carried_a_creation_time_move_as_a_re_read_brings_it_and_the_repair_finds_none(
+    hubspot: HubSpot,
+) -> None:
+    """An upgrade from before a contact carried its creation time: every stored payload lacks it."""
+
+    created = [datetime(2018, 3, 1, tzinfo=UTC), datetime(2019, 4, 2, tzinfo=UTC), datetime(2021, 6, 1, tzinfo=UTC)]
+    keys = [
+        hubspot.server.add("contacts", contact, modified=ago(days=3 - number), created=at)
+        for number, (contact, at) in enumerate(zip((ADA, GRACE, MARY), created, strict=True))
+    ]
+    hubspot.drain()
+    people, imported = read_before_creation_times(hubspot, keys)
+
+    def stated() -> list[bool]:
+        return [CREATED_AT in hubspot.link(key).source_payload for key in keys]
+
+    def times() -> list[datetime]:
+        return [Party._base_manager.get(pk=pk).created_at for pk in people]
+
+    # The first provision after the upgrade moves nobody: no stored record states a time yet.
+    assert (
+        "Moved 0 part(ies) back to the earliest creation time their sources state; 0 already as old; "
+        "3 linked record(s) state no creation time yet"
+    ) in repair_line()
+    # A delta reads what changed: Grace, edited at HubSpot, is applied, and her landing moves her
+    # person. Of the unchanged contacts it reads again only those within OVERLAP behind the
+    # watermark, which a delta reaches back by until it has caught up: Mary, modified last, not
+    # Ada. Mary's record is settled as unchanged, and her re-read moves her person all the same.
+    unchanged = {key: hubspot.link(key).applied_base_id for key in (keys[0], keys[2])}
+    hubspot.server.update("contacts", keys[1], {"jobtitle": "Director"}, modified=timezone.now())
+    hubspot.drain()
+    assert stated() == [False, True, True]
+    assert times() == [imported, created[1], created[2]]
+    # The daily sweep reads every contact again by id: Ada's re-read, settled as unchanged,
+    # stores her time and moves her person; no record is applied.
+    hubspot.sweep(page_bound=100)
+    assert stated() == [True, True, True]
+    assert {key: hubspot.link(key).applied_base_id for key in (keys[0], keys[2])} == unchanged
+    assert times() == created
+    # The provision repair afterwards finds nobody left to move.
+    line = repair_line()
+    assert (
+        "Moved 0 part(ies) back to the earliest creation time their sources state; 3 already as old; "
+        "0 linked record(s) state no creation time yet"
+    ) in line
+    assert "their new times" not in line
+
+
+def test_an_unchanged_re_read_bringing_an_earlier_creation_time_moves_the_person_without_applying_it(
+    hubspot: HubSpot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The re-read is settled as unchanged: no apply, no ingest, and the move is one version of the party."""
+
+    created = datetime(2019, 4, 2, tzinfo=UTC)
+    ada = hubspot.server.add("contacts", ADA, modified=ago(days=3), created=created)
+    hubspot.drain()
+    (person,), imported = read_before_creation_times(hubspot, [ada])
+    base = hubspot.link(ada).applied_base_id
+    versions = Party._base_manager.get(pk=person).history.count()
+    ingests = []
+    manager = type(Party.objects)
+    ingest = manager.ingest_contact
+    monkeypatch.setattr(manager, "ingest_contact", lambda *args, **kwargs: ingests.append(1) or ingest(*args, **kwargs))
+
+    hubspot.sweep(page_bound=100)
+
+    party = Party._base_manager.get(pk=person)
+    assert (party.created_at, ingests, hubspot.link(ada).applied_base_id) == (created, [], base)
+    assert party.history.count() == versions + 1
+    assert party.history.first().created_at == created
+    assert party.updated_at > imported
+
+
+def test_a_re_read_stating_an_equal_or_later_creation_time_writes_nothing(hubspot: HubSpot) -> None:
+    """A person already as old as the time their contact states keeps their row, history and change feed as they are."""
+
+    created = datetime(2019, 4, 2, tzinfo=UTC)
+    ada = hubspot.server.add("contacts", ADA, modified=ago(days=3), created=created)
+    hubspot.drain()
+    person = hubspot.person(ada).pk
+    assert Party._base_manager.get(pk=person).created_at == created
+    for held in (created, created - timedelta(days=400)):
+        Party._base_manager.filter(pk=person).update(created_at=held)
+        before = Party._base_manager.get(pk=person)
+        versions = before.history.count()
+
+        hubspot.sweep(page_bound=100)
+
+        after = Party._base_manager.get(pk=person)
+        assert (after.created_at, after.updated_at, after.history.count()) == (held, before.updated_at, versions)
+
+
+def test_the_re_read_hook_reads_once_for_a_stated_time_and_issues_no_statement_without_one(hubspot: HubSpot) -> None:
+    """The steady state after the first sweep: a contact's time is already its person's."""
+
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    ada = hubspot.server.add("contacts", ADA, modified=ago(days=3), created=datetime(2019, 4, 2, tzinfo=UTC))
+    hubspot.drain()
+    link = hubspot.link(ada)
+    with CaptureQueriesContext(connection) as stated:
+        hubspot.backend.on_revalidated(hubspot.stream, [link])
+    link.source_payload = {name: value for name, value in link.source_payload.items() if name != CREATED_AT}
+    with CaptureQueriesContext(connection) as unstated:
+        hubspot.backend.on_revalidated(hubspot.stream, [link])
+
+    assert len(stated) == 1
+    assert len(unstated) == 0
+
+
+def test_a_merged_records_re_read_moves_the_survivor_its_link_now_names(hubspot: HubSpot) -> None:
+    """A link follows its record's survivor, and a canonical party carries the earliest time of the records it holds."""
+
+    from rebac import actor_context
+
+    created = datetime(2019, 4, 2, tzinfo=UTC)
+    ada = hubspot.server.add("contacts", ADA, modified=ago(days=3), created=created)
+    hubspot.drain()
+    (merged,), imported = read_before_creation_times(hubspot, [ada])
+    owner = hubspot.directory.owner
+    own = Person.objects.create(display_name="Ada Example", created_by=owner)
+    with actor_context(owner):
+        Party.objects.get(pk=own.pk).with_actor(owner).merge(records=[hubspot.person(ada).public_id])
+    assert hubspot.link(ada).target_object_id == str(own.pk)
+    assert Party._base_manager.get(pk=own.pk).created_at == imported
+
+    hubspot.sweep(page_bound=100)
+
+    assert Party._base_manager.get(pk=own.pk).created_at == created
+    assert Party._base_manager.get(pk=merged).created_at == imported
+
+
 def modified_after(search: dict[str, Any]) -> datetime:
     """Return the time a delta search reads changes strictly after."""
 

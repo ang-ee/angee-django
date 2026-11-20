@@ -33,7 +33,6 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import models, transaction
-from django.utils import timezone
 from django_compose.models import Composable
 from phonenumbers import (
     NumberParseException,
@@ -57,7 +56,6 @@ from angee.base.models.identity import public_id_of
 from angee.base.models.merge import MergeableMixin, merge_maintenance
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.roles import role_anchor
-from angee.base.models.timestamps import auto_now_stamps
 from angee.base.models.trash import TrashMixin
 from angee.base.permissions import actor_user_id, instance_actor, reader_queryset
 from angee.base.prefetch import prefetched
@@ -683,15 +681,16 @@ class Party(
 
         A party's creation time is the earliest any of its provenance states: its
         insert, or the time a source gave the record it was minted from
-        (``CreatedAtField``). This is the one writer that moves it afterwards, and
-        only earlier, never later and never past now: the contact ingest calls it
-        when a source with an earlier time lands on an existing party, and a merge
-        when the survivor folds in an older record (:meth:`merge_fields`), so a
-        survivor a person chose takes the earliest time of what it folds in. A
-        tracked update compared in SQL: history records the move, and a party
-        already as old writes nothing, no version and no live event. The stamp
-        only ever moves earlier, so a time no earlier than the one this instance
-        holds cannot move it, and is answered without a query.
+        (``CreatedAtField``). It moves it afterwards, only earlier, never later
+        and never past now, through the one rule
+        (:meth:`PartyManager.backdate_creation`): the contact ingest calls it when
+        a source with an earlier time lands on an existing party, and a merge when
+        the survivor folds in an older record (:meth:`merge_fields`), so a survivor
+        a person chose takes the earliest time of what it folds in. A tracked
+        update compared in SQL: history records the move, and a party already as
+        old writes nothing, no version and no live event. The stamp only ever
+        moves earlier, so a time no earlier than the one this instance holds
+        cannot move it, and is answered without a query.
 
         So a batch merge's "oldest" (``PartyManager.merge_duplicates``) is the
         source-oldest record. No reader of a party's ``created_at`` means "arrived
@@ -700,13 +699,10 @@ class Party(
 
         if at is None or (self.created_at is not None and at >= self.created_at):
             return False
-        now = timezone.now()
-        at = min(at, now)
-        parties = apps.get_model("parties", "Party")
-        rows = parties._base_manager.filter(pk=self.pk, created_at__gt=at)
-        if not rows.update(created_at=at, **auto_now_stamps(parties, now)):
+        moved = cast("PartyManager[Party]", apps.get_model("parties", "Party").objects).backdate_creation(self.pk, at)
+        if moved is None:
             return False
-        self.created_at = at
+        self.created_at = moved
         return True
 
     def validate_merge(self, merged: Sequence[Any]) -> None:

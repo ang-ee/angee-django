@@ -71,6 +71,7 @@ from angee.base.identity import public_data_id_field
 from angee.base.lineage import concrete_child
 from angee.base.models.hierarchy import HierarchyQuerySet
 from angee.base.models.identity import instances_from_public_ids, public_id_for
+from angee.base.models.timestamps import auto_now_stamps
 from angee.base.models.trash import ArchiveQuerySet
 from angee.base.pagination import clamp_page_size
 from angee.base.permissions import actor_user_id, reader_queryset
@@ -3915,6 +3916,29 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             .exclude(status=LinkStatus.WITHDRAWN)
             .select_related("stream")
         )
+
+    def backdate_creation(self, pk: Any, at: datetime | None) -> datetime | None:
+        """Move party ``pk``'s ``created_at`` back to ``at`` when ``at`` is earlier; return the time it moved to.
+
+        The one rule that moves a party's creation time after its insert: only
+        earlier, never later and never past now (:meth:`Party.backdate_creation`,
+        the instance form, calls it). A tracked update of the canonical row compared
+        in SQL, under the caller's changeset: history records one version, the
+        change feed publishes the party (or collects it under ``mute_changes``), and
+        ``updated_at`` is stamped. A party already as old costs one read and writes
+        nothing: no version, no event. ``None`` when ``at`` is ``None`` or nothing
+        moved.
+        """
+
+        if at is None:
+            return None
+        now = timezone.now()
+        at = min(at, now)
+        parties = apps.get_model("parties", "Party")
+        rows = parties._base_manager.filter(pk=pk, created_at__gt=at)
+        if not rows.exists() or not rows.update(created_at=at, **auto_now_stamps(parties, now)):
+            return None
+        return at
 
     def backdate_from_sources(self) -> tuple[int, int, int, datetime | None, datetime | None]:
         """Move each party's creation time back to the earliest its directory records state; return what it did.
