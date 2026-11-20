@@ -226,3 +226,12 @@
 .sjs-theme-overrides :is(.sd-page, .sd-page__title):focus {
   outline: none;
 }
+
+/* The completed page. SurveyJS centres it with no room at its sides and 136px
+ * above it on every screen. Here it keeps a margin at a phone's edges, a
+ * measure a line can be read in, and a top space in proportion to the screen. */
+.sjs-theme-overrides .sd-completedpage {
+  max-width: 40rem;
+  margin-inline: auto;
+  padding: clamp(3rem, 14vw, 8.5rem) 1.25rem var(--sjs2-spacing-x600);
+}

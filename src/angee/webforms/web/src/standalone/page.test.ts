@@ -194,6 +194,33 @@ describe("changing the language while filling in", () => {
   });
 });
 
+describe("the fields SurveyJS draws", () => {
+  test("carry the autocomplete their question names and the type that brings an email, a telephone or a number keyboard", async () => {
+    const asked = {
+      pages: [{
+        elements: [
+          { type: "text", name: "name", autocomplete: "name" },
+          { type: "text", name: "mail", inputType: "email", autocomplete: "email" },
+          { type: "text", name: "phone", inputType: "tel", autocomplete: "tel" },
+          { type: "text", name: "age", inputType: "number" },
+        ],
+      }],
+    };
+    serve({ get: [() => json(200, described(1, asked))], post: [] });
+    await opened("/forms/semilla?lang=en", { drawn: true });
+    await vi.waitFor(() => expect(mount().querySelectorAll("input")).toHaveLength(4));
+    // SurveyJS names no `inputmode`: the type alone chooses the keyboard.
+    const drawn = [...mount().querySelectorAll("input")].map((input) =>
+      [input.getAttribute("type"), input.getAttribute("autocomplete"), input.getAttribute("inputmode")]);
+    expect(drawn).toEqual([
+      ["text", "name", null],
+      ["email", "email", null],
+      ["tel", "tel", null],
+      ["number", null, null],
+    ]);
+  });
+});
+
 describe("a form in several pages", () => {
   test("shows its progress, and a page the visitor turns to takes the focus at its title", async () => {
     serve({ get: [() => json(200, described(1, PAGED))], post: [] });
