@@ -249,11 +249,13 @@ export function RecordActionBar({
         {formDialog}
       </> : <>
         {toolbarActions.map((action) => (
-          // A band verb's disabled reason is its tooltip and description (`Button`).
+          // A band verb's disabled reason is its tooltip and description (`Button`); a
+          // pending verb stays focusable, so the keyboard user who ran it keeps their place.
           <Button key={action.id} type="button" size="sm"
             variant={action.danger ? "danger" : action === primaryAction ? "primary" : "secondary"}
             disabled={disabled(action)} disabledReason={disabledReason(action)}
-            loading={pendingId === action.id} onClick={() => void runAction(action)}>
+            loading={pendingId === action.id} focusableWhenDisabled={pendingId === action.id}
+            onClick={() => void runAction(action)}>
             {action.icon ? <Glyph name={action.icon} /> : null}
             {action.label}
           </Button>

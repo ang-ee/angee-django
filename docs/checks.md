@@ -233,6 +233,15 @@ after the base plugin: it adds test attribution and loads every installed addon'
 install-tier statement principals (`provenance.Rule` and `Seed` rows and their
 grants) into the session baseline.
 
+A test that runs under both REBAC relationship storages switches with
+[`relationship_storage(mode)`](../src/angee/base/testing/fixtures.py), never by
+setting `REBAC_LOCAL_BACKEND_STORAGE` alone. The setting only names the table REBAC
+reads, and the session baseline's relationships (every install tier's grants, such
+as a rule source's write on the parties it states) stay in the storage the host
+configured, so a bare switch reads a table without them and refuses what the
+baseline grants. The helper copies them with `rebac migrate-storage`, selects the
+storage, and on exit restores the setting and removes what it added to that table.
+
 Declare a test-local model under Django's `isolate_apps` when the code under test
 accepts a registry. When its owner reads the installed registry (content types, the
 deletion collector, system checks), create the model inside the test on an

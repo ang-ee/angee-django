@@ -103,7 +103,7 @@ public vault id. See the [knowledge addon](../../src/angee/knowledge/README.md).
 - Layering and unconsumed-owner guardrails are Vitest checks over the locked
   package graph. Do not add a boundary-lint dependency without updating
   [the opinionated stack](../stack.md) and the manifests together.
-- **Guards.** The UX component ontology is executable: `packages/app/src/ux-ontology-guard.ts`
+- **Guards.** The UX component ontology is executable: `packages/app/src/ux-ontology-guard.test-support.ts`
   (run by the architecture guardrails test over every addon and consumer root) fails on raw
   `<button>`/`<input>`/`<select>`/`<textarea>`/`<table>`/`<dialog>`/`<form>` elements, lucide
   icons rendered outside the manifest `icons` block, hand-spelled selected surfaces, deleted
@@ -295,7 +295,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   holds selection: entering another inherited scope or selecting at the owner
   clears the previous scope. Collection changes clear them before children
   render; returning to an inherited base-filter scope after entering another
-  never revives its old selection. Resource metadata supplies the selection bar's
+  never revives its old selection. The opt-in "Select all N" mode is a state of
+  that owner, defined by [`ListViewProps.selectAllMatching` and `bulkActions` →
+  `allMatching`](../../packages/ui/src/views/resource/resource-view-types.ts).
+  Resource metadata supplies the selection bar's
   generic Archive/Unarchive, Move to trash/Restore and Delete actions. Bulk is a
   bounded client fan-out over each single-record verb: successful rows leave the
   selection, refused, failed, unobserved and overflow rows stay, and one refresh
@@ -763,6 +766,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   it rests on shows again without it; it is a hint the server never trusts
   (states and surfaces:
   [`ListViewProps.bulkActions`](../../packages/ui/src/views/resource/resource-view-types.ts)).
+  Its `allMatching` is the selection owner's "Select all N" mode, defined by
+  [`selectAllMatching` and `bulkActions` →
+  `allMatching`](../../packages/ui/src/views/resource/resource-view-types.ts).
   Outside embedded presentation, selection defaults on only for a lifecycle
   action, page `bulkActions`, or a grantable model's Share utility. A `source`
   list counts only page `bulkActions`. An explicit `selectable` always wins.

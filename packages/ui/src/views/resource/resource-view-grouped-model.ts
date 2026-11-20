@@ -35,6 +35,13 @@ const EMPTY_ARRAY = [] as const;
 
 export interface GroupedRenderParams {
   query?: ResourceQuery;
+  /**
+   * The request each groups result answers, by scope key. A level's results are
+   * keyed without its page, so after a page change they answer the previous page
+   * until the batch catches up: a level lists its groups only from the answer to its
+   * own request. Absent: every result answers its level's request.
+   */
+  requested?: ReadonlyMap<string, GroupByRequestOptions>;
   leafPageSize?: number;
   groupStack: readonly ResourceViewGroup[];
   baseFilter: ResourceViewFilter | undefined;
@@ -71,6 +78,8 @@ export interface GroupedRenderModel<TRow extends Row> {
   carriedLeaves: ReadonlyMap<string, AngeeListBatchEntry>;
   items: GroupedListItem<TRow>[];
   rootResult: GroupedQueryResult | undefined;
+  /** The root level's groups read, as `groupScopes` requests it: the groups the pager counts. */
+  rootQuery: GroupByRequestOptions | undefined;
   shown: GroupedRenderShown;
 }
 
@@ -78,8 +87,9 @@ export interface GroupedRenderModel<TRow extends Row> {
 export interface GroupedRenderShown {
   /**
    * Every page the render shows, by key: the bucket keys a level's page of groups
-   * lists, or the row ids a group's page of records lists; null while the page loads
-   * or after it failed. A page the render does not show is absent.
+   * lists, or the row ids a group's page of records lists, as the page last settled;
+   * a page that refetches keeps them until it settles again. Null until the page has
+   * settled once, or after it failed. A page the render does not show is absent.
    */
   pages: ReadonlyMap<string, ReadonlySet<string> | null>;
   /** Each group's position among its level's groups, where a settled page lists it. */
@@ -91,6 +101,8 @@ export interface GroupedQueryResult extends GroupByResult {
   summary?: string;
   fetching: boolean;
   error: Error | UseAngeeGroupByResult["error"];
+  /** When the read last settled; null until it has, so a refetch keeps its groups and a first load has none. */
+  updatedAt: UseAngeeGroupByResult["updatedAt"];
   refetch: () => void;
 }
 
@@ -133,6 +145,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
   const pages = new Map<string, Set<string> | null>();
   const positions = new Map<string, number>();
   let rootResult: GroupedQueryResult | undefined;
+  let rootQuery: GroupByRequestOptions | undefined;
   const resourceQuery =
     params.query ?? (modelMetadata ? ResourceQuery.from(modelMetadata) : null);
   // The one owner of a group's first-page size: the groups read carries that page.
@@ -161,6 +174,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
         error: bucket.rows === undefined
           ? new Error("The groups read carried no first page for this group.")
           : null,
+        updatedAt: groups.updatedAt,
         refetch: groups.refetch,
       });
     } else {
@@ -175,7 +189,8 @@ export function buildGroupedRenderModel<TRow extends Row>(
     const leaf = carriedLeaves.get(bucketKey) ?? leafResults.get(bucketKey);
     const rows = rowModelsByScopeKey.get(bucketKey) ?? EMPTY_ARRAY;
     const place: SelectionPlace = { path: groupPath, page: stableSerialize([bucketKey, currentPage, leafPageSize]) };
-    pages.set(place.page, leaf && !leaf.fetching && !leaf.error ? new Set(rows.map((row) => row.id)) : null);
+    // A record page lists its rows once its own read has settled; a carried page settles with its groups.
+    pages.set(place.page, leaf && !leaf.error && leaf.updatedAt !== null ? new Set(rows.map((row) => row.id)) : null);
     const nav: GroupedRecordNav = {
       filter: cumulativeFilter,
       order: leafOrder,
@@ -269,9 +284,14 @@ export function buildGroupedRenderModel<TRow extends Row>(
       ...(isLeafLevel ? { leafPageSize: declaredLeafPageSize } : {}),
     });
     const result = groupByResults.get(levelScopeKey);
-    if (depth === 0) rootResult = result;
+    if (depth === 0) {
+      rootResult = result;
+      rootQuery = query;
+    }
     const levelPage = stableSerialize([levelScopeKey, storedPage, levelPageSize]);
-    const listed = result && !result.fetching && !result.error ? new Set<string>() : null;
+    const answered = params.requested?.get(levelScopeKey);
+    const answers = !params.requested || (answered !== undefined && stableSerialize(answered) === stableSerialize(query));
+    const listed = answers && result && !result.error && result.updatedAt !== null ? new Set<string>() : null;
     pages.set(levelPage, listed);
     const pager: GroupedListPager = {
       pageKey: levelScopeKey,
@@ -373,7 +393,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
   };
 
   walkLevel(0, baseFilter, []);
-  return { groupScopes, leafScopes, leafKeys, carriedLeaves, items, rootResult, shown: { pages, positions } };
+  return { groupScopes, leafScopes, leafKeys, carriedLeaves, items, rootResult, rootQuery, shown: { pages, positions } };
 }
 
 function bucketLabel(
@@ -447,8 +467,8 @@ export function selectedGroupsOf<TRow extends Row>(
     const current = placed.get(id);
     // Never a partial or stale split. A row has no place when it was selected without
     // one or under other levels; when it shows now under another group or several; or
-    // when a page that listed it or one of its groups shows again, loading or settled
-    // without it.
+    // when a page that listed it or one of its groups shows again settled without it,
+    // not yet settled or failed (a page that refetches keeps what it last settled with).
     if (!captured || current === null || stableSerialize(captured.path.map(({ group }) => group)) !== levels
       || !stillListed(render.shown, captured.page, id)
       || captured.path.some(({ page, bucketKey }) => !stillListed(render.shown, page, bucketKey))) return null;

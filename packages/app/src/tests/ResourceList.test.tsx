@@ -592,6 +592,8 @@ vi.mock("@angee/refine", async (importOriginal) => {
       total: matchingRows.length,
       fetching: sdkMocks.fetching,
       error: null,
+      // The page holds data, so its read has settled once.
+      updatedAt: 1,
     };
   }
   function snakeToCamel(field: string): string {

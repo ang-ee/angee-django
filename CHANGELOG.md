@@ -10,6 +10,34 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.base`, `angee.resources`, `angee.workflows`: a merge refusal's reason
+  names the record by its public id ("This record (tag_…) is loaded from
+  angee.tags resources, which would recreate it; keep it instead.", "Workflow
+  runs still working on this record (…) must finish or be canceled first.", and
+  the merge's own refusals of a shared, still-referred-to or vanished record),
+  never by its display name, which is personal data in any log or response that
+  carries the reason. The merge module's docstring states the rule for every
+  `ANGEE_MERGE_GUARDS` guard, and a test triggers each registered guard on a
+  named record and fails for a guard it does not yet trigger.
+- `angee.base`: `mute_changes(collect=MutedChanges())` is a collecting mode of
+  the mute. The block also keeps the `(concrete model label, pk)` key of every
+  row it suppressed, deduplicated and never the row itself, joining as the
+  write's transaction commits, so a block or savepoint that rolled back
+  contributes nothing. `MutedChanges.publish()` then observes each row once, as
+  a full update in `(model label, pk)` order, through `transaction.on_commit` of
+  the outermost scope, so each passes every adapter's own read gate. A row
+  deleted inside the block, or a write that asked for no transport, is not
+  observed. An ordinary mute is unchanged, including one nested inside a
+  collecting mute, so the callers that mute on purpose and publish their own
+  summary (workflows settlement, decisions, messaging teardown and fan-out) are
+  untouched; `publish_bulk_update` coalesces under a collecting mute only.
+- `angee.base.testing.fixtures`: `relationship_storage(mode)` runs a block on the
+  other REBAC relationship storage with the session baseline carried there (copied
+  with `rebac migrate-storage`), restoring the setting and that table on exit. A
+  test that sets `REBAC_LOCAL_BACKEND_STORAGE` alone reads a table without the
+  baseline's grants and is refused what they grant; storage-parametrized tests
+  switch through it. Parties claims through a rule source are covered in both
+  storages.
 - `@angee/ui`: `FormView` (and so `Form` and every registered form) takes an
   optional `renderUnavailable(id, unavailable)`: what a saved record's form
   shows when its id reads no record, given the default "Record unavailable"
@@ -70,7 +98,8 @@ live in code docstrings.
   `collection.selectedGroups`, the only read of the split: absent on an ungrouped
   list, `null` when a selected row cannot be placed (selected without its group,
   shown now under another group or several, missing from a page that listed it or
-  its groups and shows again, or loading; or on a surface that places no rows:
+  its groups and shows again, or on such a page before its first answer, a page
+  that refetches keeping its last one; or on a surface that places no rows:
   browser grouping, lane boards), else the selection split by its innermost groups
   with their parents; a hint the server never trusts.
   `Button` and `SelectionBarAction` take a `disabledReason`: the verb's tooltip
@@ -78,6 +107,33 @@ live in code docstrings.
   `data-disabled`, without an `href` on a link it renders, and one element tree as
   the reason comes and goes; an empty reason is no reason (`PaneRow` too). The
   record action bar's band verbs compose it.
+
+- A list's selection can be everything its read matches, opt-in: a list that
+  passes `selectAllMatching` (`ListView`/`List`) offers "Select all N" where its
+  pager counts what a verb acts on (a flat list's records, or the groups of a list
+  grouped by one server level), and once the person chooses it a page's
+  `bulkActions` receives `collection.allMatching`, a readonly copy of the pager's
+  unit and exact total and the list's own read:
+  `{ unit: "records", total, read: { where } }`, or
+  `{ unit: "groups", total, read: { where, dimensions, having } }` (refine's
+  `GroupByRequestOptions`, which a page turns into variables with
+  `groupByVariables`). Opting in asserts that every page verb honours it or
+  refuses it. The selected ids stay the only ids; the generic Archive,
+  Trash/Restore and Delete, and the Share utility, refuse with their reason while
+  it is on, on every list sharing the selection, where a list reading otherwise
+  renders no page verbs and only the list that chose the mode moves its total and
+  ends it by leaving. Unselecting a row or an expanded group leaves it for what
+  shows selected, the loaded rows less those unselected; a collapsed group shows
+  selected and cannot change, its checkbox saying to expand it, as a collapsed
+  group's checkbox outside the mode does. Its entry and exit rules are the
+  `bulkActions` docstring's. A native leaf page (`AngeeListBatchEntry`) states
+  when it last settled (`updatedAt`, required), which a grouped selection's split
+  reads instead of the page's total.
+  `@angee/ui/views/resource-view-list-body`: `ListSelectionBar` takes an optional
+  `matching` (`ListSelectionMatching`: "Select all N" and "All N selected") and
+  `deleteDisabledReason`, and `SelectionToggle` a `disabledReason`, its tooltip and
+  accessible description. `@angee/ui/views/resource-view-context` no longer exports
+  the lists' internal selection channel (`useSelectionPlaces`, `SelectionPlaces`).
 
 - `angee.parties`: one owner proposes same-person pairs. A pull-only
   directory's contact that may only claim an address another live party is
@@ -853,8 +909,25 @@ live in code docstrings.
   is the one batch surface: the Review page's "Merge certain pairs" action, and
   the People and Organizations lists' Merge…, where one selected record opens
   the person form's "Merge into…" (`useMergeIntoAction`, shared by both), two
-  open their compare page, and three or more open the dialog as one explicit
-  set, the whole selection.
+  open their compare page, and three or more on an ungrouped list open the dialog
+  with the duplicate sets the server finds among them
+  (`selection_duplicate_sets(ids)`, at most 1,000 ids, under the reader's own
+  read): the review's own pairs between selected records
+  (`PartyManager.selection_pairs`, the one rule of what makes two selected
+  records one), joined into connected groups, the rest left out and counted;
+  three to ten with no pair are one set, as selected, and above ten with none the
+  dialog says what to do. Both lists opt in to the list's "Select all N"
+  (`selectAllMatching`): on a list grouped by one text merge field (People's
+  display, given or family name, Organizations' display name), Merge… opens the
+  dialog on every group the list's read matches, each group of two or more
+  records with a value one set grouped by that field. The dialog pages the list
+  resource's own groups read (`PeopleGroupSets`, `OrganizationGroupSets`, under
+  the reader's own read) with the list's read forwarded through
+  `groupByVariables`, fifty groups a request with each group's first eleven ids,
+  saying "Loaded N of M groups…"; it skips and counts groups of one and groups
+  without a value, previews the sets as any others and enables Confirm once every
+  page is listed and previewed, at most 1,000 sets with the rest stated. A flat
+  list, a date bucket, a relation or another field is refused with what to do.
 
 - Parties: `Party.objects.propose_same_person_as_system(left, right, *, evidence,
   reason)` lets an importer propose that two parties are one person, citing the
@@ -912,27 +985,78 @@ live in code docstrings.
   pairs after the pair `after` names, in the pair rows' key order, each with
   its `id`, so a page continues after the last pair seen and a pair merged or
   kept apart meanwhile moves no other one. Which pairs a reader may review
-  (both endpoints and every cited handle readable) is decided for every pair at
-  once in a fixed number of queries, and only the page is read in full; a pair
-  the reader cannot read never ends a page early. `certain_same_as_pairs(limit,
+  (both endpoints and every cited handle readable) is decided by a walk
+  (`PartyQuerySet.review_walk`): the endpoints' visibility and the cursor are
+  SQL, then each window of pairs reads their statements and cited handles, and
+  the walk goes on until the page or the certain batch is full or the pairs
+  end, with no cap, so every pair stays reachable; a reader who reads the cited
+  handles reads one window whatever the number of pairs, and a reader who
+  reads both endpoints of a long run of pairs but not their cited handles
+  walks that run. A pair whose party was merged away between the walk and the
+  members' read is moot and left out, never read through its missing party.
+  The totals are exact in the rows' scope up to 1,000
+  (`same_as_pair_counts { pairs certain capped }`); past that the page reads
+  "1,000+", and the certain count covers the first 1,000 pairs and reads
+  "<n>+". `certain_same_as_pairs(limit,
   after)` gives the certain pairs a batch at a time the same way, and
   `same_as_pair_counts { pairs certain }` (`PartyManager.same_as_review_counts`)
   says how many of each the reader may review. The Review page shows both totals
   and gives each of its lists its own pager (the claims list embedded in its
-  section, the pairs under their cards); "Merge certain pairs (50 of 180)" names
-  the batch and the dialog says the next batch follows; the overview counts every
+  section, the pairs under their cards); "Merge all certain pairs (180)" opens
+  the dialog on every certain pair (`allCertain`): it lists them page after
+  page, fifty a request through the `after` cursor, saying "Loaded N of M
+  sets…", previews each page as it is listed, and enables Confirm only once every
+  page has loaded (a page that fails offers a retry); then "M sets: X will merge,
+  Y need a look" comes from the loaded list. One confirm lists and runs at most
+  1,000 sets (`CONFIRM_SETS`) and says when more may wait ("run again for the
+  rest"); the dialog renders fifty sets at a time through the shared `Pager`, and
+  once every page is in only the last page stays live. The overview counts every
   pair instead of a capped read. In the dialog each set that may merge has its
   own Include toggle, off by default when the set carries a warning (a
   disagreement, a member that no longer matches its group) and off again when
   the set changes from the state the person saw or ticked it in, and the
-  mutation sends only the included sets. A disagreement is a field the records
+  mutation sends only the included sets, five a request in order
+  (`MERGE_CHUNK`), each set's outcome showing as its chunk answers; Stop ends
+  the run after the chunk in flight, a failed request ends it with what
+  answered kept, closing mid-run asks first and sends nothing more, and the
+  models are invalidated once, when the run ends: the authored reads and the
+  resource lists of the merge's resource models (`PARTY_MERGE_RESOURCES`, rows
+  and totals, through `useResourceInvalidates`), which authored invalidation
+  does not reach, so a list's heading count no longer keeps its pre-merge total
+  until a reload; the compare page's merge and keep-apart refresh the same
+  resource lists. On the server each request's
+  sets merge with their per-row changes muted and collected
+  (`mute_changes(collect=...)`), and once its last set is done every row a
+  committed set wrote is published once: its records (the survivor observed
+  with its set) and the handles their merge re-pointed, each through its own
+  read gate, so a chunk is one burst for every viewer of those pages. A set
+  that was refused, stopped or failed rolled back and publishes nothing, and a
+  hand merge publishes as before. Measured with a record holding 30 handles,
+  circle memberships and relationships, the batch broadcasts 32 changes (each
+  row once) where the hand merge broadcasts 92, one party up to 32 times; the
+  publish costs about 4 statements a handle (117, 197 and 317 at 10, 30 and 60).
+  There is no cap: every row is published. Known limits: the circle
+  memberships, relationships and every other reference the base merge
+  re-points (`Reference.move`, one queryset update) are never observed, by hand
+  or in a batch, so their lists refresh for other viewers only on their next
+  read; that owner would have to observe the rows it moves. The statements,
+  pair statements and addresses have no change feed, so no viewer's list of
+  them refreshes from any change. Each set asks the batch permission and
+  reads its members once for the whole batch, before any lock, and keeps under
+  its own lock what must be live there (the members, their statements and
+  handles through the person, the kinds, the keep-apart decisions and the field
+  values the digest covers). A disagreement is a field the records
   state at least two different values for; a field one value is stated for,
   the rest empty, is a fill (`DuplicateSetPreview.fills`, the same
   `MergeFieldValues` rows), which the merge gives the survivor and which warns
-  nobody. The group-match mark reads either list, so a member whose grouping
-  value was cleared since the selection still no longer matches its group; when
-  every member moved to the same new value nothing differs and nothing is
-  marked. Each set that may merge carries a `digest`
+  nobody; the dialog names a set's fills in one line, "The survivor also gains:
+  …", by their merge field labels. A grouped selection sends its grouping
+  field names (names only) to the preview and the merge, and the preview returns
+  a row for each that is a text merge field whatever the members hold
+  (`DuplicateSetPreview.grouping`, in the digest), so a member whose value moved
+  from the group's key no longer matches its group, a cleared value and a set
+  whose members all moved alike included; a relation or a date-bucket group has
+  no row and is not marked. Each set that may merge carries a `digest`
   (`DuplicateSetPreview.digest`, `keyed_facts_digest`, the keyed hashing
   `IdentityBasis.facts_hash` now shares) of what the dialog shows of it: each
   member's id, name, creation time and first-met note as the reader's gates

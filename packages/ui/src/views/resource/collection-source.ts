@@ -95,6 +95,8 @@ interface CollectionQueryResult<TResult> {
   data: TResult | undefined;
   fetching: boolean;
   error: Error | null;
+  /** When the read last settled, as native reads state it; null until it has. */
+  updatedAt: number | null;
   refetch: () => void;
 }
 
@@ -141,6 +143,7 @@ export function useCollectionQueryBatch<TRequest, TResult>(
             result.data === undefined ? undefined : source?.select(result.data),
           fetching: result.isFetching,
           error: result.error,
+          updatedAt: result.dataUpdatedAt || null,
           refetch: () => {
             void result.refetch();
           },
@@ -152,6 +155,7 @@ export function useCollectionQueryBatch<TRequest, TResult>(
         data: undefined,
         fetching: false,
         error,
+        updatedAt: null,
         refetch: () => {},
       }),
     );
