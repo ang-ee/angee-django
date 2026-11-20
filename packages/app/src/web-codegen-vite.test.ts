@@ -9,7 +9,7 @@ import { Window } from "happy-dom";
 import { afterEach, beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import { build, createServer, preview, resolveConfig, type UserConfig, type ViteDevServer } from "vite";
 import * as codegen from "@angee/app/web-codegen";
-import { defineAngeeWebViteConfig } from "../config/vite";
+import { defineAngeeWebViteConfig, runInPool } from "../config/vite";
 
 let root: string;
 let runtime: string;
@@ -859,4 +859,50 @@ test("build writes a brotli and a gzip sidecar beside each text file it emits, a
   expect(small.filter(sidecar)).toEqual([]);
   // Nothing is compressed twice.
   expect(files.filter((file) => /\.(br|gz)\.(br|gz)$/.test(file))).toEqual([]);
+}, 60_000);
+
+test("the pool that compresses a build's files never runs more of them at once than its size", async () => {
+  const items = Array.from({ length: 20 }, (_value, index) => index);
+  for (const size of [1, 3, 8]) {
+    const done: number[] = [];
+    let running = 0;
+    let peak = 0;
+    // A compressor that takes a while: what overlaps is what the pool lets through.
+    await runInPool(items, size, async (item) => {
+      peak = Math.max(peak, ++running);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      running -= 1;
+      done.push(item);
+    });
+    expect(peak, `a pool of ${size}`).toBe(size);
+    expect([...done].sort((left, right) => left - right)).toEqual(items);
+  }
+  // A pool wider than its work starts no more workers than there is work, and a failure is the pool's.
+  let started = 0;
+  await runInPool([1, 2], 8, async () => { started += 1; });
+  expect(started).toBe(2);
+  await expect(runInPool(items, 2, async (item) => { if (item === 5) throw new Error("no"); })).rejects.toThrow("no");
+});
+
+test("a build's sidecars are the same bytes whatever the size of the pool that wrote them", async () => {
+  declarePage();
+  write(join(addon, "pages", "demo.ts"), `document.title = "standalone page module"; console.log(${JSON.stringify("a line of the page's script. ".repeat(200))});`);
+  const dist = join(web, "dist");
+  const sidecars = async (precompressConcurrency: number) => {
+    await build({
+      ...await defineAngeeWebViteConfig({
+        webRoot: web, gqlRuntimeDir: join(runtime, "gql"), prebundleAngeePackages: false, precompressConcurrency,
+        appearance: { themeId: "demo.theme", colorScheme: "light", options: { version: 1, value: {} } },
+      }),
+      configFile: false, logLevel: "silent",
+    });
+    const walk = (directory: string): string[] => readdirSync(join(dist, directory), { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory() ? walk(join(directory, entry.name)) : [join(directory, entry.name)]);
+    return Object.fromEntries(walk("").filter((file) => /\.(br|gz)$/.test(file)).sort()
+      .map((file) => [file, readFileSync(join(dist, file)).toString("base64")]));
+  };
+  const one = await sidecars(1);
+  const four = await sidecars(4);
+  expect(Object.keys(one).length).toBeGreaterThan(2);
+  expect(four).toEqual(one);
 }, 60_000);
