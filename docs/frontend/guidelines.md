@@ -126,17 +126,13 @@ public vault id. See the [knowledge addon](../../src/angee/knowledge/README.md).
   bundling; preview consumes built output. Native compose and operator SDL are
   its inputs. Standalone fragment checks invoke the same generator through its
   explicit CLI ([Composition and schema](../checks.md#composition-and-schema)).
-- A standalone page is a document an addon web package serves beside the app,
-  for a visitor who never loads the application. The package declares it in
-  `web/package.json` `angee.pages` (an HTML entry, the URL paths it answers and
-  the media type a request asks for it with); the composed web manifest carries
-  the declaration and [`angee:pages`](../../packages/app/config/vite.ts) builds
-  it as `<id>.html` beside `index.html`, serves it in development at those
-  paths and, in `vite preview`, serves the built file there. Only a `GET` or
-  `HEAD` whose `Accept` header matches the manifest's `pageAccept` pattern gets
-  the page (the media type must come first), so the same address still answers
-  as the server's API; the composer owns that pattern and the ingress applies
-  the same one. The page imports nothing of `@angee/app` and never links the
+- The web build's half of a standalone page (declared and routed as stated
+  above) is [`angee:pages`](../../packages/app/config/vite.ts): it reads the
+  declaration from the composed web manifest, builds the page as `<id>.html`
+  beside `index.html`, serves it in development at its paths and, in
+  `vite preview`, serves the built file there, applying the manifest's
+  `pageAccept` pattern as the ingress does and never a rule of its own. The
+  page imports nothing of `@angee/app` and never links the
   host's stylesheet: it names its own files with `./` (beside or below its
   entry, with `src` and `href`), the build gives its document the token sheet
   (`@angee/ui/tokens.css`) and the composed themes (`runtime/web/themes.css`),
