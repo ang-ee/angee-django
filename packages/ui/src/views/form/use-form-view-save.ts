@@ -24,7 +24,7 @@ import {
   type Fields,
   type HttpError,
 } from "@refinedev/core";
-import { get, set, useForm, type FieldErrors } from "react-hook-form";
+import { get, set, useForm, useWatch, type FieldErrors } from "react-hook-form";
 import { replaceEqualDeep, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import type { UiTranslate } from "../../i18n";
@@ -43,11 +43,14 @@ import {
 import {
   baselineLineRows,
   dirtyArrayValues,
+  draftHoldsPath,
   emptyDraft,
   fieldValidationSummary,
+  hiddenDraftPaths,
   missingRequiredFieldNames,
   mutationData,
   recordToValues,
+  storedDraftValue,
   type FormValues,
   type LinesSeed,
 } from "./form-view-model";
@@ -60,6 +63,7 @@ import { useRuntimeViewAs } from "../../runtime";
 import { useLatestRef } from "../../lib/use-latest-ref";
 
 type RowRecord = BaseRecord & Row;
+const NO_HIDDEN_RESETS: ReadonlyMap<string, unknown> = new Map();
 
 export interface FormSubmitContext {
   resource: string;
@@ -238,6 +242,13 @@ export function useFormViewSave({
   );
   const manualSlugFieldsRef = React.useRef<Set<string>>(new Set());
   const prefillSeedsRef = React.useRef<Map<string, unknown>>(new Map());
+  // The value a preset gave each field it then hid, by path (see `FieldDescriptor.prefill`).
+  const [hiddenResets, setHiddenResets] = React.useState(NO_HIDDEN_RESETS);
+  const hiddenResetsRef = useLatestRef(hiddenResets);
+  const rememberHiddenResets = React.useCallback((next: ReadonlyMap<string, unknown>) => {
+    hiddenResetsRef.current = next;
+    setHiddenResets(next);
+  }, [hiddenResetsRef]);
   const userEditedFieldsRef = React.useRef<Set<string>>(new Set());
   const localAcknowledgementRef = React.useRef<{
     previous: FormValues | null;
@@ -457,7 +468,20 @@ export function useFormViewSave({
       });
     },
   });
-  const formIsDirty = form.formState.isDirty;
+  // What a save writes for the fields a preset hid: each remembered value while its field stays
+  // hidden and differs from the field's stored value.
+  const writtenHiddenResets = React.useCallback((formValues: FormValues): ReadonlyMap<string, unknown> => {
+    if (isCreate || !record || hiddenResetsRef.current.size === 0) return NO_HIDDEN_RESETS;
+    const baseline = (form.formState.defaultValues ?? {}) as FormValues;
+    return new Map([...hiddenResetsRef.current].filter(([path, reset]) => {
+      if (draftHoldsPath(formValues, formFields, path)) return false;
+      const stored = storedDraftValue(path, baseline, record, formFields);
+      return replaceEqualDeep(stored, reset) !== stored;
+    }));
+  }, [form, formFields, hiddenResetsRef, isCreate, record]);
+  // Values decide whether a remembered reset still waits, so the form follows them while one does.
+  useWatch({ control: form.control, disabled: hiddenResets.size === 0 });
+  const formIsDirty = form.formState.isDirty || writtenHiddenResets(form.getValues()).size > 0;
   const pending = create.mutation.isPending || update.mutation.isPending || customSubmit.isPending || resourceSave.fetching || form.formState.isSubmitting;
   const formIsDirtyRef = React.useRef(formIsDirty);
   React.useEffect(() => {
@@ -646,7 +670,8 @@ export function useFormViewSave({
         ...Object.keys(savedValues),
       ]);
       formIsDirtyRef.current = [...observedNames].some((name) => form.getFieldState(name).isDirty)
-        || Boolean(linesField && form.getFieldState(linesField).isDirty);
+        || Boolean(linesField && form.getFieldState(linesField).isDirty)
+        || writtenHiddenResets(form.getValues()).size > 0;
       resetHistory();
       activeFieldInteractions.current.clear();
       if (isCreate) manualSlugFieldsRef.current.clear();
@@ -662,7 +687,7 @@ export function useFormViewSave({
         || (linesActive && linesField !== null && !Object.hasOwn(saved, linesField))
       )) reload();
     },
-    [acknowledgedSource, detailKey, emptyValues, form, formFields, isCreate, linesActive, linesConfig, linesField, linesSeed, onSaved, queryClient, record, reload, reset, resetDefaultValues, resetHistory, rowsFromRecord, setValue, syncRecordValues, t, toast],
+    [acknowledgedSource, detailKey, emptyValues, form, formFields, isCreate, linesActive, linesConfig, linesField, linesSeed, onSaved, queryClient, record, reload, reset, resetDefaultValues, resetHistory, rowsFromRecord, setValue, syncRecordValues, t, toast, writtenHiddenResets],
   );
   const submitValues = React.useCallback(
     async (value: FormValues) => {
@@ -675,12 +700,14 @@ export function useFormViewSave({
         throw new Error(`Resource metadata for "${resource}" is not available.`);
       }
       // The record's own fields: where an original and its variant both declare one, the admitted declaration saves.
+      const submittedResets = hiddenResetsRef.current;
       const data = mutationData(value, formFieldsFor?.(displayRecord) ?? formFields, {
         dirtyFields: dirtyFields as Record<string, unknown>,
         fieldMetadata: modelMetadata?.fields,
         isCreate,
         seededFieldNames: createSeedNames,
         writableFields: writableFieldNames,
+        hiddenResets: writtenHiddenResets(value),
       });
       const linesDiff =
         linesActive && linesConfig && linesField
@@ -707,6 +734,12 @@ export function useFormViewSave({
         const result = readSubmitResult(await runSubmit(data, linesDiff, value)
           .catch((cause) => formSubmitError(cause, t("form.genericSaveError"))));
         if (result) {
+          // The save settles the resets it saw; one a preset remembered while it was pending waits.
+          if (hiddenResetsRef.current.size) {
+            const waiting = [...hiddenResetsRef.current]
+              .filter(([path, reset]) => !submittedResets.has(path) || !Object.is(submittedResets.get(path), reset));
+            rememberHiddenResets(waiting.length ? new Map(waiting) : NO_HIDDEN_RESETS);
+          }
           const response = result.data;
           const acknowledgement = isFormSubmitAcknowledgement(response) ? response : undefined;
           const saved: Row = acknowledgement ? acknowledgement.record : response as Row;
@@ -756,6 +789,9 @@ export function useFormViewSave({
       detailKey,
       rowsFromRecord,
       record,
+      hiddenResetsRef,
+      rememberHiddenResets,
+      writtenHiddenResets,
     ],
   );
   const submitForm = form.handleSubmit(submitValues);
@@ -790,6 +826,7 @@ export function useFormViewSave({
       const scoped = (name: string) => scope ? `${scope}.${name}` : name;
       userEditedFieldsRef.current.add(scoped(field.name));
       clearErrors(scoped(field.name));
+      let resets = hiddenResetsRef.current;
       if (isCreate || !field.createOnly) {
         // What the form compares itself against: a preset may give a sibling its loaded value back.
         const loaded = form.formState.defaultValues;
@@ -800,6 +837,7 @@ export function useFormViewSave({
         );
         if (seeds) {
           const replacements = new Set(field.prefillReplace ?? []);
+          const applied = new Map<string, unknown>();
           for (const [name, seed] of Object.entries(seeds)) {
             const target = scoped(name);
             if (
@@ -810,6 +848,7 @@ export function useFormViewSave({
                 replaceEqualDeep(prefillSeedsRef.current.get(target), form.getValues(target)) !== prefillSeedsRef.current.get(target)
               ))
             ) continue;
+            applied.set(target, seed);
             if (field.prefillPreserveDirty && !replacements.has(name)) {
               setValue(target, seed, { shouldDirty: false, shouldTouch: true });
               prefillSeedsRef.current.set(target, seed);
@@ -820,6 +859,27 @@ export function useFormViewSave({
               shouldTouch: true,
             });
           }
+          // The draft holds only the fields visible for its new values, as it was loaded (`emptyDraft`),
+          // and remembers what the preset gave each field it hid.
+          const hidden = hiddenDraftPaths(form.getValues(), formFields, [...applied.keys()]);
+          if (hidden.length) {
+            form.unregister(hidden, { keepDefaultValue: true });
+            const next = new Map(resets);
+            for (const [target, seed] of applied) {
+              if (!hidden.some((path) => target === path || target.startsWith(`${path}.`))) continue;
+              if (seed === undefined) next.delete(target);
+              else next.set(target, seed);
+            }
+            resets = next;
+          }
+        }
+      }
+      // A field shown again holds its own value: the reset a preset gave it is gone.
+      if (resets.size || resets !== hiddenResetsRef.current) {
+        const values = form.getValues();
+        const waiting = [...resets].filter(([path]) => !draftHoldsPath(values, formFields, path));
+        if (resets !== hiddenResetsRef.current || waiting.length < resets.size) {
+          rememberHiddenResets(waiting.length ? new Map(waiting) : NO_HIDDEN_RESETS);
         }
       }
       if (fieldWidgetId(field) === "slug") {
@@ -837,7 +897,7 @@ export function useFormViewSave({
         });
       }
     },
-    [clearErrors, defaultSlugSource, formFields, getFieldState, isCreate, setValue],
+    [clearErrors, defaultSlugSource, form, formFields, getFieldState, hiddenResetsRef, isCreate, rememberHiddenResets, setValue],
   );
   const fieldReadOnly = React.useCallback(
     (field: FieldDescriptor): boolean =>
@@ -848,13 +908,14 @@ export function useFormViewSave({
     if (isCreate) localAcknowledgementRef.current = null;
     prefillSeedsRef.current.clear();
     userEditedFieldsRef.current.clear();
+    rememberHiddenResets(NO_HIDDEN_RESETS);
     reset(isCreate ? emptyValues : values, { keepDirtyValues: false, keepDirty: false });
     resetHistory();
     activeFieldInteractions.current.clear();
     formIsDirtyRef.current = false;
     editBasisRecordRef.current = displayRecord;
     onDiscarded?.();
-  }, [displayRecord, emptyValues, isCreate, onDiscarded, reset, resetHistory, values]);
+  }, [displayRecord, emptyValues, isCreate, onDiscarded, rememberHiddenResets, reset, resetHistory, values]);
   const startFieldInteraction = React.useCallback(
     (path: string) => {
       startHistory(path);

@@ -169,6 +169,9 @@ async function fixture(options: {
   recordExtras?: React.ComponentProps<typeof FormView>["recordExtras"];
   groups?: readonly GroupDescriptor[];
   title?: React.ComponentProps<typeof FormView>["title"];
+  /** Stored values beside the record's defaults. */
+  record?: Row;
+  viewFields?: readonly FieldDescriptor[];
 } = {}) {
   let record: Row = {
     id: options.id ?? "note-1",
@@ -180,6 +183,7 @@ async function fixture(options: {
     ...(options.relationValues
       ? { parent: { id: "note-a", title: "Parent A" } }
       : {}),
+    ...options.record,
   };
   const onSaved = vi.fn();
   const getOne = vi.fn(async (_params?: { meta?: MetaQuery }) => ({ data: record }));
@@ -219,7 +223,7 @@ async function fixture(options: {
       <BoundDescriptorField key={index} form={surface} resource="notes.Note" {...bound} />
     ))}</>;
   }
-  function Tree({ recordId = id, mountedFields = options.mountedFields ?? ["title", "body"], viewFields = fields, boundFields = options.boundFields }: { recordId?: string | null; mountedFields?: readonly string[]; viewFields?: readonly FieldDescriptor[]; boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean }[] }) {
+  function Tree({ recordId = id, mountedFields = options.mountedFields ?? ["title", "body"], viewFields = options.viewFields ?? fields, boundFields = options.boundFields }: { recordId?: string | null; mountedFields?: readonly string[]; viewFields?: readonly FieldDescriptor[]; boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean }[] }) {
     return <Provider resources={[formResource]} dataProvider={provider} queryClient={client}>
       <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: { ...defaultWidgets, ...options.widgets },
         ...(options.preview ? { auth: { user: options.preview.currentUser, status: "authenticated", hasRole: () => false, viewAs: options.preview } } : {}),
@@ -676,6 +680,98 @@ test("a preset that gives a sibling its loaded value back leaves the form clean,
   edit("Kind", "letter");
   expect(f.surface().form.getValues()).toMatchObject({ kind: "letter", config: { paper: "A4" } });
   expect(f.surface().form.formState.isDirty).toBe(false);
+});
+
+// A kind decides its settings: `rich` edits them whole, `split` field by field, `plain` and `bare` take none.
+const presetResource: DataResourceMetadata = {
+  ...resource,
+  fields: [...(resource.fields ?? []), {
+    name: "kind", kind: "scalar", scalar: "String", readable: true,
+    filterable: false, sortable: false, aggregatable: false, groupable: false,
+    creatable: true, updatable: true, requiredOnCreate: false,
+  }],
+};
+const presetFields: readonly FieldDescriptor[] = [
+  {
+    name: "kind", label: "Kind", widget: "select",
+    options: ["plain", "bare", "rich", "split"].map((value) => ({ value, label: value })),
+    // Another kind starts its settings empty; the loaded kind gets its loaded settings back.
+    prefill: (value, _values, loaded) => ({
+      settings: loaded !== undefined && value === loaded.kind ? loaded.settings ?? {} : {},
+    }),
+    prefillReplace: ["settings"],
+  },
+  { name: "settings", label: "Settings", widget: "json", showWhen: (values) => values.kind === "rich" },
+  { name: "settings.a", label: "A", showWhen: (values) => values.kind === "split" },
+  { name: "settings.b", label: "B", showWhen: (values) => values.kind === "split" },
+];
+
+/** A saved record's form over the kinds above, with the values it holds. */
+async function presetForm(stored: Row) {
+  let surface!: FormViewSaveSurface;
+  const f = await fixture({
+    publicView: true, resourceMetadata: presetResource, record: stored, viewFields: presetFields,
+    formExtras: (context) => { surface = context.form; return null; },
+  });
+  await waitFor(() => expect(screen.getByRole("combobox", { name: "Kind" }).textContent).toContain(String(stored.kind)));
+  return { ...f, values: () => surface.form.getValues() };
+}
+
+async function chooseKind(kind: string) {
+  fireEvent.click(screen.getByRole("combobox", { name: "Kind" }));
+  const option = await screen.findByRole("option", { name: kind });
+  fireEvent.pointerDown(option, { pointerType: "mouse" });
+  fireEvent.click(option);
+  await waitFor(() => expect(screen.getByRole("combobox", { name: "Kind" }).textContent).toContain(kind));
+}
+
+function expectClean() {
+  expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Discard" })).toBeNull();
+}
+
+test("a preset that hides a field leaves the form as loaded, and saves the field's reset only over a different stored value", async () => {
+  // Stored without settings: another kind, then the stored one again, is what is stored.
+  const without = await presetForm({ kind: "plain", settings: {} });
+  await chooseKind("rich");
+  expect(await screen.findByRole("button", { name: "Save" })).toBeTruthy();
+  await chooseKind("plain");
+  await waitFor(expectClean);
+  expect(without.update).not.toHaveBeenCalled();
+  cleanup();
+
+  // Stored with settings: the kind without them is dirty, and back again before saving is clean.
+  const stored = await presetForm({ kind: "rich", settings: { depth: 2 } });
+  await chooseKind("plain");
+  expect(Object.hasOwn(stored.values(), "settings")).toBe(false);
+  expect(await screen.findByRole("button", { name: "Discard" })).toBeTruthy();
+  await chooseKind("rich");
+  await waitFor(expectClean);
+  expect(stored.values()).toMatchObject({ kind: "rich", settings: { depth: 2 } });
+  // Saved, the kind without settings takes them empty.
+  await chooseKind("plain");
+  fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+  await waitFor(() => expect(stored.update).toHaveBeenCalledOnce());
+  expect(stored.update).toHaveBeenCalledWith(expect.objectContaining({ variables: { kind: "plain", settings: {} } }));
+  await waitFor(expectClean);
+});
+
+test("a preset that hides a field already stored as its reset saves the kind alone, and hidden nested fields leave no keys", async () => {
+  const empty = await presetForm({ kind: "plain", settings: {} });
+  await chooseKind("bare");
+  expect(Object.hasOwn(empty.values(), "settings")).toBe(false);
+  fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+  await waitFor(() => expect(empty.update).toHaveBeenCalledOnce());
+  expect(empty.update).toHaveBeenCalledWith(expect.objectContaining({ variables: { kind: "bare" } }));
+  cleanup();
+
+  const split = await presetForm({ kind: "split", settings: { a: "one", b: "two" } });
+  expect(split.values()).toMatchObject({ settings: { a: "one", b: "two" } });
+  await chooseKind("plain");
+  expect(Object.hasOwn(split.values(), "settings")).toBe(false);
+  fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+  await waitFor(() => expect(split.update).toHaveBeenCalledOnce());
+  expect(split.update).toHaveBeenCalledWith(expect.objectContaining({ variables: { kind: "plain", settings: {} } }));
 });
 
 test("a stateful bound widget remounts when its nested scope changes", async () => {

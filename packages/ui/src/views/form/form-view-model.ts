@@ -300,13 +300,68 @@ export function emptyDraft(
     if (value !== MISSING_DOTTED_VALUE) setDottedValue(evaluation, field.name, cloneFormValue(value));
   }
   const draft: FormValues = {};
-  for (const declared of fields) {
-    const field = resolveField(declared, evaluation);
-    if (!isFieldVisible(field, evaluation)) continue;
+  for (const field of visibleFields(fields, evaluation)) {
     const value = initialDraftFieldValue(field, defaultValues);
     if (value !== MISSING_DOTTED_VALUE) setDottedValue(draft, field.name, cloneFormValue(value));
   }
   return draft;
+}
+
+/** The fields a draft for `values` holds: those visible for them, resolved against them. */
+export function visibleFields(fields: readonly FieldDescriptor[], values: FormValues): FieldDescriptor[] {
+  return fields.map((field) => resolveField(field, values)).filter((field) => isFieldVisible(field, values));
+}
+
+/** Whether a draft for `values` holds anything at `path`: a field visible for them at, above or below it. */
+export function draftHoldsPath(values: FormValues, fields: readonly FieldDescriptor[], path: string): boolean {
+  return visibleFields(fields, values).some(({ name }) => holdsPath(name, path) || name.startsWith(`${path}.`));
+}
+
+/**
+ * The paths of `values` a draft for them does not hold (see `emptyDraft`): a field hidden for
+ * them and whatever lies within it, short of what a visible field holds, and a `seeded` path
+ * holding declared fields none of which is visible. A value no field declares stays.
+ */
+export function hiddenDraftPaths(
+  values: FormValues,
+  fields: readonly FieldDescriptor[],
+  seeded: readonly string[] = [],
+): string[] {
+  const visible = visibleFields(fields, values).map((field) => field.name);
+  const declared = fields.map((field) => field.name);
+  const walk = (value: unknown, path: string): string[] => {
+    if (visible.some((name) => holdsPath(name, path))) return [];
+    const holdsDeclared = declared.some((name) => name.startsWith(`${path}.`));
+    const owned = declared.some((name) => holdsPath(name, path)) || (holdsDeclared && seeded.includes(path));
+    const nested = owned ? visible.some((name) => name.startsWith(`${path}.`)) : holdsDeclared;
+    if (nested && value !== null && typeof value === "object" && !Array.isArray(value)) {
+      return Object.entries(value).flatMap(([key, child]) => walk(child, `${path}.${key}`));
+    }
+    return owned ? [path] : [];
+  };
+  return Object.entries(values).flatMap(([key, value]) => walk(value, key));
+}
+
+/**
+ * The stored value a draft compares `path` against when it does not hold it: the baseline's
+ * when that holds it, else the record's, read as `recordToValues` reads the field declared there.
+ */
+export function storedDraftValue(
+  path: string,
+  baseline: FormValues,
+  record: Row,
+  fields: readonly FieldDescriptor[],
+): unknown {
+  if (hasDottedValue(baseline, path)) return dottedValue(baseline, path);
+  const declared = fields.find((field) => field.name === path);
+  if (!declared) return dottedValue(record, path);
+  const value = recordFormValue(record, resolveField(declared, record));
+  return value === MISSING_DOTTED_VALUE ? undefined : value;
+}
+
+/** A field named `name` holds `path` when the path is that field or lies within it. */
+function holdsPath(name: string, path: string): boolean {
+  return path === name || path.startsWith(`${name}.`);
 }
 
 function initialDraftFieldValue(
@@ -325,19 +380,23 @@ export function recordToValues(
   lines?: LinesSeed,
 ): FormValues {
   const values: FormValues = {};
-  for (const declared of fields) {
-    const field = resolveField(declared, record);
-    if (!isFieldVisible(field, record)) continue;
-    const present = hasDottedValue(record, field.name);
-    if (!present && (field.omittable || field.presenceRequired)) continue;
-    const raw = dottedValue(record, field.name);
-    const value = isRelationIdField(field)
-      ? raw ?? null
-      : recordFieldValue({ ...record, [field.name]: raw }, field);
-    setDottedValue(values, field.name, value === undefined ? emptyValue(field) : value);
+  for (const field of visibleFields(fields, record)) {
+    const value = recordFormValue(record, field);
+    if (value !== MISSING_DOTTED_VALUE) setDottedValue(values, field.name, value);
   }
   if (lines) values[lines.field] = lines.rows;
   return values;
+}
+
+/** A record's value for one field as the form holds it, or the missing marker for an omitted one. */
+function recordFormValue(record: Row, field: FieldDescriptor): unknown {
+  const present = hasDottedValue(record, field.name);
+  if (!present && (field.omittable || field.presenceRequired)) return MISSING_DOTTED_VALUE;
+  const raw = dottedValue(record, field.name);
+  const value = isRelationIdField(field)
+    ? raw ?? null
+    : recordFieldValue({ ...record, [field.name]: raw }, field);
+  return value === undefined ? emptyValue(field) : value;
 }
 
 export function baselineLineRows(
@@ -373,9 +432,7 @@ export function missingRequiredFieldNames(
   fields: readonly FieldDescriptor[],
   requiredFieldNames: ReadonlySet<string>,
 ): readonly string[] {
-  return fields.flatMap((declared) => {
-    const field = resolveField(declared, values);
-    if (!isFieldVisible(field, values)) return [];
+  return visibleFields(fields, values).flatMap((field) => {
     const value = dottedValue(values, field.name);
     if (isStructuredPresenceField(field)) {
       return structuredFieldErrorPaths(field, value, hasDottedValue(values, field.name));
@@ -390,12 +447,7 @@ export function visibleSections(
   sections: readonly FormSectionModel[],
   values: FormValues,
 ): readonly FormSectionModel[] {
-  return sections.map((section) => ({
-    ...section,
-    fields: section.fields
-      .map((field) => resolveField(field, values))
-      .filter((field) => isFieldVisible(field, values)),
-  }));
+  return sections.map((section) => ({ ...section, fields: visibleFields(section.fields, values) }));
 }
 
 export function mutationData(
@@ -408,6 +460,8 @@ export function mutationData(
     fieldMetadata?: Readonly<Record<string, ModelFieldMetadata>> | null;
     seededFieldNames?: ReadonlySet<string> | null;
     writableFields?: ReadonlySet<string> | null;
+    /** What a preset that hid a field writes over its differing stored value (see `FieldDescriptor.prefill`). */
+    hiddenResets?: ReadonlyMap<string, unknown> | null;
   },
 ): FormValues {
   const data: FormValues = {};
@@ -420,7 +474,10 @@ export function mutationData(
       (field.defaultValue !== undefined ||
         (options.seededFieldNames?.has(field.name) ?? false));
     if (field.readOnly && !seededDefault) continue;
-    if (!isFieldVisible(field, values)) continue;
+    if (!isFieldVisible(field, values)) {
+      if (options.hiddenResets?.has(field.name)) setDottedValue(data, field.name, options.hiddenResets.get(field.name));
+      continue;
+    }
     const next = mutationFieldValue(field, dottedValue(values, field.name));
     const dirty = Boolean(dottedValue(options.dirtyFields, field.name));
     const structuredRootDirty = field.name.includes(".") && isDirtyValue(

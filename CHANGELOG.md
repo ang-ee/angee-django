@@ -10,6 +10,15 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: a record form's preset leaves the form as it was loaded. After a
+  field's `prefill` applies, the draft drops every field hidden for its new
+  values, as the loaded draft does, so choosing another kind and then the
+  stored one again is clean instead of dirty with nothing to save. A field the
+  preset hid is saved with the preset's value only where that differs from the
+  field's stored value (a configuration a kind without one no longer takes),
+  and the form stays dirty while it does; discard and a successful save forget
+  it. `prefillReplace` is documented as what it is: the fields
+  `prefillPreserveDirty` still replaces.
 - `@angee/ui`: a person's color scheme has one writer and a first-paint cache
   that follows it. Under an appearance provider the user menu no longer mounts
   the browser-local scheme (`useColorSchemePreference`), which wrote its own
