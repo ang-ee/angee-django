@@ -21,6 +21,7 @@ import { appearance } from "virtual:angee-appearance";
 
 import "survey-core/survey-core.css";
 import "./surveyjs-bridge.css";
+import { answersToSend, restoreAnswers } from "./answers";
 import { chooseLanguage, loadInterfaceStrings } from "./language";
 import { linksInNewTab } from "./markup";
 
@@ -141,14 +142,14 @@ async function send(): Promise<string | undefined> {
       submission_id: submissionId,
       version: form?.version,
       language,
-      answers: survey.data,
+      answers: answersToSend(survey),
       ...(honeypot.name ? { [honeypot.name]: honeypot.value } : {}),
     }),
   }).catch(() => undefined);
   if (response?.status === 202) return undefined;
   const refusal = ((await response?.json().catch(() => undefined)) ?? {}) as Refusal;
   if (response?.status === 409) {
-    // The form serves another version now: show it with the answers given, and say so on it.
+    // The form serves another version now: show it with the answers it still asks for, and say so on it.
     try {
       await open(survey.data);
     } catch {
@@ -160,14 +161,14 @@ async function send(): Promise<string | undefined> {
   return (refusal.fields ? refuse(refusal.fields) : refusal.message) ?? RETRY;
 }
 
-/** Render the version the form serves now, keeping any answers already given. */
+/** Render the version the form serves now, keeping the answers already given that it still asks for. */
 async function open(answers: object = {}): Promise<void> {
   form = await describe();
   wear();
   if (!form) return say(CLOSED);
   surveyLocalization.defaultLocale = form.default_language;
   survey = new Model(form.definition);
-  survey.data = answers;
+  restoreAnswers(survey, answers);
   // The one hook SurveyJS passes its markup through: `html` elements and the completed page.
   survey.onProcessHtml.add((_survey, options) => {
     options.html = linksInNewTab(options.html);
