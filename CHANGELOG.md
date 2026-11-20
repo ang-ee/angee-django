@@ -20,7 +20,10 @@ live in code docstrings.
     response (`Response`) is one submission, kept as received before anything is
     made from it, once per form and `submission_id`. A target (`FormTarget`,
     `ANGEE_WEBFORM_TARGET_CLASSES`) turns a response into a record of the addon
-    that owns it; `store`, the default, keeps the response as the record. Forms
+    that owns it; `store`, the default, keeps the response as the record. A
+    target's addon declares the type its target makes, as a relation on
+    `webforms/response_record` in its `permissions.extends.zed`; a delivery
+    that returns a record of a type nobody declared fails. Forms
     are managed by platform admins and the `webforms_admin` role, from the
     console's forms, versions, addresses and responses.
   - **The public address** of a form is `forms/<alias>`, and it answers by what
@@ -64,11 +67,16 @@ live in code docstrings.
       messaging (the message's envelope and body, with the claimed address),
       which erasing the response does not reach, because messaging has no verb
       that redacts an ingested message; the fix, a target erase hook and a
-      messaging redaction verb, is a follow-up. The bridge's refusal of a
+      messaging redaction verb, is a follow-up. Messaging's refusal of a
       removal of the channel's form columns at `migrate` (below), with its
       check `angee.E054`, is interim: deleted once the framework pins
       django-compose 0.1.0.dev14, whose drop guard judges pending removals at
-      migrate time.
+      migrate time. With that pin the bridge's template keeps its `RunPython`
+      and its `RemoveConstraint`, writes each of its six removals as
+      django-compose's `IntendedRemoveField`, and can drop
+      `moves_webform_channels`; the template's update ships with the pin,
+      because an unapplied host copy that still uses plain `RemoveField` is
+      then refused at `migrate` (it fails safe) and must be copied again.
   - **A response posted as a message** is the bridge `angee.webforms_messaging`,
     which requires both addons; neither depends on the other. Its `message`
     target posts a response on a `webform` channel through
@@ -76,9 +84,11 @@ live in code docstrings.
     with the `webform` envelope `Message.webform_submission()` reads, so
     `angee.intake` captures it. The claimed address in the envelope is the
     answer to the version's contact question when that question asks for an
-    email. Someone may point a form at a channel only if they may write on it,
-    and one channel and slug take one form: a second is refused when it is
-    configured, and by the table when two are saved at once.
+    email. The bridge declares `messaging/message` as a type a response can
+    become (`permissions.extends.zed`). Someone may point a form at a channel
+    only if they may write on it, and one channel and slug take one form: a
+    second is refused when it is configured, and by the table when two are
+    saved at once.
     A response is refused, and not tried again, as `channel_missing`,
     `message_exists` (the channel already holds a message under that
     submission's id which the response did not make) or `message_refused`. The
@@ -95,8 +105,10 @@ live in code docstrings.
     token-hook check (now `angee.webforms`, with the same names and defaults);
     and from `messaging.webforms` `WebformSpec`, `WebformField`,
     `WebformUnavailable`, `WebformChanged`, `validate_submission_id` and the
-    schema constants. The module keeps `default_webform_schema` alone, which
-    projects' retained messaging migrations import. Removed from
+    schema constants. The module keeps what projects' retained migrations
+    import: `default_webform_schema`, and what the bridge's template reads of a
+    channel's form (`FORM_COLUMNS`, `holds_form`, `channels_holding_forms`,
+    `channel_public_id`). Removed from
     `@angee/messaging`: `PublicWebform`, `PublicWebformPage`, the
     `/public/forms` routes, the channel form's "Public form" group and their
     translations. A client of the earlier `forms/<slug>` JSON contract follows
@@ -109,12 +121,9 @@ live in code docstrings.
     back means restoring that backup and running the previous code.
     - Every host that composes `angee.webforms` runs `makemigrations webforms`.
     - A host that holds channels with the `webform` backend adds
-      `angee.webforms_messaging` to its roots before it provisions. Until it
-      does, the database check `angee.E052` names those rows under
-      `check --database`, which a plain `migrate` runs first and `provision`
-      runs only after its migrations: without the bridge nothing refuses a
-      removal of the channel's form columns under `provision`, and the forms
-      are dropped before `angee.E052` is reached.
+      `angee.webforms_messaging` to its roots. Until it does, the database check
+      `angee.E052` names those rows under `check --database`, which a plain
+      `migrate` runs first and `provision` runs only after its migrations.
     - A host whose webform channels hold a form (a slug, a published flag or a
       schema) moves them with the bridge's migration template, in this order:
       delete any autodetected migration that removes `Channel.slug`,
@@ -127,8 +136,11 @@ live in code docstrings.
       `manage.py check_webform_channels`, which prints what the move would
       refuse and leave out and changes nothing; then `migrate` and `rebac sync`.
     - `migrate` refuses the wrong order by itself, also under `provision`,
-      which skips system checks: the bridge listens to `pre_migrate`, and a run
-      whose plan removes those columns with a migration that neither is the
+      which skips system checks, and on a host that has not installed the
+      bridge: the columns are messaging's, so messaging listens to
+      `pre_migrate`
+      (`angee.messaging.webform_columns.refuse_removal_ahead_of_the_move`). A
+      run whose plan removes those columns with a migration that neither is the
       move nor follows it is stopped before anything is applied, while a webform
       channel of that database holds a form. The refusal names the migration,
       counts the channels and names a few by public id, and gives the remedy;
@@ -136,10 +148,21 @@ live in code docstrings.
       nothing did: the composer's drop guard judges authoring only, at
       `makemigrations` and on the database that command runs on, so a removal
       authored where no channel held a form was applied where channels did, and
-      dropped their forms. The order above stays the instruction. A host whose
-      channels hold no form anywhere needs no template: `makemigrations
-      messaging` removes the empty columns, nothing refuses that, and
-      `check_webform_channels` says there is nothing to move.
+      dropped their forms. What is read from a plan is `RemoveField` on the
+      channel, also inside `SeparateDatabaseAndState`; a column dropped by
+      `RunSQL`, or renamed and then removed, is not seen. The order above stays
+      the instruction.
+    - The move is known by what its migration declares
+      (`moves_webform_channels = True`), under whatever name a host gave its
+      copy. A copy of the template taken before that mark existed lacks it and
+      must be copied again: it fails safe, since `migrate` refuses it as a
+      removal that is not the move.
+    - A host whose channels hold no form anywhere needs no template:
+      `makemigrations messaging` removes the empty columns and nothing refuses
+      that. `check_webform_channels` says which case a database is in: the
+      columns are gone, or no webform channel holds a form (both: nothing to
+      move), or channels hold a form and the project has no copy of the
+      template (copy it), or the copy is there (the dry run).
     - The template makes one form per channel, named after it, with the
       channel's slug as its address and as the slug of its `message` target, so
       its conversation continues. The FormSpec becomes the form's first version
@@ -175,7 +198,7 @@ live in code docstrings.
       applies the template through a 3.x release first.
   - Check ids: `angee.E052` is new (`check_stored_impl_keys`: stored rows whose
     implementation key nothing registers, with the remedy an addon states in
-    `ANGEE_IMPL_KEY_REMEDIES`). `angee.E054` is new and interim (the bridge's
+    `ANGEE_IMPL_KEY_REMEDIES`). `angee.E054` is new and interim (messaging's
     `check_form_columns_leave_with_the_move`: a pending migration that removes
     the form columns of webform channels that hold a form and is not the move).
     Provenance's merge-history check is now

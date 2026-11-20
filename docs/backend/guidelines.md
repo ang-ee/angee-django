@@ -1631,11 +1631,11 @@ retains its native routing contract.
   [composer's drop guard](../composer.md#project-migration-history). The guard
   judges authoring, on the database `makemigrations` runs on. Until the
   framework pins django-compose 0.1.0.dev14, whose guard also judges pending
-  removals at `migrate`, an addon whose template carries data out of a column
-  refuses the wrong order itself, in a `pre_migrate` receiver and a database
-  check (the web forms bridge's
-  [`refuse_removal_ahead_of_the_move`](../../src/angee/webforms_messaging/signals.py)
-  and `angee.E054`). An
+  removals at `migrate`, the addon that owns a column whose data a template
+  carries away refuses the wrong order itself, in a `pre_migrate` receiver and
+  a database check (messaging's
+  [`refuse_removal_ahead_of_the_move`](../../src/angee/messaging/webform_columns.py)
+  and `angee.E054`, for the form columns its channels held). An
   project authors a native migration that preserves or retires the data and
   removes the field or model; an empty column needs
   nothing, and neither does a table holding only rows its own resource files

@@ -7,10 +7,14 @@ held. This command runs the same judgment first: it finds the project's copy in
 its messaging history, reads the channels in the migration state just before
 that copy, and prints what the move would refuse and what it would leave out.
 
-The channel table is looked at first. Where its form columns are gone there is
-nothing to move, with or without a copy of the template: a project whose
-channels never held a form removed the empty columns with an ordinary migration
-and needs none.
+The channel table is looked at first, and the channels before the template is
+asked for. Where the form columns are gone there is nothing to move, with or
+without a copy of the template. Where they are there and no webform channel
+holds a form there is nothing to move either: ``makemigrations messaging``
+removes the empty columns, and no template is needed. Only a project whose
+channels hold a form is asked for its copy, and with one the move is judged.
+Which channels hold a form is messaging's judgment
+(``angee.messaging.webforms``), the one the move itself uses.
 """
 
 from __future__ import annotations
@@ -23,7 +27,7 @@ from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.db import DEFAULT_DB_ALIAS, connections
 from django.db.migrations.loader import MigrationLoader
 
-from angee.webforms_messaging.compose_migrations.messaging.webform_channels_to_forms import FORM_COLUMNS, is_move
+from angee.messaging.webforms import FORM_COLUMNS, channels_holding_forms, is_move
 
 
 class Command(BaseCommand):
@@ -58,8 +62,16 @@ class Command(BaseCommand):
             self.stdout.write("The webform columns are already removed from messaging's channels: nothing to move.")
             return
         if not copies:
+            holding = self.holding(loader, connection.alias)
+            if holding == 0:
+                self.stdout.write(
+                    "No webform channel holds a form: nothing to move. makemigrations messaging removes the empty "
+                    "columns."
+                )
+                return
+            held = f"{holding} webform channel(s) hold a form, and this" if holding else "This"
             raise CommandError(
-                "This project's messaging history holds no copy of the webform channel template. Copy "
+                f"{held} project's messaging history holds no copy of the webform channel template. Copy "
                 "angee/webforms_messaging/compose_migrations/messaging/webform_channels_to_forms.py into "
                 "runtime/messaging/migrations/ and pin its dependencies first."
             )
@@ -84,3 +96,20 @@ class Command(BaseCommand):
         )
         if plan.refusals:
             raise CommandError("The move would be refused. Change those channels, then check again.")
+
+    def holding(self, loader: MigrationLoader, alias: str) -> int | None:
+        """Count the webform channels that hold a form, in the state the applied migrations leave.
+
+        ``None`` when that state does not declare the form columns the table
+        has, so the channels cannot be read through it.
+        """
+
+        applied = [key for key in loader.applied_migrations if key in loader.graph.nodes]
+        state = loader.project_state(applied).apps
+        try:
+            channel = state.get_model("messaging", "Channel")
+        except LookupError:
+            return None
+        if not {field.name for field in channel._meta.get_fields()}.issuperset(FORM_COLUMNS):
+            return None
+        return len(channels_holding_forms(state, alias))

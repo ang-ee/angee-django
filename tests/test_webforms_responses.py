@@ -13,7 +13,9 @@ from typing import Any
 import pytest
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
+from django.db import connection
 from django.db.models import ProtectedError, RestrictedError
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from pydantic import BaseModel
 from rebac import PermissionDenied, actor_context, system_context
@@ -21,7 +23,7 @@ from rebac.roles import grant as grant_role
 
 from angee.base.models.identity import public_id_of
 from angee.provenance.checks import check_merge_history
-from angee.tags.testing.models import Tag
+from angee.tags.testing.models import Tag, TagCategory
 from angee.webforms import models as webforms_models
 from angee.webforms import tasks
 from angee.webforms.models import (
@@ -493,6 +495,29 @@ def test_deleting_the_record_a_response_became_erases_its_personal_answers_and_d
     with system_context(reason="webforms tests read"):
         assert not ResponseRecord._base_manager.filter(response=row).exists()
         assert ResponseRecord._base_manager.filter(response=other).exists()
+
+
+def test_only_the_record_types_a_target_declares_carry_the_link_and_pay_for_it() -> None:
+    """A type no target makes neither lists the link nor reads it when its rows go, however many go."""
+
+    link_table = ResponseRecord._meta.db_table
+
+    def link_reads(delete: Any) -> int:
+        with CaptureQueriesContext(connection) as queries, system_context(reason="webforms tests delete"):
+            delete()
+        return sum(1 for query in queries.captured_queries if link_table in query["sql"])
+
+    with system_context(reason="webforms tests setup"):
+        one = TagCategory.objects.create(name="One")
+        many = [TagCategory.objects.create(name=f"Many {index}") for index in range(50)]
+        declared = Tag.objects.create(name="Made by nobody's response")
+
+    # This host installs the tests' tag target and the messaging bridge: each declares the type its target makes.
+    assert set(ResponseRecord.accepted_target_models()) == {"messaging.message", "tags.tag"}
+    assert (ResponseRecord.declares_target(Tag), ResponseRecord.declares_target(TagCategory)) == (True, False)
+    assert link_reads(one.delete) == 0
+    assert link_reads(lambda: [category.delete() for category in many]) == 0
+    assert link_reads(declared.delete) == 1, "a declared type asks once whether a response became it, and no more"
 
 
 def test_the_owner_of_a_record_erases_the_responses_it_was_made_from() -> None:
