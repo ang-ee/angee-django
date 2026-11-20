@@ -260,7 +260,10 @@ export function DuplicatesDialog({
     : { limit: SETS_PAGE, after: lastPage?.after ?? null };
   const request = JSON.stringify(pageVariables);
   const listingDocument: AuthoredDocument = allGroups?.document ?? CertainSameAsPairs;
-  // The one cast at the schema boundary: a resource's groups read takes its own `group_by` enum, as the list sends it.
+  // The one cast at the schema boundary, and it cannot narrow to `group_by` alone: `groupByVariables` returns
+  // `Record<string, unknown>`, so `group_by` (each resource's own enum, `peopleGroupableField` or
+  // `organizationsGroupableField`) and `where`, `having` and `order_by` all arrive `unknown` to the generated
+  // variables; and `listingDocument`, one of three documents, is typed `AuthoredDocument`, whose variables are `never`.
   // The end-of-run invalidation reaches the listing's pages too, so a later dialog reads them again.
   const pageRead = useAuthoredQuery(listingDocument, pageVariables as never, {
     enabled: paged && !pagesDone, errorNotification: false, models: PARTY_MERGE_INVALIDATES,
