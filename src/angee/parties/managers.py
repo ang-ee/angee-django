@@ -3910,10 +3910,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         separate on one person, and the directory's statements, keyed by its
         integration, would overwrite each other on every sync. A tombstoned or
         withdrawn link counts for nothing, and a pair already on one record is
-        not this merge's. Any other merge is the merging person's to make: an
-        account's own person, or a person a two-way card names, included
-        (default pending the architect's ruling, O16). ``None`` when nothing
-        refuses.
+        not this merge's. Any other merge is the merging person's to make, an
+        account's own person or a person a two-way card names included. ``None``
+        when nothing refuses.
         """
 
         ids = [survivor.pk, *(row.pk for row in merged)]
@@ -3943,8 +3942,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         """Return why ``link``'s directory may not bind its contact ``parsed`` to the existing ``person``, or ``None``.
 
         Adopting a person is an access change: the directory becomes one of their
-        statement sources and its contact readers read them. Every limit must hold
-        (rulings R2 and R9), each read from rows loaded here under the contact
+        statement sources and its contact readers read them. Every limit must hold,
+        each read from rows loaded here under the contact
         locks the caller holds, never from the objects passed in: the link's
         stream is pull-only; the person is live (neither trashed nor merged away)
         and no account's own; no address the contact carries is a person

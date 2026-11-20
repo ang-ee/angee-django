@@ -95,7 +95,7 @@ is compared, versioned and stated by the ingest like the source's own, a
 person's own value still wins by rank, and removing the mapping replays the
 contact, whose ingest then states the source's own value. The preferred mark of
 the channel a contact chose is such a refinement when the contact brings that
-address (R20), so the ingest writes it once. A mapping may also write through
+address, so the ingest writes it once. A mapping may also write through
 other owners' verbs in its `apply_record`, declaring nothing for them: tags
 (`TagAssignment.objects.attach`) and the preferred mark of a handle the contact
 does not bring, a messenger's (`Handle.objects.upsert(..., is_preferred=True)`).
@@ -245,7 +245,7 @@ card names included, except two live contacts of one pull-only directory: the
 source keeps them separate, and the directory's statements would overwrite each
 other on every sync. A tombstoned link does not count, so once the source has
 merged or removed one of them, the two merge (`PartyManager.directory_merge_blocker`,
-from `Party.validate_merge`; default pending ruling O16). A trashed person is
+from `Party.validate_merge`). A trashed person is
 nobody's target (`PartyManager.contact_people`), so its record lands on a new
 person or adopts one; the link first withdraws what it stated on the trashed
 person, never handing it to another link of its source that names them too, and

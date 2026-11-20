@@ -991,7 +991,7 @@ live in code docstrings.
   page with that address no longer claims an address nobody holds. The
   PostgreSQL lane runs the directory backend's lock tests by node (a page
   against mail ingestion, a merge, a confirmation and an account's adoption);
-  the module's strict expected failure (open decision O15) would read as a skip
+  the module's strict expected failure would read as a skip
   in that lane's zero-skip gate.
 
 - `angee.parties`: the confirm rule is keyed on the address, at the owner of the
@@ -1075,7 +1075,7 @@ live in code docstrings.
   used to bind any organization it was handed, unadmitted, before locking, and
   state its addresses in full there. A link keeps its own organization, and an
   unbound one mints. Matching an existing organization, and its admission rule,
-  come with the organizations stream (open decision O9). No caller outside the
+  come with the organizations stream. No caller outside the
   tests passes one today; no vendor stream lands organizations yet.
 
 - `angee.parties`: a claim stays a claim. An address a pull-only directory
@@ -1201,7 +1201,7 @@ live in code docstrings.
   `credential_blocker` (CardDAV's Basic-auth rule moved there), and an
   `admit_credential` override on a directory backend is no longer called.
 
-- A pull-only directory adopts an existing person (rulings R2 and R9; an option,
+- A pull-only directory adopts an existing person (an option,
   off by default, since the entry above): a contact
   with no person of its own or of a record it replaced lands on the first person
   its emails name (`people_for_emails`, preferred email first) whose adoption
@@ -1288,7 +1288,7 @@ live in code docstrings.
   directory's next sync, since the rule is looked up by key.
 
 - A person's merge never sets two live contacts of one pull-only directory on
-  one person (default pending ruling O16). A survivor takes every link of the
+  one person. A survivor takes every link of the
   records merged into it, and two bound, live links of one pull-only directory
   from different records would put two records the source keeps separate on one
   person, whose statements overwrite each other on every sync:
