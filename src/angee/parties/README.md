@@ -316,7 +316,8 @@ number the handle owner reads nothing in, or refuses, is no number: each is
 left out and makes no handle, so two contacts that gave the same non-address
 are never one person for it. What can be an email address is the handle owner's
 one predicate, `Handle.is_email_address`: exactly one `@`, a non-empty name
-part with no whitespace or control character in any script (`jörg@`, `peña@`),
+part in any script (`jörg@`, `peña@`) with no whitespace, control or format
+character (a zero-width space, a direction mark),
 a domain that passes the domain rule of Django's `EmailValidator` (an
 internationalised one as typed or punycoded; the handle stores it as typed and
 compares it lower-cased), and no longer than an address may be or the handle's

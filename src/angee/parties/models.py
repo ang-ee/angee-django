@@ -1021,6 +1021,7 @@ class Handle(
             return "".join(character for character in normalized if character.isdigit())
         return normalized
 
+    # Django hard-codes it in django/core/validators.py, EmailValidator.__call__ (len(value) > 320): RFC 3696 section 3.
     EMAIL_ADDRESS_LIMIT: ClassVar[int] = 320
     """The longest an email address may be (RFC 3696 section 3): the bound Django's ``EmailValidator`` applies."""
 
@@ -1030,12 +1031,14 @@ class Handle(
 
         What cannot be an address is no address; anything else is one, however
         unusual. Surrounding whitespace aside, the value has exactly one ``@``,
-        a non-empty name part with no whitespace and no control character in
-        any script (``jörg@``, ``peña@``), and a domain that passes the domain
-        rule of Django's ``EmailValidator``, which reads an internationalised
-        domain as typed or in its punycode form. A value longer than an address
-        may be (:attr:`EMAIL_ADDRESS_LIMIT`) or than the ``value`` column holds
-        is none. It says nothing of whether the mailbox exists.
+        a non-empty name part in any script (``jörg@``, ``peña@``) with no
+        whitespace, control or format character (Unicode categories ``Cc`` and
+        ``Cf``: a zero-width space, a direction mark), and a domain that passes
+        the domain rule of Django's ``EmailValidator``, which reads an
+        internationalised domain as typed or in its punycode form. A value
+        longer than an address may be (:attr:`EMAIL_ADDRESS_LIMIT`) or than the
+        ``value`` column holds is none. It says nothing of whether the mailbox
+        exists.
         """
 
         column = cls._meta.get_field("value")
@@ -1044,7 +1047,8 @@ class Handle(
         if not address or len(address) > min(cls.EMAIL_ADDRESS_LIMIT, column.max_length) or address.count("@") != 1:
             return False
         name, domain = address.split("@")
-        if not name or any(character.isspace() or unicodedata.category(character) == "Cc" for character in name):
+        unseen = any(character.isspace() or unicodedata.category(character) in ("Cc", "Cf") for character in name)
+        if not name or unseen:
             return False
         return domain in validate_email.domain_allowlist or bool(validate_email.validate_domain_part(domain))
 

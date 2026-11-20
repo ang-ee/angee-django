@@ -532,6 +532,8 @@ def test_a_contact_with_no_address_and_no_number_states_nothing(source: Source) 
         pytest.param("ada@", id="no-domain-after-the-at"),
         pytest.param("a b@example.test", id="whitespace-in-the-name"),
         pytest.param("ada\x07@example.test", id="a-control-character-in-the-name"),
+        pytest.param("ada\u200b@example.test", id="a-zero-width-space-in-the-name"),
+        pytest.param("ada\u202e@example.test", id="a-direction-override-in-the-name"),
         pytest.param("a" * 600 + "@example.test", id="longer-than-an-address-may-be"),
     ],
 )

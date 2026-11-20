@@ -40,10 +40,10 @@ live in code docstrings.
   refuses, is no number: each is left out and makes no handle, so two contacts
   that gave the same non-address are never one person for it. What can be an
   email address is one predicate on the handle owner,
-  `Handle.is_email_address`: exactly one `@`, a non-empty name part with no
-  whitespace or control character in any script, a domain that passes the
-  domain rule of Django's `EmailValidator`, and no longer than an address may
-  be or the handle's value holds. What the person does not hold
+  `Handle.is_email_address`: exactly one `@`, a non-empty name part in any
+  script with no whitespace, control or format character, a domain that
+  passes the domain rule of Django's `EmailValidator`, and no longer than an
+  address may be or the handle's value holds. What the person does not hold
   is recorded as a claim for review with the record behind it
   (`propose_claimed_handle_as_system`) and moves nothing; a person found again
   has nothing new stated of them and carries a handle only when they hold it

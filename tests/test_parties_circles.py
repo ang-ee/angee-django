@@ -895,12 +895,14 @@ def test_handle_persists_normalized_value_on_create_and_value_update(db: None) -
         pytest.param("a@b@example.test", False, id="two-ats"),
         pytest.param("a b@example.test", False, id="whitespace-in-the-name"),
         pytest.param("ada\x07@example.test", False, id="a-control-character-in-the-name"),
+        pytest.param("ada\u200b@example.test", False, id="a-zero-width-space-in-the-name"),
+        pytest.param("ada\u202e@example.test", False, id="a-direction-override-in-the-name"),
         pytest.param("ada@example", False, id="a-domain-the-validator-refuses"),
         pytest.param("a" * 310 + "@example.test", False, id="longer-than-an-address-may-be"),
     ],
 )
 def test_handle_says_what_can_be_an_email_address(value: str, address: bool) -> None:
-    """What cannot be an address at all is none; the name part may be in any script."""
+    """What cannot be an address at all is none; the name part may be in any script, with nothing unseen in it."""
 
     assert Handle.is_email_address(value) is address
 
