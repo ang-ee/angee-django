@@ -648,6 +648,9 @@ def test_standing_claims_narrow_by_handle_or_by_party_and_keep_each_claims_recor
     ada = source.given(email=ADDRESS, phone=NUMBER, display_name="Ada Example")
     other = _source("another", owner).given(email=ADDRESS, display_name="A. Example")
 
+    with system_context(reason="tests.parties.claimants"):
+        standing = Party.objects.handle_statements().filter(handle=ada.email).standing()
+        assert set(standing.values_list("subject_id", "handle_id")) == set(_standing(handle=ada.email))
     assert _standing(handle=ada.email) == {
         (ada.person.pk, ada.email.pk): frozenset({behind(ada.record)}),
         (other.person.pk, ada.email.pk): frozenset({behind(other.record)}),

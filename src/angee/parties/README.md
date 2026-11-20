@@ -324,16 +324,18 @@ The verb proposes no pair, and no caller needs to: a claim links its person to
 the address, so identity matching (below) proposes the claimant and whoever else
 is linked to it.
 
-Which claims still stand is one read,
-[PartyStatementQuerySet.standing_claims](managers.py), over handle statements
-the caller narrows by handle or by party: each party's claim on a handle whose
-strongest current stance asserts a value, with the records its evidence names. A
-stance its source withdrew or a merge superseded makes nothing stand, and a
-person's dismissal outranks every claim. When two parties merge, the claims one
-source made for each collapse into one and the superseded one's records stay
-behind it, so two sources' claimants of one address, once merged, are each found
-as the survivor. A caller's own rule about which of its records may name a
-claimed address composes this read.
+Which claims still stand is one scope,
+[PartyStatementQuerySet.standing](managers.py), over handle statements the
+caller narrows by handle or by party: each party's strongest current stance on
+a handle, where it asserts a value. A stance its source withdrew or a merge
+superseded makes nothing stand, and a person's dismissal outranks every claim.
+`people_for_emails` and the identity lens of the party graph read it, and a
+caller that asks only who still claims what reads no evidence.
+`standing_claims` adds the records behind each claim, as its evidence names
+them. When two parties merge, the claims one source made for each collapse into
+one and the superseded one's records stay behind it, so two sources' claimants
+of one address, once merged, are each found as the survivor. A caller's own
+rule about which of its records may name a claimed address composes that read.
 
 [PartyManager.ingest_organization](managers.py) lands a `ParsedOrganization`
 from a directory stream the same way: it binds the link, mints an Organization

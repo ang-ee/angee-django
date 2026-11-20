@@ -885,14 +885,23 @@ class PartyStatementQuerySet[StatementT: PartyStatementMixin](StatementQuerySet[
             )
         )
 
+    def standing(self) -> Self:
+        """Each party's strongest current stance on a handle, where it asserts a value: the claims that still stand.
+
+        One row per party and handle (:meth:`members`). A claim stands whatever
+        its confidence: a stance its source withdrew or a merge superseded makes
+        nothing stand, and a person's dismissal outranks every claim. A caller
+        that asks only who still claims what reads no evidence;
+        :meth:`standing_claims` adds the records behind each.
+        """
+
+        return self.members().filter(status=self.model.StatementStatus.ASSERTED, snak=self.model.StatementSnak.VALUE)
+
     def standing_claims(self) -> dict[tuple[Any, Any], frozenset[EvidenceReference]]:
         """Return the handle claims among these statements that still stand, each with the records behind it.
 
-        Keyed by ``(party id, handle id)``. A party's claim on a handle stands
-        while its strongest current stance there (:meth:`members`) asserts a
-        value, whatever its confidence: a stance its source withdrew or a merge
-        superseded makes nothing stand, and a person's dismissal outranks every
-        claim. The records behind a standing claim are the evidence of each
+        Keyed by ``(party id, handle id)``, for the claims :meth:`standing`
+        answers. The records behind a standing claim are the evidence of each
         current stance that asserts the handle for the party, whichever source
         states it, and of the stances a merge folded under one of them: two
         parties' claims by one source collapse into one when the parties merge,
@@ -904,13 +913,13 @@ class PartyStatementQuerySet[StatementT: PartyStatementMixin](StatementQuerySet[
         """
 
         stance = self.model
-        asserting = Q(status=stance.StatementStatus.ASSERTED, snak=stance.StatementSnak.VALUE)
-        stated = self.handles().filter(asserting).order_by()
         claims: dict[tuple[Any, Any], set[EvidenceReference]] = {
-            pair: set() for pair in stated.members().values_list("subject_id", "handle_id")
+            pair: set() for pair in self.standing().order_by().values_list("subject_id", "handle_id")
         }
         if not claims:
             return {}
+        asserting = Q(status=stance.StatementStatus.ASSERTED, snak=stance.StatementSnak.VALUE)
+        stated = self.handles().filter(asserting).order_by()
         folded = stance._base_manager.filter(
             asserting,
             Exists(
@@ -922,6 +931,7 @@ class PartyStatementQuerySet[StatementT: PartyStatementMixin](StatementQuerySet[
             ),
             aspect="handle",
             superseded__isnull=False,
+            handle_id__in=stated.values("handle_id"),
         )
         for stances in (stated, folded):
             for party_id, handle_id, evidence in stances.values_list("subject_id", "handle_id", "evidence"):
@@ -3322,8 +3332,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             claims: defaultdict[str, dict[Any, Any]] = defaultdict(dict)
             for value, subject_id, handle_id in (
                 statements.filter(handle__in=known, subject__in=live.values("pk"))
-                .members()
-                .filter(status=statements.model.StatementStatus.ASSERTED, snak=statements.model.StatementSnak.VALUE)
+                .standing()
                 .order_by("handle_id")
                 .values_list("handle__normalized_value", "subject_id", "handle_id")
             ):

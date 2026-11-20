@@ -41,9 +41,11 @@ live in code docstrings.
   a record of the caller stands behind their claim on it. The rows of the
   address and of the number are locked in one call before any claim is read.
   The verb proposes no pair: a claim links its person to the address, so the
-  pairing job proposes them. The read behind it,
-  `PartyStatementQuerySet.standing_claims()`, answers which claims on the
-  handle statements a caller narrows still stand, each with the records its
+  pairing job proposes them. Which claims still stand is one scope,
+  `PartyStatementQuerySet.standing()` (each party's strongest current stance
+  on a handle, where it asserts a value), which `people_for_emails` and the
+  party graph's identity lens now read instead of spelling the rule. The read
+  behind the verb, `standing_claims()`, adds to each standing claim the records its
   evidence names, those of a claim a merge superseded under it included: two
   sources' claimants of one address, once merged, are each found as the
   survivor, where a read of current stances alone had one of the two sources
