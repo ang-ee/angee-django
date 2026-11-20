@@ -17,6 +17,8 @@ import re
 from collections.abc import Iterator, Sequence
 from datetime import date
 from functools import cache
+from html import escape
+from html.parser import HTMLParser
 from importlib.resources import files
 from typing import TYPE_CHECKING, Any
 
@@ -44,8 +46,13 @@ TEXT_KEYS = frozenset({
 })
 LANGUAGE_TAG = re.compile(r"^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$")
 SUBMISSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+LANGUAGE_TAG_LENGTH = 35
+MARKUP_KEYS = frozenset({"html", "completedHtml"})
+"""The only texts that are markup. Every other text is plain and is shown as written."""
+
+MARKUP_TAGS = frozenset({"p", "br", "strong", "em", "b", "i", "ul", "ol", "li", "h2", "h3", "h4", "a"})
+MARKUP_LINKS = ("http://", "https://", "mailto:")
 MAX_QUESTIONS = 200
-MAX_PANEL_DEPTH = 3
 TEXT_LIMIT = 2_000
 COMMENT_LIMIT = 20_000
 DEFAULT_RATING = (1, 5)
@@ -81,7 +88,10 @@ def validate_languages(languages: Sequence[str], default_language: str) -> None:
     errors: dict[str, list[str]] = {}
     if not isinstance(languages, (list, tuple)):
         raise ValidationError({"languages": ["A form's languages are a list of language tags."]})
-    bad = [tag for tag in languages if not isinstance(tag, str) or not LANGUAGE_TAG.fullmatch(tag)]
+    bad = [
+        tag for tag in languages
+        if not isinstance(tag, str) or not LANGUAGE_TAG.fullmatch(tag) or len(tag) > LANGUAGE_TAG_LENGTH
+    ]
     if not languages:
         errors["languages"] = ["A form is written in at least one language."]
     elif bad:
@@ -107,6 +117,90 @@ def validate_definition(definition: Any, *, languages: Sequence[str], default_la
         errors = list(_disagreements(definition, [tag for tag in languages if tag != default_language]))
     if errors:
         raise ValidationError({"definition": errors[:50]})
+
+
+class _Markup(HTMLParser):
+    """Read stored markup and write it back in its one canonical spelling.
+
+    Markup a form stores is rendered as HTML on a public page of the
+    application's origin. It is admitted only when it is made of the allowed
+    tags, a link's ``href`` and text, AND equals the canonical text rebuilt from
+    what this parser read: then there is nothing a browser could read
+    differently from what was judged. It is a refusal, never a rewrite.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.rebuilt: list[str] = []
+        self.unclosed: list[str] = []
+        self.refusal = ""
+
+    def refuse(self, reason: str) -> None:
+        self.refusal = self.refusal or reason
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag not in MARKUP_TAGS:
+            return self.refuse(f"<{tag}> is not allowed")
+        if tag != "a":
+            if attrs:
+                return self.refuse(f"<{tag}> carries no attribute")
+            self.rebuilt.append(f"<{tag}>")
+        else:
+            if len(attrs) != 1 or attrs[0][0] != "href" or attrs[0][1] is None:
+                return self.refuse("a link carries an href and nothing else")
+            # The parser has decoded the value, so a scheme split by an encoded character is seen whole.
+            address = attrs[0][1]
+            if (
+                address != address.strip()
+                or not address.lower().startswith(MARKUP_LINKS)
+                or any(character.isspace() or ord(character) < 0x20 for character in address)
+            ):
+                return self.refuse("a link goes to an http, https or mailto address")
+            self.rebuilt.append(f'<a href="{escape(address, quote=True)}">')
+        if tag != "br":
+            self.unclosed.append(tag)
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.refuse(f"write <{tag}> without a closing slash")
+
+    def handle_endtag(self, tag: str) -> None:
+        if not self.unclosed or self.unclosed[-1] != tag:
+            return self.refuse(f"</{tag}> closes nothing that is open")
+        self.unclosed.pop()
+        self.rebuilt.append(f"</{tag}>")
+
+    def handle_data(self, data: str) -> None:
+        self.rebuilt.append(escape(data, quote=False))
+
+    def handle_comment(self, data: str) -> None:
+        self.refuse("comments are not allowed")
+
+    def handle_decl(self, decl: str) -> None:
+        self.refuse("declarations are not allowed")
+
+    def handle_pi(self, data: str) -> None:
+        self.refuse("processing instructions are not allowed")
+
+    def unknown_decl(self, data: str) -> None:
+        self.refuse("declarations are not allowed")
+
+
+def markup_refusal(value: str) -> str:
+    """Return why ``value`` is not the simple markup a form may store, or an empty string."""
+
+    reader = _Markup()
+    reader.feed(value)
+    reader.close()
+    if reader.refusal:
+        return reader.refusal
+    if reader.unclosed:
+        return f"<{reader.unclosed[-1]}> is never closed"
+    if "".join(reader.rebuilt) != value:
+        return (
+            "write it plainly: lower-case tags without spaces, a double-quoted href, "
+            "and &amp;, &lt; and &gt; for those characters in text"
+        )
+    return ""
 
 
 def elements(definition: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any], int]]:
@@ -315,13 +409,11 @@ def _disagreements(definition: dict[str, Any], other_languages: Sequence[str]) -
             yield f"/pages/{index}: the name {page['name']!r} is used twice."
         names.add(page["name"])
     count = 0
-    for pointer, element, depth in elements(definition):
+    for pointer, element, _depth in elements(definition):
         name = element["name"]
         if name in names:
             yield f"{pointer}: the name {name!r} is used twice."
         names.add(name)
-        if depth >= MAX_PANEL_DEPTH and element["type"] == "panel":
-            yield f"{pointer}: panels nest at most {MAX_PANEL_DEPTH} deep."
         if element["type"] in QUESTION_TYPES:
             count += 1
             yield from (f"{pointer}: {problem}" for problem in _question_disagreements(element))
@@ -331,6 +423,16 @@ def _disagreements(definition: dict[str, Any], other_languages: Sequence[str]) -
         yield f"A form asks at most {MAX_QUESTIONS} questions."
     allowed = {"default", *other_languages}
     for pointer, value in texts(definition):
+        if pointer.rsplit("/", 1)[-1] in MARKUP_KEYS:
+            written = value.items() if isinstance(value, dict) else (("", value),)
+            for language, markup in written:
+                refusal = markup_refusal(markup)
+                if refusal:
+                    where = f"{pointer}/{language}" if language else pointer
+                    yield (
+                        f"{where}: {refusal}. Only paragraphs, line breaks, emphasis, lists, headings and "
+                        "links are stored here."
+                    )
         if isinstance(value, dict):
             unknown = sorted(set(value) - allowed)
             if unknown:

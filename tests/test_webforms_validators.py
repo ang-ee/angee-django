@@ -147,14 +147,84 @@ def test_a_definition_whose_parts_disagree_is_refused_at_the_part(definition: An
     assert any(message.startswith(f"{where}:") for message in messages), messages
 
 
-def test_a_form_asks_at_least_one_question_and_panels_nest_only_so_deep() -> None:
-    only_text = {"elements": [{"type": "html", "name": "notice", "html": "Closed."}]}
+def nested(panels: int) -> dict[str, Any]:
+    """A question inside ``panels`` panels, one in the other."""
+
     deep: dict[str, Any] = {"type": "text", "name": "q"}
-    for level in range(4):
+    for level in range(panels):
         deep = {"type": "panel", "name": f"p{level}", "elements": [deep]}
+    return {"elements": [deep]}
+
+
+def test_a_form_asks_at_least_one_question_and_panels_nest_three_deep_and_no_further() -> None:
+    only_text = {"elements": [{"type": "html", "name": "notice", "html": "<p>Closed.</p>"}]}
 
     assert refusal(only_text) == ["A form asks at least one question."]
-    assert any("nest at most" in message for message in refusal({"elements": [deep]}))
+    validate_definition(nested(3), languages=("en",), default_language="en")
+    assert any("elements[0].elements[0].elements[0].elements[0].type" in message for message in refusal(nested(4)))
+    assert refusal(nested(80)), "however deep, it is a refusal and never a recursion error"
+
+
+@pytest.mark.parametrize("markup", [
+    pytest.param("<p>Kept for a year.</p>", id="a-paragraph"),
+    pytest.param("<h2>Thank you</h2><p>We read <strong>every</strong> <em>idea</em>.<br>Soon.</p>", id="emphasis"),
+    pytest.param("<ul><li>One</li><li>Two</li></ul><ol><li>First</li></ol>", id="lists"),
+    pytest.param('<p>See <a href="https://example.test/privacy?a=1&amp;b=2">the notice</a>.</p>', id="a-web-link"),
+    pytest.param('<p>Write to <a href="mailto:hello@example.test">us</a>.</p>', id="a-mail-link"),
+    pytest.param("<p>Tom &amp; Jerry, 1 &lt; 2 &gt; 0.</p>", id="the-three-escaped-characters"),
+    pytest.param("Plain text with no tag at all.", id="no-markup"),
+])
+def test_simple_markup_is_admitted_as_written(markup: str) -> None:
+    form = changed(("completedHtml",), {"default": markup, "es": markup})
+
+    validate_definition(form, languages=LANGUAGES, default_language="en")
+
+
+@pytest.mark.parametrize("markup", [
+    pytest.param("<script>alert(1)</script>", id="a-script"),
+    pytest.param('<p onclick="alert(1)">Hello</p>', id="an-event-handler"),
+    pytest.param('<p style="color:red">Hello</p>', id="a-style-attribute"),
+    pytest.param('<img src="https://example.test/x.png">', id="an-image"),
+    pytest.param('<iframe src="https://example.test/"></iframe>', id="a-frame"),
+    pytest.param("<svg><p>Hello</p></svg>", id="a-foreign-element"),
+    pytest.param('<a href="javascript:alert(1)">x</a>', id="a-script-link"),
+    pytest.param('<a href="java&#10;script:alert(1)">x</a>', id="a-script-link-split-by-an-encoded-newline"),
+    pytest.param('<a href=" https://example.test/">x</a>', id="a-link-with-a-leading-space"),
+    pytest.param('<a href="data:text/html,x">x</a>', id="a-data-link"),
+    pytest.param('<a href="/privacy">x</a>', id="a-relative-link"),
+    pytest.param('<a href="https://example.test/" target="_blank">x</a>', id="a-second-attribute"),
+    pytest.param("<a>x</a>", id="a-link-without-an-address"),
+    pytest.param("<P>Hello</P>", id="an-upper-case-tag"),
+    pytest.param("<p >Hello</p>", id="a-space-inside-a-tag"),
+    pytest.param("<p>Hello<br/></p>", id="a-self-closing-tag"),
+    pytest.param("<p>Hello", id="a-tag-never-closed"),
+    pytest.param("<p>Hello</em></p>", id="a-tag-closed-out-of-turn"),
+    pytest.param("<p>Hello</p><!-- note -->", id="a-comment"),
+    pytest.param("<!DOCTYPE html><p>Hello</p>", id="a-declaration"),
+    pytest.param("<p>Tom & Jerry</p>", id="a-bare-ampersand"),
+    pytest.param("<p>a&nbsp;b</p>", id="a-named-entity"),
+    pytest.param("<p>1 < 2</p>", id="a-bare-less-than"),
+    pytest.param("<a href='https://example.test/'>x</a>", id="a-single-quoted-address"),
+])
+def test_markup_outside_the_allowlist_is_refused_at_its_text(markup: str) -> None:
+    in_one_language = changed(("completedHtml",), {"default": "<p>Thank you.</p>", "es": markup})
+    in_an_element = changed((*PANEL, 5, "html"), markup)
+
+    assert any(message.startswith("/completedHtml/es:") for message in refusal(in_one_language))
+    assert any(message.startswith("/pages/1/elements/0/elements/5/html:") for message in refusal(in_an_element))
+
+
+def test_a_title_is_plain_text_and_is_not_read_as_markup() -> None:
+    validate_definition(changed(("title",), "1 < 2 & <b>bold</b>"), languages=LANGUAGES, default_language="en")
+
+
+def test_a_language_tag_longer_than_a_response_can_carry_is_refused() -> None:
+    tag = "en-" + "-".join(["abcdefgh"] * 5)
+
+    with pytest.raises(ValidationError) as refused:
+        validate_languages(("en", tag), "en")
+
+    assert "languages" in refused.value.message_dict
 
 
 @pytest.mark.parametrize(("languages", "default", "field"), [

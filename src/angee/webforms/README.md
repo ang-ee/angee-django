@@ -12,8 +12,9 @@ the addon that owns it.
   public answers, its target, the theme its public page wears and how long a
   delivered response is kept.
 - A `FormVersion` holds the questions. It is numbered after its form's last when
-  it is made. While unpublished it may be revised in place; `publish()` freezes
-  it, and a change after that is a new version. A response pins the version it
+  it is made. While unpublished it may be revised in place; `publish()` judges
+  and freezes the stored row under its lock, and a change after that is a new
+  version, through every manager. A response pins the version it
   answered, so its answers stay readable whatever the form asks later.
 - A `FormAlias` is a public address of a form (a unique lower-case slug),
   optionally in one language.
@@ -30,8 +31,17 @@ accepts.
 
 - Question types: `text` (text, email, tel, url, number, date), `comment`,
   `radiogroup`, `dropdown`, `checkbox`, `boolean` and `rating`; `html` blocks,
-  panels and pages lay them out. There are no expressions (`visibleIf` and the
-  like): a definition that carries one is refused.
+  panels and pages lay them out. Panels nest three deep. There are no
+  expressions (`visibleIf` and the like): a definition that carries one is
+  refused.
+- Two texts are markup: an `html` block's `html` and the form's
+  `completedHtml`. They are shown as HTML on a public page of the application's
+  origin, so only simple markup is stored: paragraphs, line breaks, emphasis,
+  lists, headings and links to an `http`, `https` or `mailto` address. Anything
+  else (a script, a style, an image, an event handler, a comment) is refused
+  when the version is saved, and so is markup not written in its one plain
+  spelling; nothing is rewritten. Every other text is plain and is shown as
+  written.
 - A choice is `{"value": <code>, "text": <text>}`. Answers store the code, never
   the label, so they do not depend on language. "Other" is the code `other`,
   with its text in `<name>-Comment`.
@@ -52,8 +62,10 @@ A `Response` is evidence: the answers as received, the language, the client's
 `submission_id` and the version. `Response.objects.receive(form, version=…,
 submission_id=…, language=…, answers=…)` keeps one, once per form and
 `submission_id`: a client that sends the same id again gets the response it
-already made. A form that takes no submission raises `FormUnavailable`; answers
-to a version the form no longer serves raise `FormChanged`.
+already made, even after the form closed. A form that takes no submission
+raises `FormUnavailable`; answers to a version the form no longer serves raise
+`FormChanged`. The answers are judged before the form's row is locked, so a
+slow submission delays no other.
 
 Response rows are closed to generic edits and deletion. Only the owner's verbs
 change one:
