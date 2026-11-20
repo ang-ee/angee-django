@@ -4599,12 +4599,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 blocker = self.adoption_blocker(target, link=link, parsed=parsed, lookup=lookup, replaces=replaces)
                 if blocker is not None:
                     raise ValidationError(blocker)
-            stated = {"created_at": parsed.created_at} if parsed.created_at is not None else {}
-            person = target or people.create(
+            person = target or people.insert(people.model(
                 display_name=(parsed.display_name or parsed.family_name or people.model.PLACEHOLDER_NAME),
                 created_by_id=created_by_id,
-                **stated,
-            )
+            ).stamp_created_at(parsed.created_at))
             if target is not None:
                 person.backdate_creation(parsed.created_at)
             parent = apps.get_model("parties", "Party")._base_manager.get(pk=person.pk)

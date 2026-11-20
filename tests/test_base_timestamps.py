@@ -1,18 +1,22 @@
-"""The creation stamp keeps a time its creating owner states at insert, and costs a host no migration."""
+"""A creation time is kept only when its creating owner states it for the insert, at no migration."""
 
 from __future__ import annotations
 
+import copy
+import pickle
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from django.apps import apps
-from django.db import models
+from django.core import serializers
+from django.db import models, transaction
 from django.db.migrations.autodetector import MigrationAutodetector
 from django.db.migrations.graph import MigrationGraph
 from django.db.migrations.state import ProjectState
 from django.db.migrations.writer import MigrationWriter
 from django.db.models import F
 from django.db.models.functions import Coalesce, Greatest, Least
+from django.forms.models import model_to_dict
 from django.utils import timezone
 from rebac import system_context
 
@@ -23,23 +27,41 @@ SOURCE_CREATED = datetime(2019, 4, 2, 10, 30, tzinfo=UTC)
 """When an invented source says its record came into being."""
 
 
-@pytest.mark.django_db
-def test_a_creation_time_stated_at_insert_is_kept_and_none_stated_stamps_the_insert() -> None:
-    before = timezone.now()
-    stated = TrashRow.objects.create(title="from a source", created_at=SOURCE_CREATED)
-    unstated = TrashRow.objects.create(title="made here")
+def stated(title: str = "from a source", at: datetime = SOURCE_CREATED) -> TrashRow:
+    """Insert a row its creating owner dated ``at``."""
 
-    stated.refresh_from_db()
+    row = TrashRow(title=title).stamp_created_at(at)
+    row.save()
+    return row
+
+
+def imported() -> TrashRow:
+    """Return a saved row whose stored creation time is the source's, as an import leaves it."""
+
+    row = TrashRow.objects.create(title="from a source")
+    TrashRow.objects.filter(pk=row.pk).update(created_at=SOURCE_CREATED)
+    row.refresh_from_db()
+    return row
+
+
+@pytest.mark.django_db
+def test_a_creation_time_stated_for_the_insert_is_kept_and_none_stated_stamps_the_insert() -> None:
+    before = timezone.now()
+    kept = stated()
+    unstated = TrashRow(title="made here").stamp_created_at(None)
+    unstated.save()
+
+    kept.refresh_from_db()
     unstated.refresh_from_db()
-    assert stated.created_at == SOURCE_CREATED
-    assert stated.updated_at >= before
+    assert kept.created_at == SOURCE_CREATED
+    assert kept.updated_at >= before
     assert before <= unstated.created_at <= unstated.updated_at
 
 
 @pytest.mark.django_db
 def test_a_creation_time_in_the_future_is_clamped_to_the_insert() -> None:
     before = timezone.now()
-    row = TrashRow.objects.create(created_at=before + timedelta(days=30))
+    row = stated(at=before + timedelta(days=30))
 
     row.refresh_from_db()
     assert before <= row.created_at <= timezone.now()
@@ -47,8 +69,19 @@ def test_a_creation_time_in_the_future_is_clamped_to_the_insert() -> None:
 
 
 @pytest.mark.django_db
-def test_a_save_of_an_existing_row_stamps_nothing_on_its_creation_time() -> None:
-    row = TrashRow.objects.create(created_at=SOURCE_CREATED)
+def test_setting_the_attribute_alone_states_nothing_and_the_insert_is_stamped() -> None:
+    before = timezone.now()
+    row = TrashRow.objects.create(title="set on the attribute", created_at=SOURCE_CREATED)
+
+    row.refresh_from_db()
+    assert before <= row.created_at <= timezone.now()
+
+
+@pytest.mark.django_db
+def test_a_saved_row_cannot_be_dated_through_its_insert_and_its_saves_stamp_nothing() -> None:
+    row = stated()
+    with pytest.raises(ValueError, match="before the row is saved"):
+        row.stamp_created_at(SOURCE_CREATED - timedelta(days=1))
     row.title = "edited"
     row.save()
     TrashRow.objects.get(pk=row.pk).save(update_fields=["title", "updated_at"])
@@ -59,18 +92,116 @@ def test_a_save_of_an_existing_row_stamps_nothing_on_its_creation_time() -> None
 
 
 @pytest.mark.django_db
-def test_a_bulk_insert_keeps_a_stated_creation_time_too() -> None:
-    TrashRow.objects.bulk_create([TrashRow(title="stated", created_at=SOURCE_CREATED), TrashRow(title="unstated")])
+def test_a_saved_row_cloned_by_clearing_its_key_stamps_its_own_insert() -> None:
+    original = imported()
+    before = timezone.now()
+    original._set_pk_val(None)
+    original._state.adding = True
+    original.save()
+
+    clone = TrashRow.objects.get(pk=original.pk)
+    assert before <= clone.created_at <= timezone.now()
+    assert TrashRow.objects.filter(created_at=SOURCE_CREATED).count() == 1
+
+
+@pytest.mark.django_db
+def test_a_row_inserted_again_after_its_insert_rolled_back_stamps_the_new_insert() -> None:
+    """The changeset claim's recovery (``provenance.context``) re-inserts its instance this way."""
+
+    row = TrashRow(title="claim")
+    with pytest.raises(RuntimeError, match="roll back"), transaction.atomic():
+        row.save(force_insert=True)
+        rolled_back = row.created_at
+        raise RuntimeError("roll back")
+    row._set_pk_val(None)
+    row._state.adding = True
+    row.save(force_insert=True)
+
+    row.refresh_from_db()
+    assert row.created_at > rolled_back
+
+
+@pytest.mark.django_db
+def test_a_stated_time_is_kept_once_and_an_insert_retried_keeps_it_only_when_stated_again() -> None:
+    row = stated()
+    assert row.created_at == SOURCE_CREATED
+    before = timezone.now()
+
+    row._set_pk_val(None)
+    row._state.adding = True
+    row.save()
+    assert before <= TrashRow.objects.get(pk=row.pk).created_at
+
+    row._set_pk_val(None)
+    row._state.adding = True
+    row.stamp_created_at(SOURCE_CREATED).save()
+    assert TrashRow.objects.get(pk=row.pk).created_at == SOURCE_CREATED
+
+
+@pytest.mark.django_db
+def test_a_row_built_from_another_rows_values_stamps_its_own_insert() -> None:
+    original = imported()
+    before = timezone.now()
+    from_form = TrashRow(**model_to_dict(original, exclude=["id"]))
+    from_form.save()
+    every_column = TrashRow(**{
+        field.attname: getattr(original, field.attname)
+        for field in TrashRow._meta.concrete_fields
+        if not field.primary_key
+    })
+    every_column.save()
+
+    for row in (from_form, every_column):
+        row.refresh_from_db()
+        assert before <= row.created_at <= timezone.now()
+
+
+@pytest.mark.django_db
+def test_a_copied_or_pickled_row_carries_no_stated_time_and_the_original_keeps_its_own() -> None:
+    original = TrashRow(title="from a source").stamp_created_at(SOURCE_CREATED)
+    before = timezone.now()
+    copies = [copy.copy(original), copy.deepcopy(original), pickle.loads(pickle.dumps(original))]
+    for row in copies:
+        row.save()
+    original.save()
+
+    for row in copies:
+        row.refresh_from_db()
+        assert before <= row.created_at <= timezone.now()
+    original.refresh_from_db()
+    assert original.created_at == SOURCE_CREATED
+
+
+@pytest.mark.django_db
+def test_a_bulk_insert_keeps_each_stated_creation_time_and_stamps_the_rest() -> None:
+    TrashRow.objects.bulk_create([
+        TrashRow(title="stated").stamp_created_at(SOURCE_CREATED),
+        TrashRow(title="attribute only", created_at=SOURCE_CREATED),
+        TrashRow(title="unstated"),
+    ])
 
     assert TrashRow.objects.get(title="stated").created_at == SOURCE_CREATED
+    assert TrashRow.objects.get(title="attribute only").created_at > SOURCE_CREATED
     assert TrashRow.objects.get(title="unstated").created_at > SOURCE_CREATED
+
+
+@pytest.mark.django_db
+def test_a_fixture_loaded_raw_keeps_the_creation_time_it_carries() -> None:
+    fixture = serializers.serialize("json", [imported()])
+    TrashRow.objects.all().delete()
+
+    for loaded in serializers.deserialize("json", fixture):
+        loaded.save()
+
+    assert TrashRow.objects.get().created_at == SOURCE_CREATED
 
 
 @pytest.mark.django_db
 def test_historys_creation_snapshot_carries_the_stated_time_and_its_date_is_the_recording_moment() -> None:
     before = timezone.now()
     with system_context(reason="tests.timestamps.history"):
-        row = OwnedRow.objects.create(title="from a source", created_at=SOURCE_CREATED)
+        row = OwnedRow(title="from a source").stamp_created_at(SOURCE_CREATED)
+        row.save()
 
     created = row.history.model.objects.get(id=row.pk, history_type="+")
     assert created.created_at == SOURCE_CREATED
@@ -79,7 +210,7 @@ def test_historys_creation_snapshot_carries_the_stated_time_and_its_date_is_the_
 
 @pytest.mark.django_db
 def test_an_expression_combines_the_creation_time_with_any_other_datetime_in_either_order() -> None:
-    TrashRow.objects.create(created_at=SOURCE_CREATED)
+    imported()
 
     first = TrashRow.objects.annotate(at=Coalesce("updated_at", "created_at"), low=Least("updated_at", "created_at"))
     second = TrashRow.objects.annotate(

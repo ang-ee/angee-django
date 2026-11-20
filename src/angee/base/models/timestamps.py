@@ -3,23 +3,42 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Self
 
 from django.db import models
 from django.db.models.expressions import Col
 from django.utils import timezone
 from django.utils.functional import cached_property
 
+# The instance attributes holding a time ``TimestampMixin.stamp_created_at`` stated:
+# until the next save or bulk insert takes it, and while that save runs (Django calls
+# ``pre_save`` more than once for one insert). ``TimestampMixin.__getstate__`` leaves
+# both out of a copy.
+_STATED_CREATED_AT = "_stated_created_at"
+_SAVING_CREATED_AT = "_saving_created_at"
+
 
 class CreatedAtField(models.DateTimeField):
-    """When a row came into being: Django's ``auto_now_add`` stamp, which a creating owner may state at insert.
+    """When a row came into being: Django's ``auto_now_add`` stamp, which a creating owner may state for its insert.
 
-    An insert keeps a time already on the instance, a future one clamped to the
-    insert, so an owner that creates a row from a source's record states when the
-    record came into being by constructing the row with ``created_at=``; an insert
-    with none stated stamps now, as ``auto_now_add`` does. A save of an existing row
-    stamps nothing. History's ``+`` snapshot reads the stored row, so it carries the
-    stated time, while its ``history_date`` stays the moment the row was recorded.
+    An insert stamps now, as ``auto_now_add`` does, whatever the attribute
+    holds: a row cloned by clearing its primary key, one built from another
+    row's values and one inserted again after a rolled-back attempt each get the
+    moment of their own insert. The one way to keep an earlier time is
+    :meth:`TimestampMixin.stamp_created_at`, which a creating owner calls on the
+    unsaved row it builds from a source's record: the next insert of that
+    instance keeps the time, a future one clamped to the insert. A stated time
+    is kept once, at the insert it was stated for: the save or bulk insert that
+    makes it takes it, whether or not it succeeds, so a later insert of the
+    instance stamps now and a verb that retries a failed insert states the time
+    again. A save holds the time for each of Django's ``pre_save`` calls of its
+    insert (one finds expressions, one builds the statement), and a multi-table
+    child's save keeps it on the parent table that holds the column; a bulk
+    insert calls :meth:`pre_save` once per row and takes each row's own.
+    Fixtures loaded raw keep the values they carry, as Django always did: a raw
+    save never calls :meth:`pre_save`. A save of an existing row stamps nothing.
+    History's ``+`` snapshot reads the stored row, so it carries the stated time,
+    while its ``history_date`` stays the moment the row was recorded.
 
     Who may state a time: a creating owner, for a row no reader treats as having
     arrived here when it was stamped. One reader does today: an events send guard
@@ -70,11 +89,14 @@ class CreatedAtField(models.DateTimeField):
         return super().get_col(alias, output_field)
 
     def pre_save(self, model_instance: models.Model, add: bool) -> Any:
-        stated = getattr(model_instance, self.attname)
-        if add and self.auto_now_add and stated is not None:
-            value = min(stated, timezone.now())
-            setattr(model_instance, self.attname, value)
-            return value
+        if add and self.auto_now_add:
+            held = model_instance.__dict__
+            # A save holds its stated time for each of its calls; a bulk insert calls once per row.
+            stated = held[_SAVING_CREATED_AT] if _SAVING_CREATED_AT in held else held.pop(_STATED_CREATED_AT, None)
+            if stated is not None:
+                value = min(stated, timezone.now())
+                setattr(model_instance, self.attname, value)
+                return value
         return super().pre_save(model_instance, add)
 
     def deconstruct(self) -> Any:
@@ -86,7 +108,7 @@ class TimestampMixin(models.Model):
     """Add conventional creation and update timestamps to a model."""
 
     created_at = CreatedAtField(auto_now_add=True, db_index=True)
-    """When the row came into being: its insert, or the earlier time its creator stated (:class:`CreatedAtField`)."""
+    """When the row came into being: its insert, or the time its creator stated (:meth:`stamp_created_at`)."""
 
     updated_at = models.DateTimeField(auto_now=True, db_index=True)
     """The timestamp when the row was most recently saved."""
@@ -95,6 +117,49 @@ class TimestampMixin(models.Model):
         """Django model options for timestamp-only abstract inheritance."""
 
         abstract = True
+
+    def stamp_created_at(self, at: datetime | None) -> Self:
+        """State when this unsaved row came into being, for its insert to keep as ``created_at``; return the row.
+
+        The one way a creating owner states a source's creation time
+        (:class:`CreatedAtField`). The next save or bulk insert of this instance
+        takes ``at``, kept by its insert, a future one clamped to the insert: a
+        stated time is kept once, at the insert it was stated for, and a save
+        that fails takes it too. Every other insert stamps now, so a verb that
+        retries a failed insert states the time again, and a pickled or
+        ``copy``-ed row carries no stated time. ``None`` states none: the insert
+        stamps now. A saved row is refused: its creation time moves only through
+        its owner's own writer.
+        """
+
+        if not self._state.adding:
+            raise ValueError("A creation time is stated for a row's insert, before the row is saved.")
+        if at is None:
+            self.__dict__.pop(_STATED_CREATED_AT, None)
+        else:
+            self.__dict__[_STATED_CREATED_AT] = at
+        return self
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Save the row; its insert keeps a time :meth:`stamp_created_at` stated, which this save takes either way."""
+
+        stated = self.__dict__.pop(_STATED_CREATED_AT, None)
+        if stated is None:
+            super().save(*args, **kwargs)
+            return
+        self.__dict__[_SAVING_CREATED_AT] = stated
+        try:
+            super().save(*args, **kwargs)
+        finally:
+            del self.__dict__[_SAVING_CREATED_AT]
+
+    def __getstate__(self) -> dict[str, Any]:
+        """Leave a stated creation time out of a pickled or copied row: a copy stamps its own insert."""
+
+        state = super().__getstate__()
+        state.pop(_STATED_CREATED_AT, None)
+        state.pop(_SAVING_CREATED_AT, None)
+        return state
 
 
 def update_fields_with_auto_now(instance: models.Model, update_fields: Any) -> set[str]:

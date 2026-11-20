@@ -417,12 +417,13 @@ _PageManagerBase = AngeeHistoryManager.from_queryset(PageQuerySet)
 class PageManager[PageT: Page](_PageManagerBase[PageT]):
     """Factories for actor-scoped page writes."""
 
-    def create_in(self, vault: Any, **fields: Any) -> PageT:
+    def create_in(self, vault: Any, *, created_at: datetime | None = None, **fields: Any) -> PageT:
         """Create a page in ``vault`` after the REBAC create preflight.
 
-        An owner that makes the page from a source's text states when the source
-        says it was written with ``created_at`` (``CreatedAtField``); a page made
-        here stamps its insert. The preflight evaluates the schema's
+        An owner that makes the page from a source's text passes ``created_at``,
+        when the source says it was written, and the insert keeps it
+        (``TimestampMixin.stamp_created_at``); a page made without one stamps
+        its insert. The preflight evaluates the schema's
         ``create = vault->write`` with the relations the new row would carry, so only actors who can write
         the vault may add pages to it. Without an actor, inside a system
         context (an import), the page is system work: no preflight, and no
@@ -460,7 +461,7 @@ class PageManager[PageT: Page](_PageManagerBase[PageT]):
             fields["kind"] = kind
         # The create preflight above authorizes this instance. Carry that verdict
         # through native constraint validation as well as persistence.
-        page = page_model(vault=vault, **fields).sudo(reason="knowledge.page.create")
+        page = page_model(vault=vault, **fields).stamp_created_at(created_at).sudo(reason="knowledge.page.create")
         page.full_clean()
         page.save()
         created = self.model._base_manager.get(pk=page.pk)
@@ -751,8 +752,7 @@ class RecordBindingManager[BindingT: RecordBinding](_RecordBindingManagerBase[Bi
                          "new note a title of its own."}
                     )
                 folder = self.party_folder(party, vault=vault, title=folder_title)
-                stated = {"created_at": created_at} if created_at is not None else {}
-                note = page_model.objects.create_in(vault, parent=folder, title=title, body=body, **stated)
+                note = page_model.objects.create_in(vault, parent=folder, title=title, body=body, created_at=created_at)
                 self.upsert(target=party, page=note, role=role)
                 return SourcedWrite.WRITTEN
             markdown = self._readable(markdown_model, found)
