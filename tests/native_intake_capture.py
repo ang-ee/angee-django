@@ -12,7 +12,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import connection, connections, models, transaction
+from django.db import IntegrityError, connection, connections, models, transaction
 from django.test import TransactionTestCase
 from django.test.utils import CaptureQueriesContext
 from graphql import GraphQLInputObjectType, concat_ast, get_named_type, validate
@@ -195,6 +195,20 @@ class FormCaptureTests(TransactionTestCase):
             self.form, version=1, submission_id=key, language="en", answers=answers or FORM_ANSWERS,
         )
         return response.deliver()
+
+    def test_the_composed_form_takes_one_form_per_channel_and_slug(self):
+        """The bridge's rule is folded into the host's form: a second form on the conversation is refused."""
+
+        channel = self.webform()
+        second = apps.get_model("webforms", "Form")(
+            name="Second form", target_class="message",
+            target_config={"channel": channel.sqid, "slug": "request-form"},
+        )
+        with self.assertRaises(ValidationError) as refused:
+            second.full_clean()
+        self.assertEqual(list(refused.exception.message_dict), ["target_config"])
+        with system_context(reason="test form setup"), self.assertRaises(IntegrityError), transaction.atomic():
+            second.save()
 
     def test_webform_captures_claims_and_mapped_fields_on_an_ownerless_task(self):
         channel = self.webform()

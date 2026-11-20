@@ -28,6 +28,9 @@ target_config:
   A second form is refused when it is configured (`Form.clean`, under
   `target_config`), and by the table when two are saved at once
   ([`FormConversation`](models.py), which the bridge contributes to the form).
+  A form that leaves the target for another gives its configuration up (the
+  `store` target takes none, and refuses one left behind); the channel and slug
+  are then free, and the same form may take them again.
 
 [`MessageTarget.deliver`](targets.py) hands the response to messaging's one
 ingest path (`Message.objects.ingest`) and returns the message, which the

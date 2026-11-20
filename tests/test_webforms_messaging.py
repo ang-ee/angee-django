@@ -14,7 +14,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.test import override_settings
-from rebac import system_context
+from rebac import actor_context, system_context
 
 from angee.base.checks import check_stored_impl_keys
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedThread
@@ -238,6 +238,62 @@ def test_a_second_form_on_one_channel_and_slug_is_refused_at_its_configuration_a
         Form.objects.create(name="A survey", target_class="store")
         Form.objects.create(name="Another survey", target_class="store")
         assert Form._base_manager.filter(target_class="message", target_config__channel=target.sqid).count() == 2
+
+
+def test_a_form_leaves_the_message_target_for_store_and_takes_its_own_channel_and_slug_back() -> None:
+    """A form that stops posting keeps no configuration, and its channel and slug stay its own to take again."""
+
+    target = channel()
+    admin = create_platform_admin("forms-and-channels-admin")
+    config = {"channel": target.sqid, "slug": "enquiries"}
+    with actor_context(admin):
+        form = Form.objects.create(name="Enquiry form", target_class="message", target_config=config)
+        FormVersion.objects.create(
+            form=form, definition=DEFINITION, languages=["en", "es"], default_language="en",
+            personal_questions=["name", "email", "phone"], contact_question="email",
+        ).publish()
+        form = Form.objects.get(pk=form.pk)
+        form.target_class, form.target_config = "store", {}
+        form.full_clean()
+        form.save()
+    kept = Form._base_manager.get(pk=form.pk)
+    row, made = delivered(kept)
+    with system_context(reason="webforms messaging tests read"):
+        posted = Message._base_manager.filter(channel=target).count()
+
+    assert (kept.target_class, kept.target_config) == ("store", {})
+    assert (made, posted, Response._base_manager.get(pk=row.pk).delivery) == (None, 0, Delivery.DELIVERED)
+    assert not ResponseRecord._base_manager.filter(response=row).exists()
+
+    with actor_context(admin):
+        form = Form.objects.get(pk=form.pk)
+        form.target_class, form.target_config = "message", config
+        form.full_clean()  # The channel and slug it held are not another form's.
+        form.save()
+    again = Form._base_manager.get(pk=form.pk)
+    _row, message = delivered(again, "r-2")
+
+    assert (again.target_class, again.target_config) == ("message", config)
+    assert (message.channel_id, message.external_id) == (target.pk, "webform:enquiries:r-2")
+
+
+def test_a_form_that_leaves_the_message_target_may_not_keep_its_channel_and_slug() -> None:
+    """The store target takes no configuration: what the message target held is refused there, not kept."""
+
+    target = channel()
+    admin = create_platform_admin("forms-and-channels-admin")
+    config = {"channel": target.sqid, "slug": "enquiries"}
+    with actor_context(admin):
+        form = Form.objects.create(name="Enquiry form", target_class="message", target_config=config)
+        form.target_class = "store"
+        with pytest.raises(ValidationError) as refused:
+            form.full_clean()
+        with pytest.raises(ValidationError):
+            form.save()
+    kept = Form._base_manager.get(pk=form.pk)
+
+    assert list(refused.value.message_dict) == ["target_config"]
+    assert (kept.target_class, kept.target_config) == ("message", config)
 
 
 def test_any_other_error_of_messaging_is_a_failure_that_is_tried_again() -> None:
