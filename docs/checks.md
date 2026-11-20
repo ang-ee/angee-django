@@ -108,7 +108,8 @@ also runs every remaining PostgreSQL-only contract: row locks, hierarchy, IAM,
 [OIDC disconnect admission under the user lock](../tests/test_oidc.py),
 knowledge, [pgvector test-database readiness](../tests/test_postgresql_extensions.py),
 messaging with its [channel owner](../tests/test_messaging_channel_concurrency.py) races,
-parties' [same-person pair](../tests/test_parties_same_as_concurrency.py) locks,
+parties' [same-person pair](../tests/test_parties_same_as_concurrency.py) locks and
+[handle-key repair](../tests/test_parties_handle_keys_concurrency.py) races,
 [portfolio report](../tests/test_portfolio_concurrency.py) locks, proposals,
 sequences, spaces, storage with its
 [window-aligned download URLs and expiry](../tests/test_storage_access_campaign.py),

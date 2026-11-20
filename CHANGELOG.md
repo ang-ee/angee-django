@@ -412,7 +412,11 @@ live in code docstrings.
   and prints "Saved the comparison key of 0 handle(s) again." A handle stored
   with a punycode-domain key is found by its Unicode spelling after that
   first provision. A row newer code stamped with a later version is selected
-  too, so a rollback keys it again by the older rule.
+  too, so a rollback keys it again by the older rule. The PostgreSQL lane
+  runs the repair's two lock races
+  (`tests/test_parties_handle_keys_concurrency.py`): a row another process
+  deletes, and one it saves, after the repair selected its key and before
+  the repair holds its lock.
   Limits: two callers that meet two spellings of
   one new address at once each make its row, and so its person, which the
   pairing job then proposes; a handle is unique by its value as typed, not by
