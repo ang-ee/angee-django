@@ -73,16 +73,26 @@ live in code docstrings.
   consumer compares the references `standing_claims()` returns with its own
   the same way. No migration, resource or permission change. Upgrade: a
   handle stores the comparison key its rule gave when it was last saved, so a
-  change of the rule leaves stored keys behind. Every provision now runs
-  `renormalize_handles` (`HandleManager.renormalize_handles`), which compares
-  every handle, of every platform, against the rule as it is now and saves
-  again the key of each that differs, at most `HandleManager.REPAIR_LIMIT`
-  (500) a run: the provision log says "Saved the comparison key of N handle(s)
-  again." and, past the cap, "Stopped at the cap of N handle(s); M more await
-  the next provision or renormalize_handles run". A handle stored with a
-  punycode-domain key is found by its Unicode spelling after the run that
-  reaches it. The repair reads the whole table once a provision, in key
-  batches, and is idempotent. Limits: two callers that meet two spellings of
+  change of the rule leaves stored keys behind. The rule now has a version,
+  `Handle.NORMALIZATION_VERSION`, to bump whenever `Handle.normalize_value` or
+  `Handle.normalize_email_domain` returns something else; a test pins the
+  rule's outputs for a fixed sample beside the number. The repair
+  `renormalize_handles` (`HandleManager.renormalize_handles`) compares every
+  handle, of every platform, against the rule as it is now and saves again
+  the key of each that differs, at most `HandleManager.REPAIR_LIMIT` (500) a
+  run: the log says "Saved the comparison key of N handle(s) again." and,
+  past the cap, "Stopped at the cap of N handle(s); M more await the next
+  provision or renormalize_handles run". A run that leaves nothing awaiting
+  records the version as fully applied, as a keyed changeset claim under the
+  scope `parties.handle.normalization`. Every provision calls the repair, and
+  it reads the handles only while the version is not the one last recorded
+  (the first provision after this change, after a later change of the rule,
+  and after a capped run); otherwise the log says "Handle keys follow
+  normalization rule version N; nothing read." The command run by hand always
+  reads every handle. A handle stored with a punycode-domain key is found by
+  its Unicode spelling after the run that reaches it. A version that was
+  applied, left and returned to is read on every provision until the version
+  moves on. Limits: two callers that meet two spellings of
   one new address at once each make its row, and so its person, which the
   pairing job then proposes; a handle is unique by its value as typed, not by
   its comparison key, so writers that key on the exact value can still make

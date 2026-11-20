@@ -961,6 +961,16 @@ class Handle(
     ACCOUNT_PLATFORMS: ClassVar[tuple[str, ...]] = ("email", "phone")
     """Platforms whose value is itself an account's address: an email address, a phone number."""
 
+    NORMALIZATION_VERSION: ClassVar[int] = 1
+    """The version of the normalization rule; bump it whenever the rule returns something else.
+
+    The rule is :meth:`normalize_value` and :meth:`normalize_email_domain`.
+    ``normalized_value`` is stored, so a changed rule leaves stored keys behind:
+    provisioning saves them again only when this number is not the one last
+    fully applied (``HandleManager.renormalize_handles``). A test pins the rule's
+    outputs beside the number, so changing an output without a bump fails.
+    """
+
     @classmethod
     def identifies_account(cls, platform: str, external_id: str = "") -> bool:
         """Whether a handle names one account: an email address, a phone number or a platform id.
@@ -1006,6 +1016,10 @@ class Handle(
         punctuation still does not fork the same contact point. iMessage carries
         either kind of address, so it routes by value shape — the email rule when
         the value contains ``@``, the phone rule otherwise.
+
+        The key is stored: changing what this returns for any value means
+        bumping :attr:`NORMALIZATION_VERSION`, so provisioning saves the stored
+        keys again.
         """
 
         normalized = (value or "").strip().lower()
@@ -1033,6 +1047,9 @@ class Handle(
         ``Organization.domain``, read through it on both sides. The standard
         library's ``idna`` codec reads an ``xn--`` label, as Django's ``punycode``
         writes one with it; a label the codec cannot read stays as typed.
+
+        Handle keys are stored from it: changing what this returns means bumping
+        :attr:`NORMALIZATION_VERSION`.
         """
 
         labels = []

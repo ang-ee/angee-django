@@ -82,7 +82,7 @@ from angee.integrate.models import IntegrationLifecycle, IntegrationManager
 from angee.integrate.states import LinkStatus, StreamDirection
 from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedOrganization, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
-from angee.provenance.context import changeset
+from angee.provenance.context import changeset, changeset_model
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.provenance.evidence import EvidenceReference
@@ -825,6 +825,11 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         run saves at most ``limit`` keys and counts the ones it did not reach as
         ``remaining``, which the next run takes. Named system work. Idempotent: a
         second complete run saves nothing.
+
+        It always reads the whole table. A run that leaves nothing awaiting
+        records the rule's version as fully applied
+        (:meth:`normalization_applied`), which is what lets provisioning skip
+        the read until ``Handle.NORMALIZATION_VERSION`` moves.
         """
 
         rows = self.model._base_manager.order_by("pk").values_list("pk", "platform", "value", "normalized_value")
@@ -844,7 +849,28 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                         if handle.normalized_value != self.model.normalize_value(handle.platform, handle.value):
                             handle.save(update_fields=["normalized_value"])
                             rekeyed += 1
+            if not remaining and not self.normalization_applied():
+                scope, version = self.NORMALIZATION_SCOPE, str(self.model.NORMALIZATION_VERSION)
+                with transaction.atomic(), changeset(fresh=True, activity="system", change_reason=scope):
+                    changeset_model().objects.claim(scope, version, fingerprint=version)
         return rekeyed, remaining
+
+    NORMALIZATION_SCOPE: ClassVar[str] = "parties.handle.normalization"
+    """The changeset claim scope that records each normalization version fully applied to the stored keys."""
+
+    def normalization_applied(self) -> bool:
+        """Whether the stored keys were last fully saved under the normalization rule's current version.
+
+        A complete :meth:`renormalize_handles` run records the version it
+        applied as a keyed changeset claim, provenance's ledger of keyed
+        operations, under :attr:`NORMALIZATION_SCOPE` with the version as its key.
+        The latest claim names the version the stored keys follow, so a
+        version that was applied, left and returned to is not taken for
+        current. Read by key alone; no handle is read.
+        """
+
+        claims = changeset_model()._base_manager.filter(scope=self.NORMALIZATION_SCOPE).order_by("-pk")
+        return bool(claims.values_list("key", flat=True).first() == str(self.model.NORMALIZATION_VERSION))
 
     def fill_avatar(self, report: AvatarReport) -> bool:
         """Set the avatar a source reports on its handle; return whether it changed.
