@@ -59,11 +59,17 @@ describe("WebformForm", () => {
     expect(shown("store")).toEqual([]);
   });
 
-  test("choosing a target starts its configuration empty, which a target that takes none is then sent", () => {
+  test("choosing another target starts its configuration empty, and choosing the stored one again gives its stored configuration back", () => {
     render(<webformForm.Component resource="webforms.Form" />);
     const target = fields().find((field) => field.name === "target_class");
-    expect(target?.prefill?.("store", { target_config: { queue: "old" } })).toEqual({ target_config: {} });
-    expect(target?.prefill?.("enquiry", { target_config: { queue: "old" } })).toEqual({ target_config: {} });
+    // As the server reads the stored target back, in its own casing.
+    const loaded = { target_class: "ENQUIRY", target_config: { queue: "front desk" } };
+    expect(target?.prefill?.("store", { target_config: { queue: "front desk" } }, loaded)).toEqual({ target_config: {} });
+    expect(target?.prefill?.("opaque", { target_config: {} }, loaded)).toEqual({ target_config: {} });
+    expect(target?.prefill?.("enquiry", { target_config: {} }, loaded)).toEqual({ target_config: { queue: "front desk" } });
+    // A new form has no stored target: every choice starts empty.
+    expect(target?.prefill?.("store", {}, { target_class: "store" })).toEqual({ target_config: {} });
+    expect(target?.prefill?.("enquiry", {})).toEqual({ target_config: {} });
     // Replaced whole, even when the visitor had typed into it.
     expect(target?.prefillReplace).toEqual(["target_config"]);
     expect(target?.prefillPreserveDirty).toBeUndefined();
