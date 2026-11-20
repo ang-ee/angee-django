@@ -513,7 +513,7 @@ function useResourceViewContextValue({
     () => Filter.combineOptional(baseFilter, preset?.fixedFilter),
     [baseFilter, preset?.fixedFilter],
   );
-  const state = useMemo(() => {
+  const validated = useMemo(() => {
     try {
       resourceViewPreset(resourceViews, sourceState.preset, metadata?.resource.modelLabel ?? resource, presetIds);
       if (!metadata) return sourceState;
@@ -524,6 +524,13 @@ function useResourceViewContextValue({
       return { ...sourceState, queryError: error instanceof Error ? error : new Error("Invalid resource view.") };
     }
   }, [metadata, resource, sourceState, resourceViews, effectiveBaseFilter, presetIds]);
+  // Validation, and a route's decode of its search, build the query facts anew on every
+  // change to the view: a field shown or hidden, or a page, keeps those that did not
+  // change, which every surface's reads and group model are keyed on.
+  const filter = useValueStable(validated.filter);
+  const groupStack = useValueStable(validated.groupStack);
+  const sorting = useValueStable(validated.sorting);
+  const state = useMemo(() => ({ ...validated, filter, groupStack, sorting }), [validated, filter, groupStack, sorting]);
   const queryDirty = state.preset !== defaultState.preset
     || stableSerialize(state.filter) !== stableSerialize(defaultState.filter)
     || stableSerialize(state.sorting ?? []) !== stableSerialize(defaultState.sorting ?? [])

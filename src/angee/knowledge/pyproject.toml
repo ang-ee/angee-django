@@ -13,6 +13,11 @@ dynamic = ["entry-points"]
 [[tool.angee.resources.install]]
 path = "install/010_knowledge.vault.yaml"
 
+[[tool.angee.resources.install]]
+path = "install/020_knowledge.vault_grants.yaml"
+kind = "grants"
+depends_on = "install/010_knowledge.vault.yaml"
+
 [[tool.angee.resources.demo]]
 path = "demo/010_knowledge.vault.yaml"
 depends_on = "iam:demo/010_iam.user.yaml"

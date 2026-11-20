@@ -1,5 +1,6 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
+import { useRefusedReadReport } from "./authored-query-options";
 
 /**
  * What a batch's callers read of one native query result. Query notifies a batch
@@ -70,4 +71,23 @@ export function useDerivedBatch<TEntry extends object, TOutput extends object>(
     if (!output) outputs.set(key, output = derive(entry, key));
     return [key, output] as const;
   })), [batch, derived]);
+}
+
+/**
+ * Report each read whose payload its derivation refused (the derived `error` is not
+ * the read's own) as a failed read is, once per settle of that read: a list, facet
+ * or group the refused payload leaves empty then says why. A derivation puts what it
+ * refused in its output's `error`; it never throws in render.
+ */
+export function useReportRefusedReads(
+  batch: ReadonlyMap<string, QueryBatchEntry<unknown>>,
+  derived: ReadonlyMap<string, { error: unknown }>,
+): void {
+  const report = useRefusedReadReport();
+  useEffect(() => {
+    for (const [key, output] of derived) {
+      const entry = batch.get(key);
+      if (entry && output.error instanceof Error && output.error !== entry.error) report(entry, output.error);
+    }
+  }, [batch, derived, report]);
 }

@@ -1,7 +1,6 @@
 import * as React from "react";
 import { ResourceQuery, type Row } from "@angee/metadata";
 import { getCoreRowModel, useReactTable, type ColumnDef, type Row as TableRowModel } from "@tanstack/react-table";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   MAX_PAGE_SIZE,
   clampPageSize,
@@ -29,7 +28,7 @@ import {
   type GroupedQueryResult,
 } from "../resource-view-grouped-model";
 import { useCollectionQueryBatch } from "../collection-source";
-import { useResourceViewTableChrome } from "./presentation";
+import { useResourceViewTableChrome, useResourceViewVirtualizer } from "./presentation";
 import { listResultFromPageState, useResourceRowsSnapshot, useResourceViewQueryFacts, useResourceViewTableState, useSettledPageClamp } from "./table-state";
 import { EMPTY_ARRAY, EMPTY_EXPANDED_KEYS, EMPTY_LEAF_RESULTS } from "./types";
 import type { GroupedResourceViewSurface, ResourceListResult, SurfaceMatching, UseResourceViewSurfaceProps } from "./types";
@@ -37,7 +36,7 @@ import type { GroupedResourceViewSurface, ResourceListResult, SurfaceMatching, U
  * The server-grouped collection surface: the owner of a folded group view's render
  * model. It emits a single measured `listItems` stream (per-level `_groups`
  * headers, the leaf record rows of expanded buckets, and the per-group pagers)
- * driving the same `useVirtualizer` the flat list uses. The leaf `_groups` read
+ * driving the virtualizer the flat list uses (`useResourceViewVirtualizer`). The leaf `_groups` read
  * carries every group's first page (`rows`), so a grouped page is one request;
  * only a later or resized group page is requested on its own, batched into one
  * `useAngeeListBatch`. Per-group pagination is `setScopePage`. The thin list and
@@ -449,14 +448,10 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
 
   const { visibleColumnCount, visibleFields, toggleVisibleField } =
     useResourceViewTableChrome(table, columnVisibility);
-  const tableScrollRef = React.useRef<HTMLDivElement | null>(null);
-  const rowVirtualizer = useVirtualizer({
-    count: groupedItems.length,
-    getScrollElement: () => tableScrollRef.current,
-    initialRect: { width: 1024, height: 600 },
-    estimateSize: (index) => estimateGroupedItemSize(groupedItems[index]),
-    overscan: 10,
-  });
+  const { tableScrollRef, rowVirtualizer } = useResourceViewVirtualizer(
+    groupedItems.length,
+    (index) => estimateGroupedItemSize(groupedItems[index]),
+  );
 
   const rootResult = scopeModel.rootResult;
   // A page of groups counts once its read has settled: one loading for the first time

@@ -105,6 +105,7 @@ export {
 } from "./dialect/authored-hooks";
 export {
   useDerivedBatch,
+  useReportRefusedReads,
   type QueryBatchEntry,
 } from "./dialect/query-batch";
 export {
@@ -157,6 +158,7 @@ export {
   type DeletePreviewVariables,
   type FacetRequestSpec,
   type GroupByRequestOptions,
+  type GroupByVariables,
   type GroupRowsRequest,
   type GroupByResult,
   type GroupDimension,

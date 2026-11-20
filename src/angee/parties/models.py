@@ -54,6 +54,7 @@ from angee.base.models.hierarchy import HierarchyMixin
 from angee.base.models.identity import public_id_of
 from angee.base.models.merge import MergeableMixin, merge_maintenance
 from angee.base.models.ownership import OwnerMixin
+from angee.base.models.roles import role_anchor
 from angee.base.models.trash import TrashMixin
 from angee.base.permissions import actor_user_id, instance_actor, reader_queryset
 from angee.base.prefetch import prefetched
@@ -115,7 +116,7 @@ class Party(
 
     _angee_base = AngeeHistoryMergeableUnscopedManager()
 
-    rebac_grantable = {"reader": "write", "identity_reader": "write"}
+    rebac_grantable = {"reader": "share", "identity_reader": "share"}
 
     owned_relations = ("addresses", "relationships")
 
@@ -210,7 +211,8 @@ class Party(
         historical_queryset=PartyStatementQuerySet,
     )
     same_as = PairAspect(link="integrate.RecordLink")
-    MERGED_PERMISSION = "write"
+    MERGED_PERMISSION = "merge_away"
+    """A merge retires the party merged away to the trash: its write, but only a contact admin's of the roles."""
     retains_merged = True
 
     display_name = models.TextField()
@@ -844,7 +846,7 @@ class Handle(
 
     _angee_base = AngeeHistoryMergeableUnscopedManager()
 
-    rebac_grantable = {"reader": "write"}
+    rebac_grantable = {"reader": "share"}
     retains_merged = True
 
     class Platform(models.TextChoices):
@@ -1989,7 +1991,7 @@ class Directory(Bridge, inherits="integrate.Integration"):
     """
 
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.CONNECT
-    rebac_grantable = {"contact_reader": "write"}
+    rebac_grantable = {"contact_reader": "share"}
 
     objects = DirectoryManager()
 
@@ -2061,3 +2063,10 @@ class Directory(Bridge, inherits="integrate.Integration"):
                 return False
             self.system_grant_record_access("contact_reader", owner)
         return True
+
+
+PartiesRole = role_anchor("parties/role")
+"""The ``parties/role`` anchor: ``contact_reader``, ``contact_manager`` and ``contact_admin`` hold on every party
+what a per-record ``reader``, ``editor`` and owner hold on one (``permissions.zed``). See
+:func:`angee.base.models.roles.role_anchor`.
+"""
