@@ -15,5 +15,8 @@ const described = fetch(location.pathname, { headers: { Accept: "application/jso
 // A request that fails is the page's to report, once it is there to report it.
 described.catch(() => undefined);
 
-// Should the page fail before it can say anything, the document's own message is shown at once.
-import("./open").then(({ open }) => open(described)).catch(() => document.body.classList.remove("starting"));
+// The page is running: from here the document says it is loading, and no longer guesses that it failed.
+document.body.classList.replace("starting", "loading");
+
+// Should the rest not arrive, or fail before it can say anything, the document's own failure wording is shown at once.
+import("./open").then(({ open }) => open(described)).catch(() => document.body.classList.remove("starting", "loading"));
