@@ -343,6 +343,81 @@ export function hiddenDraftPaths(
 }
 
 /**
+ * What one form remembers so a dirty-preserving preset keeps the person's own values (see
+ * `seedPreset`): the paths the person changed themselves, and the seed last written to each target
+ * without dirtying the form. The form's owner creates one per form and it lasts as long as the
+ * person's editing does: a record form clears it on discard, a dialog's ends with its provider.
+ */
+export interface PresetMemory {
+  /** The person changed the value at `path` themselves. */
+  noteEdit(path: string): void;
+  /** A preset wrote `seed` at `path` without dirtying the form. */
+  noteSeed(path: string, seed: unknown): void;
+  /**
+   * Whether the value at `path` is the person's own: they changed it themselves, or it is `dirty`
+   * and no longer, by deep equality, the seed last written there.
+   */
+  isOwn(path: string, state: { dirty: boolean; value: unknown }): boolean;
+  /** Forget every edit and seed. */
+  clear(): void;
+}
+
+/** A form's empty `PresetMemory`. */
+export function createPresetMemory(): PresetMemory {
+  const edited = new Set<string>();
+  const seeds = new Map<string, unknown>();
+  return {
+    noteEdit: (path) => { edited.add(path); },
+    noteSeed: (path, seed) => { seeds.set(path, seed); },
+    isOwn: (path, { dirty, value }) => edited.has(path)
+      || (dirty && replaceEqualDeep(seeds.get(path), value) !== seeds.get(path)),
+    clear: () => { edited.clear(); seeds.clear(); },
+  };
+}
+
+/** Whether `preset` leaves the person's own value at `target`: it preserves dirty values and does not name `target` to replace. */
+function preservesTarget(preset: FieldDescriptor, target: string): boolean {
+  return Boolean(preset.prefillPreserveDirty) && !preset.prefillReplace?.includes(target);
+}
+
+/**
+ * Write what `preset` seeds when its field changes to `value` (see `FieldDescriptor.prefill`), from
+ * the `values` and `loaded` values of its scope, and return the form paths written, in the preset's
+ * order. A `createOnly` preset writes nothing outside a create. A `prefillPreserveDirty` preset skips
+ * a target whose value `memory` says is the person's own, unless `prefillReplace` names it, and writes
+ * its other unnamed targets without dirtying the form, noting each such seed in `memory`; every other
+ * seed dirties the form. A target is `read` only on its turn, after the seeds before it were written.
+ */
+export function seedPreset(
+  preset: FieldDescriptor,
+  value: unknown,
+  values: FormValues,
+  loaded: FormValues | undefined,
+  options: {
+    isCreate: boolean;
+    memory: PresetMemory;
+    /** The form path of a target the preset names: its scope in a nested form. */
+    at?: (target: string) => string;
+    /** The form's dirty flag and value at a path, as they are when asked. */
+    read: (path: string) => { dirty: boolean; value: unknown };
+    /** The caller's own write of a seed; `dirties` says whether it dirties the form. */
+    write: (path: string, seed: unknown, dirties: boolean) => void;
+  },
+): string[] {
+  if (preset.createOnly && !options.isCreate) return [];
+  const written: string[] = [];
+  for (const [target, seed] of Object.entries(preset.prefill?.(value, values, loaded) ?? {})) {
+    const path = options.at?.(target) ?? target;
+    const preserves = preservesTarget(preset, target);
+    if (preserves && options.memory.isOwn(path, options.read(path))) continue;
+    options.write(path, seed, !preserves);
+    if (preserves) options.memory.noteSeed(path, seed);
+    written.push(path);
+  }
+  return written;
+}
+
+/**
  * The loaded values a draft lacks: each field visible for `values` whose key the draft does not
  * own (a dropped field), where `baseline` holds a value. A field left unset owns its key.
  */
@@ -386,7 +461,7 @@ export function hiddenResetWrites(
     if (same(value, dottedValue(options.baseline, field.name))) continue;
     for (const [path, seed] of Object.entries(field.prefill(value, values, options.baseline) ?? {})) {
       // A seed of nothing says nothing; a dirty-preserving preset's other fields are defaults.
-      if (seed === undefined || (field.prefillPreserveDirty && !field.prefillReplace?.includes(path))) continue;
+      if (seed === undefined || preservesTarget(field, path)) continue;
       const owner = fields.find((candidate) => candidate.name === path);
       if (!owner || !savesField(resolveField(owner, values), options) || pathHolding(visibleNames, path) !== null) continue;
       if (hasDottedValue(options.baseline, path) && !same(seed, dottedValue(options.baseline, path))) {
@@ -545,10 +620,15 @@ export function mutationData(
   return data;
 }
 
+/**
+ * `field` as it presents for `values`: what its `resolve` returns over its declaration, read-only
+ * when either is. A `resolve` never renames the value: the field keeps reading and writing its
+ * declared `name`, whatever name the resolved descriptor carries.
+ */
 export function resolveField(field: FieldDescriptor, values: FormValues): FieldDescriptor {
   const resolved = field.resolve?.(values);
   return resolved
-    ? { ...field, ...resolved, readOnly: Boolean(field.readOnly || resolved.readOnly) }
+    ? { ...field, ...resolved, name: field.name, readOnly: Boolean(field.readOnly || resolved.readOnly) }
     : field;
 }
 

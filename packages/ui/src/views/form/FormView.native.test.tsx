@@ -1797,6 +1797,33 @@ test("bound descriptors apply scoped variant visibility through the native form 
   expect(f.surface().form.getValues("settings.retry")).toBe("later");
 });
 
+test("a bound descriptor whose resolve returns another name reads and writes its declared path", async () => {
+  const f = await fixture({
+    acknowledgedSource: {
+      record: { id: "note-1", title: "First" },
+      values: { title: "First", settings: { retry: "later" } },
+    },
+    mountedFields: [],
+    boundFields: [{ scope: "settings", field: {
+      name: "retry", label: "Retry", resolve: () => ({ name: "elsewhere", label: "Retry" }),
+    } }],
+  });
+  expect((await screen.findByLabelText("Retry") as HTMLInputElement).value).toBe("later");
+  edit("Retry", "soon");
+  expect(f.surface().form.getValues("settings")).toEqual({ retry: "soon" });
+});
+
+test("a keystroke in a field without a preset evaluates the form's conditions no more than it has to", async () => {
+  const showWhen = vi.fn((values: Row) => values.title === "Scheduled");
+  await fixture({ publicView: true, viewFields: [{ name: "title", label: "Title" }, { name: "deadline", label: "Deadline", showWhen }] });
+  const title = await screen.findByRole("textbox", { name: "Title" });
+  await waitFor(() => expect((title as HTMLInputElement).value).toBe("First"));
+  showWhen.mockClear();
+  fireEvent.change(title, { target: { value: "Firsts" } });
+  // Twice: the draft's restore step and the sheet's render. A field without a preset writes no seed, so no hidden-path step runs.
+  expect(showWhen).toHaveBeenCalledTimes(2);
+});
+
 test("native bound widgets delimit text, discrete, structured and presence interactions", async () => {
   const starts = vi.fn();
   const commits = vi.fn();

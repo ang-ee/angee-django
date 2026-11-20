@@ -42,6 +42,7 @@ import {
 } from "./editable-lines";
 import {
   baselineLineRows,
+  createPresetMemory,
   dirtyArrayValues,
   emptyDraft,
   fieldValidationSummary,
@@ -52,6 +53,7 @@ import {
   mutationData,
   recordToValues,
   resolveField,
+  seedPreset,
   type FormValues,
   type LinesSeed,
 } from "./form-view-model";
@@ -241,8 +243,7 @@ export function useFormViewSave({
     [defaultValues],
   );
   const manualSlugFieldsRef = React.useRef<Set<string>>(new Set());
-  const prefillSeedsRef = React.useRef<Map<string, unknown>>(new Map());
-  const userEditedFieldsRef = React.useRef<Set<string>>(new Set());
+  const [presetMemory] = React.useState(createPresetMemory);
   const localAcknowledgementRef = React.useRef<{
     previous: FormValues | null;
     accepted: FormValues;
@@ -811,7 +812,7 @@ export function useFormViewSave({
   const afterFieldChange = React.useCallback(
     (field: FieldDescriptor, value: unknown, scope = ""): void => {
       const scoped = (name: string) => scope ? `${scope}.${name}` : name;
-      userEditedFieldsRef.current.add(scoped(field.name));
+      presetMemory.noteEdit(scoped(field.name));
       clearErrors(scoped(field.name));
       // What the form compares itself against: a preset may give a sibling its loaded value back.
       const loaded = form.formState.defaultValues;
@@ -820,40 +821,23 @@ export function useFormViewSave({
       const declared = saveFields.find((candidate) => candidate.name === scoped(field.name));
       const own = declared && resolveField(declared, form.getValues());
       const preset = own?.prefill ? own : field;
-      if (isCreate || !preset.createOnly) {
-        const seeds = preset.prefill?.(
-          value,
-          (scope ? form.getValues(scope) : form.getValues()) as Row,
-          ((scope ? get(loaded, scope) : loaded) ?? undefined) as Row | undefined,
-        );
-        if (seeds) {
-          const replacements = new Set(preset.prefillReplace ?? []);
-          const applied = new Set<string>();
-          for (const [name, seed] of Object.entries(seeds)) {
-            const target = scoped(name);
-            if (
-              preset.prefillPreserveDirty &&
-              !replacements.has(name) &&
-              (userEditedFieldsRef.current.has(target) || (
-                getFieldState(target).isDirty &&
-                replaceEqualDeep(prefillSeedsRef.current.get(target), form.getValues(target)) !== prefillSeedsRef.current.get(target)
-              ))
-            ) continue;
-            applied.add(target);
-            if (preset.prefillPreserveDirty && !replacements.has(name)) {
-              setValue(target, seed, { shouldDirty: false, shouldTouch: true });
-              prefillSeedsRef.current.set(target, seed);
-              continue;
-            }
-            setValue(target, seed, {
-              shouldDirty: true,
-              shouldTouch: true,
-            });
-          }
-          // The draft holds only the fields visible for its new values, as it was loaded (`emptyDraft`).
-          const hidden = preset === own ? hiddenDraftPaths(form.getValues(), saveFields, [...applied]) : [];
-          if (hidden.length) form.unregister(hidden, { keepDefaultValue: true });
-        }
+      const written = seedPreset(
+        preset,
+        value,
+        (scope ? form.getValues(scope) : form.getValues()) as Row,
+        ((scope ? get(loaded, scope) : loaded) ?? undefined) as Row | undefined,
+        {
+          isCreate,
+          memory: presetMemory,
+          at: scoped,
+          read: (path) => ({ dirty: getFieldState(path).isDirty, value: form.getValues(path) }),
+          write: (path, seed, dirties) => setValue(path, seed, { shouldDirty: dirties, shouldTouch: true }),
+        },
+      );
+      // The draft holds only the fields visible for its new values, as it was loaded (`emptyDraft`).
+      if (written.length && preset === own) {
+        const hidden = hiddenDraftPaths(form.getValues(), saveFields, written);
+        if (hidden.length) form.unregister(hidden, { keepDefaultValue: true });
       }
       // A field dropped from the draft that shows again holds its loaded value.
       for (const [path, restored] of missingDraftValues(form.getValues(), saveFields, (loaded ?? {}) as FormValues)) {
@@ -874,7 +858,7 @@ export function useFormViewSave({
         });
       }
     },
-    [clearErrors, defaultSlugSource, form, formFields, getFieldState, isCreate, saveFields, setValue],
+    [clearErrors, defaultSlugSource, form, formFields, getFieldState, isCreate, presetMemory, saveFields, setValue],
   );
   const fieldReadOnly = React.useCallback(
     (field: FieldDescriptor): boolean =>
@@ -883,15 +867,14 @@ export function useFormViewSave({
   );
   const discardChanges = React.useCallback(() => {
     if (isCreate) localAcknowledgementRef.current = null;
-    prefillSeedsRef.current.clear();
-    userEditedFieldsRef.current.clear();
+    presetMemory.clear();
     reset(isCreate ? emptyValues : values, { keepDirtyValues: false, keepDirty: false });
     resetHistory();
     activeFieldInteractions.current.clear();
     formIsDirtyRef.current = false;
     editBasisRecordRef.current = displayRecord;
     onDiscarded?.();
-  }, [displayRecord, emptyValues, isCreate, onDiscarded, reset, resetHistory, values]);
+  }, [displayRecord, emptyValues, isCreate, onDiscarded, presetMemory, reset, resetHistory, values]);
   const startFieldInteraction = React.useCallback(
     (path: string) => {
       startHistory(path);

@@ -1,7 +1,6 @@
 import * as React from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { FormProvider, useForm } from "react-hook-form";
-import { Button, DescriptorFieldList, type DescriptorField } from "@angee/ui";
+import { ActionFormProvider, Button, DescriptorFieldList, useActionForm, type DescriptorField } from "@angee/ui";
 import { createJsonSchemaResolver } from "@angee/ui/views/json-schema";
 
 type Values = { title: string; email: string };
@@ -18,15 +17,19 @@ const fields: readonly DescriptorField[] = [
 ];
 
 function JsonSchemaForm(): React.ReactElement {
-  const form = useForm<Values>({ defaultValues: { title: "", email: "" }, resolver });
   const [accepted, setAccepted] = React.useState<Values>();
-  return <FormProvider {...form}>
-    <form className="grid w-96 gap-4" onSubmit={form.handleSubmit(setAccepted)}>
+  const { form, run } = useActionForm<Values>({
+    defaultValues: { title: "", email: "" },
+    resolver,
+    submit: (values) => { setAccepted(values); return { status: "ok", data: null }; },
+  });
+  return <ActionFormProvider {...form}>
+    <form className="grid w-96 gap-4" onSubmit={(event) => { event.preventDefault(); void run(); }}>
       <DescriptorFieldList fields={fields} />
       <Button type="submit">Validate</Button>
       {accepted ? <pre className="rounded-6 bg-surface-inset p-3 text-12">{JSON.stringify(accepted, null, 2)}</pre> : null}
     </form>
-  </FormProvider>;
+  </ActionFormProvider>;
 }
 
 const meta = { title: "Views/JsonSchemaForm", component: JsonSchemaForm, parameters: { layout: "centered" } } satisfies Meta<typeof JsonSchemaForm>;

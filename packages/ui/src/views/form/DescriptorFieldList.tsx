@@ -17,7 +17,8 @@ import { RelationFieldWidget } from "../relation/RelationFieldWidget";
 import { RelationMultiFieldWidget } from "../relation/RelationMultiFieldWidget";
 import type { FieldDescriptor } from "../page";
 import { directDottedPathMessages } from "./validation-errors";
-import { fieldErrorMessages, isCompositeFieldDescriptor, isFieldVisible, resolveField } from "./form-view-model";
+import { fieldErrorMessages, isCompositeFieldDescriptor, seedPreset, visibleFields, type FormValues } from "./form-view-model";
+import { usePresetMemory } from "./ActionFormProvider";
 import { DescriptorPresenceControl } from "./descriptor-presence-control";
 import { RecordFieldMarkControl } from "./record-field-marks";
 
@@ -103,15 +104,20 @@ export type DescriptorFieldListProps = {
   | { fields?: never; resolvedFields: readonly DescriptorField[] }
 );
 
-/** Render descriptors in the existing React Hook Form provider's value tree.
+/** Render descriptors in the value tree of the enclosing ActionFormProvider's React Hook Form form.
  * @kind surface
  */
 export function DescriptorFieldList({ fields, resolvedFields, readOnly = false }: DescriptorFieldListProps): React.ReactElement {
   const form = useFormContext<Record<string, unknown>>();
+  const memory = usePresetMemory();
   if (!form) throw new Error("DescriptorFieldList requires a React Hook Form FormProvider.");
+  if (!memory) throw new Error("DescriptorFieldList requires an ActionFormProvider.");
   const values = useWatch({ control: form.control });
   const { i18n } = useAppRuntime();
-  const renderedFields = resolveFieldLabels(fields === undefined ? resolvedFields : resolveDescriptorFields(fields, values), i18n);
+  const renderedFields = resolveFieldLabels(fields === undefined
+    ? resolvedFields
+    // Resolving lays `resolve`'s descriptor over each declared one, so its DescriptorField members stay.
+    : visibleFields(fields, values) as DescriptorField[], i18n);
   return <>{renderedFields.map((field) => (
     <Controller key={field.name} name={field.name} control={form.control} exact={false}
       render={({ field: control, fieldState }) => (
@@ -129,6 +135,7 @@ export function DescriptorFieldList({ fields, resolvedFields, readOnly = false }
           controlRef={control.ref}
           onCommit={control.onBlur}
           onChange={(next) => {
+            memory.noteEdit(field.name);
             if (field.branchReset && !Object.is(next, control.value)) {
               const previous = field.branchReset(control.value);
               const branch = field.branchReset(next);
@@ -144,31 +151,21 @@ export function DescriptorFieldList({ fields, resolvedFields, readOnly = false }
             // field may itself declare "target", so always put the value in
             // the native event envelope to keep the entire object atomic.
             control.onChange({ target: { value: next } });
-            const seeds = field.prefill?.(next, form.getValues(), form.formState.defaultValues as Record<string, unknown> | undefined);
-            if (!seeds) return;
-            for (const [name, seed] of Object.entries(seeds)) {
-              form.clearErrors(name);
-              form.setValue(name, seed, {
-                shouldDirty: true,
-                shouldTouch: true,
-                shouldValidate: true,
-              });
-            }
+            seedPreset(field, next, form.getValues(), form.formState.defaultValues as FormValues | undefined, {
+              // The list has no edit mode that locks a `createOnly` field, so it seeds as a create does.
+              isCreate: true,
+              memory,
+              read: (path) => ({ dirty: form.getFieldState(path).isDirty, value: form.getValues(path) }),
+              write: (path, seed, dirties) => {
+                form.clearErrors(path);
+                form.setValue(path, seed, { shouldDirty: dirties, shouldTouch: true, shouldValidate: true });
+              },
+            });
           }}
         />
       )}
     />
   ))}</>;
-}
-
-/** Resolve presentation without allowing a dynamic descriptor to rename its value. */
-export function resolveDescriptorFields(
-  fields: readonly DescriptorField[],
-  values: Record<string, unknown>,
-): DescriptorField[] {
-  return fields
-    .map((declared) => ({ ...declared, ...resolveField(declared, values), name: declared.name }))
-    .filter((field) => isFieldVisible(field, values));
 }
 
 /**
