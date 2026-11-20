@@ -18,7 +18,6 @@ import { THREAD_ATTACHMENT_MODEL, THREAD_CHATTER_EDGE } from "./documents";
 
 export { CHANNEL_MODEL } from "./documents";
 export { RecordChatterPane, type RecordChatterPaneProps } from "./RecordChatterPane";
-export { PublicWebform, type PublicWebformProps } from "./PublicWebform";
 export {
   defineChannelBridgeAddon,
   defineChannelPollBridgeAddon,
@@ -84,18 +83,6 @@ export interface MessagingAddonOptions {
 export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOptions = {}) => defineBaseAddon({
   id: "messaging",
   routes: [
-    {
-      name: "messaging.publicWebforms",
-      path: "/public/forms",
-      layout: "public",
-    },
-    {
-      name: "messaging.publicWebform",
-      path: "/public/forms/$slug",
-      parent: "messaging.publicWebforms",
-      layout: "public",
-      component: lazyRouteComponent(() => import("./PublicWebformPage"), "PublicWebformPage"),
-    },
     ...resourcePageRoutes("messaging.messages", "/messaging/messages", lazyRouteComponent(() => import("./MessagesPage"), "MessagesPage"), "messaging.Message"),
     ...resourcePageRoutes("messaging.threads", "/messaging/threads", lazyRouteComponent(() => import("./ThreadsPage"), "ThreadsPage"), "messaging.Thread"),
     ...resourcePageRoutes("messaging.channels", "/messaging/channels", lazyRouteComponent(() => import("./ChannelsPage"), "ChannelsPage"), "messaging.Channel"),

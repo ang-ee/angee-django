@@ -194,7 +194,10 @@ fanout, and Celery beat runs embedded in the single shared `worker` service
 
 Production framework stacks build the frontend after codegen with
 `pnpm --dir <web_path> build`. Caddy serves `dist` with an `index.html` SPA
-fallback, proxies declared Django paths, and strips `/operator` only for the
+fallback, answers the composed standalone pages (`runtime/web/pages.caddy`)
+ahead of the declared Django paths it proxies (`INGRESS_DJANGO_PATHS` in
+[`angee.web.build`](../src/angee/web/build.py), published in the web manifest as
+`ingressDjangoPaths`), and strips `/operator` only for the
 narrow `/operator/graphql` route. It sets the operator allowed origin to the
 stack's browser origin. The inner Caddy waits for the edge's Compose alias on
 public ingress and trusts its connected Compose network CIDRs with strict
@@ -270,6 +273,7 @@ settings or through the `ANGEE_WEB_STATEMENT_TIMEOUT` environment variable.
 | @vidstack/react | Inline video/audio player | storage file previewer |
 | heic-to | Client-side HEIC/HEIF decode to a displayable image (current libheif-wasm) | storage HEIC previewer |
 | postal-mime | Browser-side RFC 822 / MIME parsing: multipart bodies, transfer encodings, charsets, encoded headers and inline parts | messaging's email previewer (`message/rfc822`, lazy-loaded); the HTML alternative renders in `@angee/ui`'s `MessageHtmlFrame` sandbox |
+| survey-core + survey-js-ui 3.2.7 (MIT) | Public questionnaire rendering: question types, pages, validation in the browser, a form's texts in each language and the completed page, from a JSON definition | The web forms addon's [standalone page](../src/angee/webforms/web/src/standalone/form.ts) renders a published version with them and loads nothing of the app. Angee owns the stored definition (a checked subset of the SurveyJS schema), the server-side answer checks and the [token bridge](../src/angee/webforms/web/src/standalone/surveyjs-bridge.css) that sets SurveyJS's design tokens from the semantic token set. Both packages are pinned to one exact version, since SurveyJS's breaking changes cluster on those token names; the commercial `survey-creator-*` packages stay out |
 | pnpm | JavaScript dependency resolution and workspaces | Workspace layout |
 | Node >= 22.13 | JavaScript build runtime | Project runtime |
 

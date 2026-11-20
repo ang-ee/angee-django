@@ -153,6 +153,33 @@ export const APPEARANCE_CACHE_LIMIT: number;
  * @reason Headless appearance DOM lifecycle shared by bootstrap and React.
  */
 export function applyAppearanceRoot(options: { themeId: string | null; colorScheme: ColorScheme; tokens?: TokenLayer; target?: Document }): void;
+/** What a document wears: the theme, the color scheme and the tokens `applyAppearanceRoot` applies. */
+export interface ResolvedAppearance { themeId: string | null; colorScheme: ColorScheme; tokens: TokenLayer }
+/** What overrides the host's own appearance: a remembered preference, or the theme a document outside the app names. */
+export interface AppearanceChoice {
+  /** The theme to wear in place of the host's; one that is not installed leaves the host's. */
+  themeId?: string | null;
+  colorSchemePreference?: ColorSchemePreference;
+  /** Token layers that replace the theme's own, as a remembered preference carries them. */
+  tokenLayers?: ThemeTokenLayers;
+  /** Asked only when the color scheme follows the system. */
+  prefersDark?: () => boolean;
+}
+/**
+ * @kind null
+ * @reason Headless appearance resolution shared by bootstrap and by a document outside the app.
+ */
+export function resolveAppearance(payload: AppearanceBootstrapPayload, choice?: AppearanceChoice): ResolvedAppearance;
+/**
+ * @kind null
+ * @reason Shared name of the data block a script-free document carries its appearance payload in.
+ */
+export const APPEARANCE_PAYLOAD_ATTRIBUTE: "data-angee-appearance";
+/**
+ * @kind null
+ * @reason Headless read of the appearance payload a script-free document carries as data.
+ */
+export function readAppearancePayload(target?: Pick<Document, "querySelector">): AppearanceBootstrapPayload | null;
 /**
  * @kind null
  * @reason Headless first-paint lifecycle bundled by app composition.

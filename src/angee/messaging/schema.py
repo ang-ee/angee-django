@@ -138,37 +138,6 @@ class ChannelType(BridgeTypeMixin, AngeeNode):
             return None
 
 
-def _channel_webform_extension() -> type[Any] | None:
-    """Project the messaging-owned donor only when this graph composes it."""
-
-    required_fields = {
-        "slug",
-        "is_published",
-        "form_schema_version",
-        "form_schema",
-        "max_body_bytes",
-        "max_field_bytes",
-    }
-    if not required_fields.issubset(field.name for field in Channel._meta.get_fields()):
-        return None
-
-    @strawberry_django.type(Channel, name="ChannelType", extend=True)
-    class ChannelWebformExtension:
-        """Contribute public-form configuration onto messaging's channel node."""
-
-        slug: auto
-        is_published: auto
-        form_schema_version: auto
-        form_schema: strawberry.scalars.JSON
-        max_body_bytes: auto
-        max_field_bytes: auto
-
-    return ChannelWebformExtension
-
-
-_CHANNEL_WEBFORM_EXTENSION = _channel_webform_extension()
-
-
 def _pairing_result(operation: Any, *args: Any, **kwargs: Any) -> Any:
     """Expose only pairing-owner failures whose text is deliberately public."""
 
@@ -2050,7 +2019,6 @@ _MESSAGING_SCHEMA_BUCKET = {
         RecordFollowPayload,
         *_RESOURCE_TYPES,
     ],
-    "type_extensions": ([] if _CHANNEL_WEBFORM_EXTENSION is None else [_CHANNEL_WEBFORM_EXTENSION]),
 }
 
 

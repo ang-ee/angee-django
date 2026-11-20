@@ -345,7 +345,7 @@ async function listen(server: ViteDevServer) {
   await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
   const address = http.address();
   if (!address || typeof address === "string") throw new Error("Missing dev server address");
-  return (url: string) => fetch(`http://127.0.0.1:${address.port}${url}`);
+  return (url: string, init?: RequestInit) => fetch(`http://127.0.0.1:${address.port}${url}`, init);
 }
 /** A dev server without a watcher, transforming a page whose host head holds `tags`. */
 async function headServer() {
@@ -642,4 +642,183 @@ test("preview serves the built site and assets after sources and runtime disappe
   expect(await (await fetch(origin)).text()).toBe(built.html);
   const imageUrl = head(built.html).querySelector('meta[property="og:image"]')!.getAttribute("content")!;
   expect(Buffer.from(await (await fetch(new URL(imageUrl, origin))).arrayBuffer())).toEqual(tinyPng);
+}, 30_000);
+
+const pageDeclaration = { entry: "./pages/demo.html", paths: ["/forms/w/*"], accept: "text/html" };
+// What this fixture's manifest publishes. The composer owns both values and its own tests pin them;
+// the build applies whatever the manifest carries, which the tests below read back from it.
+const pageAccept = { "text/html": "^[\\t\\x20]*[Tt][Ee][Xx][Tt]/[Hh][Tt][Mm][Ll][\\t\\x20]*(?:;[^,]*)?(?:,|$)" };
+const pageCsp = "default-src 'self'; script-src 'self'; frame-ancestors 'none'; style-src 'self' 'unsafe-inline'";
+const browserAccept = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+const demoDocument = '<html><head><title>Demo</title><link rel="stylesheet" href="./demo.css" /></head><body><script type="module" src="./demo.ts"></script></body></html>';
+
+/** Declare one standalone page on the linked addon; `files` also writes its entry and the files beside it. */
+function declarePage({ files = true, document = demoDocument, ...published }: { files?: boolean; document?: string; pageAccept?: object; pageCsp?: string } = {}) {
+  if (files) {
+    write(join(addon, "pages", "demo.html"), document);
+    write(join(addon, "pages", "demo.ts"), 'document.title = "standalone page module"; import("./rest").then((rest) => rest.open());');
+    write(join(addon, "pages", "rest.ts"), 'export function open() { document.body.dataset.rest = "standalone page rest"; }');
+    write(join(addon, "pages", "demo.css"), ".demo-page { color: var(--text-primary); }");
+  }
+  manifest({ pageAccept, pageCsp, ...published, addonPackages: [{
+    package: "@demo/theme", root: "../../linked-addon", sourceRoot: "src/headless", pages: { "demo.page": pageDeclaration },
+  }] });
+}
+
+/** A dev server over the fixture, without a watcher, and a way to ask it. */
+async function devServer() {
+  const server = await createServer({
+    ...await config(), configFile: false, logLevel: "silent",
+    optimizeDeps: { noDiscovery: true, entries: [] },
+    // The addon sits beside the web root, as a linked package sits inside a workspace Vite allows.
+    // Nothing here admits the token sheet or the runtime's themes: the build does, for the pages it serves.
+    server: { middlewareMode: true, ws: false, watch: null, fs: { allow: [web, addon] } },
+  });
+  servers.push(server);
+  return listen(server);
+}
+
+test("a declared page whose entry is missing fails the build, naming its package and the page", async () => {
+  declarePage({ files: false });
+  await expect(resolveConfig({ ...await config(), configFile: false, logLevel: "silent" }, "build"))
+    .rejects.toThrow('@demo/theme page "demo.page" must name an existing file inside its package');
+});
+
+test("a declared page with no published policy fails, naming the manifest's key", async () => {
+  declarePage({ pageCsp: undefined });
+  await expect(resolveConfig({ ...await config(), configFile: false, logLevel: "silent" }, "build"))
+    .rejects.toThrow("The web manifest declares standalone pages but publishes no pageCsp");
+});
+
+test("build emits a declared page as <id>.html beside index.html, with its own files, the tokens and the themes, and no policy of its own", async () => {
+  declarePage({ pageCsp });
+  const { outputs, html } = await builtSite();
+  const page = outputs.find((entry) => entry.type === "asset" && entry.fileName === "demo.page.html");
+  if (!page || page.type !== "asset") throw new Error("Missing built demo.page.html");
+  const source = Buffer.from(page.source).toString();
+  const chunk = outputs.find((entry) => entry.type === "chunk" && entry.code.includes("standalone page module"));
+  expect(source).toContain(`src="/${chunk?.fileName}"`);
+  // What the page's entry imports dynamically downloads beside the entry: the document preloads it.
+  const rest = outputs.find((entry) => entry.type === "chunk" && entry.code.includes("standalone page rest"));
+  expect(rest?.fileName).not.toBe(chunk?.fileName);
+  expect(source).toContain(`<link rel="modulepreload" crossorigin href="/${rest?.fileName}">`);
+  expect(html).not.toContain(rest?.fileName);
+  // The app's document keeps its first-paint script. A page applies its own theme: the content
+  // security policy the ingress sends it runs no inline script, so it is given the appearance as data.
+  expect(html).toContain("data-angee-appearance-bootstrap");
+  const inline = [...source.matchAll(/<script(?![^>]*\ssrc=)([^>]*)>([\s\S]*?)<\/script>/g)];
+  expect(inline.map((script) => script[1]!.trim())).toEqual(['type="application/json" data-angee-appearance=""']);
+  expect(JSON.parse(inline[0]![2]!)).toMatchObject({ host: { themeId: "demo.theme", colorScheme: "light" }, catalogue: { themes: [{ id: "demo.theme" }] } });
+  // The ingress sends the policy as a header: the built document repeats none of it.
+  expect(source).not.toContain("Content-Security-Policy");
+  // The page is given the design tokens and the installed themes, and never the host's own stylesheet.
+  const sheets = [...source.matchAll(/<link rel="stylesheet"[^>]*href="\/([^"]+)"/g)].map((match) =>
+    outputs.find((entry) => entry.type === "asset" && entry.fileName === match[1]));
+  const css = sheets.map((sheet) => sheet?.type === "asset" ? Buffer.from(sheet.source).toString() : "").join("\n");
+  // In that order: a theme overrides the tokens, and the page's own sheet follows both.
+  const order = ["--surface-canvas:", "demo\\.theme]", ".demo-page"].map((mark) => css.indexOf(mark));
+  expect(order.every((at) => at >= 0), css.slice(0, 80)).toBe(true);
+  expect(order).toEqual([...order].sort((left, right) => left - right));
+  // What `vite preview` serves the pages by, inside the distribution.
+  const described = outputs.find((entry) => entry.type === "asset" && entry.fileName === ".vite/angee-pages.json");
+  expect(JSON.parse(Buffer.from(described?.type === "asset" ? described.source : "").toString())).toEqual({
+    pages: [{ id: "demo.page", paths: pageDeclaration.paths, acceptPattern: pageAccept["text/html"] }],
+    policy: pageCsp,
+  });
+}, 30_000);
+
+test.each([
+  ["a file outside its entry's directory", '<html><head></head><body><img src="../mark.svg" /></body></html>',
+    '@demo/theme page "demo.page" references "../mark.svg": a page names its own files with "./", beside or below its entry.'],
+  ["srcset", '<html><head></head><body><img srcset="./mark.svg 2x" /></body></html>',
+    '@demo/theme page "demo.page" uses srcset, which a page\'s document cannot name files with: use src.'],
+  ["no head", "<html><body></body></html>",
+    '@demo/theme page "demo.page" needs a <head> element for the stylesheets every page is given.'],
+])("build refuses a page whose document has %s", async (_label, document, message) => {
+  declarePage({ document });
+  await expect(builtSite()).rejects.toThrow(message);
+}, 30_000);
+
+test("dev serves a declared page at its paths to a document request, and nothing else there", async () => {
+  declarePage();
+  const get = await devServer();
+  const page = await get("/forms/w/demo?lang=es", { headers: { accept: browserAccept } });
+  expect(page.status).toBe(200);
+  expect(page.headers.get("content-type")).toContain("text/html");
+  // Beside whatever the server already varies by (its CORS policy varies by Origin).
+  expect(page.headers.get("vary")?.split(", ")).toContain("Accept");
+  const html = await page.text();
+  expect(html).not.toContain("data-angee-appearance-bootstrap");
+  expect(html).toContain('<script type="application/json" data-angee-appearance="">');
+  const module = encodeURI(`/@fs${join(addon, "pages", "demo.ts")}`);
+  expect(html).toContain(`<script type="module" src="${module}">`);
+  expect(await (await get(module)).text()).toContain("standalone page module");
+  // The design tokens, then the installed themes, then the page's own sheet.
+  const sheets = [...html.matchAll(/<link rel="stylesheet" href="([^"]+)"/g)].map((match) => match[1]!);
+  expect(sheets).toEqual([
+    encodeURI(`/@fs${fileURLToPath(import.meta.resolve("@angee/ui/tokens.css"))}`),
+    encodeURI(`/@fs${join(runtime, "web", "themes.css")}`),
+    encodeURI(`/@fs${join(addon, "pages", "demo.css")}`),
+  ]);
+  expect(await (await get(sheets[0]!, { headers: { accept: "text/css" } })).text()).toContain("--surface-canvas");
+  expect(await (await get(sheets[1]!, { headers: { accept: "text/css" } })).text()).toContain('[data-theme-id="demo.theme"]');
+  const head = await get("/forms/w/demo", { method: "HEAD", headers: { accept: browserAccept } });
+  expect([head.status, await head.text()]).toEqual([200, ""]);
+  // This server has no proxy: a request the page does not answer finds no document of the page's.
+  const other = async (path: string, init: RequestInit) => (await (await get(path, init)).text()).includes("demo.ts");
+  expect(await other("/forms/w/demo", { headers: { accept: "Text/HTML; charset=utf-8" } })).toBe(true);
+  for (const accept of ["application/json", "*/*", "application/json, text/html", ""]) {
+    expect(await other("/forms/w/demo", { headers: { accept } }), accept).toBe(false);
+  }
+  expect(await other("/forms/w/demo", { method: "POST", headers: { accept: browserAccept } })).toBe(false);
+  expect(await other("/forms/w", { headers: { accept: browserAccept } })).toBe(false);
+  expect(await other("/forms/demo", { headers: { accept: browserAccept } })).toBe(false);
+}, 30_000);
+
+test("dev asks a request for a page by the manifest's pattern and no rule of its own", async () => {
+  declarePage({ pageAccept: { "text/html": "^application/x-demo$" } });
+  const get = await devServer();
+  const served = async (accept: string) => (await (await get("/forms/w/demo", { headers: { accept } })).text()).includes("demo.ts");
+  expect(await served("application/x-demo")).toBe(true);
+  expect(await served(browserAccept)).toBe(false);
+}, 30_000);
+
+test("dev writes the manifest's page policy into the document, after Vite's own head scripts", async () => {
+  declarePage({ pageCsp });
+  const get = await devServer();
+  const html = await (await get("/forms/w/demo", { headers: { accept: browserAccept } })).text();
+  // A document cannot set `frame-ancestors` for itself; the rest is the manifest's policy.
+  expect(head(html).querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute("content"))
+    .toBe("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'");
+  const headEnd = html.indexOf("</head>");
+  const policyAt = html.indexOf("Content-Security-Policy");
+  const lastHeadScript = html.lastIndexOf("<script", headEnd);
+  expect(lastHeadScript).toBeGreaterThan(-1);
+  expect(policyAt).toBeGreaterThan(lastHeadScript);
+  expect(policyAt).toBeLessThan(headEnd);
+  // The app's own document is not a page: it carries no page policy.
+  const app = await (await get("/", { headers: { accept: browserAccept } })).text();
+  expect(app).not.toContain("Content-Security-Policy");
+}, 30_000);
+
+test("preview serves a built page at its paths as the ingress does, under the manifest's policy", async () => {
+  declarePage({ pageCsp });
+  const value = await config();
+  await build({ ...value, configFile: false, logLevel: "silent" });
+  // Preview reads the distribution alone: no manifest, no sources.
+  rmSync(runtime, { recursive: true, force: true });
+  rmSync(addon, { recursive: true, force: true });
+  const server = await preview({ ...value, configFile: false, logLevel: "silent", preview: { host: "127.0.0.1", port: 0, strictPort: false } });
+  onTestFinished(() => new Promise<void>((resolve, reject) => server.httpServer.close((error) => error ? reject(error) : resolve())));
+  const address = server.httpServer.address();
+  if (!address || typeof address === "string") throw new Error("Missing preview address");
+  const get = (path: string, init?: RequestInit) => fetch(`http://127.0.0.1:${address.port}${path}`, init);
+  const page = await get("/forms/w/demo?lang=es", { headers: { accept: browserAccept } });
+  expect(page.status).toBe(200);
+  expect(page.headers.get("vary")?.split(", ")).toContain("Accept");
+  expect(page.headers.get("content-security-policy")).toBe(pageCsp);
+  expect(await page.text()).toContain("<title>Demo</title>");
+  const json = await get("/forms/w/demo", { headers: { accept: "application/json" } });
+  expect(json.headers.get("content-security-policy")).toBeNull();
+  expect(await json.text()).not.toContain("<title>Demo</title>");
 }, 30_000);

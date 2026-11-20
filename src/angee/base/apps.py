@@ -81,11 +81,13 @@ class BaseConfig(AppConfig):
             check_ownership,
             check_public_origin,
             check_rebac_caveats,
+            check_stored_impl_keys,
         )
 
         checks.register(check_settings, checks.Tags.models)
         checks.register(check_database_routers, checks.Tags.models)
         checks.register(check_public_origin, checks.Tags.security)
+        checks.register(check_stored_impl_keys, checks.Tags.database)
 
         checks.register(check_ownership, checks.Tags.models)
         checks.register(check_rebac_caveats, checks.Tags.models)
