@@ -47,7 +47,9 @@ accepts.
   (`name`, `given-name`, `family-name`, `email`, `tel`, `organization`, the
   address hints, `off`); payment and credential hints are not offered. A form
   with pages may show its progress (`showProgressBar`, `progressBarLocation`,
-  `progressBarType`).
+  `progressBarType`). `showTitle: false` keeps a form's `title`, in each
+  language, as the page's document title without rendering it as a heading,
+  for a form whose first block carries its own.
 - A choice is `{"value": <code>, "text": <text>}`. Answers store the code, never
   the label, so they do not depend on language. "Other" is the code `other`,
   with its text in `<name>-Comment`.

@@ -50,6 +50,10 @@
         "questions",
         "requiredQuestions"
       ]
+    },
+    "showTitle": {
+      "description": "False keeps the title for the page's document title without rendering it as a heading.",
+      "type": "boolean"
     }
   },
   "oneOf": [

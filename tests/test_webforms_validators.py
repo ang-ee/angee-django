@@ -233,6 +233,12 @@ def test_a_text_question_takes_an_autofill_hint_and_never_one_for_a_card_or_a_pa
     assert refusal(changed((*FIRST, 2, "autocomplete"), "email")), "only a text question takes the hint"
 
 
+def test_a_form_may_keep_its_title_for_the_document_alone() -> None:
+    validate_definition(changed(("showTitle",), False), languages=LANGUAGES, default_language="en")
+
+    assert refusal(changed(("showTitle",), "never"))
+
+
 def test_a_form_with_pages_may_show_its_progress() -> None:
     shown = changed(("showProgressBar",), True)
     shown["progressBarLocation"], shown["progressBarType"] = "bottom", "questions"
