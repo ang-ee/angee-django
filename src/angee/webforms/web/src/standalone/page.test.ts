@@ -59,7 +59,7 @@ function serve(address: Address): void {
 }
 
 /** Open the page at an address; its surveys are kept, and drawn only when a test asks for SurveyJS's own renderer. */
-async function opened(address = "/forms/w/semilla", { drawn = false } = {}): Promise<void> {
+async function opened(address = "/forms/semilla", { drawn = false } = {}): Promise<void> {
   history.replaceState(null, "", address);
   await openPage({
     render(survey, host) {
@@ -109,7 +109,7 @@ describe("the document before its script speaks", () => {
 describe("opening a form", () => {
   test("shows the form in its theme and in the language the address asks for, whatever the case", async () => {
     serve({ get: [() => json(200, described(1, FIRST))], post: [] });
-    await opened("/forms/w/semilla?lang=EN");
+    await opened("/forms/semilla?lang=EN");
     expect(wear).toHaveBeenLastCalledWith("house.theme");
     expect(document.documentElement.lang).toBe("en");
     expect(document.title).toBe("Survey");
@@ -134,7 +134,7 @@ describe("opening a form", () => {
 
   test("says the form takes no responses when the address has none, in the visitor's language", async () => {
     serve({ get: [() => json(404, { error: "not_found" })], post: [] });
-    await opened("/forms/w/semilla?lang=es");
+    await opened("/forms/semilla?lang=es");
     expect(notice().hidden).toBe(false);
     expect(notice().textContent).toBe("Este formulario no está aceptando respuestas.");
     expect(mount().hidden).toBe(true);
@@ -169,7 +169,7 @@ describe("changing the language while filling in", () => {
 
   test("the last choice wins when its strings arrive first", async () => {
     serve({ get: [() => json(200, described(1, FIRST))], post: [] });
-    await opened("/forms/w/semilla?lang=en");
+    await opened("/forms/semilla?lang=en");
     // Spanish loads a file of strings; English is built in and answers at once.
     picker().value = "es";
     picker().dispatchEvent(new Event("change"));
@@ -185,7 +185,7 @@ describe("changing the language while filling in", () => {
 describe("sending the answers", () => {
   test("sends what the form asks, under one id, with the field a person leaves empty", async () => {
     serve({ get: [() => json(200, described(1, FIRST))], post: [() => json(202, { submission_id: "kept" })] });
-    await opened("/forms/w/semilla?lang=en");
+    await opened("/forms/semilla?lang=en");
     survey().setValue("name", "Ada");
     survey().setValue("colour", "other");
     survey().setComment("colour", "teal");
@@ -206,7 +206,7 @@ describe("sending the answers", () => {
         fields: { name: ["Too short."], "colour-Comment": ["Say what the other answer is."], answers: ["Not kept."] },
       })],
     });
-    await opened("/forms/w/semilla?lang=en");
+    await opened("/forms/semilla?lang=en");
     const said = vi.spyOn(survey(), "notify");
     await complete();
     expect(survey().state).toBe("running");
@@ -220,7 +220,7 @@ describe("sending the answers", () => {
       get: [() => json(200, described(1, FIRST))],
       post: [() => json(400, { error: "invalid_submission", message: "Check the answers.", fields: { name: ["Too short."] } })],
     });
-    await opened("/forms/w/semilla?lang=en", { drawn: true });
+    await opened("/forms/semilla?lang=en", { drawn: true });
     await vi.waitFor(() => expect(mount().textContent).toContain("Name"));
     expect(mount().textContent).toContain("Survey");
     await complete();
@@ -236,7 +236,7 @@ describe("sending the answers", () => {
       get: [() => json(200, described(1, FIRST))],
       post: [() => json(429, { error: "rate_limited", message: "Too many submissions. Try again in a minute." })],
     });
-    await opened("/forms/w/semilla?lang=en");
+    await opened("/forms/semilla?lang=en");
     const said = vi.spyOn(survey(), "notify");
     await complete();
     expect(survey().state).toBe("running");
@@ -248,7 +248,7 @@ describe("sending the answers", () => {
       get: [() => json(200, described(1, FIRST)), () => json(200, described(2, SECOND))],
       post: [() => json(409, { error: "form_changed", message: "Reload." }), () => json(202, { submission_id: "kept" })],
     });
-    await opened("/forms/w/semilla?lang=en");
+    await opened("/forms/semilla?lang=en");
     const first = survey();
     first.setValue("name", "Ada");
     first.setValue("nickname", "Countess");
@@ -277,7 +277,7 @@ describe("sending the answers", () => {
 
   test("says the form takes no responses when it closed while being filled in", async () => {
     serve({ get: [() => json(200, described(1, FIRST))], post: [() => json(404, { error: "not_found" })] });
-    await opened("/forms/w/semilla?lang=es");
+    await opened("/forms/semilla?lang=es");
     survey().tryComplete();
     await vi.waitFor(() => expect(notice().hidden).toBe(false));
     expect(notice().textContent).toBe("Este formulario no está aceptando respuestas.");
@@ -288,7 +288,7 @@ describe("sending the answers", () => {
 
   test("keeps the form usable when the answers could not be sent, in SurveyJS's own words", async () => {
     serve({ get: [() => json(200, described(1, FIRST))], post: [] });
-    await opened("/forms/w/semilla?lang=en");
+    await opened("/forms/semilla?lang=en");
     const said = vi.spyOn(survey(), "notify");
     // The request fails before it leaves: nothing answers at all.
     vi.stubGlobal("fetch", () => {
