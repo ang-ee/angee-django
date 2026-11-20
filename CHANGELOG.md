@@ -119,20 +119,25 @@ live in code docstrings.
   `UseQueryResult`; a caller needing another property (`status`, `isStale`…) reads
   it from its own `useQuery`. It and `useAngeeListBatch` give `useQueries` one
   projection as `combine`, fresh each render, so Query runs it on that render's
-  results (enabling a read shows it fetching at once) and shares it structurally:
-  the Map and each entry keep their identity until one of those five or a label's
-  request changes, a change replaces only the entries it touched, and a read going
-  stale, a failed attempt Query retries or an offline pause no longer renders the
-  batch's owner. A label without a result fails, naming the hook. `useDerivedBatch`
-  (new) maps a batch, reusing each output while its entry is the same object and
-  its inputs are unchanged: `useAngeeGroupByBatch`, `useAngeeFacets`,
-  `useAngeeListBatch` and `@angee/ui`'s `useCollectionQueryBatch` derive through
-  it, so a read that settles decodes only itself. `useAngeeGroupBy` and
-  `useAngeeAggregate` decode once per read, `useAngeeListBatch` keys its requests on
-  the target's names, and a resource's operations (`useGroupOperation`,
-  `useAggregateOperation`, `useDeletePreviewOperation`) keep their target across
-  renders, so a grouped list's render that changes nothing it reads (a scroll
-  frame) rebuilds no group model; it still corrects a group page set past its last.
+  results (enabling a read shows it fetching at once), keyed by each request's
+  query hash, which Query's structural sharing matches by key: the Map and each
+  entry keep their identity until one of those five or a label's request changes,
+  and a change replaces only the entries it touched, wherever a request is
+  inserted, removed or moved in the batch. A read going stale or a failed attempt
+  Query retries no longer renders the batch's owner. A label without a result
+  fails, naming the hook. `useDerivedBatch` (new) maps a batch, reusing each output
+  while its entry is the same object and its inputs are unchanged:
+  `useAngeeGroupByBatch`, `useAngeeFacets`, `useAngeeListBatch`, `@angee/ui`'s
+  `useCollectionQueryBatch` and the grouped surface's source results derive
+  through it, so a read that settles decodes only itself and opening a group
+  decodes no other. A group payload the decoder refuses is that read's `error`, in
+  a batch and in the facets as in `useAngeeGroupBy`, never a render that throws.
+  `useAngeeGroupBy` and `useAngeeAggregate` decode once per read,
+  `useAngeeListBatch` keys its requests on the target's and scopes' contents, and a
+  resource's operations (`useGroupOperation`, `useAggregateOperation`,
+  `useDeletePreviewOperation`) keep their target across renders, so a grouped
+  list's render that changes nothing it reads (a scroll frame) rebuilds no group
+  model; it still corrects a group page set past its last.
 
 - `angee.parties`: one owner proposes same-person pairs. A pull-only
   directory's contact that may only claim an address another live party is

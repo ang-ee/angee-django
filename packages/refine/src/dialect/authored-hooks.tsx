@@ -130,31 +130,34 @@ export function useAuthoredQueryBatch<TDocument extends AuthoredDocument>(
   const provider = options.dataProviderName ?? activeProvider ?? "default";
   const dataProvider = useDataProvider();
   const client = useQueryClient();
-  const configured = scopes.map((scope) => authoredQueryOptions(
-    client, dataProvider, provider, scope.document, scope.variables, scope.models, scope.records, scope.relatedModels,
-  ));
   // Labels address results; only native provider/document/variables identity owns
   // requests. A dynamic batch may contain several labels for the same request.
-  const hashes = configured.map((query) => client.defaultQueryOptions(query).queryHash);
-  const unique = new Map(hashes.map((hash, index) => [hash, configured[index]!]));
-  const indexByHash = new Map([...unique.keys()].map((hash, index) => [hash, index]));
+  const labelled = scopes.map((scope) => {
+    const query = authoredQueryOptions(
+      client, dataProvider, provider, scope.document, scope.variables, scope.models, scope.records, scope.relatedModels,
+    );
+    return { label: scope.key, query, hash: client.defaultQueryOptions(query).queryHash };
+  });
+  const unique = new Map(labelled.map(({ hash, query }) => [hash, query]));
+  const requested = [...unique.keys()];
   const queries = [...unique.values()].map((query) => ({
     ...query,
     enabled: options.enabled ?? true,
     refetchInterval: options.refetchInterval,
   }));
-  const results = useQueries({
+  const entries = useQueries({
     queries,
-    combine: (current) => projectQueryBatch<DocumentData<TDocument>, Error>(current),
+    combine: (current) => projectQueryBatch<DocumentData<TDocument>, Error>(requested, current),
   });
   const models = useStableArray([...new Set(scopes.flatMap((scope) => scope.models ?? []))].sort());
   useAuthoredLiveInterest(options.enabled ?? true, models);
   useAuthoredErrorPolicy(queries.map((query) => query.queryKey), { notify: options.errorNotification !== false });
-  // Each label's request among the unique ones: with the shared results, all the Map holds.
-  const slots = useStableValue<readonly (readonly [string, number])[]>(
-    scopes.map((scope, index) => [scope.key, indexByHash.get(hashes[index]!)!]), [],
+  // The requests are rebuilt each render; each label's request, named by its hash,
+  // is one value keyed by its own content, so it changes exactly when they do.
+  const labels = useStableValue<readonly (readonly [string, string])[]>(
+    labelled.map(({ label, hash }) => [label, hash]), [],
   );
-  return useMemo(() => labelBatchResults("useAuthoredQueryBatch", slots, results), [results, slots]);
+  return useMemo(() => labelBatchResults("useAuthoredQueryBatch", labels, entries), [entries, labels]);
 }
 
 /** Invalidate every authored read registered against any supplied model. */

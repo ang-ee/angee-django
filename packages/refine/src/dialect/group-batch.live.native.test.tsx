@@ -388,6 +388,61 @@ test("of two group reads one settling decodes only it, and the other's result st
   expect(result.current.get("channels")).toBe(first);
 });
 
+test("a group read inserted at the front or removed from the middle decodes nothing else again", async () => {
+  const custom = vi.fn(async ({ meta }: { meta?: { gqlVariables?: { offset?: number } } }) =>
+    response(1 + (meta?.gqlVariables?.offset ?? 0) / 50));
+  const f = fixture(custom as never);
+  const page = (index: number): GroupByBatchScope => ({ key: `page-${index}`, query: { ...SCOPES[0]!.query, page: index } });
+  const { result, rerender } = renderHook(
+    ({ pages }) => useAngeeGroupByBatch(TARGET, pages.map(page), { document: DOCUMENT }),
+    { initialProps: { pages: [2, 3, 4] }, wrapper: f.wrapper },
+  );
+  await waitFor(() => expect([...result.current.values()].every((entry) => entry.updatedAt !== null && !entry.fetching)).toBe(true));
+  const settled = result.current;
+  const decoded = vi.mocked(extractGroupBy).mock.calls.length;
+  rerender({ pages: [1, 2, 3, 4] });
+  for (const key of ["page-2", "page-3", "page-4"]) expect(result.current.get(key)).toBe(settled.get(key));
+  rerender({ pages: [2, 4] });
+  for (const key of ["page-2", "page-4"]) expect(result.current.get(key)).toBe(settled.get(key));
+  // Only the inserted page (one group) may have decoded since.
+  expect(vi.mocked(extractGroupBy).mock.calls.slice(decoded)
+    .filter(([data]) => (data as { totalCount: number }).totalCount !== 1)).toEqual([]);
+});
+
+test("a group read whose payload the decoder refuses carries the error beside an intact sibling", async () => {
+  const custom = vi.fn(async ({ meta }: { meta?: { gqlVariables?: { offset?: number } } }) =>
+    meta?.gqlVariables?.offset ? { data: { messages_groups: [] } } : response(1));
+  const f = fixture(custom as never);
+  const scopes: readonly GroupByBatchScope[] = [SCOPES[0]!, { key: "next-page", query: { ...SCOPES[0]!.query, page: 2 } }];
+  const { result } = renderHook(() => useAngeeGroupByBatch(TARGET, scopes, { document: DOCUMENT }), { wrapper: f.wrapper });
+  await waitFor(() => expect(result.current.get("next-page")?.error?.message).toBe("Grouped response requires a numeric totalCount"));
+  expect(result.current.get("next-page")?.buckets).toEqual([]);
+  expect(result.current.get("channels")).toMatchObject({ error: null, totalCount: 1 });
+});
+
+test("two facets of one read keep their own results, each keeping its identity while another read settles", async () => {
+  let answerOther!: (value: ReturnType<typeof response>) => void;
+  const custom = vi.fn(({ meta }: { meta?: { gqlVariables?: { offset?: number } } }) => meta?.gqlVariables?.offset
+    ? new Promise<ReturnType<typeof response>>((resolve) => { answerOther = resolve; })
+    : Promise.resolve(response(1)));
+  const f = fixture(custom as never);
+  const facets = [
+    { id: "values", ...SCOPES[0]!.query },
+    // The same read, its options taken from a key the buckets lack.
+    { id: "absent", ...SCOPES[0]!.query, valueKey: "absent" },
+    { id: "later", ...SCOPES[0]!.query, page: 2 },
+  ];
+  const { result } = renderHook(() => useAngeeFacets(TARGET, { document: DOCUMENT, facets }), { wrapper: f.wrapper });
+  await waitFor(() => expect(result.current.facets.values?.options).toHaveLength(1));
+  expect(custom).toHaveBeenCalledTimes(2);
+  expect(result.current.facets.absent?.options).toEqual([]);
+  const settled = result.current.facets;
+  await act(async () => { answerOther(response(2)); });
+  await waitFor(() => expect(result.current.facets.later?.options).toHaveLength(2));
+  expect(result.current.facets.values).toBe(settled.values);
+  expect(result.current.facets.absent).toBe(settled.absent);
+});
+
 test("native aggregate and group polling survives unrelated renders, pauses without focus, and stops on unmount", async () => {
   vi.useFakeTimers();
   focusManager.setFocused(true);

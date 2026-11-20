@@ -10,6 +10,7 @@ import {
   useAngeeAggregate,
   useAngeeGroupByBatch,
   useAngeeListBatch,
+  useDerivedBatch,
   type AngeeListBatchEntry,
 } from "@angee/refine";
 import type { ResourceViewGroupExpansion } from "../resource-view-context";
@@ -243,28 +244,22 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
       enabled: !source && rowGroupStack.length > 0,
     },
   );
-  const authoredGroups = useCollectionQueryBatch(source?.groups, groupScopes);
-  const groupByResults = React.useMemo<ReadonlyMap<string, GroupedQueryResult>>(
-    () =>
-      source
-        ? new Map(
-            [...authoredGroups].map(([key, result]) => [
-              key,
-              {
-                buckets: result.data?.buckets ?? EMPTY_ARRAY,
-                count: result.data?.count ?? 0,
-                totalCount: result.data?.totalCount ?? 0,
-                summary: result.data?.summary,
-                fetching: result.fetching,
-                error: result.error,
-                updatedAt: result.updatedAt,
-                refetch: result.refetch,
-              },
-            ]),
-          )
-        : nativeGroupResults,
-    [source, authoredGroups, nativeGroupResults],
+  // A source's group results, each derived again only when its own read changes.
+  const authoredGroups = useDerivedBatch(
+    useCollectionQueryBatch(source?.groups, groupScopes),
+    (result): GroupedQueryResult => ({
+      buckets: result.data?.buckets ?? EMPTY_ARRAY,
+      count: result.data?.count ?? 0,
+      totalCount: result.data?.totalCount ?? 0,
+      summary: result.data?.summary,
+      fetching: result.fetching,
+      error: result.error,
+      updatedAt: result.updatedAt,
+      refetch: result.refetch,
+    }),
+    EMPTY_ARRAY,
   );
+  const groupByResults: ReadonlyMap<string, GroupedQueryResult> = source ? authoredGroups : nativeGroupResults;
   const scopeModel = React.useMemo(
     () =>
       buildGroupedRenderModel<TRow>(
@@ -330,26 +325,20 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     fields: requestedFields,
     enabled: !source && leafScopes.length > 0,
   });
-  const authoredLeaves = useCollectionQueryBatch(source?.rows, leafScopes);
-  const requestedLeafResults = React.useMemo<ReadonlyMap<string, AngeeListBatchEntry>>(
-    () =>
-      source
-        ? new Map(
-            [...authoredLeaves].map(([key, result]) => [
-              key,
-              {
-                rows: result.data?.rows ?? EMPTY_ARRAY,
-                total: result.data?.total,
-                fetching: result.fetching,
-                error: result.error,
-                updatedAt: result.updatedAt,
-                refetch: result.refetch,
-              },
-            ]),
-          )
-        : nativeLeafResults,
-    [source, authoredLeaves, nativeLeafResults],
+  // A source's later group pages, each derived again only when its own read changes.
+  const authoredLeaves = useDerivedBatch(
+    useCollectionQueryBatch(source?.rows, leafScopes),
+    (result): AngeeListBatchEntry => ({
+      rows: result.data?.rows ?? EMPTY_ARRAY,
+      total: result.data?.total,
+      fetching: result.fetching,
+      error: result.error,
+      updatedAt: result.updatedAt,
+      refetch: result.refetch,
+    }),
+    EMPTY_ARRAY,
   );
+  const requestedLeafResults: ReadonlyMap<string, AngeeListBatchEntry> = source ? authoredLeaves : nativeLeafResults;
   const leafResults = React.useMemo<ReadonlyMap<string, AngeeListBatchEntry>>(
     () => new Map([...scopeModel.carriedLeaves, ...requestedLeafResults]),
     [scopeModel.carriedLeaves, requestedLeafResults],

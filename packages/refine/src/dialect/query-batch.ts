@@ -10,54 +10,59 @@ export type QueryBatchEntry<TData, TError = Error> = Readonly<
   Pick<UseQueryResult<TData, TError>, "data" | "dataUpdatedAt" | "error" | "isFetching" | "refetch">
 >;
 
+/** A batch's entries by their request's native query hash. */
+export type QueryBatchEntries<TData, TError = Error> = Readonly<Record<string, QueryBatchEntry<TData, TError>>>;
+
 /**
- * The one `useQueries` `combine` of every batch read. A caller passes it as a fresh
- * function each render, so Query re-runs it on that render's results (an option such
- * as `enabled`, or a rebuilt cache entry, changes them without a new hash), and its
- * structural sharing keeps the array and each entry that did not change.
+ * The one `useQueries` `combine` of every batch read: each result's entry under its
+ * request's hash (`hashes`, in the order of the requests). A caller passes it as a
+ * fresh function each render, so Query re-runs it on that render's results (an
+ * option such as `enabled`, or a rebuilt cache entry, changes them without a new
+ * hash), and its structural sharing matches a plain object's entries by key: an entry
+ * that did not change keeps its identity wherever its request moved in the batch.
  */
 export function projectQueryBatch<TData, TError>(
+  hashes: readonly string[],
   results: readonly UseQueryResult<TData, TError>[],
-): QueryBatchEntry<TData, TError>[] {
-  return results.map(({ data, dataUpdatedAt, error, isFetching, refetch }) => ({
-    data, dataUpdatedAt, error, isFetching, refetch,
-  }));
+): QueryBatchEntries<TData, TError> {
+  return Object.fromEntries(results.map(({ data, dataUpdatedAt, error, isFetching, refetch }, index) => [
+    hashes[index], { data, dataUpdatedAt, error, isFetching, refetch },
+  ]));
 }
 
 /**
- * Each label's result, by its slot among the batch's results, which Query keeps in
- * the order of the requests. A label without one is a broken batch: it fails here,
- * naming `hook`, rather than hand a caller another request's result or nothing.
+ * Each label's entry, by its request's hash. A label without one is a broken batch:
+ * it fails here, naming `hook`, rather than hand a caller another request's entry or
+ * nothing.
  */
-export function labelBatchResults<TResult>(
+export function labelBatchResults<TEntry>(
   hook: string,
-  slots: readonly (readonly [string, number])[],
-  results: readonly TResult[],
-): ReadonlyMap<string, TResult> {
-  return new Map(slots.map(([key, slot]) => {
-    const result = results[slot];
-    if (result === undefined) {
-      throw new Error(`${hook}: "${key}" has no result among the batch's ${results.length}.`);
+  labels: readonly (readonly [label: string, hash: string])[],
+  entries: Readonly<Record<string, TEntry>>,
+): ReadonlyMap<string, TEntry> {
+  return new Map(labels.map(([label, hash]) => {
+    if (!Object.hasOwn(entries, hash)) {
+      throw new Error(`${hook}: "${label}" has no result for its request.`);
     }
-    return [key, result] as const;
+    return [label, entries[hash]!] as const;
   }));
 }
 
 /**
  * Derive each entry of a batch, reusing an output while its entry is the identical
  * object and `inputs` are unchanged, so a change derives again only the entries it
- * touched. `derive` reads only its entry, its key and what `inputs` names.
+ * touched. `derive` reads only its entry, its key and what `inputs` names. This is
+ * every batch's one derivation, a source's `select` included: a batch serves one
+ * request to several labels that may derive differently (two facets of one read),
+ * which Query's per-query `select` cannot express.
  */
 export function useDerivedBatch<TEntry extends object, TOutput extends object>(
   batch: ReadonlyMap<string, TEntry>,
   derive: (entry: TEntry, key: string) => TOutput,
   inputs: readonly unknown[],
 ): ReadonlyMap<string, TOutput> {
-  // One table per set of inputs, by entry and then label: labels sharing a request
-  // may derive differently (two facets of one read).
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // One table per set of inputs, by entry and then label.
   const derived = useMemo(() => new WeakMap<TEntry, Map<string, TOutput>>(), inputs);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   return useMemo(() => new Map([...batch].map(([key, entry]) => {
     let outputs = derived.get(entry);
     if (!outputs) derived.set(entry, outputs = new Map());

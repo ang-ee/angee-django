@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { useQueries } from "@tanstack/react-query";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
 import {
   useCustomMutation,
   useDataProvider,
@@ -51,7 +51,7 @@ import {
 import type { TypedDocumentNode } from "../typed-document";
 import { graphqlDocumentIdentity } from "./wire";
 import { labelBatchResults, projectQueryBatch, useDerivedBatch, type QueryBatchEntry } from "./query-batch";
-import { stableKey, useStableArray } from "../stable-deps";
+import { stableKey } from "../stable-deps";
 
 type Row = Record<string, unknown>;
 type InvalidateParams = Parameters<ReturnType<typeof useInvalidate>>[0];
@@ -244,24 +244,34 @@ export function useAngeeGroupBy(
   const entry = run.get("single");
   const root = target?.root;
   // Decoded once per read, so a render that changes nothing hands back the same result.
-  return useMemo(() => {
-    let result = EMPTY_GROUP_BY_RESULT;
-    let decodeError: Error | null = null;
-    if (root !== undefined && entry?.data != null) {
-      try {
-        result = extractGroupBy(entry.data, root);
-      } catch (cause) {
-        decodeError = cause instanceof Error ? cause : new Error(String(cause));
-      }
+  return useMemo(() => groupByResult(entry, root), [entry, root]);
+}
+
+/**
+ * A group read's entry as its result, for one read and for a batch alike: a payload
+ * the decoder refuses is that read's error, never a render that throws.
+ */
+function groupByResult(entry: QueryBatchEntry<unknown> | undefined, root: string | undefined): UseAngeeGroupByResult {
+  let result = EMPTY_GROUP_BY_RESULT;
+  let decodeError: Error | null = null;
+  if (root !== undefined && entry?.data != null) {
+    try {
+      result = extractGroupBy(entry.data, root);
+    } catch (cause) {
+      decodeError = errorOf(cause);
     }
-    return {
-      ...result,
-      fetching: entry?.isFetching ?? false,
-      error: entry?.error ?? decodeError,
-      updatedAt: entry?.dataUpdatedAt || null,
-      refetch: () => { void entry?.refetch(); },
-    };
-  }, [entry, root]);
+  }
+  return {
+    ...result,
+    fetching: entry?.isFetching ?? false,
+    error: entry?.error ?? decodeError,
+    updatedAt: entry?.dataUpdatedAt || null,
+    refetch: () => { void entry?.refetch(); },
+  };
+}
+
+function errorOf(cause: unknown): Error {
+  return cause instanceof Error ? cause : new Error(String(cause));
 }
 
 export function useAngeeFacets(
@@ -278,18 +288,25 @@ export function useAngeeFacets(
   const batch = useGroupByRequestBatch(target, scopes, { document, enabled: canQuery });
   const root = target?.root ?? "";
   // A facet decodes again only when its own read does: two facets may share a read.
+  // A payload the decoder refuses is the facets' error, as it is a group read's.
   const decoded = useDerivedBatch(batch, (entry, id) => {
     const facet = activeFacets.find((spec) => spec.id === id);
-    return facet && entry.data != null ? extractFacet(entry.data, root, facet) : EMPTY_FACET_RESULT;
+    if (!facet || entry.data == null) return { result: EMPTY_FACET_RESULT, error: null };
+    try {
+      return { result: extractFacet(entry.data, root, facet), error: null };
+    } catch (cause) {
+      return { result: EMPTY_FACET_RESULT, error: errorOf(cause) };
+    }
   }, [activeFacets, root]);
   return useMemo(() => {
     const values = [...new Set(batch.values())];
     return {
       facets: Object.fromEntries(
-        activeFacets.map((facet) => [facet.id, decoded.get(facet.id) ?? EMPTY_FACET_RESULT]),
+        activeFacets.map((facet) => [facet.id, decoded.get(facet.id)?.result ?? EMPTY_FACET_RESULT]),
       ),
       fetching: values.some((entry) => entry.isFetching),
-      error: values.find((entry) => entry.error)?.error ?? null,
+      error: values.find((entry) => entry.error)?.error
+        ?? [...decoded.values()].find((facet) => facet.error)?.error ?? null,
       refetch: () => {
         values.forEach((entry) => { void entry.refetch(); });
       },
@@ -343,14 +360,8 @@ export function useAngeeGroupByBatch(
   options: DialectQueryOptions,
 ): ReadonlyMap<string, UseAngeeGroupByResult> {
   const batch = useGroupByRequestBatch(target, scopes, options);
-  const root = target?.root ?? "";
-  return useDerivedBatch(batch, (entry) => ({
-    ...(entry.data == null ? EMPTY_GROUP_BY_RESULT : extractGroupBy(entry.data, root)),
-    fetching: entry.isFetching,
-    error: entry.error,
-    updatedAt: entry.dataUpdatedAt || null,
-    refetch: () => { void entry.refetch(); },
-  }), [root]);
+  const root = target?.root;
+  return useDerivedBatch(batch, (entry) => groupByResult(entry, root), [root]);
 }
 
 /**
@@ -369,27 +380,31 @@ export function useAngeeListBatch(
   const canQuery = enabled && target !== null;
   const activeScopes = canQuery ? scopes : EMPTY_LIST_SCOPES;
   const { keys } = useKeys();
+  const client = useQueryClient();
   const dataProvider = useDataProvider();
   const resourceName = target?.resourceName ?? "";
   const identifier = target?.resourceIdentifier ?? "";
   const schemaName = target?.dataProviderName;
-  // A caller derives its target per render: its names, not the object, key the requests.
+  // A caller derives its target and scopes per render: their contents, not the
+  // objects, key the requests. The requests, their hashes and each label's request
+  // are one value, so the labels cannot outlive the requests they name.
   const targetKey = stableKey(target);
   const fieldsKey = stableKey(options.fields);
   const scopesKey = stableKey(activeScopes);
-  const requests = useMemo(
-    () =>
-      activeScopes.map((scope) => ({
-        scope,
-        meta: listQueryMeta(target!, options.fields, scope.where, scope.orderBy),
-        pagination: {
-          mode: "server" as const,
-          currentPage: scope.page,
-          pageSize: scope.pageSize,
-        },
-      })),
-    [activeScopes, scopesKey, targetKey, fieldsKey],
-  );
+  const batch = useMemo(() => {
+    const requests = activeScopes.map((scope) => {
+      const meta = listQueryMeta(target!, options.fields, scope.where, scope.orderBy);
+      const pagination = { mode: "server" as const, currentPage: scope.page, pageSize: scope.pageSize };
+      const queryKey = keys().data(schemaName).resource(identifier).action("list")
+        .params({ ...meta, filters: [], pagination, sorters: [] }).get();
+      return { label: scope.key, meta, pagination, queryKey, hash: client.defaultQueryOptions({ queryKey }).queryHash };
+    });
+    return {
+      requests,
+      hashes: requests.map(({ hash }) => hash),
+      labels: requests.map(({ label, hash }) => [label, hash] as const),
+    };
+  }, [client, scopesKey, targetKey, fieldsKey]);
   // One static, resource-level live subscription re-opens the websocket changes()
   // feed for these rows: refine's auto liveMode invalidates the resource list cache
   // on each change, and the keys below are the very keys useList builds, so the
@@ -402,16 +417,10 @@ export function useAngeeListBatch(
     enabled: canQuery,
     meta: { dataProviderName: schemaName },
   });
-  const scopeKeys = useStableArray(requests.map(({ scope }) => scope.key));
-  const queries = useQueries({
-    combine: (current) => projectQueryBatch(current),
-    queries: requests.map(({ meta, pagination }) => ({
-      queryKey: keys()
-        .data(schemaName)
-        .resource(identifier)
-        .action("list")
-        .params({ ...meta, filters: [], pagination, sorters: [] })
-        .get(),
+  const entries = useQueries({
+    combine: (current) => projectQueryBatch(batch.hashes, current),
+    queries: batch.requests.map(({ meta, pagination, queryKey }) => ({
+      queryKey,
       queryFn: () =>
         dataProvider(schemaName).getList({
           resource: resourceName,
@@ -423,10 +432,7 @@ export function useAngeeListBatch(
       enabled: canQuery,
     })),
   });
-  const pages = useMemo(
-    () => labelBatchResults("useAngeeListBatch", scopeKeys.map((key, index) => [key, index] as const), queries),
-    [scopeKeys, queries],
-  );
+  const pages = useMemo(() => labelBatchResults("useAngeeListBatch", batch.labels, entries), [batch, entries]);
   return useDerivedBatch(pages, (query) => ({
     refetch: () => { void query.refetch(); },
     rows: (query.data?.data ?? []) as readonly Row[],

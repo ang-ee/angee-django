@@ -891,6 +891,56 @@ test("a render that changes nothing the grouped list reads, as a parent's state 
   }
 });
 
+const TASK_COLUMNS = [{ field: "title", header: "Title" }];
+
+/** The grouped Task surface alone, for what its model holds. */
+function taskSurfaceFixture(initialState: Record<string, unknown>, rows: readonly Row[]) {
+  const { custom, getList, documents } = taskServer(rows);
+  const metadata = schemaFieldMetadataFromDataResources([taskResource]);
+  let surface!: GroupedResourceViewSurface<Row>;
+  function Surface() {
+    surface = useGroupedResourceViewSurface({ resource: taskResource.modelLabel, modelMetadata: metadata.labels[taskResource.modelLabel]!,
+      columns: TASK_COLUMNS, resourceView: useResourceView() });
+    return null;
+  }
+  render(
+    <Provider metadata={metadata} apiUrl="test://task-surface" dataProvider={{ custom, getList }}
+      queryClientConfig={{ defaultOptions: { queries: { retry: false } } }}>
+      <OperationDocumentsProvider documents={documents}>
+        <ResourceViewProvider resource={taskResource.modelLabel} scope="local" initialState={initialState}><Surface /></ResourceViewProvider>
+      </OperationDocumentsProvider>
+    </Provider>,
+  );
+  return { get surface() { return surface; } };
+}
+
+test("opening an earlier group decodes no later open group's read again", async () => {
+  // Every status opens by default, each reading its owners.
+  const f = taskSurfaceFixture({ groupStack: [{ field: "status" }, { field: "owner" }] }, threeRepeated);
+  /** Each status's owner groups, as their buckets: decoded again, a group's bucket is a new object. */
+  const owners = () => {
+    const byStatus = new Map<string, unknown[]>();
+    let status = "";
+    for (const item of f.surface.groupedItems) {
+      if (item.kind !== "groupHeader") continue;
+      if (item.depth === 0) byStatus.set(status = item.label, []);
+      else byStatus.get(status)!.push(item.bucket);
+    }
+    return byStatus;
+  };
+  await waitFor(() => expect(["active", "closed", "open"].map((status) => owners().get(status)?.length)).toEqual([2, 2, 1]));
+  const before = owners();
+  const active = f.surface.groupedItems.find((item) => item.kind === "groupHeader" && item.label === "active")!;
+  act(() => f.surface.toggleGroup(active.kind === "groupHeader" ? active.bucketKey : ""));
+  await waitFor(() => expect(owners().get("active")).toEqual([]));
+  act(() => f.surface.toggleGroup(active.kind === "groupHeader" ? active.bucketKey : ""));
+  await waitFor(() => expect(owners().get("active")).toHaveLength(2));
+  for (const status of ["closed", "open"]) {
+    expect(owners().get(status)).toHaveLength(before.get(status)!.length);
+    owners().get(status)!.forEach((bucket, index) => expect(bucket).toBe(before.get(status)![index]));
+  }
+});
+
 test("a grouping that has not opted in, or whose page holds every record, offers no select-all", async () => {
   const plain = selectedGroupsFixture({ groupStack: [{ field: "status", repeated: true }], pageSize: 1 }, { rows: sixTasks });
   await screen.findByText("Task 2");
