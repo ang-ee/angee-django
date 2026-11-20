@@ -33,7 +33,12 @@ live in code docstrings.
   `batch_merge = merge_away & person->active_member`, so a contact manager, who
   merges no party away, is offered no set. A deployment that grants the platform
   admins' set onto a contact role makes every directory adopt, as documented and
-  tested. Revision 41.
+  tested. An actor who holds no contact role plans exactly as before; a contact
+  role holder plans one more `EXISTS` (on its role membership) in four of the five
+  planner-gate documents and the account exclusion once in each person, party and
+  organization statement, and stays within the gate's one-block allowance on every
+  document: cheaper than an `editor` grant on every party row for the person and
+  selected documents, a few percent dearer for connections and related. Revision 41.
   `angee.knowledge`: the people vault takes the roles by install grant rows on
   `knowledge/vault` relations named for them (`contact_reader`,
   `contact_manager`, `contact_admin`); a contact admin removes the vault's
