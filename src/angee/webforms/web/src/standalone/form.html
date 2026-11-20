@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--
+      In production the ingress sends this policy as a response header, with
+      `frame-ancestors` beside it (a meta tag cannot set that one). It is repeated
+      here for the Vite dev server, which serves this file itself. Keep the two the
+      same. A form's `html` elements and its completed page are markup written by
+      staff: under this policy that markup cannot run script, so this file carries
+      no inline script and no inline event handler. Everything is in form.ts.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; connect-src 'self'; img-src 'self' data:; font-src 'self'; style-src 'self' 'unsafe-inline'; form-action 'none'"
+    />
+    <!-- The blank page before the theme applies follows the visitor's colour scheme. -->
+    <meta name="color-scheme" content="light dark" />
+    <title>Form</title>
+    <!-- The host stylesheet: the design tokens and every installed theme. -->
+    <link rel="stylesheet" href="/src/index.css" />
+  </head>
+  <!-- Shown by form.ts once the form's theme is applied. -->
+  <body hidden class="min-h-dvh bg-canvas font-sans text-fg">
+    <header class="flex justify-end p-3">
+      <select id="language" hidden aria-label="Language" autocomplete="off" class="rounded-6 border bg-sheet px-2 py-1 text-sm text-fg"></select>
+    </header>
+    <main id="form"></main>
+    <p id="notice" hidden role="status" class="p-8 text-center text-fg-2"></p>
+    <!-- Named by the server, never shown: a person leaves it empty. -->
+    <input id="honeypot" hidden tabindex="-1" autocomplete="off" aria-hidden="true" />
+    <script type="module" src="./form.ts"></script>
+  </body>
+</html>

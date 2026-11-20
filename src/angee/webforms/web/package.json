@@ -4,9 +4,23 @@
   "license": "LGPL-3.0-or-later",
   "private": true,
   "type": "module",
-  "sideEffects": false,
+  "sideEffects": [
+    "**/*.css",
+    "./src/standalone/form.ts"
+  ],
   "exports": {
     ".": "./src/index.tsx"
+  },
+  "angee": {
+    "pages": {
+      "webforms.form": {
+        "entry": "./src/standalone/form.html",
+        "paths": [
+          "/forms/w/*"
+        ],
+        "accept": "text/html"
+      }
+    }
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -15,7 +29,9 @@
   },
   "dependencies": {
     "@angee/app": "workspace:*",
-    "@angee/ui": "workspace:*"
+    "@angee/ui": "workspace:*",
+    "survey-core": "3.2.7",
+    "survey-js-ui": "3.2.7"
   },
   "peerDependencies": {
     "@tanstack/react-router": "^1",
