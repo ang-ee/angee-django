@@ -40,8 +40,8 @@ const webformsMenu: MenuDeclarations = {
 
 /**
  * The `@angee/webforms` rendered addon, the staff side of public web forms: the
- * forms with their verbs, the versions that hold their questions, and the
- * responses they have kept. The public page a visitor answers is not part of
+ * forms with their verbs and public addresses, the versions that hold their
+ * questions, and the responses they have kept. The public page a visitor answers is not part of
  * this manifest: it is the package's standalone page, which loads none of the
  * application.
  */

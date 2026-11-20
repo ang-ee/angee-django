@@ -14,11 +14,14 @@ const undelivered = (row: Record<string, unknown>) => ["pending", "failed"].incl
  * The responses forms have kept, read only: each is evidence, as received. What
  * became of one changes only through its owner's verbs: hand it to the form's
  * target again, give up on it, or blank the answers its version marks as personal.
+ * A delivery that fails is tried again by itself until it runs out of attempts;
+ * the record shows how often it was tried, why it last failed and when it is next tried.
  */
 export function ResponsesPage(): React.ReactElement {
   const t = useWebformsT();
+  // A delivery that fails answers with the reason and still records the attempt on the response.
   const [deliver] = useRecordActionMutation<ActionFieldName>("deliver_webform_response", {
-    idArgument: "response", invalidateModels: [RESPONSE_MODEL],
+    idArgument: "response", invalidateModels: [RESPONSE_MODEL], invalidateOnFailure: true,
   });
   const [dismiss] = useRecordActionMutation<ActionFieldName>("dismiss_webform_response", {
     idArgument: "response", invalidateModels: [RESPONSE_MODEL],
@@ -44,9 +47,11 @@ export function ResponsesPage(): React.ReactElement {
           <Field name="language" />
           <Field name="created_at" />
           <Field name="delivered_at" showWhen={(row) => Boolean(row.delivered_at)} />
+          <Field name="delivery_attempts" />
+          <Field name="delivery_error" showWhen={(row) => Boolean(row.delivery_error)} />
+          <Field name="retry_at" showWhen={(row) => Boolean(row.retry_at)} />
           <Field name="erased_at" showWhen={(row) => Boolean(row.erased_at)} />
         </Group>
-        <Field name="delivery_error" widget="textarea" showWhen={(row) => Boolean(row.delivery_error)} />
         <Field name="answers" widget="json" />
         <Action id="deliver" label={t("response.deliver")} primary visibleWhen={undelivered} run={deliver} />
         <Action id="dismiss" label={t("response.dismiss")} visibleWhen={undelivered}
