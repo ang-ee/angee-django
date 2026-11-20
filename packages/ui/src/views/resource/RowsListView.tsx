@@ -41,12 +41,12 @@ import {
   type ResourceTableHeaderVisibility,
   type ResourceTableLayout,
   type ListViewProps,
-  type PlacedBulkCollection,
 } from "./resource-view-types";
 import { useResourceSearch } from "./search/use-resource-search";
 import { useSearchCatalog } from "./search/catalog";
 import type { ResourceToolbarProps } from "../../toolbars";
 import { declaredGroupDefaults, useAppliedRepeated, validateDeclaredGroupDefaults, withoutRepeated } from "./search/group-defaults";
+import { renderBulkActions, type PlacedBulkActions } from "./bulk-action";
 import {
   useRowActionsSurface,
   type RowActionDeclaration,
@@ -203,7 +203,8 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   bulkActions,
   draggableRow,
   resourceView,
-}: RowsListViewProps<TRow> & {
+}: Omit<RowsListViewProps<TRow>, "bulkActions"> & {
+  bulkActions?: PlacedBulkActions<TRow>;
   resourceView: ResourceViewContextValue;
 }): React.ReactElement {
   const t = useUiT();
@@ -274,15 +275,11 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
           ? {
               count: selectedIds.size,
               onClear: resourceView.clearSelectedIds,
-              actions: selectedIds.size > 0
-                ? bulkActions?.(selectedIds, resourceView.clearSelectedIds, {
-                  filter: surface.mergedFilter,
-                  // Scope snapshots are shared Rows; narrow to the declared row type (see bulkActions).
-                  selectedRows: resourceView.selectedRows as readonly TRow[],
-                  // Rows grouped in the browser are never placed: a grouped list reports null.
-                  selectedGroups: selectedGroupsOf(selectedIds, effectiveGroupStack, null),
-                } satisfies PlacedBulkCollection<TRow>)
-                : undefined,
+              actions: renderBulkActions(bulkActions, selectedIds, resourceView, {
+                filter: surface.mergedFilter,
+                // Rows grouped in the browser are never placed: a grouped list reports null.
+                selectedGroups: selectedGroupsOf(selectedIds, effectiveGroupStack, null),
+              }),
             }
           : undefined
       }

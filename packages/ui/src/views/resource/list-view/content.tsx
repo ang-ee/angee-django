@@ -1,5 +1,5 @@
 import * as React from "react";
-import { MAX_PAGE_SIZE, useAngeeAggregate } from "@angee/refine";
+import { MAX_PAGE_SIZE, stableSerialize, useAngeeAggregate } from "@angee/refine";
 import { ResourceQuery, modelLabelSegment, rowPublicId, canDeleteRecord, useModelMetadata } from "@angee/metadata";
 import type { ModelFieldMetadata, Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
@@ -14,7 +14,7 @@ import { type GroupedResourceViewSurface, type ResourceViewSurface } from "../re
 import { GroupedListBody } from "../GroupedList";
 import { FlatListBody, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures, type FlatListBodyProps, type GroupMeasure } from "../resource-view-list-body";
 import { ResourceListFrame } from "../ResourceListFrame";
-import { listChromeState, type BoardCardSpec, type CardActionContext, type ListEmptyContent, type ListViewProps, type PlacedBulkCollection } from "../resource-view-types";
+import { listChromeState, type BoardCardSpec, type CardActionContext, type ListEmptyContent, type ListViewProps } from "../resource-view-types";
 import { DeclaredBoardCardBody, DefaultBoardCardBody } from "../board/cards";
 import { columnsWithMetadataDefaults } from "../model-metadata-defaults";
 import { createLabelForResource } from "../resource-view-utils";
@@ -22,7 +22,7 @@ import type { ColumnDescriptor } from "../../page";
 import { useRelationFacets } from "../../relation/relation-facet";
 import { useScalarFacets } from "../../relation/scalar-facet";
 import { useBulkDelete } from "../useBulkDelete";
-import { useBulkAction } from "../bulk-action";
+import { renderBulkActions, useBulkAction, type AllMatching, type PlacedBulkActions } from "../bulk-action";
 import { BulkArchiveActions } from "../archive";
 import { BulkTrashActions } from "../trash";
 import { recordRepresentationValue, titleText } from "../../form/form-view-model";
@@ -77,7 +77,7 @@ interface ListViewContentProps<TRow extends Row> {
   renderRowActions: ((row: TRow) => React.ReactNode) | undefined;
   draggableRow: ListViewProps<TRow>["draggableRow"];
   toolbarActions: ListViewProps<TRow>["toolbarActions"];
-  bulkActions: ListViewProps<TRow>["bulkActions"];
+  bulkActions: PlacedBulkActions<TRow> | undefined;
   cardActions: ListViewProps<TRow>["cardActions"];
   boardCard?: BoardCardSpec;
   gallery: ListViewProps<TRow>["gallery"];
@@ -171,6 +171,27 @@ export function ListViewContent<TRow extends Row = Row>({
   // snapshot; a grouped board's card also captures where its record shows.
   const toggleCardSelected = selectable ? resourceView.toggleSelectedId : undefined;
   const placement = useSelectionPlaces();
+  // "Select all N" (opt-in) selects what the surface's read behind its pager matches.
+  // The mode holds that read's key, so it is only ever this read's, and the total it
+  // last settled with, which it keeps while the read pages, refetches or fails.
+  const matching = surface.matching;
+  const matchingKey = matching ? stableSerialize(matching.selects) : null;
+  const chosen = placement.allMatching?.read === matchingKey ? placement.allMatching : null;
+  // A copy: a page changing what it received changes nothing in the list's reads.
+  const allMatching = useValueStable(matching && chosen
+    ? structuredClone<AllMatching>({ ...matching.selects, total: matching.total ?? chosen.total }) : undefined);
+  const { updateAllMatching } = placement;
+  // This list reading otherwise, or no longer showing, leaves the mode: it never comes back by itself.
+  React.useLayoutEffect(() => matchingKey === null ? undefined : () => updateAllMatching(matchingKey, null),
+    [matchingKey, updateAllMatching]);
+  // A refetch that settles with another total moves the mode with it.
+  React.useLayoutEffect(() => {
+    if (chosen && matching?.total !== undefined) updateAllMatching(chosen.read, matching.total);
+  }, [chosen, matching?.total, updateAllMatching]);
+  // The generic verbs and the Share utility act on each selected row, never on every match.
+  const disabledReason = !matching ? undefined : allMatching
+    ? t(allMatching.unit === "groups" ? "list.selectedOnlyNotAllGroups" : "list.selectedOnlyNotAllRecords", { count: allMatching.total })
+    : null;
   const deselectSucceeded = React.useCallback((ids: readonly string[]) => {
     resourceView.setRowSelection((selection) => {
       const remaining = { ...selection };
@@ -178,7 +199,7 @@ export function ListViewContent<TRow extends Row = Row>({
       return remaining;
     });
   }, [resourceView.setRowSelection]);
-  const bulk = useBulkAction(source ? null : modelMetadata?.resource, deselectSucceeded);
+  const bulk = useBulkAction(source ? null : modelMetadata?.resource, deselectSucceeded, disabledReason);
   const selectedRowsById = React.useMemo(() => new Map(resourceView.selectedRows.map((row) => [rowPublicId(row), row])),
     [resourceView.selectedRows]);
   const deleteIds = React.useMemo(() => new Set([...selectedIds].filter((id) =>
@@ -245,6 +266,7 @@ export function ListViewContent<TRow extends Row = Row>({
         filter: effectiveFilter,
         selectedIds,
         selectable,
+        disabledReason,
         fields: resolvedColumns.flatMap((column) => column.field ? [column.field] : []),
         refresh: () => void surface.list.refetch(),
       }}
@@ -280,13 +302,20 @@ export function ListViewContent<TRow extends Row = Row>({
     ? selectedGroupsOf(selectedIds, effectiveGroupStack,
       groupedItems && shown ? { places: placement.places, items: groupedItems, shown } : null)
     : undefined, [splitsSelection, selectedIds, placement.places, effectiveGroupStack, groupedItems, shown]));
-  const domainBulkActions = splitsSelection
-    ? bulkActions?.(selectedIds, resourceView.clearSelectedIds, {
-      filter: surface.mergedFilter,
-      // Scope snapshots are shared Rows; narrow to the declared row type (see bulkActions).
-      selectedRows: resourceView.selectedRows as readonly TRow[],
-      selectedGroups,
-    } satisfies PlacedBulkCollection<TRow>) : null;
+  // Offered once every loaded row is selected and the read, settled, matches more.
+  const offersAll = Boolean(matching?.more && !chosen && matching.loaded.length > 0
+    && matching.loaded.every((id) => selectedIds.has(id)));
+  const barTotal = allMatching?.total ?? (offersAll ? matching?.total : undefined);
+  const barMatching = matching && matchingKey !== null && barTotal !== undefined ? {
+    total: barTotal, unit: matching.selects.unit, selected: Boolean(allMatching),
+    ...(offersAll ? { onSelectAll: () => placement.selectAllMatching(matchingKey, barTotal) } : {}),
+  } : undefined;
+  // Every loaded row shows selected in the mode; the selection's ids stay the selected ones.
+  const shownSelectedIds = React.useMemo(() => allMatching && matching
+    ? new Set([...selectedIds, ...matching.loaded]) : selectedIds, [allMatching, matching?.loaded, selectedIds]);
+  const domainBulkActions = renderBulkActions(bulkActions, selectedIds, resourceView, {
+    filter: surface.mergedFilter, selectedGroups, ...(allMatching ? { allMatching } : {}),
+  });
   const genericSelection = !source && modelMetadata ? {
     modelMetadata,
     selectedRows: resourceView.selectedRows,
@@ -309,7 +338,8 @@ export function ListViewContent<TRow extends Row = Row>({
             ? bulkDelete.deleteInitiate
             : undefined,
         deletePending: bulkDelete.isPending,
-        pending: bulk.pending,
+        bulk,
+        matching: barMatching,
         actions: <>
           {domainBulkActions}
           {genericSelection ? <>
@@ -360,7 +390,7 @@ export function ListViewContent<TRow extends Row = Row>({
           cardHref={rowHref ? (row) => rowHref(row, surface.listState.navigationScope) : undefined}
           onCardClick={onRowClick}
           draggableRow={draggableRow}
-          selectedIds={selectedIds}
+          selectedIds={shownSelectedIds}
           onToggleSelected={toggleCardSelected}
           fetching={surface.list.fetching}
           emptyContent={emptyContent}
@@ -383,7 +413,7 @@ export function ListViewContent<TRow extends Row = Row>({
           cardActionContext={cardActionContext}
           renderCard={resolvedRenderCard}
           cardFrame={cardFrame ?? "inset"}
-          selectedIds={selectedIds}
+          selectedIds={shownSelectedIds}
           onToggleSelected={selectable ? placement.toggleSelectedId : undefined}
           fetching={surface.list.fetching}
           error={surface.list.error}
@@ -411,7 +441,7 @@ export function ListViewContent<TRow extends Row = Row>({
           setGroupsExpanded={surface.setGroupsExpanded}
           setScopePage={surface.setScopePage}
           setScopePageSize={surface.setScopePageSize}
-          selectedIds={selectedIds}
+          selectedIds={shownSelectedIds}
           interactive={interactive}
           rowHref={rowHref}
           renderRowActions={renderRowActions}
@@ -428,7 +458,7 @@ export function ListViewContent<TRow extends Row = Row>({
           groups={surface.groupedRows}
           resourceView={resourceView}
           modelMetadata={modelMetadata}
-          selectedIds={selectedIds}
+          selectedIds={shownSelectedIds}
           onToggleSelected={toggleCardSelected}
           interactive={interactive}
           fetching={surface.list.fetching}
@@ -470,6 +500,7 @@ export function ListViewContent<TRow extends Row = Row>({
           allPageSelected={surface.allPageSelected}
           somePageSelected={surface.somePageSelected}
           onPageSelectionChange={surface.setPageSelection}
+          allMatching={Boolean(allMatching)}
           visibleFields={visibleFields}
           onVisibleFieldToggle={surface.toggleVisibleField}
           resourceView={resourceView}
@@ -500,6 +531,7 @@ export function ListViewContent<TRow extends Row = Row>({
           allPageSelected={surface.allPageSelected}
           somePageSelected={surface.somePageSelected}
           onPageSelectionChange={surface.setPageSelection}
+          allMatching={Boolean(allMatching)}
           visibleFields={visibleFields}
           onVisibleFieldToggle={surface.toggleVisibleField}
           resourceView={resourceView}

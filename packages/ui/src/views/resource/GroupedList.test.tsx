@@ -9,6 +9,7 @@ import { expect, test, vi } from "vitest";
 
 import { GroupedListBody } from "./GroupedList";
 import { ResourceViewProvider, useResourceView } from "./resource-view-context";
+import { idsFromRowSelectionState } from "./resource-view-codecs";
 import { estimateGroupedItemSize, groupMeasuresFromColumns, RecordRow, type GroupedListItem } from "./resource-view-list-body";
 import type { ColumnDescriptor } from "../page";
 
@@ -47,7 +48,7 @@ function Harness({ pending = false, actions = false, columns = defaultColumns, o
       table={table} tableColumns={tableColumns} visibleColumnCount={columns.length}
       resourceView={resourceView} listItems={listItems} tableScrollRef={tableScrollRef}
       rowVirtualizer={rowVirtualizer} footerAggregate={null} measures={groupMeasuresFromColumns(columns)} expandedKeys={new Set(["january"])}
-      toggleGroup={onToggle} setGroupsExpanded={() => undefined} setScopePage={onPageChange} setScopePageSize={onPageSizeChange} selectedIds={new Set()} interactive
+      toggleGroup={onToggle} setGroupsExpanded={() => undefined} setScopePage={onPageChange} setScopePageSize={onPageSizeChange} selectedIds={idsFromRowSelectionState(resourceView.state.rowSelection)} interactive
       renderRowActions={actions ? () => null : undefined} emptyContent="Empty" fetching={false} error={null}
     />
   );
@@ -183,7 +184,7 @@ function GroupedRecordHarness({ selectable, expanded = true, onSetExpanded = () 
       resourceView={resourceView} listItems={listItems} tableScrollRef={tableScrollRef}
       rowVirtualizer={rowVirtualizer} footerAggregate={null} measures={[]} expandedKeys={new Set(["january"])}
       toggleGroup={() => undefined} setGroupsExpanded={onSetExpanded} setScopePage={() => undefined} setScopePageSize={() => undefined}
-      selectedIds={new Set()} interactive emptyContent="Empty" fetching={false} error={null}
+      selectedIds={idsFromRowSelectionState(resourceView.state.rowSelection)} interactive emptyContent="Empty" fetching={false} error={null}
     />
   );
 }

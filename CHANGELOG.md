@@ -82,7 +82,8 @@ live in code docstrings.
   `collection.selectedGroups`, the only read of the split: absent on an ungrouped
   list, `null` when a selected row cannot be placed (selected without its group,
   shown now under another group or several, missing from a page that listed it or
-  its groups and shows again, or loading; or on a surface that places no rows:
+  its groups and shows again, or on such a page before its first answer, a page
+  that refetches keeping its last one; or on a surface that places no rows:
   browser grouping, lane boards), else the selection split by its innermost groups
   with their parents; a hint the server never trusts.
   `Button` and `SelectionBarAction` take a `disabledReason`: the verb's tooltip
@@ -90,6 +91,22 @@ live in code docstrings.
   `data-disabled`, without an `href` on a link it renders, and one element tree as
   the reason comes and goes; an empty reason is no reason (`PaneRow` too). The
   record action bar's band verbs compose it.
+
+- A list's selection can be everything its read matches, opt-in: a list that
+  passes `selectAllMatching` (`ListView`/`List`) offers "Select all N" where its
+  pager counts what a verb acts on (a flat list's records, or the groups of a list
+  grouped by one server level), and once the person chooses it a page's
+  `bulkActions` receives `collection.allMatching`, a readonly copy of the pager's
+  unit and exact total and the list's own read:
+  `{ unit: "records", total, read: { where } }`, or
+  `{ unit: "groups", total, read: { where, dimensions, having } }` (refine's
+  `GroupByRequestOptions`, which a page turns into variables with
+  `groupByVariables`). Opting in asserts that every page verb honours it or
+  refuses it. The selected ids stay the only ids; the generic Archive,
+  Trash/Restore and Delete, and the Share utility, refuse with their reason while
+  it is on. Its entry and exit rules are the `bulkActions` docstring's. A native
+  leaf page (`AngeeListBatchEntry`) states when it last settled (`updatedAt`,
+  required), which a grouped selection's split reads instead of the page's total.
 
 - `angee.parties`: one owner proposes same-person pairs. A pull-only
   directory's contact that may only claim an address another live party is

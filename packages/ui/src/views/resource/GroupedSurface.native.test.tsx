@@ -4,9 +4,9 @@ import * as React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { GetListParams } from "@refinedev/core";
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from "@tanstack/react-router";
-import { ResourceQuery, schemaFieldMetadataFromDataResources, type GroupSpec, type Row } from "@angee/metadata";
+import { ResourceQuery, schemaFieldMetadataFromDataResources, type DataResourceMetadata, type GroupSpec, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
-import { OperationDocumentsProvider } from "@angee/refine";
+import { OperationDocumentsProvider, groupByVariables, stableSerialize } from "@angee/refine";
 import { afterEach, expect, test, vi } from "vitest";
 import { createUiTestProviders } from "../../testing";
 import { AppRuntimeProvider, containersFromChildren, type ResourceViewKindContent } from "../../runtime";
@@ -16,7 +16,8 @@ import { RESOURCE_CONTAINERS } from "./resource-view-kinds";
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "./resource-view-context";
 import { useGroupedResourceViewSurface, type GroupedResourceViewSurface } from "./resource-view-surface";
 import { ListHeaderCell } from "./resource-view-list-body";
-import { ListView } from "./ListView";
+import { ListView, type ListViewProps } from "./ListView";
+import { useResourceViewUtilityContext } from "./resource-view-utilities";
 import { ToastProvider } from "../../feedback";
 
 const contract = ResourceQuery.forRows({ fields: {
@@ -47,6 +48,7 @@ function fixture({ failedRoot = false, page = 1, summaryOnly = false }: { failed
   const activeModel = activeMetadata.labels[activeResource.modelLabel]!;
   let view!: ResourceViewContextValue;
   let surface!: GroupedResourceViewSurface<Row>;
+  const shown: GroupedResourceViewSurface<Row>["shown"][] = [];
   let show!: React.Dispatch<React.SetStateAction<boolean>>;
   let delayPage: number | null = null;
   let rowTotal = 120;
@@ -76,6 +78,7 @@ function fixture({ failedRoot = false, page = 1, summaryOnly = false }: { failed
     const resourceView = useResourceView();
     surface = useGroupedResourceViewSurface({ resource: resource.modelLabel, modelMetadata: activeModel,
       columns, resourceView });
+    shown.push(surface.shown);
     React.useEffect(() => { lifecycle.mounts++; return () => { lifecycle.unmounts++; }; }, []);
     return <table><thead>{surface.table.getHeaderGroups().map((group) => <tr key={group.id}>
       {group.headers.map((header) => <ListHeaderCell key={header.id} header={header} resourceView={resourceView} />)}
@@ -97,6 +100,8 @@ function fixture({ failedRoot = false, page = 1, summaryOnly = false }: { failed
   const client = clients.at(-1)!;
   const header = (depth: number) => surface.groupedItems.filter((item) => item.kind === "groupHeader").find((item) => item.depth === depth);
   return { get view() { return view; }, get surface() { return surface; }, header, show: (visible: boolean) => show(visible),
+    /** What every render reported its pages listing. */
+    shown,
     custom, getList, lifecycle, refreshCount: async (count: number) => { rowTotal = count; await client.invalidateQueries(); }, delay: (page: number) => { delayPage = page; }, release: () => resolvePage({ data: [{ id: "obsolete", title: "Old filter row" }], total: 120 }) };
 }
 
@@ -106,6 +111,22 @@ test("server summary axes without a row identity render buckets without leaf req
   expect(f.surface.list.error).toBeNull();
   expect(f.getList).not.toHaveBeenCalled();
   expect(f.surface.requestedFields).toEqual(["id", "title", "status"]);
+});
+
+test("no render reports a new page of groups settled with the previous page's groups", async () => {
+  const f = fixture();
+  await waitFor(() => expect(f.header(1)?.label).toBe("Title 0"));
+  const root = f.header(0)!;
+  if (root.kind !== "groupHeader" || !root.pager) throw new Error("missing root header");
+  const previous = f.header(1)!.bucketKey;
+  // The key of the titles' second page, as the render's pages name it.
+  const second = stableSerialize([root.pager.pageKey, 2, root.pager.pageSize]);
+  const from = f.shown.length;
+  act(() => f.surface.setScopePage(root.pager!.pageKey, 2));
+  await waitFor(() => expect(f.header(1)?.label).toBe("Title 20"));
+  const reported = f.shown.slice(from).map((shown) => shown.pages.get(second));
+  expect(reported.filter((listed) => listed?.has(previous))).toEqual([]);
+  expect(reported.at(-1)).toEqual(new Set([f.header(1)!.bucketKey]));
 });
 
 test("native subgroup and leaf page sizes, page 2 and expansion survive an actual server-surface unmount", async () => {
@@ -278,12 +299,14 @@ function matchesWhere(row: Row, where: Record<string, unknown> | undefined): boo
 function taskServer(rows: readonly Row[], stale?: { id: string; group: string }) {
   const records = rows.map((row) => ({ ...row }));
   let held: Promise<void> | null = null;
+  let groupsFail = false;
   const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
     if (held) await held;
     const variables = meta!.gqlVariables as {
       group_by?: { field: string }[]; where?: Record<string, unknown>; having?: { count_gt: number }; rows_limit?: number;
       limit?: number; offset?: number;
     };
+    if (groupsFail && variables.group_by) throw new Error("Groups unavailable");
     const rows = records.filter((row) => matchesWhere(row, variables.where));
     if (!variables.group_by) return { data: { tasks_aggregate: { aggregate: { count: rows.length } } } };
     const field = variables.group_by[0]!.field;
@@ -313,6 +336,8 @@ function taskServer(rows: readonly Row[], stale?: { id: string; group: string })
   } };
   return {
     records, custom, getList, documents,
+    /** Make every later groups read fail, or answer again. */
+    failGroups: (fail: boolean) => { groupsFail = fail; },
     /** Hold the server's answers until the returned release runs. */
     hold: () => {
       let release!: () => void;
@@ -322,17 +347,24 @@ function taskServer(rows: readonly Row[], stale?: { id: string; group: string })
   };
 }
 
+type BulkCollection = Parameters<NonNullable<ListViewProps["bulkActions"]>>[2];
+
 /** A rendered grouped Task list whose page's bulk actions record the selectedGroups they receive. */
 function selectedGroupsFixture(initialState: Record<string, unknown>, {
-  stale, columns = [{ field: "title", header: "Title" }], rows = tasks,
+  stale, columns = [{ field: "title", header: "Title" }], rows = tasks, selectAllMatching, resource = taskResource, utility,
 }: {
   /** A stale page: the server also lists this row in another group. */
   stale?: { id: string; group: string };
   columns?: readonly { field: string; header: string; aggregate?: "count" }[];
   rows?: readonly Row[];
+  selectAllMatching?: boolean;
+  resource?: DataResourceMetadata;
+  /** A list utility contributed to the toolbar, which reads the utility context. */
+  utility?: React.ReactElement;
 } = {}) {
-  const { records, custom, getList, documents, hold } = taskServer(rows, stale);
+  const { records, custom, getList, documents, hold, failGroups } = taskServer(rows, stale);
   const seen: unknown[] = [];
+  const collections: BulkCollection[] = [];
   let view!: ResourceViewContextValue;
   let rerender!: () => void;
   function Probe() { view = useResourceView(); return null; }
@@ -340,18 +372,21 @@ function selectedGroupsFixture(initialState: Record<string, unknown>, {
     const [, setTick] = React.useState(0);
     rerender = () => setTick((tick) => tick + 1);
     return (
-      <ResourceViewProvider resource={taskResource.modelLabel} scope="local" initialState={initialState}>
+      <ResourceViewProvider resource={resource.modelLabel} scope="local" initialState={initialState}>
         <Probe />
-        <ListView resource={taskResource.modelLabel} columns={columns} scope="inherit"
-          bulkActions={(_ids, _clear, collection) => { seen.push(collection.selectedGroups); return null; }} />
+        <ListView resource={resource.modelLabel} columns={columns} scope="inherit" selectAllMatching={selectAllMatching}
+          bulkActions={(_ids, _clear, collection) => { seen.push(collection.selectedGroups); collections.push(collection); return null; }} />
       </ResourceViewProvider>
     );
   }
+  const page = <ToastProvider><Page /></ToastProvider>;
   render(
-    <Provider resources={[taskResource]} apiUrl="test://selected-groups" dataProvider={{ custom, getList }}
+    <Provider resources={[resource]} apiUrl="test://selected-groups" dataProvider={{ custom, getList }}
       queryClientConfig={{ defaultOptions: { queries: { retry: false } } }}>
       <OperationDocumentsProvider documents={documents}>
-        <ToastProvider><Page /></ToastProvider>
+        {utility ? <AppRuntimeProvider runtime={{ containers: containersFromChildren(RESOURCE_CONTAINERS, {
+          [`${resource.modelLabel}#utilities`]: { "test.utility": { content: utility } },
+        }) }}>{page}</AppRuntimeProvider> : page}
       </OperationDocumentsProvider>
     </Provider>,
   );
@@ -360,18 +395,28 @@ function selectedGroupsFixture(initialState: Record<string, unknown>, {
     const row = (await screen.findByText(title)).closest("tr")!;
     fireEvent.click(within(row).getByRole("checkbox", { name: "Select row" }));
   };
+  /** Change a record on the server without telling the list. */
+  const edit = (id: string, patch: Partial<Row>) => { Object.assign(records.find((row) => row.id === id)!, patch); };
   return {
-    select, custom, seen,
+    select, custom, getList, seen, edit, failGroups,
     get view() { return view; },
     get selectedGroups() { return seen.at(-1); },
+    /** The collection the page's bulk actions last received. */
+    get collection() { return collections.at(-1); },
+    /** Every collection the page's bulk actions received, in render order. */
+    collections,
+    /** The list's read of its root groups is in flight (the frame's `aria-busy`). */
+    get fetching() { return document.querySelector("[data-resource-presentation]")?.getAttribute("aria-busy") === "true"; },
     rerender: () => act(() => rerender()),
     /** Change a record on the server and let the live list refetch. */
     update: async (id: string, patch: Partial<Row>) => {
-      Object.assign(records.find((row) => row.id === id)!, patch);
+      edit(id, patch);
       await act(async () => { await client.invalidateQueries(); });
     },
     /** Start the live list's refetch without waiting for it. */
     refetch: () => act(() => { void client.invalidateQueries(); }),
+    /** Drop what the list's reads hold, so each page loads as for the first time. */
+    reset: () => act(() => { void client.resetQueries(); }),
     hold,
   };
 }
@@ -483,17 +528,53 @@ test("a nested selection whose parent group left its settled page offers no spli
   expect(f.selectedGroups).toBeNull();
 });
 
-test("while a page the split rests on refetches, there is no split", async () => {
+test("a refetch that changes nothing keeps the split, the same array, throughout", async () => {
   const f = selectedGroupsFixture({ groupStack: [{ field: "status" }] });
   await f.select("Task 1");
   await f.select("Task 2");
   await waitFor(() => expect(f.selectedGroups).toEqual([status("active", "active", ["t1", "t2"])]));
+  const split = f.selectedGroups;
+  const from = f.seen.length;
   const release = f.hold();
   f.refetch();
-  await waitFor(() => expect(f.selectedGroups).toBeNull());
-  expect(screen.getByText("Task 1")).toBeTruthy();
+  await waitFor(() => expect(f.fetching).toBe(true));
+  const during = f.seen.length;
   await release();
+  await waitFor(() => expect(f.fetching).toBe(false));
+  expect(during).toBeGreaterThan(from);
+  expect(f.seen.length).toBeGreaterThan(during);
+  for (const seen of f.seen.slice(from)) expect(seen).toBe(split);
+});
+
+test("a refetch that moves a selected row out keeps the last split in flight and offers none once it settles", async () => {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status" }] });
+  await f.select("Task 1");
+  await f.select("Task 2");
   await waitFor(() => expect(f.selectedGroups).toEqual([status("active", "active", ["t1", "t2"])]));
+  const split = f.selectedGroups;
+  const from = f.seen.length;
+  f.edit("t2", { status: "closed" });
+  const release = f.hold();
+  f.refetch();
+  await waitFor(() => expect(f.fetching).toBe(true));
+  expect(f.seen.length).toBeGreaterThan(from);
+  for (const seen of f.seen.slice(from)) expect(seen).toBe(split);
+  await release();
+  await waitFor(() => expect(f.selectedGroups).toBeNull());
+  expect(f.view.state.rowSelection).toEqual({ t1: true, t2: true });
+});
+
+test("a page of groups that lists a selected row's group and loads for the first time offers no split until it settles", async () => {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status" }] });
+  await f.select("Task 1");
+  await waitFor(() => expect(f.selectedGroups).toEqual([status("active", "active", ["t1"])]));
+  // The reads start over: the page of groups that lists "active" has never settled.
+  const release = f.hold();
+  f.reset();
+  await waitFor(() => expect(f.selectedGroups).toBeNull());
+  expect(f.fetching).toBe(true);
+  await release();
+  await waitFor(() => expect(f.selectedGroups).toEqual([status("active", "active", ["t1"])]));
 });
 
 test("collapsing a group or paging within it keeps the group a row was selected in", async () => {
@@ -619,6 +700,269 @@ test("selectedGroups keeps its identity across re-renders while the selection is
   f.rerender();
   await waitFor(() => expect(f.seen.length).toBeGreaterThan(calls));
   expect(f.selectedGroups).toBe(split);
+});
+
+/** The variables of the list's own root groups read, as the server last received them. */
+function rootGroupsRead(custom: ReturnType<typeof taskServer>["custom"], field: string) {
+  return custom.mock.calls.map(([request]) => request.meta?.gqlVariables as {
+    group_by?: { field: string }[]; where?: Record<string, unknown>; having?: Record<string, unknown>;
+  }).filter((variables) => variables.group_by?.[0]?.field === field).at(-1)!;
+}
+
+/** The `where` of the list's last rows read, as the server received it. */
+const rowsWhere = (getList: ReturnType<typeof taskServer>["getList"]) =>
+  (getList.mock.calls.at(-1)![0].meta?.gqlVariables as { where: Record<string, unknown> }).where;
+
+/** A verb's accessible description: the text of the nodes its aria-describedby names. */
+function description(element: HTMLElement): string {
+  return (element.getAttribute("aria-describedby") ?? "").split(" ").filter(Boolean)
+    .map((id) => document.getElementById(id)?.textContent ?? "").join(" ");
+}
+
+const checked = (name: string, index = 0) => screen.getAllByRole("checkbox", { name })[index]!.getAttribute("aria-checked");
+const sixTasks = [...tasks, { id: "t6", title: "Task 6", status: "closed", owner: "Bo", kind: "Other" }];
+const deletableTasks = { ...taskResource, roots: { ...taskResource.roots, deletePreview: "tasks_delete" } };
+const SELECT_ALL = /^Select (all|the) /;
+const ADA = { pageSize: 2, filter: { owner: { exact: "Ada" } } };
+
+/** Ada's four tasks, two a page, with every one of them selected. */
+async function allOfAda(options: Parameters<typeof selectedGroupsFixture>[1] = {}) {
+  const f = selectedGroupsFixture(ADA, { selectAllMatching: true, ...options });
+  await f.select("Task 1");
+  await f.select("Task 3");
+  fireEvent.click(await screen.findByRole("button", { name: "Select all 4 records" }));
+  await waitFor(() => expect(f.collection?.allMatching?.total).toBe(4));
+  return f;
+}
+
+/** Both repeated status groups, one a page, with every one of them selected. */
+async function allRepeated(options: Parameters<typeof selectedGroupsFixture>[1] = {}) {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status", repeated: true }], pageSize: 1 },
+    { rows: sixTasks, selectAllMatching: true, ...options });
+  await screen.findByText("Task 2");
+  fireEvent.click(screen.getByRole("checkbox", { name: "Select all loaded rows" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Select all 2 groups" }));
+  await waitFor(() => expect(f.collection?.allMatching?.total).toBe(2));
+  return f;
+}
+
+test("an opted-in flat list offers its every record once each loaded row is selected, handing on a copy of its own read", async () => {
+  const f = selectedGroupsFixture(ADA, { selectAllMatching: true });
+  await f.select("Task 1");
+  await waitFor(() => expect(f.view.state.rowSelection).toEqual({ t1: true }));
+  expect(screen.queryByRole("button", { name: SELECT_ALL })).toBeNull();
+  expect(f.collection).not.toHaveProperty("allMatching");
+  await f.select("Task 3");
+  fireEvent.click(await screen.findByRole("button", { name: "Select all 4 records" }));
+  expect(await screen.findByText("All 4 records selected")).toBeTruthy();
+  // Focus stays in the bar: the control that was pressed is gone.
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Clear" }));
+  expect(JSON.stringify(rowsWhere(f.getList))).toContain("Ada");
+  expect(f.collection?.allMatching).toEqual({ unit: "records", total: 4, read: { where: rowsWhere(f.getList) } });
+  // No id of an unloaded row is invented.
+  expect(f.view.state.rowSelection).toEqual({ t1: true, t3: true });
+  expect(f.collection?.selectedRows.map((row) => row.id)).toEqual(["t1", "t3"]);
+  // A page that changes what it received changes nothing in the list's next read.
+  Object.assign(f.collection!.allMatching!.read.where as Record<string, unknown>, { title: { _eq: "Task 9" } });
+  const reads = f.getList.mock.calls.length;
+  await f.update("t1", {});
+  await waitFor(() => expect(f.getList.mock.calls.length).toBeGreaterThan(reads));
+  expect(JSON.stringify(rowsWhere(f.getList))).not.toContain("Task 9");
+});
+
+test("an opted-in repeated grouping offers its every group, handing on its own groups read", async () => {
+  const f = await allRepeated();
+  expect(await screen.findByText("All 2 groups selected")).toBeTruthy();
+  const sent = rootGroupsRead(f.custom, "status");
+  expect(sent.having).toEqual({ count_gt: 1 });
+  const allMatching = f.collection?.allMatching;
+  if (allMatching?.unit !== "groups") throw new Error("expected every group selected");
+  expect(allMatching.total).toBe(2);
+  expect(allMatching.read.dimensions).toHaveLength(1);
+  // A page turns it into its own read's variables: those the list's request sent.
+  const variables = groupByVariables(allMatching.read);
+  expect([variables.group_by, variables.where, variables.having]).toEqual([sent.group_by, sent.where, sent.having]);
+  expect(f.collection?.selectedGroups).toEqual([status("active", "active", ["t1", "t2"])]);
+});
+
+test("a grouping that has not opted in, or whose page holds every record, offers no select-all", async () => {
+  const plain = selectedGroupsFixture({ groupStack: [{ field: "status", repeated: true }], pageSize: 1 }, { rows: sixTasks });
+  await screen.findByText("Task 2");
+  fireEvent.click(screen.getByRole("checkbox", { name: "Select all loaded rows" }));
+  await waitFor(() => expect(plain.collection?.selectedGroups).toEqual([status("active", "active", ["t1", "t2"])]));
+  expect(screen.queryByRole("button", { name: SELECT_ALL })).toBeNull();
+  expect(plain.collection).not.toHaveProperty("allMatching");
+  cleanup();
+  // Only "active" repeats, and both its records are loaded.
+  const whole = selectedGroupsFixture({ groupStack: [{ field: "status", repeated: true }] }, { selectAllMatching: true });
+  await screen.findByText("Task 2");
+  fireEvent.click(screen.getByRole("checkbox", { name: "Select all loaded rows" }));
+  await waitFor(() => expect(whole.view.state.rowSelection).toEqual({ t1: true, t2: true }));
+  expect(screen.getByText("2 selected")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: SELECT_ALL })).toBeNull();
+});
+
+test("under nested grouping a root group holds records nobody saw: no select-all, no member", async () => {
+  // Kinds one a page ("Other" first), each split into its repeated statuses: only "closed" repeats there.
+  const f = selectedGroupsFixture({ groupStack: [{ field: "kind" }, { field: "status", repeated: true }], pageSize: 1 },
+    { rows: sixTasks, selectAllMatching: true });
+  fireEvent.click(await screen.findByRole("button", { name: "closed" }));
+  await screen.findByText("Task 6");
+  fireEvent.click(screen.getByRole("checkbox", { name: "Select all loaded rows" }));
+  await waitFor(() => expect(f.view.state.rowSelection).toEqual({ t3: true, t6: true }));
+  expect(screen.getByText("2 selected")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: SELECT_ALL })).toBeNull();
+  expect(f.collections.some((collection) => "allMatching" in collection)).toBe(false);
+});
+
+test("paging in the mode hands every render the whole selection, never the selected ids alone", async () => {
+  const f = await allOfAda();
+  const from = f.collections.length;
+  const release = f.hold();
+  act(() => f.view.setPage(2));
+  await waitFor(() => expect(f.fetching).toBe(true));
+  expect(screen.getByText("All 4 records selected")).toBeTruthy();
+  await release();
+  expect(await screen.findByText("Task 5")).toBeTruthy();
+  expect(f.collections.length).toBeGreaterThan(from + 1);
+  expect(f.collections.slice(from).map((collection) => collection.allMatching?.total)).toEqual(
+    f.collections.slice(from).map(() => 4));
+});
+
+test("a failed refetch of the root groups keeps the last settled member and the generic verbs disabled", async () => {
+  const f = await allRepeated({ resource: deletableTasks });
+  const from = f.collections.length;
+  f.failGroups(true);
+  await f.update("t1", {});
+  expect(await screen.findByText("Groups unavailable")).toBeTruthy();
+  expect(f.collections.slice(from).map((collection) => collection.allMatching?.total)).toEqual(
+    f.collections.slice(from).map(() => 2));
+  expect(screen.getByText("All 2 groups selected")).toBeTruthy();
+  const remove = screen.getByRole("button", { name: "Delete" });
+  expect(remove.getAttribute("aria-disabled")).toBe("true");
+  expect(description(remove)).toBe("This acts on the rows you select, not on all 2 groups");
+});
+
+test("a refetch that settles with another total moves the selection's N, which paging then keeps", async () => {
+  const f = await allOfAda();
+  await f.update("t2", { owner: "Ada" });
+  expect(await screen.findByText("All 5 records selected")).toBeTruthy();
+  expect(f.collection?.allMatching?.total).toBe(5);
+  const from = f.collections.length;
+  const release = f.hold();
+  act(() => f.view.setPage(2));
+  await waitFor(() => expect(f.fetching).toBe(true));
+  expect(screen.getByText("All 5 records selected")).toBeTruthy();
+  await release();
+  await waitFor(() => expect(f.fetching).toBe(false));
+  expect(new Set(f.collections.slice(from).map((collection) => collection.allMatching?.total))).toEqual(new Set([5]));
+});
+
+test("every loaded row shows selected in the mode; unselecting one, or the header on another page, leaves it", async () => {
+  const f = await allOfAda();
+  act(() => f.view.setPage(2));
+  await screen.findByText("Task 5");
+  expect(checked("Select all rows on this page")).toBe("true");
+  expect(checked("Select row", 0)).toBe("true");
+  expect(checked("Select row", 1)).toBe("true");
+  // The selection's ids stay the ones selected.
+  expect(f.view.state.rowSelection).toEqual({ t1: true, t3: true });
+  fireEvent.click(screen.getAllByRole("checkbox", { name: "Select row" })[0]!);
+  await waitFor(() => expect(screen.getByText("2 selected")).toBeTruthy());
+  expect(f.collection).not.toHaveProperty("allMatching");
+  expect(checked("Select row", 1)).toBe("false");
+  cleanup();
+  // Unselecting the header of a page that holds no selected row changes no id, and leaves it too.
+  const again = await allOfAda();
+  act(() => again.view.setPage(2));
+  await screen.findByText("Task 5");
+  fireEvent.click(screen.getByRole("checkbox", { name: "Select all rows on this page" }));
+  await waitFor(() => expect(screen.getByText("2 selected")).toBeTruthy());
+  expect(again.view.state.rowSelection).toEqual({ t1: true, t3: true });
+  expect(again.collection).not.toHaveProperty("allMatching");
+});
+
+test("every loaded group shows selected in the mode; unselecting a group leaves it", async () => {
+  const f = await allRepeated();
+  act(() => f.view.setPage(2));
+  await screen.findByText("Task 6");
+  expect(checked("Select all loaded rows")).toBe("true");
+  expect(checked("Select the loaded rows in closed")).toBe("true");
+  expect(checked("Select row", 0)).toBe("true");
+  fireEvent.click(screen.getByRole("checkbox", { name: "Select the loaded rows in closed" }));
+  await waitFor(() => expect(screen.getByText("2 selected")).toBeTruthy());
+  expect(f.collection).not.toHaveProperty("allMatching");
+  expect(checked("Select the loaded rows in closed")).toBe("false");
+});
+
+test("paging keeps every group selected; selecting a row, Clear, the filter, the sort or a level's repeated values leave it", async () => {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status", repeated: true }], pageSize: 1 },
+    { rows: sixTasks, selectAllMatching: true });
+  const selectAll = async () => {
+    await screen.findByText("Task 2");
+    if (!f.view.state.rowSelection.t1 || !f.view.state.rowSelection.t2) {
+      fireEvent.click(screen.getByRole("checkbox", { name: "Select all loaded rows" }));
+    }
+    fireEvent.click(await screen.findByRole("button", { name: "Select all 2 groups" }));
+    await waitFor(() => expect(f.collection?.allMatching?.total).toBe(2));
+  };
+  await selectAll();
+  const from = f.collections.length;
+  act(() => f.view.setPage(2));
+  expect(await screen.findByText("Task 6")).toBeTruthy();
+  await waitFor(() => expect(f.fetching).toBe(false));
+  expect(screen.getByText("All 2 groups selected")).toBeTruthy();
+  expect(f.collections.slice(from).every((collection) => collection.allMatching?.total === 2)).toBe(true);
+  act(() => f.view.setPage(1));
+  await f.select("Task 1");
+  await waitFor(() => expect(f.collection?.selectedRows.map((row) => row.id)).toEqual(["t2"]));
+  expect(f.collection).not.toHaveProperty("allMatching");
+  expect(screen.getByText("1 selected")).toBeTruthy();
+  await f.select("Task 1");
+  await selectAll();
+  // Clear empties the selection.
+  fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+  expect(f.view.state.rowSelection).toEqual({});
+  expect(screen.queryByText("All 2 groups selected")).toBeNull();
+  // A change of filter, sort or grouping clears the selection, the mode with it.
+  for (const change of [
+    () => f.view.setFilter({ title: { ne: "Task 5" } }),
+    () => f.view.setSorting([{ id: "title", desc: true }]),
+    () => f.view.setGroupStack([{ field: "status" }]),
+  ]) {
+    await selectAll();
+    act(change);
+    expect(f.view.state.rowSelection).toEqual({});
+    expect(screen.queryByText("All 2 groups selected")).toBeNull();
+  }
+});
+
+test("the mode never comes back by itself: a view reading otherwise leaves it, and the list is back to the selected ids", async () => {
+  const f = await allRepeated();
+  // The gallery pages every record of the filter, not the repeated groups the person chose.
+  act(() => f.view.setView("gallery"));
+  // Its own read has settled: six records, one a page.
+  expect(await screen.findByRole("button", { name: "Records 1-1 / 6" })).toBeTruthy();
+  expect(f.collection).not.toHaveProperty("allMatching");
+  expect(screen.queryByText("All 2 groups selected")).toBeNull();
+  expect(f.view.state.rowSelection).toEqual({ t1: true, t2: true });
+  act(() => f.view.setView("list"));
+  // The person may choose it again; nothing chose it for them.
+  expect(await screen.findByRole("button", { name: "Select all 2 groups" })).toBeTruthy();
+  expect(screen.queryByText("All 2 groups selected")).toBeNull();
+  expect(f.collection).not.toHaveProperty("allMatching");
+});
+
+test("a list utility receives the mode's reason, so a Share of the selected rows can refuse it", async () => {
+  function Reason() {
+    const { disabledReason } = useResourceViewUtilityContext();
+    return <output aria-label="Utility reason">{disabledReason === null ? "none" : disabledReason}</output>;
+  }
+  await allOfAda({ utility: <Reason /> });
+  expect(screen.getByRole("status", { name: "Utility reason" }).textContent)
+    .toBe("This acts on the rows you select, not on all 4 records");
+  fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+  await waitFor(() => expect(screen.getByRole("status", { name: "Utility reason" }).textContent).toBe("none"));
 });
 
 test("a repeated grouping lists no footer total, which a flat aggregate cannot narrow to its groups", async () => {

@@ -35,7 +35,7 @@ import type { DndPayload } from "../../lib/dnd";
 import type { RowActionDeclaration } from "./RowActions";
 import type { CrudFilter, CrudSort } from "@refinedev/core";
 import type { CollectionSource } from "./collection-source";
-import type { AggregateBucket } from "@angee/refine";
+import type { AggregateBucket, GroupByRequestOptions, listQueryMeta } from "@angee/refine";
 
 export type { ListSearchDeclaration, SearchShortcut } from "./search/shortcuts";
 export { validateSearchShortcut } from "./search/shortcuts";
@@ -162,18 +162,6 @@ export interface SelectedGroupLevel {
   /** What the group header shows, the list's own wording for an empty group included. */
   label: string;
 }
-
-/**
- * What a list surface hands `bulkActions`: the public collection with the split
- * stated. Every surface builds this type, so one that groups cannot leave the split
- * out and read as "not grouped"; the public member stays optional so a caller that
- * builds a collection by hand (a consumer's test) need not name it.
- */
-export type PlacedBulkCollection<TRow> = {
-  filter: QueryFilter;
-  selectedRows: readonly TRow[];
-  selectedGroups: readonly SelectedGroup[] | null | undefined;
-};
 
 /** The selected rows of one innermost group (`bulkActions` → `selectedGroups`). */
 export interface SelectedGroup extends SelectedGroupLevel {
@@ -342,6 +330,15 @@ export interface ListViewProps<TRow extends Row = Row> {
    * collection changes clear it. Only one scope holds selection: entering another
    * inherited scope or selecting at the owner clears the previous scope. */
   selectable?: boolean;
+  /** Offer "Select all N": the selection becomes everything the list's read matches,
+   * which the page's `bulkActions` receives as `allMatching` (its docstring holds the
+   * rules). Only where the pager counts what a verb acts on: a flat list's records,
+   * or the groups of a list grouped by one server level; never under nested
+   * grouping, on a `source` list, a client row model or a lane board, and only with
+   * page `bulkActions` on a selectable list. Opting in asserts that every verb the
+   * page's `bulkActions` renders honours `allMatching` or refuses it: the framework
+   * cannot disable a page's verbs. */
+  selectAllMatching?: boolean;
   /** Authored server projection using the same native collection surface. */
   source?: CollectionSource<TRow>;
   /** Allowed render kinds; defaults to the resource's available kinds. */
@@ -435,14 +432,15 @@ export interface ListViewProps<TRow extends Row = Row> {
    * selectedGroups is the selection split by the grouping the list renders, in
    * three states; never an empty array, since without a selection the bulk actions
    * do not render. Absent or undefined: the list is not grouped (a gallery never
-   * groups); a list surface always states it (`PlacedBulkCollection`), a collection
+   * groups); a list surface always states it (`renderBulkActions`), a collection
    * built by hand may leave it out.
    * null: it is grouped but at least one selected id cannot be placed, so no split
    * is offered, never a partial one: the id was selected while the list was flat or
    * grouped otherwise, or by a select-all that holds ids without rows; it shows now
    * under another group than the one it was selected in, or under more than one; a
-   * page that listed it, or listed one of its groups, shows again without it or is
-   * still loading; or the surface never places rows (a client-grouped list, a lane
+   * page that listed it, or listed one of its groups, shows again without it, with
+   * no answer yet, or failed (a page that refetches keeps its last answer until the
+   * refetch settles); or the surface never places rows (a client-grouped list, a lane
    * board, whose every selected card yields null, and `RowsListView`; pane lists do
    * not select). Otherwise one entry per innermost group holding a selected row,
    * every selected id in exactly one entry: a row the list shows in the group it
@@ -462,6 +460,49 @@ export interface ListViewProps<TRow extends Row = Row> {
       filter: QueryFilter;
       selectedRows: readonly TRow[];
       selectedGroups?: readonly SelectedGroup[] | null;
+      /**
+       * Present when the person chose "Select all N" (`selectAllMatching`): the
+       * selection is everything the list's read matches, not the selected ids. The
+       * list offers it once every loaded row is selected and its read matches more;
+       * the bar then reads "All N selected" and every loaded row shows selected.
+       * Paging, a refetch and a failed read keep it, with the total that last
+       * settled. Selecting or unselecting a row or a group, Clear (which empties the
+       * selection), a change of filter, grouping or sort (which clears it) and the
+       * list reading otherwise (another view kind) leave it; it never comes back by
+       * itself. `selectedIds`, `selectedRows` and `selectedGroups` still describe only
+       * the loaded selected rows, never an unloaded one: a verb that honours
+       * `allMatching` acts on `read` on the server and ignores them, and a verb that
+       * cannot must not act on them either, and says why. The generic Archive,
+       * Trash/Restore and Delete, which act on each row, and the list utilities that
+       * act on `selectedIds` (Share) are disabled with their reason while it is on.
+       * Descriptive, like `filter`: the server validates what it is given.
+       */
+      allMatching?:
+        | {
+            /** A flat list: `total` counts its records. */
+            readonly unit: "records";
+            /** What the bar says is selected: exact, as the list's pager counts it. */
+            readonly total: number;
+            /** The `where` the list hands its data provider for its rows (the provider
+             * may wrap it; the meaning is the same). It names no schema or root field:
+             * forward it to the verb's own read, never re-derive it. A copy: changing
+             * it changes nothing in the list. */
+            readonly read: { readonly where: NonNullable<Parameters<typeof listQueryMeta>[2]> };
+          }
+        | {
+            /** A list grouped by one server level: `total` counts its groups after the
+             * level's `having` (the read's `totalCount`). */
+            readonly unit: "groups";
+            /** What the bar says is selected: exact, as the list's pager counts it. */
+            readonly total: number;
+            /** The level's groups read as the list builds it (`ResourceQuery.toGroupRead`):
+             * its `where` (a repeated level's records with a value included), its
+             * `dimensions` and, for a repeated level, its `having`. It names no schema
+             * or root field: a page turns it into its own read's variables with
+             * `groupByVariables` (`@angee/refine`), never re-deriving it. A copy:
+             * changing it changes nothing in the list. */
+            readonly read: Readonly<Pick<GroupByRequestOptions, "where" | "dimensions" | "having">>;
+          };
     },
   ) => ReactNode;
   /** Optional action content rendered in each board card footer. */
