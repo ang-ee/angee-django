@@ -452,8 +452,9 @@ Use these owners instead of maintaining another contract in an addon:
   uninstalled, or the class moved to an addon the host has not installed)
   strands the rows that store it: the database check `angee.E052`
   ([`check_stored_impl_keys`](../../src/angee/base/checks.py)) names them by
-  model, field, key and count before `migrate` and under `check --database`,
-  and the addon that stopped providing a key states the remedy in
+  model, field, key and count under `check --database` and at the start of
+  `migrate`, where a column the pending migrations have yet to add is passed
+  over, and the addon that stopped providing a key states the remedy in
   `ANGEE_IMPL_KEY_REMEDIES`.
 - **Rowless implementation catalogues compose the same registry owner.**
   [`angee.base.implementations`](../../src/angee/base/implementations.py) owns registry checks, choice

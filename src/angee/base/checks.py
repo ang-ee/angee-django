@@ -75,24 +75,41 @@ def check_stored_impl_keys(
     a key comes from a setting that addons contribute to. When the addon that
     contributed a key is no longer installed, or the key moved to an addon the
     host has not installed, the rows that name it are stranded: nothing resolves
-    them, and the first use of one fails. This reads every concrete model's
-    ``ImplClassField`` columns, so it is registered under ``Tags.database``: it
-    runs with ``check --database`` and before ``migrate``, never in a plain
-    ``check``. ``ANGEE_IMPL_KEY_REMEDIES`` maps a registry setting and a key to
-    what an operator does about it.
+    them, and the first use of one fails. This reads the ``ImplClassField``
+    columns of the selected apps' concrete models (every installed app's when
+    none is selected), so it is registered under ``Tags.database``: it runs with
+    ``check --database`` and at the start of ``migrate``, never in a plain
+    ``check``. At the start of ``migrate`` the database is still the previous
+    release's, so a table or a column the pending migrations have yet to add is
+    passed over: nothing is stored there. ``ANGEE_IMPL_KEY_REMEDIES`` maps a
+    registry setting and a key to what an operator does about it.
     """
 
-    del app_configs, kwargs
+    del kwargs
     remedies: Mapping[str, Mapping[str, str]] = getattr(settings, "ANGEE_IMPL_KEY_REMEDIES", {})
+    selected = (
+        apps.get_models() if app_configs is None
+        else [model for config in app_configs for model in config.get_models()]
+    )
     errors: list[checks.CheckMessage] = []
     for alias in databases or ():
-        tables = set(connections[alias].introspection.table_names())
-        for model in sorted(apps.get_models(), key=lambda candidate: candidate._meta.label):
+        connection = connections[alias]
+        tables = set(connection.introspection.table_names())
+        for model in sorted(selected, key=lambda candidate: candidate._meta.label):
             options = model._meta
             if options.proxy or not options.managed or options.db_table not in tables:
                 continue
-            for field in options.local_concrete_fields:
-                if not isinstance(field, ImplClassField) or field.base_class is None:
+            keyed = [
+                field for field in options.local_concrete_fields
+                if isinstance(field, ImplClassField) and field.base_class is not None
+            ]
+            if not keyed:
+                continue
+            with connection.cursor() as cursor:
+                described = connection.introspection.get_table_description(cursor, options.db_table)
+            columns = {column.name for column in described}
+            for field in keyed:
+                if field.column not in columns:
                     continue
                 # Read the column as text: the field itself refuses a key it does not know.
                 stranded = (
