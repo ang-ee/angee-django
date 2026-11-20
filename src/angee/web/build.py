@@ -96,14 +96,16 @@ PAGE_CSP: dict[str, list[str]] = {
     "style-src": [CSP.SELF, CSP.UNSAFE_INLINE],
     "form-action": [CSP.NONE],
 }
-"""The content security policy the ingress sends with every standalone page.
+"""The content security policy of every standalone page, and its one owner.
 
 A standalone page renders markup written by staff on the application's origin, so
 it must not be able to run inline script, and it is never framed. The ingress sends
 it as a response header because a ``<meta>`` policy cannot set ``frame-ancestors``.
 ``style-src`` admits inline styles, the one loosened directive, because the
 rendering library sets them. The policy is the same for every page: none declares
-its own.
+its own. The manifest publishes the rendered policy as its top-level ``pageCsp``
+string, the value the ingress header carries, so the Vite dev server, which has
+no ingress in front of it, can apply the same policy in development.
 """
 
 
@@ -219,6 +221,7 @@ class WebRuntime:
             "addonPackages": addon_packages,
             "codegen": codegen_entries,
             "pageAccept": {PAGE_ACCEPT: PAGE_ACCEPT_PATTERN},
+            "pageCsp": build_policy(PAGE_CSP),
             "documentRoots": [
                 {"kind": "package", "package": entry["package"], "path": f"node_modules/{entry['package']}/src"}
                 for entry in (*core_packages, *addon_packages)
@@ -271,9 +274,9 @@ class WebRuntime:
         request's ``Accept`` header matches the manifest's ``pageAccept`` pattern,
         with the web build's ``/<id>.html`` under the importing site's ``root``;
         every other request falls through to the site's own routes. The page
-        carries ``PAGE_CSP`` on those paths and at the built file's own URL, which
-        the site's file server also answers. Without pages only the sentinel
-        remains, so the import always resolves.
+        carries the manifest's ``pageCsp`` on those paths and at the built file's
+        own URL, which the site's file server also answers. Without pages only
+        the sentinel remains.
         """
 
         pages = {
@@ -292,7 +295,7 @@ class WebRuntime:
                 "# A page renders staff-written markup on the application's origin, so its content security",
                 "# policy runs no inline script and forbids framing, wherever the built file is requested.",
             ]
-        policy = f'{CSP.HEADER_ENFORCE} "{build_policy(PAGE_CSP)}"'
+        policy = f'{CSP.HEADER_ENFORCE} "{self.manifest["pageCsp"]}"'
         for name in sorted(pages):
             matcher = f"@page_{name.replace('.', '_')}"
             accept = self.manifest["pageAccept"][pages[name]["accept"]]

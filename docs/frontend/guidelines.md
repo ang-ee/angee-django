@@ -106,7 +106,10 @@ public vault id. See the [knowledge addon](../../src/angee/knowledge/README.md).
   every page with one fixed content security policy (`PAGE_CSP`): a page renders
   staff-written markup on the application's origin, so it loads only from that
   origin, runs no inline script, submits no form natively and is never framed;
-  inline styles are the one loosened directive. The ingress reads the snippet
+  inline styles are the one loosened directive. `PAGE_CSP` is the policy's one
+  owner: a page's HTML carries no copy, the built page gets it from the ingress
+  header, and the manifest's `pageCsp` publishes the same string so the dev
+  server injects it as a meta tag in development only. The ingress reads the snippet
   when it starts: a recomposed snippet takes effect only when the static ingress
   service (`frontend`; `caddy` in an instance stack) restarts, which the
   whole-application chained restart does and a lone compose does not

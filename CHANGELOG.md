@@ -25,7 +25,8 @@ live in code docstrings.
   and `HEAD` on its paths only when `text/html` is the first media type of the
   request's `Accept` header, however the header is folded into field lines, so
   every other request reaches Django, and carries
-  one fixed content security policy (no inline script, never framed). The stack
+  one fixed content security policy (no inline script, never framed), owned by
+  `PAGE_CSP` and published as the manifest's `pageCsp`. The stack
   templates' static ingress declares its site root once and imports the snippet
   by glob ahead of its Django routes: an ingress whose composer emits no snippet
   still starts, and those paths stay Django's. The ingress reads the snippet

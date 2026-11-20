@@ -12,12 +12,13 @@ from typing import Any
 import pytest
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
+from django.utils.csp import build_policy
 from django_compose.serving import GENERATED_SENTINEL
 
 from angee.base.addons import addon_contribution, addon_facts
 from angee.graphql.schema import schema_parts_for
 from angee.mcp.server import tool_registrar
-from angee.web.build import INGRESS_DJANGO_PATHS, PAGE_ACCEPT_PATTERN, PAGE_PREFIXES, WebRuntime
+from angee.web.build import INGRESS_DJANGO_PATHS, PAGE_ACCEPT_PATTERN, PAGE_CSP, PAGE_PREFIXES, WebRuntime
 from tests.conftest import make_addon, write_addon_package
 
 FORM_PAGE: dict[str, Any] = {"entry": "./src/form.html", "paths": ["/forms/w/*"], "accept": "text/html"}
@@ -159,6 +160,9 @@ def test_a_package_without_pages_emits_no_pages_key_and_an_importable_snippet(
     (tmp_path / "web/package.json").write_text(json.dumps({"name": "@example/site", "angee": declared}))
     projection = WebRuntime((config,), dependencies={config.name: ()})
     assert "pages" not in projection.manifest["addonPackages"][0]
+    # The page rules are the composer's own, so the manifest carries them whether or not a page is declared.
+    assert projection.manifest["pageAccept"] == {"text/html": PAGE_ACCEPT_PATTERN}
+    assert projection.manifest["pageCsp"] == build_policy(PAGE_CSP)
     # The ingress imports the file unconditionally, so it holds its sentinel comment and no route.
     assert projection.pages_caddy() == f"# {GENERATED_SENTINEL}\n"
     assert Path("web/pages.caddy") in projection.render_sources()
@@ -347,11 +351,13 @@ def test_the_page_ingress_snippet_routes_each_page_by_method_path_and_leading_ac
     assert all(line.startswith("#") for line in preamble.splitlines())
     accept = projection.manifest["pageAccept"]["text/html"]
     # One fixed policy for every page: no inline script, never framed; inline styles are the one loosened directive.
-    policy = (
-        "Content-Security-Policy \"default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; "
+    # The manifest publishes it for the dev server, and the ingress header carries that same string.
+    assert projection.manifest["pageCsp"] == (
+        "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; "
         "frame-ancestors 'none'; connect-src 'self'; img-src 'self' data:; font-src 'self'; "
-        "style-src 'self' 'unsafe-inline'; form-action 'none'\""
+        "style-src 'self' 'unsafe-inline'; form-action 'none'"
     )
+    policy = f'Content-Security-Policy "{projection.manifest["pageCsp"]}"'
     # Pages and their paths are sorted; page <id> is the web build's /<id>.html under the importing site's root.
     # The Accept condition reads the header's joined field lines, never one line alone.
     assert routes == (
