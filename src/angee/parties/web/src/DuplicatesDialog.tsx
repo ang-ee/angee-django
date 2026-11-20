@@ -491,7 +491,10 @@ export function DuplicatesDialog({
             {derived.error ? <ErrorBanner description={derived.error.message || t("duplicates.error")} /> : null}
             {readError ? (
               <ErrorBanner
-                description={t(live.length > 0 ? "duplicates.pageError" : "duplicates.error")}
+                // Said by what failed: a re-read of previews already shown, a page not yet shown, or the first read.
+                description={t(previewError && loaded
+                  ? "duplicates.rereadError"
+                  : live.length > 0 ? "duplicates.pageError" : "duplicates.error")}
                 actions={
                   <Button type="button" size="sm" variant="secondary"
                     onClick={() => void (pageError ? pageRead.refetch() : preview.refetch())}>

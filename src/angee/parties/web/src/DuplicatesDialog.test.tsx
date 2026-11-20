@@ -286,6 +286,9 @@ describe("the batch merge dialog", () => {
     act(() => { failed = true; mocks.rerender?.(); });
     expect(await screen.findByRole("button", { name: message("duplicates.retry") })).toBeTruthy();
     expect(mergeButton("2").hasAttribute("disabled")).toBe(true);
+    // What failed is a re-read of records already shown, not a next page.
+    expect(screen.getByText(message("duplicates.rereadError"))).toBeTruthy();
+    expect(screen.queryByText(message("duplicates.pageError"))).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: message("duplicates.retry") }));
     await waitFor(() => expect(screen.queryByRole("button", { name: message("duplicates.retry") })).toBeNull());
