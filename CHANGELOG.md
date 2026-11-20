@@ -947,8 +947,15 @@ live in code docstrings.
   `same_as_pair_counts { pairs certain }` (`PartyManager.same_as_review_counts`)
   says how many of each the reader may review. The Review page shows both totals
   and gives each of its lists its own pager (the claims list embedded in its
-  section, the pairs under their cards); "Merge certain pairs (50 of 180)" names
-  the batch and the dialog says the next batch follows; the overview counts every
+  section, the pairs under their cards); "Merge all certain pairs (180)" opens
+  the dialog on every certain pair (`allCertain`): it lists them page after
+  page, fifty a request through the `after` cursor, saying "Loaded N of M
+  sets…", previews each page as it is listed, and enables Confirm only once every
+  page has loaded (a page that fails offers a retry); then "M sets: X will merge,
+  Y need a look" comes from the loaded list. One confirm lists and runs at most
+  1,000 sets (`CONFIRM_SETS`) and says when more may wait ("run again for the
+  rest"); the dialog renders fifty sets at a time through the shared `Pager`, and
+  once every page is in only the last page stays live. The overview counts every
   pair instead of a capped read. In the dialog each set that may merge has its
   own Include toggle, off by default when the set carries a warning (a
   disagreement, a member that no longer matches its group) and off again when

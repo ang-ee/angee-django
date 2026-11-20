@@ -435,8 +435,10 @@ records disagree on a merge field, the merging person confirms the value kept
 
 Nothing merges unattended. A person may also merge in a batch: confirmed sets of
 two to ten records each (`PartyManager.merge_duplicates`, the `merge_duplicates`
-mutation; at most 50 sets), either the certain pairs the Review page lists
-(`certain_same_as_pairs`) or a selection from the People or Organizations list.
+mutation; at most 50 sets a request), either every certain pair awaiting review
+(`certain_same_as_pairs`, listed page by page, at most 1,000 a confirm, from the
+Review page's "Merge all certain pairs") or a selection from the People or
+Organizations list.
 There, one selected record opens "Merge into…" to choose the other, two open
 their compare page, and three or more on an ungrouped list are the duplicate
 sets the server finds among them (`PartyManager.selection_duplicate_sets`, under

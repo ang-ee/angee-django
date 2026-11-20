@@ -366,6 +366,7 @@ export type MergePersonRecord = NonNullable<
   DocumentType<typeof PartyMergeComparison>["left_person"]
 >;
 
+export type CertainSameAsPair = DocumentType<typeof CertainSameAsPairs>["certain_same_as_pairs"][number];
 export type DuplicateSetPreview = DocumentType<typeof DuplicateSetPreviews>["duplicate_set_previews"][number];
 export type DuplicateSetMember = DuplicateSetPreview["members"][number];
 export type DuplicateSetOutcome = DocumentType<typeof MergeDuplicates>["merge_duplicates"][number];

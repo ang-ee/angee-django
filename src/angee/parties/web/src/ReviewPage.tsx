@@ -1,8 +1,8 @@
 import * as React from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import { Alert, Avatar, Button, EmptyState, ErrorBanner, Glyph, ListView, LoadingPanel, NavLink, Page, PageBody, PageHeader, RailPanel, ResourcePaneFooter, Chip, avatarInitials, formatNumber, type ListColumn, useRouteHref } from "@angee/ui";
-import { CertainSameAsPairs, PARTY_MERGE_INVALIDATES, SameAsPairs, PartyReviewCounts } from "./documents";
-import { DuplicatesDialog, type DuplicateSetInput } from "./DuplicatesDialog";
+import { PARTY_MERGE_INVALIDATES, SameAsPairs, PartyReviewCounts } from "./documents";
+import { DuplicatesDialog } from "./DuplicatesDialog";
 import { usePartiesT } from "./i18n";
 import { useIdentityClaimColumns, type IdentityClaimRow } from "./identity-columns";
 import { usePartyStatementRowActions } from "./party-statement-row-actions";
@@ -22,8 +22,8 @@ const SAME_AS_PAGE = 50;
  * carries its own total (`PartyReviewCounts`) and its own pager: the claims list
  * pages inside its section, and the possible duplicates page after the last pair
  * seen (`same_as_pairs(after:)`), so a pair merged or kept apart meanwhile moves
- * no other one. The certain pairs merge a batch at a time from one dialog
- * (`DuplicatesDialog`); each batch continues after the last one.
+ * no other one. Every certain pair merges from one dialog (`DuplicatesDialog`'s
+ * `allCertain`), which lists them all page by page before one confirm.
  */
 export function ReviewPage(): React.ReactElement {
   const t = usePartiesT();
@@ -43,24 +43,6 @@ export function ReviewPage(): React.ReactElement {
     ...held,
   });
   const rowActions = usePartyStatementRowActions<SuggestionRow>("all");
-  // Each batch of certain pairs continues after the last pair of the batch before it.
-  const [certainAfter, setCertainAfter] = React.useState<string | null>(null);
-  const certain = useAuthoredQuery(CertainSameAsPairs, { limit: SAME_AS_PAGE, after: certainAfter }, {
-    models: PARTY_MERGE_INVALIDATES,
-    ...held,
-  });
-  const certainPairs = certain.data?.certain_same_as_pairs;
-  const certainSets = React.useMemo<readonly DuplicateSetInput[]>(
-    () => (certainPairs ?? []).map((pair) => ({
-      members: [pair.left.id, pair.right.id],
-      heading: t("review.sameAs.certainHeading", {
-        left: pair.left.display_name,
-        right: pair.right.display_name,
-        address: pair.normalized_value,
-      }),
-    })),
-    [certainPairs, t],
-  );
   const handleCount = counts.data?.party_statements_aggregate.aggregate?.count ?? 0;
   const pairTotal = counts.data?.same_as_pair_counts.pairs;
   const certainTotal = counts.data?.same_as_pair_counts.certain ?? 0;
@@ -69,10 +51,6 @@ export function ReviewPage(): React.ReactElement {
   const shownTotal = (value: number): string =>
     capped ? t("review.cappedCount", { count: formatNumber(value) }) : formatNumber(value);
   const sameAsCandidates = sameAs.data?.same_as_pairs ?? [];
-  // Past the last batch, the batches start over (a pair a batch left unmerged is offered again).
-  React.useEffect(() => {
-    if (certainAfter !== null && certainPairs && certainPairs.length === 0) setCertainAfter(null);
-  }, [certainAfter, certainPairs]);
   // A page whose every pair has left (merged, kept apart) steps back to the page before it.
   React.useEffect(() => {
     if (page > 1 && sameAs.data && !sameAs.isFetching && sameAs.data.same_as_pairs.length === 0) {
@@ -141,9 +119,9 @@ export function ReviewPage(): React.ReactElement {
             title={t("review.sameAs")}
             count={pairTotal === undefined ? undefined : shownTotal(pairTotal)}
             fetching={sameAs.isFetching && sameAsCandidates.length > 0}
-            actions={certainSets.length > 0 ? (
+            actions={certainTotal > 0 ? (
               <Button type="button" size="sm" variant="secondary" onClick={() => setMergingCertain(true)}>
-                {t("review.sameAs.mergeCertain", { count: certainSets.length, total: shownTotal(Math.max(certainTotal, certainSets.length)) })}
+                {t("review.sameAs.mergeCertain", { total: shownTotal(certainTotal) })}
               </Button>
             ) : undefined}
           >
@@ -207,16 +185,8 @@ export function ReviewPage(): React.ReactElement {
         </div>
         {mergingCertain ? (
           <DuplicatesDialog
-            sets={certainSets}
-            certain
-            notes={capped || certainTotal > certainSets.length
-              ? [t("duplicates.nextBatch", { count: certainSets.length, total: shownTotal(certainTotal) })]
-              : []}
-            onClose={() => {
-              setMergingCertain(false);
-              // The next batch continues after the last pair of this one.
-              setCertainAfter(certainPairs?.[certainPairs.length - 1]?.id ?? null);
-            }}
+            allCertain={{ total: shownTotal(certainTotal) }}
+            onClose={() => setMergingCertain(false)}
           />
         ) : null}
       </PageBody>

@@ -3,16 +3,18 @@ import { useResourceInvalidates } from "@angee/metadata";
 import { useAuthoredMutation, useAuthoredQuery, useInvalidateAuthoredModels } from "@angee/refine";
 import { useInvalidate } from "@refinedev/core";
 import {
-  Alert, Button, Checkbox, Chip, Dialog, ErrorBanner, LoadingPanel, NavLink, RowsListView, defaultWidgets, optionLabel,
-  useEnumOptions, useRouteHref, type ListColumn,
+  Alert, Button, Checkbox, Chip, Dialog, ErrorBanner, LoadingPanel, NavLink, Pager, RowsListView, defaultWidgets,
+  formatNumber, optionLabel, useEnumOptions, useRouteHref, type ListColumn,
 } from "@angee/ui";
 
 import {
+  CertainSameAsPairs,
   DuplicateSetPreviews,
   MergeDuplicates,
   PARTY_MERGE_INVALIDATES,
   PARTY_MERGE_RESOURCES,
   SelectionDuplicateSets,
+  type CertainSameAsPair,
   type DuplicateSetMember,
   type DuplicateSetOutcome,
   type DuplicateSetPreview,
@@ -22,6 +24,21 @@ import { usePartiesT } from "./i18n";
 const DateTimeRead = defaultWidgets.datetime.read;
 
 const NO_SETS: readonly DuplicateSetInput[] = [];
+
+/**
+ * How many sets one read lists or previews: the server's bound on one request
+ * (``PartyManager.BATCH_SETS``). A longer list loads one page after another.
+ */
+export const SETS_PAGE = 50;
+
+/**
+ * The most sets one confirm lists and runs. Review's "every certain pair" stops
+ * loading there and says how to reach the rest: run again.
+ */
+export const CONFIRM_SETS = 1000;
+
+/** How many sets the dialog renders at a time; the shared pager pages the rest. */
+const SHOWN_SETS = 50;
 
 /**
  * How many sets one merge request carries. A run sends the confirmed sets this
@@ -41,6 +58,12 @@ export interface DuplicateSetInput {
   grouping?: readonly { field: string; key: string | null }[];
 }
 
+/** One page of certain pairs as listed: the pair it continued after, and its pairs. */
+interface CertainPage {
+  after: string | null;
+  pairs: readonly CertainSameAsPair[];
+}
+
 /** One confirmed run: the sets as confirmed, their outcomes as the chunks answer, and how it ended. */
 interface MergeRun {
   shown: readonly DuplicateSetPreview[];
@@ -50,19 +73,26 @@ interface MergeRun {
 }
 
 export interface DuplicatesDialogProps {
-  sets: readonly DuplicateSetInput[];
+  sets?: readonly DuplicateSetInput[];
   /**
    * Records selected on an ungrouped list: the server finds the duplicate sets
    * among them (``selection_duplicate_sets``) and the dialog lists those, said
    * what was left out; ``sets`` is then unused.
    */
   selection?: readonly string[];
+  /**
+   * Every certain pair awaiting the person's review: the dialog lists them page
+   * by page (``certain_same_as_pairs(after:)``), at most :data:`CONFIRM_SETS`,
+   * saying "loaded N of M" with ``total`` as the Review page shows it; ``sets``
+   * is then unused and each set is re-checked as certain.
+   */
+  allCertain?: { total: string };
   /** The Review page's certain pairs: each set is re-checked as still certain when merged. */
   certain?: boolean;
   /**
-   * Lines about the sets around these ones: how the next batch is reached (the
-   * Review page's certain pairs, a selection over the batch cap) and what a list
-   * selection left out (records with no one to merge with, groups without a value).
+   * Lines about the sets around these ones: how the next batch is reached (a
+   * selection over the batch cap) and what a list selection left out (records
+   * with no one to merge with, groups without a value).
    */
   notes?: readonly string[];
   onClose: (merged: boolean) => void;
@@ -84,16 +114,24 @@ export interface DuplicatesDialogProps {
  * leaving the page mid-run, after the dialog asks, sends nothing more. The sets
  * not sent are shown as left out and nothing is queued behind the person's back.
  * While a run is in flight the preview is held, and the models are invalidated
- * once, when it ends. The server judges and merges (`duplicate_set_previews`,
+ * once, when it ends. A list longer than one request (:data:`SETS_PAGE`) loads
+ * page after page, saying how many are loaded, and Confirm waits for every page
+ * (a page that fails offers a retry); at most :data:`CONFIRM_SETS` sets are
+ * listed, and the dialog renders :data:`SHOWN_SETS` of them at a time through the
+ * shared pager. The server judges and merges (`duplicate_set_previews`,
  * `merge_duplicates`); the dialog only shows.
  */
 export function DuplicatesDialog({
-  sets: opened, selection, certain = false, notes: given = [], onClose,
+  sets: opened = NO_SETS, selection, allCertain, certain: certainOnly = false, notes: given = [], onClose,
 }: DuplicatesDialogProps): React.ReactElement {
   const t = usePartiesT();
-  // The dialog lists the sets it opened with, or those found once among a selection; a caller's later reads never
-  // change what is confirmed.
-  const [found, setFound] = React.useState<readonly DuplicateSetInput[] | null>(selection ? null : opened);
+  const everyCertain = allCertain !== undefined;
+  const certain = certainOnly || everyCertain;
+  // The dialog lists the sets it opened with, those found once among a selection, or every certain pair page by page;
+  // a caller's later reads never change what is confirmed.
+  const [found, setFound] = React.useState<readonly DuplicateSetInput[] | null>(
+    selection || everyCertain ? null : opened,
+  );
   const derived = useAuthoredQuery(SelectionDuplicateSets, { ids: [...(selection ?? [])] }, {
     enabled: selection !== undefined && found === null,
   });
@@ -101,7 +139,36 @@ export function DuplicatesDialog({
   React.useEffect(() => {
     if (found === null && among) setFound(among.sets.map((members) => ({ members })));
   }, [among, found]);
-  const sets = found ?? NO_SETS;
+  // Every certain pair: one page after another, each continuing after the last pair of the page before.
+  const [pairPages, setPairPages] = React.useState<readonly CertainPage[]>([]);
+  const lastPairs = pairPages.at(-1);
+  const listedPairs = pairPages.reduce((count, page) => count + page.pairs.length, 0);
+  const pairsDone = lastPairs !== undefined && (lastPairs.pairs.length < SETS_PAGE || listedPairs >= CONFIRM_SETS);
+  const pairsAfter = lastPairs ? lastPairs.pairs.at(-1)?.id ?? null : null;
+  const pairs = useAuthoredQuery(CertainSameAsPairs, { limit: SETS_PAGE, after: pairsAfter }, {
+    enabled: everyCertain && !pairsDone, errorNotification: false,
+  });
+  const pairsPage = pairs.data?.certain_same_as_pairs;
+  React.useEffect(() => {
+    if (!pairsPage || pairsDone) return;
+    setPairPages((pages) => (pages.some((page) => page.after === pairsAfter) ? pages : [
+      ...pages, { after: pairsAfter, pairs: pairsPage },
+    ]));
+  }, [pairsAfter, pairsDone, pairsPage]);
+  const certainSets = React.useMemo<readonly DuplicateSetInput[]>(
+    () => pairPages.flatMap((page) => page.pairs).slice(0, CONFIRM_SETS).map((pair) => ({
+      members: [pair.left.id, pair.right.id],
+      heading: t("review.sameAs.certainHeading", {
+        left: pair.left.display_name, right: pair.right.display_name, address: pair.normalized_value,
+      }),
+    })),
+    [pairPages, t],
+  );
+  const sets = React.useMemo(
+    () => (everyCertain ? certainSets : (found ?? NO_SETS).slice(0, CONFIRM_SETS)),
+    [certainSets, everyCertain, found],
+  );
+  const listed = everyCertain ? pairsDone : found !== null;
   const notes = [
     ...given,
     ...(among?.explicit ? [t("duplicates.explicitSet")] : []),
@@ -111,23 +178,50 @@ export function DuplicatesDialog({
     ...(among && among.left_out > 0 && among.sets.length > 0
       ? [t("duplicates.leftOutUnpaired", { count: String(among.left_out) })]
       : []),
+    // At the bound with a full last page, more certain pairs may wait: the next run lists them.
+    ...(allCertain && pairsDone && listedPairs >= CONFIRM_SETS && lastPairs?.pairs.length === SETS_PAGE
+      ? [t("duplicates.firstOfAll", { count: formatNumber(CONFIRM_SETS), total: allCertain.total })]
+      : []),
   ];
   // The fields each set was grouped by, names only, when the list grouped any: the preview returns their rows.
   const groupings = React.useMemo(
     () => (sets.some((set) => set.grouping?.length) ? sets.map((set) => (set.grouping ?? []).map((level) => level.field)) : null),
     [sets],
   );
-  const variables = React.useMemo(
-    () => ({ sets: sets.map((set) => [...set.members]), certain, groupings }),
-    [certain, groupings, sets],
-  );
+  // The previews load one page of SETS_PAGE sets after another; once all are in, the last page stays live (a set
+  // that changed since the person saw it is refused by its digest when sent, whichever page it is on).
+  const pageCount = Math.ceil(sets.length / SETS_PAGE);
+  const [previewPages, setPreviewPages] = React.useState<readonly (readonly DuplicateSetPreview[])[]>([]);
+  const previewing = Math.min(previewPages.length, Math.max(pageCount - 1, 0));
+  const variables = React.useMemo(() => {
+    const start = previewing * SETS_PAGE;
+    const page = sets.slice(start, start + SETS_PAGE);
+    return {
+      sets: page.map((set) => [...set.members]),
+      certain,
+      groupings: groupings && groupings.slice(start, start + SETS_PAGE),
+    };
+  }, [certain, groupings, previewing, sets]);
+  // A page is asked once its sets are all listed: the whole list, or a full page of it.
+  const pageListed = listed || sets.length >= (previewing + 1) * SETS_PAGE;
   // Once confirmed the dialog keeps showing the sets as they were confirmed, each with its outcome; the preview is
   // held so the merges in flight do not refetch it.
   const [run, setRun] = React.useState<MergeRun | null>(null);
   const preview = useAuthoredQuery(DuplicateSetPreviews, variables, {
-    enabled: sets.length > 0 && run === null,
+    enabled: variables.sets.length > 0 && pageListed && run === null,
     models: PARTY_MERGE_INVALIDATES,
+    errorNotification: false,
   });
+  const previewPage = preview.data?.duplicate_set_previews;
+  React.useEffect(() => {
+    if (!previewPage) return;
+    setPreviewPages((pages) => (pages[previewing] === previewPage
+      ? pages
+      : [...pages.slice(0, previewing), previewPage, ...pages.slice(previewing + 1)]));
+  }, [previewPage, previewing]);
+  // Confirm waits for every page: the whole list is listed and each of its pages previewed.
+  const loaded = listed && previewPages.length === pageCount;
+  const [shownPage, setShownPage] = React.useState(1);
   const [merge] = useAuthoredMutation(MergeDuplicates);
   const invalidate = useInvalidateAuthoredModels();
   const invalidateResource = useInvalidate();
@@ -144,7 +238,7 @@ export function DuplicatesDialog({
   }, []);
   const [closing, setClosing] = React.useState(false);
   const running = run?.status === "running";
-  const live = preview.data?.duplicate_set_previews ?? [];
+  const live = React.useMemo(() => previewPages.flat(), [previewPages]);
   const previews = run?.shown ?? live;
   // Each set's state when the person first saw it, and the person's ticks with the state each was made in.
   const [firstSeen, setFirstSeen] = React.useState<ReadonlyMap<number, string>>(new Map());
@@ -235,26 +329,60 @@ export function DuplicatesDialog({
             <Alert tone="info">{t("duplicates.valueRule")} {t("duplicates.undo")}</Alert>
             {notes.map((note) => <Alert key={note} tone="info">{note}</Alert>)}
             {derived.error ? <ErrorBanner description={derived.error.message || t("duplicates.error")} /> : null}
-            {preview.error ? <ErrorBanner description={t("duplicates.error")} /> : null}
+            {preview.error || pairs.error ? (
+              <ErrorBanner
+                description={t(live.length > 0 ? "duplicates.pageError" : "duplicates.error")}
+                actions={
+                  <Button type="button" size="sm" variant="secondary"
+                    onClick={() => void (pairs.error ? pairs.refetch() : preview.refetch())}>
+                    {t("duplicates.retry")}
+                  </Button>
+                }
+              />
+            ) : null}
             {run ? <RunLine run={run} /> : null}
-            {(preview.isFetching || derived.isFetching) && previews.length === 0
+            {!run && !loaded && live.length > 0 ? (
+              <Alert tone="info">
+                {t("duplicates.loadedOf", {
+                  loaded: formatNumber(live.length),
+                  total: allCertain ? allCertain.total : formatNumber(sets.length),
+                })}
+              </Alert>
+            ) : null}
+            {!run && loaded && live.length > 0 && (everyCertain || live.length > SETS_PAGE) ? (
+              <Alert tone="info">
+                {t("duplicates.totals", {
+                  count: formatNumber(live.length),
+                  merge: formatNumber(sending.length),
+                  look: formatNumber(live.length - sending.length),
+                })}
+              </Alert>
+            ) : null}
+            {(preview.isFetching || derived.isFetching || pairs.isFetching) && previews.length === 0
               ? <LoadingPanel loadingLabel={t("duplicates.loading")} />
               : null}
-            {previews.map((row, index) => (
-              <DuplicateSetSection
-                key={sets[index]?.members.join(":") ?? index}
-                preview={row}
-                heading={sets[index]?.heading}
-                grouping={sets[index]?.grouping}
-                outcome={run?.outcomes.get(row)}
-                include={run || row.outcome != null ? undefined : {
-                  checked: included(index),
-                  changed: changed(index),
-                  onChange: (checked) => setTicks((current) => new Map(current).set(index, { checked, state: stateOf(row) })),
-                }}
-                left={run !== null && !running && row.outcome == null && !run.outcomes.has(row)}
-              />
-            ))}
+            {previews.length > SHOWN_SETS ? (
+              <Pager page={shownPage} pageSize={SHOWN_SETS} total={previews.length} unit={t("duplicates.pagerUnit")}
+                labelElement="span" onPageChange={setShownPage} />
+            ) : null}
+            {previews.slice((shownPage - 1) * SHOWN_SETS, shownPage * SHOWN_SETS).map((row, shown) => {
+              const index = (shownPage - 1) * SHOWN_SETS + shown;
+              return (
+                <DuplicateSetSection
+                  key={sets[index]?.members.join(":") ?? index}
+                  preview={row}
+                  heading={sets[index]?.heading}
+                  grouping={sets[index]?.grouping}
+                  outcome={run?.outcomes.get(row)}
+                  include={run || row.outcome != null ? undefined : {
+                    checked: included(index),
+                    changed: changed(index),
+                    onChange: (checked) => setTicks((current) => new Map(current).set(index, { checked, state: stateOf(row) })),
+                  }}
+                  left={run !== null && !running && row.outcome == null && !run.outcomes.has(row)}
+                />
+              );
+            })}
           </Dialog.Body>
           <Dialog.Footer>
             {running && closing ? (
@@ -294,7 +422,7 @@ export function DuplicatesDialog({
                 <Button
                   type="button"
                   variant="primary"
-                  disabled={sending.length === 0 || preview.isFetching}
+                  disabled={!loaded || sending.length === 0 || preview.isFetching}
                   onClick={() => void submit()}
                 >
                   {t("duplicates.confirm", { count: sending.length })}

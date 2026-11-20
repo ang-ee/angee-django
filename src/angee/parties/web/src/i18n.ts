@@ -203,11 +203,9 @@ export const enPartiesMessages: Record<string, string> = {
   "relationship.field.startedAt": "Started",
   "relationship.field.endedAt": "Ended",
   // The batch merge: the Review page's certain pairs, a list selection's sets, and their one dialog.
-  "review.sameAs.mergeCertain": "Merge certain pairs ({count} of {total})",
+  "review.sameAs.mergeCertain": "Merge all certain pairs ({total})",
   "review.sameAs.pagerUnit": "pairs",
   "review.cappedCount": "{count}+",
-  "duplicates.nextBatch":
-    "These are {count} of the {total} certain pairs. When this dialog closes, Merge certain pairs offers the next ones, until the last; a pair left out here comes back after the last batch.",
   "review.sameAs.certainHeading": "{left} and {right}, both at {address}",
   "merge.selection.action": "Merge…",
   "merge.selection.unplaceable":
@@ -248,6 +246,12 @@ export const enPartiesMessages: Record<string, string> = {
   "duplicates.done": "Done",
   "duplicates.loading": "Reading the records…",
   "duplicates.error": "Could not read these records.",
+  "duplicates.pageError": "Could not read the next page of sets; nothing can be merged until every page is read.",
+  "duplicates.retry": "Retry",
+  "duplicates.loadedOf": "Loaded {loaded} of {total} sets…",
+  "duplicates.totals": "{count} sets: {merge} will merge, {look} need a look.",
+  "duplicates.firstOfAll": "This lists the first {count} of {total} certain pairs; run again for the rest.",
+  "duplicates.pagerUnit": "sets",
   "duplicates.progress": "{done} of {total} done.",
   "duplicates.runStopped": "Stopped: {done} of {total} done; the rest were not sent and nothing of them merged.",
   "duplicates.runFailed": "A request failed: {done} of {total} answered; the rest were not sent and nothing of them merged.",

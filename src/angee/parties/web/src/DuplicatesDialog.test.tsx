@@ -8,9 +8,14 @@ import { AppRuntimeProvider, InAppLinkProvider, createRouteHref, routerNavigator
 import { createUiTestProviders } from "@angee/ui/testing";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
+type Read = { data: unknown; isFetching: boolean; error: Error | null; refetch?: () => unknown };
 const mocks = vi.hoisted(() => ({
   merge: vi.fn(), invalidate: vi.fn(), invalidateResource: vi.fn(), previews: [] as readonly unknown[],
   variables: [] as unknown[], selection: undefined as unknown,
+  // Reads answered per document when a test sets them: the certain pairs' pages, and each page of previews.
+  documents: { certain: undefined as unknown, previews: undefined as unknown },
+  certainRead: undefined as ((variables: { after: string | null }) => Read) | undefined,
+  previewRead: undefined as ((variables: { sets: string[][] }) => Read) | undefined,
 }));
 vi.mock("@angee/metadata", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/metadata")>()),
@@ -22,8 +27,11 @@ vi.mock("@refinedev/core", async (importOriginal) => ({
 }));
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
-  useAuthoredQuery: (_document: unknown, variables: unknown) => {
-    mocks.variables.push(variables);
+  useAuthoredQuery: (document: unknown, variables: never, options?: { enabled?: boolean }) => {
+    // Only the reads the hook sends: a disabled query sends none.
+    if (options?.enabled !== false) mocks.variables.push(variables);
+    if (document === mocks.documents.certain && mocks.certainRead) return mocks.certainRead(variables);
+    if (document === mocks.documents.previews && mocks.previewRead) return mocks.previewRead(variables);
     return {
       data: { duplicate_set_previews: mocks.previews, selection_duplicate_sets: mocks.selection },
       isFetching: false, error: null,
@@ -34,7 +42,7 @@ vi.mock("@angee/refine", async (importOriginal) => ({
 }));
 
 import { DuplicatesDialog, type DuplicateSetInput } from "./DuplicatesDialog";
-import { PARTY_MERGE_RESOURCES } from "./documents";
+import { CertainSameAsPairs, DuplicateSetPreviews, PARTY_MERGE_RESOURCES } from "./documents";
 import { enPartiesMessages } from "./i18n";
 import parties from "./index";
 
@@ -46,6 +54,9 @@ beforeEach(() => {
   mocks.previews = PREVIEWS;
   mocks.variables = [];
   mocks.selection = undefined;
+  mocks.documents = { certain: CertainSameAsPairs, previews: DuplicateSetPreviews };
+  mocks.certainRead = undefined;
+  mocks.previewRead = undefined;
 });
 afterEach(() => {
   cleanup();
@@ -117,13 +128,15 @@ const merged = (id: string, name: string) => ({
 });
 
 /** The dialog over the review queue of the app opened with `?app=console`, links routed as the host routes them. */
-function renderDialog(onClose = vi.fn(), sets = SETS, certain = false, selection?: readonly string[]) {
+function renderDialog(
+  onClose = vi.fn(), sets = SETS, certain = false, selection?: readonly string[], allCertain?: { total: string },
+) {
   function Host(): React.ReactElement {
     const router = useRouter();
     const navigate = React.useMemo(() => routerNavigator(router), [router]);
     return (
       <InAppLinkProvider navigate={navigate}>
-        <DuplicatesDialog sets={sets} selection={selection} certain={certain} onClose={onClose} />
+        <DuplicatesDialog sets={sets} selection={selection} allCertain={allCertain} certain={certain} onClose={onClose} />
         <Outlet />
       </InAppLinkProvider>
     );
@@ -470,6 +483,128 @@ describe("the batch merge dialog", () => {
 
       expect(await screen.findByText(message("duplicates.noneFound", { count: "11" }))).toBeTruthy();
       expect(screen.getByRole("button", { name: message("duplicates.confirm", { count: "0" }) })).toBeTruthy();
+    });
+  });
+
+  describe("every certain pair from Review", () => {
+    // Certain pair n is p<n> and q<n>, one address; every tenth one's records disagree on a name, so it is warned.
+    const pair = (number: number) => ({
+      id: `pair-${number}`, normalized_value: `p${number}@example.test`,
+      left: { id: `p${number}`, display_name: `Person ${number}` },
+      right: { id: `q${number}`, display_name: `Person ${number}` },
+      survivor: { id: `p${number}` },
+    });
+    const preview = (number: number) => ({
+      outcome: null, reason: "", digest: `digest-${number}`, survivor: { id: `p${number}` },
+      members: [
+        member(`p${number}`, `Person ${number}`, `p${number}@example.test`, "2020-01-01T00:00:00Z"),
+        member(`q${number}`, `Person ${number}`, `p${number}@example.test`, "2021-01-01T00:00:00Z"),
+      ],
+      disagreements: number % 10 === 0 ? [{ field: "given_name", values: ["P", "Q"], shown: "P" }] : [],
+      fills: [], grouping: [],
+    });
+    /** ``total`` certain pairs, fifty a page after the cursor (``Infinity`` never ends), one stable result a page. */
+    const pages = (total: number) => {
+      const cache = new Map<string | null, Read>();
+      return (variables: { after: string | null }): Read => {
+        if (!cache.has(variables.after)) {
+          const from = variables.after === null ? 1 : Number(variables.after.slice("pair-".length)) + 1;
+          const count = Math.max(0, Math.min(50, total - from + 1));
+          cache.set(variables.after, {
+            data: { certain_same_as_pairs: Array.from({ length: count }, (_value, index) => pair(from + index)) },
+            isFetching: false, error: null,
+          });
+        }
+        return cache.get(variables.after)!;
+      };
+    };
+    const previewsOf = (variables: { sets: string[][] }) => variables.sets.map(([left]) => preview(Number(left!.slice(1))));
+    /** Each page's previews, one stable result per page as the query cache keeps it. */
+    const answering = () => {
+      const cache = new Map<string, Read>();
+      return (variables: { sets: string[][] }): Read => {
+        const key = JSON.stringify(variables.sets);
+        if (!cache.has(key)) {
+          cache.set(key, { data: { duplicate_set_previews: previewsOf(variables) }, isFetching: false, error: null });
+        }
+        return cache.get(key)!;
+      };
+    };
+    const pairReads = () => mocks.variables.filter((variables) => (variables as { limit?: number }).limit === 50);
+    const confirmButton = () => screen.getByRole("button", { name: /^Merge \(/ });
+
+    test("lists every pair page after page, then says the totals; one confirm runs every ticked set", async () => {
+      mocks.certainRead = pages(120);
+      mocks.previewRead = answering();
+      mocks.merge.mockImplementation(async (variables: { sets: string[][] }) => ({
+        merge_duplicates: variables.sets.map((ids) => merged(ids[0]!, `Person ${ids[0]!.slice(1)}`)),
+      }));
+      renderDialog(vi.fn(), [], false, undefined, { total: "120" });
+
+      expect(await screen.findByText(message("duplicates.totals", { count: "120", merge: "108", look: "12" }))).toBeTruthy();
+      expect(pairReads()).toEqual(expect.arrayContaining([
+        { limit: 50, after: null }, { limit: 50, after: "pair-50" }, { limit: 50, after: "pair-100" },
+      ]));
+      expect(pairReads()).not.toContainEqual({ limit: 50, after: "pair-120" });
+      // The shared pager shows fifty sets at a time.
+      expect(screen.getAllByRole("checkbox")).toHaveLength(50);
+      fireEvent.click(screen.getAllByRole("button", { name: "Next page" }).at(-1)!);
+      expect(await screen.findByText(message("review.sameAs.certainHeading", {
+        left: "Person 51", right: "Person 51", address: "p51@example.test",
+      }))).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: message("duplicates.confirm", { count: "108" }) }));
+
+      expect(await screen.findByText(message("duplicates.progress", { done: "108", total: "108" }))).toBeTruthy();
+      expect(mocks.merge).toHaveBeenCalledTimes(22);
+      expect(mocks.merge.mock.calls.every(([variables]) => (variables as { certain: boolean }).certain)).toBe(true);
+    });
+
+    test("Confirm stays disabled while a page of previews is still loading", async () => {
+      const answered = answering();
+      mocks.certainRead = pages(120);
+      mocks.previewRead = (variables) => (variables.sets[0]?.[0] === "p51"
+        ? { data: undefined, isFetching: true, error: null }
+        : answered(variables));
+      renderDialog(vi.fn(), [], false, undefined, { total: "120" });
+
+      expect(await screen.findByText(message("duplicates.loadedOf", { loaded: "50", total: "120" }))).toBeTruthy();
+      expect(confirmButton().hasAttribute("disabled")).toBe(true);
+    });
+
+    test("a page that fails to load leaves Confirm disabled and offers a retry", async () => {
+      const refetch = vi.fn();
+      const answered = answering();
+      mocks.certainRead = pages(120);
+      mocks.previewRead = (variables) => (variables.sets[0]?.[0] === "p51"
+        ? { data: undefined, isFetching: false, error: new Error("timeout"), refetch }
+        : answered(variables));
+      renderDialog(vi.fn(), [], false, undefined, { total: "120" });
+
+      expect(await screen.findByText(message("duplicates.pageError"))).toBeTruthy();
+      expect(confirmButton().hasAttribute("disabled")).toBe(true);
+      fireEvent.click(screen.getByRole("button", { name: message("duplicates.retry") }));
+      expect(refetch).toHaveBeenCalledTimes(1);
+    });
+
+    test("lists at most a thousand and says how to reach the rest", async () => {
+      mocks.certainRead = pages(Infinity);
+      mocks.previewRead = answering();
+      renderDialog(vi.fn(), [], false, undefined, { total: "1,000+" });
+
+      // One wait per read: twenty pages of pairs, then twenty of previews, outlast one shared wait under load.
+      for (let page = 0; page < 20; page += 1) {
+        await waitFor(() => expect(pairReads()).toContainEqual({ limit: 50, after: page === 0 ? null : `pair-${page * 50}` }));
+      }
+      for (let page = 0; page < 20; page += 1) {
+        await waitFor(() => expect(mocks.variables.some((variables) =>
+          (variables as { sets?: string[][] }).sets?.[0]?.[0] === `p${page * 50 + 1}`)).toBe(true));
+      }
+      expect(await screen.findByText(message("duplicates.firstOfAll", { count: "1,000", total: "1,000+" }))).toBeTruthy();
+      expect(await screen.findByText(message("duplicates.totals", { count: "1,000", merge: "900", look: "100" })))
+        .toBeTruthy();
+      expect(pairReads()).toContainEqual({ limit: 50, after: "pair-950" });
+      expect(pairReads()).not.toContainEqual({ limit: 50, after: "pair-1000" });
     });
   });
 });
