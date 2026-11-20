@@ -17,9 +17,7 @@ from tests.composed_host import run_composed_tests
             "tests.native_intake_capture.NeedResetAccessTests",
             "tests.native_intake_capture.DecisionRecordTests",
             "tests.native_intake_campaign.IntakeCampaign",
-            "tests.native_intake_campaign.CaptureCampaign",
             "tests.native_intake_review.RequesterReplyTests",
-            "tests.native_intake_review.RequesterDomainTests",
             "tests.native_intake_review.ClarifyTests",
             "tests.native_intake_review.RequestPositionTests",
             "tests.native_projects_surface.ProjectSurfaceCampaign",
@@ -32,6 +30,15 @@ from tests.composed_host import run_composed_tests
             "tests.native_intake_capture.NeedResetAccessTests",
         ),
     }, id="intake"),
+    # A form's responses reach intake as messages on a webform channel: web forms, the bridge and intake together.
+    pytest.param({
+        "app": ("angee.intake", "angee.webforms_messaging"),
+        "sqlite": (
+            "tests.native_intake_capture.FormCaptureTests",
+            "tests.native_intake_campaign.CaptureCampaign",
+            "tests.native_intake_review.RequesterDomainTests",
+        ),
+    }, id="intake-forms"),
     # Every addon's Hasura filter declarations build together once workflows joins intake.
     pytest.param({
         "app": ("angee.intake", "angee.workflows"),

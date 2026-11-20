@@ -13,6 +13,7 @@ the contract tests pin whatever the templates compute, never a value re-derived 
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import json
 import os
 import re
@@ -965,6 +966,53 @@ def test_local_stack_renders_single_caddy_frontend_ingress() -> None:
     assert "runtime/schemas" not in frontend_command
 
 
+def test_static_ingress_imports_the_composed_standalone_pages_ahead_of_django() -> None:
+    """Every static ingress answers the composer's page routes first, from the one site root the app shares."""
+
+    from angee.web.build import WebRuntime
+
+    # The file the composer publishes, under the project's composed output in the ingress mount.
+    snippet = next(path for path in WebRuntime((), dependencies={}).render_sources() if path.suffix == ".caddy")
+    runtime = _render_project_settings()["COMPOSE_OUTPUT_DIR"].replace("{BASE_DIR}", "/srv/project")
+    # A glob import only warns when nothing matches, so an ingress ahead of its composer still starts.
+    imported = "/srv/project/runtime/web/pages.cadd?"
+    assert fnmatch.fnmatchcase(f"{runtime}/{snippet.as_posix()}", imported)
+    for stack in (
+        _render_local_stack(),
+        _render_staging_stack(),
+        _render_dev_stack(_runtime_mode="docker", serve_mode="production"),
+    ):
+        frontend = stack["services"]["frontend" if "frontend" in stack["services"] else "caddy"]
+        assert frontend["mounts"] == ["source://app:/srv/project"]
+        site = _rendered_caddyfile(frontend).partition(":80 {")[2]
+        root, pages, django, app = (
+            site.index(directive)
+            for directive in (
+                "root * /srv/project/web/dist", f"import {imported}\n", "handle @django", "handle {",
+            )
+        )
+        # The imported routes carry no root of their own: the site declares it once, ahead of every handler.
+        assert root < pages < django < app
+        assert site.count("root *") == 1
+
+
+def test_static_ingress_sends_django_exactly_the_declared_paths() -> None:
+    """The template cannot read Python, so its ``@django`` matcher is pinned to the list the page rule reads."""
+
+    from angee.web.build import INGRESS_DJANGO_PATHS
+
+    for stack in (
+        _render_local_stack(),
+        _render_staging_stack(),
+        _render_dev_stack(_runtime_mode="docker", serve_mode="production"),
+    ):
+        frontend = stack["services"]["frontend" if "frontend" in stack["services"] else "caddy"]
+        matchers = [
+            line.strip() for line in _rendered_caddyfile(frontend).splitlines() if line.strip().startswith("@django ")
+        ]
+        assert matchers == [f"@django path {' '.join(INGRESS_DJANGO_PATHS)}"]
+
+
 def test_local_stack_uses_operator_backed_addon_installer() -> None:
     """Containerized local stacks edit project files through the host operator."""
 
@@ -1097,6 +1145,8 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
     assert "angee.knowledge_integrate_notion" not in base["INSTALLED_APPS"]
     assert "angee.proposals_work" not in base["INSTALLED_APPS"]
     assert "angee.workflows_messaging" not in base["INSTALLED_APPS"]
+    assert "angee.webforms" not in base["INSTALLED_APPS"]
+    assert "angee.webforms_messaging" not in base["INSTALLED_APPS"]
     assert "ANGEE_ADDON_DIRS" not in base
     assert base["ANGEE_DATA_DIR"] == "{BASE_DIR}/data"
 
@@ -1113,6 +1163,8 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
         "angee.workflows_messaging",
         "angee.work",
         "angee.intake",
+        "angee.webforms",
+        "angee.webforms_messaging",
         "angee.money",
         "angee.proposals",
         "angee.proposals_work",

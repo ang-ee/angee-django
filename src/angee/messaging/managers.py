@@ -252,11 +252,6 @@ class ChannelQuerySet[ChannelT: Channel](IntegrationQuerySet[ChannelT]):
 
         return self.filter(backend_class=backend_class)
 
-    def published_webforms(self, slug: str) -> Self:
-        """Published webform channels at ``slug``, the anonymous description and submission scope."""
-
-        return self.for_backend("webform").filter(slug=slug, is_published=True)
-
     def outbound_email(self, *, backend_class: str | None = None) -> Self:
         """Connected channels whose declared backend currently offers configured outbound email.
 

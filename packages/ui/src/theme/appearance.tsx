@@ -145,10 +145,10 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST, themeLocked:
   const system = useSystemColorScheme();
   const hostThemeId = host.themeId ?? null;
   const hostTheme = hostThemeId ? catalogue.get(hostThemeId) ?? null : null;
-  const savedAppearance = resolveAppearance(preferences, saved.notice, catalogue, host, system, lockRequested);
+  const savedAppearance = resolvePreferredAppearance(preferences, saved.notice, catalogue, host, system, lockRequested);
   const { themeLocked } = savedAppearance;
   const { effectiveThemeId, effectiveTheme, colorSchemePreference, colorScheme, effectiveTokens, effectiveOptions, notice } =
-    draft ? resolveAppearance(draft, null, catalogue, host, system, lockRequested) : savedAppearance;
+    draft ? resolvePreferredAppearance(draft, null, catalogue, host, system, lockRequested) : savedAppearance;
   let hostOptions: ThemeOptionsEnvelope | undefined;
   if (hostTheme?.definition.options) {
     try {
@@ -313,7 +313,7 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST, themeLocked:
 }
 
 /** Resolve both live appearance and the saved-only boot cache through one path. */
-function resolveAppearance(preferences: AppearancePreferences, notice: AppearanceState["notice"], catalogue: ReadonlyMap<string, ThemeContribution>, host: HostAppearanceDefaults, system: ColorScheme, lockRequested: boolean) {
+function resolvePreferredAppearance(preferences: AppearancePreferences, notice: AppearanceState["notice"], catalogue: ReadonlyMap<string, ThemeContribution>, host: HostAppearanceDefaults, system: ColorScheme, lockRequested: boolean) {
   const hostTheme = host.themeId ? catalogue.get(host.themeId) : undefined;
   // A locked app theme replaces the person's theme and its options, never their scheme;
   // the person's options are not in play, so their invalidity is no notice here.

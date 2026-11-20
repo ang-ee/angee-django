@@ -1192,7 +1192,7 @@ def test_a_party_merge_moves_what_points_at_the_merged_party_and_revert_restores
 
 
 def _party_references(merged: Any, actor: Any) -> list[tuple[Any, str]]:
-    """One row of each further kind a party merge moves that kept no history before ``angee.E051``."""
+    """One row of each further kind a party merge moves that kept no history before ``angee.E053``."""
 
     model = apps.get_model
     now = timezone.now()
@@ -1238,7 +1238,7 @@ def _handle_references(merged: Any, actor: Any) -> list[tuple[Any, str]]:
 def test_a_merge_revert_restores_every_moved_kind(
     db: None, django_capture_on_commit_callbacks: Any, model: Any, values: Any, references: Any,
 ) -> None:
-    """Every row a merge moves keeps history, so reverting the merge puts it back (``angee.E051``).
+    """Every row a merge moves keeps history, so reverting the merge puts it back (``angee.E053``).
 
     The rows' history is wiped first, as for rows written before their model kept
     history: the merge records each one's baseline in a changeset of its own.

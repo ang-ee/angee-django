@@ -337,7 +337,7 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
                     if need.party_id is None and need.claimed_email and channel.intake_requester_domains:
                         need._link_requester(
                             allow_create=channel.creates_requester_account(need.claimed_email.rsplit("@", 1)[-1]),
-                            system_reason=f"intake.requester_domain:{channel.slug}",
+                            system_reason=f"intake.requester_domain:{channel.sqid}",
                         )
                     if need.party_id is not None:
                         need.save(_access_decision=True, update_fields=("party",))
@@ -1281,28 +1281,28 @@ class ChannelIntake(Composable, extends="messaging.Channel"):
         abstract = True
 
     def clean(self) -> None:
-        """Validate mappings through messaging's form spec and authorize domains."""
+        """Hold the field map to its shape and intake's own targets, and authorize domains.
+
+        The map names the answers of a form submission by question name. Which
+        questions a form asks is not intake's to know, so a name a submission
+        does not carry maps nothing (:meth:`mapped_task_values`).
+        """
 
         super().clean()
         mapping = self.intake_field_map
         if not isinstance(mapping, dict):
-            raise ValidationError({"intake_field_map": "Use an object mapping target fields to form properties."})
+            raise ValidationError({"intake_field_map": "Use an object mapping target fields to form answers."})
         if mapping:
             if str(self.backend_class) != "webform":
                 raise ValidationError({"intake_field_map": "Field mapping requires the webform backend."})
-            properties = {field.name: field for field in self.webform_spec().fields}
             used: set[str] = set()
             for target, name in mapping.items():
-                field = properties.get(name) if isinstance(name, str) else None
-                kinds = {"number", "integer"} if target == "estimate" else {"string"}
                 if target not in self.intake_map_targets:
                     raise ValidationError({"intake_field_map": f"Unsupported target field: {target}."})
-                if field is None or field.read_only or field.email:
-                    raise ValidationError({"intake_field_map": f"{target} requires a writable, non-email property."})
-                if field.schema["type"] not in kinds:
-                    raise ValidationError({"intake_field_map": f"The form property has the wrong kind for {target}."})
+                if not isinstance(name, str) or not name:
+                    raise ValidationError({"intake_field_map": f"{target} requires the name of a form answer."})
                 if name in used:
-                    raise ValidationError({"intake_field_map": "Map each form property only once."})
+                    raise ValidationError({"intake_field_map": "Map each form answer only once."})
                 used.add(name)
         self._validate_requester_domains()
 
@@ -1359,7 +1359,7 @@ class ChannelIntake(Composable, extends="messaging.Channel"):
         return self.ANY_REQUESTER_DOMAIN in domains or domain.lower() in domains
 
     def mapped_task_values(self, message: Message) -> dict[str, Any]:
-        """Clean each mapped answer through its field; malformed answers fall back."""
+        """Clean each mapped answer through its field; an absent or malformed answer maps nothing."""
 
         submission = message.webform_submission()
         if submission is None or not isinstance(self.intake_field_map, dict):
