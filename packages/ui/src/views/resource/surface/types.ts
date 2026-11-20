@@ -10,7 +10,8 @@ import { type ResourceListOrder, type ResourceViewFilter, type ResourceViewGroup
 import { type GroupedListItem, type GroupMeasure, type RowGroup, type VisibleFieldOption } from "../resource-view-list-body";
 import type { ColumnDescriptor } from "../../page";
 import { type ResolvedBoardLaneSource } from "../resource-view-board-lanes";
-import type { AllMatching, BoardCardPlacement, BoardOrder } from "../resource-view-types";
+import type { BoardCardPlacement, BoardOrder } from "../resource-view-types";
+import type { AllMatchingRead } from "../bulk-action";
 import type { CollectionSource } from "../collection-source";
 import type { GroupedRenderShown } from "../resource-view-grouped-model";
 export type RowRecord = BaseRecord & Row;
@@ -64,6 +65,8 @@ export interface UseResourceViewSurfaceProps<TRow extends Row = Row> {
   laneSource?: ResolvedBoardLaneSource | null;
   enabled?: boolean;
   onListStateChange?: (state: ResourceListSnapshot<TRow>) => void;
+  /** The list offers "Select all N" (`ListViewProps.selectAllMatching`): the surface states its `matching`. */
+  selectAllMatching?: boolean;
 }
 
 export interface UseRowsResourceViewSurfaceProps<
@@ -146,17 +149,21 @@ interface ResourceViewSurfaceBase<TRow extends Row = Row> {
   mergedFilter: QueryFilter;
   sortOrder: ResourceListOrder | undefined;
   /**
-   * What `list.total` counts, for "Select all N": the read as this surface's own
-   * request sent it (`bulkActions` → `all.read`), the ids of the loaded records, and
-   * whether the read matches records beyond them. Present once that total has
-   * settled, on a surface that pages its native server read (not a `source`).
+   * What "Select all N" would select (`bulkActions` → `allMatching`), on a list that
+   * offers it where the pager counts what a verb acts on: a flat native read, or a
+   * native read grouped by one level. Present whether or not the read has settled.
    */
   matching?: SurfaceMatching;
 }
 
 export interface SurfaceMatching {
-  read: AllMatching["read"];
+  /** The pager's unit and the read whose matches it counts, as this surface's own request holds it. */
+  selects: AllMatchingRead;
+  /** The read's settled total (`list.total`); undefined while its page loads or after it failed. */
+  total: number | undefined;
+  /** The loaded records' ids. */
   loaded: readonly string[];
+  /** The read matches records beyond the loaded ones; false until its total has settled. */
   more: boolean;
 }
 

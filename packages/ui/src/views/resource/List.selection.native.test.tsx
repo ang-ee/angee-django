@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvider } from "@tanstack/react-router";
 import { Filter, ResourceQuery } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, expect, expectTypeOf, test, vi } from "vitest";
 
 import { baseIcons } from "../../chrome/icon-registry";
 import { ModalsHost, ToastProvider } from "../../feedback";
@@ -17,6 +17,7 @@ import { RowsListView } from "./RowsListView";
 import { ganttResources, ganttLane, ganttLanes, ganttRecord, scheduledRecord } from "../../../tests/gantt-fixtures";
 import type { GanttViewProps } from "../gantt/GanttView";
 import type { ListViewProps } from "./resource-view-types";
+import type { PlacedBulkActions, PlacedBulkCollection } from "./bulk-action";
 
 const drawing = vi.hoisted(() => ({ props: null as GanttViewProps | null }));
 vi.mock("../gantt/GanttView", () => ({ GanttView: (props: GanttViewProps) => {
@@ -46,17 +47,15 @@ function SelectionControls() {
   </>;
 }
 
-test("a bulk-action collection built by hand may leave the split, all and the grouping out, and reads as ticked ungrouped rows", () => {
+test("a page's bulkActions takes a collection built by hand without the split or allMatching; a list surface states the split", () => {
+  type Collection = Parameters<NonNullable<ListViewProps<{ id: string }>["bulkActions"]>>[2];
+  type HandBuilt = { filter: Record<string, never>; selectedRows: { id: string }[] };
   // What a consumer's test does: call a page's bulkActions with its own collection.
-  const bulkActions: NonNullable<ListViewProps<{ id: string }>["bulkActions"]> = (_ids, _clear, collection) =>
-    [collection.selectedGroups === undefined ? "not grouped" : "grouped", collection.all ? `all ${collection.all.total}` : "ticked",
-      collection.grouping?.length ? "grouping" : "flat"].join(", ");
-  expect(bulkActions(new Set(["one"]), () => {}, { filter: {}, selectedRows: [{ id: "one" }] })).toBe("not grouped, ticked, flat");
-  expect(bulkActions(new Set(["one"]), () => {}, { filter: {}, selectedRows: [{ id: "one" }], selectedGroups: null })).toBe("grouped, ticked, flat");
-  expect(bulkActions(new Set(["one"]), () => {}, {
-    filter: {}, selectedRows: [{ id: "one" }], selectedGroups: null, grouping: [{ field: "title", repeated: true }],
-    all: { total: 3, unit: "groups", read: { where: {}, groupBy: [{ field: "title" }], having: { count_gt: 1 } } },
-  })).toBe("grouped, all 3, grouping");
+  expectTypeOf<HandBuilt>().toExtend<Collection>();
+  // A list surface holds a page's callback, and its call cannot leave the split out.
+  expectTypeOf<NonNullable<ListViewProps<{ id: string }>["bulkActions"]>>().toExtend<PlacedBulkActions<{ id: string }>>();
+  expectTypeOf<HandBuilt>().not.toExtend<PlacedBulkCollection<{ id: string }>>();
+  expectTypeOf<HandBuilt & { selectedGroups: null }>().toExtend<PlacedBulkCollection<{ id: string }>>();
 });
 
 test("List resolves selection and bulk actions against the current view", async () => {

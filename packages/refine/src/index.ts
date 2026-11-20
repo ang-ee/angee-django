@@ -153,7 +153,6 @@ export {
   type DeletePreviewVariables,
   type FacetRequestSpec,
   type GroupByRequestOptions,
-  type GroupBySpecVariable,
   type GroupRowsRequest,
   type GroupByResult,
   type GroupDimension,

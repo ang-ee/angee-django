@@ -431,6 +431,7 @@ function ListViewBody<TRow extends Row = Row>({
   // aggregate it would query does not exist).
   const clientRowModel = isClientRowModel(modelMetadata?.resource);
   const serverGroupedMode = serverGroups && effectiveGroupStack.length > 0;
+  const surfaceSelectable = renderPaneRow ? false : selectable;
   const surfaceProps: UseResourceViewSurfaceProps<TRow> = {
     resource,
     relatedModels,
@@ -446,6 +447,8 @@ function ListViewBody<TRow extends Row = Row>({
     laneSource: resolvedLaneSource,
     enabled: !serverGroupedMode,
     onListStateChange,
+    // The selection bar offers it over page verbs; lanes place no rows the pager counts.
+    selectAllMatching: selectAllMatching && surfaceSelectable && Boolean(bulkActions) && !boardGroupingPinned,
   };
   const content = (
     surface: ResourceViewSurface<TRow> | GroupedResourceViewSurface<TRow>,
@@ -459,8 +462,7 @@ function ListViewBody<TRow extends Row = Row>({
       toolbarWrap={toolbarWrap}
       tableLayout={tableLayout}
       headerVisibility={headerVisibility}
-      selectable={renderPaneRow ? false : selectable}
-      selectAllMatching={selectAllMatching}
+      selectable={surfaceSelectable}
       renderGroupLabel={renderGroupLabel}
       renderPaneRow={renderPaneRow}
       pane={pane}

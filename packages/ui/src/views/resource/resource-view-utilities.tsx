@@ -16,6 +16,13 @@ export interface ResourceViewUtilityContext {
   selectedIds?: ReadonlySet<string>;
   /** Whether this collection exposes selection to contributed utilities. */
   selectable: boolean;
+  /**
+   * Why a utility acting on `selectedIds` must not run: the selection is every
+   * record the list matches ("Select all N"), not those ids. A utility passes it as
+   * its control's `disabledReason`. Null on a list that offers the mode but is not in
+   * it; absent on one that never offers it.
+   */
+  disabledReason?: string | null;
   /** Saved record enclosing this collection, for actions that explicitly target the parent. */
   record?: RecordChromeContext | null;
 }
@@ -57,12 +64,12 @@ export function ResourceViewUtilities({
   /** False for a list over its own `source`, which names no schema model. */
   modelBacked?: boolean;
 }): React.ReactElement | null {
-  const { resource, filter, fields, refresh, selectedIds, selectable } = value;
+  const { resource, filter, fields, refresh, selectedIds, selectable, disabledReason } = value;
   const entries = useResourceViewUtilities(resource, { modelBacked });
   const record = useRecordChromeContextMaybe();
   const context = React.useMemo(
-    () => ({ resource, filter, fields, refresh, selectedIds, selectable, record }),
-    [resource, filter, fields, refresh, selectedIds, selectable, record],
+    () => ({ resource, filter, fields, refresh, selectedIds, selectable, disabledReason, record }),
+    [resource, filter, fields, refresh, selectedIds, selectable, disabledReason, record],
   );
   if (entries.length === 0) return null;
   return (

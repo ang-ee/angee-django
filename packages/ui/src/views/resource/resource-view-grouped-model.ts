@@ -35,6 +35,13 @@ const EMPTY_ARRAY = [] as const;
 
 export interface GroupedRenderParams {
   query?: ResourceQuery;
+  /**
+   * The request each groups result answers, by scope key. A level's results are
+   * keyed without its page, so after a page change they answer the previous page
+   * until the batch catches up: a level lists its groups only from the answer to its
+   * own request. Absent: every result answers its level's request.
+   */
+  requested?: ReadonlyMap<string, GroupByRequestOptions>;
   leafPageSize?: number;
   groupStack: readonly ResourceViewGroup[];
   baseFilter: ResourceViewFilter | undefined;
@@ -71,7 +78,7 @@ export interface GroupedRenderModel<TRow extends Row> {
   carriedLeaves: ReadonlyMap<string, AngeeListBatchEntry>;
   items: GroupedListItem<TRow>[];
   rootResult: GroupedQueryResult | undefined;
-  /** The outermost level's groups read, as `groupScopes` requests it: the groups the pager counts. */
+  /** The root level's groups read, as `groupScopes` requests it: the groups the pager counts. */
   rootQuery: GroupByRequestOptions | undefined;
   shown: GroupedRenderShown;
 }
@@ -183,7 +190,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
     const rows = rowModelsByScopeKey.get(bucketKey) ?? EMPTY_ARRAY;
     const place: SelectionPlace = { path: groupPath, page: stableSerialize([bucketKey, currentPage, leafPageSize]) };
     // A record page lists its rows once its own read has settled; a carried page settles with its groups.
-    pages.set(place.page, leaf && !leaf.error && (leaf.updatedAt ?? null) !== null ? new Set(rows.map((row) => row.id)) : null);
+    pages.set(place.page, leaf && !leaf.error && leaf.updatedAt !== null ? new Set(rows.map((row) => row.id)) : null);
     const nav: GroupedRecordNav = {
       filter: cumulativeFilter,
       order: leafOrder,
@@ -282,7 +289,9 @@ export function buildGroupedRenderModel<TRow extends Row>(
       rootQuery = query;
     }
     const levelPage = stableSerialize([levelScopeKey, storedPage, levelPageSize]);
-    const listed = result && !result.error && result.updatedAt !== null ? new Set<string>() : null;
+    const answered = params.requested?.get(levelScopeKey);
+    const answers = !params.requested || (answered !== undefined && stableSerialize(answered) === stableSerialize(query));
+    const listed = answers && result && !result.error && result.updatedAt !== null ? new Set<string>() : null;
     pages.set(levelPage, listed);
     const pager: GroupedListPager = {
       pageKey: levelScopeKey,

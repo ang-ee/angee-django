@@ -23,6 +23,7 @@ export function useResourceViewSurface<TRow extends Row = Row>({
   laneSource,
   enabled = true,
   onListStateChange,
+  selectAllMatching = false,
 }: UseResourceViewSurfaceProps<TRow>): ResourceViewSurface<TRow> {
   const { requestedFields, mergedFilter, sortOrder } =
     useResourceViewQueryFacts({
@@ -188,11 +189,12 @@ export function useResourceViewSurface<TRow extends Row = Row>({
     groupStack,
     boardLaneState,
   });
-  // The rows read counts its records; its `where` is what `all.read` hands on.
-  const where = source ? undefined : listQuery.where;
-  const matching = React.useMemo<SurfaceMatching | undefined>(() => where && total !== undefined
-    ? { read: { where }, loaded: presentation.pageIds, more: total > presentation.pageIds.length }
-    : undefined, [where, total, presentation.pageIds]);
+  // The rows read counts its records; its `where` is what "Select all N" selects.
+  const where = selectAllMatching && !source ? listQuery.where : undefined;
+  const matching = React.useMemo<SurfaceMatching | undefined>(() => where ? {
+    selects: { unit: "records", read: { where } }, total, loaded: presentation.pageIds,
+    more: total !== undefined && total > presentation.pageIds.length,
+  } : undefined, [where, total, presentation.pageIds]);
 
   return {
     kind: "flat",

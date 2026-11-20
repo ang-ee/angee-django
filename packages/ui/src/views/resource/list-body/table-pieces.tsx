@@ -22,12 +22,13 @@ import { LeadingSelectionCell, renderListRow } from "./rows";
 import { ALIGN_CLASS, GROUP_ROW_HEIGHT, RECORD_ROW_HEIGHT } from "./types";
 import type { GroupMeasure, VisibleFieldOption } from "./types";
 import { useVirtualWindow, VirtualPaddingRow } from "./virtualization";
-import { useRuntimeViewAs } from "../../../runtime";
+import type { BulkActionRunner } from "../bulk-action";
+import type { ResourceListResult } from "../surface/types";
 /** "Select all N" in the list's bar (`ListViewProps.selectAllMatching`). */
 export interface ListSelectionMatching {
   /** The records or groups the list's read matches, as its pager counts them. */
-  count: number;
-  unit: "records" | "groups";
+  total: number;
+  unit: ResourceListResult["pageUnit"];
   /** The selection is all of them: the bar reads "All N selected". */
   selected: boolean;
   /** Offers "Select all N"; absent when it is not offered. */
@@ -42,8 +43,7 @@ export function ListSelectionBar({
   onClear,
   onDelete,
   deletePending = false,
-  deleteDisabledReason,
-  pending = false,
+  bulk,
   actions: extraActions,
   matching,
 }: {
@@ -51,22 +51,23 @@ export function ListSelectionBar({
   onClear: () => void;
   onDelete?: () => void;
   deletePending?: boolean;
-  /** Why Delete cannot run for this selection (`Button` `disabledReason`). */
-  deleteDisabledReason?: React.ReactNode;
-  pending?: boolean;
+  /** The list's bulk runner: the bar waits for its run, and Delete for its preview and its reason. */
+  bulk?: BulkActionRunner;
   /** Caller-supplied bulk actions rendered before the built-in Delete/Clear. */
   actions?: React.ReactNode;
   matching?: ListSelectionMatching;
 }): React.ReactElement {
   const t = useUiT();
-  const preview = useRuntimeViewAs();
-  const previewBlocked = Boolean(preview.viewAs || preview.pending);
+  const pending = bulk?.pending ?? false;
   const groups = matching?.unit === "groups";
+  // Choosing "Select all N" unmounts it: focus stays in the bar, on Clear.
+  const clear = React.useRef<HTMLElement>(null);
   const actions = (
     <>
       {matching?.onSelectAll ? (
-        <SelectionBarPrimitive.Action surface="brand" disabled={pending} onClick={matching.onSelectAll}>
-          {t(groups ? "list.selectAllMatchingGroups" : "list.selectAllMatchingRecords", { count: matching.count })}
+        <SelectionBarPrimitive.Action surface="brand" disabled={pending}
+          onClick={() => { matching.onSelectAll?.(); clear.current?.focus(); }}>
+          {t(groups ? "list.selectAllMatchingGroups" : "list.selectAllMatchingRecords", { count: matching.total })}
         </SelectionBarPrimitive.Action>
       ) : null}
       {extraActions}
@@ -75,15 +76,15 @@ export function ListSelectionBar({
           surface="brand"
           tone="danger"
           pending={deletePending}
-          disabled={previewBlocked || pending}
-          disabledReason={deleteDisabledReason}
-          onClick={() => { if (!previewBlocked) onDelete(); }}
+          disabled={bulk?.blocked || pending}
+          {...bulk?.reason}
+          onClick={onDelete}
         >
           <Glyph name="trash" />
           {t("selection.delete")}
         </SelectionBarPrimitive.Action>
       ) : null}
-      <SelectionBarPrimitive.Action surface="brand" disabled={pending} onClick={onClear}>
+      <SelectionBarPrimitive.Action ref={clear} surface="brand" disabled={pending} onClick={onClear}>
         {t("selection.clear")}
       </SelectionBarPrimitive.Action>
     </>
@@ -93,7 +94,7 @@ export function ListSelectionBar({
       className="min-h-11 w-full rounded-none border-b border-border-subtle shadow-none"
       count={count}
       countLabel={matching?.selected
-        ? t(groups ? "list.allMatchingGroupsSelected" : "list.allMatchingRecordsSelected", { count: matching.count })
+        ? t(groups ? "list.allMatchingGroupsSelected" : "list.allMatchingRecordsSelected", { count: matching.total })
         : t("selection.countSelected", { count })}
       actions={actions}
     />
@@ -112,6 +113,8 @@ export interface FlatListBodyProps<TRow extends Row> {
   allPageSelected: boolean;
   somePageSelected: boolean;
   onPageSelectionChange: (checked: boolean) => void;
+  /** Every record the list's read matches is selected ("Select all N"): every row and the header show selected. */
+  allMatching?: boolean;
   visibleFields?: readonly VisibleFieldOption[];
   onVisibleFieldToggle?: (id: string, visible: boolean) => void;
   resourceView: ResourceViewContextValue;
@@ -145,6 +148,7 @@ export function FlatListBody<TRow extends Row>({
   allPageSelected,
   somePageSelected,
   onPageSelectionChange,
+  allMatching = false,
   visibleFields = [],
   onVisibleFieldToggle,
   resourceView,
@@ -205,8 +209,8 @@ export function FlatListBody<TRow extends Row>({
                 <LeadingSelectionCell
                   head
                   label={t("list.selectAllOnPage")}
-                  checked={allPageSelected}
-                  indeterminate={!allPageSelected && somePageSelected}
+                  checked={allMatching || allPageSelected}
+                  indeterminate={!allMatching && !allPageSelected && somePageSelected}
                   onCheckedChange={onPageSelectionChange}
                 />
               ) : null}
@@ -258,6 +262,7 @@ export function FlatListBody<TRow extends Row>({
                       groupStack,
                       interactive,
                       selectable,
+                      allMatching,
                       rowHref,
                       onRowClick,
                       activeRowId,

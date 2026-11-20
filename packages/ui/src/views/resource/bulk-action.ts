@@ -8,6 +8,52 @@ import { errorMessage, useToast } from "../../feedback";
 import { useUiT } from "../../i18n";
 import { useLatestRef } from "../../lib/use-latest-ref";
 import { useRuntimeViewAs } from "../../runtime";
+import type { ButtonProps } from "../../ui/button";
+import type { ListViewProps } from "./resource-view-types";
+
+/** The collection a page's `bulkActions` receives, its third argument. */
+type BulkCollection<TRow extends Row> = Parameters<NonNullable<ListViewProps<TRow>["bulkActions"]>>[2];
+
+/** "Select all N" as a page's `bulkActions` receives it (`collection.allMatching`). */
+export type AllMatching = NonNullable<BulkCollection<Row>["allMatching"]>;
+
+/** What "Select all N" selects, its total aside: per unit, the read whose matches the total counts. */
+export type AllMatchingRead = { [Unit in AllMatching["unit"]]: Omit<Extract<AllMatching, { unit: Unit }>, "total"> }[AllMatching["unit"]];
+
+/**
+ * What a list surface hands `bulkActions`: the public collection with the split
+ * stated. The public member stays optional so a caller that builds a collection by
+ * hand (a consumer's test) need not name it.
+ */
+export type PlacedBulkCollection<TRow extends Row> = BulkCollection<TRow>
+  & { selectedGroups: BulkCollection<TRow>["selectedGroups"] };
+
+/**
+ * A page's `bulkActions` as a list surface holds it: a page's callback is assignable,
+ * and any call must state the split.
+ */
+export type PlacedBulkActions<TRow extends Row> = (
+  selectedIds: ReadonlySet<string>,
+  clear: () => void,
+  collection: PlacedBulkCollection<TRow>,
+) => React.ReactNode;
+
+/**
+ * The call of a page's `bulkActions`, made only over a selection: the surface states
+ * the split and the scope's selection supplies its ids' snapshots and clear.
+ */
+export function renderBulkActions<TRow extends Row>(
+  bulkActions: PlacedBulkActions<TRow> | undefined,
+  selectedIds: ReadonlySet<string>,
+  selection: { selectedRows: readonly Row[]; clearSelectedIds: () => void },
+  collection: Omit<PlacedBulkCollection<TRow>, "selectedRows">,
+): React.ReactNode {
+  if (selectedIds.size === 0) return null;
+  // Scope snapshots are shared Rows; narrow to the declared row type (see bulkActions).
+  return bulkActions?.(selectedIds, selection.clearSelectedIds, {
+    ...collection, selectedRows: selection.selectedRows as readonly TRow[],
+  });
+}
 
 /** Maximum rows previewed or written by one client fan-out per click.
  * Kept below the server action_selection_limit (100): each row sends a separate
@@ -24,8 +70,6 @@ export interface BulkSelectionProps {
   /** Selected ids with no observed row cannot be admitted to a flag action. */
   unprocessedCount: number;
   bulk: BulkActionRunner;
-  /** Why the verbs cannot run for this selection (all records the list matches, not its ticked rows). */
-  disabledReason?: string;
 }
 
 export interface BulkActionRefusal {
@@ -68,11 +112,14 @@ interface BulkActionOptions {
  * per-row notifications/invalidation, return server refusals and reject failures.
  * Only successful ids leave selection; caches refresh once and one toast reports
  * successes, refusals (with the first reason), and rows left for another pass.
+ * A `disabledReason` (the selection is every record a list matches, not rows this
+ * fan-out can act on) disables the verbs and makes `run` refuse; null is none yet.
  * @owner ListView
  */
 export function useBulkAction(
   resource: DataResourceMetadata | null | undefined,
   onSucceeded: (ids: readonly string[]) => void,
+  disabledReason?: string | null,
 ) {
   const t = useUiT();
   const toast = useToast();
@@ -81,6 +128,7 @@ export function useBulkAction(
   const queryClient = useQueryClient();
   const preview = useRuntimeViewAs();
   const viewAs = useLatestRef(preview);
+  const refused = useLatestRef(Boolean(disabledReason));
   const running = React.useRef(false);
   const mounted = React.useRef(false);
   React.useEffect(() => {
@@ -90,12 +138,13 @@ export function useBulkAction(
   const [pending, setPending] = React.useState(false);
   const blocked = Boolean(preview.viewAs || preview.pending);
   const run = React.useCallback(async ({ ids, perform, confirm, done, failed, unprocessedCount = 0 }: BulkActionOptions) => {
-    if (!mounted.current || !resource || ids.length === 0 || running.current || viewAs.current.viewAs || viewAs.current.pending) return;
+    if (!mounted.current || !resource || ids.length === 0 || running.current || refused.current
+      || viewAs.current.viewAs || viewAs.current.pending) return;
     running.current = true;
     setPending(true);
     try {
       if (confirm && !await confirm()) return;
-      if (!mounted.current || viewAs.current.viewAs || viewAs.current.pending) return;
+      if (!mounted.current || refused.current || viewAs.current.viewAs || viewAs.current.pending) return;
       const results = await settleBulkRows(ids, async (id) => {
         if (!mounted.current || viewAs.current.viewAs || viewAs.current.pending) throw new Error(t("viewAs.readOnly"));
         return perform(id);
@@ -133,6 +182,9 @@ export function useBulkAction(
       running.current = false;
       if (mounted.current) setPending(false);
     }
-  }, [invalidate, invalidates, onSucceeded, queryClient, resource, t, toast, viewAs]);
-  return { run, pending, blocked };
+  }, [invalidate, invalidates, onSucceeded, queryClient, refused, resource, t, toast, viewAs]);
+  // Given only by a list that can enter the mode, so another list's verbs keep a plain tree.
+  const reason = React.useMemo<Pick<ButtonProps, "disabledReason">>(
+    () => disabledReason === undefined ? {} : { disabledReason }, [disabledReason]);
+  return { run, pending, blocked, reason };
 }

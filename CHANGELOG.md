@@ -80,22 +80,21 @@ live in code docstrings.
   the reason comes and goes; an empty reason is no reason (`PaneRow` too). The
   record action bar's band verbs compose it.
 
-- A list's selection can be everything its view matches. A list that opts in
-  (`ListView`/`List` `selectAllMatching`) with page `bulkActions` over its own
-  server read offers "Select all N" (N records, or N groups when grouped) once
-  every loaded row is ticked and the view holds more; the bar then reads "All N
-  selected" and `bulkActions` receives `collection.all` (the pager's exact total,
-  its unit, and the list's own read as its request sent it: a flat list's `where`,
-  a grouped list's outermost groups read with its `group_by` and `having`) and,
-  whenever the list groups on the server, `collection.grouping`. The ticked ids
-  stay the only ids; the generic Archive, Trash/Restore and Delete are disabled
-  with their reason while the mode is on. A tick, an untick, Clear, or a change of
-  filter, grouping or sort returns to the ticked ids; paging keeps the mode. No
-  list opts in yet: a list does so together with a verb that reads
-  `collection.all`. `groupByVariables` (`@angee/refine`)
-  types its `group_by` (`GroupBySpecVariable`), and a native leaf page
-  (`AngeeListBatchEntry`) states when it last settled (`updatedAt`), which a grouped
-  selection's split reads instead of the page's total.
+- A list's selection can be everything its read matches, opt-in: a list that
+  passes `selectAllMatching` (`ListView`/`List`) offers "Select all N" where its
+  pager counts what a verb acts on (a flat list's records, or the groups of a list
+  grouped by one server level), and once the person chooses it a page's
+  `bulkActions` receives `collection.allMatching`, a readonly copy of the pager's
+  unit and exact total and the list's own read:
+  `{ unit: "records", total, read: { where } }`, or
+  `{ unit: "groups", total, read: { where, dimensions, having } }` (refine's
+  `GroupByRequestOptions`, which a page turns into variables with
+  `groupByVariables`). Opting in asserts that every page verb honours it or
+  refuses it. The selected ids stay the only ids; the generic Archive,
+  Trash/Restore and Delete, and the Share utility, refuse with their reason while
+  it is on. Its entry and exit rules are the `bulkActions` docstring's. A native
+  leaf page (`AngeeListBatchEntry`) states when it last settled (`updatedAt`,
+  required), which a grouped selection's split reads instead of the page's total.
 
 - `angee.parties`: one owner proposes same-person pairs. A pull-only
   directory's contact that may only claim an address another live party is

@@ -34,7 +34,6 @@ import { ResourceListFrame } from "./ResourceListFrame";
 import { columnsWithMetadataDefaults } from "./model-metadata-defaults";
 import {
   listChromeState,
-  renderBulkActions,
   type CardRenderer,
   type ListSearchDeclaration,
   type ListEmptyContent,
@@ -47,6 +46,7 @@ import { useResourceSearch } from "./search/use-resource-search";
 import { useSearchCatalog } from "./search/catalog";
 import type { ResourceToolbarProps } from "../../toolbars";
 import { declaredGroupDefaults, useAppliedRepeated, validateDeclaredGroupDefaults, withoutRepeated } from "./search/group-defaults";
+import { renderBulkActions, type PlacedBulkActions } from "./bulk-action";
 import {
   useRowActionsSurface,
   type RowActionDeclaration,
@@ -203,7 +203,8 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   bulkActions,
   draggableRow,
   resourceView,
-}: RowsListViewProps<TRow> & {
+}: Omit<RowsListViewProps<TRow>, "bulkActions"> & {
+  bulkActions?: PlacedBulkActions<TRow>;
   resourceView: ResourceViewContextValue;
 }): React.ReactElement {
   const t = useUiT();

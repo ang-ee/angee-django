@@ -54,7 +54,7 @@ export function BulkArchiveActions(props: BulkSelectionProps): React.ReactElemen
   return actions.length ? <ArchiveSelectionActions {...props} actions={actions} /> : null;
 }
 
-function ArchiveSelectionActions({ modelMetadata, selectedRows, unprocessedCount, bulk, disabledReason, actions }: BulkSelectionProps & {
+function ArchiveSelectionActions({ modelMetadata, selectedRows, unprocessedCount, bulk, actions }: BulkSelectionProps & {
   actions: readonly ActionDescriptor[];
 }): React.ReactElement {
   const t = useUiT();
@@ -77,8 +77,7 @@ function ArchiveSelectionActions({ modelMetadata, selectedRows, unprocessedCount
       return id && action.visibleWhen?.(row) ? [id] : [];
     });
     if (!ids.length) return null;
-    return <SelectionBar.Action key={action.id} surface="brand" pending={bulk.pending} disabled={bulk.blocked}
-      disabledReason={disabledReason}
+    return <SelectionBar.Action key={action.id} surface="brand" pending={bulk.pending} disabled={bulk.blocked} {...bulk.reason}
       onClick={() => void bulk.run({
         ids, unprocessedCount,
         perform: async (id) => {

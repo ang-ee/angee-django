@@ -383,6 +383,7 @@ export function renderListRow<TRow extends Row>({
   groupStack,
   interactive,
   selectable,
+  allMatching = false,
   rowHref,
   onRowClick,
   activeRowId,
@@ -396,6 +397,8 @@ export function renderListRow<TRow extends Row>({
   groupStack: readonly ResourceViewGroup[];
   interactive: boolean;
   selectable: boolean;
+  /** Every record the list's read matches is selected: the row shows selected. */
+  allMatching?: boolean;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
   activeRowId?: string | null;
@@ -417,7 +420,7 @@ export function renderListRow<TRow extends Row>({
     <RecordRow
       key={row.id}
       row={row}
-      selected={Boolean(resourceView.state.rowSelection[row.id])}
+      selected={allMatching || Boolean(resourceView.state.rowSelection[row.id])}
       onToggleSelected={resourceView.toggleSelectedId}
       interactive={interactive}
       selectable={selectable}

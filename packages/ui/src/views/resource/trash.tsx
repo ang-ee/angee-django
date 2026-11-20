@@ -153,7 +153,7 @@ export function BulkTrashActions(props: BulkSelectionProps): React.ReactElement 
   return targetType && flag ? <TrashSelectionActions {...props} targetType={targetType} flag={flag} /> : null;
 }
 
-function TrashSelectionActions({ modelMetadata, selectedRows, unprocessedCount, bulk, disabledReason, targetType, flag }: BulkSelectionProps & {
+function TrashSelectionActions({ modelMetadata, selectedRows, unprocessedCount, bulk, targetType, flag }: BulkSelectionProps & {
   targetType: string;
   flag: string;
 }): React.ReactElement {
@@ -175,8 +175,7 @@ function TrashSelectionActions({ modelMetadata, selectedRows, unprocessedCount, 
   const [restoreRecord] = useAuthoredResourceMutation(RestoreRecord, options);
   return <>{selections.map(({ restore, ids }) => {
     if (!ids.length) return null;
-    return <SelectionBar.Action key={String(restore)} surface="brand" pending={bulk.pending} disabled={bulk.blocked}
-      disabledReason={disabledReason}
+    return <SelectionBar.Action key={String(restore)} surface="brand" pending={bulk.pending} disabled={bulk.blocked} {...bulk.reason}
       onClick={() => {
         let reason = "";
         void bulk.run({

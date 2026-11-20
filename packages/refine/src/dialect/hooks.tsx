@@ -119,9 +119,8 @@ export interface AngeeListBatchEntry {
   total: number | undefined;
   fetching: boolean;
   error: Error | null;
-  /** Timestamp of the most recent successful native query read; null until the
-   * page first settles. A hand-built entry may leave it out, which reads as unsettled. */
-  updatedAt?: number | null;
+  /** Timestamp of the most recent successful native query read; null until the page first settles. */
+  updatedAt: number | null;
 }
 
 interface GroupByRequestBatchEntry {

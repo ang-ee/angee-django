@@ -362,7 +362,11 @@ test("a list that has not opted in, or whose page holds every record, offers no 
   f.selectAll();
   expect(screen.getByText("2 selected")).toBeTruthy();
   expect(screen.queryByRole("button", { name: /^Select (all|the) / })).toBeNull();
-  expect(collections.at(-1)).not.toHaveProperty("all");
+  expect(collections.at(-1)).not.toHaveProperty("allMatching");
+  // Its generic verbs carry no reason, nor a reason's tooltip wrapper.
+  const bar = screen.getByText("2 selected").closest<HTMLElement>("[aria-live]")!;
+  expect(within(bar).getByRole("button", { name: "Archive" }).hasAttribute("aria-describedby")).toBe(false);
+  expect(bar.querySelectorAll("span[hidden]")).toHaveLength(0);
   cleanup();
   // Opted in, but the loaded page is every record the list's read matches.
   await fixture({ selectAllMatching: true, bulkActions });
@@ -377,21 +381,21 @@ test("while every matching record is selected the generic verbs are disabled wit
     bulkActions: () => <span>Page verb</span> });
   const verbs = ["Archive", "Unarchive", "Move to trash", "Restore", "Delete"];
   fireEvent.click(screen.getAllByRole("checkbox", { name: "Select row" })[0]!);
-  // Only once every loaded row is ticked.
+  // Only once every loaded row is selected.
   expect(screen.queryByRole("button", { name: "Select all 30 records" })).toBeNull();
   fireEvent.click(screen.getAllByRole("checkbox", { name: "Select row" })[1]!);
   fireEvent.click(screen.getByRole("button", { name: "Select all 30 records" }));
   expect(screen.getByText("All 30 records selected")).toBeTruthy();
   for (const name of verbs) {
     const verb = screen.getByRole("button", { name });
-    expect(description(verb)).toBe("This acts on the rows you tick, not on all 30 records");
+    expect(description(verb)).toBe("This acts on the rows you select, not on all 30 records");
     expect(verb.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(verb);
   }
   expect(screen.queryByRole("alertdialog")).toBeNull();
   expect(f.update).not.toHaveBeenCalled();
   expect(f.custom).not.toHaveBeenCalled();
-  // Unticking a row returns to the ticked ids, which the verbs act on again.
+  // Unselecting a row returns to the selected ids, which the verbs act on again.
   fireEvent.click(screen.getAllByRole("checkbox", { name: "Select row" })[1]!);
   expect(screen.getByText("1 selected")).toBeTruthy();
   const archive = screen.getByRole<HTMLButtonElement>("button", { name: "Archive" });

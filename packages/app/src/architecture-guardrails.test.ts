@@ -424,18 +424,6 @@ describe("React architecture guardrails", () => {
       .toEqual([]);
   });
 
-  test("a list surface calls a page's bulkActions only through renderBulkActions, which states the split", () => {
-    const files = sourceFiles(join(PACKAGES_ROOT, "ui/src/views")).filter((file) => !isTestFile(file) && !isStoryFile(file));
-    expect(files.flatMap((file) => bulkActionsCallViolations(file, readFileSync(file, "utf8")))).toEqual([]);
-  });
-
-  test("the bulkActions guard reports a call outside renderBulkActions", () => {
-    expect(bulkActionsCallViolations("seed.tsx", "bulkActions?.(ids, clear, { filter, selectedRows });")).toHaveLength(1);
-    expect(bulkActionsCallViolations("seed.tsx", "const node = props.bulkActions(ids, clear, collection);")).toHaveLength(1);
-    expect(bulkActionsCallViolations("seed.tsx", "function renderBulkActions() { return bulkActions?.(ids, clear, placed); }"))
-      .toEqual([]);
-  });
-
   test("framework-owned dynamic i18n families contain only UI vocabulary", () => {
     expect([...new Set(UI_DYNAMIC_I18N_KEY_FAMILIES.map((family) => family.namespace))])
       .toEqual(["ui"]);
@@ -1625,24 +1613,6 @@ function refineTelemetryViolations(file: string, text: string): string[] {
       if (!off) {
         violations.push(`${workspaceRelative(file)}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}`);
       }
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
-  return violations;
-}
-
-/** Calls of a page's `bulkActions` outside `renderBulkActions`, the one call that states the split, as `file:line`. */
-function bulkActionsCallViolations(file: string, text: string): string[] {
-  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
-  const violations: string[] = [];
-  const visit = (node: ts.Node): void => {
-    const callee = ts.isCallExpression(node)
-      ? ts.isPropertyAccessExpression(node.expression) ? node.expression.name : node.expression
-      : undefined;
-    if (callee && ts.isIdentifier(callee) && callee.text === "bulkActions"
-      && ts.findAncestor(node, ts.isFunctionDeclaration)?.name?.text !== "renderBulkActions") {
-      violations.push(`${workspaceRelative(file)}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}`);
     }
     ts.forEachChild(node, visit);
   };

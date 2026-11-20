@@ -18,14 +18,14 @@ import {
   type ListSelectionMatching,
 } from "./resource-view-list-body";
 import type { ListChrome, ResourceCollectionPresentation } from "./resource-view-types";
+import type { BulkActionRunner } from "./bulk-action";
 
 export interface ResourceListFrameSelection {
   count: number;
   onClear: () => void;
   onDelete?: () => void;
   deletePending?: boolean;
-  deleteDisabledReason?: React.ReactNode;
-  pending?: boolean;
+  bulk?: BulkActionRunner;
   actions?: React.ReactNode;
   matching?: ListSelectionMatching;
 }
@@ -139,8 +139,7 @@ export function ResourceListFrame({
             onClear={selection.onClear}
             onDelete={selection.onDelete}
             deletePending={selection.deletePending}
-            deleteDisabledReason={selection.deleteDisabledReason}
-            pending={selection.pending}
+            bulk={selection.bulk}
             actions={selection.actions}
             matching={selection.matching}
           />

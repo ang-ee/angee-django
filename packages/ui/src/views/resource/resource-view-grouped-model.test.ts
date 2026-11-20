@@ -200,7 +200,7 @@ describe("buildGroupedRenderModel", () => {
     const failed = buildGroupedRenderModel<Row>(
       results,
       new Map([[header.bucketKey, {
-        rows: [], total: undefined, fetching: false, refetch: vi.fn(),
+        rows: [], total: undefined, fetching: false, updatedAt: null, refetch: vi.fn(),
         error: Object.assign(new Error(`variables secret=${secret}`), {
           request: { variables: { secret } }, response: { status: 500 },
         }),
@@ -464,9 +464,21 @@ test("a page of records lists what it last settled with while it refetches; one 
   // A later page has a read of its own; its total alone does not make it settled.
   const second = { ...expanded, paginationByScope: { [bucketKey]: { pageIndex: 1, pageSize: 1 } } };
   const requested = (entry: Partial<AngeeListBatchEntry>) => leafPage(buildGroupedRenderModel<Row>(groups({}),
-    new Map([[bucketKey, { rows: [], total: 3, fetching: false, error: null, refetch: vi.fn(), ...entry }]]), EMPTY_ROWS, second));
+    new Map([[bucketKey, { rows: [], total: 3, fetching: false, error: null, updatedAt: null, refetch: vi.fn(), ...entry }]]), EMPTY_ROWS, second));
   expect(requested({ fetching: true, updatedAt: 1 })).toEqual(new Set());
   expect(requested({ fetching: true, updatedAt: null })).toBeNull();
   expect(requested({ updatedAt: 1, error: new Error("Rows unavailable") })).toBeNull();
-  expect(requested({})).toBeNull();
+  expect(requested({ updatedAt: null })).toBeNull();
+});
+
+test("a page of groups lists its groups only from the answer to its own request, not the previous page's", () => {
+  const { rootKey, bucketKey } = rootFixture();
+  const results = new Map([[rootKey, result([{ key: { status: "ACTIVE" }, count: 4 }], { updatedAt: 1 })]]);
+  const first = buildGroupedRenderModel<Row>(results, EMPTY_LEAVES, EMPTY_ROWS, params()).groupScopes[0]!.query;
+  const pages = (overrides: Partial<GroupedRenderParams>) =>
+    [...buildGroupedRenderModel<Row>(results, EMPTY_LEAVES, EMPTY_ROWS, params(overrides)).shown.pages.values()];
+  expect(pages({ requested: new Map([[rootKey, first]]) })).toEqual([new Set([bucketKey])]);
+  // The batch still answers page 1 while the list shows page 2: its groups are not page 2's.
+  expect(pages({ rootPage: 2, requested: new Map([[rootKey, first]]) })).toEqual([null]);
+  expect(pages({ requested: new Map() })).toEqual([null]);
 });
