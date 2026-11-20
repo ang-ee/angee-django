@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   Outlet, RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter, retainSearchParams, useRouter,
 } from "@tanstack/react-router";
@@ -263,6 +263,33 @@ describe("the batch merge dialog", () => {
     expect(await screen.findByText(message("duplicates.error"))).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: message("duplicates.retry") }));
     expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  test("a failed re-read of the previews holds Confirm while the banner shows, and Retry brings it back as ticked", async () => {
+    // Every set is previewed; then a live re-read fails. As React Query does on a failed refetch, the read keeps its
+    // data, sets its error and is no longer fetching; Retry's re-read succeeds and clears the error.
+    const data = { duplicate_set_previews: PREVIEWS };
+    let failed = false;
+    const fresh: Read = { data, isFetching: false, isFetchedAfterMount: true, error: null };
+    const lost: Read = {
+      data, isFetching: false, isFetchedAfterMount: true, error: new Error("lost"),
+      refetch: () => { failed = false; mocks.rerender?.(); },
+    };
+    mocks.previewRead = () => (failed ? lost : fresh);
+    renderDialog();
+    const mergeButton = (count: string) => screen.getByRole("button", { name: message("duplicates.confirm", { count }) });
+
+    expect(await screen.findByRole("button", { name: message("duplicates.confirm", { count: "1" }) })).toBeTruthy();
+    fireEvent.click(screen.getAllByRole("checkbox")[0]!);
+    expect(mergeButton("2").hasAttribute("disabled")).toBe(false);
+
+    act(() => { failed = true; mocks.rerender?.(); });
+    expect(await screen.findByRole("button", { name: message("duplicates.retry") })).toBeTruthy();
+    expect(mergeButton("2").hasAttribute("disabled")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: message("duplicates.retry") }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: message("duplicates.retry") })).toBeNull());
+    expect(mergeButton("2").hasAttribute("disabled")).toBe(false);
   });
 
   test("one confirm merges only the included sets, then shows each outcome and the sets left out", async () => {
@@ -904,6 +931,21 @@ describe("the batch merge dialog", () => {
       expect(await screen.findByText(message("duplicates.error"))).toBeTruthy();
       fireEvent.click(screen.getByRole("button", { name: message("duplicates.retry") }));
       expect(refetch).toHaveBeenCalledTimes(1);
+    });
+
+    test("once every page is listed, an error cached past the last page neither shows nor holds Confirm", async () => {
+      // The listing read is disabled once listed; its key is the page past the last, where another reader met an error.
+      const listed = groupPages(3);
+      mocks.groupsRead = (variables) => (cursorOf(variables) === keyOf(3)
+        ? { data: undefined, isFetching: false, isFetchedAfterMount: true, error: new Error("old"), refetch: vi.fn() }
+        : listed(variables));
+      mocks.previewRead = answering();
+      renderDialog(vi.fn(), [], false, undefined, undefined, groupsOf(3));
+
+      expect(await screen.findByText(message("duplicates.totals", { count: "3", merge: "3", look: "0" }))).toBeTruthy();
+      expect(screen.queryByRole("button", { name: message("duplicates.retry") })).toBeNull();
+      expect(screen.getByRole("button", { name: message("duplicates.confirm", { count: "3" }) })
+        .hasAttribute("disabled")).toBe(false);
     });
 
     test("Confirm stays disabled until the last page of groups is listed", async () => {
