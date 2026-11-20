@@ -34,7 +34,11 @@ target_config:
 
 [`MessageTarget.deliver`](targets.py) hands the response to messaging's one
 ingest path (`Message.objects.ingest`) and returns the message, which the
-response links as the record it became.
+response links as the record it became. The bridge declares
+`messaging/message` as a type a response can become
+([`permissions.extends.zed`](permissions.extends.zed)): web forms links a
+response only to a record of a declared type, and when that message is deleted
+the response loses its personal answers and the link.
 
 A response is refused in three ways. Each is kept on the response as
 `refused: <code>`, where staff see it, and is not tried again by itself:
@@ -101,24 +105,29 @@ with its own leaves, and applies it. The order matters:
    changes.
 3. Run `manage.py check_webform_channels`. It judges the channels as `migrate`
    will, prints what the move would refuse and what it would leave out, and
-   changes nothing. Where the form columns are already gone it says there is
-   nothing to move.
+   changes nothing. Where the form columns are already gone, or no webform
+   channel holds a form, it says there is nothing to move and asks for no
+   template.
 4. Run `migrate`, then `rebac sync`.
 
 `migrate` refuses the wrong order by itself, also under `provision`, which skips
-system checks. The bridge listens to `pre_migrate`
-([`refuse_removal_ahead_of_the_move`](signals.py)): a run whose plan removes the
-form columns with a migration that neither is the move nor follows it is stopped
-before anything is applied, while a webform channel of that database holds a
-form. The refusal names the migration, counts the channels and names a few by
-public id, and gives the remedy. `check --database` says the same beforehand as
-`angee.E054` ([`checks.py`](checks.py)). A project's copy of the template is
-known by what the template declares of itself, not by its file name. The order
-above stays the instruction.
+system checks. The columns are messaging's, so the refusal is too, and it holds
+on a project that has not installed this bridge
+([`angee.messaging.webform_columns`](../messaging/webform_columns.py)): a run
+whose plan removes the form columns with a migration that neither is the move
+nor follows it is stopped before anything is applied, while a webform channel
+of that database holds a form. `check --database` says the same beforehand as
+`angee.E054`. That guard is interim: deleted from messaging once the framework
+pins django-compose 0.1.0.dev14, whose drop guard judges pending removals at
+migrate time. The order above stays the instruction.
 
-Interim: the receiver and the check are deleted once the framework pins
-django-compose 0.1.0.dev14, whose drop guard judges pending removals at migrate
-time.
+The bridge keeps nothing of the guard. Its template declares that it is the
+move (`moves_webform_channels = True` on its `Migration`), so a project's copy
+is known under whatever name it has, and it imports messaging's one judgment of
+which channels hold a form
+([`angee.messaging.webforms`](../messaging/webforms.py)), which the dry run
+reads too. A copy of the template taken before the mark existed lacks it and
+must be copied again; `migrate` refuses it as a removal that is not the move.
 
 Each channel becomes a form with its first version and its address, posting on
 the same channel under the same slug, and the channel's form columns are
