@@ -429,10 +429,15 @@ def test_the_repair_moves_each_party_back_to_its_sources_earliest_creation_time_
     call_command("backdate_parties_from_sources", stdout=again)
 
     assert (
-        "Moved 2 part(ies) back to the earliest creation time their sources state; 0 already as old; "
+        "Moved 2 part(ies) back to the earliest creation time their sources state; their new times run from "
+        "2019-04-02T00:00:00+00:00 to 2021-06-01T00:00:00+00:00; 0 already as old; "
         "1 linked record(s) state no creation time yet"
     ) in first.getvalue()
-    assert "Moved 0 part(ies)" in again.getvalue() and "2 already as old; 1 linked record(s)" in again.getvalue()
+    assert (
+        "Moved 0 part(ies) back to the earliest creation time their sources state; 2 already as old; "
+        "1 linked record(s) state no creation time yet"
+    ) in again.getvalue()
+    assert "their new times" not in again.getvalue()
     assert Party._base_manager.get(pk=own.pk).created_at == ada_created
     assert Party._base_manager.get(pk=people[grace]).created_at == grace_created
     assert Party._base_manager.get(pk=people[mary]).created_at == imported

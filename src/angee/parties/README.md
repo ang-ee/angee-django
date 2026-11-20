@@ -72,7 +72,8 @@ its survivor's to the earliest of what it folds in (`Party.backdate_creation`, t
 one writer). Every provision runs `backdate_parties_from_sources`
 (`PartyManager.backdate_from_sources`): each party takes the earliest of its own
 and its directory records' stored times, and a record whose payload states none is
-counted and left for its next read from the source.
+counted and left for its next read from the source. Its line gives those counts and,
+when it moved any, the earliest and latest new time: no name or id.
 
 A consumer addon fills its own person columns from a pull-only directory's
 source fields in code, with a [directory mapping](backends.py)

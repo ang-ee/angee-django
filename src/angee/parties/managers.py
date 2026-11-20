@@ -3916,8 +3916,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             .select_related("stream")
         )
 
-    def backdate_from_sources(self) -> tuple[int, int, int]:
-        """Move each party's creation time back to the earliest its directory records state: moved, kept, unstated.
+    def backdate_from_sources(self) -> tuple[int, int, int, datetime | None, datetime | None]:
+        """Move each party's creation time back to the earliest its directory records state; return what it did.
 
         The repair for parties imported before a contact carried its source's
         creation time, run at every provision and as ``backdate_parties_from_sources``:
@@ -3929,8 +3929,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         merge survivor holds the records it folded in. ``moved`` parties moved and
         ``kept`` were already as old; ``unstated`` records' contact payloads state
         no time (stored before a contact carried one, or from a source that states
-        none), which only a re-read of the source fills, never this repair.
-        Idempotent: a second run moves nothing.
+        none), which only a re-read of the source fills, never this repair. The
+        result is ``(moved, kept, unstated, oldest, newest)``: ``oldest`` and
+        ``newest`` are the earliest and the latest creation time it moved a party
+        to, ``None`` when it moved none. Idempotent: a second run moves nothing.
         """
 
         reason = "parties.backdate_from_sources"
@@ -3956,11 +3958,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                     unstated += 1
                 elif pk not in earliest or at < earliest[pk]:
                     earliest[pk] = at
-            moved = sum(
-                party.backdate_creation(earliest[party.pk])
+            times = [
+                party.created_at
                 for party in parties._base_manager.filter(pk__in=list(earliest)).order_by("pk")
-            )
-        return moved, len(earliest) - moved, unstated
+                if party.backdate_creation(earliest[party.pk])
+            ]
+        return len(times), len(earliest) - len(times), unstated, min(times, default=None), max(times, default=None)
 
     def directory_merge_blocker(self, survivor: Party, merged: Sequence[Party]) -> str | None:
         """Return why merging ``merged`` into ``survivor`` would set two contacts of one directory on one person.

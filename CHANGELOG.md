@@ -39,7 +39,9 @@ live in code docstrings.
   Upgrade: no migration. Every provision runs `backdate_parties_from_sources`,
   moving each party back to the earliest creation time its directory records'
   stored payloads state; a record stored before a contact carried its time is
-  counted and gains it on its next read from the source. Requires
+  counted and gains it on its next read from the source. Its provision line gives
+  the counts (moved, already as old, records stating no time) and, when it moved
+  any, the earliest and latest new time, never a name or an id. Requires
   `strawberry-django-aggregates` 0.15.0 (the GraphQL manifest's floor), which
   aggregates the created-time field as the `DateTimeField` it stores: with
   0.14.1 a grouping by `created_at` loses its type and date buckets.
