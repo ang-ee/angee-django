@@ -130,6 +130,17 @@ test("no render reports a new page of groups settled with the previous page's gr
   expect(reported.at(-1)).toEqual(new Set([f.header(1)!.bucketKey]));
 });
 
+test("showing or hiding a field keeps the grouped surface's items: they read no visible field", async () => {
+  const f = fixture();
+  await waitFor(() => expect(f.header(1)?.label).toBe("Title 0"));
+  const items = f.surface.groupedItems;
+  const reads = f.custom.mock.calls.length + f.getList.mock.calls.length;
+  act(() => f.view.setColumnVisibility({ status: false }));
+  await waitFor(() => expect(f.surface.table.getVisibleLeafColumns().map(({ id }) => id)).toEqual(["title"]));
+  expect(f.surface.groupedItems).toBe(items);
+  expect(f.custom.mock.calls.length + f.getList.mock.calls.length).toBe(reads);
+});
+
 test("native subgroup and leaf page sizes, page 2 and expansion survive an actual server-surface unmount", async () => {
   const f = fixture();
   await waitFor(() => expect(f.header(0)?.kind === "groupHeader" && f.header(0)?.pager).toBeTruthy());

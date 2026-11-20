@@ -105,6 +105,7 @@ export {
 } from "./dialect/authored-hooks";
 export {
   useDerivedBatch,
+  useReportRefusedReads,
   type QueryBatchEntry,
 } from "./dialect/query-batch";
 export {

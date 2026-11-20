@@ -12,6 +12,8 @@ import {
 import {
   type Column as TableColumn,
   type ColumnDef,
+  type HeaderGroup,
+  type SortingState,
   type Table as TableModel,
 } from "@tanstack/react-table";
 import { type Virtualizer } from "@tanstack/react-virtual";
@@ -38,6 +40,7 @@ import type { ResourceViewContextValue } from "./resource-view-context";
 import { useSelectionPlaces, type SelectionPlaces, type ShownSelection } from "./selection-channel";
 import { placedRecords } from "./resource-view-grouped-model";
 import type { ListViewNavigationScope, ResourceListSnapshot } from "./resource-view-surface";
+import { EMPTY_ARRAY } from "./surface/types";
 import {
   ALIGN_CLASS,
   ListEmpty,
@@ -51,7 +54,6 @@ import {
   SelectionToggle,
   VirtualPaddingRow,
   alignOf,
-  estimateGroupedItemSize,
   formatMeasure,
   measureValue,
   useVirtualWindow,
@@ -115,7 +117,7 @@ export function GroupedListBody<TRow extends Row>({
   renderGroupLabel,
   table,
   visibleColumnCount,
-  visibleFields = [],
+  visibleFields = EMPTY_ARRAY,
   onVisibleFieldToggle,
   resourceView,
   measures,
@@ -148,35 +150,15 @@ export function GroupedListBody<TRow extends Row>({
     [measures],
   );
   const visibleColumns = table.getVisibleLeafColumns();
-  const { paddingTop, paddingBottom, visibleIndexes } = useVirtualWindow(
-    rowVirtualizer,
-    listItems.length,
-    (index) => estimateGroupedItemSize(listItems[index]),
-  );
+  const { paddingTop, paddingBottom, visibleIndexes } = useVirtualWindow(rowVirtualizer);
   const handleRecordOpen = React.useCallback(
     (nav: GroupedRecordNav) => onListStateChange?.(snapshotFromNav<TRow>(nav)),
     [onListStateChange],
   );
   const groupHeaders = React.useMemo(
-    () => listItems.filter((item): item is Extract<GroupedListItem<TRow>, { kind: "groupHeader" }> =>
-      item.kind === "groupHeader" && item.expandable),
+    () => listItems.filter((item): item is GroupedHeaderItem<TRow> => item.kind === "groupHeader" && item.expandable),
     [listItems],
   );
-  const anyExpanded = groupHeaders.some((item) => item.expanded);
-  const expandAll = groupHeaders.length > 0 ? (
-    <button
-      type="button"
-      className="flex size-6 items-center justify-center rounded-4 text-fg-muted outline-none hover:bg-inset hover:text-fg focus-visible:focus-ring"
-      aria-label={t(anyExpanded ? "list.collapseAllGroups" : "list.expandAllGroups")}
-      title={t(anyExpanded ? "list.collapseAllGroups" : "list.expandAllGroups")}
-      onClick={() => setGroupsExpanded(
-        groupHeaders.filter((item) => item.expanded === anyExpanded).map((item) => item.bucketKey),
-        !anyExpanded,
-      )}
-    >
-      <Glyph name={anyExpanded ? "chevron-down" : "chevron-right"} className="size-3.5" />
-    </button>
-  ) : null;
   // The loaded records of each group (nested groups included), read from their own
   // group paths, and of the whole list.
   const { groupRecords, loadedRecords } = React.useMemo(() => {
@@ -224,40 +206,22 @@ export function GroupedListBody<TRow extends Row>({
             ))}
             {hasRowActions ? <col /> : null}
           </colgroup>
-          <TableHeader className={headerVisibility === "visually-hidden" ? "sr-only" : undefined}>
-            {table.getHeaderGroups().map((group) => (
-              <TableRow key={group.id}>
-                {selectable ? (
-                  <LeadingSelectionCell
-                    head
-                    grouped
-                    chevron={expandAll}
-                    label={t("list.selectAllLoaded")}
-                    // Under "Select all N" it shows checked even with every group collapsed, and unticking it leaves the mode.
-                    checked={allMatching || (loadedRecords.length > 0 && selectedCount === loadedRecords.length)}
-                    indeterminate={!allMatching && selectedCount > 0 && selectedCount < loadedRecords.length}
-                    disabled={!allMatching && loadedRecords.length === 0}
-                    onCheckedChange={(checked) => selectRecords(loadedRecords, checked)}
-                  />
-                ) : (
-                  <TableHead sticky className="w-8 p-0">
-                    <div className="flex justify-center">{expandAll}</div>
-                  </TableHead>
-                )}
-                {group.headers.map((header, index) => (
-                  <ListHeaderCell
-                    key={header.id}
-                    header={header}
-                    resourceView={resourceView}
-                    visibleFields={visibleFields}
-                    onVisibleFieldToggle={onVisibleFieldToggle}
-                    withVisibleFields={index === group.headers.length - 1}
-                  />
-                ))}
-                {hasRowActions ? <RowActionsHeader /> : null}
-              </TableRow>
-            ))}
-          </TableHeader>
+          <GroupedListHeader
+            headerVisibility={headerVisibility}
+            headerGroups={table.getHeaderGroups()}
+            sorting={table.getState().sorting}
+            selectable={selectable}
+            expandableGroups={groupHeaders}
+            onSetGroupsExpanded={setGroupsExpanded}
+            allMatching={allMatching}
+            loadedRecords={loadedRecords}
+            selectedCount={selectedCount}
+            onSelectRecords={selectRecords}
+            resourceView={resourceView}
+            visibleFields={visibleFields}
+            onVisibleFieldToggle={onVisibleFieldToggle}
+            trailingColumn={hasRowActions}
+          />
           <TableBody>
             {fetching && listItems.length === 0 ? (
               // The grouped colgroup/header always reserve the leading chevron
@@ -345,6 +309,101 @@ export function GroupedListBody<TRow extends Row>({
     </>
   );
 }
+
+interface GroupedListHeaderProps<TRow extends Row> {
+  headerVisibility: ResourceTableHeaderVisibility;
+  /** `table.getHeaderGroups()`, which the table keeps until a column is shown, hidden, moved or pinned. */
+  headerGroups: readonly HeaderGroup<TRow>[];
+  /** The table's sorting, which each header's sort button and `aria-sort` show through its column. */
+  sorting: SortingState;
+  selectable: boolean;
+  /** The groups that open and close, which the header's chevron opens or closes together. */
+  expandableGroups: readonly GroupedHeaderItem<TRow>[];
+  onSetGroupsExpanded: (keys: readonly string[], expanded: boolean) => void;
+  allMatching: boolean;
+  /** Every loaded record, which the header's checkbox ticks, and how many of them show selected. */
+  loadedRecords: readonly GroupedRecordItem<TRow>[];
+  selectedCount: number;
+  onSelectRecords: GroupedItemRowProps<TRow>["onSelectRecords"];
+  resourceView: ResourceViewContextValue;
+  visibleFields: readonly VisibleFieldOption[];
+  onVisibleFieldToggle?: (id: string, visible: boolean) => void;
+  trailingColumn: boolean;
+}
+
+function GroupedListHeaderInner<TRow extends Row>({
+  headerVisibility,
+  headerGroups,
+  selectable,
+  expandableGroups,
+  onSetGroupsExpanded,
+  allMatching,
+  loadedRecords,
+  selectedCount,
+  onSelectRecords,
+  resourceView,
+  visibleFields,
+  onVisibleFieldToggle,
+  trailingColumn,
+}: GroupedListHeaderProps<TRow>): React.ReactElement {
+  const t = useUiT();
+  const anyExpanded = expandableGroups.some((item) => item.expanded);
+  const expandAll = expandableGroups.length > 0 ? (
+    <button
+      type="button"
+      className="flex size-6 items-center justify-center rounded-4 text-fg-muted outline-none hover:bg-inset hover:text-fg focus-visible:focus-ring"
+      aria-label={t(anyExpanded ? "list.collapseAllGroups" : "list.expandAllGroups")}
+      title={t(anyExpanded ? "list.collapseAllGroups" : "list.expandAllGroups")}
+      onClick={() => onSetGroupsExpanded(
+        expandableGroups.filter((item) => item.expanded === anyExpanded).map((item) => item.bucketKey),
+        !anyExpanded,
+      )}
+    >
+      <Glyph name={anyExpanded ? "chevron-down" : "chevron-right"} className="size-3.5" />
+    </button>
+  ) : null;
+  return (
+    <TableHeader className={headerVisibility === "visually-hidden" ? "sr-only" : undefined}>
+      {headerGroups.map((group) => (
+        <TableRow key={group.id}>
+          {selectable ? (
+            <LeadingSelectionCell
+              head
+              grouped
+              chevron={expandAll}
+              label={t("list.selectAllLoaded")}
+              // Under "Select all N" it shows checked even with every group collapsed, and unticking it leaves the mode.
+              checked={allMatching || (loadedRecords.length > 0 && selectedCount === loadedRecords.length)}
+              indeterminate={!allMatching && selectedCount > 0 && selectedCount < loadedRecords.length}
+              disabled={!allMatching && loadedRecords.length === 0}
+              onCheckedChange={(checked) => onSelectRecords(loadedRecords, checked)}
+            />
+          ) : (
+            <TableHead sticky className="w-8 p-0">
+              <div className="flex justify-center">{expandAll}</div>
+            </TableHead>
+          )}
+          {group.headers.map((header, index) => (
+            <ListHeaderCell
+              key={header.id}
+              header={header}
+              resourceView={resourceView}
+              visibleFields={visibleFields}
+              onVisibleFieldToggle={onVisibleFieldToggle}
+              withVisibleFields={index === group.headers.length - 1}
+            />
+          ))}
+          {trailingColumn ? <RowActionsHeader /> : null}
+        </TableRow>
+      ))}
+    </TableHeader>
+  );
+}
+
+// Memoised, as the rows are: the table keeps its header groups and sorting, the surface's
+// items keep the groups and loaded records, and the callbacks are stable, so a range
+// change leaves the header alone.
+const GroupedListHeader = React.memo(GroupedListHeaderInner) as typeof GroupedListHeaderInner;
 
 function groupedItemKey<TRow extends Row>(item: GroupedListItem<TRow>): string {
   switch (item.kind) {
@@ -468,6 +527,7 @@ function GroupedItemRowInner<TRow extends Row>({
 const GroupedItemRow = React.memo(GroupedItemRowInner) as typeof GroupedItemRowInner;
 
 type GroupedRecordItem<TRow extends Row> = Extract<GroupedListItem<TRow>, { kind: "record" }>;
+type GroupedHeaderItem<TRow extends Row> = Extract<GroupedListItem<TRow>, { kind: "groupHeader" }>;
 const NO_RECORDS: readonly never[] = [];
 
 /** A record row whose callbacks stay stable across selection toggles, so the memoised row skips them. */
@@ -513,7 +573,7 @@ function GroupedRecordRow<TRow extends Row>({
 
 interface GroupedHeaderRowProps<TRow extends Row> {
   renderGroupLabel?: (group: GroupLabelContext) => React.ReactNode;
-  item: Extract<GroupedListItem<TRow>, { kind: "groupHeader" }>;
+  item: GroupedHeaderItem<TRow>;
   /** The group has a checkbox, which ticks its loaded records. */
   selectable: boolean;
   /** The group's loaded records, nested groups' included. */

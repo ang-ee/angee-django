@@ -49,11 +49,11 @@ function RecordRowInner<TRow extends Row>({
 }: {
   row: TableRowModel<TRow>;
   /**
-   * The row's visible cells (`row.getVisibleCells()`), which it draws. The table hands a
-   * new array when a column is shown, hidden or moved, so a caller passing it renders
-   * the memoised row again then; omitted, the row reads them as it renders.
+   * The row's visible cells (`row.getVisibleCells()`), which it draws. The table keeps
+   * that array per row until a column is shown, hidden, moved or pinned, so such a
+   * change reaches the memoised row and a scroll does not.
    */
-  cells?: readonly TableCellModel<TRow, unknown>[];
+  cells: readonly TableCellModel<TRow, unknown>[];
   selected: boolean;
   onToggleSelected: (id: string, selected?: boolean, row?: TRow) => void;
   interactive: boolean;
@@ -115,13 +115,12 @@ function RecordRowInner<TRow extends Row>({
       }}
     ><Glyph name="grip-vertical" decorative /></Button>
   </TableCell> : null;
-  const visibleCells = cells ?? row.getVisibleCells();
   const href = rowHref?.(row.original);
   if (href) {
     return (
       <LinkedRecordRow
         row={row}
-        cells={visibleCells}
+        cells={cells}
         selected={selected}
         onToggleSelected={onToggleSelected}
         selectable={selectable}
@@ -138,7 +137,7 @@ function RecordRowInner<TRow extends Row>({
   return (
     <PlainRecordRow
       row={row}
-      cells={visibleCells}
+      cells={cells}
       selected={selected}
       onToggleSelected={onToggleSelected}
       interactive={interactive}

@@ -17,8 +17,11 @@ import type { ColumnDescriptor } from "../page";
 // What each row's and each group header's render reaches: its title cell, through the
 // column's own renderer, and its label, through the page's group label; and each time the
 // grouped body hands a record its row again, through a test-only wrapper over that row,
-// which the memoised row then skips or renders.
-const rendered = vi.hoisted(() => ({ rows: new Map<string, number>(), headers: new Map<string, number>(), handed: new Map<string, number>() }));
+// which the memoised row then skips or renders. The table header's cells are counted
+// through a test-only wrapper over the table's header cell.
+const rendered = vi.hoisted(() => ({
+  rows: new Map<string, number>(), headers: new Map<string, number>(), handed: new Map<string, number>(), headCells: { count: 0 },
+}));
 const count = (counts: Map<string, number>, key: string) => counts.set(key, (counts.get(key) ?? 0) + 1);
 vi.mock("./resource-view-list-body", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./resource-view-list-body")>();
@@ -28,6 +31,15 @@ vi.mock("./resource-view-list-body", async (importOriginal) => {
     return React.createElement(actual.RecordRow, props);
   }
   return { ...actual, RecordRow };
+});
+vi.mock("../../ui/table", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../ui/table")>();
+  const React = await import("react");
+  function TableHead(props: React.ComponentProps<typeof actual.TableHead>): React.ReactElement {
+    rendered.headCells.count += 1;
+    return React.createElement(actual.TableHead, props);
+  }
+  return { ...actual, TableHead };
 });
 const columns = [{ field: "title", header: "Title", render: (row: Row) => {
   count(rendered.rows, String(row.id));
@@ -85,6 +97,7 @@ beforeEach(() => {
   rendered.rows.clear();
   rendered.headers.clear();
   rendered.handed.clear();
+  rendered.headCells.count = 0;
   // The document has no layout: the list's scroll element is a 600px viewport, which
   // the virtualizer reads when it observes the element.
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) {
@@ -120,6 +133,15 @@ async function scrollTenRows(): Promise<void> {
   scroller.scrollTop = 400;
   fireEvent.scroll(scroller);
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 200)); });
+}
+
+/** Show or hide a field through the table header's fields menu. */
+async function toggleField(name: string): Promise<void> {
+  fireEvent.click(screen.getByRole("button", { name: "Visible fields" }));
+  const item = await screen.findByRole("menuitemcheckbox", { name });
+  fireEvent.click(item);
+  fireEvent.keyDown(item, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
 }
 
 /** After a range change, what stayed in the window rendered no more, and what entered rendered once. */
@@ -174,17 +196,30 @@ test.each([
   const cells = async () => (await screen.findByText("Task a0")).closest("tr")!.querySelectorAll("td").length;
   await settled();
   const hidden = await cells();
-  const toggle = async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Visible fields" }));
-    const item = await screen.findByRole("menuitemcheckbox", { name: "Status" });
-    fireEvent.click(item);
-    fireEvent.keyDown(item, { key: "Escape" });
-    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
-  };
-  await toggle();
+  await toggleField("Status");
   await waitFor(async () => expect(await cells()).toBe(hidden + 1));
-  await toggle();
+  await toggleField("Status");
   await waitFor(async () => expect(await cells()).toBe(hidden));
+});
+
+test.each([
+  ["flat", { pageSize: 60 }],
+  ["grouped", { pageSize: 20, groupStack: [{ field: "status" }] }],
+])("a %s list's range change leaves its header row alone, which a sort, a field shown and a selection still reach", async (_kind, initialState) => {
+  renderList(initialState, [...columns, { field: "status", header: "Status", hiddenByDefault: true }]);
+  await screen.findByText("Task a0");
+  await settled();
+  const before = rendered.headCells.count;
+  await scrollTenRows();
+  expect(rendered.headCells.count).toBe(before);
+  const header = () => within(document.querySelector("thead")!);
+  fireEvent.click(header().getByRole("button", { name: "Sort Title (not sorted)" }));
+  expect(await header().findByRole("button", { name: "Sort Title (currently ascending)" })).toBeTruthy();
+  await settled();
+  await toggleField("Status");
+  expect(await header().findByText("Status")).toBeTruthy();
+  fireEvent.click(within((await screen.findByText("Task a0")).closest("tr")!).getByRole("checkbox", { name: "Select row" }));
+  await waitFor(() => expect(header().getByRole("checkbox", { name: /^Select all/ }).getAttribute("aria-checked")).toBe("mixed"));
 });
 
 test("a reorderable in-memory list's range change renders the rows that enter its window and none that stay", async () => {

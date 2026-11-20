@@ -150,13 +150,50 @@ live in code docstrings.
   function, and each reorderable row's `reorder` is built once per row set. The
   grouped body's item and header rows are memoised as `RecordRow` is, and a
   header takes its group's records and selected count, so ticking a record
-  renders only its own groups' headers. `RecordRow` takes an optional `cells`,
-  the row's visible cells, which both bodies pass: its memo kept stale cells when
-  only the shown columns changed, which the flat body's churning props had hidden
-  and a grouped row whose item stayed the same showed. The search box hands Base
-  UI's combobox the search's active items as they are, its items and item
-  callbacks stable, so a re-render with the search unchanged no longer renders
-  its input and chips a second time.
+  renders only its own groups' headers. `RecordRow` takes `cells`, the row's
+  visible cells, which both bodies pass: its memo kept stale cells when only the
+  shown columns changed, which the flat body's churning props had hidden and a
+  grouped row whose item stayed the same showed. The search box hands Base UI's
+  combobox the search's active items as they are, its items and item callbacks
+  stable, so a re-render with the search unchanged no longer renders its input
+  and chips a second time.
+
+- `@angee/ui`: `RecordRow`'s `cells` is required. A caller hands the row the
+  visible cells it draws (`row.getVisibleCells()`, which TanStack Table keeps per
+  row until a column is shown, hidden, moved or pinned); the row no longer reads
+  them itself as it renders, so no caller can bring back the stale cells its memo
+  held.
+
+- `@angee/ui`: a resource view hands its surfaces the same filter, grouping and
+  sorting until they change. Its validation, and a routed view's decode of its
+  search, built them anew on every change to the view, so showing or hiding a
+  field gave every surface a new group stack and filter and a grouped list
+  rebuilt its group model and items with no read; the view keeps each one while
+  its value holds (`useValueStable`).
+
+- `@angee/ui`: one owner for a list's virtual window options. The flat and
+  grouped surfaces give the same virtualizer their item count and size estimate,
+  and `useVirtualWindow`'s count and estimate are optional, defaulting to the
+  virtualizer's own, so a list body repeats neither. Debt: a surface whose
+  presentation attaches no scroll element (a board, a gallery, the pane list, a
+  collection tree) still creates that virtualizer, since every surface result
+  carries one and a hook cannot be skipped; with no element it stays idle,
+  observing and measuring nothing. Removing it needs the rows body to own the
+  virtualizer, the held move of the virtual window into the body.
+
+- `@angee/ui`: a list's range change no longer renders its table header. The flat
+  and grouped header rows are memoised and take the table's header groups, its
+  sorting, the selection state, the group chevron's groups and the visible fields,
+  each stable across a scroll; a sort, a field shown or hidden and a selection
+  still render them. The measure footer still renders with the body: it reads the
+  visible columns through the table, whose identity never changes.
+
+- `@angee/refine`, `@angee/ui`: a payload a collection source's `select` refuses
+  no longer throws in render. It is that read's error, reported as a failed read
+  is, once per settle of the read, through `useReportRefusedReads`, which
+  `@angee/refine` now exports beside `useDerivedBatch` and its facets and group
+  reads already use; a request whose `variables` throw takes its error through
+  `errorFromUnknown`, the one normaliser.
 
 - `angee.parties`: one owner proposes same-person pairs. A pull-only
   directory's contact that may only claim an address another live party is

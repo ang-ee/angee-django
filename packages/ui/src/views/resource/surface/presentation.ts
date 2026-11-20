@@ -177,15 +177,10 @@ export function useResourceViewPresentationSurfaceFromTable<TRow extends Row>({
           ),
     [rowModels, groupedRowModels, rowGroupStack, boardLaneState, t],
   );
-  const tableScrollRef = React.useRef<HTMLDivElement | null>(null);
-  const rowVirtualizer = useVirtualizer({
-    count: rowModels.length,
-    getScrollElement: () => tableScrollRef.current,
-    initialRect: { width: 1024, height: 600 },
-    estimateSize: (index) =>
-      rowModels[index]?.getIsGrouped() ? GROUP_ROW_HEIGHT : RECORD_ROW_HEIGHT,
-    overscan: 10,
-  });
+  const { tableScrollRef, rowVirtualizer } = useResourceViewVirtualizer(
+    rowModels.length,
+    (index) => rowModels[index]?.getIsGrouped() ? GROUP_ROW_HEIGHT : RECORD_ROW_HEIGHT,
+  );
 
   return {
     tableColumns,
@@ -216,6 +211,30 @@ export function useResourceViewPresentationSurfaceFromTable<TRow extends Row>({
     tableScrollRef,
     rowVirtualizer,
   };
+}
+
+/**
+ * The scroll element's ref and the virtualizer that windows a list body's items in it:
+ * the one owner of the virtual window's options, given each surface's item count and
+ * the size it estimates for an item until the item is measured (which the body's window
+ * reads back, `useVirtualWindow`). Every surface creates one, since its result carries
+ * it; a presentation that attaches no scroll element (a board, a gallery, the pane list,
+ * a tree) leaves it idle: with no element it observes nothing, measures nothing and
+ * never renders its surface again.
+ */
+export function useResourceViewVirtualizer(
+  count: number,
+  estimateSize: (index: number) => number,
+): Pick<ResourceViewPresentationSurface, "tableScrollRef" | "rowVirtualizer"> {
+  const tableScrollRef = React.useRef<HTMLDivElement | null>(null);
+  const rowVirtualizer = useVirtualizer({
+    count,
+    getScrollElement: () => tableScrollRef.current,
+    initialRect: { width: 1024, height: 600 },
+    estimateSize,
+    overscan: 10,
+  });
+  return { tableScrollRef, rowVirtualizer };
 }
 
 export function useResourceViewTableChrome<TRow extends Row>(

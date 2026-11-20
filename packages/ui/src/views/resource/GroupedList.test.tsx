@@ -2,10 +2,10 @@
 
 import * as React from "react";
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { getCoreRowModel, useReactTable, type Row as TableRowModel } from "@tanstack/react-table";
+import { getCoreRowModel, useReactTable, type Cell as TableCellModel, type Row as TableRowModel } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Row } from "@angee/metadata";
-import { expect, test, vi } from "vitest";
+import { expect, expectTypeOf, test, vi } from "vitest";
 
 import { GroupedListBody } from "./GroupedList";
 import { ResourceViewProvider, useResourceView } from "./resource-view-context";
@@ -256,11 +256,18 @@ function FlatRecordRow({ selectable }: { selectable: boolean }): React.ReactElem
   return (
     <table>
       <tbody>
-        <RecordRow row={row} selected={false} onToggleSelected={() => undefined} interactive selectable={selectable} />
+        <RecordRow row={row} cells={row.getVisibleCells()} selected={false} onToggleSelected={() => undefined} interactive
+          selectable={selectable} />
       </tbody>
     </table>
   );
 }
+
+test("a record row is handed the visible cells it draws, so no caller has it read them as it renders", () => {
+  type RecordRowProps = React.ComponentProps<typeof RecordRow<Row>>;
+  expectTypeOf<Omit<RecordRowProps, "cells">>().not.toExtend<RecordRowProps>();
+  expectTypeOf<RecordRowProps["cells"]>().toEqualTypeOf<readonly TableCellModel<Row, unknown>[]>();
+});
 
 test("a non-selectable flat record row emits no leading column cell", () => {
   render(<FlatRecordRow selectable={false} />);

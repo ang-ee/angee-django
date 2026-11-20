@@ -307,17 +307,21 @@ function ClientSurfaceProbe(): React.ReactElement {
 }
 
 describe("useResourceViewSurface", () => {
+  // The authored batch is replaced, but its read-failure report still runs, as refine's
+  // auth check does, under the query client.
   test("row query filters follow cleared resource-view facets after mount", async () => {
     render(
-      <ToastProvider>
-        <ResourceViewProvider
-          resource="notes.Note"
-          scope="local"
-          initialState={{ filter: { status: "active" } }}
-        >
-          <SurfaceProbe />
-        </ResourceViewProvider>
-      </ToastProvider>,
+      <QueryClientProvider client={new QueryClient()}>
+        <ToastProvider>
+          <ResourceViewProvider
+            resource="notes.Note"
+            scope="local"
+            initialState={{ filter: { status: "active" } }}
+          >
+            <SurfaceProbe />
+          </ResourceViewProvider>
+        </ToastProvider>
+      </QueryClientProvider>,
     );
 
     expect(tableMocks.activeFilters.at(-1)).toEqual({
@@ -334,11 +338,13 @@ describe("useResourceViewSurface", () => {
   test("server pagination clamps oversized native state before query and navigation", async () => {
     const onListStateChange = vi.fn();
     render(
-      <ToastProvider>
-        <ResourceViewProvider scope="local" initialState={{ pageSize: 200 }}>
-          <SurfaceProbe onListStateChange={onListStateChange} />
-        </ResourceViewProvider>
-      </ToastProvider>,
+      <QueryClientProvider client={new QueryClient()}>
+        <ToastProvider>
+          <ResourceViewProvider scope="local" initialState={{ pageSize: 200 }}>
+            <SurfaceProbe onListStateChange={onListStateChange} />
+          </ResourceViewProvider>
+        </ToastProvider>
+      </QueryClientProvider>,
     );
 
     await waitFor(() =>

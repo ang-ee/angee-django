@@ -33,6 +33,7 @@ import { useSearchCatalog } from "../search/catalog";
 import type { ResourceToolbarProps } from "../../../toolbars";
 import { PAGE_SIZE_OPTIONS } from "../page-size";
 import { EMPTY_SELECTED_IDS } from "../resource-view-codecs";
+import { EMPTY_ARRAY } from "../surface/types";
 import { ResourceViewUtilities } from "../resource-view-utilities";
 import { PaneListBody } from "./pane-list-body";
 import { placedRecords, selectedGroupsOf } from "../resource-view-grouped-model";
@@ -281,7 +282,7 @@ export function ListViewContent<TRow extends Row = Row>({
   const heading = chrome?.heading ?? (resolvedChrome.compact
     ? { label: modelMetadata?.pluralLabel ?? modelMetadata?.label ?? titleCase(modelLabelSegment(resource)) }
     : undefined);
-  const visibleFields = resolvedChrome.columnChooser ? surface.visibleFields : [];
+  const visibleFields = resolvedChrome.columnChooser ? surface.visibleFields : EMPTY_ARRAY;
   const contributedUtilities = (
     <ResourceViewUtilities
       modelBacked={!source}
@@ -345,11 +346,12 @@ export function ListViewContent<TRow extends Row = Row>({
     ...resourceView, setRowSelection: placement.setRowSelection, toggleSelectedId: placement.toggleSelectedId,
     state: { ...resourceView.state, rowSelection: Object.fromEntries([...shownSelectedIds].map((id) => [id, true])) },
   } : resourceView, [allMatching, resourceView, placement.setRowSelection, placement.toggleSelectedId, shownSelectedIds]);
+  // The header shows checked in the mode, so it only unticks: it clears the page's rows, every row it shows.
+  const pageIds: readonly string[] = surface.kind === "flat" ? surface.pageIds : EMPTY_ARRAY;
+  const clearPageSelection = React.useCallback(() => placement.setRowSelection((current) => Object.fromEntries(
+    Object.entries(current).filter(([id]) => !pageIds.includes(id)))), [placement.setRowSelection, pageIds]);
   const flatSelection = (flat: ResourceViewSurface<TRow>) => allMatching ? {
-    resourceView: flatView, allPageSelected: true, somePageSelected: false,
-    // The header shows checked, so it only unticks: it clears the page's rows, every row it shows.
-    onPageSelectionChange: () => placement.setRowSelection((current) => Object.fromEntries(
-      Object.entries(current).filter(([id]) => !flat.pageIds.includes(id)))),
+    resourceView: flatView, allPageSelected: true, somePageSelected: false, onPageSelectionChange: clearPageSelection,
   } : {
     resourceView, allPageSelected: flat.allPageSelected, somePageSelected: flat.somePageSelected,
     onPageSelectionChange: flat.setPageSelection,
