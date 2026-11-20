@@ -25,6 +25,7 @@ import { CalendarCollectionSurface } from "../../calendar/calendar-collection-su
 import { type GroupedResourceViewSurface, type ResourceViewSurface, type UseResourceViewSurfaceProps } from "../resource-view-surface";
 import type { ResolvedBoardLaneSource } from "../resource-view-board-lanes";
 import type { CardRenderer, ListViewProps } from "../resource-view-types";
+import type { WithPlacedBulkActions } from "../bulk-action";
 import { resolveResourceViewGroup } from "../resource-view-utils";
 import { columnsWithMetadataDefaults, relationFieldInfo } from "../model-metadata-defaults";
 import { useRelationFacets } from "../../relation/relation-facet";
@@ -47,11 +48,15 @@ export function ListView<TRow extends Row = Row>(
   if (props.boardCard && (!props.boardCard.title || (props.boardCard.fields?.length ?? 0) > 4)) {
     throw new Error("ListView boardCard needs a title and at most four detail fields.");
   }
-  return <ListViewFrame {...props} />;
+  // Below the public surface a page's bulk actions are held narrowed: no call can leave the split out.
+  return <ListViewFrame<TRow> {...props} />;
 }
 
+/** `ListView`'s props as everything under it holds them. */
+type ListViewSurfaceProps<TRow extends Row> = WithPlacedBulkActions<ListViewProps<TRow>, TRow>;
+
 function ListViewFrame<TRow extends Row = Row>(
-  props: ListViewProps<TRow>,
+  props: ListViewSurfaceProps<TRow>,
 ): React.ReactElement {
   const resourceView = useResourceViewMaybe();
   const recordChrome = useRecordChromeContextMaybe();
@@ -88,14 +93,14 @@ function ListViewFrame<TRow extends Row = Row>(
     initialState: initial.state,
     children: (scopedResourceView) => (
       <ResourceViewArchiveScopeContext.Provider value={archiveScope}>
-        <ValidatedListViewBody {...props} resourceView={scopedResourceView} />
+        <ValidatedListViewBody<TRow> {...props} resourceView={scopedResourceView} />
       </ResourceViewArchiveScopeContext.Provider>
     ),
   });
 }
 
 function ValidatedListViewBody<TRow extends Row>(
-  props: ListViewProps<TRow> & { resourceView: ResourceViewContextValue },
+  props: ListViewSurfaceProps<TRow> & { resourceView: ResourceViewContextValue },
 ): React.ReactElement {
   const t = useUiT();
   const metadata = useModelMetadata(props.source ? "" : props.resource);
@@ -159,7 +164,7 @@ function ValidatedListViewBody<TRow extends Row>(
           resourceView.resetQuery();
         }} />
       ) : (
-        <ListViewBody {...props} resourceView={resourceView} serverGroups={serverGroups} appliesRepeated={appliesRepeated} />
+        <ListViewBody<TRow> {...props} resourceView={resourceView} serverGroups={serverGroups} appliesRepeated={appliesRepeated} />
       )}
     </ResourceViewKinds>
   );
@@ -274,7 +279,7 @@ function ListViewBody<TRow extends Row = Row>({
   resourceView,
   serverGroups,
   appliesRepeated,
-}: ListViewProps<TRow> & {
+}: ListViewSurfaceProps<TRow> & {
   resourceView: ResourceViewContextValue;
   /** The view groups its stored stack through the server group read (`ValidatedListViewBody`). */
   serverGroups: boolean;

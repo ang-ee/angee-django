@@ -416,7 +416,6 @@ export {
   type RelationOptionsResult,
 } from "./relation/relation-options";
 export * from "./resource/resource-view-model";
-// `useSelectionPlaces` stays internal: a page reads the split through `bulkActions`.
 export {
   ResourceViewProvider,
   useResourceView,

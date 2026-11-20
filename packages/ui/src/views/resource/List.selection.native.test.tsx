@@ -13,11 +13,11 @@ import { Column } from "../page";
 import { List } from "./List";
 import { ResourceList } from "./ResourceList";
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "./resource-view-context";
-import { RowsListView } from "./RowsListView";
+import { RowsListView, type RowsListViewProps } from "./RowsListView";
 import { ganttResources, ganttLane, ganttLanes, ganttRecord, scheduledRecord } from "../../../tests/gantt-fixtures";
 import type { GanttViewProps } from "../gantt/GanttView";
 import type { ListViewProps } from "./resource-view-types";
-import type { PlacedBulkActions, PlacedBulkCollection } from "./bulk-action";
+import type { PlacedBulkActions, PlacedBulkCollection, WithPlacedBulkActions } from "./bulk-action";
 
 const drawing = vi.hoisted(() => ({ props: null as GanttViewProps | null }));
 vi.mock("../gantt/GanttView", () => ({ GanttView: (props: GanttViewProps) => {
@@ -56,6 +56,13 @@ test("a page's bulkActions takes a collection built by hand without the split or
   expectTypeOf<NonNullable<ListViewProps<{ id: string }>["bulkActions"]>>().toExtend<PlacedBulkActions<{ id: string }>>();
   expectTypeOf<HandBuilt>().not.toExtend<PlacedBulkCollection<{ id: string }>>();
   expectTypeOf<HandBuilt & { selectedGroups: null }>().toExtend<PlacedBulkCollection<{ id: string }>>();
+  // Every component under `ListView` and `RowsListView` holds the page's callback narrowed:
+  // the public props are assignable, and a call there cannot leave the split out either.
+  type Held<TProps extends { bulkActions?: unknown }> = NonNullable<WithPlacedBulkActions<TProps, { id: string }>["bulkActions"]>;
+  expectTypeOf<ListViewProps<{ id: string }>>().toExtend<WithPlacedBulkActions<ListViewProps<{ id: string }>, { id: string }>>();
+  expectTypeOf<RowsListViewProps<{ id: string }>>().toExtend<WithPlacedBulkActions<RowsListViewProps<{ id: string }>, { id: string }>>();
+  expectTypeOf<HandBuilt>().not.toExtend<Parameters<Held<ListViewProps<{ id: string }>>>[2]>();
+  expectTypeOf<HandBuilt>().not.toExtend<Parameters<Held<RowsListViewProps<{ id: string }>>>[2]>();
 });
 
 test("List resolves selection and bulk actions against the current view", async () => {

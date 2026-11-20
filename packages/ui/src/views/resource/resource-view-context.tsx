@@ -18,6 +18,14 @@ import { normaliseGroupStack, normaliseSourceKeys } from "./model/search";
 import { normalisePageSize } from "./page-size";
 import { idsFromRowSelectionState } from "./resource-view-codecs";
 import type { ResourceCollectionPresentation, SelectionPlace } from "./resource-view-types";
+import {
+  EMPTY_SELECTION,
+  SelectionOwnerContext,
+  SelectionScopeContext,
+  useScopedSelection,
+  type SelectionOwner,
+  type SelectionRead,
+} from "./selection-channel";
 
 import {
   createResourceViewState,
@@ -67,82 +75,12 @@ function groupsForQuery(current: ResourceViewGroups, query: string, order: strin
   };
 }
 
-interface SelectionState {
+interface SelectionState extends SelectionRead {
   collection: string;
   scope: string;
-  rowSelection: RowSelectionState;
-  rows: Readonly<Record<string, Row>>;
-  /** The place a grouped surface showed each row in when selected; absent for a row selected without one. */
-  places: Readonly<Record<string, SelectionPlace>>;
-  /**
-   * "Select all N": the key of the list read whose every match the person chose and
-   * the total it last settled with, or null when the selection is its ids. The ids
-   * stay the selected ones; any selection write of the scope leaves the mode.
-   */
-  allMatching: { read: string; total: number } | null;
 }
 
-type SelectionRead = Pick<SelectionState, "rowSelection" | "rows" | "places" | "allMatching">;
-interface SelectionOwner {
-  read: (scope: string) => SelectionRead;
-  update: (
-    scope: string,
-    updater: Updater<RowSelectionState>,
-    observed?: (id: string) => Row | undefined,
-    placed?: (id: string) => SelectionPlace | undefined,
-  ) => void;
-  enter: (scope: string) => void;
-  selectAllMatching: (scope: string, read: string, total: number) => void;
-  updateAllMatching: (scope: string, read: string, total: number | null) => void;
-}
-const EMPTY_SELECTION: SelectionRead = { rowSelection: {}, rows: {}, places: {}, allMatching: null };
-const SelectionOwnerContext = createContext<SelectionOwner | null>(null);
-/** The selection scope of the nearest inherited view; the owner's own collection is "". */
-const SelectionScopeContext = createContext("");
-
-/** The list surfaces' own channel to their scope's selection (`useSelectionPlaces`). */
-export interface SelectionPlaces {
-  /** The place a grouped surface showed each selected row in when it was selected. */
-  places: Readonly<Record<string, SelectionPlace>>;
-  /** `setRowSelection`, also capturing where `placed` shows each selected row it places, newly or already selected. */
-  setRowSelection: (
-    updater: Updater<RowSelectionState>,
-    observed?: (id: string) => Row | undefined,
-    placed?: (id: string) => SelectionPlace | undefined,
-  ) => void;
-  /** `toggleSelectedId`, also capturing where the row shows. */
-  toggleSelectedId: (id: string, selected?: boolean, row?: Row, place?: SelectionPlace) => void;
-  /** "Select all N": the key of the read whose every match is selected and its last settled total, or null. */
-  allMatching: SelectionState["allMatching"];
-  /** The person's choice: select every match of the read with this key, keeping the selected ids; nothing without a selection. */
-  selectAllMatching: (read: string, total: number) => void;
-  /** The total the mode chosen over this read settled with, or null to leave it; never enters it. */
-  updateAllMatching: (read: string, total: number | null) => void;
-}
-
-/** One scope's selection and its writes; the public value narrows the writes' types. */
-function useScopedSelection(scope: string, owner: SelectionOwner) {
-  const read = owner.read(scope);
-  const setRowSelection = useCallback<SelectionPlaces["setRowSelection"]>(
-    (updater, observed, placed) => owner.update(scope, updater, observed, placed), [owner.update, scope],
-  );
-  const toggleSelectedId = useCallback<SelectionPlaces["toggleSelectedId"]>(
-    (id, selected, row, place) => setRowSelection((current) => ({
-      ...current, [id]: selected ?? !current[id],
-    }), row === undefined ? undefined : (selectedId) => selectedId === id ? row : undefined,
-    place === undefined ? undefined : (selectedId) => selectedId === id ? place : undefined),
-    [setRowSelection],
-  );
-  const selectAllMatching = useCallback<SelectionPlaces["selectAllMatching"]>(
-    (matching, total) => owner.selectAllMatching(scope, matching, total), [owner.selectAllMatching, scope],
-  );
-  const updateAllMatching = useCallback<SelectionPlaces["updateAllMatching"]>(
-    (matching, total) => owner.updateAllMatching(scope, matching, total), [owner.updateAllMatching, scope],
-  );
-  return { ...read, setRowSelection, toggleSelectedId, selectAllMatching, updateAllMatching };
-}
-
-/** One public selection projection for the owning collection and inherited scopes. */
+/** One public selection projection for the owning collection and inherited scopes; it narrows the writes' types. */
 function useSelectionValue(scope: string, owner: SelectionOwner) {
   const { rowSelection, rows, setRowSelection, toggleSelectedId } = useScopedSelection(scope, owner);
   const selectedRows = useMemo(() => [...idsFromRowSelectionState(rowSelection)]
@@ -154,23 +92,6 @@ function useSelectionValue(scope: string, owner: SelectionOwner) {
   const value = useMemo(() => ({ selectedRows, setRowSelection, toggleSelectedId, clearSelectedIds }),
     [selectedRows, setRowSelection, toggleSelectedId, clearSelectedIds]);
   return { rowSelection, value };
-}
-
-/**
- * The list's channel to the selection of the scope it renders in: the places captured
- * with the snapshots, the writes that capture them, and the "Select all N" mode. It is
- * not part of the package's API: a page reads the split only through `bulkActions` →
- * `selectedGroups`, which the list computes and checks against what it shows, and the
- * mode through `bulkActions` → `allMatching`.
- * @owner ResourceViewProvider
- */
-export function useSelectionPlaces(): SelectionPlaces {
-  const owner = useContext(SelectionOwnerContext);
-  const scope = useContext(SelectionScopeContext);
-  if (!owner) throw new Error("A grouped list requires a resource view.");
-  const { places, setRowSelection, toggleSelectedId, allMatching, selectAllMatching, updateAllMatching } = useScopedSelection(scope, owner);
-  return useMemo(() => ({ places, setRowSelection, toggleSelectedId, allMatching, selectAllMatching, updateAllMatching }),
-    [places, setRowSelection, toggleSelectedId, allMatching, selectAllMatching, updateAllMatching]);
 }
 
 /**
@@ -642,14 +563,18 @@ function useResourceViewContextValue({
   if (activeSelection !== selection) setSelection(activeSelection);
   const read = useCallback<SelectionOwner["read"]>((scope) =>
     activeSelection.scope === scope ? activeSelection : EMPTY_SELECTION, [activeSelection]);
-  const update = useCallback<SelectionOwner["update"]>((scope, updater, observed, placed) => {
+  const update = useCallback<SelectionOwner["update"]>((scope, updater, observed, placed, shown) => {
     setSelection((current) => {
       const base = current.scope === scope ? current : EMPTY_SELECTION;
-      const rowSelection = functionalUpdate(updater, base.rowSelection);
+      // Under "Select all N" a write from a surface showing it starts from what that
+      // surface shows selected, its loaded rows: what the person sees selected is selected.
+      const from = shown && base.allMatching?.readKey === shown.readKey ? shown : undefined;
+      const rowSelection = functionalUpdate(updater, from
+        ? Object.fromEntries(from.ids.map((id) => [id, true])) : base.rowSelection);
       // Object key order is part of the selectedRows contract.
       const ids = Object.keys(rowSelection);
       const previousIds = Object.keys(base.rowSelection);
-      // A write that changes no id still leaves "Select all N": unselecting a row the mode shows selected.
+      // A write that changes no id still leaves "Select all N".
       if (ids.length === previousIds.length && ids.every((id, index) =>
         id === previousIds[index] && rowSelection[id] === base.rowSelection[id])) {
         return base === current && current.allMatching ? { ...current, allMatching: null } : current;
@@ -662,10 +587,11 @@ function useResourceViewContextValue({
       const places: Record<string, SelectionPlace> = {};
       for (const id of selectedIds) {
         const kept = Boolean(base.rowSelection[id]);
-        const row = kept ? base.rows[id] : observed?.(id);
+        const row = kept ? base.rows[id] : observed?.(id) ?? from?.observed(id);
         if (row !== undefined) rows[id] = row;
-        // A write that places a row recaptures it, already selected or not (a ticked group header).
-        const place = placed?.(id) ?? (kept ? base.places[id] : undefined);
+        // A write that places a row recaptures it, already selected or not (a ticked group
+        // header), as does one starting from where the surface shows its rows.
+        const place = placed?.(id) ?? from?.placed?.(id) ?? (kept ? base.places[id] : undefined);
         if (place !== undefined) places[id] = place;
       }
       // Selecting, unselecting or clearing returns to the selected ids.
@@ -675,18 +601,20 @@ function useResourceViewContextValue({
   const enter = useCallback<SelectionOwner["enter"]>((scope) => {
     setSelection((current) => current.scope === scope ? current : { ...current, scope, ...EMPTY_SELECTION });
   }, []);
-  const selectAllMatching = useCallback<SelectionOwner["selectAllMatching"]>((scope, read, total) => {
+  const selectAllMatching = useCallback<SelectionOwner["selectAllMatching"]>((scope, mode) => {
     setSelection((current) => current.scope !== scope || idsFromRowSelectionState(current.rowSelection).size === 0
-      || (current.allMatching?.read === read && current.allMatching.total === total)
-      ? current : { ...current, allMatching: { read, total } });
+      || stableSerialize(current.allMatching) === stableSerialize(mode) ? current : { ...current, allMatching: mode });
   }, []);
-  const updateAllMatching = useCallback<SelectionOwner["updateAllMatching"]>((scope, read, total) => {
-    setSelection((current) => current.scope !== scope || current.allMatching?.read !== read
-      || current.allMatching.total === total ? current
-      : { ...current, allMatching: total === null ? null : { read, total } });
+  const updateAllMatching = useCallback<SelectionOwner["updateAllMatching"]>((scope, readKey, total) => {
+    setSelection((current) => current.scope !== scope || current.allMatching?.readKey !== readKey
+      || current.allMatching.total === total ? current : { ...current, allMatching: { ...current.allMatching, total } });
   }, []);
-  const selectionOwner = useMemo(() => ({ read, update, enter, selectAllMatching, updateAllMatching }),
-    [read, update, enter, selectAllMatching, updateAllMatching]);
+  const leaveAllMatching = useCallback<SelectionOwner["leaveAllMatching"]>((scope, surface) => {
+    setSelection((current) => current.scope !== scope || current.allMatching?.surface !== surface
+      ? current : { ...current, allMatching: null });
+  }, []);
+  const selectionOwner = useMemo(() => ({ read, update, enter, selectAllMatching, updateAllMatching, leaveAllMatching }),
+    [read, update, enter, selectAllMatching, updateAllMatching, leaveAllMatching]);
   const { rowSelection, value: { selectedRows, setRowSelection, toggleSelectedId, clearSelectedIds } } = useSelectionValue("", selectionOwner);
   const viewState = useMemo(() => ({ ...state, rowSelection }), [state, rowSelection]);
   const setPaginationByScope = useCallback<OnChangeFn<GroupPagination>>(

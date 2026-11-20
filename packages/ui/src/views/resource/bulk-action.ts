@@ -10,6 +10,7 @@ import { useLatestRef } from "../../lib/use-latest-ref";
 import { useRuntimeViewAs } from "../../runtime";
 import type { ButtonProps } from "../../ui/button";
 import type { ListViewProps } from "./resource-view-types";
+import type { AllMatchingMode } from "./selection-channel";
 
 /** The collection a page's `bulkActions` receives, its third argument. */
 type BulkCollection<TRow extends Row> = Parameters<NonNullable<ListViewProps<TRow>["bulkActions"]>>[2];
@@ -39,16 +40,25 @@ export type PlacedBulkActions<TRow extends Row> = (
 ) => React.ReactNode;
 
 /**
+ * A surface's props as every component under it holds them: its public props with
+ * `bulkActions` narrowed where the surface receives it, so no call can leave the split out.
+ */
+export type WithPlacedBulkActions<TProps extends { bulkActions?: unknown }, TRow extends Row> =
+  Omit<TProps, "bulkActions"> & { bulkActions?: PlacedBulkActions<TRow> };
+
+/**
  * The call of a page's `bulkActions`, made only over a selection: the surface states
- * the split and the scope's selection supplies its ids' snapshots and clear.
+ * the split and the scope's selection supplies its ids' snapshots and clear. While the
+ * scope holds "Select all N" only a surface showing it hands the page its verbs: one
+ * reading otherwise renders none, so no verb acts on the selected ids alone.
  */
 export function renderBulkActions<TRow extends Row>(
   bulkActions: PlacedBulkActions<TRow> | undefined,
   selectedIds: ReadonlySet<string>,
-  selection: { selectedRows: readonly Row[]; clearSelectedIds: () => void },
+  selection: { selectedRows: readonly Row[]; clearSelectedIds: () => void; allMatching: AllMatchingMode | null },
   collection: Omit<PlacedBulkCollection<TRow>, "selectedRows">,
 ): React.ReactNode {
-  if (selectedIds.size === 0) return null;
+  if (selectedIds.size === 0 || (selection.allMatching && !collection.allMatching)) return null;
   // Scope snapshots are shared Rows; narrow to the declared row type (see bulkActions).
   return bulkActions?.(selectedIds, selection.clearSelectedIds, {
     ...collection, selectedRows: selection.selectedRows as readonly TRow[],

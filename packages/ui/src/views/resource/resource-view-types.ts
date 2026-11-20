@@ -466,15 +466,19 @@ export interface ListViewProps<TRow extends Row = Row> {
        * list offers it once every loaded row is selected and its read matches more;
        * the bar then reads "All N selected" and every loaded row shows selected.
        * Paging, a refetch and a failed read keep it, with the total that last
-       * settled. Selecting or unselecting a row or a group, Clear (which empties the
-       * selection), a change of filter, grouping or sort (which clears it) and the
-       * list reading otherwise (another view kind) leave it; it never comes back by
-       * itself. `selectedIds`, `selectedRows` and `selectedGroups` still describe only
-       * the loaded selected rows, never an unloaded one: a verb that honours
-       * `allMatching` acts on `read` on the server and ignores them, and a verb that
-       * cannot must not act on them either, and says why. The generic Archive,
-       * Trash/Restore and Delete, which act on each row, and the list utilities that
-       * act on `selectedIds` (Share) are disabled with their reason while it is on.
+       * settled. Unselecting a row or a group leaves it for what shows selected: the
+       * loaded rows less those unselected, so an id selected before that does not
+       * show now is dropped. Clear empties the selection and a change of filter,
+       * grouping or sort clears it; the list reading otherwise (another view kind) or
+       * no longer showing leaves it for the selected ids. It never comes back by
+       * itself. `selectedIds`, `selectedRows` and `selectedGroups` still describe the
+       * selected ids, those on pages not loaded included, never a row nobody
+       * selected: a verb that honours `allMatching` acts on `read` on the server and
+       * ignores them, and a verb that cannot must not act on them either, and says
+       * why. The generic Archive, Trash/Restore and Delete, which act on each row, and
+       * the list utilities that act on `selectedIds` (Share) are disabled with their
+       * reason while it is on, on every list sharing the selection; a list there that
+       * reads otherwise renders no page verbs.
        * Descriptive, like `filter`: the server validates what it is given.
        */
       allMatching?:

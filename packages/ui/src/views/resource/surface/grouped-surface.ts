@@ -469,10 +469,11 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   });
 
   const rootResult = scopeModel.rootResult;
-  const rootWindow =
-    rootResult && !rootResult.error
-      ? groupedPageWindow(rootResult, rootPage, statePageSize)
-      : undefined;
+  // A page of groups counts once its read has settled: one loading for the first time
+  // (the first load, another page) has no total yet, never 0, and a refetch keeps the
+  // total it last settled with. The pager and "Select all N" read the same.
+  const settledRoot = rootResult && !rootResult.error && rootResult.updatedAt !== null ? rootResult : undefined;
+  const rootWindow = settledRoot ? groupedPageWindow(settledRoot, rootPage, statePageSize) : undefined;
   const rootTotal = rootWindow?.total;
   const rootPageCount =
     rootTotal === undefined
@@ -527,16 +528,15 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   const matching = React.useMemo<SurfaceMatching | undefined>(() => {
     if (!rootQuery) return undefined;
     const { where, dimensions, having } = rootQuery;
-    const settled = rootResult && !rootResult.error && rootResult.updatedAt !== null ? rootResult : undefined;
     const loaded = [...new Set(groupedItems.flatMap((item) => item.kind === "record" ? [item.row.id] : []))];
     // Every record the read holds is loaded only when this page lists all its groups and their records.
-    const held = !settled ? 0 : rootPage === 1 && settled.totalCount <= settled.buckets.length
-      ? settled.buckets.reduce((count, bucket) => count + bucket.count, 0) : Infinity;
+    const held = !settledRoot ? 0 : rootPage === 1 && settledRoot.totalCount <= settledRoot.buckets.length
+      ? settledRoot.buckets.reduce((count, bucket) => count + bucket.count, 0) : Infinity;
     return {
       selects: { unit: "groups", read: { where, dimensions, ...(having ? { having } : {}) } },
-      total: settled?.totalCount, loaded, more: held > loaded.length,
+      total: settledRoot?.totalCount, loaded, more: held > loaded.length,
     };
-  }, [rootQuery, rootResult, groupedItems, rootPage]);
+  }, [rootQuery, settledRoot, groupedItems, rootPage]);
   return {
     kind: "grouped",
     list,

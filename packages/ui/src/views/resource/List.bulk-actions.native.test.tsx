@@ -18,6 +18,7 @@ import { collectionQuery } from "./collection-source";
 import { List } from "./List";
 import type { ListViewProps } from "./resource-view-types";
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "./resource-view-context";
+import { ListSelectionBar } from "./resource-view-list-body";
 
 const flags: DataResourceFieldMetadata[] = [
   { name: "archived", kind: "scalar", scalar: "Boolean", readable: true, aggregatable: false,
@@ -422,6 +423,18 @@ test.each([preview, { ...preview, viewAs: null, pending: true }])("view-as block
   }
   expect(f.update).not.toHaveBeenCalled();
   expect(f.custom).not.toHaveBeenCalled();
+});
+
+test("the list's selection bar refuses its own Delete under view-as, without a list's bulk runner", () => {
+  const onDelete = vi.fn();
+  render(<Provider><AppRuntimeProvider runtime={{ icons: baseIcons,
+    auth: { user: preview.currentUser, status: "authenticated", hasRole: () => false, viewAs: preview } }}>
+    <ListSelectionBar count={1} onClear={() => undefined} onDelete={onDelete} />
+  </AppRuntimeProvider></Provider>);
+  const remove = screen.getByRole<HTMLButtonElement>("button", { name: "Delete" });
+  expect(remove.disabled).toBe(true);
+  fireEvent.click(remove);
+  expect(onDelete).not.toHaveBeenCalled();
 });
 
 test("entering view-as while the trash prompt is open blocks its confirmed writes", async () => {

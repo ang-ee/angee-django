@@ -10,6 +10,7 @@ import { Button } from "../../../ui/button";
 import { cn } from "../../../lib/cn";
 import { Checkbox } from "../../../ui/checkbox";
 import { TableCell, TableHead, TableRow } from "../../../ui/table";
+import { Tooltip } from "../../../ui/tooltip";
 import type { ResourceViewContextValue } from "../resource-view-context";
 import type { ResourceViewGroup } from "../resource-view-model";
 import {
@@ -383,7 +384,6 @@ export function renderListRow<TRow extends Row>({
   groupStack,
   interactive,
   selectable,
-  allMatching = false,
   rowHref,
   onRowClick,
   activeRowId,
@@ -397,8 +397,6 @@ export function renderListRow<TRow extends Row>({
   groupStack: readonly ResourceViewGroup[];
   interactive: boolean;
   selectable: boolean;
-  /** Every record the list's read matches is selected: the row shows selected. */
-  allMatching?: boolean;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
   activeRowId?: string | null;
@@ -420,7 +418,7 @@ export function renderListRow<TRow extends Row>({
     <RecordRow
       key={row.id}
       row={row}
-      selected={allMatching || Boolean(resourceView.state.rowSelection[row.id])}
+      selected={Boolean(resourceView.state.rowSelection[row.id])}
       onToggleSelected={resourceView.toggleSelectedId}
       interactive={interactive}
       selectable={selectable}
@@ -439,6 +437,11 @@ export interface SelectionToggleProps {
   checked: boolean;
   indeterminate?: boolean;
   disabled?: boolean;
+  /**
+   * Why the box cannot change; a reason disables it. The reason is its tooltip and its
+   * accessible description; null is none yet, keeping its tree for one to come.
+   */
+  disabledReason?: string | null;
   onCheckedChange: (checked: boolean) => void;
   className?: string;
 }
@@ -451,11 +454,15 @@ export function SelectionToggle({
   label,
   checked,
   indeterminate = false,
-  disabled = false,
+  disabled: disabledProp = false,
+  disabledReason,
   onCheckedChange,
   className,
 }: SelectionToggleProps): React.ReactElement {
-  return (
+  const reasonId = React.useId();
+  const reason = disabledReason || null;
+  const disabled = disabledProp || reason !== null;
+  const toggle = (
     <div
       className={cn("flex items-center justify-center", disabled ? "cursor-not-allowed" : "cursor-pointer", className)}
       onClick={(event) => {
@@ -467,13 +474,16 @@ export function SelectionToggle({
       <Checkbox
         size="sm"
         aria-label={label}
+        aria-describedby={reason === null ? undefined : reasonId}
         checked={checked}
         indeterminate={indeterminate}
         disabled={disabled}
         onCheckedChange={(next) => onCheckedChange(next)}
       />
+      {reason === null ? null : <span id={reasonId} hidden>{reason}</span>}
     </div>
   );
+  return disabledReason === undefined ? toggle : <Tooltip label={reason} disabled={reason === null}>{toggle}</Tooltip>;
 }
 
 /**

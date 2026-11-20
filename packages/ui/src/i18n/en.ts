@@ -444,6 +444,7 @@ export const enUiMessages: Record<string, string> = {
   "list.selectedOnlyNotAllGroups_one": "This acts on the rows you select, not on the {count} group",
   "list.selectedOnlyNotAllGroups_other": "This acts on the rows you select, not on all {count} groups",
   "list.selectGroup": "Select the loaded rows in {label}",
+  "list.expandGroupToChangeSelection": "Expand the group to change its selection",
   "list.expandAllGroups": "Expand all groups",
   "list.collapseAllGroups": "Collapse all groups",
   "list.actions": "Actions",

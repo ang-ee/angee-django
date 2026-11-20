@@ -34,7 +34,8 @@ import {
 } from "../../ui/table";
 import { textRoleVariants } from "../../ui/text";
 import { depthIndent } from "../../ui/tree";
-import { useSelectionPlaces, type ResourceViewContextValue, type SelectionPlaces } from "./resource-view-context";
+import type { ResourceViewContextValue } from "./resource-view-context";
+import { useSelectionPlaces, type SelectionPlaces, type ShownSelection } from "./selection-channel";
 import { placedRecords } from "./resource-view-grouped-model";
 import type { ListViewNavigationScope, ResourceListSnapshot } from "./resource-view-surface";
 import {
@@ -91,6 +92,11 @@ export interface GroupedListBodyProps<TRow extends Row> {
   setScopePage: (key: string, page: number) => void;
   setScopePageSize: (key: string, pageSize: number) => void;
   selectedIds: ReadonlySet<string>;
+  /**
+   * Present while "Select all N" is on: what the list shows selected, every loaded row,
+   * which a write starts from. The header and every group's checkbox show checked.
+   */
+  shown?: ShownSelection;
   interactive: boolean;
   rowHref?: (row: TRow, scope?: ListViewNavigationScope) => string;
   renderRowActions?: (row: TRow) => React.ReactNode;
@@ -122,6 +128,7 @@ export function GroupedListBody<TRow extends Row>({
   setScopePage,
   setScopePageSize,
   selectedIds,
+  shown,
   interactive,
   rowHref,
   renderRowActions,
@@ -186,7 +193,8 @@ export function GroupedListBody<TRow extends Row>({
     }
     return { groupRecords: byGroup, loadedRecords: all };
   }, [listItems]);
-  const { setRowSelection, toggleSelectedId } = useSelectionPlaces();
+  const { setRowSelection, toggleSelectedId } = useSelectionPlaces(shown);
+  const allMatching = shown !== undefined;
   // Ticking captures where each record is shown in these records, again for one
   // already selected; one shown under several group paths captures none.
   const selectRecords = React.useCallback((records: readonly GroupedRecordItem<TRow>[], selected: boolean) => {
@@ -225,9 +233,10 @@ export function GroupedListBody<TRow extends Row>({
                     grouped
                     chevron={expandAll}
                     label={t("list.selectAllLoaded")}
-                    checked={loadedRecords.length > 0 && selectedCount === loadedRecords.length}
-                    indeterminate={selectedCount > 0 && selectedCount < loadedRecords.length}
-                    disabled={loadedRecords.length === 0}
+                    // Under "Select all N" it shows checked even with every group collapsed, and unticking it leaves the mode.
+                    checked={allMatching || (loadedRecords.length > 0 && selectedCount === loadedRecords.length)}
+                    indeterminate={!allMatching && selectedCount > 0 && selectedCount < loadedRecords.length}
+                    disabled={!allMatching && loadedRecords.length === 0}
                     onCheckedChange={(checked) => selectRecords(loadedRecords, checked)}
                   />
                 ) : (
@@ -301,6 +310,7 @@ export function GroupedListBody<TRow extends Row>({
                       onToggleGroup={toggleGroup}
                       groupRecords={groupRecords}
                       selectedIds={selectedIds}
+                      allMatching={allMatching}
                       toggleSelectedId={toggleSelectedId}
                       onSelectRecords={selectRecords}
                       onPageChange={setScopePage}
@@ -366,6 +376,8 @@ interface GroupedItemRowProps<TRow extends Row> {
   groupRecords: ReadonlyMap<string, readonly GroupedRecordItem<TRow>[]>;
   /** What shows selected: the selection, and every loaded row under "Select all N". */
   selectedIds: ReadonlySet<string>;
+  /** "Select all N" is on: every group shows selected, a collapsed one too. */
+  allMatching: boolean;
   toggleSelectedId: SelectionPlaces["toggleSelectedId"];
   onSelectRecords: (records: readonly GroupedRecordItem<TRow>[], selected: boolean) => void;
   onPageChange: (key: string, page: number) => void;
@@ -391,6 +403,7 @@ function GroupedItemRow<TRow extends Row>({
   onToggleGroup,
   groupRecords,
   selectedIds,
+  allMatching,
   toggleSelectedId,
   onSelectRecords,
   onPageChange,
@@ -408,10 +421,13 @@ function GroupedItemRow<TRow extends Row>({
           item={item}
           selection={selectable ? {
             label: t("list.selectGroup", { label: item.label }),
-            checked: records.length > 0 && selectedCount === records.length,
-            indeterminate: selectedCount > 0 && selectedCount < records.length,
-            // Only loaded rows can be selected; a collapsed group has none yet.
+            checked: allMatching || (records.length > 0 && selectedCount === records.length),
+            indeterminate: !allMatching && selectedCount > 0 && selectedCount < records.length,
+            // Only loaded rows can be selected or unselected, so a group with none loaded
+            // (collapsed, or its page loading) cannot change, under "Select all N" too, where
+            // it shows selected; a collapsed one says why.
             disabled: records.length === 0,
+            disabledReason: item.expandable && !item.expanded ? t("list.expandGroupToChangeSelection") : null,
             onCheckedChange: (checked: boolean) => onSelectRecords(records, checked),
           } : undefined}
           visibleColumns={visibleColumns}

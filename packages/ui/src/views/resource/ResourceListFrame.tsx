@@ -25,6 +25,7 @@ export interface ResourceListFrameSelection {
   onClear: () => void;
   onDelete?: () => void;
   deletePending?: boolean;
+  /** The list's bulk runner: the bar waits for its run, and Delete refuses with its reason, as every generic verb does. */
   bulk?: BulkActionRunner;
   actions?: React.ReactNode;
   matching?: ListSelectionMatching;
@@ -139,7 +140,8 @@ export function ResourceListFrame({
             onClear={selection.onClear}
             onDelete={selection.onDelete}
             deletePending={selection.deletePending}
-            bulk={selection.bulk}
+            pending={selection.bulk?.pending}
+            deleteDisabledReason={selection.bulk?.reason.disabledReason}
             actions={selection.actions}
             matching={selection.matching}
           />
