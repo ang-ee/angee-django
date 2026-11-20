@@ -128,6 +128,41 @@ describe("native list batch structural sharing", () => {
     expect(seen[removedAt]).toEqual({ rows: [], fetching: true });
   });
 
+  test("two labels on one request share one observer and one entry", async () => {
+    dataProvider.getList.mockResolvedValue({ data: [{ id: "note-a" }], total: 1 });
+    const warn = vi.spyOn(console, "warn");
+    try {
+      const { result } = renderHook(() => {
+        const [first] = scopes();
+        return useAngeeListBatch(target, [first!, { ...first!, key: "again" }], { fields: ["id"] });
+      }, { wrapper: Provider });
+      await waitFor(() => expect(result.current.get("1")?.total).toBe(1));
+      expect(result.current.get("again")).toBe(result.current.get("1"));
+      const pages = clients.at(-1)!.getQueryCache().findAll({ predicate: (query) => query.queryHash.includes('"list"') });
+      expect(pages.map((query) => query.getObserversCount())).toEqual([1]);
+      expect(dataProvider.getList).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls.flat().some((message) => String(message).includes("Duplicate Queries"))).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("changing the fields asks for each page again, under its new request", async () => {
+    dataProvider.getList.mockResolvedValue({ data: [{ id: "note-a" }], total: 12 });
+    const { result, rerender } = renderHook(
+      ({ fields }) => useAngeeListBatch(target, scopes(), { fields }),
+      { initialProps: { fields: ["id"] }, wrapper: Provider },
+    );
+    await waitFor(() => expect([...result.current.values()].every((entry) => entry.total === 12 && !entry.fetching)).toBe(true));
+    const settled = result.current;
+    rerender({ fields: ["id", "title"] });
+    expect(result.current.get("1")).not.toBe(settled.get("1"));
+    await waitFor(() => expect(dataProvider.getList).toHaveBeenCalledTimes(4));
+    const pages = clients.at(-1)!.getQueryCache().findAll({ predicate: (query) => query.queryHash.includes('"list"') });
+    expect(pages).toHaveLength(4);
+    expect(pages.filter((query) => query.getObserversCount() > 0)).toHaveLength(2);
+  });
+
   test("returns an empty stable Map when disabled and makes no requests", () => {
     const { result, rerender } = renderHook(() => useAngeeListBatch(target, scopes(), { fields: ["id"], enabled: false }), { wrapper: Provider });
     const empty = result.current;

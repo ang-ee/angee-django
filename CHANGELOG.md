@@ -131,9 +131,12 @@ live in code docstrings.
   `useCollectionQueryBatch` and the grouped surface's source results derive
   through it, so a read that settles decodes only itself and opening a group
   decodes no other. A group payload the decoder refuses is that read's `error`, in
-  a batch and in the facets as in `useAngeeGroupBy`, never a render that throws.
+  a batch and in the facets as in `useAngeeGroupBy`, never a render that throws,
+  and is reported as a failed read is (refine's auth check and error
+  notification), once per settle of the read across its consumers.
   `useAngeeGroupBy` and `useAngeeAggregate` decode once per read,
-  `useAngeeListBatch` keys its requests on the target's and scopes' contents, and a
+  `useAngeeListBatch` keys its requests on the target's and scopes' contents and
+  shares one request among the labels on it, and a
   resource's operations (`useGroupOperation`, `useAggregateOperation`,
   `useDeletePreviewOperation`) keep their target across renders, so a grouped
   list's render that changes nothing it reads (a scroll frame) rebuilds no group

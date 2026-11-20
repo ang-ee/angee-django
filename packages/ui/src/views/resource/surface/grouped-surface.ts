@@ -257,7 +257,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
       updatedAt: result.updatedAt,
       refetch: result.refetch,
     }),
-    EMPTY_ARRAY,
+    [],
   );
   const groupByResults: ReadonlyMap<string, GroupedQueryResult> = source ? authoredGroups : nativeGroupResults;
   const scopeModel = React.useMemo(
@@ -336,7 +336,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
       updatedAt: result.updatedAt,
       refetch: result.refetch,
     }),
-    EMPTY_ARRAY,
+    [],
   );
   const requestedLeafResults: ReadonlyMap<string, AngeeListBatchEntry> = source ? authoredLeaves : nativeLeafResults;
   const leafResults = React.useMemo<ReadonlyMap<string, AngeeListBatchEntry>>(

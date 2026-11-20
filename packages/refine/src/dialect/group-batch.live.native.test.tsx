@@ -418,6 +418,10 @@ test("a group read whose payload the decoder refuses carries the error beside an
   await waitFor(() => expect(result.current.get("next-page")?.error?.message).toBe("Grouped response requires a numeric totalCount"));
   expect(result.current.get("next-page")?.buckets).toEqual([]);
   expect(result.current.get("channels")).toMatchObject({ error: null, totalCount: 1 });
+  // Reported as a failed read is: once, however often the batch renders.
+  await waitFor(() => expect(f.notify).toHaveBeenCalledTimes(1));
+  expect(f.notify).toHaveBeenCalledWith(expect.objectContaining({ type: "error", description: "Grouped response requires a numeric totalCount" }));
+  expect(f.onError).toHaveBeenCalledTimes(1);
 });
 
 test("two facets of one read keep their own results, each keeping its identity while another read settles", async () => {

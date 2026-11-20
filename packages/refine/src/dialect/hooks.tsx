@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import {
   useCustomMutation,
@@ -41,6 +41,7 @@ import {
   useOperationDocuments,
 } from "../operation-documents";
 import { useActiveDataProviderName } from "./data-provider-context";
+import { useRefusedReadReport } from "./authored-query-options";
 import {
   useAuthoredMutation,
   useAuthoredQueryBatch,
@@ -240,11 +241,11 @@ export function useAngeeGroupBy(
     () => [{ key: "single", query }],
     [queryKey],
   );
-  const run = useGroupByRequestBatch(target, scopes, { document, enabled, refetchInterval, relatedModels });
-  const entry = run.get("single");
+  // One read is a batch of one: decoded once per read, its refusal reported once.
+  const results = useAngeeGroupByBatch(target, scopes, { document, enabled, refetchInterval, relatedModels });
   const root = target?.root;
-  // Decoded once per read, so a render that changes nothing hands back the same result.
-  return useMemo(() => groupByResult(entry, root), [entry, root]);
+  const absent = useMemo(() => groupByResult(undefined, root), [root]);
+  return results.get("single") ?? absent;
 }
 
 /**
@@ -258,7 +259,7 @@ function groupByResult(entry: QueryBatchEntry<unknown> | undefined, root: string
     try {
       result = extractGroupBy(entry.data, root);
     } catch (cause) {
-      decodeError = errorOf(cause);
+      decodeError = errorFromHttp(cause);
     }
   }
   return {
@@ -270,8 +271,22 @@ function groupByResult(entry: QueryBatchEntry<unknown> | undefined, root: string
   };
 }
 
-function errorOf(cause: unknown): Error {
-  return cause instanceof Error ? cause : new Error(String(cause));
+/**
+ * Report each read whose payload a derivation refused (its derived error is not the
+ * read's own) as a failed read is, once per settle: an empty facet or group list
+ * then says why.
+ */
+function useReportRefusedReads(
+  batch: ReadonlyMap<string, QueryBatchEntry<unknown>>,
+  derived: ReadonlyMap<string, { error: unknown }>,
+): void {
+  const report = useRefusedReadReport();
+  useEffect(() => {
+    for (const [key, output] of derived) {
+      const entry = batch.get(key);
+      if (entry && output.error instanceof Error && output.error !== entry.error) report(entry, output.error);
+    }
+  }, [batch, derived, report]);
 }
 
 export function useAngeeFacets(
@@ -295,9 +310,10 @@ export function useAngeeFacets(
     try {
       return { result: extractFacet(entry.data, root, facet), error: null };
     } catch (cause) {
-      return { result: EMPTY_FACET_RESULT, error: errorOf(cause) };
+      return { result: EMPTY_FACET_RESULT, error: errorFromHttp(cause) };
     }
   }, [activeFacets, root]);
+  useReportRefusedReads(batch, decoded);
   return useMemo(() => {
     const values = [...new Set(batch.values())];
     return {
@@ -361,7 +377,9 @@ export function useAngeeGroupByBatch(
 ): ReadonlyMap<string, UseAngeeGroupByResult> {
   const batch = useGroupByRequestBatch(target, scopes, options);
   const root = target?.root;
-  return useDerivedBatch(batch, (entry) => groupByResult(entry, root), [root]);
+  const results = useDerivedBatch(batch, (entry) => groupByResult(entry, root), [root]);
+  useReportRefusedReads(batch, results);
+  return results;
 }
 
 /**
@@ -387,22 +405,24 @@ export function useAngeeListBatch(
   const schemaName = target?.dataProviderName;
   // A caller derives its target and scopes per render: their contents, not the
   // objects, key the requests. The requests, their hashes and each label's request
-  // are one value, so the labels cannot outlive the requests they name.
+  // are one value, so the labels cannot outlive the requests they name. Labels on
+  // one request share it, as in the authored batch.
   const targetKey = stableKey(target);
   const fieldsKey = stableKey(options.fields);
   const scopesKey = stableKey(activeScopes);
   const batch = useMemo(() => {
-    const requests = activeScopes.map((scope) => {
+    const labelled = activeScopes.map((scope) => {
       const meta = listQueryMeta(target!, options.fields, scope.where, scope.orderBy);
       const pagination = { mode: "server" as const, currentPage: scope.page, pageSize: scope.pageSize };
       const queryKey = keys().data(schemaName).resource(identifier).action("list")
         .params({ ...meta, filters: [], pagination, sorters: [] }).get();
       return { label: scope.key, meta, pagination, queryKey, hash: client.defaultQueryOptions({ queryKey }).queryHash };
     });
+    const requests = new Map(labelled.map((request) => [request.hash, request]));
     return {
-      requests,
-      hashes: requests.map(({ hash }) => hash),
-      labels: requests.map(({ label, hash }) => [label, hash] as const),
+      requests: [...requests.values()],
+      hashes: [...requests.keys()],
+      labels: labelled.map(({ label, hash }) => [label, hash] as const),
     };
   }, [client, scopesKey, targetKey, fieldsKey]);
   // One static, resource-level live subscription re-opens the websocket changes()
@@ -432,8 +452,9 @@ export function useAngeeListBatch(
       enabled: canQuery,
     })),
   });
-  const pages = useMemo(() => labelBatchResults("useAngeeListBatch", batch.labels, entries), [batch, entries]);
-  return useDerivedBatch(pages, (query) => ({
+  // Each request's page, derived once and read by every label on it.
+  const byRequest = useMemo(() => new Map(Object.entries(entries)), [entries]);
+  const pages = useDerivedBatch(byRequest, (query) => ({
     refetch: () => { void query.refetch(); },
     rows: (query.data?.data ?? []) as readonly Row[],
     total: query.data?.total,
@@ -441,6 +462,7 @@ export function useAngeeListBatch(
     error: errorFromHttp(query.error),
     updatedAt: query.dataUpdatedAt || null,
   }), []);
+  return useMemo(() => labelBatchResults("useAngeeListBatch", batch.labels, Object.fromEntries(pages)), [batch, pages]);
 }
 
 export function useAngeeDeletePreview(

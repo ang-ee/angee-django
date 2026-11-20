@@ -1,15 +1,16 @@
 // @vitest-environment happy-dom
 
 import { parse } from "graphql";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, render, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import type { ReactNode } from "react";
+import { useLayoutEffect, type ReactNode } from "react";
 
 import { createLiveInvalidation, invalidateAuthoredQueries } from "../query-invalidation";
 import type { TypedDocumentNode } from "../typed-document";
 import { ActiveDataProviderNameProvider } from "./data-provider-context";
 import {
+  authoredQueryKey,
   useAuthoredQuery,
   useAuthoredQueryBatch,
   type AuthoredQueryBatchScope,
@@ -232,6 +233,37 @@ describe("useAuthoredQueryBatch", () => {
     const removedAt = seen.length;
     rerender({ tick: 1 });
     expect(seen[removedAt]).toEqual({ data: undefined, fetching: true });
+  });
+
+  test("data written for a request during the render that inserts another keys each label to its own", async () => {
+    for (const parent of ["folder-a", "folder-b"]) {
+      batchMock.handlers.set(`drive-a/${parent}`, async () => data(parent, "drive-a", parent));
+    }
+    const client = createQueryClient();
+    const seen: ReadonlyMap<string, { data?: ProbeData }>[] = [];
+    /** Writes folder-a's data in a layout effect, before the batch's own effects follow its new requests. */
+    function Write() {
+      useLayoutEffect(() => {
+        client.setQueryData(authoredQueryKey(DOCUMENT, { drive: "drive-a", parent: "folder-a" }, "console"),
+          data("written-a", "drive-a", "folder-a"));
+      }, []);
+      return null;
+    }
+    function Batch({ parents }: { parents: readonly string[] }) {
+      seen.push(useAuthoredQueryBatch(parents.map((parent) => scope(parent, "drive-a", parent))));
+      return parents.length > 1 ? <Write /> : null;
+    }
+    const view = render(<Providers client={client}><Batch parents={["folder-a"]} /></Providers>);
+    await waitFor(() => expect(seen.at(-1)?.get("folder-a")?.data?.folders[0]?.id).toBe("folder-a"));
+    expect(() => view.rerender(<Providers client={client}><Batch parents={["folder-b", "folder-a"]} /></Providers>)).not.toThrow();
+    await waitFor(() => {
+      expect(seen.at(-1)?.get("folder-a")?.data?.folders[0]?.id).toBe("written-a");
+      expect(seen.at(-1)?.get("folder-b")?.data?.folders[0]?.id).toBe("folder-b");
+    });
+    // No render handed a label another request's data.
+    for (const batch of seen) {
+      for (const [label, entry] of batch) if (entry.data) expect(entry.data.folders[0]?.parent).toBe(label);
+    }
   });
 
   test("a request inserted at the front or removed from the middle keeps every other label's entry", async () => {
