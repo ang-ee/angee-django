@@ -12,11 +12,14 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from rebac import actor_context, system_context
-from rebac.models import SchemaDefinition
+from rebac import ObjectRef, actor_context, backend, system_context, to_subject_ref
+from rebac.conf import app_settings
+from rebac.models import Relationship, RelationshipRegistry, SchemaDefinition
+from rebac.roles import grant
 
 from angee.agents.testing import models as agents_models
-from angee.base.testing.fixtures import SESSION_BASELINE, database_rows
+from angee.base.testing import fixtures as testing_fixtures
+from angee.base.testing.fixtures import SESSION_BASELINE, database_rows, relationship_storage
 from angee.decisions.testing import models as decisions_models
 from angee.integrate.testing import integration as integration_models
 from angee.integrate.testing import models as integrate_models
@@ -143,3 +146,65 @@ def test_a_flush_restores_the_recorded_session_baseline(pytestconfig: pytest.Con
     with CaptureQueriesContext(connection) as queries:
         ContentType.objects.get_for_model(Workflow)
     assert not queries
+
+
+def _storages() -> tuple[str, str]:
+    """The host's configured relationship storage, then the other one."""
+
+    configured = app_settings.REBAC_LOCAL_BACKEND_STORAGE
+    return configured, "denormalized" if configured == "registry" else "registry"
+
+
+def _rows(storage: str) -> int:
+    return (RelationshipRegistry if storage == "registry" else Relationship)._base_manager.count()
+
+
+def _holds(subject: object, action: str, resource: ObjectRef) -> bool:
+    return backend().check_access(subject=to_subject_ref(subject), action=action, resource=resource).allowed
+
+
+def test_relationship_storage_carries_the_baseline_into_either_storage_and_back(db: None) -> None:
+    """A baseline grant reads in the other storage, and a grant written there reads back in the configured one."""
+
+    del db
+    configured, other = _storages()
+    rule = apps.get_model("provenance", "Rule")._base_manager.get(key="parties.source_sender")
+    statement_sources = ObjectRef("provenance/role", "parties_statement_source")
+    auditor = get_user_model().objects.create_user(username="storage-auditor")
+    auditors = ObjectRef("angee/role", "auditor")
+    before = _rows(other)
+    with relationship_storage(other):
+        assert app_settings.REBAC_LOCAL_BACKEND_STORAGE == other
+        assert _holds(rule, "effective_member", statement_sources)
+        with system_context(reason="tests.testing.relationship_storage"):
+            grant(actor=auditor, role=str(auditors))
+        with relationship_storage(configured):
+            assert app_settings.REBAC_LOCAL_BACKEND_STORAGE == configured
+            assert _holds(auditor, "member", auditors) and _holds(rule, "effective_member", statement_sources)
+        # Back in the other storage: its own rows stand; the configured table lost what the inner block added.
+        assert _holds(auditor, "member", auditors)
+    assert app_settings.REBAC_LOCAL_BACKEND_STORAGE == configured
+    assert _rows(other) == before
+    assert not _holds(auditor, "member", auditors) and _holds(rule, "effective_member", statement_sources)
+
+
+def test_relationship_storage_restores_the_setting_and_the_table_when_the_block_raises(db: None) -> None:
+    del db
+    configured, other = _storages()
+    before = _rows(other)
+    with pytest.raises(RuntimeError, match="inside the block"), relationship_storage(other):
+        assert _rows(other) > before
+        raise RuntimeError("inside the block")
+    assert app_settings.REBAC_LOCAL_BACKEND_STORAGE == configured
+    assert _rows(other) == before
+
+
+def test_relationship_storage_of_the_active_storage_copies_nothing(db: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    del db
+    configured, other = _storages()
+    copies: list[tuple[object, ...]] = []
+    monkeypatch.setattr(testing_fixtures, "call_command", lambda *args, **kwargs: copies.append(args))
+    before = _rows(other)
+    with relationship_storage(configured):
+        assert app_settings.REBAC_LOCAL_BACKEND_STORAGE == configured
+    assert copies == [] and _rows(other) == before
