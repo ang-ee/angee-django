@@ -95,14 +95,30 @@ with its own leaves, and applies it. The order matters:
 
 1. Delete any autodetected migration that removes the channel's form columns.
    The drop guard refuses to author one only at `makemigrations`, and only on a
-   database that holds a form; it never judges one already on disk.
+   database that holds a form.
 2. Copy the template in, pinned after the project's messaging leaf and its
    webforms initial migration. `makemigrations messaging` then reports no
    changes.
 3. Run `manage.py check_webform_channels`. It judges the channels as `migrate`
    will, prints what the move would refuse and what it would leave out, and
-   changes nothing.
+   changes nothing. Where the form columns are already gone it says there is
+   nothing to move.
 4. Run `migrate`, then `rebac sync`.
+
+`migrate` refuses the wrong order by itself, also under `provision`, which skips
+system checks. The bridge listens to `pre_migrate`
+([`refuse_removal_ahead_of_the_move`](signals.py)): a run whose plan removes the
+form columns with a migration that neither is the move nor follows it is stopped
+before anything is applied, while a webform channel of that database holds a
+form. The refusal names the migration, counts the channels and names a few by
+public id, and gives the remedy. `check --database` says the same beforehand as
+`angee.E054` ([`checks.py`](checks.py)). A project's copy of the template is
+known by what the template declares of itself, not by its file name. The order
+above stays the instruction.
+
+Interim: the receiver and the check are deleted once the framework pins
+django-compose 0.1.0.dev14, whose drop guard judges pending removals at migrate
+time.
 
 Each channel becomes a form with its first version and its address, posting on
 the same channel under the same slug, and the channel's form columns are

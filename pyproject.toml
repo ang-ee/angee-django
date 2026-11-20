@@ -323,7 +323,8 @@ type = "forbidden"
 source_modules = ["angee.webforms"]
 forbidden_modules = ["angee.messaging", "angee.intake", "angee.webforms_messaging"]
 ignore_imports = [
-  # The bare test host's one concrete form folds the bridge's same-row rule, as the composer does.
+  # The bare test host has one concrete model per app label, so a donor that extends webforms.Form can be
+  # folded only into that module's Form; this one edge is the fold, and nothing wider is excused.
   "angee.webforms.testing.models -> angee.webforms_messaging.models",
 ]
 

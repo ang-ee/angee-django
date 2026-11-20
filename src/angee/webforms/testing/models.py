@@ -13,6 +13,9 @@ from angee.webforms.models import WebformsRole as AbstractWebformsRole
 from angee.webforms_messaging.models import FormConversation
 
 
+# The bare test host has one concrete model per app label, so a donor that extends webforms.Form can be
+# folded only into this Form; the bridge has no host of its own to fold it in. The composed host, where
+# the composer folds the donor as on a real project, is the test of record for the rule.
 class Form(FormConversation, AbstractForm):
     """Concrete form used by web forms tests.
 
