@@ -80,6 +80,8 @@ dependencies = [
     "angee-timeline==3.0.0",
     "angee-uom==3.0.0",
     "angee-web==3.0.0",
+    "angee-webforms==3.0.0",
+    "angee-webforms-messaging==3.0.0",
     "angee-work==3.0.0",
     "angee-workflows==3.0.0",
     "angee-workflows-agents==3.0.0",
@@ -201,6 +203,8 @@ angee-theme-warm-red = {workspace = true}
 angee-timeline = {workspace = true}
 angee-uom = {workspace = true}
 angee-web = {workspace = true}
+angee-webforms = {workspace = true}
+angee-webforms-messaging = {workspace = true}
 angee-work = {workspace = true}
 angee-workflows = {workspace = true}
 angee-workflows-agents = {workspace = true}
@@ -305,6 +309,23 @@ source_modules = ["angee.checklists"]
 forbidden_modules = [
   "angee.workflows", "angee.workflows_agents", "angee.workflows_extraction", "angee.workflows_integrate",
   "angee.workflows_messaging", "angee.workflows_parties", "angee.workflows_posts",
+]
+
+[[tool.importlinter.contracts]]
+name = "Web forms and messaging meet only in their bridge"
+type = "forbidden"
+source_modules = ["angee.messaging", "angee.intake"]
+forbidden_modules = ["angee.webforms", "angee.webforms_messaging"]
+
+[[tool.importlinter.contracts]]
+name = "Web forms do not import messaging, intake or the bridge"
+type = "forbidden"
+source_modules = ["angee.webforms"]
+forbidden_modules = ["angee.messaging", "angee.intake", "angee.webforms_messaging"]
+ignore_imports = [
+  # The bare test host has one concrete model per app label, so a donor that extends webforms.Form can be
+  # folded only into that module's Form; this one edge is the fold, and nothing wider is excused.
+  "angee.webforms.testing.models -> angee.webforms_messaging.models",
 ]
 
 [[tool.importlinter.contracts]]

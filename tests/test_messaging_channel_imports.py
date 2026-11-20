@@ -53,9 +53,9 @@ def test_import_target_resolves_only_a_channel_of_the_named_backend(import_owner
 
     with system_context(reason="test.messaging.channel.import.target"):
         channel = Channel.objects.create_disconnected(import_owner, name="Archive", backend_class="manual")
-        assert list(Channel.objects.filter(pk=channel.pk).for_backend("webform")) == []
+        assert list(Channel.objects.filter(pk=channel.pk).for_backend("email")) == []
     assert Channel.objects.require_backend_target(channel.sqid, backend_class="manual").pk == channel.pk
-    with pytest.raises(ValidationError, match="No Public Webform channel"):
-        Channel.objects.require_backend_target(channel.sqid, backend_class="webform")
+    with pytest.raises(ValidationError, match="No Email channel"):
+        Channel.objects.require_backend_target(channel.sqid, backend_class="email")
     with pytest.raises(ValidationError, match="No Manual channel 'chn_missing'"):
         Channel.objects.require_backend_target("chn_missing", backend_class="manual")

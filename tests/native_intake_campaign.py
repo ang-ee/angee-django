@@ -12,7 +12,7 @@ from rebac import PermissionDenied, actor_context, system_context
 from angee.base.exceptions import RecordAccessSubjectRefused
 from angee.base.models.identity import public_id_of
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
-from tests.native_intake_capture import ChannelIntakeCaptureTests, IntakeAccessCase, grant_rows
+from tests.native_intake_capture import FormCaptureTests, IntakeAccessCase, grant_rows
 
 
 class IntakeCampaign(IntakeAccessCase):
@@ -174,36 +174,41 @@ class IntakeCampaign(IntakeAccessCase):
             first.task.with_actor(self.reader).message_post("Unusable comment arm")
 
 class CaptureCampaign(TransactionTestCase):
-    """Reuse the native capture fixture's setup and webform constructor."""
+    """Reuse the native form capture fixture's setup, webform constructor and submission."""
 
-    webform = ChannelIntakeCaptureTests.webform
+    webform = FormCaptureTests.webform
+    submit = FormCaptureTests.submit
 
     def setUp(self):
         setting = override_settings(REBAC_SUPERUSER_BYPASS=False)
         setting.enable()
         self.addCleanup(setting.disable)
-        ChannelIntakeCaptureTests.setUp(self)
+        FormCaptureTests.setUp(self)
         with system_context(reason="tests.t3.capture_identity"):
             self.actor.username = self._testMethodName
             self.actor.email = f"{self._testMethodName}@example.test"
             self.actor.save(update_fields=("username", "email"))
 
-    def test_map_validation_rejects_undeclared_email_duplicate_and_wrong_kind_properties(self):
+    def test_map_validation_holds_the_map_to_its_shape_and_to_the_fields_intake_fills(self):
         channel = self.webform()
-        channel.form_schema["properties"]["locked"] = {"type": "string", "readOnly": True}
         for mapping in (
+            ["title"],
             {"owner": "name"},
-            {"title": "absent"},
-            {"title": "email"},
+            {"title": 3},
+            {"title": ""},
             {"title": "name", "note": "name"},
-            {"estimate": "subject"},
-            {"claimed_name": "size"},
-            {"title": "locked"},
         ):
             channel.intake_field_map = mapping
             with self.subTest(mapping=mapping), system_context(reason="tests.t3.map_validation"):
                 with self.assertRaises(ValidationError):
                     channel.clean()
+        # Which questions the form asks is not intake's to know: such a name maps nothing at capture.
+        channel.intake_field_map = {"title": "absent", "estimate": "subject", "note": "email"}
+        with system_context(reason="tests.t3.map_validation"):
+            channel.clean()
+        self.channel.intake_field_map = {"title": "subject"}
+        with system_context(reason="tests.t3.map_validation"), self.assertRaises(ValidationError):
+            self.channel.clean()
 
     def test_mapping_keeps_valid_fields_when_other_answers_fail_native_coercion(self):
         channel = self.webform()
@@ -213,6 +218,7 @@ class CaptureCampaign(TransactionTestCase):
             "estimate": "size",
             "due_date": "day",
             "priority": "urgency",
+            "note": "never_asked",
         }
         message = self.Message(
             metadata={
@@ -255,18 +261,15 @@ class CaptureCampaign(TransactionTestCase):
                 if case == "inactive":
                     with system_context(reason="tests.t3.inactive_account"):
                         users._base_manager.filter(pk=existing.pk).update(is_active=False)
-            parsed = channel.webform_message(
-                submission_id=f"domain-{index}",
-                answers={"subject": "Retained request", "email": email},
-            )
+            answers = {"subject": "Retained request", "email": email}
             with self.subTest(case=case), system_context(reason="tests.t3.domain_capture"):
                 if case == "factory_refusal":
                     with patch.object(
                         users.objects, "create_person_as_system", side_effect=ValidationError("Refused")
                     ):
-                        (message,) = self.Message.objects.ingest([parsed], channel=channel)
+                        message = self.submit(channel, f"domain-{index}", answers)
                 else:
-                    (message,) = self.Message.objects.ingest([parsed], channel=channel)
+                    message = self.submit(channel, f"domain-{index}", answers)
                 need = self.Need._base_manager.get(source_message=message)
                 self.assertIsNotNone(need.task_id)
                 self.assertEqual(need.access_verdict, None)
@@ -279,12 +282,7 @@ class CaptureCampaign(TransactionTestCase):
         stores = [apps.get_model("rebac", name) for name in ("Relationship", "RelationshipRegistry")]
         before = [grant_rows(store) for store in stores]
         for key in ("first", "first", "second"):
-            parsed = channel.webform_message(
-                submission_id=key,
-                answers={"name": "Request author", "subject": "Printer", "size": 4, "email": email},
-            )
-            with system_context(reason="tests.t3.webform"):
-                self.Message.objects.ingest([parsed], channel=channel)
+            self.submit(channel, key, {"name": "Request author", "subject": "Printer", "size": 4, "email": email})
         needs = list(self.Need._base_manager.order_by("pk"))
         self.assertEqual(len(needs), 2)
         self.assertEqual(needs[0].party_id, needs[1].party_id)

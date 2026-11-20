@@ -49,6 +49,257 @@ live in code docstrings.
   role an actor does not hold costs it nothing; rows, decisions and statement counts are
   unchanged. The member planner-memory ceilings are lowered to the new costs: person
   351 to 327 MiB, selected 711 to 695 MiB (projects, connections and related keep theirs).
+- `@angee/ui`: a person's color scheme has one writer and a first-paint cache
+  that follows it. Under an appearance provider the user menu no longer mounts
+  the browser-local scheme (`useColorSchemePreference`), which wrote its own
+  preference (`system` there) over the saved one when the shell mounted, on an
+  OS scheme change and on a storage event; the menu's toggle reads and sets the
+  provider's scheme, and the browser-local scheme is read, applied and followed
+  only in a tree without a provider, as before. A locked app now writes the
+  boot cache (`angee:appearance:3`) with the person's own theme, options and
+  scheme, resolved as if the app were not locked, so a scheme chosen there
+  paints on the next load instead of only once React applies the saved
+  preference.
+- **Public web forms: the new addon `angee.webforms`, and its bridge to
+  messaging, `angee.webforms_messaging`.**
+  - **What it holds.** A form (`Form`) is what staff manage: whether it takes
+    submissions, which version the public answers, and what a response becomes.
+    A version (`FormVersion`) holds the questions in every language the form is
+    written in, as a checked subset of a SurveyJS definition. An address
+    (`FormAlias`) is a public slug of a form, optionally in one language. A
+    response (`Response`) is one submission, kept as received before anything is
+    made from it, once per form and `submission_id`. A target (`FormTarget`,
+    `ANGEE_WEBFORM_TARGET_CLASSES`) turns a response into a record of the addon
+    that owns it; `store`, the default, keeps the response as the record. A
+    target's addon declares the type its target makes, as a relation on
+    `webforms/response_record` in its `permissions.extends.zed`; a delivery
+    that returns a record of a type nobody declared fails. Forms
+    are managed by platform admins and the `webforms_admin` role, from the
+    console's forms, versions, addresses and responses.
+  - **The public address** of a form is `forms/<alias>`, and it answers by what
+    the request accepts. A browser, whose first `Accept` type is `text/html`,
+    gets the public page from the ingress. Every other request reaches Django:
+    `GET` describes the version the form serves, and `POST` keeps one submission
+    (`{submission_id, version, language, answers}`) and answers
+    `202 {"submission_id"}`, and only that again for a resend, even after the
+    form closed. The shared guard (`angee.server.ingress`) runs before anything
+    is read, within the `ANGEE_WEBFORM_*` bounds the addon declares (body bytes,
+    rate-limit burst and window, honeypot field, token hook).
+  - **The public page** is a standalone page: the addon's web package declares
+    it (`angee.pages` in `web/package.json`), the web build emits it and the
+    ingress serves it. It loads nothing of the application, reads the JSON
+    description from the same address and posts the submission to it.
+  - **The rules.**
+    - A published version never changes; a change is a new version, and a
+      response pins the version it answered.
+    - Stored markup (`html` blocks and `completedHtml`) is an allowlist of simple
+      tags in one plain spelling, and anything else is refused when the version
+      is saved.
+    - A failed delivery keeps its failure's class and never its message, which
+      could quote an answer.
+    - Delivery is retried by `webforms.redeliver_responses`, eight attempts in
+      all, and a response its target's owner refused (`DeliveryRefused`) is not
+      retried.
+    - Retention removes every response once its form's `retention_days` since
+      receipt have passed, delivered or not, and before that the console shows
+      what is undelivered and when it expires.
+    - Erasing is per response, or by the record a response became
+      (`Response.objects.erase_for_record`, and automatically when that record
+      is deleted), and a person's responses are found by their contact through
+      the console's filter.
+    - A target is chosen only by someone its owner lets make its records
+      (`FormTarget.permits`).
+    - Known gaps: who chose a form's target is not recorded, and it is not
+      checked again at delivery. The staff form does not prefill a target's
+      default configuration: `ImplBase.effective_defaults` writes defaults under
+      `config` only, and a form's field is `target_config`; a follow-up at base.
+      A form that posts on a messaging channel keeps a copy of the answers in
+      messaging (the message's envelope and body, with the claimed address),
+      which erasing the response does not reach, because messaging has no verb
+      that redacts an ingested message; the fix, a target erase hook and a
+      messaging redaction verb, is a follow-up. Messaging's refusal of a
+      removal of the channel's form columns at `migrate` (below), with its
+      check `angee.E054`, is interim: deleted once the framework pins
+      django-compose 0.1.0.dev14, whose drop guard judges pending removals at
+      migrate time. With that pin the bridge's template keeps its `RunPython`
+      and its `RemoveConstraint`, writes each of its six removals as
+      django-compose's `IntendedRemoveField`, and can drop
+      `moves_webform_channels`; the template's update ships with the pin,
+      because an unapplied host copy that still uses plain `RemoveField` is
+      then refused at `migrate` (it fails safe) and must be copied again.
+  - **A response posted as a message** is the bridge `angee.webforms_messaging`,
+    which requires both addons; neither depends on the other. Its `message`
+    target posts a response on a `webform` channel through
+    `Message.objects.ingest`, as the message `webform:<slug>:<submission id>`,
+    with the `webform` envelope `Message.webform_submission()` reads, so
+    `angee.intake` captures it. The claimed address in the envelope is the
+    answer to the version's contact question when that question asks for an
+    email. The bridge declares `messaging/message` as a type a response can
+    become (`permissions.extends.zed`). Someone may point a form at a channel
+    only if they may write on it, and one channel and slug take one form: a
+    second is refused when it is configured, and by the table when two are
+    saved at once.
+    A response is refused, and not tried again, as `channel_missing`,
+    `message_exists` (the channel already holds a message under that
+    submission's id which the response did not make) or `message_refused`. The
+    `webform` channel backend is the bridge's,
+    under the registry key channel rows already store.
+  - **Messaging holds no form.** Removed from `angee.messaging`:
+    `views.public_webform` and `urls.py`; `ChannelWebform` with `Channel.slug`,
+    `is_published`, `form_schema`, `form_schema_version`, `max_body_bytes`,
+    `max_field_bytes`, `uq_messaging_channel_webform_slug`, `webform_spec`,
+    `webform_message` and `submit_webform`; `Channel.validate_webform_answers`;
+    `ChannelQuerySet.published_webforms`; those columns on GraphQL
+    `ChannelType`; `WebformChannelBackend` (now
+    `angee.webforms_messaging.backends`); the `ANGEE_WEBFORM_*` settings and the
+    token-hook check (now `angee.webforms`, with the same names and defaults);
+    and from `messaging.webforms` `WebformSpec`, `WebformField`,
+    `WebformUnavailable`, `WebformChanged`, `validate_submission_id` and the
+    schema constants. The module keeps what projects' retained migrations
+    import: `default_webform_schema`, and what the bridge's template reads of a
+    channel's form (`FORM_COLUMNS`, `holds_form`, `channels_holding_forms`,
+    `channel_public_id`). Removed from
+    `@angee/messaging`: `PublicWebform`, `PublicWebformPage`, the
+    `/public/forms` routes, the channel form's "Public form" group and their
+    translations. A client of the earlier `forms/<slug>` JSON contract follows
+    the new one.
+  - `angee.intake` reads only the message's envelope: `intake_field_map` is held
+    to its shape and to the fields intake fills, and a name a submission does
+    not carry maps nothing, as an answer the field refuses already did. The
+    checks against a channel's form schema are gone with the schema.
+  - **Upgrade.** Back up the database first: the move has no reverse, so going
+    back means restoring that backup and running the previous code.
+    - Every host that composes `angee.webforms` runs `makemigrations webforms`.
+    - A host that holds channels with the `webform` backend adds
+      `angee.webforms_messaging` to its roots. Until it does, the database check
+      `angee.E052` names those rows under `check --database`, which a plain
+      `migrate` runs first and `provision` runs only after its migrations.
+    - A host whose webform channels hold a form (a slug, a published flag or a
+      schema) moves them with the bridge's migration template, in this order:
+      delete any autodetected migration that removes `Channel.slug`,
+      `is_published`, `form_schema`, `form_schema_version`, `max_body_bytes`,
+      `max_field_bytes` or `uq_messaging_channel_webform_slug`; copy
+      `src/angee/webforms_messaging/compose_migrations/messaging/webform_channels_to_forms.py`
+      into `runtime/messaging/migrations/`, pinned after the host's current
+      messaging leaf and its webforms initial migration; run
+      `makemigrations messaging`, which must report no changes; run
+      `manage.py check_webform_channels`, which prints what the move would
+      refuse and leave out and changes nothing; then `migrate` and `rebac sync`.
+    - `migrate` refuses the wrong order by itself, also under `provision`,
+      which skips system checks, and on a host that has not installed the
+      bridge: the columns are messaging's, so messaging listens to
+      `pre_migrate`
+      (`angee.messaging.webform_columns.refuse_removal_ahead_of_the_move`). A
+      run whose plan removes those columns with a migration that neither is the
+      move nor follows it is stopped before anything is applied, while a webform
+      channel of that database holds a form. The refusal names the migration,
+      counts the channels and names a few by public id, and gives the remedy;
+      `check --database` says the same beforehand as `angee.E054`. Until now
+      nothing did: the composer's drop guard judges authoring only, at
+      `makemigrations` and on the database that command runs on, so a removal
+      authored where no channel held a form was applied where channels did, and
+      dropped their forms. What is read from a plan is `RemoveField` on the
+      channel, also inside `SeparateDatabaseAndState`; a column dropped by
+      `RunSQL`, or renamed and then removed, is not seen. The order above stays
+      the instruction.
+    - The move is known by what its migration declares
+      (`moves_webform_channels = True`), under whatever name a host gave its
+      copy. A copy of the template taken before that mark existed lacks it and
+      must be copied again: it fails safe, since `migrate` refuses it as a
+      removal that is not the move.
+    - A host whose channels hold no form anywhere needs no template:
+      `makemigrations messaging` removes the empty columns and nothing refuses
+      that. `check_webform_channels` says which case a database is in: the
+      columns are gone, or no webform channel holds a form (both: nothing to
+      move), or channels hold a form and the project has no copy of the
+      template (copy it), or the copy is there (the dry run).
+    - The template makes one form per channel, named after it, with the
+      channel's slug as its address and as the slug of its `message` target, so
+      its conversation continues. The FormSpec becomes the form's first version
+      in the project's `LANGUAGE_CODE`; the email field becomes the contact
+      question; a field without a label shows its name. A published channel
+      becomes a published form whose version states every question personal, to
+      be narrowed in a new version, and is judged by the rule publishing applies
+      (`validate_publishable`); an unpublished one becomes a draft that states
+      nothing yet. It makes no response: the submissions a channel received stay
+      the messages they are.
+    - The template refuses, with every such channel named and before any column
+      goes: a schema it cannot turn into questions (an `integer`, a read-only,
+      hidden or defaulted field, a pattern), a version the web forms' rules
+      refuse (a choice whose value is not a code, a field named `submission_id`,
+      `version`, `language` or `answers`, a curly bracket in the success text),
+      a slug that cannot be an address, an address a form already has, and a
+      form without a slug. Change the channel on the previous release and apply
+      again. Without the check command a refusal first appears at `migrate`,
+      and holds the services that wait on it until the channel is changed.
+    - Not carried over, each reported in the log with its channel's public id:
+      a channel's `max_body_bytes` and `max_field_bytes` (a form's limits are
+      its definition's and the `ANGEE_WEBFORM_*` bounds), a field's `title`
+      beside its `label`, a disabled option, and form columns on a channel of
+      another backend.
+    - A link to `/public/forms/<slug>` stops working and nothing redirects it:
+      publish the new address, `/forms/<slug>`, or add a redirect at the
+      ingress. A webform channel authored as a resource row needs its resource
+      file changed, since the row no longer takes `slug`, `is_published` or
+      `form_schema`; that is the consumer's companion change.
+    - Upgrade cutoff: the template ships through the 3.x releases and is removed
+      in 4.0, and `messaging.webforms.default_webform_schema` stays while
+      retained migrations import it; a host upgrading from an earlier release
+      applies the template through a 3.x release first.
+  - Check ids: `angee.E052` is new (`check_stored_impl_keys`: stored rows whose
+    implementation key nothing registers, with the remedy an addon states in
+    `ANGEE_IMPL_KEY_REMEDIES`). `angee.E054` is new and interim (messaging's
+    `check_form_columns_leave_with_the_move`: a pending migration that removes
+    the form columns of webform channels that hold a form and is not the move).
+    Provenance's merge-history check is now
+    `angee.E053`; it shared `angee.E051` with base's `ANGEE_PUBLIC_ORIGIN`
+    check, which keeps that id. A host that silences the merge-history check
+    silences `angee.E053`.
+- Stack templates: the static ingress answers with `Cache-Control: public,
+  max-age=31536000, immutable` for an existing file the build names by its
+  content, `/assets/<name>-<hash>.<ext>`: Vite's emitted scripts, stylesheets,
+  locale and metadata files and the emission of a deployment's selected named
+  asset. A repeat visit no longer transfers them. The rule reads the hash in
+  the file name, never the directory alone. Documents are revalidated,
+  content-hashed assets are kept: the app document however it is reached, a
+  missing asset's fallback to it included, and each standalone page answer
+  `Cache-Control: no-cache`, stored but checked by ETag before each use, so no
+  visitor holds a document naming hashed files a deploy has deleted. The
+  build's `.vite/` manifests and every file kept or rewritten under a stable
+  name carry no cache header.
+  The ingress serves precompressed sidecars when a build provides them: a
+  `<file>.br`, `.zst` or `.gz` beside a file answers a client that accepts it,
+  brotli first, for the app's files and the standalone pages; without one the
+  file is compressed on the fly as before.
+- `angee.web`: an addon's web package declares **standalone pages**, static HTML
+  entries of the web build that load none of the app, in `web/package.json`:
+  `"angee": {"pages": {"<id>": {"entry": "./src/standalone/form.html", "paths":
+  ["/forms/*"], "accept": "text/html"}}}`. `WebRuntime` validates the
+  declaration beside `angee.assets` (a dotted lower-case id unique across
+  packages, an existing entry file inside the package, absolute path prefixes
+  ending in `/*` that overlap no other page's and sit under a prefix the ingress
+  sends to Django for pages, today `/forms/*`) and projects it twice: on the
+  package's entry in `runtime/web/manifest.json`, with the one `Accept` rule as
+  `pageAccept`, and as Caddy routes in `runtime/web/pages.caddy`, published with
+  the other `runtime/web` outputs and holding only its sentinel when no page is
+  declared. Page `<id>` is the build output's `<id>.html`. A page answers `GET`
+  and `HEAD` on its paths only when `text/html` is the first media type of the
+  request's `Accept` header, however the header is folded into field lines, so
+  every other request reaches Django, and carries
+  one fixed content security policy (no inline script, never framed), owned by
+  `PAGE_CSP` and published as the manifest's `pageCsp`. The stack
+  templates' static ingress declares its site root once and imports the snippet
+  by glob ahead of its Django routes: an ingress whose composer emits no snippet
+  still starts, and those paths stay Django's. The ingress reads the snippet
+  when it starts, so a recomposed one takes effect when that service restarts.
+  The paths the static ingress sends to Django are declared once
+  (`INGRESS_DJANGO_PATHS`); the stack template's `@django` matcher is pinned to
+  them, and a page claiming any other of them, or a path Django never receives,
+  is refused. The manifest publishes the list as `ingressDjangoPaths`.
+  Follow-up: the dev server's proxy still keeps its own, narrower list of these
+  paths (`packages/app/config/vite.ts`); it is to read `ingressDjangoPaths`
+  instead, which needs a check on a running dev server because it widens what
+  the dev server proxies.
 - `@angee/ui`: `FormView` (and so `Form` and every registered form) takes an
   optional `renderUnavailable(id, unavailable)`: what a saved record's form
   shows when its id reads no record, given the default "Record unavailable"

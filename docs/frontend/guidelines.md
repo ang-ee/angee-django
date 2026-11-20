@@ -86,6 +86,40 @@ public vault id. See the [knowledge addon](../../src/angee/knowledge/README.md).
   resolving workspace links to real directories so the dev watcher sees edits.
   Runtime CSS is never hand-edited; every addon web package enters that manifest
   and the stack-owned dependency graph.
+- A **standalone page** is a static HTML entry of the web build that loads none
+  of the app. The addon that owns it declares it once in `web/package.json`
+  (`"angee": { "pages": { "suite.form": { "entry": "./src/standalone/form.html",
+  "paths": ["/forms/*"], "accept": "text/html" } } }`), and the composer
+  ([`WebRuntime`](../../src/angee/web/build.py)) projects that declaration twice:
+  on the package's entry in `runtime/web/manifest.json` for the web build, and as
+  the ingress routes in `runtime/web/pages.caddy`, which the stack's static
+  ingress imports ahead of its Django routes. Page `<id>` is the build output's
+  `<id>.html`. An id is a dotted lower-case name; a path is an absolute prefix
+  ending in `/*`, and no two pages' paths overlap. A path sits under a prefix the
+  ingress sends to Django for pages (`PAGE_PREFIXES`, today `/forms/*`), so the
+  page's own requests reach Django; the other paths the ingress sends to Django
+  (`INGRESS_DJANGO_PATHS`, which the stack template's matcher is pinned to and
+  the manifest publishes in order as `ingressDjangoPaths`) are the framework's
+  own endpoints and take no page. The web forms addon's page declares the whole
+  of `/forms/*`, the only page prefix today, so a second addon's page anywhere
+  under `/forms/` is refused as overlapping; a second page needs its own prefix
+  added to `PAGE_PREFIXES`, which also adds it to the paths the ingress sends to
+  Django. A page answers `GET` and `HEAD`
+  only when `text/html` is the first media type of the request's `Accept` header,
+  so `fetch` and API clients reach Django on the same path; the manifest's
+  `pageAccept` carries that one pattern for the dev server. The ingress sends
+  every page with one fixed content security policy (`PAGE_CSP`): a page renders
+  staff-written markup on the application's origin, so it loads only from that
+  origin, runs no inline script, submits no form natively and is never framed;
+  inline styles are the one loosened directive. `PAGE_CSP` is the policy's one
+  owner: a page's HTML carries no copy, the built page gets it from the ingress
+  header, and the manifest's `pageCsp` publishes the same string so the dev
+  server injects it as a meta tag in development only. The ingress reads the snippet
+  when it starts: a recomposed snippet takes effect only when the static ingress
+  service (`frontend`; `caddy` in an instance stack) restarts, which the
+  whole-application chained restart does and a lone compose does not
+  ([Restart the running stack](../howto/getstarted.md#restart-the-running-stack)).
+  Never route a page in a stack template or a Vite config by hand.
 - Installed `@angee/*` packages are prebundled by source signature. Vite's
   optimizer hash covers only the lockfile and manifests, so
   `defineAngeeWebViteConfig` (`@angee/app/vite`) hashes each package's on-disk
@@ -96,6 +130,28 @@ public vault id. See the [knowledge addon](../../src/angee/knowledge/README.md).
   bundling; preview consumes built output. Native compose and operator SDL are
   its inputs. Standalone fragment checks invoke the same generator through its
   explicit CLI ([Composition and schema](../checks.md#composition-and-schema)).
+- The web build's half of a standalone page (declared and routed as stated
+  above) is [`angee:pages`](../../packages/app/config/vite.ts): it reads the
+  declaration from the composed web manifest, builds the page as `<id>.html`
+  beside `index.html`, serves it in development at its paths and, in
+  `vite preview`, serves the built file there, applying the manifest's
+  `pageAccept` pattern as the ingress does and never a rule of its own. The
+  page imports nothing of `@angee/app` and never links the
+  host's stylesheet: it names its own files with `./` (beside or below its
+  entry, with `src` and `href`), the build gives its document the token sheet
+  (`@angee/ui/tokens.css`) and the composed themes (`runtime/web/themes.css`),
+  and it applies its theme through the React-free owners of
+  [`@angee/ui/theme-runtime`](../../packages/ui/src/theme/runtime.mjs):
+  `resolveAppearance`, the same resolution the first-paint bootstrap uses (the
+  host's theme, forced color scheme and token layers, or a theme the page
+  names), then `applyAppearanceRoot`. It gets no inline first-paint script: the
+  ingress sends every page a content security policy that runs no inline
+  script, so the build writes the appearance payload into the document as a
+  JSON data block (`readAppearancePayload`) and the document carries no policy
+  of its own. The composer owns that policy and publishes it
+  as the manifest's `pageCsp`; development, which cannot send it as a header
+  without refusing Vite's own scripts, writes it into the document after them,
+  and preview sends it as the ingress does.
 - Operator daemon types are generated, never authored: the
   [operator manifest](../../src/angee/operator/pyproject.toml) contributes the
   committed daemon SDL and document glob to the shared codegen pass, and daemon

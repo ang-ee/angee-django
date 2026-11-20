@@ -662,6 +662,7 @@ from angee.resources.testing.models import Resource  # noqa: E402
 from angee.sequence.testing import models as sequence_models  # noqa: E402, F401
 from angee.tags.testing import models as tags_models  # noqa: E402, F401
 from angee.uom.testing import models as uom_models  # noqa: E402, F401
+from angee.webforms.testing import models as webforms_models  # noqa: E402, F401
 from tests import proposals_models  # noqa: E402, F401
 
 

@@ -52,7 +52,7 @@ function applyColorSchemePreference(value: ColorSchemePreference, target?: Docum
 }
 function resolveColorSchemePreference(value: ColorSchemePreference): ColorScheme { return value === "system" ? systemColorScheme() : value; }
 function systemColorScheme(): ColorScheme { return typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light"; }
-/**
+/** The browser-local scheme, which this applies and follows: mount it only in a tree without an appearance provider.
  * @owner AppearanceProvider
  */
 export function useColorSchemePreference(): ColorSchemeState {

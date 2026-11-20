@@ -101,7 +101,7 @@ also covers [review waiters](../tests/test_workflows_review.py), their
 [locking races](../tests/test_agent_sessions_concurrency.py), plus
 [connection discovery races](../tests/test_integrate_discovery_concurrency.py),
 [cross-addon reply and inbound joins](../tests/test_framework_integration.py),
-[delivery contracts with their sweep, claim-fence and held-action races and webform submission
+[delivery contracts with their sweep, claim-fence and held-action
 races](../tests/test_composed_messaging.py), and the
 [comment reply workflow and scheduling races](../tests/test_composed_workflows.py). The selection
 also runs every remaining PostgreSQL-only contract: row locks, hierarchy, IAM,
@@ -131,8 +131,12 @@ SQLite-only tests, and `test_parties_directory_backend.py` its lock nodes becaus
 expected failure would read as a skip;
 the PostgreSQL branches in `test_extraction_models.py` and
 `test_knowledge_access_campaign.py`, the [resource ledger's](../tests/test_resource_ledger.py)
-concurrent upsert, and the composed profiles that carry PostgreSQL contracts also run by
-node. Every other listed file runs whole, which keeps the SQLite
+concurrent upsert, a form's submission, delivery and publication
+[races](../tests/test_webforms_concurrency.py), and the composed profiles that carry PostgreSQL contracts also run by
+node. The selection also runs the
+[move of webform channels to forms](../tests/test_webforms_messaging_upgrade.py), whose one migration writes rows
+and then alters the channel table, and the [race of two forms](../tests/test_webforms_messaging_concurrency.py)
+saved on one channel and slug. Every other listed file runs whole, which keeps the SQLite
 floor tests out of the PostgreSQL zero-skip gate. The six groups are assigned
 by pytest-split's `least_duration` algorithm over the
 [PostgreSQL timing map](../.test_durations_postgres); each runs with four xdist

@@ -71,10 +71,11 @@ A selected app may lock its theme (`themeLocked: true` beside the app's or its
 root's `theme`; see [`selectApp`](../../packages/app/src/boot-app.tsx)). Only the app
 selection locks: the build defaults cannot. Within that app the locked theme and the
 host options replace the person's `themeId` and `options`, which stay saved and apply
-again in unlocked apps; their `colorScheme` still applies. A locked app does not
-write the device's boot cache, so the next first paint follows the person's own
-choice. The Appearance page shows why, disables the theme choices (describing them by
-that reason), and hides the customization and the theme tools there.
+again in unlocked apps; their `colorScheme` still applies. The device's boot cache
+keeps the person's own choice there, resolved as if the app were not locked, so a
+scheme chosen in a locked app paints on the next load. The Appearance page shows
+why, disables the theme choices (describing them by that reason), and hides the
+customization and the theme tools there.
 
 An absent field follows the corresponding host default. Selecting a different
 theme replaces the old theme's options. Reset removes the complete appearance
@@ -301,8 +302,11 @@ each addon contribution references its canonical discovered definition.
 Projects created before this feature need a template update. Re-render the
 project template, review the explicit `/src/index.css` head link and virtual
 `virtual:angee-appearance` wiring, then run the runtime build and production
-web build. Import `ColorSchemePreference` and `useColorSchemePreference` and
-target `data-color-scheme`.
+web build. Read and set a person's color scheme through `useAppearance`
+(`useOptionalAppearance` where a provider may be absent) and target
+`data-color-scheme`; `useColorSchemePreference` is the browser-local scheme of a
+tree with no appearance provider, and mounting it under one writes over the saved
+scheme.
 
 `angee.appearance_integrate` is optional. It adds a signed-in GraphQL analysis
 operation and a tool on the Appearance page, as an `appearance.settings#tools`

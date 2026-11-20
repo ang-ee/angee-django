@@ -520,7 +520,7 @@ def test_a_merge_identity_must_be_a_declared_unique_set(monkeypatch: pytest.Monk
 
 
 def test_a_model_a_revertible_merge_moves_must_keep_history(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Revert replays history only, so ``angee.E051`` names a moved model without it, or without the moved column.
+    """Revert replays history only, so ``angee.E053`` names a moved model without it, or without the moved column.
 
     A merge of a model without history (``MergeReferenceNode``) is never revertible and is exempt. Only
     this module's probes are judged: other modules register test models of their own.
@@ -534,7 +534,7 @@ def test_a_model_a_revertible_merge_moves_must_keep_history(monkeypatch: pytest.
     tracked = provenance_checks.model_history
     monkeypatch.setattr(tracked(TagSlot), "excluded_fields", ["tag"])
     [error] = probes()
-    assert (error.id, error.obj) == ("angee.E051", TagSlot)
+    assert (error.id, error.obj) == ("angee.E053", TagSlot)
     assert "excludes tag from history" in error.msg
     monkeypatch.setattr(provenance_checks, "model_history", lambda model: None if model is TagSlot else tracked(model))
     [error] = probes()

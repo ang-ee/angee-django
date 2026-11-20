@@ -73,7 +73,7 @@ def check_merge_history(
             f"{label}.{name} moves in {merger} merges but {gap}, so reverting the merge cannot restore it.",
             hint="Compose HistoryMixin on the moved model and track the key, or declare it KEEP in merge_policies.",
             obj=pointing,
-            id="angee.E051",
+            id="angee.E053",
         )
         for (label, name), (pointing, merger, gap) in sorted(untracked.items())
     ]

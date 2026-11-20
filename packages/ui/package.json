@@ -25,6 +25,7 @@
       "import": "./src/index.ts"
     },
     "./styles.css": "./src/styles/index.css",
+    "./tokens.css": "./src/styles/tokens.css",
     "./catalog": {
       "types": "./src/catalog.ts",
       "import": "./src/catalog.ts"
@@ -408,6 +409,7 @@
         "default": "./dist/index.js"
       },
       "./styles.css": "./dist/styles/index.css",
+      "./tokens.css": "./dist/styles/tokens.css",
       "./catalog": {
         "types": "./dist/catalog.d.ts",
         "default": "./dist/catalog.js"

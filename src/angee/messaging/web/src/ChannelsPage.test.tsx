@@ -99,12 +99,6 @@ describe("ChannelsPage", () => {
     expect(pageMocks.fieldNames).toEqual(
       expect.arrayContaining([
         "credential_status",
-        "slug",
-        "is_published",
-        "form_schema_version",
-        "form_schema",
-        "max_body_bytes",
-        "max_field_bytes",
         "is_syncing",
         "sync_stage",
         "sync_error",

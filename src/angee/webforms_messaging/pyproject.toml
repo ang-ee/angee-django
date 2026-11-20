@@ -1,0 +1,14 @@
+build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-webforms-messaging"
+version = "3.0.0"
+description = "Web form responses posted as messages: the message target and the webform channel backend"
+keywords = ["webforms", "messaging", "forms", "channels", "intake"]
+dependencies = ["angee-base>=3,<4", "angee-webforms>=3,<4", "angee-messaging>=3,<4"]
+dynamic = ["entry-points"]
+
+[tool.angee]
+
+[tool.angee.platform]
+category = "Productivity"
