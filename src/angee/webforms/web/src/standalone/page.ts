@@ -192,8 +192,13 @@ export async function openPage({ render, wear, described: asked }: PageParts): P
     });
     // SurveyJS shows its completed page only when the answers were kept; a refusal returns to the form.
     // SurveyJS holds its navigation until this handler answers, so it answers whatever happens.
+    // A survey can be taken down while it waits here (the form changed, or closed): it is then
+    // finished with only once SurveyJS has read this handler's answer.
+    let answering = false;
+    let retired = false;
     next.onCompleting.add(async (_survey, options) => {
       let refusal: string | undefined = next.getLocalizationString("savingDataError");
+      answering = true;
       try {
         refusal = await send(next);
       } catch {
@@ -203,6 +208,9 @@ export async function openPage({ render, wear, described: asked }: PageParts): P
           options.allow = false;
           options.message = refusal;
         }
+        answering = false;
+        // SurveyJS reads the answer as this handler returns; a task later it is done with the survey.
+        if (retired) setTimeout(() => next.dispose());
       }
     });
     survey = next;
@@ -227,7 +235,8 @@ export async function openPage({ render, wear, described: asked }: PageParts): P
     const remove = render(next, host);
     takeDown = () => {
       remove();
-      next.dispose();
+      if (answering) retired = true;
+      else next.dispose();
     };
     picker.hidden = described.languages.length < 2;
     notice.hidden = true;
