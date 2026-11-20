@@ -46,7 +46,11 @@ live in code docstrings.
   address may be or the handle's value holds. Both spellings of an
   internationalised domain are one address: `Handle.normalize_value` reads a
   domain's punycode labels (`xn--`) as Unicode in the comparison key, while
-  `value` keeps what was typed. What the person does not hold
+  `value` keeps what was typed. The rule for a domain is one function,
+  `Handle.normalize_email_domain`, and the organization-domain suggestion
+  reads the handle's domain and `Organization.domain` (stored as typed)
+  through it on both sides, so either spelling of either suggests the
+  organization. What the person does not hold
   is recorded as a claim for review with the record behind it
   (`propose_claimed_handle_as_system`) and moves nothing; a person found again
   has nothing new stated of them and carries a handle only when they hold it

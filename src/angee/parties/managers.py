@@ -51,6 +51,7 @@ from django.db.models.functions import Coalesce, NullIf
 from django.db.models.lookups import Exact
 from django.utils import timezone
 from django.utils.crypto import salted_hmac
+from django.utils.encoding import punycode
 from phonenumbers import PhoneNumberMatcher
 from pydantic import ValidationError as PydanticValidationError
 from rebac import (
@@ -2034,7 +2035,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         pair: indexed normalized twins contribute distinct candidate parties (the
         first at ``1.0``, which decides the handle's party, competing parties at ``0.3`` for
         review); otherwise an email whose non-generic domain matches a tracked
-        :attr:`Organization.domain` contributes a rule suggestion at ``0.4``;
+        :attr:`Organization.domain` contributes a rule suggestion at ``0.4``,
+        both domains read in the one spelling ``Handle.normalize_email_domain``
+        gives, so a punycode and a Unicode spelling match;
         otherwise no-op. Both branches stay inside the partition of the handle's
         creator: handles that user created and parties that user owns. Public
         mailbox-provider domains never imply organization membership. Returns the
@@ -2076,16 +2079,25 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         if strongest is not None:
             return strongest
         if handle.platform == handle_model.Platform.EMAIL and "@" in handle.normalized_value:
-            domain = handle.normalized_value.rsplit("@", 1)[1]
+            domain = handle_model.normalize_email_domain(handle.normalized_value.rsplit("@", 1)[1])
             organization_model = apps.get_model("parties", "Organization")
-            org = (
-                organization_model.objects.filter(
-                    owner_id=handle.created_by_id,
-                    domain__iexact=domain,
-                ).first()
-                if domain and domain not in GENERIC_EMAIL_DOMAINS
-                else None
-            )
+            org = None
+            if domain and domain not in GENERIC_EMAIL_DOMAINS:
+                # An organization's domain is stored as typed, in either spelling: read both, compare by the one rule.
+                spelled = Q(domain__iexact=domain)
+                if not domain.isascii():
+                    try:
+                        spelled |= Q(domain__iexact=punycode(domain))
+                    except UnicodeError:
+                        pass
+                org = next(
+                    (
+                        row
+                        for row in organization_model.objects.filter(spelled, owner_id=handle.created_by_id)
+                        if handle_model.normalize_email_domain(row.domain) == domain
+                    ),
+                    None,
+                )
             if org is not None:
                 return self.assert_handle(
                     org,

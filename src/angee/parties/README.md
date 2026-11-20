@@ -324,8 +324,13 @@ Both spellings of an internationalised domain are one address: the handle keeps
 its `value` as typed, and `Handle.normalize_value` reads the punycode labels of
 a domain as Unicode in the comparison key (`normalized_value`), the column
 every lookup of an address reads. A label the standard library's `idna` codec
-cannot read stays as typed. Nothing is stated in full: each handle the person
-does not hold is recorded as a claim for review (`propose_claimed_handle_as_system`)
+cannot read stays as typed. That is one rule, `Handle.normalize_email_domain`,
+for whoever compares a domain: the organization-domain suggestion
+(`PartyManager.suggest_for`) reads the handle's domain and
+`Organization.domain`, which is stored as typed, through it on both sides, so
+either spelling of either suggests the organization. Nothing is stated in full:
+each handle the person does not hold is recorded as a claim for review
+(`propose_claimed_handle_as_system`)
 with the record behind it, which decides nothing and moves nothing. A claim
 gains one evidence reference per record that carried the address, deduplicated,
 and that is how the next record finds the person. A person found again has

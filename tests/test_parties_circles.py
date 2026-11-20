@@ -1061,6 +1061,32 @@ def test_suggest_for_org_domain_suggests_at_low_confidence(db: None) -> None:
     assert link.source_kind == "rule"
 
 
+@pytest.mark.parametrize(
+    ("address", "stored"),
+    [
+        pytest.param("bob@bücher.example", "bücher.example", id="handle-unicode-organization-unicode"),
+        pytest.param("bob@bücher.example", "xn--bcher-kva.example", id="handle-unicode-organization-punycode"),
+        pytest.param("bob@xn--bcher-kva.example", "Bücher.example", id="handle-punycode-organization-unicode"),
+        pytest.param("bob@xn--bcher-kva.example", "XN--BCHER-KVA.example", id="handle-punycode-organization-punycode"),
+    ],
+)
+def test_suggest_for_org_domain_reads_both_spellings_of_an_internationalised_domain(
+    db: None, address: str, stored: str,
+) -> None:
+    """One rule for a domain on both sides: the handle's key, and the organization's domain as it was typed."""
+
+    del db
+    with system_context(reason="test suggest domain spellings"):
+        owner = _user("ines")
+        publisher = Organization._base_manager.create(display_name="Bücher", domain=stored, created_by=owner)
+        handle = Handle._base_manager.create(platform="email", value=address, created_by=owner)
+        link = Party.objects.suggest_for(handle)
+
+    assert link is not None
+    assert (link.subject_id, link.confidence, link.source_kind) == (publisher.pk, 0.4, "rule")
+    assert Organization._base_manager.get(pk=publisher.pk).domain == stored
+
+
 def test_suggest_for_stays_inside_the_parties_the_handle_creator_owns(db: None) -> None:
     """The partition follows party ownership, not who first recorded the party."""
 
