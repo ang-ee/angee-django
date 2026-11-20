@@ -18,6 +18,8 @@ from pydantic import BaseModel
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.roles import grant as grant_role
 
+from angee.base.models.identity import public_id_of
+from angee.provenance.checks import check_merge_history
 from angee.tags.testing.models import Tag
 from angee.webforms import models as webforms_models
 from angee.webforms import tasks
@@ -408,7 +410,7 @@ def test_the_reconciler_queues_what_is_due_once_and_leaves_the_rest(monkeypatch:
 
     queued: list[tuple[str, Any]] = []
     monkeypatch.setattr(
-        webforms_models, "enqueue_task", lambda name, *, kwargs, robust: queued.append((name, kwargs["pk"])),
+        webforms_models, "enqueue_task", lambda name, *, kwargs, **options: queued.append((name, kwargs["pk"])),
     )
     form, _version = published("tag")
     lost, _ = receive(form, "lost")
@@ -547,6 +549,56 @@ def test_retention_removes_every_response_received_longer_ago_than_its_form_keep
     with system_context(reason="webforms tests read"):
         left = set(Response._base_manager.values_list("submission_id", flat=True))
     assert left == {"fresh", "unlimited"}
+
+
+def test_an_attempt_that_never_reports_still_counts_and_the_last_one_leaves_the_response_to_staff() -> None:
+    """A worker that dies on one response every time is not handed it for ever."""
+
+    form, _version = published("tag")
+    with system_context(reason="webforms tests setup"):
+        dying, _ = receive(form, "dying")
+        last, _ = receive(form, "last")
+        now = timezone.now()
+        # What an attempt leaves when its worker dies after it started: one more attempt and a lease.
+        Response.objects.filter(pk=dying.pk).owner_update(delivery_attempts=3, retry_at=now - timedelta(minutes=1))
+        Response.objects.filter(pk=last.pk).owner_update(
+            delivery_attempts=MAX_DELIVERY_ATTEMPTS, retry_at=now - timedelta(minutes=1),
+        )
+
+    assert Response.objects.redeliver(now=now) == 1
+
+    kept = stored(last)
+    assert (kept.delivery, kept.delivery_error, kept.retry_at) == (Delivery.FAILED, "Unfinished", None)
+    assert (stored(dying).delivery, stored(dying).retry_at) == (Delivery.PENDING, now + REDELIVERY_LEASE)
+    with system_context(reason="webforms tests setup"):
+        assert stored(dying)._start_attempt() is True
+    started = stored(dying)
+    assert started.delivery_attempts == 4, "counted before the target runs"
+    assert started.retry_at >= now + retry_delay(4), "and tried again no sooner than a failed attempt would be"
+    assert stored(dying).deliver() is not None
+    assert (stored(dying).delivery, stored(dying).delivery_attempts, stored(dying).retry_at) == (
+        Delivery.DELIVERED, 5, None,
+    )
+
+
+def test_a_response_keeps_naming_the_record_it_became_through_a_merge_and_is_read_from_the_survivor() -> None:
+    """The link is evidence: a merge rewrites none of it, and asks for no history to undo."""
+
+    form, _version = published("tag")
+    row, _made = receive(form)
+    curator = create_platform_admin("webforms-merge-curator")
+    with system_context(reason="webforms tests setup"):
+        made = stored(row).deliver()
+        survivor = Tag.objects.create(name="Ada Lovelace")
+    with actor_context(curator):
+        Tag.objects.get(pk=survivor.pk).merge(records=[public_id_of(made)])
+
+    with system_context(reason="webforms tests read"):
+        link = ResponseRecord._base_manager.get(response=row)
+        assert (link.object_id, stored(row)._record().pk) == (made.pk, survivor.pk)
+        assert list(Response.objects.for_record(survivor).values_list("pk", flat=True)) == [row.pk]
+        assert Response.objects.erase_for_record(survivor) == 1
+    assert [error for error in check_merge_history() if error.obj is ResponseRecord] == []
 
 
 def test_what_is_undelivered_is_counted_with_the_day_the_first_of_it_expires() -> None:

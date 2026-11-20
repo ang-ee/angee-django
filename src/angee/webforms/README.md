@@ -99,8 +99,9 @@ Delivery runs on a worker after the submission commits
 (`webforms.deliver_response`). A failed delivery, or one whose task was lost, is
 queued again by `webforms.redeliver_responses` every five minutes when its next
 try has come (`retry_at`): five minutes after the first failure, doubling to six
-hours, eight attempts in all. After that the response stays failed until staff
-deliver or dismiss it.
+hours, eight attempts in all. An attempt is counted, and its next try set,
+before the target runs, so an attempt whose worker dies counts too. After the
+last one the response stays failed until staff deliver or dismiss it.
 
 ## The public address
 
@@ -185,10 +186,11 @@ addon's model.
 - `Response.objects.erase_for_record(record)` blanks the personal answers of the
   responses a record was made from: the owner of that record calls it when it
   erases the person.
-- The link to the record a response became follows that record through a merge
-  and goes when the record or the response does; it never blocks either. When
-  the record is deleted, the response it was made from loses its personal
-  answers first.
+- The link to the record a response became is evidence of what was made, so a
+  merge of that record rewrites nothing: the survivor's responses are read
+  through it, and a response's record is read as its survivor. The link goes
+  when the record or the response does and never blocks either. When the record
+  is deleted, the response it was made from loses its personal answers first.
 - A form is deleted, with its versions, only while it holds no response; a form
   that has been answered is archived, and its responses go when their retention
   has passed.

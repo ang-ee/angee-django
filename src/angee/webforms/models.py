@@ -51,6 +51,7 @@ from angee.base.managers import AngeeManager
 from angee.base.models.append_only import AppendOnlyModel, AppendOnlyQuerySet
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.locks import ImmutableFieldsMixin
+from angee.base.models.merge import MergeableMixin
 from angee.base.models.merge_references import MergePolicy
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.roles import role_anchor
@@ -505,9 +506,16 @@ class ResponseQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet):
         return self.filter(delivery__in=(Delivery.PENDING, Delivery.FAILED))
 
     def due(self, *, now: datetime) -> Self:
-        """Keep the undelivered responses whose next try has come and whose retention has not passed."""
+        """Keep the undelivered responses whose next try has come, with attempts and retention left."""
 
-        return self.undelivered().filter(retry_at__lte=now).exclude(past_retention(now))
+        return self.undelivered().filter(
+            retry_at__lte=now, delivery_attempts__lt=MAX_DELIVERY_ATTEMPTS,
+        ).exclude(past_retention(now))
+
+    def abandoned(self, *, now: datetime) -> Self:
+        """Keep the undelivered responses whose last attempt started, reported nothing, and was the last allowed."""
+
+        return self.undelivered().filter(retry_at__lte=now, delivery_attempts__gte=MAX_DELIVERY_ATTEMPTS)
 
     def expired(self, *, now: datetime) -> Self:
         """Keep the responses received longer ago than their form keeps one.
@@ -620,20 +628,28 @@ class ResponseManager(_ResponseManagerBase):
         """Queue again the undelivered responses whose next try has come; return how many.
 
         Named system work for the scheduled task. It is what delivers a response
-        whose first task was lost or failed: each failure sets the next try
-        (:func:`retry_delay`) until :data:`MAX_DELIVERY_ATTEMPTS`, after which
-        the response waits for staff. A queued response is left alone for
-        :data:`REDELIVERY_LEASE`.
+        whose first task was lost, failed, or died without a word: each attempt
+        counts when it starts, a failure sets the next try (:func:`retry_delay`)
+        and an attempt that reported nothing is due again when its lease ends,
+        until :data:`MAX_DELIVERY_ATTEMPTS`. After that the response is marked
+        failed and waits for staff. A queued response is left alone for
+        :data:`REDELIVERY_LEASE`, and a queued task that nobody started by then
+        is dropped, so a stopped worker comes back to one task per response.
         """
 
         with transaction.atomic(), system_context(reason="webforms.response.redeliver"):
+            given_up = self.get_queryset().abandoned(now=now)
+            given_up.filter(delivery_error="").owner_update(delivery_error="Unfinished")
+            given_up.owner_update(delivery=Delivery.FAILED, retry_at=None)
             due = list(
                 self.get_queryset().due(now=now).order_by("retry_at", "pk").lock_if_supported(skip_locked=True)
                 .values_list("pk", flat=True)[:REDELIVERY_BATCH]
             )
             self.get_queryset().filter(pk__in=due).owner_update(retry_at=now + REDELIVERY_LEASE)
             for pk in due:
-                enqueue_task(DELIVER_RESPONSE_TASK, kwargs={"pk": pk}, robust=True)
+                enqueue_task(
+                    DELIVER_RESPONSE_TASK, kwargs={"pk": pk}, robust=True, expires=REDELIVERY_LEASE.total_seconds(),
+                )
         return len(due)
 
     def erase_for_record(self, record: models.Model) -> int:
@@ -714,10 +730,15 @@ class Response(AppendOnlyModel, AngeeDataModel, concrete=True):
         return type(self).objects.filter(pk=self.pk)
 
     def _record(self) -> Any:
-        """Return the record this response became, or ``None``; a system read for the owner's own verbs."""
+        """Return the record this response became, or ``None``; a system read for the owner's own verbs.
+
+        A record merged into another since is read as its survivor: the link
+        keeps naming what was made, and the redirect is identity.
+        """
 
         link = _model("ResponseRecord")._base_manager.filter(response_id=self.pk).first()
-        return link.record if link is not None else None
+        made = link.record if link is not None else None
+        return made.canonical() if isinstance(made, MergeableMixin) else made
 
     def deliver(self) -> Any:
         """Hand this response to its form's target once; return the record it became, if any.
@@ -733,8 +754,16 @@ class Response(AppendOnlyModel, AngeeDataModel, concrete=True):
         logged or raised. What is logged is where it was raised. The response is
         tried again later (:meth:`ResponseManager.redeliver`) unless its
         target's owner refused it (:class:`~angee.webforms.targets.DeliveryRefused`).
+
+        The attempt is counted and its next try set under the row's lock,
+        before the target runs and in a transaction of its own: an attempt whose
+        worker dies reports nothing, and must still count against
+        :data:`MAX_DELIVERY_ATTEMPTS` and be tried again no sooner than a failed
+        one.
         """
 
+        if not self._start_attempt():
+            return self._record()
         try:
             with transaction.atomic(), system_context(reason="webforms.response.deliver"):
                 row = self._stored().undelivered().lock_if_supported().first()
@@ -746,11 +775,10 @@ class Response(AppendOnlyModel, AngeeDataModel, concrete=True):
                     if made is not None:
                         content_type, object_id = generic_pointer_target(made)
                         _model("ResponseRecord").objects.create(
-                            response_id=row.pk, content_type=content_type, object_id=str(object_id),
+                            response_id=row.pk, content_type=content_type, object_id=object_id,
                         )
                 row._stored().undelivered().owner_update(
                     delivery=Delivery.DELIVERED, delivered_at=timezone.now(), delivery_error="", retry_at=None,
-                    delivery_attempts=row.delivery_attempts + 1,
                 )
                 return made
         except DeliveryRefused as refusal:
@@ -765,6 +793,20 @@ class Response(AppendOnlyModel, AngeeDataModel, concrete=True):
         self._record_failure(reason, again=again)
         raise DeliveryFailed(reason)
 
+    def _start_attempt(self) -> bool:
+        """Count one attempt on an undelivered response and set when it is next tried; whether there was one."""
+
+        with transaction.atomic(), system_context(reason="webforms.response.deliver"):
+            row = self._stored().undelivered().lock_if_supported().first()
+            if row is None:
+                return False
+            attempts = row.delivery_attempts + 1
+            row._stored().undelivered().owner_update(
+                delivery_attempts=attempts,
+                retry_at=timezone.now() + max(retry_delay(attempts), REDELIVERY_LEASE),
+            )
+        return True
+
     def _record_failure(self, reason: str, *, again: bool) -> None:
         """Mark an undelivered response failed, and set when it is tried again, if it is."""
 
@@ -772,11 +814,10 @@ class Response(AppendOnlyModel, AngeeDataModel, concrete=True):
             row = self._stored().undelivered().lock_if_supported().first()
             if row is None:
                 return
-            attempts = row.delivery_attempts + 1
-            retried = again and attempts < MAX_DELIVERY_ATTEMPTS
+            retried = again and row.delivery_attempts < MAX_DELIVERY_ATTEMPTS
             row._stored().undelivered().owner_update(
-                delivery=Delivery.FAILED, delivery_error=reason, delivery_attempts=attempts,
-                retry_at=timezone.now() + retry_delay(attempts) if retried else None,
+                delivery=Delivery.FAILED, delivery_error=reason,
+                retry_at=timezone.now() + retry_delay(row.delivery_attempts) if retried else None,
             )
 
     def dismiss(self) -> bool:
@@ -810,19 +851,23 @@ class ResponseRecord(RecordRefMixin, AngeeDataModel, concrete=True):
     """The record one response became.
 
     It is what a retried delivery finds instead of making a second record, and
-    the path from that record back to the answers it came from. It follows the
-    record through a merge and goes when the record or the response does; it
-    never blocks either. When the record is deleted, the response it came from
-    loses its personal answers first (:meth:`teardown_for_target`).
+    the path from that record back to the answers it came from. It is evidence
+    of what the response became when it was delivered, so a merge of that record
+    does not rewrite it (``KEEP``): the survivor's responses are read through its
+    redirect group (:meth:`ResponseQuerySet.for_record`), a response's record is
+    read as its survivor, and reverting the merge has nothing to restore. It
+    goes when the record or the response does and never blocks either. When the
+    record is deleted, the response it came from loses its personal answers
+    first (:meth:`teardown_for_target`).
     """
 
-    merge_policy = MergePolicy.MOVE
+    merge_policy = MergePolicy.KEEP
     accepts_any_record_target = True
     sqid_prefix = "wbl_"
 
     response = models.OneToOneField("webforms.Response", on_delete=models.CASCADE, related_name="record_link")
     content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT, related_name="+")
-    object_id = models.CharField(max_length=255)
+    object_id = models.PositiveBigIntegerField()
     record = GenericForeignKey("content_type", "object_id")
 
     class Meta:
