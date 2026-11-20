@@ -40,8 +40,9 @@ accepts.
   lists, headings and links to an `http`, `https` or `mailto` address. Anything
   else (a script, a style, an image, an event handler, a comment) is refused
   when the version is saved, and so is markup not written in its one plain
-  spelling; nothing is rewritten. Every other text is plain and is shown as
-  written.
+  spelling; nothing is rewritten. Curly brackets are refused in markup: the
+  page's library fills `{name}` with an answer, which markup would then read as
+  markup. Every other text is plain and is shown as written.
 - A choice is `{"value": <code>, "text": <text>}`. Answers store the code, never
   the label, so they do not depend on language. "Other" is the code `other`,
   with its text in `<name>-Comment`.
@@ -162,7 +163,11 @@ class EnquiryTarget(FormTarget):
 makes its owner's records as system work, for anyone who submits the form, so
 managing forms is not enough to choose one: the owner answers with its own
 access check. It is asked when a form's target or its configuration changes
-under an acting user, and every target states it.
+under an acting user, and every target states it. A collection edit
+(`Form.objects.filter(…).update(target_class=…)`) is refused: the owner is asked
+one form at a time. What `deliver` returns must be a record a reference can
+reach (a model with a permission type); anything else fails the delivery, since
+nothing would erase the answers when it goes.
 
 `deliver` runs as named system work inside the transaction that records its
 outcome. It returns the record it made or found, or `None`. When the owner
@@ -181,8 +186,12 @@ addon's model.
 - A response carries no history, and a failed delivery keeps only the
   failure's class, so an erased answer stays nowhere in this addon. The record
   a response became is its owner's to erase.
-- `Response.objects.answered_by("<contact>")` finds a person's responses across
-  forms by their contact answer, whatever the letter case.
+- A response keeps its contact answer beside the answers (`contact`: trimmed,
+  in one letter case), and the contact question is always one the version
+  states personal. `Response.objects.answered_by("<contact>")` finds a person's
+  responses across forms by it, and the console's responses list filters on
+  it: that is how a person's request to be erased is served, one Erase per
+  response found. Erasing blanks it with the answers.
 - `Response.objects.erase_for_record(record)` blanks the personal answers of the
   responses a record was made from: the owner of that record calls it when it
   erases the person.

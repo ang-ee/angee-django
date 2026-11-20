@@ -60,6 +60,7 @@ MARKUP_TAGS = frozenset({
 MARKUP_LINKS = ("http://", "https://", "mailto:")
 MAX_QUESTIONS = 200
 TEXT_LIMIT = 2_000
+CONTACT_LIMIT = 320
 COMMENT_LIMIT = 20_000
 DEFAULT_RATING = (1, 5)
 
@@ -201,6 +202,9 @@ def markup_refusal(value: str) -> str:
         return reader.refusal
     if reader.unclosed:
         return f"<{reader.unclosed[-1]}> is never closed"
+    if "{" in value or "}" in value:
+        # The page's library fills {name} with an answer; inside markup that answer would be read as markup.
+        return "curly brackets are not allowed"
     if "".join(reader.rebuilt) != value:
         return (
             "write it plainly: lower-case tags without spaces, a double-quoted href, "
@@ -330,6 +334,65 @@ def validate_answers(definition: dict[str, Any], answers: Any) -> dict[str, Any]
     if issues:
         raise ValidationError(issues)
     return dict(answers)
+
+
+def validate_version(
+    definition: Any, *, languages: Sequence[str], default_language: str, personal_questions: Any,
+    contact_question: str,
+) -> None:
+    """Refuse a version whose content does not hold together, each refusal under its field.
+
+    The definition is inside the stored subset; the personal questions, once
+    stated, are questions it asks; and the contact question is one of them and,
+    being a way to reach a person, is stated personal.
+    """
+
+    validate_definition(definition, languages=languages, default_language=default_language)
+    asked = {question["name"] for question in questions(definition)}
+    errors: dict[str, str] = {}
+    if personal_questions is not None and (
+        not isinstance(personal_questions, list)
+        or any(not isinstance(name, str) or name not in asked for name in personal_questions)
+    ):
+        errors["personal_questions"] = "Name questions this version asks."
+    if contact_question and contact_question not in asked:
+        errors["contact_question"] = "Name a question this version asks."
+    elif contact_question and isinstance(personal_questions, list) and contact_question not in personal_questions:
+        errors["contact_question"] = "The contact question holds personal data: list it among the personal questions."
+    if errors:
+        raise ValidationError(errors)
+
+
+def validate_publishable(
+    definition: Any, *, languages: Sequence[str], default_language: str, personal_questions: Any,
+    contact_question: str,
+) -> None:
+    """Refuse a version that is not ready to be served.
+
+    Beyond :func:`validate_version`: every text is written in every language of
+    the form, and the version has stated which questions hold personal data,
+    even if none do. :meth:`FormVersion.publish` judges the stored row with it;
+    a migration that carries published forms over judges what it writes with it.
+    """
+
+    validate_version(
+        definition, languages=languages, default_language=default_language,
+        personal_questions=personal_questions, contact_question=contact_question,
+    )
+    missing = missing_translations(definition, languages=languages, default_language=default_language)
+    if missing:
+        raise ValidationError({
+            "definition": [f"{pointer}: not written in every language of the form." for pointer in missing],
+        })
+    if personal_questions is None:
+        raise ValidationError({"personal_questions": "State which questions hold personal data, even if none do."})
+
+
+def contact_of(answers: dict[str, Any], contact_question: str) -> str:
+    """Return the contact answer as it is kept for finding a person's responses: trimmed, in one letter case."""
+
+    value = answers.get(contact_question) if contact_question else None
+    return "" if value is None else str(value).strip().casefold()[:CONTACT_LIMIT]
 
 
 def _offered(question: dict[str, Any]) -> int:

@@ -11,6 +11,7 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db.models import ProtectedError, RestrictedError
 from django.utils import timezone
@@ -521,10 +522,57 @@ def test_a_persons_responses_are_found_by_their_contact_answer_across_forms() ->
         receive(first, "theirs", answers={**ANSWERS, "email": "bo@example.test"})
         receive(nameless, "unnamed")
 
-        found = set(Response.objects.answered_by(" ada@example.test ").values_list("pk", flat=True))
+        found = set(Response.objects.answered_by(" Ada@Example.test ").values_list("pk", flat=True))
         nobody = Response.objects.answered_by("  ").count()
+        assert stored(also_mine).erase() is True
 
     assert (found, nobody) == ({mine.pk, also_mine.pk}, 0)
+    assert (stored(mine).contact, stored(also_mine).contact) == ("ada@example.test", "")
+    with system_context(reason="webforms tests read"):
+        assert list(Response.objects.answered_by("ada@example.test").values_list("pk", flat=True)) == [mine.pk]
+
+
+def test_the_contact_question_is_one_the_version_states_personal() -> None:
+    """A way to reach a person is personal data: erasing a response must take it too."""
+
+    form, version = form_with()
+    version.personal_questions = ["name"]
+
+    with system_context(reason="webforms tests setup"), pytest.raises(ValidationError) as refused:
+        version.full_clean()
+
+    assert "list it among the personal questions" in refused.value.message_dict["contact_question"][0]
+
+
+def test_a_forms_target_is_not_changed_through_a_collection_edit() -> None:
+    """The target's owner is asked one form at a time; an edit of many forms at once would skip it."""
+
+    form, _version = form_with()
+    with system_context(reason="webforms tests setup"):
+        with pytest.raises(ValidationError):
+            Form.objects.filter(pk=form.pk).update(target_class="tag")
+        with pytest.raises(ValidationError):
+            Form.objects.filter(pk=form.pk).update(name="Renamed", target_config={"prefix": "x"})
+        Form.objects.filter(pk=form.pk).update(name="Renamed")
+
+    assert (stored(form).name, stored(form).target_class) == ("Renamed", "store")
+
+
+def test_a_target_that_returns_what_no_record_reference_reaches_fails_and_links_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nothing would erase the answers when such a row goes, so it is never taken as the record."""
+
+    monkeypatch.setattr(TagTarget, "deliver", lambda self, response: ContentType.objects.get_for_model(Tag))
+    form, _version = published("tag")
+    row, _made = receive(form)
+
+    with pytest.raises(DeliveryFailed) as failed:
+        stored(row).deliver()
+
+    assert failed.value.reason == "ImproperlyConfigured"
+    with system_context(reason="webforms tests read"):
+        assert not ResponseRecord._base_manager.filter(response=row).exists()
 
 
 def test_retention_removes_every_response_received_longer_ago_than_its_form_keeps_one() -> None:
