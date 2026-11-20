@@ -7,6 +7,8 @@ are judged by a schema derived from it. Every row names the rule it pins.
 from __future__ import annotations
 
 import copy
+import json
+import time
 from typing import Any
 
 import pytest
@@ -243,3 +245,32 @@ def test_the_answers_schema_names_each_question_once_and_nothing_else() -> None:
         "topics-Comment", "size-Comment",
     }
     assert (schema["required"], schema["additionalProperties"]) == (["name", "email", "topics"], False)
+
+
+def test_a_list_longer_than_the_choices_offered_is_refused_without_being_read() -> None:
+    """A body under the endpoint's cap cannot buy seconds of comparison: the list is bounded before the schema."""
+
+    items: list[Any] = []
+    while len(json.dumps({"answers": {"topics": items}})) < 65_000:
+        items.extend([len(items), f"s{len(items)}"])
+    started = time.perf_counter()
+    with pytest.raises(ValidationError) as refused:
+        validate_answers(FORM, without("topics-Comment", topics=items))
+    elapsed = time.perf_counter() - started
+
+    assert refused.value.message_dict == {"topics": ["Choose at most 4."]}
+    assert elapsed < 0.5, f"{len(items)} items took {elapsed:.2f}s"
+
+
+def test_a_character_the_database_cannot_store_is_refused_under_its_question() -> None:
+    with pytest.raises(ValidationError) as refused:
+        validate_answers(FORM, without(idea="An evening\x00 of readings.", size__Comment="x\x00"))
+
+    assert "idea" in refused.value.message_dict and "size-Comment" in refused.value.message_dict
+
+
+def test_a_multi_select_is_bounded_by_what_it_offers_in_the_derived_schema() -> None:
+    topics = answers_schema(FORM)["properties"]["topics"]
+
+    assert (topics["maxItems"], topics["uniqueItems"]) == (2, True), "the tighter of the choices offered and the cap"
+

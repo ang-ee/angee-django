@@ -201,8 +201,21 @@ def validate_answers(definition: dict[str, Any], answers: Any) -> dict[str, Any]
 
     if not isinstance(answers, dict):
         raise ValidationError({"__all__": ["Answers are an object keyed by question name."]})
-    issues = validation_issues(answers_schema(definition), answers)
-    for question in questions(definition):
+    asked = questions(definition)
+    # Refused before the schema reads them: every keyword of a schema runs whatever another found,
+    # and comparing a long list's items pairwise costs seconds within the body cap.
+    oversized = {
+        question["name"]: _offered(question) for question in asked
+        if isinstance(answers.get(question["name"]), list) and len(answers[question["name"]]) > _offered(question)
+    }
+    unreadable = [name for name, value in answers.items() if isinstance(value, str) and "\x00" in value]
+    judged = {name: value for name, value in answers.items() if name not in oversized}
+    issues = validation_issues(answers_schema(definition), judged)
+    for name, most in oversized.items():
+        issues[name] = [f"Choose at most {most}."]
+    for name in unreadable:
+        issues.setdefault(name, ["Remove the character that cannot be stored."])
+    for question in asked:
         name = question["name"]
         comment = f"{name}{OTHER_SUFFIX}"
         if comment in issues and comment not in answers:
@@ -219,6 +232,12 @@ def validate_answers(definition: dict[str, Any], answers: Any) -> dict[str, Any]
     return dict(answers)
 
 
+def _offered(question: dict[str, Any]) -> int:
+    """How many choices a question offers, its "Other" included; none for a question without choices."""
+
+    return len(question.get("choices", ())) + (1 if question.get("showOtherItem") else 0)
+
+
 def _chose_other(value: Any) -> bool:
     return value == OTHER or (isinstance(value, list) and OTHER in value)
 
@@ -232,12 +251,13 @@ def _answer_schema(question: dict[str, Any]) -> dict[str, Any]:
             codes.append(OTHER)
         if kind != "checkbox":
             return {"enum": codes}
-        chosen: dict[str, Any] = {"type": "array", "uniqueItems": True, "items": {"enum": codes}}
+        chosen: dict[str, Any] = {
+            "type": "array", "uniqueItems": True, "items": {"enum": codes},
+            "maxItems": min(question.get("maxSelectedChoices", len(codes)), len(codes)),
+        }
         least = max(question.get("minSelectedChoices", 0), 1 if needed else 0)
         if least:
             chosen["minItems"] = least
-        if "maxSelectedChoices" in question:
-            chosen["maxItems"] = question["maxSelectedChoices"]
         return chosen
     if kind == "boolean":
         return {"type": "boolean"}

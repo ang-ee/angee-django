@@ -190,6 +190,30 @@ def test_a_language_the_version_is_not_written_in_falls_back_to_its_default() ->
     assert stored(row).language == "en"
 
 
+def test_a_resend_after_the_form_closed_is_still_the_response_it_made() -> None:
+    form, _version = published()
+    row, _made = receive(form)
+    with system_context(reason="webforms tests setup"):
+        form.close()
+
+    again, made = receive(form)
+
+    assert (again.pk, made) == (row.pk, False)
+    with pytest.raises(FormUnavailable):
+        receive(form, "r-2")
+
+
+def test_a_form_that_points_at_an_unpublished_version_takes_no_submission() -> None:
+    """Whatever put it there, a version without a publication is never served."""
+
+    form, version = published()
+    with system_context(reason="webforms tests setup"):
+        FormVersion.objects.filter(pk=version.pk).owner_update(published_at=None)
+
+    with pytest.raises(FormUnavailable):
+        receive(form)
+
+
 def test_a_draft_form_takes_no_submission() -> None:
     form, _version = form_with()
 

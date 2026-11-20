@@ -254,6 +254,11 @@ class FormVersion(ImmutableFieldsMixin, AngeeDataModel, concrete=True):
         if errors:
             raise ValidationError(errors)
 
+    def validate_answers(self, answers: Any) -> dict[str, Any]:
+        """Return ``answers`` when this version's definition admits them; raise each refusal under its question."""
+
+        return validate_answers(self.definition, answers)
+
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Number a new version after its form's last, and keep an unpublished one open to revision."""
 
@@ -380,30 +385,56 @@ class ResponseManager(AngeeManager.from_queryset(ResponseQuerySet)):  # type: ig
         another raises :class:`FormChanged`, so its answers are never judged by
         questions the sender did not see, and a form that takes no submission
         raises :class:`FormUnavailable`. A ``submission_id`` the form already
-        holds returns that response unchanged. A language the version is not
-        written in falls back to its default. The response is handed to the
-        form's target after the transaction commits.
+        holds returns that response unchanged, even after the form closed. A
+        language the version is not written in falls back to its default. The
+        answers are judged before the form is locked, and what was read is
+        checked again under the lock, so a slow submission delays nobody. The
+        response is handed to the form's target after the transaction commits.
         """
 
         receipt = validate_submission_id(submission_id)
-        with transaction.atomic(), system_context(reason="webforms.response.receive"):
-            current = _model("Form").system_queryset(lock=("self",)).accepting().filter(pk=form.pk).first()
-            if current is None:
-                raise FormUnavailable
-            kept = self.model._base_manager.filter(form_id=current.pk, submission_id=receipt).first()
+        forms = _model("Form")
+        with system_context(reason="webforms.response.receive"):
+            # A resend is answered first, whatever became of the form since.
+            kept = self._kept(form.pk, receipt)
             if kept is not None:
                 return kept, False
-            published = _model("FormVersion")._base_manager.get(pk=current.published_version_id)
+            current = forms.system_queryset().accepting().filter(pk=form.pk).first()
+            if current is None:
+                raise FormUnavailable
+            published = _model("FormVersion")._base_manager.filter(
+                pk=current.published_version_id, published_at__isnull=False,
+            ).first()
+            if published is None:
+                raise FormUnavailable
             if published.number != version:
                 raise FormChanged
-            row = self.model(
-                form_id=current.pk, version_id=published.pk, submission_id=receipt,
-                language=language if language in published.languages else published.default_language,
-                answers=validate_answers(published.definition, answers),
-            )
-            row._owner_insert()
-            enqueue_task(DELIVER_RESPONSE_TASK, kwargs={"pk": row.pk}, robust=True)
+            # Judged before the form is locked: the sender decides how long this takes.
+            checked = published.validate_answers(answers)
+            tag = language if isinstance(language, str) and language in published.languages else None
+            with transaction.atomic():
+                serving = forms.system_queryset(lock=("self",)).accepting().filter(
+                    pk=form.pk, published_version_id=published.pk,
+                )
+                if not serving.exists():
+                    # Closed, or serving another version, since the answers were judged.
+                    still = forms.system_queryset().accepting().filter(pk=form.pk).exists()
+                    raise FormChanged if still else FormUnavailable
+                kept = self._kept(form.pk, receipt)
+                if kept is not None:
+                    return kept, False
+                row = self.model(
+                    form_id=form.pk, version_id=published.pk, submission_id=receipt,
+                    language=tag or published.default_language, answers=checked,
+                )
+                row._owner_insert()
+                enqueue_task(DELIVER_RESPONSE_TASK, kwargs={"pk": row.pk}, robust=True)
         return row, True
+
+    def _kept(self, form_id: Any, receipt: str) -> Any:
+        """Return the response a form already holds under a submission id, or ``None``."""
+
+        return self.model._base_manager.filter(form_id=form_id, submission_id=receipt).first()
 
     def purge_expired(self, *, now: Any) -> int:
         """Remove the delivered responses past their form's retention; return how many."""
