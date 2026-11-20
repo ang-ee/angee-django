@@ -81,6 +81,7 @@ dependencies = [
     "angee-uom==3.0.0",
     "angee-web==3.0.0",
     "angee-webforms==3.0.0",
+    "angee-webforms-messaging==3.0.0",
     "angee-work==3.0.0",
     "angee-workflows==3.0.0",
     "angee-workflows-agents==3.0.0",
@@ -203,6 +204,7 @@ angee-timeline = {workspace = true}
 angee-uom = {workspace = true}
 angee-web = {workspace = true}
 angee-webforms = {workspace = true}
+angee-webforms-messaging = {workspace = true}
 angee-work = {workspace = true}
 angee-workflows = {workspace = true}
 angee-workflows-agents = {workspace = true}

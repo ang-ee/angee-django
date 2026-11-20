@@ -82,6 +82,7 @@ members = [
     "angee-uom",
     "angee-web",
     "angee-webforms",
+    "angee-webforms-messaging",
     "angee-work",
     "angee-workflows",
     "angee-workflows-agents",
@@ -208,6 +209,7 @@ dependencies = [
     { name = "angee-uom" },
     { name = "angee-web" },
     { name = "angee-webforms" },
+    { name = "angee-webforms-messaging" },
     { name = "angee-work" },
     { name = "angee-workflows" },
     { name = "angee-workflows-agents" },
@@ -321,6 +323,7 @@ requires-dist = [
     { name = "angee-uom", editable = "src/angee/uom" },
     { name = "angee-web", editable = "src/angee/web" },
     { name = "angee-webforms", editable = "src/angee/webforms" },
+    { name = "angee-webforms-messaging", editable = "src/angee/webforms_messaging" },
     { name = "angee-work", editable = "src/angee/work" },
     { name = "angee-workflows", editable = "src/angee/workflows" },
     { name = "angee-workflows-agents", editable = "src/angee/workflows_agents" },
@@ -2024,6 +2027,23 @@ requires-dist = [
     { name = "angee-resources", editable = "src/angee/resources" },
     { name = "angee-server", editable = "src/angee/server" },
     { name = "angee-web", editable = "src/angee/web" },
+]
+
+[[package]]
+name = "angee-webforms-messaging"
+version = "3.0.0"
+source = { editable = "src/angee/webforms_messaging" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-messaging" },
+    { name = "angee-webforms" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-messaging", editable = "src/angee/messaging" },
+    { name = "angee-webforms", editable = "src/angee/webforms" },
 ]
 
 [[package]]
