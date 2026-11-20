@@ -15,8 +15,11 @@ from it (:meth:`ResponseManager.receive`); a client that sends the same
 to generic edits: only the owner verbs here change one, to record what became of
 it (:meth:`Response.deliver`), to blank a person's answers
 (:meth:`Response.erase`) or to remove it when its form's retention has passed
-(:meth:`ResponseManager.purge_expired`). A response carries no history, so an
-erased answer is kept nowhere.
+(:meth:`ResponseManager.purge_expired`). A response carries no history, a
+failed delivery keeps only the failure's class, and deleting the record a
+response became erases the response's personal answers too, so an erased answer
+stays nowhere in this addon. The record made from a response is its owner's to
+erase.
 
 **Personal data.** A response holds the answers, the language and the client's
 submission id; no address of the sender and no browser detail. Each version
@@ -36,8 +39,9 @@ from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.core.validators import RegexValidator
+from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models, transaction
+from django.db.models.fields.json import KeyTextTransform
 from django.utils import timezone
 from rebac import system_context
 
@@ -73,6 +77,8 @@ SLUG = RegexValidator(r"^[a-z0-9]+(?:-[a-z0-9]+)*$", "Use lower-case letters and
 THEME_ID = RegexValidator(r"^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$", "Enter a theme id, such as acme.paper.")
 LANGUAGE = RegexValidator(LANGUAGE_TAG, "Enter a language tag, such as en or pt-BR.")
 
+MAX_RETENTION_DAYS = 36_500
+"""A century: past it a form keeps its responses by leaving ``retention_days`` empty."""
 MAX_DELIVERY_ATTEMPTS = 8
 """How often a failing delivery is tried before it waits for staff."""
 FIRST_RETRY = timedelta(minutes=5)
@@ -154,16 +160,22 @@ class Form(HistoryMixin, ArchiveMixin, AngeeDataModel, concrete=True):
     name = models.CharField(max_length=160)
     status = StateField(choices_enum=FormStatus, default=FormStatus.DRAFT)
     published_version = models.ForeignKey(
-        "webforms.FormVersion", null=True, blank=True, editable=False, on_delete=models.PROTECT, related_name="+",
+        "webforms.FormVersion", null=True, blank=True, editable=False, on_delete=models.RESTRICT, related_name="+",
     )
-    """The version the public answers; set by :meth:`FormVersion.publish`."""
+    """The version the public answers; set by :meth:`FormVersion.publish`.
+
+    The served version cannot be deleted by itself; it goes with its form, which
+    is deleted only while it holds no response.
+    """
     target_class = ImplClassField(FormTarget, default="store")
     target_config = models.JSONField(default=dict, blank=True)
     """The target's own configuration, checked by its ``config_model``: how answers become its record's fields."""
     theme_id = models.CharField(max_length=64, blank=True, default="", validators=[THEME_ID])
     """The theme the public page wears; empty follows the deployment's default."""
-    retention_days = models.PositiveIntegerField(null=True, blank=True)
-    """How many days a delivered response is kept; empty keeps it."""
+    retention_days = models.PositiveIntegerField(
+        null=True, blank=True, validators=[MinValueValidator(1), MaxValueValidator(MAX_RETENTION_DAYS)],
+    )
+    """How many days a response is kept after it was received, whatever became of it; empty keeps it."""
 
     status_transitions = StateTransitions(
         status,
@@ -419,17 +431,49 @@ class ResponseQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet):
 
         return self.undelivered().filter(retry_at__lte=now)
 
-    def expired(self, *, now: Any) -> ResponseQuerySet:
-        """Keep the delivered responses past their form's retention."""
+    def expired(self, *, now: datetime) -> ResponseQuerySet:
+        """Keep the responses received longer ago than their form keeps one.
+
+        Every response counts, delivered or not: what a form says it keeps for
+        a time is not kept longer because nothing came of it.
+        """
 
         # One bound per retention length in use: a duration multiplied in SQL is not portable.
-        lengths = _model("Form")._base_manager.exclude(retention_days__isnull=True).values_list(
+        lengths = _model("Form")._base_manager.filter(retention_days__range=(1, MAX_RETENTION_DAYS)).values_list(
             "retention_days", flat=True,
         ).order_by().distinct()
         past = models.Q(pk__in=())
         for days in lengths:
-            past |= models.Q(form__retention_days=days, delivered_at__lt=now - timedelta(days=days))
-        return self.filter(past, delivery=Delivery.DELIVERED)
+            past |= models.Q(form__retention_days=days, created_at__lt=now - timedelta(days=days))
+        return self.filter(past)
+
+    def answered_by(self, contact: str) -> ResponseQuerySet:
+        """Keep the responses whose contact answer is ``contact``, whatever the letter case.
+
+        The contact answer is the one a response's version names
+        (``FormVersion.contact_question``). This is how a person's responses are
+        found across forms when they ask what is held about them.
+        """
+
+        wanted = contact.strip()
+        if not wanted:
+            return self.none()
+        names = _model("FormVersion")._base_manager.exclude(contact_question="").values_list(
+            "contact_question", flat=True,
+        ).order_by().distinct()
+        found = models.Q(pk__in=())
+        rows = self
+        for index, name in enumerate(names):
+            # A key read by name: a question may be called what a lookup is called.
+            rows = rows.alias(**{f"contact_{index}": KeyTextTransform(name, "answers")})
+            found |= models.Q(version__contact_question=name, **{f"contact_{index}__iexact": wanted})
+        return rows.filter(found)
+
+    def for_record(self, record: models.Model) -> ResponseQuerySet:
+        """Keep the responses ``record`` was made from."""
+
+        links = _model("ResponseRecord")
+        return self.filter(pk__in=links._base_manager.filter(links.record_filter(record)).values("response_id"))
 
 
 class ResponseManager(AngeeManager.from_queryset(ResponseQuerySet)):  # type: ignore[misc]
@@ -516,8 +560,21 @@ class ResponseManager(AngeeManager.from_queryset(ResponseQuerySet)):  # type: ig
                 enqueue_task(DELIVER_RESPONSE_TASK, kwargs={"pk": pk}, robust=True)
         return len(due)
 
-    def purge_expired(self, *, now: Any) -> int:
-        """Remove the delivered responses past their form's retention; return how many."""
+    def erase_for_record(self, record: models.Model) -> int:
+        """Blank the personal answers of the responses ``record`` was made from; return how many this call did.
+
+        Named system work for the owner of a record a form made, when it erases
+        the person the record is about. It also runs when the record is deleted
+        (:meth:`ResponseRecord.teardown_for_target`), so the answers do not
+        outlive it unseen.
+        """
+
+        with transaction.atomic(), system_context(reason="webforms.response.erase_for_record"):
+            rows = self.get_queryset().for_record(record).filter(erased_at__isnull=True).select_related("version")
+            return sum(row._erase() for row in rows)
+
+    def purge_expired(self, *, now: datetime) -> int:
+        """Remove the responses received longer ago than their form keeps one; return how many."""
 
         with system_context(reason="webforms.response.purge_expired"):
             _total, removed = self.get_queryset().expired(now=now).owner_delete()
@@ -558,7 +615,6 @@ class Response(AppendOnlyModel, AngeeDataModel, concrete=True):
             models.UniqueConstraint(fields=("form", "submission_id"), name="%(app_label)s_response_submission"),
         )
         indexes = (
-            models.Index(fields=("delivery", "delivered_at"), name="%(app_label)s_response_delivery"),
             models.Index(
                 fields=("retry_at",), name="%(app_label)s_response_retry", condition=models.Q(retry_at__isnull=False),
             ),
@@ -650,10 +706,16 @@ class Response(AppendOnlyModel, AngeeDataModel, concrete=True):
         """Blank the answers its version marks as personal; return whether this call did.
 
         The row stays, with its other answers, its delivery and its link, so
-        counts and what was made from it still stand.
+        counts and what was made from it still stand. The record made from it is
+        its owner's to erase.
         """
 
         self.require_access("write")
+        return self._erase()
+
+    def _erase(self) -> bool:
+        """Blank the personal answers once; the write behind :meth:`erase` and the manager's system erasure."""
+
         personal = set(self.version.personal_questions or ())
         kept = {
             name: value for name, value in self.answers.items() if name.removesuffix(OTHER_SUFFIX) not in personal
@@ -667,11 +729,11 @@ class ResponseRecord(RecordRefMixin, AngeeDataModel, concrete=True):
     It is what a retried delivery finds instead of making a second record, and
     the path from that record back to the answers it came from. It follows the
     record through a merge and goes when the record or the response does; it
-    never blocks either.
+    never blocks either. When the record is deleted, the response it came from
+    loses its personal answers first (:meth:`teardown_for_target`).
     """
 
     merge_policy = MergePolicy.MOVE
-    on_target_delete = models.CASCADE
     accepts_any_record_target = True
     sqid_prefix = "wbl_"
 
@@ -686,6 +748,17 @@ class ResponseRecord(RecordRefMixin, AngeeDataModel, concrete=True):
         abstract = True
         rebac_resource_type = "webforms/response_record"
         indexes = (models.Index(fields=("content_type", "object_id"), name="%(app_label)s_record_target"),)
+
+    @classmethod
+    def teardown_for_target(cls, target: models.Model) -> None:
+        """Erase the personal answers of the responses a deleted record was made from, then drop their links."""
+
+        links = cls._base_manager.filter(cls.record_filter(target))
+        if not links.exists():
+            return
+        _model("Response").objects.erase_for_record(target)
+        with system_context(reason="webforms.response_record.target_delete"):
+            links.delete()
 
 
 WebformsRole = role_anchor("webforms/role", name="WebformsRole")

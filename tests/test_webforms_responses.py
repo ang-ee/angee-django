@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 from django.core.exceptions import ValidationError
+from django.db.models import ProtectedError, RestrictedError
 from django.utils import timezone
 from rebac import actor_context, system_context
 
@@ -453,24 +454,106 @@ def test_a_response_is_closed_to_every_generic_edit() -> None:
     assert stored(row).answers == ANSWERS
 
 
-def test_retention_removes_delivered_responses_past_their_forms_days_and_no_others() -> None:
-    form, _version = published(retention_days=30)
+def test_deleting_the_record_a_response_became_erases_its_personal_answers_and_drops_the_link() -> None:
+    form, _version = published("tag")
+    row, _made = receive(form)
+    other, _made = receive(form, "r-2", answers={**ANSWERS, "name": "Bo Example"})
+    with system_context(reason="webforms tests setup"):
+        made = stored(row).deliver()
+        stored(other).deliver()
+
+        made.delete()
+
+    kept, untouched = stored(row), stored(other)
+    assert (kept.answers, kept.erased_at is not None) == ({"size": "other", "size-Comment": "Huge"}, True)
+    assert (untouched.answers["name"], untouched.erased_at) == ("Bo Example", None)
+    with system_context(reason="webforms tests read"):
+        assert not ResponseRecord._base_manager.filter(response=row).exists()
+        assert ResponseRecord._base_manager.filter(response=other).exists()
+
+
+def test_the_owner_of_a_record_erases_the_responses_it_was_made_from() -> None:
+    form, _version = published("tag")
+    row, _made = receive(form)
+    with system_context(reason="webforms tests setup"):
+        made = stored(row).deliver()
+
+    assert Response.objects.erase_for_record(made) == 1
+    assert Response.objects.erase_for_record(made) == 0
+
+    assert stored(row).answers == {"size": "other", "size-Comment": "Huge"}
+    with system_context(reason="webforms tests read"):
+        assert ResponseRecord._base_manager.get(response=row).record == made, "the record and its link stay"
+
+
+def test_a_persons_responses_are_found_by_their_contact_answer_across_forms() -> None:
+    first, _version = published()
+    second, _version = published()
+    nameless, unnamed = form_with()
+    with system_context(reason="webforms tests setup"):
+        unnamed.contact_question = ""
+        unnamed.save()
+        unnamed.publish()
+        mine, _ = receive(first, "mine")
+        also_mine, _ = receive(second, "also", answers={**ANSWERS, "email": "ADA@Example.test"})
+        receive(first, "theirs", answers={**ANSWERS, "email": "bo@example.test"})
+        receive(nameless, "unnamed")
+
+        found = set(Response.objects.answered_by(" ada@example.test ").values_list("pk", flat=True))
+        nobody = Response.objects.answered_by("  ").count()
+
+    assert (found, nobody) == ({mine.pk, also_mine.pk}, 0)
+
+
+def test_retention_removes_every_response_received_longer_ago_than_its_form_keeps_one() -> None:
+    form, _version = published("failing", retention_days=30)
     kept_forever, _other = published()
     with system_context(reason="webforms tests setup"):
         old, _ = receive(form, "old")
+        failed, _ = receive(form, "failed")
+        given_up, _ = receive(form, "given-up")
         fresh, _ = receive(form, "fresh")
-        waiting, _ = receive(form, "waiting")
         unlimited, _ = receive(kept_forever, "unlimited")
-        for row in (old, fresh, unlimited):
-            stored(row).deliver()
+        with pytest.raises(DeliveryFailed):
+            stored(failed).deliver()
+        stored(given_up).dismiss()
+        stored(unlimited).deliver()
         now = timezone.now()
-        Response.objects.filter(pk__in=(old.pk, unlimited.pk)).owner_update(delivered_at=now - timedelta(days=31))
+        long_ago = Response.objects.filter(pk__in=(old.pk, failed.pk, given_up.pk, unlimited.pk))
+        long_ago.owner_update(created_at=now - timedelta(days=31))
 
-    assert Response.objects.purge_expired(now=now) == 1
+    assert Response.objects.purge_expired(now=now) == 3
 
     with system_context(reason="webforms tests read"):
         left = set(Response._base_manager.values_list("submission_id", flat=True))
-    assert left == {"fresh", "waiting", "unlimited"}
+    assert left == {"fresh", "unlimited"}
+
+
+@pytest.mark.parametrize("days", [0, 36_501])
+def test_a_form_keeps_its_responses_for_at_least_a_day_and_at_most_a_century(days: int) -> None:
+    form, _version = form_with()
+    form.retention_days = days
+
+    with pytest.raises(ValidationError) as refused:
+        form.full_clean()
+
+    assert "retention_days" in refused.value.message_dict
+
+
+def test_a_form_is_deleted_with_its_versions_while_it_holds_no_response() -> None:
+    empty, version = published()
+    answered, kept_version = published()
+    receive(answered)
+    with system_context(reason="webforms tests setup"):
+        with pytest.raises(RestrictedError):
+            FormVersion._base_manager.get(pk=version.pk).delete()
+        with pytest.raises(ProtectedError):
+            Form._base_manager.get(pk=answered.pk).delete()
+
+        Form._base_manager.get(pk=empty.pk).delete()
+
+        assert not FormVersion._base_manager.filter(pk=version.pk).exists()
+        assert FormVersion._base_manager.filter(pk=kept_version.pk).exists()
 
 
 def test_an_alias_leads_to_a_form_only_while_it_takes_submissions() -> None:

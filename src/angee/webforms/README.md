@@ -10,7 +10,7 @@ the addon that owns it.
 - A `Form` is what staff manage: its name, whether it takes submissions
   (`status`: draft, published, closed; `open()` and `close()`), the version the
   public answers, its target, the theme its public page wears and how long a
-  delivered response is kept.
+  response is kept.
 - A `FormVersion` holds the questions. It is numbered after its form's last when
   it is made. While unpublished it may be revised in place; `publish()` judges
   and freezes the stored row under its lock, and a change after that is a new
@@ -81,8 +81,9 @@ change one:
   nor raised; the log says where it was raised.
 - `dismiss()` gives up on one that could not be delivered.
 - `erase()` blanks the answers its version marks as personal and keeps the row.
-- `Response.objects.purge_expired(now=…)` removes delivered responses past
-  their form's `retention_days`; a daily task calls it.
+- `Response.objects.purge_expired(now=…)` removes every response received
+  longer ago than its form's `retention_days` (one day to a century; empty
+  keeps them), delivered or not; a daily task calls it.
 
 Delivery runs on a worker after the submission commits
 (`webforms.deliver_response`). A failed delivery, or one whose task was lost, is
@@ -157,9 +158,21 @@ addon's model.
   (`personal_questions`: null is not yet stated, an empty list states none) and
   may name the one whose answer finds a person's responses
   (`contact_question`).
-- A response carries no history, so an erased answer is kept nowhere.
+- A response carries no history, and a failed delivery keeps only the
+  failure's class, so an erased answer stays nowhere in this addon. The record
+  a response became is its owner's to erase.
+- `Response.objects.answered_by("<contact>")` finds a person's responses across
+  forms by their contact answer, whatever the letter case.
+- `Response.objects.erase_for_record(record)` blanks the personal answers of the
+  responses a record was made from: the owner of that record calls it when it
+  erases the person.
 - The link to the record a response became follows that record through a merge
-  and goes when the record or the response does; it never blocks either.
+  and goes when the record or the response does; it never blocks either. When
+  the record is deleted, the response it was made from loses its personal
+  answers first.
+- A form is deleted, with its versions, only while it holds no response; a form
+  that has been answered is archived, and its responses go when their retention
+  has passed.
 
 ## Permissions
 
