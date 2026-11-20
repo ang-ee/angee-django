@@ -502,8 +502,13 @@ function angeeWebCodegenPlugin({
 /** What a request must match to be for a declared page. */
 type PageRoute = Pick<StandalonePage, "id" | "paths" | "acceptPattern">;
 
-/** Where a build describes its pages for `vite preview`, inside the distribution. */
-const BUILT_PAGES = ".angee/pages.json";
+/**
+ * Where a build describes its pages for `vite preview`: beside Vite's own build
+ * manifest, in the directory of the distribution that is the build tool's and
+ * no page of the site. It holds what a response already shows (each page's
+ * paths, the `Accept` pattern and the policy header), and nothing else.
+ */
+const BUILT_PAGES = ".vite/angee-pages.json";
 
 /**
  * Compile declared pages into the question the ingress asks of a request: which

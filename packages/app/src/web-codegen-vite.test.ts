@@ -721,7 +721,7 @@ test("build emits a declared page as <id>.html beside index.html, with its own f
   expect(order.every((at) => at >= 0), css.slice(0, 80)).toBe(true);
   expect(order).toEqual([...order].sort((left, right) => left - right));
   // What `vite preview` serves the pages by, inside the distribution.
-  const described = outputs.find((entry) => entry.type === "asset" && entry.fileName === ".angee/pages.json");
+  const described = outputs.find((entry) => entry.type === "asset" && entry.fileName === ".vite/angee-pages.json");
   expect(JSON.parse(Buffer.from(described?.type === "asset" ? described.source : "").toString())).toEqual({
     pages: [{ id: "demo.page", paths: pageDeclaration.paths, acceptPattern: pageAccept["text/html"] }],
     policy: pageCsp,
