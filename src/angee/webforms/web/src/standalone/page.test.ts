@@ -353,13 +353,17 @@ describe("sending the answers", () => {
     first.setValue("colour", "other");
     first.setComment("colour", "teal");
     const said = vi.spyOn(Model.prototype, "notify");
+    const disposed = vi.spyOn(Model.prototype, "dispose");
     first.tryComplete();
     await vi.waitFor(() => expect(rendered).toHaveLength(2));
     const second = survey();
     expect(second).not.toBe(first);
-    // The version that was on screen is taken down and finished with.
+    // The version that was on screen is taken down, and finished with only after SurveyJS has the
+    // answer of the completion it was waiting on: the new version has spoken by then.
     expect(removed).toEqual([first]);
-    expect(first.isDisposed).toBe(true);
+    await vi.waitFor(() => expect(first.isDisposed).toBe(true));
+    expect(disposed.mock.contexts).toEqual([first]);
+    expect(disposed.mock.invocationCallOrder[0]).toBeGreaterThan(said.mock.invocationCallOrder.at(-1)!);
     expect(second.data).toEqual({ name: "Ada" });
     expect(said).toHaveBeenCalledWith(
       "The form changed while you were filling it in. Your answers are kept; please check them and send again.", "info",
@@ -382,6 +386,7 @@ describe("sending the answers", () => {
     expect(mount().hidden).toBe(true);
     expect(picker().hidden).toBe(true);
     expect(removed).toEqual(rendered);
+    await vi.waitFor(() => expect(rendered[0]!.isDisposed).toBe(true));
   });
 
   test("keeps the form usable when the answers could not be sent, in SurveyJS's own words", async () => {
