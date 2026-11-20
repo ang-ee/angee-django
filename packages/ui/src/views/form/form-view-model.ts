@@ -313,9 +313,10 @@ export function visibleFields(fields: readonly FieldDescriptor[], values: FormVa
   return fields.map((field) => resolveField(field, values)).filter((field) => isFieldVisible(field, values));
 }
 
-/** Whether a draft for `values` holds anything at `path`: a field visible for them at, above or below it. */
-export function draftHoldsPath(values: FormValues, fields: readonly FieldDescriptor[], path: string): boolean {
-  return visibleFields(fields, values).some(({ name }) => holdsPath(name, path) || name.startsWith(`${path}.`));
+/** How fields named `names` hold `path`, by segment: one is it or above it, some below it, or none. */
+export function pathHolding(names: readonly string[], path: string): "whole" | "part" | null {
+  if (names.some((name) => path === name || path.startsWith(`${name}.`))) return "whole";
+  return names.some((name) => name.startsWith(`${path}.`)) ? "part" : null;
 }
 
 /**
@@ -330,39 +331,48 @@ export function hiddenDraftPaths(
 ): string[] {
   const visible = visibleFields(fields, values).map((field) => field.name);
   const walk = (value: unknown, path: string): string[] => {
-    if (visible.some((name) => holdsPath(name, path))) return [];
-    if (!visible.some((name) => name.startsWith(`${path}.`)) || value === null || typeof value !== "object"
-      || Array.isArray(value)) return [path];
+    const held = pathHolding(visible, path);
+    if (held === "whole") return [];
+    if (held === null || value === null || typeof value !== "object" || Array.isArray(value)) return [path];
     return Object.entries(value).flatMap(([key, child]) => walk(child, `${path}.${key}`));
   };
+  const declared = fields.map((field) => field.name);
   return targets
-    .filter((target) => fields.some(({ name }) => holdsPath(name, target) || name.startsWith(`${target}.`)))
+    .filter((target) => pathHolding(declared, target) !== null)
     .flatMap((target) => walk(dottedValue(values, target), target));
 }
 
 /**
- * What a save writes for the fields a preset hid (see `FieldDescriptor.prefill`): each remembered
- * reset whose path a field the save writes owns, the draft holds nothing at, and the form was
- * loaded with a different value for.
+ * What a save writes for the fields a preset hid (see `FieldDescriptor.prefill`), derived from the
+ * values alone: each visible field the save writes, changed from its loaded value, has its preset
+ * evaluated again; of the seeds it replaces, each whose path a field the save writes owns, no
+ * visible field holds, and the form was loaded with a different value for is written.
  */
 export function hiddenResetWrites(
   values: FormValues,
   fields: readonly FieldDescriptor[],
-  resets: ReadonlyMap<string, unknown>,
   options: FieldSaveOptions & { baseline: FormValues },
 ): ReadonlyMap<string, unknown> {
-  return new Map([...resets].filter(([path, reset]) => {
-    const declared = fields.find((field) => field.name === path);
-    if (!declared || !savesField(resolveField(declared, values), options)) return false;
-    if (draftHoldsPath(values, fields, path) || !hasDottedValue(options.baseline, path)) return false;
-    const loaded = dottedValue(options.baseline, path);
-    return replaceEqualDeep(loaded, reset) !== loaded;
-  }));
-}
-
-/** A field named `name` holds `path` when the path is that field or lies within it. */
-function holdsPath(name: string, path: string): boolean {
-  return path === name || path.startsWith(`${name}.`);
+  const writes = new Map<string, unknown>();
+  if (options.isCreate) return writes;
+  const visible = visibleFields(fields, values);
+  const visibleNames = visible.map((field) => field.name);
+  const same = (left: unknown, right: unknown) => replaceEqualDeep(left, right) === left;
+  for (const field of visible) {
+    if (!field.prefill || field.createOnly || !savesField(field, options)) continue;
+    const value = dottedValue(values, field.name);
+    if (same(value, dottedValue(options.baseline, field.name))) continue;
+    for (const [path, seed] of Object.entries(field.prefill(value, values, options.baseline) ?? {})) {
+      // A dirty-preserving preset's other fields are defaults, never written in a hidden field's place.
+      if (field.prefillPreserveDirty && !field.prefillReplace?.includes(path)) continue;
+      const owner = fields.find((candidate) => candidate.name === path);
+      if (!owner || !savesField(resolveField(owner, values), options) || pathHolding(visibleNames, path) !== null) continue;
+      if (hasDottedValue(options.baseline, path) && !same(seed, dottedValue(options.baseline, path))) {
+        writes.set(path, seed);
+      }
+    }
+  }
+  return writes;
 }
 
 function initialDraftFieldValue(
@@ -478,7 +488,14 @@ export function mutationData(
   const data: FormValues = {};
   for (const declared of fields) {
     const field = resolveField(declared, values);
-    if (!savesField(field, options) || !isFieldVisible(field, values)) continue;
+    if (!isFieldVisible(field, values)) {
+      // A preset's value for a hidden field goes on the wire as the field's own value would.
+      if (options.hiddenResets?.has(field.name)) {
+        setDottedValue(data, field.name, mutationFieldValue(field, cloneFormValue(options.hiddenResets.get(field.name))));
+      }
+      continue;
+    }
+    if (!savesField(field, options)) continue;
     const seededDefault = createSeeded(field, options);
     const next = mutationFieldValue(field, dottedValue(values, field.name));
     const dirty = Boolean(dottedValue(options.dirtyFields, field.name));
@@ -502,7 +519,6 @@ export function mutationData(
     if (!options.isCreate && !dirty && !structuredRootDirty) continue;
     setDottedValue(data, field.name, next);
   }
-  for (const [path, reset] of options.hiddenResets ?? []) setDottedValue(data, path, cloneFormValue(reset));
   if (!options.isCreate && options.id != null) data.id = options.id;
   return data;
 }

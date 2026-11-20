@@ -43,14 +43,15 @@ import {
 import {
   baselineLineRows,
   dirtyArrayValues,
-  draftHoldsPath,
   emptyDraft,
   fieldValidationSummary,
   hiddenDraftPaths,
   hiddenResetWrites,
   missingRequiredFieldNames,
   mutationData,
+  pathHolding,
   recordToValues,
+  visibleFields,
   type FormValues,
   type LinesSeed,
 } from "./form-view-model";
@@ -241,10 +242,9 @@ export function useFormViewSave({
   );
   const manualSlugFieldsRef = React.useRef<Set<string>>(new Set());
   const prefillSeedsRef = React.useRef<Map<string, unknown>>(new Map());
-  // What presets dropped from the draft, and the value a preset gave each field it hid that the
-  // form was loaded with a value for (see `FieldDescriptor.prefill`).
+  // What presets dropped from the draft and no one has set since. A control may leave a visible
+  // field `undefined` itself (an omittable field "Not set"), so only these get their loaded value back.
   const droppedPathsRef = React.useRef<Set<string>>(new Set());
-  const hiddenResetsRef = React.useRef<Map<string, unknown>>(new Map());
   const userEditedFieldsRef = React.useRef<Set<string>>(new Set());
   const localAcknowledgementRef = React.useRef<{
     previous: FormValues | null;
@@ -301,6 +301,11 @@ export function useFormViewSave({
     ? acknowledgedSource.record
     : read.result ?? null;
   const displayRecord = record;
+  // The record's own fields: where an original and its variant both declare one, the admitted declaration saves.
+  const saveFields = React.useMemo(
+    () => formFieldsFor?.(displayRecord) ?? formFields,
+    [displayRecord, formFields, formFieldsFor],
+  );
   const editBasisRecordRef = React.useRef<Row | null>(displayRecord);
   const loading = acknowledgedSource?.loading ?? (nativeReadEnabled && (read.query.isPending || read.query.isFetching));
   const loadError = acknowledgedSource === undefined ? read.query.error : null;
@@ -577,7 +582,7 @@ export function useFormViewSave({
     (saved: Row, options: {
       submitted?: FormValues;
       submittedFields?: readonly string[];
-      /** Resets the save wrote for fields a preset hid, which the submitted draft does not hold. */
+      /** What the save wrote for fields a preset hid, which the submitted draft does not hold. */
       writtenResets?: ReadonlyMap<string, unknown>;
       acceptedValues?: FormValues;
       reconcile?: FormSubmitAcknowledgement["reconcile"];
@@ -589,14 +594,16 @@ export function useFormViewSave({
       // A mutation response is a patch over the latest cache, which may have
       // refreshed while the write was pending. Accepted submitted values fill
       // response omissions until canonical refetch; unsubmitted fields stay current.
-      const submitted: FormValues = Object.fromEntries((options.submittedFields ?? [])
+      const submitted = Object.fromEntries((options.submittedFields ?? [])
         .map((name) => [name, options.submitted?.[name]]));
-      for (const [path, reset] of options.writtenResets ?? []) {
-        const head = path.split(".", 1)[0]!;
-        if (head !== path) submitted[head] = structuredClone(submitted[head]);
-        set(submitted, path, reset);
-      }
       const acceptedPatch = { ...submitted, ...saved };
+      // What the save wrote for a hidden field fills its path where the response omits it.
+      for (const [path, reset] of options.writtenResets ?? []) {
+        if (get(saved, path) !== undefined) continue;
+        const head = path.split(".", 1)[0]!;
+        if (head !== path) acceptedPatch[head] = structuredClone(acceptedPatch[head]);
+        set(acceptedPatch, path, structuredClone(reset));
+      }
       const accepted = acknowledgedSource !== undefined
         ? { ...(record ?? {}), ...saved }
         : isCreate ? acceptedPatch : queryClient.setQueryData<GetOneResponse<RowRecord>>(
@@ -688,11 +695,8 @@ export function useFormViewSave({
       if (!dataResource) {
         throw new Error(`Resource metadata for "${resource}" is not available.`);
       }
-      // The record's own fields: where an original and its variant both declare one, the admitted declaration saves.
-      const saveFields = formFieldsFor?.(displayRecord) ?? formFields;
       const saveOptions = { isCreate, seededFieldNames: createSeedNames, writableFields: writableFieldNames };
-      const remembered = new Map(hiddenResetsRef.current);
-      const resets = hiddenResetWrites(value, saveFields, remembered, {
+      const resets = hiddenResetWrites(value, saveFields, {
         ...saveOptions,
         baseline: (form.formState.defaultValues ?? {}) as FormValues,
       });
@@ -727,10 +731,6 @@ export function useFormViewSave({
         const result = readSubmitResult(await runSubmit(data, linesDiff, value)
           .catch((cause) => formSubmitError(cause, t("form.genericSaveError"))));
         if (result) {
-          // The save settles the resets it saw; one a preset remembered while it was pending waits.
-          for (const [path, reset] of remembered) {
-            if (Object.is(hiddenResetsRef.current.get(path), reset)) hiddenResetsRef.current.delete(path);
-          }
           const response = result.data;
           const acknowledgement = isFormSubmitAcknowledgement(response) ? response : undefined;
           const saved: Row = acknowledgement ? acknowledgement.record : response as Row;
@@ -739,8 +739,7 @@ export function useFormViewSave({
             submittedFields: acknowledgement
               ? []
               : [...Object.keys(data), ...(linesDiff && linesField ? [linesField] : [])],
-            writtenResets: resets,
-            ...(acknowledgement ? { acceptedValues: acknowledgement.values } : {}),
+            ...(acknowledgement ? { acceptedValues: acknowledgement.values } : { writtenResets: resets }),
             ...(acknowledgement?.reconcile ? { reconcile: acknowledgement.reconcile } : {}),
             createdLines: Boolean(linesDiff?.created.length),
             notify: true,
@@ -759,7 +758,7 @@ export function useFormViewSave({
       displayRecord,
       fieldByName,
       formFields,
-      formFieldsFor,
+      saveFields,
       formReadOnly,
       isCreate,
       previewBlockedRef,
@@ -814,6 +813,7 @@ export function useFormViewSave({
     (field: FieldDescriptor, value: unknown, scope = ""): void => {
       const scoped = (name: string) => scope ? `${scope}.${name}` : name;
       userEditedFieldsRef.current.add(scoped(field.name));
+      droppedPathsRef.current.delete(scoped(field.name));
       clearErrors(scoped(field.name));
       // What the form compares itself against: a preset may give a sibling its loaded value back.
       const loaded = form.formState.defaultValues;
@@ -825,7 +825,7 @@ export function useFormViewSave({
         );
         if (seeds) {
           const replacements = new Set(field.prefillReplace ?? []);
-          const applied = new Map<string, unknown>();
+          const applied = new Set<string>();
           for (const [name, seed] of Object.entries(seeds)) {
             const target = scoped(name);
             if (
@@ -836,7 +836,7 @@ export function useFormViewSave({
                 replaceEqualDeep(prefillSeedsRef.current.get(target), form.getValues(target)) !== prefillSeedsRef.current.get(target)
               ))
             ) continue;
-            applied.set(target, seed);
+            applied.add(target);
             if (field.prefillPreserveDirty && !replacements.has(name)) {
               setValue(target, seed, { shouldDirty: false, shouldTouch: true });
               prefillSeedsRef.current.set(target, seed);
@@ -848,26 +848,20 @@ export function useFormViewSave({
             });
           }
           // The draft holds only the fields visible for its new values, as it was loaded (`emptyDraft`).
-          const hidden = hiddenDraftPaths(form.getValues(), formFields, [...applied.keys()]);
+          const hidden = hiddenDraftPaths(form.getValues(), saveFields, [...applied]);
           if (hidden.length) form.unregister(hidden, { keepDefaultValue: true });
-          for (const [target, seed] of applied) {
-            const dropped = hidden.includes(target);
-            if (dropped) droppedPathsRef.current.add(target);
-            // A save writes the preset's value where the form was loaded with another (see `hiddenResetWrites`).
-            if (dropped && !isCreate && seed !== undefined && get(loaded, target) !== undefined
-              && formFields.some((declared) => declared.name === target)) hiddenResetsRef.current.set(target, seed);
-            else hiddenResetsRef.current.delete(target);
+          for (const target of applied) {
+            if (hidden.includes(target)) droppedPathsRef.current.add(target);
+            else droppedPathsRef.current.delete(target);
           }
         }
       }
-      // A dropped field shown again holds its loaded value, and the reset a preset gave it is gone.
+      // A field a preset dropped that shows again holding nothing holds its loaded value.
       if (droppedPathsRef.current.size) {
         const values = form.getValues();
+        const visible = visibleFields(saveFields, values).map(({ name }) => name);
         for (const path of droppedPathsRef.current) {
-          if (!draftHoldsPath(values, formFields, path)) continue;
-          droppedPathsRef.current.delete(path);
-          hiddenResetsRef.current.delete(path);
-          if (get(values, path) === undefined && get(loaded, path) !== undefined) {
+          if (pathHolding(visible, path) !== null && get(values, path) === undefined && get(loaded, path) !== undefined) {
             setValue(path, get(loaded, path), { shouldDirty: true });
           }
         }
@@ -887,7 +881,7 @@ export function useFormViewSave({
         });
       }
     },
-    [clearErrors, defaultSlugSource, form, formFields, getFieldState, isCreate, setValue],
+    [clearErrors, defaultSlugSource, form, formFields, getFieldState, isCreate, saveFields, setValue],
   );
   const fieldReadOnly = React.useCallback(
     (field: FieldDescriptor): boolean =>
@@ -898,8 +892,6 @@ export function useFormViewSave({
     if (isCreate) localAcknowledgementRef.current = null;
     prefillSeedsRef.current.clear();
     userEditedFieldsRef.current.clear();
-    droppedPathsRef.current.clear();
-    hiddenResetsRef.current.clear();
     reset(isCreate ? emptyValues : values, { keepDirtyValues: false, keepDirty: false });
     resetHistory();
     activeFieldInteractions.current.clear();

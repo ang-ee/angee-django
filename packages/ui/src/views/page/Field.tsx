@@ -64,9 +64,10 @@ export interface FieldDescriptor extends FieldPresentation {
   /** Resolve implementation-dependent presentation from current form values. */
   resolve?: (values: Row) => FieldDescriptor;
   /**
-   * Load the chosen preset onto sibling fields when this field changes, from its new value, the
-   * form's current values and the values the form was loaded with (this field's scope in a nested
-   * form), so a preset may derive from siblings or give a sibling its loaded value back.
+   * The preset this field loads onto sibling fields, from its value, the form's current values and
+   * the values the form was loaded with (this field's scope in a nested form), so a preset may
+   * derive from siblings or give a sibling its loaded value back. It is called when the field
+   * changes and when the form is saved; it must not have effects.
    * In a record form, a field a preset hides is dropped from the draft; if the form was loaded with
    * a different value for it, the save writes the preset's value.
    */
@@ -75,7 +76,8 @@ export interface FieldDescriptor extends FieldPresentation {
   prefillPreserveDirty?: boolean;
   /**
    * The preset fields `prefillPreserveDirty` still replaces when dirty (private implementation
-   * configuration, say); without `prefillPreserveDirty` a preset replaces every field it names.
+   * configuration, say), and the only ones it writes for a field it hides; without
+   * `prefillPreserveDirty` a preset replaces every field it names.
    */
   prefillReplace?: readonly string[];
   /** Source field a `widget="slug"` field derives from on create (see `FieldProps.slugFrom`). */
