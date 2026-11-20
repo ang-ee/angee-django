@@ -15,16 +15,17 @@ export function AppearanceSettingsPage(): ReactElement {
   const selectedScheme = appearance.currentPreferences.colorScheme ?? HOST_VALUE;
   const OptionsEditor = appearance.theme?.optionsEditor;
   const readOnly = !appearance.editable;
-  const { openDraft, discard, saving, themeLocked } = appearance;
+  const { openDraft, discard, drafting, saving, themeLocked } = appearance;
   const lockedReasonId = useId();
   const lockedReason = themeLocked ? lockedReasonId : undefined;
   const dirty = useLatestRef(appearance.dirty);
   useUnsavedChangesNavigationGuard({ isDirty: appearance.dirty, isDirtyNow: () => dirty.current, readOnly });
-  // Opening is idempotent; commands that close the draft leave the page ready
-  // for another edit. Cleanup is separate so command changes never discard it.
+  // The page edits a draft: whenever none is open (on arrival, and after Save, Discard
+  // or Reset closed one) it opens one, so the next edit is drafted and not saved.
+  // Cleanup is separate so command changes never discard it.
   useEffect(() => {
-    if (!readOnly && !saving) openDraft();
-  }, [openDraft, readOnly, saving]);
+    if (!readOnly && !saving && !drafting) openDraft();
+  }, [drafting, openDraft, readOnly, saving]);
   useEffect(() => discard, [discard]);
 
   return <>

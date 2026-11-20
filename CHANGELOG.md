@@ -22,6 +22,9 @@ live in code docstrings.
   must be pure. Choosing another kind and then the stored one again is
   therefore clean instead of dirty with nothing to save. `prefillReplace` is
   documented as what it is: the fields `prefillPreserveDirty` still replaces.
+- `@angee/ui`: `AppearanceState` has `drafting`, whether a draft is open. The
+  Appearance settings page keeps a draft open by it; it used to rely on `openDraft`
+  being a new function on every render, which re-ran its effect after a Discard.
 - `@angee/ui`: `AppearanceProvider` resolves the appearance once per input (the
   saved preferences, the catalogue, the host defaults, the system scheme, the lock
   and the draft), so a render that changes none of them no longer re-applies the

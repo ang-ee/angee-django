@@ -277,6 +277,21 @@ test("a re-render that changes nothing neither applies the appearance again nor 
   expect(cleared).not.toHaveBeenCalled();
 });
 
+test("drafting says whether a draft is open, and a caller's callbacks keep their identity across a discard", () => {
+  const { result } = renderAppearance();
+  expect(result.current.drafting).toBe(false);
+  const { openDraft } = result.current;
+  act(() => result.current.openDraft());
+  expect(result.current.drafting).toBe(true);
+  expect(result.current.dirty).toBe(false);
+  act(() => result.current.discard());
+  // A page that keeps a draft open follows `drafting`: nothing else changes when a clean draft closes.
+  expect(result.current.drafting).toBe(false);
+  expect(result.current.openDraft).toBe(openDraft);
+  act(() => result.current.openDraft());
+  expect(result.current.drafting).toBe(true);
+});
+
 test("draft-only edits never write the boot cache and remounting applies saved appearance", async () => {
   const { result, patchPreferences, unmount, stored } = renderAppearance();
   const cached = window.localStorage.getItem(APPEARANCE_CACHE_KEY);

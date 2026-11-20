@@ -65,6 +65,8 @@ export interface AppearanceState {
   preferences: AppearancePreferences;
   /** Preferences being applied: the open draft, or the saved preferences. */
   currentPreferences: AppearancePreferences;
+  /** A draft is open: edits apply to it, not to the saved preferences, until Save, Discard or Reset closes it. */
+  drafting: boolean;
   dirty: boolean;
   effectiveThemeId: string | null;
   effectiveColorSchemePreference: ColorSchemePreference;
@@ -297,6 +299,7 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST, themeLocked:
   const value = useMemo<AppearanceState>(() => ({
     preferences,
     currentPreferences,
+    drafting: draft !== null,
     dirty,
     effectiveThemeId,
     effectiveColorSchemePreference: colorSchemePreference,
@@ -319,7 +322,7 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST, themeLocked:
     save,
     discard,
     reset,
-  }), [preferences, currentPreferences, dirty, effectiveThemeId, colorSchemePreference, colorScheme, effectiveTheme, hostTheme, hostOptions, effectiveOptions, themeLocked, userPreferences.available, saved.writable, resolvingIdentity, saving, error, notice, setTheme, setColorScheme, setOptions, openDraft, save, discard, reset]);
+  }), [preferences, currentPreferences, draft, dirty, effectiveThemeId, colorSchemePreference, colorScheme, effectiveTheme, hostTheme, hostOptions, effectiveOptions, themeLocked, userPreferences.available, saved.writable, resolvingIdentity, saving, error, notice, setTheme, setColorScheme, setOptions, openDraft, save, discard, reset]);
   return <AppearanceContext.Provider value={value}>{children}</AppearanceContext.Provider>;
 }
 
