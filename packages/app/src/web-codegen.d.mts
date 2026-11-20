@@ -40,7 +40,7 @@ export interface WebCodegenResult {
   themes: readonly ThemeDefinition<unknown>[];
   /** Declared standalone pages in id order, their entries resolved inside their packages. */
   pages: readonly StandalonePage[];
-  /** The content security policy the ingress sends every page: the manifest's `pageCsp`, when it publishes one. */
+  /** The content security policy the ingress sends every page: the manifest's `pageCsp`, present whenever a page is declared. */
   pageCsp?: string;
   /** The build-only static head, its selected assets resolved to absolute canonical files. */
   head?: SiteHead;

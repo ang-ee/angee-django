@@ -107,8 +107,7 @@ export async function generateWebRuntime({
   emitAppModule(runtimeDir, manifest, djangoSchemas, addonSources, installedThemes);
   return {
     inputs: inputs.snapshot(), themes: installedThemes.definitions, pages,
-    // The composer owns the policy a page is served under and publishes it once, for the ingress and for this build.
-    ...(typeof manifest.pageCsp === "string" ? { pageCsp: manifest.pageCsp } : {}),
+    ...(pages.length > 0 ? { pageCsp: pagePolicy(manifest) } : {}),
     ...(head ? { head } : {}),
   };
 }
@@ -142,6 +141,17 @@ function resolvePages(manifest, addonSources, inputs) {
     }
   }
   return pages.sort((left, right) => left.id.localeCompare(right.id));
+}
+
+/**
+ * The content security policy every page is served under. The composer owns it
+ * and publishes it once, for the ingress and for this build. A manifest that
+ * declares a page without it would leave the page with no policy in development
+ * and in preview, and nothing to say so: that is refused here.
+ */
+function pagePolicy(manifest) {
+  if (typeof manifest.pageCsp === "string" && manifest.pageCsp.trim()) return manifest.pageCsp;
+  throw new Error("The web manifest declares standalone pages but publishes no pageCsp, the content security policy they are served under. Compose the web runtime again with a composer that publishes it.");
 }
 
 /** Resolve only the deployment's selected assets, within their owning package. */

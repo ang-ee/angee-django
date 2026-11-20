@@ -546,7 +546,7 @@ function angeePagesPlugin(themesSheet: string): Plugin & {
 } {
   let pages: readonly StandalonePage[] = [];
   let pageFor = pageMatcher(pages);
-  /** The content security policy the ingress sends a page: the manifest's `pageCsp`, when it publishes one. */
+  /** The content security policy the ingress sends a page: the manifest's `pageCsp`, published whenever a page is declared. */
   let policy: string | undefined;
   let root = "";
   let base = "/";
