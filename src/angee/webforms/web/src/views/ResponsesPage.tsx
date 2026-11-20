@@ -64,7 +64,7 @@ export function ResponsesPage(): React.ReactElement {
           <Field name="form" />
           <Field name="version" />
           <Field name="language" />
-          <Field name="contact" showWhen={(row) => Boolean(row.contact)} />
+          <Field name="contact" description={t("response.contactHint")} showWhen={(row) => Boolean(row.contact)} />
           <Field name="created_at" />
           <Field name="delivered_at" showWhen={(row) => Boolean(row.delivered_at)} />
           <Field name="delivery_attempts" />

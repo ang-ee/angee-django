@@ -10,7 +10,8 @@ const capture = vi.hoisted(() => ({ props: null as FormProps | null }));
 
 // The record's own owner is replaced by one that keeps what the form declared; the
 // form's verbs, its target choices and the route to the responses list answer plainly.
-// One target, `enquiry`, declares its configuration; one theme is installed.
+// Of the targets, `enquiry` declares a configuration this form has fields for, `opaque` one it has
+// none for, and `store` declares none; one theme is installed.
 vi.mock("@angee/ui", async (importOriginal) => ({
   ...await importOriginal<typeof import("@angee/ui")>(),
   Form: (props: FormProps) => {
@@ -25,7 +26,7 @@ vi.mock("@angee/ui", async (importOriginal) => ({
       name: `${configField}.queue`, label: "Queue",
       showWhen: (values: Record<string, unknown>) => values[field] === "enquiry",
     }],
-    hasSchema: (value: unknown) => value === "enquiry",
+    hasSchema: (value: unknown) => value === "enquiry" || value === "opaque",
   }),
   useAppRuntime: () => ({ themes: [{ definition: { id: "house.paper", labelKey: "house.paper.label" } }] }),
   useT: () => (key: string) => `themes:${key}`,
@@ -49,12 +50,23 @@ describe("WebformForm", () => {
     ]);
   });
 
-  test("a target that declares its configuration is edited by its own fields, another by the raw value", () => {
+  test("a target's configuration is edited by its own fields, shown raw only when the form has none for it, and not shown when the target takes none", () => {
     render(<webformForm.Component resource="webforms.Form" />);
     const shown = (target: string) => fields().filter((field) => field.name.startsWith("target_config"))
       .filter((field) => field.showWhen?.({ target_class: target }) !== false).map((field) => field.name);
     expect(shown("enquiry")).toEqual(["target_config.queue"]);
-    expect(shown("store")).toEqual(["target_config"]);
+    expect(shown("opaque")).toEqual(["target_config"]);
+    expect(shown("store")).toEqual([]);
+  });
+
+  test("choosing a target starts its configuration empty, which a target that takes none is then sent", () => {
+    render(<webformForm.Component resource="webforms.Form" />);
+    const target = fields().find((field) => field.name === "target_class");
+    expect(target?.prefill?.("store", { target_config: { queue: "old" } })).toEqual({ target_config: {} });
+    expect(target?.prefill?.("enquiry", { target_config: { queue: "old" } })).toEqual({ target_config: {} });
+    // Replaced whole, even when the visitor had typed into it.
+    expect(target?.prefillReplace).toEqual(["target_config"]);
+    expect(target?.prefillPreserveDirty).toBeUndefined();
   });
 
   test("the theme is a choice among the installed themes, or the deployment's default", () => {
