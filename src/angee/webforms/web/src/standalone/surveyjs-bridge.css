@@ -67,3 +67,40 @@
   --sjs2-typography-font-family-component-panel-title: var(--font-family-display);
   --sjs2-typography-font-family-component-question-title: var(--font-family-display);
 }
+
+/* Touch targets. SurveyJS sizes a field by the padding around its line of text:
+ * a text field, a dropdown, the first line of a long answer and the text box of
+ * an "Other" choice all read this one variable. With a 24px line, 10px makes
+ * them 44px high everywhere and 12px makes them 48px where the pointer is a
+ * finger. */
+.sjs-theme-overrides {
+  --sjs2-layout-component-input-medium-content-padding-vertical: 10px;
+}
+
+@media (pointer: coarse) {
+  .sjs-theme-overrides {
+    --sjs2-layout-component-input-medium-content-padding-vertical: 12px;
+  }
+}
+
+/* A choice is taken by touching anywhere on its row. SurveyJS has no variable
+ * for this: it puts the row's height in padding around the label and sizes the
+ * label to its text, so only the mark and the words answer a touch. Here the
+ * label fills the row and carries that padding itself, to the same heights as
+ * a field. */
+.sjs-theme-overrides .sd-selectbase__item {
+  padding-block: 0;
+}
+
+.sjs-theme-overrides .sd-selectbase__label {
+  box-sizing: border-box;
+  width: 100%;
+  padding-block: max(calc(var(--sjs2-layout-component-labeled-group-box-gap-vertical) / 2), 10px);
+  cursor: pointer;
+}
+
+@media (pointer: coarse) {
+  .sjs-theme-overrides .sd-selectbase__label {
+    padding-block: max(calc(var(--sjs2-layout-component-labeled-group-box-gap-vertical) / 2), 12px);
+  }
+}
