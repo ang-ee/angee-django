@@ -92,9 +92,17 @@ live in code docstrings.
   `groupByVariables`). Opting in asserts that every page verb honours it or
   refuses it. The selected ids stay the only ids; the generic Archive,
   Trash/Restore and Delete, and the Share utility, refuse with their reason while
-  it is on. Its entry and exit rules are the `bulkActions` docstring's. A native
-  leaf page (`AngeeListBatchEntry`) states when it last settled (`updatedAt`,
-  required), which a grouped selection's split reads instead of the page's total.
+  it is on, on every list sharing the selection, where a list reading otherwise
+  renders no page verbs and only the list that chose the mode ends it by leaving.
+  Unselecting a row or a group leaves it for what shows selected, the loaded rows
+  less those unselected. Its entry and exit rules are the `bulkActions`
+  docstring's. A native leaf page (`AngeeListBatchEntry`) states when it last
+  settled (`updatedAt`, required), which a grouped selection's split reads
+  instead of the page's total.
+  `@angee/ui/views/resource-view-list-body`: `ListSelectionBar` takes an optional
+  `matching` (`ListSelectionMatching`: "Select all N" and "All N selected") and
+  `deleteDisabledReason`. `@angee/ui/views/resource-view-context` no longer exports
+  the lists' internal selection channel (`useSelectionPlaces`, `SelectionPlaces`).
 
 - `angee.parties`: one owner proposes same-person pairs. A pull-only
   directory's contact that may only claim an address another live party is

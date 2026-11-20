@@ -18,6 +18,7 @@ import { useGroupedResourceViewSurface, type GroupedResourceViewSurface } from "
 import { ListHeaderCell } from "./resource-view-list-body";
 import { ListView, type ListViewProps } from "./ListView";
 import { useResourceViewUtilityContext } from "./resource-view-utilities";
+import { idsFromRowSelectionState } from "./resource-view-codecs";
 import { ToastProvider } from "../../feedback";
 
 const contract = ResourceQuery.forRows({ fields: {
@@ -300,6 +301,7 @@ function taskServer(rows: readonly Row[], stale?: { id: string; group: string })
   const records = rows.map((row) => ({ ...row }));
   let held: Promise<void> | null = null;
   let groupsFail = false;
+  let rowsFail = false;
   const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
     if (held) await held;
     const variables = meta!.gqlVariables as {
@@ -323,9 +325,12 @@ function taskServer(rows: readonly Row[], stale?: { id: string; group: string })
     return { data: { tasks_groups: buckets.slice(offset, offset + (variables.limit ?? buckets.length)), totalCount: buckets.length } };
   });
   // A group's later page: its rows in server order, one page of them.
-  const getList = vi.fn(async ({ pagination, meta }: GetListParams) => {
+  const getList = vi.fn(async ({ resource, pagination, meta }: GetListParams) => {
     if (held) await held;
-    const matching = records.filter((row) => matchesWhere(row, (meta?.gqlVariables as { where?: Record<string, unknown> }).where));
+    // A board's project lanes: none, so every card shows in the lane without one.
+    if (resource === "projects") return { data: [], total: 0 };
+    if (rowsFail) throw new Error("Rows unavailable");
+    const matching = records.filter((row) => matchesWhere(row, (meta?.gqlVariables as { where?: Record<string, unknown> } | undefined)?.where));
     const size = pagination?.pageSize ?? matching.length;
     const page = pagination?.currentPage ?? 1;
     return { data: matching.slice((page - 1) * size, page * size), total: matching.length };
@@ -338,6 +343,8 @@ function taskServer(rows: readonly Row[], stale?: { id: string; group: string })
     records, custom, getList, documents,
     /** Make every later groups read fail, or answer again. */
     failGroups: (fail: boolean) => { groupsFail = fail; },
+    /** Make every later rows read fail, or answer again. */
+    failRows: (fail: boolean) => { rowsFail = fail; },
     /** Hold the server's answers until the returned release runs. */
     hold: () => {
       let release!: () => void;
@@ -352,6 +359,7 @@ type BulkCollection = Parameters<NonNullable<ListViewProps["bulkActions"]>>[2];
 /** A rendered grouped Task list whose page's bulk actions record the selectedGroups they receive. */
 function selectedGroupsFixture(initialState: Record<string, unknown>, {
   stale, columns = [{ field: "title", header: "Title" }], rows = tasks, selectAllMatching, resource = taskResource, utility,
+  second, laneSource, related = [],
 }: {
   /** A stale page: the server also lists this row in another group. */
   stale?: { id: string; group: string };
@@ -361,27 +369,43 @@ function selectedGroupsFixture(initialState: Record<string, unknown>, {
   resource?: DataResourceMetadata;
   /** A list utility contributed to the toolbar, which reads the utility context. */
   utility?: React.ReactElement;
+  /** A second list of the same view, sharing its selection, whose page verbs say they rendered. */
+  second?: { selectAllMatching?: boolean };
+  laneSource?: ListViewProps["laneSource"];
+  /** Resources the list's relations name. */
+  related?: readonly DataResourceMetadata[];
 } = {}) {
-  const { records, custom, getList, documents, hold, failGroups } = taskServer(rows, stale);
+  const { records, custom, getList, documents, hold, failGroups, failRows } = taskServer(rows, stale);
   const seen: unknown[] = [];
   const collections: BulkCollection[] = [];
+  const secondCollections: BulkCollection[] = [];
   let view!: ResourceViewContextValue;
   let rerender!: () => void;
+  let showLists!: React.Dispatch<React.SetStateAction<{ first: boolean; second: boolean }>>;
   function Probe() { view = useResourceView(); return null; }
   function Page() {
     const [, setTick] = React.useState(0);
+    const [shownLists, setShownLists] = React.useState({ first: true, second: true });
     rerender = () => setTick((tick) => tick + 1);
+    showLists = setShownLists;
     return (
       <ResourceViewProvider resource={resource.modelLabel} scope="local" initialState={initialState}>
         <Probe />
-        <ListView resource={resource.modelLabel} columns={columns} scope="inherit" selectAllMatching={selectAllMatching}
-          bulkActions={(_ids, _clear, collection) => { seen.push(collection.selectedGroups); collections.push(collection); return null; }} />
+        <section aria-label="First list">{shownLists.first ? (
+          <ListView resource={resource.modelLabel} columns={columns} scope="inherit" selectAllMatching={selectAllMatching}
+            laneSource={laneSource}
+            bulkActions={(_ids, _clear, collection) => { seen.push(collection.selectedGroups); collections.push(collection); return null; }} />
+        ) : null}</section>
+        {second && shownLists.second ? <section aria-label="Second list">
+          <ListView resource={resource.modelLabel} columns={columns} scope="inherit" selectAllMatching={second.selectAllMatching}
+            bulkActions={(_ids, _clear, collection) => { secondCollections.push(collection); return <span>Second page verb</span>; }} />
+        </section> : null}
       </ResourceViewProvider>
     );
   }
   const page = <ToastProvider><Page /></ToastProvider>;
   render(
-    <Provider resources={[resource]} apiUrl="test://selected-groups" dataProvider={{ custom, getList }}
+    <Provider resources={[resource, ...related]} apiUrl="test://selected-groups" dataProvider={{ custom, getList }}
       queryClientConfig={{ defaultOptions: { queries: { retry: false } } }}>
       <OperationDocumentsProvider documents={documents}>
         {utility ? <AppRuntimeProvider runtime={{ containers: containersFromChildren(RESOURCE_CONTAINERS, {
@@ -391,14 +415,18 @@ function selectedGroupsFixture(initialState: Record<string, unknown>, {
     </Provider>,
   );
   const client = clients.at(-1)!;
+  /** The first list, where every helper acts. */
+  const first = () => within(screen.getByRole("region", { name: "First list" }));
   const select = async (title: string) => {
-    const row = (await screen.findByText(title)).closest("tr")!;
+    const row = (await first().findByText(title)).closest("tr")!;
     fireEvent.click(within(row).getByRole("checkbox", { name: "Select row" }));
   };
   /** Change a record on the server without telling the list. */
   const edit = (id: string, patch: Partial<Row>) => { Object.assign(records.find((row) => row.id === id)!, patch); };
   return {
-    select, custom, getList, seen, edit, failGroups,
+    select, custom, getList, seen, edit, failGroups, failRows, first, secondCollections,
+    /** Unmount or mount a list, the view and its selection staying. */
+    show: (list: "first" | "second", shown: boolean) => act(() => showLists((current) => ({ ...current, [list]: shown }))),
     get view() { return view; },
     get selectedGroups() { return seen.at(-1); },
     /** The collection the page's bulk actions last received. */
@@ -722,6 +750,24 @@ function description(element: HTMLElement): string {
 const checked = (name: string, index = 0) => screen.getAllByRole("checkbox", { name })[index]!.getAttribute("aria-checked");
 const sixTasks = [...tasks, { id: "t6", title: "Task 6", status: "closed", owner: "Bo", kind: "Other" }];
 const deletableTasks = { ...taskResource, roots: { ...taskResource.roots, deletePreview: "tasks_delete" } };
+// Tasks whose board lanes are their project, a relation.
+const laneContract = ResourceQuery.forRows({ fields: {
+  id: { scalar: "ID" }, title: { scalar: "String" }, status: { scalar: "String" }, owner: { scalar: "String" }, kind: { scalar: "String" },
+  project: { kind: "relation", identityPath: "project.id", labelPath: "project.name" },
+} }).contract;
+laneContract.fields.project!.relation = { model: "notes.Project", identityPath: "project.id", labelPath: "project.name" };
+for (const field of ["status", "owner", "kind"]) laneContract.axes[field] = taskContract.axes[field]!;
+laneContract.axes.project!.server = { input: "project", key: "project" };
+const laneTasks: DataResourceMetadata = { ...taskResource, query: laneContract, fields: [...taskResource.fields ?? [], {
+  name: "project", kind: "relation", relationModelLabel: "notes.Project", relationObject: true, readable: true,
+  aggregatable: false, nullable: true, creatable: false, updatable: false, requiredOnCreate: false,
+}] };
+const projects = testDataResource("notes.Project", {
+  capabilities: ["list"], roots: { list: "projects" }, recordRepresentation: "name",
+  query: ResourceQuery.forRows({ fields: { id: { scalar: "ID" }, name: { scalar: "String" } } }).contract,
+  fields: ["id", "name"].map((name) => ({ name, kind: "scalar", scalar: "String", readable: true,
+    aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false })),
+});
 const SELECT_ALL = /^Select (all|the) /;
 const ADA = { pageSize: 2, filter: { owner: { exact: "Ada" } } };
 
@@ -730,19 +776,19 @@ async function allOfAda(options: Parameters<typeof selectedGroupsFixture>[1] = {
   const f = selectedGroupsFixture(ADA, { selectAllMatching: true, ...options });
   await f.select("Task 1");
   await f.select("Task 3");
-  fireEvent.click(await screen.findByRole("button", { name: "Select all 4 records" }));
+  fireEvent.click(await f.first().findByRole("button", { name: "Select all 4 records" }));
   await waitFor(() => expect(f.collection?.allMatching?.total).toBe(4));
   return f;
 }
 
-/** Both repeated status groups, one a page, with every one of them selected. */
-async function allRepeated(options: Parameters<typeof selectedGroupsFixture>[1] = {}) {
-  const f = selectedGroupsFixture({ groupStack: [{ field: "status", repeated: true }], pageSize: 1 },
+/** The repeated status groups, `pageSize` a page, with every one of them selected. */
+async function allRepeated(options: Parameters<typeof selectedGroupsFixture>[1] = {}, { pageSize = 1, groups = 2 } = {}) {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status", repeated: true }], pageSize },
     { rows: sixTasks, selectAllMatching: true, ...options });
   await screen.findByText("Task 2");
   fireEvent.click(screen.getByRole("checkbox", { name: "Select all loaded rows" }));
-  fireEvent.click(await screen.findByRole("button", { name: "Select all 2 groups" }));
-  await waitFor(() => expect(f.collection?.allMatching?.total).toBe(2));
+  fireEvent.click(await screen.findByRole("button", { name: `Select all ${groups} groups` }));
+  await waitFor(() => expect(f.collection?.allMatching?.total).toBe(groups));
   return f;
 }
 
@@ -858,7 +904,9 @@ test("a refetch that settles with another total moves the selection's N, which p
   expect(new Set(f.collections.slice(from).map((collection) => collection.allMatching?.total))).toEqual(new Set([5]));
 });
 
-test("every loaded row shows selected in the mode; unselecting one, or the header on another page, leaves it", async () => {
+const selected = (f: ReturnType<typeof selectedGroupsFixture>) => [...idsFromRowSelectionState(f.view.state.rowSelection)];
+
+test("every loaded row shows selected in the mode; unselecting one leaves what shows selected, the header clears what it covers", async () => {
   const f = await allOfAda();
   act(() => f.view.setPage(2));
   await screen.findByText("Task 5");
@@ -867,32 +915,152 @@ test("every loaded row shows selected in the mode; unselecting one, or the heade
   expect(checked("Select row", 1)).toBe("true");
   // The selection's ids stay the ones selected.
   expect(f.view.state.rowSelection).toEqual({ t1: true, t3: true });
-  fireEvent.click(screen.getAllByRole("checkbox", { name: "Select row" })[0]!);
-  await waitFor(() => expect(screen.getByText("2 selected")).toBeTruthy());
+  // Task 5 stays selected as it shows; Tasks 1 and 3, selected on a page not shown now, are dropped.
+  await f.select("Task 4");
+  await waitFor(() => expect(screen.getByText("1 selected")).toBeTruthy());
   expect(f.collection).not.toHaveProperty("allMatching");
-  expect(checked("Select row", 1)).toBe("false");
+  expect([checked("Select row", 0), checked("Select row", 1)]).toEqual(["false", "true"]);
+  expect(selected(f)).toEqual(["t5"]);
+  expect(f.collection?.selectedRows.map((row) => row.id)).toEqual(["t5"]);
   cleanup();
-  // Unselecting the header of a page that holds no selected row changes no id, and leaves it too.
+  // The page's header covers every row shown: unselecting it leaves nothing selected.
   const again = await allOfAda();
   act(() => again.view.setPage(2));
   await screen.findByText("Task 5");
   fireEvent.click(screen.getByRole("checkbox", { name: "Select all rows on this page" }));
-  await waitFor(() => expect(screen.getByText("2 selected")).toBeTruthy());
-  expect(again.view.state.rowSelection).toEqual({ t1: true, t3: true });
-  expect(again.collection).not.toHaveProperty("allMatching");
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Clear" })).toBeNull());
+  expect(selected(again)).toEqual([]);
+  expect(checked("Select row", 0)).toBe("false");
 });
 
-test("every loaded group shows selected in the mode; unselecting a group leaves it", async () => {
-  const f = await allRepeated();
-  act(() => f.view.setPage(2));
-  await screen.findByText("Task 6");
+test("every loaded group shows selected in the mode; unselecting a group or a row leaves the loaded rows that show selected, in their groups", async () => {
+  // Three repeated groups, two a page: "active" and "closed", then "open".
+  const rows = [...sixTasks, { id: "t7", title: "Task 7", status: "open", owner: "Bo", kind: "Other" },
+    { id: "t8", title: "Task 8", status: "open", owner: "Bo", kind: "Other" }];
+  const f = await allRepeated({ rows }, { pageSize: 2, groups: 3 });
   expect(checked("Select all loaded rows")).toBe("true");
   expect(checked("Select the loaded rows in closed")).toBe("true");
-  expect(checked("Select row", 0)).toBe("true");
   fireEvent.click(screen.getByRole("checkbox", { name: "Select the loaded rows in closed" }));
   await waitFor(() => expect(screen.getByText("2 selected")).toBeTruthy());
   expect(f.collection).not.toHaveProperty("allMatching");
-  expect(checked("Select the loaded rows in closed")).toBe("false");
+  expect(f.collection?.selectedGroups).toEqual([status("active", "active", ["t1", "t2"])]);
+  expect([checked("Select the loaded rows in active"), checked("Select the loaded rows in closed")]).toEqual(["true", "false"]);
+  cleanup();
+  // On the next page of groups only "open" shows: unselecting Task 7 leaves Task 8, in its group.
+  const again = await allRepeated({ rows }, { pageSize: 2, groups: 3 });
+  act(() => again.view.setPage(2));
+  await screen.findByText("Task 8");
+  expect(checked("Select the loaded rows in open")).toBe("true");
+  await again.select("Task 7");
+  await waitFor(() => expect(screen.getByText("1 selected")).toBeTruthy());
+  expect(again.collection).not.toHaveProperty("allMatching");
+  expect(selected(again)).toEqual(["t8"]);
+  expect(again.collection?.selectedRows.map((row) => row.id)).toEqual(["t8"]);
+  expect(again.collection?.selectedGroups).toEqual([status("open", "open", ["t8"])]);
+});
+
+test("with every group collapsed in the mode the header and the groups show selected, and unselecting the header leaves it", async () => {
+  const f = await allRepeated();
+  fireEvent.click(screen.getByRole("button", { name: "Collapse all groups" }));
+  await waitFor(() => expect(screen.queryByText("Task 1")).toBeNull());
+  const header = screen.getByRole("checkbox", { name: "Select all loaded rows" });
+  expect(header.getAttribute("aria-checked")).toBe("true");
+  expect(header.hasAttribute("data-disabled")).toBe(false);
+  expect(checked("Select the loaded rows in active")).toBe("true");
+  fireEvent.click(header);
+  // Nothing shows selected any more, so nothing is.
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Clear" })).toBeNull());
+  expect(selected(f)).toEqual([]);
+  expect(header.getAttribute("aria-checked")).toBe("false");
+});
+
+test("a page of groups loading for the first time leaves the pager's total unknown, never 0", async () => {
+  const f = await allRepeated();
+  expect(screen.getByRole("button", { name: "Groups 1-1 / 2 groups" })).toBeTruthy();
+  const release = f.hold();
+  act(() => f.view.setPage(2));
+  await waitFor(() => expect(f.fetching).toBe(true));
+  expect(screen.getByRole("button", { name: "Groups 2-2" })).toBeTruthy();
+  expect(screen.getByText("All 2 groups selected")).toBeTruthy();
+  await release();
+  expect(await screen.findByRole("button", { name: "Groups 2-2 / 2 groups" })).toBeTruthy();
+});
+
+test("a flat list's failed refetch or failed page change in the mode keeps the last settled member and the generic verbs disabled", async () => {
+  const f = await allOfAda({ resource: deletableTasks });
+  const keeps = (from: number) => {
+    expect(f.collections.length).toBeGreaterThan(from);
+    expect(f.collections.slice(from).map((collection) => collection.allMatching?.total)).toEqual(
+      f.collections.slice(from).map(() => 4));
+    expect(screen.getByText("All 4 records selected")).toBeTruthy();
+    const remove = screen.getByRole("button", { name: "Delete" });
+    expect(remove.getAttribute("aria-disabled")).toBe("true");
+    expect(description(remove)).toBe("This acts on the rows you select, not on all 4 records");
+  };
+  let from = f.collections.length;
+  f.failRows(true);
+  await f.update("t1", {});
+  expect(await screen.findByText("Rows unavailable")).toBeTruthy();
+  keeps(from);
+  from = f.collections.length;
+  act(() => f.view.setPage(2));
+  await waitFor(() => expect(f.getList.mock.calls.some(([params]) => params.pagination?.currentPage === 2)).toBe(true));
+  await waitFor(() => expect(f.fetching).toBe(false));
+  expect(screen.getByText("Rows unavailable")).toBeTruthy();
+  keeps(from);
+});
+
+test("a list reading otherwise without remounting, a lane board and back, leaves the mode for the selected ids", async () => {
+  const f = await allOfAda({ resource: laneTasks, related: [projects], laneSource: { field: "project" } });
+  act(() => f.view.setView("board"));
+  await waitFor(() => expect(screen.queryByText("All 4 records selected")).toBeNull());
+  expect(screen.getByText("2 selected")).toBeTruthy();
+  expect(f.view.state.rowSelection).toEqual({ t1: true, t3: true });
+  act(() => f.view.setView("list"));
+  // The person may choose it again; nothing chose it for them.
+  expect(await f.first().findByRole("button", { name: "Select all 4 records" })).toBeTruthy();
+  expect(screen.queryByText("All 4 records selected")).toBeNull();
+  expect(f.collection).not.toHaveProperty("allMatching");
+});
+
+test("a list that unmounts, as on leaving its route, and mounts again is back to the selected ids", async () => {
+  const f = await allOfAda();
+  f.show("first", false);
+  expect(f.view.state.rowSelection).toEqual({ t1: true, t3: true });
+  f.show("first", true);
+  expect(await f.first().findByRole("button", { name: "Select all 4 records" })).toBeTruthy();
+  expect(screen.getByText("2 selected")).toBeTruthy();
+  expect(f.collection).not.toHaveProperty("allMatching");
+});
+
+test("a second list sharing the selection refuses its generic verbs and Share and renders no page verbs, and only the list that chose the mode ends it", async () => {
+  function Reason() {
+    const { disabledReason } = useResourceViewUtilityContext();
+    return <output aria-label="Utility reason">{disabledReason == null ? "none" : disabledReason}</output>;
+  }
+  const reason = "This acts on the rows you select, not on all 4 records";
+  // The second list has not opted in, so it reads its rows otherwise, over the same selected ids.
+  const f = await allOfAda({ resource: deletableTasks, utility: <Reason />, second: {} });
+  const second = within(screen.getByRole("region", { name: "Second list" }));
+  expect(second.getByText("2 selected")).toBeTruthy();
+  const remove = second.getByRole("button", { name: "Delete" });
+  expect(remove.getAttribute("aria-disabled")).toBe("true");
+  expect(description(remove)).toBe(reason);
+  expect(second.getByRole("status", { name: "Utility reason" }).textContent).toBe(reason);
+  expect(second.queryByText("Second page verb")).toBeNull();
+  const handed = f.secondCollections.length;
+  f.rerender();
+  expect(f.secondCollections).toHaveLength(handed);
+  cleanup();
+  // A second list reading the same shows the mode and hands it on; its leaving never ends it.
+  const same = await allOfAda({ second: { selectAllMatching: true } });
+  const other = within(screen.getByRole("region", { name: "Second list" }));
+  expect(other.getByText("All 4 records selected")).toBeTruthy();
+  expect(same.secondCollections.at(-1)?.allMatching?.total).toBe(4);
+  same.show("second", false);
+  expect(same.first().getByText("All 4 records selected")).toBeTruthy();
+  same.rerender();
+  expect(same.collection?.allMatching?.total).toBe(4);
 });
 
 test("paging keeps every group selected; selecting a row, Clear, the filter, the sort or a level's repeated values leave it", async () => {

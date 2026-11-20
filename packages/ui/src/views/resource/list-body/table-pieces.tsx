@@ -22,7 +22,7 @@ import { LeadingSelectionCell, renderListRow } from "./rows";
 import { ALIGN_CLASS, GROUP_ROW_HEIGHT, RECORD_ROW_HEIGHT } from "./types";
 import type { GroupMeasure, VisibleFieldOption } from "./types";
 import { useVirtualWindow, VirtualPaddingRow } from "./virtualization";
-import type { BulkActionRunner } from "../bulk-action";
+import { useRuntimeViewAs } from "../../../runtime";
 import type { ResourceListResult } from "../surface/types";
 /** "Select all N" in the list's bar (`ListViewProps.selectAllMatching`). */
 export interface ListSelectionMatching {
@@ -43,7 +43,8 @@ export function ListSelectionBar({
   onClear,
   onDelete,
   deletePending = false,
-  bulk,
+  deleteDisabledReason,
+  pending = false,
   actions: extraActions,
   matching,
 }: {
@@ -51,14 +52,16 @@ export function ListSelectionBar({
   onClear: () => void;
   onDelete?: () => void;
   deletePending?: boolean;
-  /** The list's bulk runner: the bar waits for its run, and Delete for its preview and its reason. */
-  bulk?: BulkActionRunner;
+  /** Why Delete must not run (`Button.disabledReason`); null is none yet, keeping its tree for one to come. */
+  deleteDisabledReason?: React.ReactNode;
+  pending?: boolean;
   /** Caller-supplied bulk actions rendered before the built-in Delete/Clear. */
   actions?: React.ReactNode;
   matching?: ListSelectionMatching;
 }): React.ReactElement {
   const t = useUiT();
-  const pending = bulk?.pending ?? false;
+  const preview = useRuntimeViewAs();
+  const previewBlocked = Boolean(preview.viewAs || preview.pending);
   const groups = matching?.unit === "groups";
   // Choosing "Select all N" unmounts it: focus stays in the bar, on Clear.
   const clear = React.useRef<HTMLElement>(null);
@@ -76,9 +79,9 @@ export function ListSelectionBar({
           surface="brand"
           tone="danger"
           pending={deletePending}
-          disabled={bulk?.blocked || pending}
-          {...bulk?.reason}
-          onClick={onDelete}
+          disabled={previewBlocked || pending}
+          {...(deleteDisabledReason === undefined ? {} : { disabledReason: deleteDisabledReason })}
+          onClick={() => { if (!previewBlocked) onDelete(); }}
         >
           <Glyph name="trash" />
           {t("selection.delete")}
@@ -113,8 +116,6 @@ export interface FlatListBodyProps<TRow extends Row> {
   allPageSelected: boolean;
   somePageSelected: boolean;
   onPageSelectionChange: (checked: boolean) => void;
-  /** Every record the list's read matches is selected ("Select all N"): every row and the header show selected. */
-  allMatching?: boolean;
   visibleFields?: readonly VisibleFieldOption[];
   onVisibleFieldToggle?: (id: string, visible: boolean) => void;
   resourceView: ResourceViewContextValue;
@@ -148,7 +149,6 @@ export function FlatListBody<TRow extends Row>({
   allPageSelected,
   somePageSelected,
   onPageSelectionChange,
-  allMatching = false,
   visibleFields = [],
   onVisibleFieldToggle,
   resourceView,
@@ -209,8 +209,8 @@ export function FlatListBody<TRow extends Row>({
                 <LeadingSelectionCell
                   head
                   label={t("list.selectAllOnPage")}
-                  checked={allMatching || allPageSelected}
-                  indeterminate={!allMatching && !allPageSelected && somePageSelected}
+                  checked={allPageSelected}
+                  indeterminate={!allPageSelected && somePageSelected}
                   onCheckedChange={onPageSelectionChange}
                 />
               ) : null}
@@ -262,7 +262,6 @@ export function FlatListBody<TRow extends Row>({
                       groupStack,
                       interactive,
                       selectable,
-                      allMatching,
                       rowHref,
                       onRowClick,
                       activeRowId,
