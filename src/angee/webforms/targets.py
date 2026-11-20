@@ -4,7 +4,8 @@ A form selects one target by key (``Form.target_class``). An addon that owns a
 record contributes its target with one settings line,
 ``"ANGEE_WEBFORM_TARGET_CLASSES.<key>": "<dotted path>"``, and maps answers to
 its own fields in the target's ``config_model``. The web forms addon never names
-another addon's model: a target calls its owner's own verb.
+another addon's model: a target calls its owner's own verb, and says who may
+choose it (:meth:`FormTarget.permits`).
 """
 
 from __future__ import annotations
@@ -53,6 +54,20 @@ class FormTarget(ImplBase):
         self.form = form
         self.config = self.parse_config(form.target_config)
 
+    def permits(self, actor: Any) -> bool:
+        """Whether ``actor`` may point a form at this target, as it is configured.
+
+        A target makes its owner's records as system work, for anyone who
+        submits the form. So choosing it is the owner's decision, not the form
+        manager's: answer with the owner's own access check for the record this
+        configuration would make (``Enquiry(queue=…).with_actor(actor)
+        .has_access("create")``). Every target states it. It is asked when a
+        form's target or its configuration changes under an acting user, never
+        for system work and never at delivery.
+        """
+
+        raise NotImplementedError
+
     def deliver(self, response: Any) -> Any:
         """Make or find the record ``response`` becomes; ``None`` when there is none to make."""
 
@@ -64,6 +79,11 @@ class StoreTarget(FormTarget):
 
     key = "store"
     label = "Keep the response"
+
+    def permits(self, actor: Any) -> bool:
+        """Anyone who manages the form: nothing is made outside it."""
+
+        return True
 
     def deliver(self, response: Any) -> Any:
         """Make nothing: the response stays the record."""

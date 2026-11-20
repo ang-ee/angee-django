@@ -43,7 +43,8 @@ from django.core.validators import MaxValueValidator, MinValueValidator, RegexVa
 from django.db import models, transaction
 from django.db.models.fields.json import KeyTextTransform
 from django.utils import timezone
-from rebac import system_context
+from rebac import PermissionDenied, system_context
+from rebac.actors import is_sudo
 
 from angee.base.fields import DiagnosticTextField, ImplClassField, StateField
 from angee.base.managers import AngeeManager
@@ -55,6 +56,7 @@ from angee.base.models.refs import RecordRefMixin
 from angee.base.models.roles import role_anchor
 from angee.base.models.transitions import StateTransitions, save_state, transition
 from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet
+from angee.base.permissions import instance_actor
 from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet, ClosedUpdateQuerySet
 from angee.base.refs import generic_pointer_target
 from angee.jobs.enqueue import enqueue_task
@@ -213,6 +215,36 @@ class Form(HistoryMixin, ArchiveMixin, AngeeDataModel, concrete=True):
         """Return this form's target, bound to it and to its checked configuration."""
 
         return self.get_target_class_impl()(self)
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Refuse a target, or a configuration of it, the acting user may not choose."""
+
+        fields = kwargs.get("update_fields")
+        if fields is None or {"target_class", "target_config"} & set(fields):
+            self._require_target_choice()
+        super().save(*args, **kwargs)
+
+    def _require_target_choice(self) -> None:
+        """Ask the target's owner whether the acting user may point this form at it.
+
+        A target makes its owner's records as system work, so managing forms is
+        not enough to choose one. Asked only when the target or its
+        configuration differs from what is stored; system work without an
+        acting user (demo data, a migration) is not asked.
+        """
+
+        chosen = (str(self.target_class), self.target_config)
+        if not self._state.adding:
+            stored = type(self)._base_manager.filter(pk=self.pk).values_list("target_class", "target_config").first()
+            if stored is not None and (str(stored[0]), stored[1]) == chosen:
+                return
+        actor = instance_actor(self)
+        if actor is None:
+            if self.is_sudo() or is_sudo():
+                return
+            raise PermissionDenied("Denied: choosing a form's target requires an actor.")
+        if not self.target().permits(actor):
+            raise PermissionDenied(f"Denied: the current actor may not point a form at {chosen[0]!r}.")
 
     @transition(
         status, source=[FormStatus.DRAFT, FormStatus.CLOSED], target=FormStatus.PUBLISHED, on_success=save_state,

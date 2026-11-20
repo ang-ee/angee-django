@@ -140,9 +140,18 @@ class EnquiryTarget(FormTarget):
     label = "File an enquiry"
     config_model = EnquiryMapping  # a Pydantic model: which answer fills which field
 
+    def permits(self, actor):
+        return Enquiry(queue=self.config.queue).with_actor(actor).has_access("create")
+
     def deliver(self, response):
         return Enquiry.objects.file(subject=response.answers[self.config.subject], …)
 ```
+
+`permits` says who may point a form at the target, as it is configured. A target
+makes its owner's records as system work, for anyone who submits the form, so
+managing forms is not enough to choose one: the owner answers with its own
+access check. It is asked when a form's target or its configuration changes
+under an acting user, and every target states it.
 
 `deliver` runs as named system work inside the transaction that records its
 outcome. It returns the record it made or found, or `None`. When the owner

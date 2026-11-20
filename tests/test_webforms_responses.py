@@ -14,7 +14,9 @@ import pytest
 from django.core.exceptions import ValidationError
 from django.db.models import ProtectedError, RestrictedError
 from django.utils import timezone
-from rebac import actor_context, system_context
+from pydantic import BaseModel
+from rebac import PermissionDenied, actor_context, system_context
+from rebac.roles import grant as grant_role
 
 from angee.tags.testing.models import Tag
 from angee.webforms import models as webforms_models
@@ -50,19 +52,32 @@ DEFINITION: dict[str, Any] = {
 ANSWERS = {"name": "Ada Example", "email": "ada@example.test", "size": "other", "size-Comment": "Huge"}
 
 
+class TagNaming(BaseModel):
+    """How the tag target names what it makes."""
+
+    prefix: str = ""
+
+
 class TagTarget(FormTarget):
     """A target that makes one tag named after the respondent (registered in ``tests/autoconfig.py``)."""
 
     key = "tag"
+    config_model = TagNaming
+
+    def permits(self, actor: Any) -> bool:
+        return bool(Tag(name="A tag this target would make").with_actor(actor).has_access("create"))
 
     def deliver(self, response: Any) -> Any:
-        return Tag.objects.create(name=response.answers["name"])
+        return Tag.objects.create(name=self.config.prefix + response.answers["name"])
 
 
 class FailingTarget(FormTarget):
     """A target that fails after writing, with a message that quotes an answer."""
 
     key = "failing"
+
+    def permits(self, actor: Any) -> bool:
+        return False
 
     def deliver(self, response: Any) -> Any:
         Tag.objects.create(name="left behind?")
@@ -73,6 +88,9 @@ class RefusingTarget(FormTarget):
     """A target whose owner refuses the response as it is."""
 
     key = "refusing"
+
+    def permits(self, actor: Any) -> bool:
+        return False
 
     def deliver(self, response: Any) -> Any:
         raise DeliveryRefused("unknown_size")
@@ -568,6 +586,35 @@ def test_an_alias_leads_to_a_form_only_while_it_takes_submissions() -> None:
         assert list(FormAlias.objects.serving()) == []
         with pytest.raises(ValidationError):
             FormAlias(form=form, slug="Not A Slug").full_clean()
+
+
+def test_a_target_is_chosen_only_by_someone_its_owner_lets_make_its_records() -> None:
+    """Managing forms is not making tags: the target's owner decides who points a form at it."""
+
+    manager = create_user("webforms-only-manager")
+    with system_context(reason="webforms tests setup"):
+        grant_role(actor=manager, role="webforms/role:webforms_admin")
+        seeded = Form.objects.create(name="Seeded", target_class="tag")
+    admin = create_platform_admin("webforms-and-tags-admin")
+
+    with actor_context(manager):
+        kept = Form.objects.create(name="Survey")
+        with pytest.raises(PermissionDenied):
+            Form.objects.create(name="Tags from strangers", target_class="tag")
+        kept.target_class = "tag"
+        with pytest.raises(PermissionDenied):
+            kept.save()
+        theirs = Form.objects.get(pk=seeded.pk)
+        theirs.name = "Renamed"
+        theirs.save()
+        theirs.target_config = {"prefix": "Guest: "}
+        with pytest.raises(PermissionDenied):
+            theirs.save()
+    with actor_context(admin):
+        chosen = Form.objects.create(name="Tags from the public", target_class="tag")
+
+    assert (stored(kept).target_class, stored(chosen).target_class) == ("store", "tag")
+    assert (stored(seeded).name, stored(seeded).target_config) == ("Renamed", {})
 
 
 def test_a_forms_manager_publishes_and_an_outsider_does_not_even_read() -> None:
