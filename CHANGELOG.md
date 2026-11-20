@@ -10,6 +10,11 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: a record form's rail shows a field exactly when the sheet would:
+  visible for the form's current values (`showWhen`, resolved through
+  `resolve`) and not `hidden`, decided by the same `visibleFields` the draft
+  uses; a rail group left with no field and no content is dropped.
+  `visibleRecordRailGroups` takes the form's values after the record.
 - `@angee/ui`: in a record form, the targets a preset hides are dropped from
   the draft, and on save each preset field whose value changed writes its
   preset's value for every target that is hidden now and was loaded with a
