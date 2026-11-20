@@ -34,7 +34,11 @@ live in code docstrings.
   The paths the static ingress sends to Django are declared once
   (`INGRESS_DJANGO_PATHS`); the stack template's `@django` matcher is pinned to
   them, and a page claiming any other of them, or a path Django never receives,
-  is refused.
+  is refused. The manifest publishes the list as `ingressDjangoPaths`.
+  Follow-up: the dev server's proxy still keeps its own, narrower list of these
+  paths (`packages/app/config/vite.ts`); it is to read `ingressDjangoPaths`
+  instead, which needs a check on a running dev server because it widens what
+  the dev server proxies.
 - `@angee/ui`: `FormView` (and so `Form` and every registered form) takes an
   optional `renderUnavailable(id, unavailable)`: what a saved record's form
   shows when its id reads no record, given the default "Record unavailable"

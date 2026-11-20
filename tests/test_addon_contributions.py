@@ -275,6 +275,12 @@ def test_web_pages_refuse_overlapping_paths(tmp_path: Path, packages: list[dict[
     assert str(refusal.value) == f"Overlapping web/package.json angee.pages paths {claims}"
 
 
+def test_the_web_manifest_publishes_the_ingress_django_paths_in_their_declared_order() -> None:
+    # The stack template's @django matcher is pinned to the same constant, so the three cannot drift.
+    manifest = json.loads(WebRuntime((), dependencies={}).manifest_json())
+    assert manifest["ingressDjangoPaths"] == list(INGRESS_DJANGO_PATHS)
+
+
 @pytest.mark.parametrize("path", ["/forms/*", "/forms/w/*"])
 def test_web_pages_admit_paths_under_a_prefix_the_ingress_sends_to_django_for_pages(tmp_path: Path, path: str) -> None:
     config = _page_site(tmp_path, {"site.form": {**FORM_PAGE, "paths": [path]}})
