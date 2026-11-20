@@ -18,8 +18,9 @@ it (:meth:`Response.deliver`), to blank a person's answers
 (:meth:`ResponseManager.purge_expired`). A response carries no history, a
 failed delivery keeps only the failure's class, and deleting the record a
 response became erases the response's personal answers too, so an erased answer
-stays nowhere in this addon. The record made from a response is its owner's to
-erase.
+stays nowhere inside web forms. What a target made from a response is a copy
+this addon does not reach: the record, or the message a form posted, is its
+owner's to erase.
 
 **Personal data.** A response holds the answers, the language and the client's
 submission id; no address of the sender and no browser detail. Each version

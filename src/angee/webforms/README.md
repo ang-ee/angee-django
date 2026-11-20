@@ -198,8 +198,9 @@ addon's model.
   may name the one whose answer finds a person's responses
   (`contact_question`).
 - A response carries no history, and a failed delivery keeps only the
-  failure's class, so an erased answer stays nowhere in this addon. The record
-  a response became is its owner's to erase.
+  failure's class, so an erased answer stays nowhere inside web forms. What a
+  target made from a response is a copy this addon does not reach: the record a
+  response became, or the message a form posted, is its owner's to erase.
 - A response keeps its contact answer beside the answers (`contact`: trimmed,
   in one letter case), and the contact question is always one the version
   states personal. `Response.objects.answered_by("<contact>")` finds a person's
