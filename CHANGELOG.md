@@ -17,6 +17,10 @@ live in code docstrings.
   must be pure. Choosing another kind and then the stored one again is
   therefore clean instead of dirty with nothing to save. `prefillReplace` is
   documented as what it is: the fields `prefillPreserveDirty` still replaces.
+- `@angee/ui`: `AppearanceProvider` resolves the appearance once per input (the
+  saved preferences, the catalogue, the host defaults, the system scheme, the lock
+  and the draft), so a render that changes none of them no longer re-applies the
+  token layers to the document or reads and encodes the boot cache.
 - `@angee/ui`: a person's color scheme has one writer and a first-paint cache
   that follows it. Under an appearance provider the user menu no longer mounts
   the browser-local scheme (`useColorSchemePreference`), which wrote its own
