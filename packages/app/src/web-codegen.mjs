@@ -73,6 +73,7 @@ export async function generateWebRuntime({
   assertShellSettings(manifest.deployment?.shell ?? {});
   const addonSources = addonSourceDirectories(runtimeDir, webRoot, manifest, inputs);
   const head = resolveSiteAssets(manifest, addonSources, inputs);
+  const pages = resolvePages(manifest, addonSources, inputs);
   const externalEntries = Array.isArray(manifest.codegen) ? manifest.codegen : [];
   const djangoSchemas = schemaNamesFor(runtimeDir);
   const documentRoots = documentRootsFor(webRoot, manifest, addonSources);
@@ -104,7 +105,36 @@ export async function generateWebRuntime({
   }
   emitThemeArtifacts(runtimeDir, installedThemes, inputs);
   emitAppModule(runtimeDir, manifest, djangoSchemas, addonSources, installedThemes);
-  return { inputs: inputs.snapshot(), themes: installedThemes.definitions, ...(head ? { head } : {}) };
+  return { inputs: inputs.snapshot(), themes: installedThemes.definitions, pages, ...(head ? { head } : {}) };
+}
+
+/**
+ * Resolve each standalone page the manifest carries (an addon's `web/package.json`
+ * `angee.pages`, admitted by the composer) to its canonical entry inside the
+ * declaring package and to the pattern a request's `Accept` header must match,
+ * in id order. A page is a document of its own, built beside the app's as `<id>.html`.
+ */
+function resolvePages(manifest, addonSources, inputs) {
+  const pages = [];
+  for (const pkg of manifest.addonPackages ?? []) {
+    for (const [id, page] of Object.entries(pkg.pages ?? {})) {
+      const where = `${pkg.package} page ${JSON.stringify(id)}`;
+      const root = addonSources.get(pkg.package).root;
+      const entry = path.resolve(root, page.entry);
+      inputs.file(entry);
+      const file = packageFile(root, entry);
+      if (!file) throw new Error(`${where} must name an existing file inside its package: ${entry}`);
+      // Vite addresses the document by this path in a URL and in an attribute.
+      if (/[#?"]/.test(file)) throw new Error(`${where} must not contain "#", "?" or a quote in its path: ${file}`);
+      // The composer owns the rule and publishes it once, for this build and for the ingress.
+      const acceptPattern = manifest.pageAccept?.[page.accept];
+      if (typeof acceptPattern !== "string") {
+        throw new Error(`${where} is asked for as ${JSON.stringify(page.accept)}, which the manifest's pageAccept has no pattern for.`);
+      }
+      pages.push({ id, package: pkg.package, file, paths: page.paths, acceptPattern });
+    }
+  }
+  return pages.sort((left, right) => left.id.localeCompare(right.id));
 }
 
 /** Resolve only the deployment's selected assets, within their owning package. */

@@ -96,6 +96,21 @@ public vault id. See the [knowledge addon](../../src/angee/knowledge/README.md).
   bundling; preview consumes built output. Native compose and operator SDL are
   its inputs. Standalone fragment checks invoke the same generator through its
   explicit CLI ([Composition and schema](../checks.md#composition-and-schema)).
+- A standalone page is a document an addon web package serves beside the app,
+  for a visitor who never loads the application. The package declares it in
+  `web/package.json` `angee.pages` (an HTML entry, the URL paths it answers and
+  the media type a request asks for it with); the composed web manifest carries
+  the declaration and [`angee:pages`](../../packages/app/config/vite.ts) builds
+  it as `<id>.html` beside `index.html` and serves it in development at those
+  paths. Only a `GET` or `HEAD` whose `Accept` header matches the manifest's
+  `pageAccept` pattern gets the page (the media type must come first), so the
+  same address still answers as the server's API; the composer owns that
+  pattern and the ingress applies the same one. The page imports
+  nothing of `@angee/app`: it names its own files with `./`, links the host
+  stylesheet for tokens and installed themes, and applies its theme through the
+  React-free [`applyAppearanceRoot`](../../packages/ui/src/theme/runtime.mjs).
+  It gets no inline first-paint script: the ingress sends every page a content
+  security policy that runs no inline script, so the built document has none.
 - Operator daemon types are generated, never authored: the
   [operator manifest](../../src/angee/operator/pyproject.toml) contributes the
   committed daemon SDL and document glob to the shared codegen pass, and daemon
