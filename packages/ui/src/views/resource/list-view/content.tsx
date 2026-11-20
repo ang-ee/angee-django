@@ -186,19 +186,23 @@ export function ListViewContent<TRow extends Row = Row>({
   const placement = useSelectionPlaces(shown);
   const mode = placement.allMatching;
   const chosen = mode?.readKey === matchingKey ? mode : null;
-  // A copy: a page changing what it received changes nothing in the list's reads.
-  const allMatching = useValueStable(matching && chosen
-    ? structuredClone<AllMatching>({ ...matching.selects, total: matching.total ?? chosen.total }) : undefined);
-  const { updateAllMatching, leaveAllMatching } = placement;
   const surfaceId = React.useId();
+  // Only the list that chose the mode moves its total; another list with the same read
+  // shows the mode's, so two lists whose reads settle apart never write over each other.
+  const entered = chosen?.surface === surfaceId ? chosen : null;
+  // A copy: a page changing what it received changes nothing in the list's reads.
+  const allMatching = useValueStable(matching && chosen ? structuredClone<AllMatching>({
+    ...matching.selects, total: (entered ? matching.total : undefined) ?? chosen.total,
+  }) : undefined);
+  const { updateAllMatching, leaveAllMatching } = placement;
   // This list reading otherwise, or no longer showing, ends the mode it chose: it never
   // comes back by itself, and another list sharing the selection never ends it.
   React.useLayoutEffect(() => matchingKey === null ? undefined : () => leaveAllMatching(surfaceId),
     [matchingKey, leaveAllMatching, surfaceId]);
-  // A refetch that settles with another total moves the mode with it.
+  // A refetch of the list that chose the mode that settles with another total moves the mode with it.
   React.useLayoutEffect(() => {
-    if (chosen && matching?.total !== undefined) updateAllMatching(chosen.readKey, matching.total);
-  }, [chosen, matching?.total, updateAllMatching]);
+    if (entered && matching?.total !== undefined) updateAllMatching(entered.readKey, matching.total);
+  }, [entered, matching?.total, updateAllMatching]);
   // While the scope holds the mode, this list's or another's sharing the selection, the
   // generic verbs and the Share utility refuse: they act on each selected row.
   const disabledReason = mode

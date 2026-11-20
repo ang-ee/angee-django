@@ -423,9 +423,11 @@ function GroupedItemRow<TRow extends Row>({
             label: t("list.selectGroup", { label: item.label }),
             checked: allMatching || (records.length > 0 && selectedCount === records.length),
             indeterminate: !allMatching && selectedCount > 0 && selectedCount < records.length,
-            // Only loaded rows can be selected; a collapsed group has none yet, except
-            // under "Select all N", which unticking it leaves.
-            disabled: !allMatching && records.length === 0,
+            // Only loaded rows can be selected or unselected, so a group with none loaded
+            // (collapsed, or its page loading) cannot change, under "Select all N" too, where
+            // it shows selected; a collapsed one says why.
+            disabled: records.length === 0,
+            disabledReason: item.expandable && !item.expanded ? t("list.expandGroupToChangeSelection") : null,
             onCheckedChange: (checked: boolean) => onSelectRecords(records, checked),
           } : undefined}
           visibleColumns={visibleColumns}

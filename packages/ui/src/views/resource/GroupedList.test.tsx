@@ -267,7 +267,7 @@ test("grouped lists select a whole group or every loaded row, and a near miss on
   expect(view.state.rowSelection).toEqual({ r1: true });
 });
 
-test("a collapsed group's checkbox is disabled until its rows are loaded", () => {
+test("a collapsed group's checkbox is disabled until its rows are loaded, and says why", () => {
   render(
     <ResourceViewProvider scope="local">
       <GroupedRecordHarness selectable expanded={false} />
@@ -275,4 +275,6 @@ test("a collapsed group's checkbox is disabled until its rows are loaded", () =>
   );
   const group = screen.getByRole("checkbox", { name: "Select the loaded rows in January" });
   expect(group.getAttribute("aria-disabled") ?? group.getAttribute("data-disabled")).not.toBeNull();
+  expect(document.getElementById(group.getAttribute("aria-describedby") ?? "")?.textContent)
+    .toBe("Expand the group to change its selection");
 });
