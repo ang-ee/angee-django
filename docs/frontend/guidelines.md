@@ -95,15 +95,26 @@ public vault id. See the [knowledge addon](../../src/angee/knowledge/README.md).
   the ingress routes in `runtime/web/pages.caddy`, which the stack's static
   ingress imports ahead of its Django routes. Page `<id>` is the build output's
   `<id>.html`. An id is a dotted lower-case name; a path is an absolute prefix
-  ending in `/*`, and no two pages' paths overlap. A page answers `GET` and `HEAD`
+  ending in `/*`, and no two pages' paths overlap. A path sits under a prefix the
+  ingress sends to Django for pages (`PAGE_PREFIXES`, today `/forms/*`), so the
+  page's own requests reach Django; the other paths the ingress sends to Django
+  (`INGRESS_DJANGO_PATHS`, which the stack template's matcher is pinned to) are
+  the framework's own endpoints and take no page. A page answers `GET` and `HEAD`
   only when `text/html` is the first media type of the request's `Accept` header,
   so `fetch` and API clients reach Django on the same path; the manifest's
   `pageAccept` carries that one pattern for the dev server. The ingress sends
   every page with one fixed content security policy (`PAGE_CSP`): a page renders
   staff-written markup on the application's origin, so it loads only from that
   origin, runs no inline script, submits no form natively and is never framed;
-  inline styles are the one loosened directive. Never route a page in a
-  stack template or a Vite config by hand.
+  inline styles are the one loosened directive. `PAGE_CSP` is the policy's one
+  owner: a page's HTML carries no copy, the built page gets it from the ingress
+  header, and the manifest's `pageCsp` publishes the same string so the dev
+  server injects it as a meta tag in development only. The ingress reads the snippet
+  when it starts: a recomposed snippet takes effect only when the static ingress
+  service (`frontend`; `caddy` in an instance stack) restarts, which the
+  whole-application chained restart does and a lone compose does not
+  ([Restart the running stack](../howto/getstarted.md#restart-the-running-stack)).
+  Never route a page in a stack template or a Vite config by hand.
 - Installed `@angee/*` packages are prebundled by source signature. Vite's
   optimizer hash covers only the lockfile and manifests, so
   `defineAngeeWebViteConfig` (`@angee/app/vite`) hashes each package's on-disk

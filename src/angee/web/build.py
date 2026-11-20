@@ -48,6 +48,24 @@ PAGE_ID_RE = re.compile(r"^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$")
 PAGE_PATH_RE = re.compile(r"^/(?:[a-z0-9][a-z0-9._~-]*/)+\*$")
 """A path a standalone page answers: an absolute lower-case prefix of whole segments ending in ``/*``."""
 
+PAGE_PREFIXES: tuple[str, ...] = ("/forms/*",)
+"""The prefixes the ingress sends to Django under which an addon may declare a standalone page."""
+
+INGRESS_DJANGO_PATHS: tuple[str, ...] = (
+    "/graphql/*", "/acp/*", "/auth/csrf", "/auth/csrf/", *PAGE_PREFIXES,
+    "/storage/upload", "/storage/upload/*", "/storage/download", "/storage/download/*",
+    "/admin/*", "/static/*", "/media/*", "/mcp", "/mcp/*",
+)
+"""Every path the stack's static ingress sends to Django: the one list, which its ``@django`` matcher is pinned to.
+
+A standalone page's own requests (the JSON it fetches, what it submits) are not
+page requests, so they must reach Django on the page's paths: a page path sits
+under a prefix listed here. Only ``PAGE_PREFIXES`` are open to pages. Every other
+entry is the framework's own endpoint, whose browser navigations a page would take
+over, and a path this list does not hold (an app route, the build's ``/assets/``,
+the operator's ``/operator/``) falls to the app and never reaches Django.
+"""
+
 PAGE_ACCEPT = "text/html"
 """The media type a standalone page declares as ``accept``; this version admits no other."""
 
@@ -63,7 +81,8 @@ lists another type first reaches Django however its header is folded. The ingres
 snippet and the Vite dev server apply this one string, published as the manifest's
 top-level ``pageAccept`` (each admitted ``accept`` media type to its pattern); it
 therefore uses only syntax Go RE2, JavaScript and Python read alike without flags,
-which is why each letter spells out both cases.
+which is why each letter spells out both cases. Parameters are not read: a leading
+``text/html;q=0`` still selects the page, which is known and accepted.
 """
 
 PAGE_CSP: dict[str, list[str]] = {
@@ -78,14 +97,16 @@ PAGE_CSP: dict[str, list[str]] = {
     "style-src": [CSP.SELF, CSP.UNSAFE_INLINE],
     "form-action": [CSP.NONE],
 }
-"""The content security policy the ingress sends with every standalone page.
+"""The content security policy of every standalone page, and its one owner.
 
 A standalone page renders markup written by staff on the application's origin, so
 it must not be able to run inline script, and it is never framed. The ingress sends
 it as a response header because a ``<meta>`` policy cannot set ``frame-ancestors``.
 ``style-src`` admits inline styles, the one loosened directive, because the
 rendering library sets them. The policy is the same for every page: none declares
-its own.
+its own. The manifest publishes the rendered policy as its top-level ``pageCsp``
+string, the value the ingress header carries, so the Vite dev server, which has
+no ingress in front of it, can apply the same policy in development.
 """
 
 
@@ -201,6 +222,7 @@ class WebRuntime:
             "addonPackages": addon_packages,
             "codegen": codegen_entries,
             "pageAccept": {PAGE_ACCEPT: PAGE_ACCEPT_PATTERN},
+            "pageCsp": build_policy(PAGE_CSP),
             "documentRoots": [
                 {"kind": "package", "package": entry["package"], "path": f"node_modules/{entry['package']}/src"}
                 for entry in (*core_packages, *addon_packages)
@@ -253,15 +275,15 @@ class WebRuntime:
         request's ``Accept`` header matches the manifest's ``pageAccept`` pattern,
         with the web build's ``/<id>.html`` under the importing site's ``root``;
         every other request falls through to the site's own routes. The page
-        carries ``PAGE_CSP`` on those paths and at the built file's own URL, which
-        the site's file server also answers. Without pages only the sentinel
-        remains, so the import always resolves.
+        carries the manifest's ``pageCsp`` on those paths and at the built file's
+        own URL, which the site's file server also answers. Without pages only
+        the sentinel remains.
         """
 
         pages = {
             name: page for entry in self.manifest["addonPackages"] for name, page in entry.get("pages", {}).items()
         }
-        lines = [f"# {GENERATED_SENTINEL}"]
+        lines = [GENERATED_SENTINEL]  # already a "#" comment, which is Caddy's own
         if pages:
             lines += [
                 "#",
@@ -274,7 +296,7 @@ class WebRuntime:
                 "# A page renders staff-written markup on the application's origin, so its content security",
                 "# policy runs no inline script and forbids framing, wherever the built file is requested.",
             ]
-        policy = f'{CSP.HEADER_ENFORCE} "{build_policy(PAGE_CSP)}"'
+        policy = f'{CSP.HEADER_ENFORCE} "{self.manifest["pageCsp"]}"'
         for name in sorted(pages):
             matcher = f"@page_{name.replace('.', '_')}"
             accept = self.manifest["pageAccept"][pages[name]["accept"]]
@@ -358,7 +380,8 @@ class WebRuntime:
         """Admit standalone pages: static entries of the web build that load none of the app.
 
         A page declares exactly its ``entry`` (an existing file of the package), the
-        ``paths`` it answers and the ``accept`` media type whose requests select it.
+        ``paths`` it answers (each under one of ``PAGE_PREFIXES``) and the ``accept``
+        media type whose requests select it.
         Only the declaration is projected: the entry's bytes are the web build's input.
         """
 
@@ -385,6 +408,12 @@ class WebRuntime:
                     f"{here}.paths must be a non-empty list of absolute lower-case prefixes ending in '/*', "
                     "such as '/forms/w/*'"
                 )
+            for path in paths:
+                if not any(path.startswith(prefix.removesuffix("*")) for prefix in PAGE_PREFIXES):
+                    raise ImproperlyConfigured(
+                        f"{here}.paths {path!r} must sit under a prefix the ingress sends to Django for pages: "
+                        f"{', '.join(map(repr, PAGE_PREFIXES))}"
+                    )
             if page["accept"] != PAGE_ACCEPT:
                 raise ImproperlyConfigured(f"{here}.accept must be {PAGE_ACCEPT!r}")
             pages[name] = {"entry": entry, "paths": list(paths), "accept": PAGE_ACCEPT}

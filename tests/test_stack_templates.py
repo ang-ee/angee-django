@@ -13,6 +13,7 @@ the contract tests pin whatever the templates compute, never a value re-derived 
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import json
 import os
 import re
@@ -972,6 +973,9 @@ def test_static_ingress_imports_the_composed_standalone_pages_ahead_of_django() 
     # The file the composer publishes, under the project's composed output in the ingress mount.
     snippet = next(path for path in WebRuntime((), dependencies={}).render_sources() if path.suffix == ".caddy")
     runtime = _render_project_settings()["COMPOSE_OUTPUT_DIR"].replace("{BASE_DIR}", "/srv/project")
+    # A glob import only warns when nothing matches, so an ingress ahead of its composer still starts.
+    imported = "/srv/project/runtime/web/pages.cadd?"
+    assert fnmatch.fnmatchcase(f"{runtime}/{snippet.as_posix()}", imported)
     for stack in (
         _render_local_stack(),
         _render_staging_stack(),
@@ -983,12 +987,29 @@ def test_static_ingress_imports_the_composed_standalone_pages_ahead_of_django() 
         root, pages, django, app = (
             site.index(directive)
             for directive in (
-                "root * /srv/project/web/dist", f"import {runtime}/{snippet.as_posix()}", "handle @django", "handle {",
+                "root * /srv/project/web/dist", f"import {imported}\n", "handle @django", "handle {",
             )
         )
         # The imported routes carry no root of their own: the site declares it once, ahead of every handler.
         assert root < pages < django < app
         assert site.count("root *") == 1
+
+
+def test_static_ingress_sends_django_exactly_the_declared_paths() -> None:
+    """The template cannot read Python, so its ``@django`` matcher is pinned to the list the page rule reads."""
+
+    from angee.web.build import INGRESS_DJANGO_PATHS
+
+    for stack in (
+        _render_local_stack(),
+        _render_staging_stack(),
+        _render_dev_stack(_runtime_mode="docker", serve_mode="production"),
+    ):
+        frontend = stack["services"]["frontend" if "frontend" in stack["services"] else "caddy"]
+        matchers = [
+            line.strip() for line in _rendered_caddyfile(frontend).splitlines() if line.strip().startswith("@django ")
+        ]
+        assert matchers == [f"@django path {' '.join(INGRESS_DJANGO_PATHS)}"]
 
 
 def test_local_stack_uses_operator_backed_addon_installer() -> None:

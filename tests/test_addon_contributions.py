@@ -12,12 +12,13 @@ from typing import Any
 import pytest
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
+from django.utils.csp import build_policy
 from django_compose.serving import GENERATED_SENTINEL
 
 from angee.base.addons import addon_contribution, addon_facts
 from angee.graphql.schema import schema_parts_for
 from angee.mcp.server import tool_registrar
-from angee.web.build import PAGE_ACCEPT_PATTERN, WebRuntime
+from angee.web.build import INGRESS_DJANGO_PATHS, PAGE_ACCEPT_PATTERN, PAGE_CSP, PAGE_PREFIXES, WebRuntime
 from tests.conftest import make_addon, write_addon_package
 
 FORM_PAGE: dict[str, Any] = {"entry": "./src/form.html", "paths": ["/forms/w/*"], "accept": "text/html"}
@@ -159,8 +160,11 @@ def test_a_package_without_pages_emits_no_pages_key_and_an_importable_snippet(
     (tmp_path / "web/package.json").write_text(json.dumps({"name": "@example/site", "angee": declared}))
     projection = WebRuntime((config,), dependencies={config.name: ()})
     assert "pages" not in projection.manifest["addonPackages"][0]
+    # The page rules are the composer's own, so the manifest carries them whether or not a page is declared.
+    assert projection.manifest["pageAccept"] == {"text/html": PAGE_ACCEPT_PATTERN}
+    assert projection.manifest["pageCsp"] == build_policy(PAGE_CSP)
     # The ingress imports the file unconditionally, so it holds its sentinel comment and no route.
-    assert projection.pages_caddy() == f"# {GENERATED_SENTINEL}\n"
+    assert projection.pages_caddy() == f"{GENERATED_SENTINEL}\n"
     assert Path("web/pages.caddy") in projection.render_sources()
 
 
@@ -223,7 +227,7 @@ def test_web_pages_refuse_an_entry_that_resolves_outside_the_package(tmp_path: P
 
 def test_web_pages_refuse_ids_shared_by_addons(tmp_path: Path) -> None:
     configs = [
-        _page_site(tmp_path / name, {"site.form": {**FORM_PAGE, "paths": [f"/{name}/*"]}}, name=f"tests.{name}")
+        _page_site(tmp_path / name, {"site.form": {**FORM_PAGE, "paths": [f"/forms/{name}/*"]}}, name=f"tests.{name}")
         for name in ("first", "second")
     ]
     with pytest.raises(
@@ -271,10 +275,43 @@ def test_web_pages_refuse_overlapping_paths(tmp_path: Path, packages: list[dict[
     assert str(refusal.value) == f"Overlapping web/package.json angee.pages paths {claims}"
 
 
+@pytest.mark.parametrize("path", ["/forms/*", "/forms/w/*"])
+def test_web_pages_admit_paths_under_a_prefix_the_ingress_sends_to_django_for_pages(tmp_path: Path, path: str) -> None:
+    config = _page_site(tmp_path, {"site.form": {**FORM_PAGE, "paths": [path]}})
+    entry = WebRuntime((config,), dependencies={config.name: ()}).manifest["addonPackages"][0]
+    assert entry["pages"]["site.form"]["paths"] == [path]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        # Unknown to the ingress: the page's own JSON request would fall to the app and receive HTML.
+        pytest.param("/surveys/*", id="unrouted"),
+        pytest.param("/assets/*", id="build-assets"),
+        pytest.param("/operator/*", id="operator"),
+        # Sent to Django, yet the framework's own: a page there would take over its browser navigations.
+        *(
+            pytest.param(owned, id=owned.strip("/*"))
+            for owned in INGRESS_DJANGO_PATHS
+            if owned.endswith("/*") and owned not in PAGE_PREFIXES
+        ),
+        pytest.param("/admin/login/*", id="beneath-a-framework-prefix"),
+    ],
+)
+def test_web_pages_refuse_paths_outside_the_prefixes_open_to_pages(tmp_path: Path, path: str) -> None:
+    config = _page_site(tmp_path, {"site.form": {**FORM_PAGE, "paths": ["/forms/w/*", path]}})
+    with pytest.raises(ImproperlyConfigured) as refusal:
+        WebRuntime((config,), dependencies={config.name: ()})
+    assert str(refusal.value) == (
+        f"tests.site web/package.json angee.pages['site.form'].paths {path!r} "
+        "must sit under a prefix the ingress sends to Django for pages: '/forms/*'"
+    )
+
+
 def test_web_pages_admit_prefixes_that_share_only_leading_segments(tmp_path: Path) -> None:
     pages = {
         "site.form": {**FORM_PAGE, "paths": ["/forms/w/*", "/forms/wide/*"]},
-        "site.list": {**FORM_PAGE, "paths": ["/forms/x/*", "/lists/2024-q1_draft.v2~a/*"]},
+        "site.list": {**FORM_PAGE, "paths": ["/forms/x/*", "/forms/2024-q1_draft.v2~a/*"]},
     }
     config = _page_site(tmp_path, pages)
     assert WebRuntime((config,), dependencies={config.name: ()}).manifest["addonPackages"][0]["pages"] == pages
@@ -287,6 +324,7 @@ def test_web_pages_admit_prefixes_that_share_only_leading_segments(tmp_path: Pat
         pytest.param("text/html", True, id="text-html-alone"),
         pytest.param("TEXT/HTML; charset=UTF-8, */*", True, id="any-case-with-parameters"),
         pytest.param(" text/html ;q=0.9", True, id="optional-whitespace"),
+        pytest.param("text/html;q=0", True, id="weight-is-not-read"),
         pytest.param("application/json", False, id="json"),
         pytest.param("*/*", False, id="wildcard"),
         pytest.param("text/*", False, id="type-wildcard"),
@@ -305,20 +343,22 @@ def test_the_page_accept_pattern_selects_only_a_leading_text_html(accept: str, s
 
 def test_the_page_ingress_snippet_routes_each_page_by_method_path_and_leading_accept(tmp_path: Path) -> None:
     config = _page_site(tmp_path, {
-        "site.list": {**FORM_PAGE, "paths": ["/lists/*"]},
+        "site.list": {**FORM_PAGE, "paths": ["/forms/lists/*"]},
         "site.form": {**FORM_PAGE, "paths": ["/forms/w/*", "/forms/draft/*"]},
     })
     projection = WebRuntime((config,), dependencies={config.name: ()})
     preamble, _, routes = projection.pages_caddy().partition("\n\n")
-    assert preamble.startswith(f"# {GENERATED_SENTINEL}\n")
+    assert preamble.startswith(f"{GENERATED_SENTINEL}\n")
     assert all(line.startswith("#") for line in preamble.splitlines())
     accept = projection.manifest["pageAccept"]["text/html"]
     # One fixed policy for every page: no inline script, never framed; inline styles are the one loosened directive.
-    policy = (
-        "Content-Security-Policy \"default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; "
+    # The manifest publishes it for the dev server, and the ingress header carries that same string.
+    assert projection.manifest["pageCsp"] == (
+        "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; "
         "frame-ancestors 'none'; connect-src 'self'; img-src 'self' data:; font-src 'self'; "
-        "style-src 'self' 'unsafe-inline'; form-action 'none'\""
+        "style-src 'self' 'unsafe-inline'; form-action 'none'"
     )
+    policy = f'Content-Security-Policy "{projection.manifest["pageCsp"]}"'
     # Pages and their paths are sorted; page <id> is the web build's /<id>.html under the importing site's root.
     # The Accept condition reads the header's joined field lines, never one line alone.
     assert routes == (
@@ -337,7 +377,7 @@ def test_the_page_ingress_snippet_routes_each_page_by_method_path_and_leading_ac
         "\n"
         "@page_site_list {\n"
         "\tmethod GET HEAD\n"
-        "\tpath /lists/*\n"
+        "\tpath /forms/lists/*\n"
         f"\texpression `{{http.request.header.Accept}}.matches(r'{accept}')`\n"
         "}\n"
         "handle @page_site_list {\n"

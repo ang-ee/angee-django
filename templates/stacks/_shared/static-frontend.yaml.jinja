@@ -26,7 +26,8 @@
           root * /srv/project/{{ web_path }}/dist
 
           # Standalone pages the composer projects from addon declarations answer before Django and the app.
-          import /srv/project/runtime/web/pages.caddy
+          # A glob: a stack whose composer emits no snippet still starts, and those paths stay Django's.
+          import /srv/project/runtime/web/pages.cadd?
 
           @django path /graphql/* /acp/* /auth/csrf /auth/csrf/ /forms/* /storage/upload /storage/upload/* /storage/download /storage/download/* /admin/* /static/* /media/* /mcp /mcp/*
           handle @django {

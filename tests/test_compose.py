@@ -452,7 +452,7 @@ def test_compose_publishes_the_page_ingress_snippet_and_follows_page_declaration
     host.write_settings()
     assert "Composition generated." in host.compose()
     snippet = host.root / "runtime/web/pages.caddy"
-    assert snippet.read_text() == f"# {GENERATED_SENTINEL}\n"
+    assert snippet.read_text() == f"{GENERATED_SENTINEL}\n"
     package["angee"] = {
         "pages": {"site.form": {"entry": "./src/form.html", "paths": ["/forms/w/*"], "accept": "text/html"}},
     }

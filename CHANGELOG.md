@@ -16,7 +16,8 @@ live in code docstrings.
   ["/forms/w/*"], "accept": "text/html"}}}`. `WebRuntime` validates the
   declaration beside `angee.assets` (a dotted lower-case id unique across
   packages, an existing entry file inside the package, absolute path prefixes
-  ending in `/*` that overlap no other page's) and projects it twice: on the
+  ending in `/*` that overlap no other page's and sit under a prefix the ingress
+  sends to Django for pages, today `/forms/*`) and projects it twice: on the
   package's entry in `runtime/web/manifest.json`, with the one `Accept` rule as
   `pageAccept`, and as Caddy routes in `runtime/web/pages.caddy`, published with
   the other `runtime/web` outputs and holding only its sentinel when no page is
@@ -24,13 +25,16 @@ live in code docstrings.
   and `HEAD` on its paths only when `text/html` is the first media type of the
   request's `Accept` header, however the header is folded into field lines, so
   every other request reaches Django, and carries
-  one fixed content security policy (no inline script, never framed). The stack
+  one fixed content security policy (no inline script, never framed), owned by
+  `PAGE_CSP` and published as the manifest's `pageCsp`. The stack
   templates' static ingress declares its site root once and imports the snippet
-  ahead of its Django routes. **Upgrade:** re-render a stack together with the
-  framework it runs: the ingress imports `runtime/web/pages.caddy`, which an
-  earlier composer does not emit, and Caddy refuses to start on a missing import.
-  A stack re-rendered from the new template must run a framework that emits
-  `runtime/web/pages.caddy`, or its ingress will not start.
+  by glob ahead of its Django routes: an ingress whose composer emits no snippet
+  still starts, and those paths stay Django's. The ingress reads the snippet
+  when it starts, so a recomposed one takes effect when that service restarts.
+  The paths the static ingress sends to Django are declared once
+  (`INGRESS_DJANGO_PATHS`); the stack template's `@django` matcher is pinned to
+  them, and a page claiming any other of them, or a path Django never receives,
+  is refused.
 - `@angee/ui`: `FormView` (and so `Form` and every registered form) takes an
   optional `renderUnavailable(id, unavailable)`: what a saved record's form
   shows when its id reads no record, given the default "Record unavailable"
