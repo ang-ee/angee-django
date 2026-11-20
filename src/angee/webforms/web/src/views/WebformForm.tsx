@@ -17,11 +17,16 @@ const UNDELIVERED_FIELDS = ["undelivered_count", "undelivered_expires_at"];
 const TARGET_CONFIG = ["target_config"];
 
 /**
- * A target's configuration is not another's: choosing a target starts its
+ * A target's configuration is not another's: choosing another target starts its
  * configuration empty. That is also what a target that takes none must be sent,
- * since the server refuses configuration on it.
+ * since the server refuses configuration on it. Choosing the target the form
+ * was loaded with changes nothing: its configuration comes back with it, and
+ * the form is again what is stored.
  */
-const startTargetConfig = () => ({ target_config: {} });
+function targetConfigFor(target: unknown, _values: unknown, loaded?: Record<string, unknown>): { target_config: unknown } {
+  const stored = loaded !== undefined && optionToken(loaded.target_class) === optionToken(target);
+  return { target_config: stored ? loaded.target_config ?? {} : {} };
+}
 
 /**
  * A web form as staff manage it, in the order a person decides it: its name,
@@ -62,7 +67,7 @@ function WebformForm({ resource: _resource, recordTabs, returning, headerExtras,
       <Field name="name" title />
       <Field name="status" widget="statusbar" status readOnly />
       <Field name="target_class" label={t("form.target")} widget="select" options={targetOptions}
-        prefill={startTargetConfig} prefillReplace={TARGET_CONFIG} />
+        prefill={targetConfigFor} prefillReplace={TARGET_CONFIG} />
       <Field name="target_config" label={t("form.targetConfig")} widget="json"
         showWhen={(values) => targetConfig.hasSchema(values.target_class)
           && !targetConfig.fields.some((field) => field.showWhen?.(values))} />

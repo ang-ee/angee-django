@@ -7,6 +7,7 @@ would reach it. Every name and address is invented.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -19,6 +20,7 @@ from rebac import system_context
 
 from angee.webforms import views
 from angee.webforms.testing.models import Form, FormAlias, FormVersion, Response
+from angee.webforms.urls import PUBLIC_PREFIX
 
 pytestmark = pytest.mark.django_db
 
@@ -97,6 +99,18 @@ def test_the_address_resolves_to_the_view() -> None:
     assert (match.func, match.kwargs) == (views.public_form, {"alias": "semilla"})
 
 
+def test_the_public_page_is_declared_on_the_prefix_the_address_answers_at() -> None:
+    """One prefix has two declarations, the URL and the page's paths in the web package: they name the same one."""
+
+    manifest = Path(views.__file__).parent / "web" / "package.json"
+    if not manifest.is_file():
+        pytest.skip("The web package that declares the public page (angee.pages) is not in this checkout.")
+
+    page = json.loads(manifest.read_text(encoding="utf-8"))["angee"]["pages"]["webforms.form"]
+
+    assert page["paths"] == [f"/{PUBLIC_PREFIX}/*"]
+
+
 def test_a_published_form_is_described_for_its_page_and_never_cached(form: Any) -> None:
     response = describe()
 
@@ -110,17 +124,31 @@ def test_a_published_form_is_described_for_its_page_and_never_cached(form: Any) 
     assert response["Cache-Control"] == "no-store"
 
 
-def test_an_address_that_leads_nowhere_and_a_closed_form_are_not_found(form: Any) -> None:
+def test_an_address_that_leads_nowhere_is_not_found(form: Any) -> None:
     with pytest.raises(Http404):
         describe("nowhere")
+    with pytest.raises(Http404):
+        submit(envelope(), alias="nowhere")
+    assert kept(form) == []
+
+
+def test_a_closed_form_is_not_described_and_takes_nothing_new_but_still_answers_a_resend(form: Any) -> None:
+    """After a form closed, a resend of a submission it kept gets its receipt alone: no answer, no response id."""
+
+    first = submit(envelope())
     with system_context(reason="webforms tests setup"):
         form.close()
 
     with pytest.raises(Http404):
         describe()
     with pytest.raises(Http404):
-        submit(envelope())
-    assert kept(form) == []
+        submit(envelope(submission_id="r-2"))
+    again = submit(envelope(answers={**ANSWERS, "name": "Someone Else"}))
+
+    assert (first.status_code, again.status_code) == (202, 202)
+    assert json.loads(again.content) == {"submission_id": "r-1"}
+    (row,) = kept(form)
+    assert (row.submission_id, row.answers) == ("r-1", ANSWERS)
 
 
 def test_a_submission_is_kept_once_and_a_resend_is_accepted_again(form: Any) -> None:

@@ -15,12 +15,16 @@ from typing import Any
 import pytest
 from django.apps import apps
 from django.conf import settings
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.core.validators import MinValueValidator
 from django.db import connection, migrations, models
 from django.db.migrations.exceptions import IrreversibleError
 from django.db.migrations.executor import MigrationExecutor
+from django.db.migrations.graph import MigrationGraph
 from django.db.migrations.recorder import MigrationRecorder
 from django.db.migrations.state import ProjectState
+from django_compose.migrations import DropGuardAutodetector
 from rebac import system_context
 
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedThread
@@ -46,7 +50,9 @@ _SCHEMA: dict[str, Any] = {
                 {"value": "delivery", "label": "Delivery"},
             ],
         },
-        "subject": {"type": "string", "label": "Subject", "maxLength": 120, "placeholder": "One line"},
+        "subject": {
+            "type": "string", "label": "Subject", "title": "Never shown", "maxLength": 120, "placeholder": "One line",
+        },
         "email": {"type": "string", "widget": "email", "title": "Your email"},
         "details": {"type": "string", "widget": "textarea", "description": "Anything else."},
         "budget": {"type": "number", "minimum": 0, "maximum": 5000},
@@ -176,12 +182,16 @@ def test_the_template_moves_the_previous_releases_webform_channels_once_and_does
         str(rows["request"].pk): {"slug": "request-form", "is_published": True, "form_schema": _SCHEMA},
         str(rows["draft"].pk): {
             "slug": "draft-form", "max_field_bytes": 1_024,
-            "form_schema": {"type": "object", "properties": {"note": {"type": "string"}}},
+            "form_schema": {"type": "object", "properties": {
+                "note": {"type": "string"}, "reply_to": {"type": "string", "widget": "email"},
+            }},
         },
         str(rows["blank"].pk): {"slug": "blank-form"},
         str(rows["mailbox"].pk): {"slug": "stray"},
     }
     with _previous_release(**held) as before:
+        plan = template.planned_moves(before.apps, "default")  # The judgment by itself writes nothing.
+        assert (len(plan.moves), plan.refusals, Form._base_manager.count()) == (3, [], 0)
         with connection.schema_editor() as editor:  # A run cut short before its column changes.
             template.move_webform_channels(before.apps, editor)
         executor.apply_migration(before.clone(), migration)
@@ -218,16 +228,23 @@ def test_the_template_moves_the_previous_releases_webform_channels_once_and_does
         ["subject", "email", "details", "budget", "urgent", "topic"], "email",
     )
     assert published.published_at is not None
-    assert (draft.status, draft.published_version_id, unpublished.published_at, unpublished.personal_questions) == (
-        FormStatus.DRAFT, None, None, None,
-    )
+    # An unpublished version names its contact question and states no personal question yet, which holds together.
+    assert (draft.status, draft.published_version_id, unpublished.published_at) == (FormStatus.DRAFT, None, None)
+    assert (unpublished.personal_questions, unpublished.contact_question) == (None, "reply_to")
     assert (blank.status, versions[blank.pk]) == (FormStatus.DRAFT, [])
     assert addresses == {"request-form": request.pk, "draft-form": draft.pk, "blank-form": blank.pk}
     assert serving == ["request-form"]
+    # What the move does not carry over is said with its channel's public id, never dropped silently.
     logged = [record.getMessage() for record in caplog.records]
-    assert any(rows["mailbox"].sqid in line and "never served a form" in line for line in logged)
-    assert any(rows["draft"].sqid in line and "an answer to 1024" in line for line in logged)
-    assert not any(rows["request"].sqid in line for line in logged)
+    for sqid, left_out in (
+        (rows["mailbox"].sqid, "never served a form"),
+        (rows["draft"].sqid, "an answer to 1024"),
+        (rows["request"].sqid, "field 'subject' has a title beside its label"),
+        (rows["request"].sqid, "field 'topic' has 1 disabled option(s)"),
+        (rows["request"].sqid, "already has a form that posts on it"),  # The second run, of the migration itself.
+    ):
+        assert any(sqid in line and left_out in line for line in logged), left_out
+    assert not any(rows["unused"].sqid in line or rows["blank"].sqid in line for line in logged[:len(plan.reports)])
 
     # The moved form takes a submission at its address's form, and its message continues the conversation.
     row, _made = Response.objects.receive(
@@ -260,6 +277,7 @@ def test_the_template_refuses_every_channel_it_cannot_move_before_any_column_goe
         str(rows["movable"].pk): {"slug": "movable-form", "form_schema": asks},
     }
     with _previous_release(**held) as before:
+        assert len(template.planned_moves(before.apps, "default").refusals) == 3
         with pytest.raises(template.FormNotMovable) as refused:
             executor.apply_migration(before.clone(), template.Migration(_NAME, "messaging"))
 
@@ -279,28 +297,17 @@ def test_the_template_refuses_every_channel_it_cannot_move_before_any_column_goe
 
 @pytest.mark.parametrize(("schema", "refusal"), [
     pytest.param({"type": "array"}, "not an object schema", id="not-an-object"),
-    pytest.param({"type": "object", "properties": {}}, "asks no question", id="no-question"),
     pytest.param({"type": "object", "title": "Request", "properties": {"a": {"type": "string"}}}, "declares title",
                  id="a-root-key-a-form-does-not-say"),
     pytest.param({"type": "object", "properties": {"a": {"type": "integer"}}}, "'a' is 'integer'", id="a-whole-number"),
     pytest.param({"type": "object", "properties": {"a": {"type": "string", "readOnly": True}}}, "declares readOnly",
                  id="a-read-only-field"),
-    pytest.param({"type": "object", "properties": {"version": {"type": "string"}}}, "'version' has a name",
-                 id="a-field-named-as-the-submission-names-its-version"),
-    pytest.param({"type": "object", "properties": {"submission_id": {"type": "string"}}},
-                 "'submission_id' has a name", id="a-field-named-as-the-submission-names-its-id"),
     pytest.param({"type": "object", "properties": {"a": {"type": "string", "pattern": "^x"}}}, "declares pattern",
                  id="a-pattern"),
     pytest.param({"type": "object", "properties": {"a": {"type": "string", "widget": "markdown"}}},
                  "shown as 'markdown'", id="a-widget-without-a-question"),
     pytest.param({"type": "object", "properties": {"a": {"type": "boolean", "enum": [True]}}}, "with choices",
                  id="choices-on-a-field-that-is-no-text"),
-    pytest.param({"type": "object", "properties": {"a": {"type": "string", "enum": ["Very good"]}}},
-                 "'Very good' does not match", id="a-choice-that-is-no-code"),
-    pytest.param({"type": "object", "properties": {"a": {"type": "string", "maxLength": 5000}}},
-                 "greater than the maximum of 2000", id="a-text-longer-than-a-text-answer"),
-    pytest.param({"type": "object", "properties": {"a": {"type": "string", "minimum": 1}}}, "only a number or a date",
-                 id="a-bound-on-a-text"),
     pytest.param(
         {"type": "object", "properties": {
             "a": {"type": "string", "widget": "email"}, "b": {"type": "string", "widget": "email"},
@@ -314,6 +321,106 @@ def test_the_template_refuses_every_channel_it_cannot_move_before_any_column_goe
     pytest.param({"type": "object", "properties": {"a": {"type": "string"}}, "success": {"title": 3}},
                  "success copy is not text", id="success-copy-that-is-no-text"),
 ])
-def test_a_stored_schema_a_definition_cannot_say_is_refused_with_its_reason(schema: Any, refusal: str) -> None:
+def test_a_stored_schema_the_move_cannot_turn_into_questions_is_refused_with_its_reason(
+    schema: Any, refusal: str,
+) -> None:
     with pytest.raises(template.FormNotMovable, match=refusal):
-        template.definition_from_form_spec(schema, title="Request form", language="en")
+        template.definition_from_form_spec(schema, title="Request form")
+
+
+def test_what_a_schema_says_that_a_form_does_not_is_named_and_not_dropped_silently() -> None:
+    """A title the form never showed and an option nobody could choose are left out, and said."""
+
+    schema = {"type": "object", "properties": {
+        "mood": {"type": "string", "label": "Mood", "title": "Hidden", "options": [
+            {"value": "good", "label": "Good"}, {"value": "gone", "label": "Gone", "disabled": True},
+        ]},
+    }}
+
+    definition, left_out = template.definition_from_form_spec(schema, title="Request form")
+
+    assert definition["elements"] == [
+        {"type": "dropdown", "name": "mood", "title": "Mood", "choices": [{"value": "good", "text": "Good"}]},
+    ]
+    assert left_out == [
+        "field 'mood' has 1 disabled option(s), which a form does not offer",
+        "field 'mood' has a title beside its label, which the form never showed",
+    ]
+
+
+@pytest.mark.parametrize(("schema", "refusal"), [
+    pytest.param({"type": "object", "properties": {}}, "definition: .*should be non-empty", id="no-question"),
+    pytest.param({"type": "object", "properties": {"a": {"type": "string", "enum": ["Very good"]}}},
+                 "'Very good' does not match", id="a-choice-that-is-no-code"),
+    pytest.param({"type": "object", "properties": {"a": {"type": "string", "maxLength": 5000}}},
+                 "greater than the maximum of 2000", id="a-text-longer-than-a-text-answer"),
+    pytest.param({"type": "object", "properties": {"a": {"type": "string", "minimum": 1}}}, "only a number or a date",
+                 id="a-bound-on-a-text"),
+    pytest.param({"type": "object", "properties": {"version": {"type": "string"}}},
+                 "the name 'version' is the submission's own", id="a-field-named-as-a-submission-names-its-version"),
+    pytest.param({"type": "object", "properties": {"answers": {"type": "string"}}},
+                 "the name 'answers' is the submission's own", id="a-field-named-as-a-submission-names-its-answers"),
+    pytest.param(
+        {"type": "object", "properties": {"a": {"type": "string"}}, "success": {"body": "Thank you, {a}."}},
+        "completedHtml: curly brackets are not allowed", id="success-text-with-a-curly-bracket",
+    ),
+])
+@pytest.mark.parametrize("published", [True, False], ids=["published", "unpublished"])
+def test_a_version_the_web_forms_rule_refuses_is_refused_in_that_rules_words(
+    schema: Any, refusal: str, published: bool,
+) -> None:
+    """The move restates none of these rules: the refusal is the validators' own, under the field it is about."""
+
+    with pytest.raises(template.FormNotMovable, match=refusal):
+        template.version_from_form_spec(schema, title="Request form", language="en", published=published)
+
+
+def test_the_version_a_schema_becomes_states_what_its_publication_needs_and_no_more() -> None:
+    """A published form's version states every question personal; an unpublished one states nothing yet."""
+
+    schema = {
+        "type": "object", "properties": {"note": {"type": "string"}, "reply": {"type": "string", "widget": "email"}},
+    }
+
+    served, _left_out = template.version_from_form_spec(schema, title="Request form", language="en", published=True)
+    drafted, _left_out = template.version_from_form_spec(schema, title="Request form", language="en", published=False)
+
+    assert (served["personal_questions"], served["contact_question"]) == (["note", "reply"], "reply")
+    assert (drafted["personal_questions"], drafted["contact_question"]) == (None, "reply")
+    assert served["definition"] == drafted["definition"]
+    assert (served["languages"], served["default_language"]) == (["en"], "en")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_the_drop_guard_refuses_an_autodetected_removal_of_form_columns_that_hold_a_form() -> None:
+    """``makemigrations`` on a database whose channels hold forms: refused by column, with the remedy.
+
+    The guard is the composer's (``DropGuardAutodetector``). It judges only what
+    it autodetects, against the database the command runs on.
+    """
+
+    rows = _channels(held="webform", empty="webform")
+    held = {str(rows["held"].pk): {"slug": "held-form", "is_published": True}}
+    graph = MigrationGraph()  # A project that has authored its messaging history.
+    graph.add_node(("messaging", "0001_initial"), migrations.Migration("0001_initial", "messaging"))
+    with _previous_release(**held) as before:
+        with pytest.raises(CommandError) as refused:
+            DropGuardAutodetector(before, ProjectState.from_apps(apps)).changes(graph=graph)
+
+        table = Channel._meta.db_table
+        assert f"messaging.channel: {table}.slug holds data in 1 rows" in str(refused.value)
+        assert f"messaging.channel: {table}.is_published holds data in 1 rows" in str(refused.value)
+        assert "Declare a reviewed cutover migration before native makemigrations" in str(refused.value)
+
+        # With no channel holding a form the same removal is autodetected and allowed: the columns are empty.
+        before.apps.get_model("messaging", "Channel")._base_manager.update(slug="", is_published=False)
+        (removal,) = DropGuardAutodetector(before, ProjectState.from_apps(apps)).changes(graph=graph)["messaging"]
+        assert {operation.name for operation in removal.operations if hasattr(operation, "model_name")} >= {
+            "slug", "is_published", "form_schema",
+        }
+
+
+@pytest.mark.django_db
+def test_the_check_command_asks_for_the_projects_copy_of_the_template_before_it_judges() -> None:
+    with pytest.raises(CommandError, match="holds no copy of the webform channel template"):
+        call_command("check_webform_channels")

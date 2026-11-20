@@ -144,7 +144,7 @@ export function DescriptorFieldList({ fields, resolvedFields, readOnly = false }
             // field may itself declare "target", so always put the value in
             // the native event envelope to keep the entire object atomic.
             control.onChange({ target: { value: next } });
-            const seeds = field.prefill?.(next, form.getValues());
+            const seeds = field.prefill?.(next, form.getValues(), form.formState.defaultValues as Record<string, unknown> | undefined);
             if (!seeds) return;
             for (const [name, seed] of Object.entries(seeds)) {
               form.clearErrors(name);
