@@ -42,7 +42,8 @@ def _row(handle: Any) -> tuple[str, str, Any, int]:
     """A row as the repair may change it: its key, its value, when it was last saved, and how many versions it has."""
 
     stored = Handle._base_manager.get(pk=handle.pk)
-    versions = Handle.history.model._base_manager.filter(id=handle.pk).count()
+    history: Any = Handle.history
+    versions = history.model._base_manager.filter(id=handle.pk).count()
     return stored.normalized_value, stored.value, stored.updated_at, versions
 
 
@@ -147,9 +148,8 @@ def test_provisioning_runs_the_key_repair(owner: Any) -> None:
     stale = _stored_with(owner, "ada@xn--bcher-kva.example", "behind")
     output = StringIO()
 
-    apps.get_app_config("parties").compose_provision(
-        ProvisionContext("default", OutputWrapper(output), OutputWrapper(StringIO()))
-    )
+    parties: Any = apps.get_app_config("parties")
+    parties.compose_provision(ProvisionContext("default", OutputWrapper(output), OutputWrapper(StringIO())))
 
     assert "Saved the comparison key of 1 handle(s) again." in output.getvalue()
     assert _row(stale)[0] == "ada@bücher.example"
