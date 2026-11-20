@@ -100,7 +100,11 @@ public vault id. See the [knowledge addon](../../src/angee/knowledge/README.md).
   page's own requests reach Django; the other paths the ingress sends to Django
   (`INGRESS_DJANGO_PATHS`, which the stack template's matcher is pinned to and
   the manifest publishes in order as `ingressDjangoPaths`) are the framework's
-  own endpoints and take no page. A page answers `GET` and `HEAD`
+  own endpoints and take no page. The web forms addon's page declares the whole
+  of `/forms/*`, the only page prefix today, so a second addon's page anywhere
+  under `/forms/` is refused as overlapping; a second page needs its own prefix
+  added to `PAGE_PREFIXES`, which also adds it to the paths the ingress sends to
+  Django. A page answers `GET` and `HEAD`
   only when `text/html` is the first media type of the request's `Accept` header,
   so `fetch` and API clients reach Django on the same path; the manifest's
   `pageAccept` carries that one pattern for the dev server. The ingress sends
