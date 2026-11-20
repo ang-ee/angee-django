@@ -23,10 +23,11 @@ published flag becomes a draft form with its address and no version.
 
 Nothing is guessed. A channel is refused, by name and before any column goes,
 when its form cannot be said as a definition (:func:`definition_from_form_spec`
-lists what can), when its slug or name cannot be a form's, when another form
-already has its address, or when it holds a schema or a published flag without a
-slug. Every refusal is raised together. Change the channel on the previous
-release, then apply the migration again.
+lists what can), when the web forms' own rule refuses the version it would
+become (:func:`version_from_form_spec`), when its slug or name cannot be a
+form's, when another form already has its address, or when it holds a schema or
+a published flag without a slug. Every refusal is raised together. Change the
+channel on the previous release, then apply the migration again.
 
 Not carried over, and reported in the log: a channel's ``max_body_bytes`` and
 ``max_field_bytes`` when it changed either (a form's limits are its
@@ -38,12 +39,12 @@ is. The upgrade is **irreversible**: a definition is not written back as a
 FormSpec.
 
 Every row is read and written through historical models, as a data migration's
-are: the permissions a web form's own verbs need are synchronized only after
-``migrate``. So the template judges each definition with the addon's
-``validate_definition``, holds each row to its fields' rules, and writes the
-published state itself. Historical models keep ``Meta.ordering`` on ``sqid``,
-which migration state does not carry, so every query here orders by the primary
-key.
+are, so no verb of a form runs here. The template applies the rule the verbs
+apply instead: a published form's version is judged with the addon's
+``validate_publishable`` before its published state is written, an unpublished
+one with ``validate_version``, and each row is held to its fields' own rules.
+Historical models keep ``Meta.ordering`` on ``sqid``, which migration state does
+not carry, so every query here orders by the primary key.
 """
 
 from __future__ import annotations
@@ -61,7 +62,7 @@ from django.db.migrations.state import StateApps
 from django.utils import timezone
 
 from angee.base.fields.identity import SqidField
-from angee.webforms.validators import questions, validate_definition
+from angee.webforms.validators import validate_publishable, validate_version
 
 FORM_COLUMNS = ("slug", "is_published", "form_schema_version", "form_schema", "max_body_bytes", "max_field_bytes")
 EMPTY_SCHEMA = {"type": "object", "properties": {}}
@@ -77,8 +78,6 @@ TEXT_QUESTIONS: dict[str, dict[str, Any]] = {
     "email": {"type": "text", "inputType": "email"},
     "textarea": {"type": "comment"},
 }
-ENVELOPE_NAMES = frozenset({"version", "submission_id"})
-"""The names a form's address answers a refused submission under, which no question may take."""
 CHOICE_WIDGETS = frozenset({"", "select", "selection", "combobox"})
 NUMBER_WIDGETS = frozenset({"", "number"})
 BOOLEAN_WIDGETS = frozenset({"", "boolean", "switch"})
@@ -90,8 +89,8 @@ class FormNotMovable(ValueError):
     """A channel's form cannot become a web form as it is stored."""
 
 
-def definition_from_form_spec(schema: Any, *, title: str, language: str) -> dict[str, Any]:
-    """Return the one-language definition that asks what a stored FormSpec asks.
+def definition_from_form_spec(schema: Any, *, title: str) -> dict[str, Any]:
+    """Return the definition that asks what a stored FormSpec asks, every text one plain string.
 
     What carries over: a ``string`` field as a text answer (``widget`` ``email``
     or ``textarea`` makes it an email address or a long text), ``number`` and
@@ -103,9 +102,8 @@ def definition_from_form_spec(schema: Any, *, title: str, language: str) -> dict
 
     Anything else raises :class:`FormNotMovable`: an ``integer`` (a number
     question also admits fractions), a read-only, hidden or defaulted field, a
-    pattern, a second email field, a field named ``version`` or
-    ``submission_id``, and whatever the definition's own check refuses, such as
-    a choice whose value is not a code or markup a form does not store.
+    pattern, a second email field. Whether the result is a definition a form may
+    store is the web forms' rule to judge (:func:`version_from_form_spec`).
     """
 
     if not isinstance(schema, dict) or schema.get("type", "object") != "object":
@@ -117,8 +115,6 @@ def definition_from_form_spec(schema: Any, *, title: str, language: str) -> dict
         raise FormNotMovable("its schema's properties, required or propertyOrder are not what a FormSpec holds")
     if len(order) != len(properties) or set(order) != set(properties):
         raise FormNotMovable("its propertyOrder does not name every field once")
-    if not properties:
-        raise FormNotMovable("it asks no question")
     undeclared = sorted(str(name) for name in required if name not in properties)
     if undeclared:
         raise FormNotMovable(f"it requires {', '.join(undeclared)}, which it does not declare")
@@ -137,11 +133,43 @@ def definition_from_form_spec(schema: Any, *, title: str, language: str) -> dict
     )
     if thanks:
         definition["completedHtml"] = thanks
-    try:
-        validate_definition(definition, languages=[language], default_language=language)
-    except ValidationError as error:
-        raise FormNotMovable("; ".join(error.messages)) from error
     return definition
+
+
+def version_from_form_spec(schema: Any, *, title: str, language: str, published: bool) -> dict[str, Any]:
+    """Return the content of the one-language version a stored FormSpec becomes, judged by the web forms' rule.
+
+    A published form's version states every question personal, because a
+    FormSpec never said which are, and must be ready to serve
+    (``validate_publishable``). An unpublished one states nothing yet and must
+    only hold together (``validate_version``). The schema's email field is the
+    contact question. What the rule refuses raises :class:`FormNotMovable` with
+    the rule's own words: a choice whose value is not a code, an element named
+    as a submission names its own keys, markup a form does not store.
+    """
+
+    definition = definition_from_form_spec(schema, title=title)
+    asked = definition["elements"]
+    content = {
+        "definition": definition,
+        "languages": [language],
+        "default_language": language,
+        "personal_questions": [question["name"] for question in asked] if published else None,
+        "contact_question": next((question["name"] for question in asked if question.get("inputType") == "email"), ""),
+    }
+    try:
+        (validate_publishable if published else validate_version)(**content)
+    except ValidationError as error:
+        raise FormNotMovable(_reasons(error)) from error
+    return content
+
+
+def _reasons(error: ValidationError) -> str:
+    """Return a refusal as one line, each message after the field it is about."""
+
+    if hasattr(error, "message_dict"):
+        return "; ".join(f"{field}: {' '.join(messages)}" for field, messages in error.message_dict.items())
+    return "; ".join(error.messages)
 
 
 def _only(holder: dict[str, Any], sayable: frozenset[str], what: str) -> None:
@@ -155,8 +183,6 @@ def _question(name: str, field: Any, *, required: bool) -> dict[str, Any]:
 
     if not isinstance(field, dict):
         raise FormNotMovable(f"field {name!r} is not an object")
-    if name in ENVELOPE_NAMES:
-        raise FormNotMovable(f"field {name!r} has a name a form's address keeps for the submission itself")
     _only(field, FIELD_KEYS, f"field {name!r}")
     choices = _choices(name, field)
     kind, widget = field.get("type", "string" if choices is not None else None), field.get("widget", "")
@@ -214,9 +240,7 @@ def _checked(row: Any, *, exclude: tuple[str, ...] = ()) -> Any:
     try:
         row.clean_fields(exclude=exclude)
     except ValidationError as error:
-        raise FormNotMovable(
-            "; ".join(f"{field}: {' '.join(messages)}" for field, messages in error.message_dict.items())
-        ) from error
+        raise FormNotMovable(_reasons(error)) from error
     return row
 
 
@@ -265,16 +289,13 @@ def move_webform_channels(apps: StateApps, schema_editor: BaseDatabaseSchemaEdit
             address = _checked(aliases.model(slug=slug), exclude=("form",))
             version = None
             if published or schema != EMPTY_SCHEMA:
-                definition = definition_from_form_spec(schema, title=channel["display_name"] or slug, language=language)
-                asked = questions(definition)
-                version = _checked(versions.model(
-                    number=1, definition=definition, languages=[language], default_language=language,
-                    personal_questions=[question["name"] for question in asked] if published else None,
-                    contact_question=next(
-                        (question["name"] for question in asked if question.get("inputType") == "email"), "",
-                    ),
-                    published_at=timezone.now() if published else None,
-                ), exclude=("form",))
+                content = version_from_form_spec(
+                    schema, title=channel["display_name"] or slug, language=language, published=published,
+                )
+                version = _checked(
+                    versions.model(number=1, published_at=timezone.now() if published else None, **content),
+                    exclude=("form",),
+                )
         except FormNotMovable as refusal:
             refusals.append(f"channel {public_id} ({channel['display_name'] or slug}): {refusal}")
             continue

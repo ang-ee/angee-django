@@ -176,7 +176,9 @@ def test_the_template_moves_the_previous_releases_webform_channels_once_and_does
         str(rows["request"].pk): {"slug": "request-form", "is_published": True, "form_schema": _SCHEMA},
         str(rows["draft"].pk): {
             "slug": "draft-form", "max_field_bytes": 1_024,
-            "form_schema": {"type": "object", "properties": {"note": {"type": "string"}}},
+            "form_schema": {"type": "object", "properties": {
+                "note": {"type": "string"}, "reply_to": {"type": "string", "widget": "email"},
+            }},
         },
         str(rows["blank"].pk): {"slug": "blank-form"},
         str(rows["mailbox"].pk): {"slug": "stray"},
@@ -218,9 +220,9 @@ def test_the_template_moves_the_previous_releases_webform_channels_once_and_does
         ["subject", "email", "details", "budget", "urgent", "topic"], "email",
     )
     assert published.published_at is not None
-    assert (draft.status, draft.published_version_id, unpublished.published_at, unpublished.personal_questions) == (
-        FormStatus.DRAFT, None, None, None,
-    )
+    # An unpublished version names its contact question and states no personal question yet, which holds together.
+    assert (draft.status, draft.published_version_id, unpublished.published_at) == (FormStatus.DRAFT, None, None)
+    assert (unpublished.personal_questions, unpublished.contact_question) == (None, "reply_to")
     assert (blank.status, versions[blank.pk]) == (FormStatus.DRAFT, [])
     assert addresses == {"request-form": request.pk, "draft-form": draft.pk, "blank-form": blank.pk}
     assert serving == ["request-form"]
@@ -279,28 +281,17 @@ def test_the_template_refuses_every_channel_it_cannot_move_before_any_column_goe
 
 @pytest.mark.parametrize(("schema", "refusal"), [
     pytest.param({"type": "array"}, "not an object schema", id="not-an-object"),
-    pytest.param({"type": "object", "properties": {}}, "asks no question", id="no-question"),
     pytest.param({"type": "object", "title": "Request", "properties": {"a": {"type": "string"}}}, "declares title",
                  id="a-root-key-a-form-does-not-say"),
     pytest.param({"type": "object", "properties": {"a": {"type": "integer"}}}, "'a' is 'integer'", id="a-whole-number"),
     pytest.param({"type": "object", "properties": {"a": {"type": "string", "readOnly": True}}}, "declares readOnly",
                  id="a-read-only-field"),
-    pytest.param({"type": "object", "properties": {"version": {"type": "string"}}}, "'version' has a name",
-                 id="a-field-named-as-the-submission-names-its-version"),
-    pytest.param({"type": "object", "properties": {"submission_id": {"type": "string"}}},
-                 "'submission_id' has a name", id="a-field-named-as-the-submission-names-its-id"),
     pytest.param({"type": "object", "properties": {"a": {"type": "string", "pattern": "^x"}}}, "declares pattern",
                  id="a-pattern"),
     pytest.param({"type": "object", "properties": {"a": {"type": "string", "widget": "markdown"}}},
                  "shown as 'markdown'", id="a-widget-without-a-question"),
     pytest.param({"type": "object", "properties": {"a": {"type": "boolean", "enum": [True]}}}, "with choices",
                  id="choices-on-a-field-that-is-no-text"),
-    pytest.param({"type": "object", "properties": {"a": {"type": "string", "enum": ["Very good"]}}},
-                 "'Very good' does not match", id="a-choice-that-is-no-code"),
-    pytest.param({"type": "object", "properties": {"a": {"type": "string", "maxLength": 5000}}},
-                 "greater than the maximum of 2000", id="a-text-longer-than-a-text-answer"),
-    pytest.param({"type": "object", "properties": {"a": {"type": "string", "minimum": 1}}}, "only a number or a date",
-                 id="a-bound-on-a-text"),
     pytest.param(
         {"type": "object", "properties": {
             "a": {"type": "string", "widget": "email"}, "b": {"type": "string", "widget": "email"},
@@ -314,6 +305,51 @@ def test_the_template_refuses_every_channel_it_cannot_move_before_any_column_goe
     pytest.param({"type": "object", "properties": {"a": {"type": "string"}}, "success": {"title": 3}},
                  "success copy is not text", id="success-copy-that-is-no-text"),
 ])
-def test_a_stored_schema_a_definition_cannot_say_is_refused_with_its_reason(schema: Any, refusal: str) -> None:
+def test_a_stored_schema_the_move_cannot_turn_into_questions_is_refused_with_its_reason(
+    schema: Any, refusal: str,
+) -> None:
     with pytest.raises(template.FormNotMovable, match=refusal):
-        template.definition_from_form_spec(schema, title="Request form", language="en")
+        template.definition_from_form_spec(schema, title="Request form")
+
+
+@pytest.mark.parametrize(("schema", "refusal"), [
+    pytest.param({"type": "object", "properties": {}}, "definition: .*should be non-empty", id="no-question"),
+    pytest.param({"type": "object", "properties": {"a": {"type": "string", "enum": ["Very good"]}}},
+                 "'Very good' does not match", id="a-choice-that-is-no-code"),
+    pytest.param({"type": "object", "properties": {"a": {"type": "string", "maxLength": 5000}}},
+                 "greater than the maximum of 2000", id="a-text-longer-than-a-text-answer"),
+    pytest.param({"type": "object", "properties": {"a": {"type": "string", "minimum": 1}}}, "only a number or a date",
+                 id="a-bound-on-a-text"),
+    pytest.param({"type": "object", "properties": {"version": {"type": "string"}}},
+                 "the name 'version' is the submission's own", id="a-field-named-as-a-submission-names-its-version"),
+    pytest.param({"type": "object", "properties": {"answers": {"type": "string"}}},
+                 "the name 'answers' is the submission's own", id="a-field-named-as-a-submission-names-its-answers"),
+    pytest.param(
+        {"type": "object", "properties": {"a": {"type": "string"}}, "success": {"body": "Thank you, {a}."}},
+        "completedHtml: curly brackets are not allowed", id="success-text-with-a-curly-bracket",
+    ),
+])
+@pytest.mark.parametrize("published", [True, False], ids=["published", "unpublished"])
+def test_a_version_the_web_forms_rule_refuses_is_refused_in_that_rules_words(
+    schema: Any, refusal: str, published: bool,
+) -> None:
+    """The move restates none of these rules: the refusal is the validators' own, under the field it is about."""
+
+    with pytest.raises(template.FormNotMovable, match=refusal):
+        template.version_from_form_spec(schema, title="Request form", language="en", published=published)
+
+
+def test_the_version_a_schema_becomes_states_what_its_publication_needs_and_no_more() -> None:
+    """A published form's version states every question personal; an unpublished one states nothing yet."""
+
+    schema = {
+        "type": "object", "properties": {"note": {"type": "string"}, "reply": {"type": "string", "widget": "email"}},
+    }
+
+    served = template.version_from_form_spec(schema, title="Request form", language="en", published=True)
+    drafted = template.version_from_form_spec(schema, title="Request form", language="en", published=False)
+
+    assert (served["personal_questions"], served["contact_question"]) == (["note", "reply"], "reply")
+    assert (drafted["personal_questions"], drafted["contact_question"]) == (None, "reply")
+    assert served["definition"] == drafted["definition"]
+    assert (served["languages"], served["default_language"]) == (["en"], "en")

@@ -76,8 +76,12 @@ and a FormSpec. A project that holds such channels copies the migration template
 into `runtime/messaging/migrations/`, replaces its two placeholder dependencies
 with its own leaves, and applies it. Each channel becomes a form with its first
 version and its address, posting on the same channel under the same slug, and
-the channel's form columns are removed. The template's docstring states what
-carries over, what it refuses and what it reports. It does not reverse.
+the channel's form columns are removed. A migration writes through historical
+models, so no verb of a form runs: the template judges each version with the
+web forms' own rule (`validate_publishable` for a published form,
+`validate_version` otherwise) before it writes it, and refuses a channel that
+rule refuses, by name. The template's docstring states what carries over, what
+it refuses and what it reports. It does not reverse.
 
 ## Intake
 
