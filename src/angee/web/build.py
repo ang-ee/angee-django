@@ -86,6 +86,16 @@ The page routes below and the stack template's own file server, which is pinned 
 this list, read files the same way.
 """
 
+INGRESS_DOCUMENT_CACHE_CONTROL = "no-cache"
+"""The ``Cache-Control`` of every document the ingress answers: documents are revalidated.
+
+A browser stores the app document and each standalone page but asks again before
+every use (a 304 by ETag when unchanged), so a visitor never holds a document that
+names content-hashed files a deploy has deleted; those files themselves are kept.
+The page routes below send it, and the stack template's rule for the app's own
+documents is pinned to it.
+"""
+
 PAGE_ACCEPT = "text/html"
 """The media type a standalone page declares as ``accept``; this version admits no other."""
 
@@ -297,7 +307,8 @@ class WebRuntime:
         with the web build's ``/<id>.html`` under the importing site's ``root``;
         every other request falls through to the site's own routes. The page
         carries the manifest's ``pageCsp`` on those paths and at the built file's
-        own URL, which the site's file server also answers, and is read as that
+        own URL, which the site's file server also answers, is revalidated like
+        every document (``INGRESS_DOCUMENT_CACHE_CONTROL``), and is read as that
         server reads its files: a precompressed sidecar first
         (``INGRESS_PRECOMPRESSED``). Without pages only the sentinel remains.
         """
@@ -315,6 +326,7 @@ class WebRuntime:
                 "# reach Django on the same path, so neither a wildcard nor a later text/html selects a page.",
                 "# The placeholder joins the header's field lines in order, so folding never changes the first type.",
                 "# Only GET and HEAD read a file, and the answer varies by Accept for every cache.",
+                "# A page is a document: stored, but revalidated before each use.",
                 "# A page renders staff-written markup on the application's origin, so its content security",
                 "# policy runs no inline script and forbids framing, wherever the built file is requested.",
             ]
@@ -333,6 +345,7 @@ class WebRuntime:
                 f"handle {matcher} {{",
                 "\theader +Vary Accept",
                 f"\theader {policy}",
+                f"\theader Cache-Control {INGRESS_DOCUMENT_CACHE_CONTROL}",
                 f"\trewrite * /{name}.html",
                 "\tfile_server {",
                 f"\t\tprecompressed {' '.join(INGRESS_PRECOMPRESSED)}",

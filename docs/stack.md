@@ -206,10 +206,16 @@ the name patterns), the composed themes sheet inside the app's stylesheet and
 the emission of a deployment's selected named asset among them. The rule reads
 the hash in the file name, never the directory alone, and takes an
 eight-character tail without an upper-case letter for a word or a date: the
-rare hash without one is revalidated. The app document, a standalone page's
-`<id>.html`, the build's `.vite/` manifests and every file kept or rewritten
-under a stable name (a host's public-directory files, a named asset under its
-own name) are revalidated. When the build wrote a sidecar beside a file
+rare hash without one is not kept. Documents are revalidated, content-hashed
+assets are kept: the app document however it is reached (`/`, its own name, a
+route or a missing file that falls back to it) and each standalone page, by its
+paths and by its built file, answer `Cache-Control: no-cache`
+(`INGRESS_DOCUMENT_CACHE_CONTROL`), stored but checked by ETag before each use,
+so no visitor holds a document naming hashed files a deploy has deleted. No
+answer carries both headers, and what Django answers keeps its own. The build's
+`.vite/` manifests and every file kept or rewritten under a stable name (a
+host's public-directory files, a named asset under its own name) carry no cache
+header. When the build wrote a sidecar beside a file
 (`<file>.br`, `.zst`, `.gz`) and the client accepts that encoding, the ingress
 sends the sidecar, brotli first (`INGRESS_PRECOMPRESSED`, for the app's files
 and the standalone pages alike); a file without one is compressed on the fly as

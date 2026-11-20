@@ -15,10 +15,13 @@ live in code docstrings.
   content, `/assets/<name>-<hash>.<ext>`: Vite's emitted scripts, stylesheets,
   locale and metadata files and the emission of a deployment's selected named
   asset. A repeat visit no longer transfers them. The rule reads the hash in
-  the file name, never the directory alone. Documents (`index.html`, a
-  standalone page's `<id>.html`), the build's `.vite/` manifests and every file
-  kept or rewritten under a stable name are revalidated, as is the app document
-  a missing asset falls back to.
+  the file name, never the directory alone. Documents are revalidated,
+  content-hashed assets are kept: the app document however it is reached, a
+  missing asset's fallback to it included, and each standalone page answer
+  `Cache-Control: no-cache`, stored but checked by ETag before each use, so no
+  visitor holds a document naming hashed files a deploy has deleted. The
+  build's `.vite/` manifests and every file kept or rewritten under a stable
+  name carry no cache header.
   The ingress serves precompressed sidecars when a build provides them: a
   `<file>.br`, `.zst` or `.gz` beside a file answers a client that accepts it,
   brotli first, for the app's files and the standalone pages; without one the

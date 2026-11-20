@@ -1011,15 +1011,14 @@ def test_static_ingress_caches_for_good_only_what_the_build_names_by_content() -
         assert conditions == [
             r"path_regexp ^/assets/.+-[A-Za-z0-9_-]{8}(\.[A-Za-z0-9]+)+$",
             r"not path_regexp -[a-z0-9_-]{8}(\.[A-Za-z0-9]+)+$",
+            "not path *.html",
             "file",
         ]
-        assert [line for line in lines if "Cache-Control" in line] == [
-            'header @hashed Cache-Control "public, max-age=31536000, immutable"'
-        ]
+        assert 'header @hashed Cache-Control "public, max-age=31536000, immutable"' in lines
         named, word = (re.compile(condition.rpartition("path_regexp ")[2]) for condition in conditions[:2])
 
         def kept(path: str) -> bool:
-            return bool(named.search(path)) and not word.search(path)
+            return bool(named.search(path)) and not word.search(path) and not path.endswith(".html")
 
         # Vite writes all it emits under assets/ as <name>-<hash>.<ext>, the emission of a selected named asset too.
         # A precompressed sidecar is its source's name with one more extension, hashed exactly when its source is.
@@ -1038,10 +1037,40 @@ def test_static_ingress_caches_for_good_only_what_the_build_names_by_content() -
             "/assets/logo-inverted.svg", "/assets/chunk-settings.js", "/assets/report-20240115.pdf",
             "/assets/app-AbCd123.js", "/static/app-AbCd1234.js", "/pages/assets/app-AbCd1234.js",
             "/index.html.br", "/site.page.html.gz",
-            # A real hash without an upper-case letter: revalidated, the price of never keeping a word.
+            # A real hash without an upper-case letter: not kept, the price of never keeping a word.
             "/assets/low-abcd1234.js",
+            # A document is revalidated, whatever its name.
+            "/assets/page-AbCd1234.html",
         ):
             assert not kept(path), path
+
+
+def test_static_ingress_revalidates_documents_and_keeps_only_hashed_assets() -> None:
+    """Documents answer the declared ``Cache-Control``; no response can carry it and the long-lived one."""
+
+    from angee.web.build import INGRESS_DOCUMENT_CACHE_CONTROL
+
+    assert INGRESS_DOCUMENT_CACHE_CONTROL == "no-cache"
+    for stack in (
+        _render_local_stack(),
+        _render_staging_stack(),
+        _render_dev_stack(_runtime_mode="docker", serve_mode="production"),
+    ):
+        frontend = stack["services"]["frontend" if "frontend" in stack["services"] else "caddy"]
+        lines = [line.strip() for line in _rendered_caddyfile(frontend).splitlines()]
+        start = lines.index("@document {")
+        # A document: the root or an HTML file, or any path with no file, which falls back to the app document.
+        assert lines[start + 1 : start + 6] == ["not {", "not path / *.html", "file", "}", "}"]
+        assert lines[start + 6] == f"header @document Cache-Control {INGRESS_DOCUMENT_CACHE_CONTROL}"
+        # Inside the app's own handler, ahead of its fallback: at the site level it would mark what Django answers.
+        assert lines.index("handle {") < start < lines.index("try_files {path} /index.html")
+        # The kept files exclude both arms of that rule (``not path *.html`` and ``file``), so the two never meet.
+        hashed = lines[lines.index("@hashed {") + 1 : lines.index("}", lines.index("@hashed {"))]
+        assert {"not path *.html", "file"} <= set(hashed)
+        assert sorted(line for line in lines if "Cache-Control" in line) == sorted([
+            'header @hashed Cache-Control "public, max-age=31536000, immutable"',
+            f"header @document Cache-Control {INGRESS_DOCUMENT_CACHE_CONTROL}",
+        ])
 
 
 def test_static_ingress_serves_precompressed_sidecars_in_the_declared_order() -> None:

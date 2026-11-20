@@ -28,12 +28,14 @@
           # Only a file the build names by its content is cached for good: Vite writes all it emits under assets/ as
           # <name>-<hash>.<ext>, the hash eight base-64 characters. The name must carry one, wherever the file sits:
           # an eight-character tail with no upper-case letter is taken for a word or a date, never for a hash, so a
-          # hand-named file is not kept by mistake and the rare hash without one is merely revalidated. Documents,
-          # the build's manifests and every file rewritten under a stable name are revalidated, and so is the app
-          # document a missing asset falls back to: the file must exist.
+          # hand-named file is not kept by mistake and the rare hash without one is merely not kept. Nothing else
+          # is: a document is revalidated (below) and is never one of these files, the build's manifests and every
+          # file under a stable name are left as they were, and a missing asset falls back to the app document, so
+          # the file must exist.
           @hashed {
             path_regexp ^/assets/.+-[A-Za-z0-9_-]{8}(\.[A-Za-z0-9]+)+$
             not path_regexp -[a-z0-9_-]{8}(\.[A-Za-z0-9]+)+$
+            not path *.html
             file
           }
           header @hashed Cache-Control "public, max-age=31536000, immutable"
@@ -62,6 +64,17 @@
           }{% endif %}
 
           handle {
+            # Documents are revalidated, content-hashed assets are kept. The app document however it is reached (its
+            # own name, a route or a missing file that falls back to it) and every other HTML document are stored
+            # but checked by ETag before each use, so none outlives the hashed files it names. A document is never
+            # one of the files kept above, and what Django answers keeps its own headers.
+            @document {
+              not {
+                not path / *.html
+                file
+              }
+            }
+            header @document Cache-Control no-cache
             try_files {path} /index.html
             # A sidecar the build wrote beside a file answers a client that accepts it; with none, encode compresses.
             file_server {
