@@ -9,7 +9,7 @@ request asks for it with. `defineAngeeWebViteConfig` builds each declared page
 as `<id>.html` beside `index.html`, serves it in development at its paths to
 a `GET` or `HEAD` whose `Accept` header matches the manifest's `pageAccept`
 pattern, and serves the built file the same way in `vite preview` (the build
-describes its pages in `.angee/pages.json` inside the distribution).
+describes its pages in `.vite/angee-pages.json` inside the distribution).
 `generateWebRuntime` returns the resolved pages and the manifest's `pageCsp`,
 and fails when a declared entry is missing; the build fails when a declared
 page is not emitted, or when its document references `../` or uses `srcset`.
