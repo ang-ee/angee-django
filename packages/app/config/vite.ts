@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, matchesGlob, posix, relative, resolve } from "node:path";
+import { readFile, writeFile } from "node:fs/promises";
+import { basename, dirname, extname, join, matchesGlob, posix, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { brotliCompress, constants as zlib, gzip } from "node:zlib";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { build, defineConfig, mergeConfig, normalizePath, send, type Connect, type HtmlTagDescriptor, type Plugin, type UserConfig, type ViteDevServer } from "vite";
@@ -301,6 +304,7 @@ export async function defineAngeeWebViteConfig({
       preloadSchemaMetadata(pagesPlugin.owns),
       react(),
       tailwindcss(),
+      angeePrecompressedPlugin(),
     ],
     // The alias for this project's generated typed operations, pointing at the
     // project's OWN `runtime/gql/<name>/` tree (the web package generates it via
@@ -675,6 +679,47 @@ function angeePagesPlugin(themesSheet: string): Plugin & {
         }
         next();
       });
+    },
+  };
+}
+
+/** The text a build emits that an ingress compresses on the way out; images and fonts are compressed already. */
+const PRECOMPRESSED_TEXT = new Set([".js", ".mjs", ".css", ".html", ".svg", ".json"]);
+/** Below this a response fits one packet either way, and a sidecar is one more file to keep. */
+const PRECOMPRESSED_MINIMUM = 1024;
+
+/**
+ * Write a brotli and a gzip sidecar beside every text file the build emits
+ * (`<file>.br`, `<file>.gz`), for an ingress that serves a precompressed file
+ * when a browser accepts it. Brotli at its highest quality is a quarter smaller
+ * than gzip on a script and too slow to do per request, so the build does it
+ * once. A sidecar that is not smaller than its source is not written, and the
+ * output is the same for the same input: neither format carries a time here.
+ */
+function angeePrecompressedPlugin(): Plugin {
+  const compressors = {
+    br: (source: Buffer) => promisify(brotliCompress)(source, {
+      params: { [zlib.BROTLI_PARAM_QUALITY]: zlib.BROTLI_MAX_QUALITY, [zlib.BROTLI_PARAM_SIZE_HINT]: source.length },
+    }),
+    gz: (source: Buffer) => promisify(gzip)(source, { level: zlib.Z_BEST_COMPRESSION }),
+  };
+  return {
+    name: "angee:precompressed",
+    apply: "build",
+    // A browser fetches the client's files; no other build's output is served.
+    applyToEnvironment: (environment) => environment.config.consumer === "client",
+    async writeBundle(options, bundle) {
+      const directory = options.dir;
+      if (!directory) return;
+      await Promise.all(Object.keys(bundle).filter((file) => PRECOMPRESSED_TEXT.has(extname(file))).map(async (file) => {
+        // What was written, byte for byte, is what a sidecar must decompress to.
+        const source = await readFile(join(directory, file));
+        if (source.length < PRECOMPRESSED_MINIMUM) return;
+        await Promise.all(Object.entries(compressors).map(async ([suffix, compress]) => {
+          const compressed = await compress(source);
+          if (compressed.length < source.length) await writeFile(join(directory, `${file}.${suffix}`), compressed);
+        }));
+      }));
     },
   };
 }
