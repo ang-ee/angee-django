@@ -167,7 +167,7 @@ def test_a_form_asks_at_least_one_question_and_panels_nest_three_deep_and_no_fur
 
 @pytest.mark.parametrize("markup", [
     pytest.param("<p>Kept for a year.</p>", id="a-paragraph"),
-    pytest.param("<h2>Thank you</h2><p>We read <strong>every</strong> <em>idea</em>.<br>Soon.</p>", id="emphasis"),
+    pytest.param("<h1>Thanks</h1><h6>Soon</h6><p><strong>Every</strong> <em>idea</em>.<br>Read.</p>", id="emphasis"),
     pytest.param("<ul><li>One</li><li>Two</li></ul><ol><li>First</li></ol>", id="lists"),
     pytest.param('<p>See <a href="https://example.test/privacy?a=1&amp;b=2">the notice</a>.</p>', id="a-web-link"),
     pytest.param('<p>Write to <a href="mailto:hello@example.test">us</a>.</p>', id="a-mail-link"),

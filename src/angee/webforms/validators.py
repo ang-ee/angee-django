@@ -50,7 +50,9 @@ LANGUAGE_TAG_LENGTH = 35
 MARKUP_KEYS = frozenset({"html", "completedHtml"})
 """The only texts that are markup. Every other text is plain and is shown as written."""
 
-MARKUP_TAGS = frozenset({"p", "br", "strong", "em", "b", "i", "ul", "ol", "li", "h2", "h3", "h4", "a"})
+MARKUP_TAGS = frozenset({
+    "p", "br", "strong", "em", "b", "i", "ul", "ol", "li", "h1", "h2", "h3", "h4", "h5", "h6", "a",
+})
 MARKUP_LINKS = ("http://", "https://", "mailto:")
 MAX_QUESTIONS = 200
 TEXT_LIMIT = 2_000
