@@ -733,7 +733,7 @@ test("selectedGroups keeps its identity across re-renders while the selection is
 /** The variables of the list's own root groups read, as the server last received them. */
 function rootGroupsRead(custom: ReturnType<typeof taskServer>["custom"], field: string) {
   return custom.mock.calls.map(([request]) => request.meta?.gqlVariables as {
-    group_by?: { field: string }[]; where?: Record<string, unknown>; having?: Record<string, unknown>;
+    group_by?: { field: string }[]; where?: Record<string, unknown>; having?: Record<string, unknown>; order_by?: unknown;
   }).filter((variables) => variables.group_by?.[0]?.field === field).at(-1)!;
 }
 
@@ -828,10 +828,31 @@ test("an opted-in repeated grouping offers its every group, handing on its own g
   if (allMatching?.unit !== "groups") throw new Error("expected every group selected");
   expect(allMatching.total).toBe(2);
   expect(allMatching.read.dimensions).toHaveLength(1);
-  // A page turns it into its own read's variables: those the list's request sent.
+  // A page turns it into its own read's variables: those the list's request sent, the
+  // order the list shows the groups in included.
+  expect(sent.order_by).toBeDefined();
   const variables = groupByVariables(allMatching.read);
-  expect([variables.group_by, variables.where, variables.having]).toEqual([sent.group_by, sent.where, sent.having]);
+  expect([variables.group_by, variables.where, variables.having, variables.order_by])
+    .toEqual([sent.group_by, sent.where, sent.having, sent.order_by]);
   expect(f.collection?.selectedGroups).toEqual([status("active", "active", ["t1", "t2"])]);
+});
+
+test("in the mode a render that changes nothing, as a scroll frame does, copies no read and hands on the same member", async () => {
+  for (const enter of [allOfAda, allRepeated]) {
+    const f = await enter();
+    const member = f.collection?.allMatching;
+    const handed = f.collections.length;
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    try {
+      f.rerender();
+      expect(f.collections.length).toBeGreaterThan(handed);
+      expect(clone).not.toHaveBeenCalled();
+      expect(f.collection?.allMatching).toBe(member);
+    } finally {
+      clone.mockRestore();
+    }
+    cleanup();
+  }
 });
 
 test("a grouping that has not opted in, or whose page holds every record, offers no select-all", async () => {
@@ -985,7 +1006,13 @@ test("in the mode a collapsed group shows selected and cannot change, while a ro
   expect(closed.getAttribute("aria-checked")).toBe("true");
   expect(closed.hasAttribute("data-disabled")).toBe(true);
   expect(description(closed)).toBe("Expand the group to change its selection");
-  // Neither the box nor a near miss beside it changes the selection or leaves the mode.
+  // Tab reaches it, so a keyboard user hears the reason.
+  expect(closed.tabIndex).toBe(0);
+  closed.focus();
+  expect(document.activeElement).toBe(closed);
+  // Neither Space, the box nor a near miss beside it changes the selection or leaves the mode.
+  fireEvent.keyDown(closed, { key: " " });
+  fireEvent.keyUp(closed, { key: " " });
   fireEvent.click(closed);
   fireEvent.click(closed.parentElement!);
   expect(screen.getByText("All 3 groups selected")).toBeTruthy();
@@ -1167,16 +1194,28 @@ test("the mode never comes back by itself: a view reading otherwise leaves it, a
   expect(f.collection).not.toHaveProperty("allMatching");
 });
 
-test("a list utility receives the mode's reason, so a Share of the selected rows can refuse it", async () => {
+test("a list utility receives the mode's reason and no selected ids, so one ignoring the reason acts on nothing", async () => {
   function Reason() {
-    const { disabledReason } = useResourceViewUtilityContext();
-    return <output aria-label="Utility reason">{disabledReason === null ? "none" : disabledReason}</output>;
+    const { disabledReason, selectedIds } = useResourceViewUtilityContext();
+    return <>
+      <output aria-label="Utility reason">{disabledReason === null ? "none" : disabledReason}</output>
+      <output aria-label="Utility ids">{[...selectedIds ?? []].join(",")}</output>
+    </>;
   }
-  await allOfAda({ utility: <Reason /> });
-  expect(screen.getByRole("status", { name: "Utility reason" }).textContent)
-    .toBe("This acts on the rows you select, not on all 4 records");
-  fireEvent.click(screen.getByRole("button", { name: "Clear" }));
-  await waitFor(() => expect(screen.getByRole("status", { name: "Utility reason" }).textContent).toBe("none"));
+  const utility = (name: string) => screen.getByRole("status", { name }).textContent;
+  const f = selectedGroupsFixture(ADA, { selectAllMatching: true, utility: <Reason /> });
+  await f.select("Task 1");
+  await f.select("Task 3");
+  await waitFor(() => expect(utility("Utility ids")).toBe("t1,t3"));
+  fireEvent.click(await f.first().findByRole("button", { name: "Select all 4 records" }));
+  await waitFor(() => expect(utility("Utility reason")).toBe("This acts on the rows you select, not on all 4 records"));
+  expect(utility("Utility ids")).toBe("");
+  // The selection keeps its ids; only the utilities are handed none.
+  expect(f.view.state.rowSelection).toEqual({ t1: true, t3: true });
+  // Leaving the mode by a row hands them what shows selected again.
+  await f.select("Task 1");
+  await waitFor(() => expect(utility("Utility reason")).toBe("none"));
+  expect(utility("Utility ids")).toBe("t3");
 });
 
 test("a repeated grouping lists no footer total, which a flat aggregate cannot narrow to its groups", async () => {

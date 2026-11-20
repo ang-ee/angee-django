@@ -7,6 +7,9 @@ export type {
   ListColumn,
 } from "./resource-view-list-body";
 export type {
+  AllMatching,
+  AllMatchingGroups,
+  AllMatchingRecords,
   BoardLaneSource,
   BoardCardSpec,
   GalleryCardSpec,

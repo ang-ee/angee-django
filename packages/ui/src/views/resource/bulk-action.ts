@@ -15,12 +15,6 @@ import type { AllMatchingMode } from "./selection-channel";
 /** The collection a page's `bulkActions` receives, its third argument. */
 type BulkCollection<TRow extends Row> = Parameters<NonNullable<ListViewProps<TRow>["bulkActions"]>>[2];
 
-/** "Select all N" as a page's `bulkActions` receives it (`collection.allMatching`). */
-export type AllMatching = NonNullable<BulkCollection<Row>["allMatching"]>;
-
-/** What "Select all N" selects, its total aside: per unit, the read whose matches the total counts. */
-export type AllMatchingRead = { [Unit in AllMatching["unit"]]: Omit<Extract<AllMatching, { unit: Unit }>, "total"> }[AllMatching["unit"]];
-
 /**
  * What a list surface hands `bulkActions`: the public collection with the split
  * stated. The public member stays optional so a caller that builds a collection by

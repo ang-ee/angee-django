@@ -193,6 +193,37 @@ export interface SelectionPlace {
   page: string;
 }
 
+/** "Select all N" over a flat list (`bulkActions` → `allMatching`, whose docstring holds the rules). */
+export type AllMatchingRecords = {
+  /** A flat list: `total` counts its records. */
+  readonly unit: "records";
+  /** What the bar says is selected: exact, as the list's pager counts it. */
+  readonly total: number;
+  /** The `where` the list hands its data provider for its rows (the provider may wrap
+   * it; the meaning is the same). It names no schema or root field: forward it to the
+   * verb's own read, never re-derive it. A copy: changing it changes nothing in the list. */
+  readonly read: { readonly where: NonNullable<Parameters<typeof listQueryMeta>[2]> };
+};
+
+/** "Select all N" over a list grouped by one server level (`bulkActions` → `allMatching`). */
+export type AllMatchingGroups = {
+  /** A list grouped by one server level: `total` counts its groups after the level's
+   * `having` (the read's `totalCount`). */
+  readonly unit: "groups";
+  /** What the bar says is selected: exact, as the list's pager counts it. */
+  readonly total: number;
+  /** The level's groups read as the list's own groups request sends it
+   * (`ResourceQuery.toGroupRead`): its `where` (a repeated level's records with a value
+   * included), its `dimensions`, for a repeated level its `having`, and its `orderBy`,
+   * the order the list shows the groups in. It names no schema or root field: a page
+   * turns it into its own read's variables with `groupByVariables` (`@angee/refine`),
+   * never re-deriving it. A copy: changing it changes nothing in the list. */
+  readonly read: Readonly<Pick<GroupByRequestOptions, "where" | "dimensions" | "having" | "orderBy">>;
+};
+
+/** "Select all N" as a page's `bulkActions` receives it (`collection.allMatching`), by the pager's unit. */
+export type AllMatching = AllMatchingRecords | AllMatchingGroups;
+
 /**
  * What a card renderer knows about the card it draws, discriminated by the
  * surface: narrow on `kind` before reading a board-only fact.
@@ -332,7 +363,9 @@ export interface ListViewProps<TRow extends Row = Row> {
   selectable?: boolean;
   /** Offer "Select all N": the selection becomes everything the list's read matches,
    * which the page's `bulkActions` receives as `allMatching` (its docstring holds the
-   * rules). Only where the pager counts what a verb acts on: a flat list's records,
+   * rules) with a copy of the list's own read: a flat list's `where`, or a one-level
+   * grouping's `where`, `dimensions`, `having` and `orderBy`. Only where the pager
+   * counts what a verb acts on: a flat list's records,
    * or the groups of a list grouped by one server level; never under nested
    * grouping, on a `source` list, a client row model or a lane board, and only with
    * page `bulkActions` on a selectable list. Opting in asserts that every verb the
@@ -475,38 +508,16 @@ export interface ListViewProps<TRow extends Row = Row> {
        * selected ids, those on pages not loaded included, never a row nobody
        * selected: a verb that honours `allMatching` acts on `read` on the server and
        * ignores them, and a verb that cannot must not act on them either, and says
-       * why. The generic Archive, Trash/Restore and Delete, which act on each row, and
-       * the list utilities that act on `selectedIds` (Share) are disabled with their
-       * reason while it is on, on every list sharing the selection; a list there that
-       * reads otherwise renders no page verbs.
+       * why. The generic Archive, Trash/Restore and Delete, which act on each row, are
+       * disabled with their reason while it is on, on every list sharing the
+       * selection, and the list utilities get the reason and no `selectedIds` (Share
+       * refuses); a list there that reads otherwise renders no page verbs.
+       * What it forwards is the list's own request: a flat list's `where`
+       * (`AllMatchingRecords`), or a one-level grouping's `where`, `dimensions`,
+       * `having` and `orderBy` (`AllMatchingGroups`).
        * Descriptive, like `filter`: the server validates what it is given.
        */
-      allMatching?:
-        | {
-            /** A flat list: `total` counts its records. */
-            readonly unit: "records";
-            /** What the bar says is selected: exact, as the list's pager counts it. */
-            readonly total: number;
-            /** The `where` the list hands its data provider for its rows (the provider
-             * may wrap it; the meaning is the same). It names no schema or root field:
-             * forward it to the verb's own read, never re-derive it. A copy: changing
-             * it changes nothing in the list. */
-            readonly read: { readonly where: NonNullable<Parameters<typeof listQueryMeta>[2]> };
-          }
-        | {
-            /** A list grouped by one server level: `total` counts its groups after the
-             * level's `having` (the read's `totalCount`). */
-            readonly unit: "groups";
-            /** What the bar says is selected: exact, as the list's pager counts it. */
-            readonly total: number;
-            /** The level's groups read as the list builds it (`ResourceQuery.toGroupRead`):
-             * its `where` (a repeated level's records with a value included), its
-             * `dimensions` and, for a repeated level, its `having`. It names no schema
-             * or root field: a page turns it into its own read's variables with
-             * `groupByVariables` (`@angee/refine`), never re-deriving it. A copy:
-             * changing it changes nothing in the list. */
-            readonly read: Readonly<Pick<GroupByRequestOptions, "where" | "dimensions" | "having">>;
-          };
+      allMatching?: AllMatching;
     },
   ) => ReactNode;
   /** Optional action content rendered in each board card footer. */
