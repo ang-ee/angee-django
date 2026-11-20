@@ -103,7 +103,7 @@ public vault id. See the [knowledge addon](../../src/angee/knowledge/README.md).
 - Layering and unconsumed-owner guardrails are Vitest checks over the locked
   package graph. Do not add a boundary-lint dependency without updating
   [the opinionated stack](../stack.md) and the manifests together.
-- **Guards.** The UX component ontology is executable: `packages/app/src/ux-ontology-guard.ts`
+- **Guards.** The UX component ontology is executable: `packages/app/src/ux-ontology-guard.test-support.ts`
   (run by the architecture guardrails test over every addon and consumer root) fails on raw
   `<button>`/`<input>`/`<select>`/`<textarea>`/`<table>`/`<dialog>`/`<form>` elements, lucide
   icons rendered outside the manifest `icons` block, hand-spelled selected surfaces, deleted
