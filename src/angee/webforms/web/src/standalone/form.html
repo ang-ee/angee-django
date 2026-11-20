@@ -18,15 +18,22 @@
     <title></title>
     <link rel="stylesheet" href="./form.css" />
   </head>
-  <!-- Nothing shows until the page's script has applied the form's theme (form.css). -->
+  <!-- Nothing shows until the page's script has applied the form's theme; what shows while that takes long is in form.css. -->
   <body class="starting">
     <header>
       <!-- Named by the page's script, in the language of the form. -->
       <select id="language" hidden autocomplete="off"></select>
     </header>
     <main id="form"></main>
-    <!-- What the page says in place of a form. Until its script speaks, this is all the document says. -->
-    <p id="notice" role="status" dir="auto">This form could not be loaded. Reload the page to try again.</p>
+    <!--
+      What the page says in place of a form. Until its script speaks, this is all
+      the document says: that it is loading while that may still be true, and that
+      it failed once it has, or once it must have.
+    -->
+    <p id="notice" role="status" dir="auto">
+      <span class="loading">Loading…</span>
+      <span class="failed">This form could not be loaded. Reload the page to try again.</span>
+    </p>
     <!-- Named by the server, never shown: a person leaves it empty. -->
     <input id="honeypot" hidden tabindex="-1" autocomplete="off" aria-hidden="true" />
     <script type="module" src="./form.ts"></script>

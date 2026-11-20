@@ -31,8 +31,8 @@ export interface PageParts {
   described?: Promise<Response>;
 }
 
-/** The document shows nothing while it carries this class; see `form.css`. */
-const STARTING = "starting";
+/** The document shows no form while it carries either of these classes; see `form.css`. */
+const STARTING = ["starting", "loading"] as const;
 
 // A refusal about no question is a sentence to read, and SurveyJS shows its notices for two seconds.
 const NOTICE_LIFETIME = 10_000;
@@ -79,7 +79,7 @@ export async function openPage({ render, wear, described: asked }: PageParts): P
     mount.hidden = picker.hidden = true;
     notice.textContent = message;
     notice.hidden = false;
-    document.body.classList.remove(STARTING);
+    document.body.classList.remove(...STARTING);
   }
 
   /** Ask the address for the version the form serves now; nothing when it takes no submissions. */
@@ -241,7 +241,7 @@ export async function openPage({ render, wear, described: asked }: PageParts): P
     picker.hidden = described.languages.length < 2;
     notice.hidden = true;
     mount.hidden = false;
-    document.body.classList.remove(STARTING);
+    document.body.classList.remove(...STARTING);
   }
 
   picker.addEventListener("change", () => {

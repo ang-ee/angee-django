@@ -111,10 +111,19 @@ afterEach(() => {
 });
 
 describe("the document before its script speaks", () => {
-  test("shows nothing while the page starts, and carries a plain message of its own", () => {
+  test("shows nothing while the page starts, and carries its own words for loading and for failing", () => {
     expect(document.body.classList.contains("starting")).toBe(true);
     expect(notice().hidden).toBe(false);
-    expect(notice().textContent).toBe("This form could not be loaded. Reload the page to try again.");
+    expect(notice().querySelector(".loading")?.textContent).toBe("Loading…");
+    expect(notice().querySelector(".failed")?.textContent).toBe("This form could not be loaded. Reload the page to try again.");
+  });
+
+  test("a page that speaks replaces both, whichever the document was saying", async () => {
+    document.body.classList.replace("starting", "loading");
+    serve({ get: [() => json(404, { error: "not_found" })], post: [] });
+    await opened("/forms/semilla?lang=en");
+    expect(notice().textContent).toBe("This form is not taking responses.");
+    expect(document.body.className).toBe("");
   });
 });
 

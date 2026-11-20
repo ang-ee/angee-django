@@ -5,18 +5,59 @@
  */
 
 /*
- * Nothing shows while the page starts. If its script never takes over (it did
- * not load, the browser could not run it, or scripting is off), the plain
- * message the document carries appears by itself after a while.
+ * Nothing shows while the page starts, and what the document says by itself
+ * depends on what has happened, not only on how long it took.
+ *
+ * `starting`: no script of the page has run yet. A slow connection and a script
+ * that will never come look the same from here, so the document says it is
+ * loading after a few seconds, and that it failed only after a long while.
+ *
+ * `loading`: the page's entry is running (it puts this in place of `starting`)
+ * and is fetching the rest. The document says it is loading, for as long as
+ * that takes; the entry says so itself if the rest cannot be fetched.
+ *
+ * Neither: the page has spoken, or its entry has failed. What the notice holds
+ * is shown: a sentence of the page's, or the document's own failure wording.
  */
-body.starting {
+body:is(.starting, .loading) {
   visibility: hidden;
-  animation: page-fallback 0s linear 10s forwards;
 }
 
-@keyframes page-fallback {
+#notice .loading {
+  display: none;
+}
+
+body:is(.starting, .loading) #notice {
+  display: grid;
+}
+
+body:is(.starting, .loading) #notice > * {
+  display: block;
+  grid-area: 1 / 1;
+  visibility: hidden;
+}
+
+body.starting #notice .loading {
+  animation: page-says 0s linear 3s forwards, page-unsays 0s linear 30s forwards;
+}
+
+body.starting #notice .failed {
+  animation: page-says 0s linear 30s forwards;
+}
+
+body.loading #notice .loading {
+  animation: page-says 0s linear 1.5s forwards;
+}
+
+@keyframes page-says {
   to {
     visibility: visible;
+  }
+}
+
+@keyframes page-unsays {
+  to {
+    visibility: hidden;
   }
 }
 
