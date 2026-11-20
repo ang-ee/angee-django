@@ -10,6 +10,17 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: in a record form, the targets a preset hides are dropped from
+  the draft, and on save each preset field whose value changed writes its
+  preset's value for every target that is hidden now and was loaded with a
+  different value. `prefill` is now also called when the form is saved, so it
+  must be pure. Choosing another kind and then the stored one again is
+  therefore clean instead of dirty with nothing to save. `prefillReplace` is
+  documented as what it is: the fields `prefillPreserveDirty` still replaces.
+- `@angee/ui`: `AppearanceProvider` resolves the appearance once per input (the
+  saved preferences, the catalogue, the host defaults, the system scheme, the lock
+  and the draft), so a render that changes none of them no longer re-applies the
+  token layers to the document or reads and encodes the boot cache.
 - `angee.base`, `angee.resources`, `angee.workflows`: a merge refusal's reason
   names the record by its public id ("This record (tag_…) is loaded from
   angee.tags resources, which would recreate it; keep it instead.", "Workflow

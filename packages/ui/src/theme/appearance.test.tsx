@@ -70,6 +70,9 @@ const saved: AppearancePreferences = {
 const changedOptions = { version: 1, value: { brand: "#abcdef", rail: "#334455" } };
 const host: HostAppearanceDefaults = { themeId: ink.definition.id, colorScheme: "dark", fingerprint: "test-host" };
 
+/** The runtime's themes: one value for the app's lifetime, as the composed runtime holds them. */
+const THEMES = [paper, ink];
+
 function renderAppearance({
   preferences = { [APPEARANCE_PREFERENCE_KEY]: saved, unrelated: { keep: true } },
   available = true,
@@ -93,7 +96,7 @@ function renderAppearance({
     const [preferences, setPreferences] = useState(stored);
     committed = setPreferences;
     return <AppRuntimeProvider runtime={{
-      themes: [paper, ink],
+      themes: THEMES,
       auth: { status, user: status === "authenticated" ? { id: "actor-1", name: "Example" } : null, hasRole: () => false },
       userPreferences: { available, preferences, patchPreferences },
     }}><AppearanceProvider host={defaults} themeLocked={themeLocked}>{children}</AppearanceProvider></AppRuntimeProvider>;
@@ -258,6 +261,20 @@ test("reset directly deletes saved preferences, closes the draft and applies the
   expect(document.documentElement.style.getPropertyValue("--surface-rail")).toBe("");
   await act(async () => result.current.setColorScheme("light"));
   expect(patchPreferences).toHaveBeenCalledTimes(2);
+});
+
+test("a re-render that changes nothing neither applies the appearance again nor touches the boot cache", () => {
+  const { rerender } = renderAppearance();
+  const reads = vi.spyOn(window.localStorage, "getItem");
+  const writes = vi.spyOn(window.localStorage, "setItem");
+  const applied = vi.spyOn(document.documentElement.style, "setProperty");
+  const cleared = vi.spyOn(document.documentElement.style, "removeProperty");
+  rerender();
+  rerender();
+  expect(reads).not.toHaveBeenCalled();
+  expect(writes).not.toHaveBeenCalled();
+  expect(applied).not.toHaveBeenCalled();
+  expect(cleared).not.toHaveBeenCalled();
 });
 
 test("draft-only edits never write the boot cache and remounting applies saved appearance", async () => {
