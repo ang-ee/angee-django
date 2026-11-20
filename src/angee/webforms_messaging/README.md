@@ -50,6 +50,17 @@ The body lists each answer under its question's title in the form's default
 language, in the order the form asks them. A choice is shown by its code; the
 text a respondent gave for "Other" stands in for that code.
 
+## Channels that held their own form
+
+Earlier releases kept a public form on its channel row: a slug, a published flag
+and a FormSpec. A project that holds such channels copies the migration template
+[`webform_channels_to_forms`](compose_migrations/messaging/webform_channels_to_forms.py)
+into `runtime/messaging/migrations/`, replaces its two placeholder dependencies
+with its own leaves, and applies it. Each channel becomes a form with its first
+version and its address, posting on the same channel under the same slug, and
+the channel's form columns are removed. The template's docstring states what
+carries over, what it refuses and what it reports. It does not reverse.
+
 ## Intake
 
 `angee.intake` captures a message on a channel that has an intake queue, and it
