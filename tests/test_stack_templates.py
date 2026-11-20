@@ -467,7 +467,7 @@ def _render_local_stack(
     celery_queues: str = "",
     enable_celery: bool = True,
     serve_mode: str = "development",
-    serve_workers: int = 0,
+    serve_workers: int = 2,
     db_pool_max_size: int = 2,
     db_pool_timeout: int = 5,
     sentry_dsn: str = "",
@@ -538,7 +538,7 @@ def _render_dev_stack(
     sentry_dsn: str = "",
     sentry_web_dsn: str = "",
     serve_mode: str = "development",
-    serve_workers: int = 0,
+    serve_workers: int = 2,
     db_pool_max_size: int = 2,
     db_pool_timeout: int = 5,
     operator_home: str = "",
@@ -651,6 +651,7 @@ def _render_staging_stack(
     enable_celery: bool = True,
     operator_home: str = "",
     sentry_web_dsn: str = "",
+    serve_workers: int = 2,
 ) -> dict[str, Any]:
     """Render the staging stack with the inputs its copier.yml declares, and no others."""
 
@@ -679,7 +680,7 @@ def _render_staging_stack(
         "repositories": json.dumps(list(repositories)),
         "sentry_dsn": "",
         "sentry_web_dsn": sentry_web_dsn,
-        "serve_workers": "0",
+        "serve_workers": str(serve_workers),
         "settings_file": settings_file,
         "ui_port": "5173",
         "web_path": "web",
@@ -2091,8 +2092,6 @@ def test_serve_modes_cover_both_flavors_and_runtimes() -> None:
     for copier in (dev_copier, local_copier):
         assert copier["serve_mode"]["default"] == "development"
         assert copier["serve_mode"]["choices"] == ["development", "production"]
-        assert copier["serve_workers"]["default"] == 0
-        assert "serve_workers < 2" in copier["serve_workers"]["validator"]
         assert copier["db_pool_max_size"]["default"] == 2
         assert copier["db_pool_timeout"]["default"] == 5
     assert dev_copier["runtime_mode"]["choices"] == ["process", "docker"]
@@ -2127,8 +2126,7 @@ def test_serve_modes_cover_both_flavors_and_runtimes() -> None:
         assert stack["jobs"]["compose"]["command"][-2:] == ["compose", "--if-stale"]
         if serve_mode == "production":
             assert "manage.py serve" in command
-            assert "--workers 0" in command
-            assert "--production" in command
+            assert "--workers 2 --production" in command
             assert "runserver" not in command
             assert django["env"]["ANGEE_DB_POOL"] == "true"
             assert django["env"]["ANGEE_DB_POOL_MAX_SIZE"] == "2"
@@ -2784,7 +2782,7 @@ def test_staging_stack_is_the_containerized_dev_shape_with_production_serving() 
     assert set(services) == {"operator", "postgres", "redis", "django", "celery-worker", "frontend"}
     assert all(service["runtime"] == "container" for service in services.values())
     assert "manage.py serve" in services["django"]["command"][-1]
-    assert services["django"]["command"][-1].endswith("--workers 0 --production")
+    assert services["django"]["command"][-1].endswith("--workers 2 --production")
     assert services["django"]["after"] == ["provision", "frontend"]
     assert services["frontend"]["image"] == "caddy:2.9-alpine"
     assert services["frontend"]["route"] == {"port": 80, "path": "/", "auth": "none"}
@@ -2999,6 +2997,21 @@ def test_the_shared_celery_worker_runs_a_bounded_prefork_pool(render) -> None:
     for path in (DEV_COPIER, LOCAL_COPIER, STAGING_COPIER):
         question = yaml.safe_load(path.read_text(encoding="utf-8"))["celery_concurrency"]
         assert (question["type"], question["default"]) == ("int", 2)
+
+
+def test_production_django_serves_two_workers_unless_cpu_count_is_chosen() -> None:
+    """Each serve worker loads the whole app with nothing shared, so one per CPU is the explicit 0."""
+
+    for path in (DEV_COPIER, LOCAL_COPIER, STAGING_COPIER):
+        question = yaml.safe_load(path.read_text(encoding="utf-8"))["serve_workers"]
+        assert (question["type"], question["default"]) == ("int", 2)
+        assert "serve_workers != 0 and serve_workers < 2" in question["validator"]
+    for stack in (
+        _render_dev_stack(_runtime_mode="docker", serve_mode="production", serve_workers=0),
+        _render_local_stack(serve_mode="production", serve_workers=0),
+        _render_staging_stack(serve_workers=0),
+    ):
+        assert " ".join(stack["services"]["django"]["command"]).endswith("--workers 0 --production")
 
 
 def test_caddy_script_opens_without_a_blank_line_whatever_the_ingress() -> None:

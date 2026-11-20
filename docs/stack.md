@@ -186,7 +186,9 @@ under uvicorn without autoreload. GraphQL's ready-phase `SchemaIntegration` emit
 SDL during compose; `schema --check` is read-only. Serving children consume verified output
 without regenerating artifacts. Development composition runs in the native
 launcher parent before its reloader child.
-`serve_workers: 0` uses CPU count (at least two); an explicit value must be at
+`serve_workers` defaults to two. Each worker is a spawned process that loads the
+whole application, about 550 MiB with nothing shared, so size the count to the
+host's memory; `0` opts into CPU count (at least two), and any other value must be at
 least two. Uvicorn starts the ASGI lifespan in every worker. The MCP session
 manager and process memory are worker-local; Redis owns shared cache and channel
 fanout, and Celery beat runs embedded in the single shared `worker` service

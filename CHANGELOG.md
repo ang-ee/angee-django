@@ -10,6 +10,12 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Stack templates `dev`, `local` and `staging`: `serve_workers` defaults to 2
+  instead of CPU count. Each production Django worker loads the whole
+  application, about 550 MiB with nothing shared, so the CPU-count default
+  took 33 processes and 15.6 GiB on a 32-core host. `0` still opts into CPU
+  count. A stack keeps the value its answers file records;
+  `angee stack update --template --input serve_workers=<n>` changes it.
 - `@angee/ui`: `FormView` (and so `Form` and every registered form) takes an
   optional `renderUnavailable(id, unavailable)`: what a saved record's form
   shows when its id reads no record, given the default "Record unavailable"
