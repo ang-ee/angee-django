@@ -512,7 +512,8 @@ def test_only_the_record_types_a_target_declares_carry_the_link_and_pay_for_it()
         many = [TagCategory.objects.create(name=f"Many {index}") for index in range(50)]
         declared = Tag.objects.create(name="Made by nobody's response")
 
-    assert set(ResponseRecord.accepted_target_models()) == {"tags.tag"}
+    # This host installs the tests' tag target and the messaging bridge: each declares the type its target makes.
+    assert set(ResponseRecord.accepted_target_models()) == {"messaging.message", "tags.tag"}
     assert (ResponseRecord.declares_target(Tag), ResponseRecord.declares_target(TagCategory)) == (True, False)
     assert link_reads(one.delete) == 0
     assert link_reads(lambda: [category.delete() for category in many]) == 0

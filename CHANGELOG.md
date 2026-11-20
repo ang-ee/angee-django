@@ -20,7 +20,10 @@ live in code docstrings.
     response (`Response`) is one submission, kept as received before anything is
     made from it, once per form and `submission_id`. A target (`FormTarget`,
     `ANGEE_WEBFORM_TARGET_CLASSES`) turns a response into a record of the addon
-    that owns it; `store`, the default, keeps the response as the record. Forms
+    that owns it; `store`, the default, keeps the response as the record. A
+    target's addon declares the type its target makes, as a relation on
+    `webforms/response_record` in its `permissions.extends.zed`; a delivery
+    that returns a record of a type nobody declared fails. Forms
     are managed by platform admins and the `webforms_admin` role, from the
     console's forms, versions, addresses and responses.
   - **The public address** of a form is `forms/<alias>`, and it answers by what
@@ -81,9 +84,11 @@ live in code docstrings.
     with the `webform` envelope `Message.webform_submission()` reads, so
     `angee.intake` captures it. The claimed address in the envelope is the
     answer to the version's contact question when that question asks for an
-    email. Someone may point a form at a channel only if they may write on it,
-    and one channel and slug take one form: a second is refused when it is
-    configured, and by the table when two are saved at once.
+    email. The bridge declares `messaging/message` as a type a response can
+    become (`permissions.extends.zed`). Someone may point a form at a channel
+    only if they may write on it, and one channel and slug take one form: a
+    second is refused when it is configured, and by the table when two are
+    saved at once.
     A response is refused, and not tried again, as `channel_missing`,
     `message_exists` (the channel already holds a message under that
     submission's id which the response did not make) or `message_refused`. The

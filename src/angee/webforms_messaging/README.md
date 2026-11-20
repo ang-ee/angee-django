@@ -34,7 +34,11 @@ target_config:
 
 [`MessageTarget.deliver`](targets.py) hands the response to messaging's one
 ingest path (`Message.objects.ingest`) and returns the message, which the
-response links as the record it became.
+response links as the record it became. The bridge declares
+`messaging/message` as a type a response can become
+([`permissions.extends.zed`](permissions.extends.zed)): web forms links a
+response only to a record of a declared type, and when that message is deleted
+the response loses its personal answers and the link.
 
 A response is refused in three ways. Each is kept on the response as
 `refused: <code>`, where staff see it, and is not tried again by itself:
