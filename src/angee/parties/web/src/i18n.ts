@@ -212,6 +212,7 @@ export const enPartiesMessages: Record<string, string> = {
     "This view cannot tell which group each selected record is in. Merge three or more from a grouped list, or clear the grouping.",
   "merge.selection.noGroups": "No group holds two or more selected records.",
   "merge.selection.allRecords": "Group the list by what the duplicates share, then select all.",
+  "merge.selection.allRepeated": "Turn on \"Repeated values only\", then select all.",
   "merge.selection.allGrouping":
     "Select all merges records that share a name: group the list by a name field, not a date, a relation or another field, then select all.",
   "duplicates.title": "Merge duplicates",

@@ -40,12 +40,22 @@ export const ORGANIZATION_MERGE_GROUPS: MergeGroupsRead = { document: Organizati
  * Whether "Select all" can merge what the list matched, and by which field: one
  * group level whose single dimension is one of ``groups.fields`` (no date
  * bucket, no relation, no other field), since each set is the records that share
- * a value the dialog can show and mark. A flat list is refused with what to do.
+ * a value the dialog can show and mark, read with "Repeated values only" (the
+ * read's `having`), so it lists no group of one. A flat list is refused with what
+ * to do, and so is a grouping without repeated values only.
  */
+const ALL_MATCHING_REFUSALS = {
+  records: "merge.selection.allRecords",
+  grouping: "merge.selection.allGrouping",
+  repeated: "merge.selection.allRepeated",
+} as const;
+
 export function allMatchingField(
   allMatching: AllMatching, groups: MergeGroupsRead,
-): { field: string } | { refused: "records" | "grouping" } {
+): { field: string } | { refused: "records" | "grouping" | "repeated" } {
   if (allMatching.unit === "records") return { refused: "records" };
+  // Without "Repeated values only" the read lists every group of one too: as many requests as there are names.
+  if (!allMatching.read.having) return { refused: "repeated" };
   const [dimension, ...others] = allMatching.read.dimensions;
   const field = dimension?.key ?? dimension?.input;
   if (!field || others.length > 0 || dimension?.granularity || !groups.fields.includes(field)) {
@@ -162,7 +172,7 @@ export function MergeSelectionAction({
   const among = split?.kind === "ungrouped" && split.ids.length > 2 ? split.ids : null;
   const reason = everyGroup
     ? "refused" in everyGroup
-      ? t(everyGroup.refused === "records" ? "merge.selection.allRecords" : "merge.selection.allGrouping")
+      ? t(ALL_MATCHING_REFUSALS[everyGroup.refused])
       : undefined
     : single || pair || among || sets.length > 0
       ? undefined
