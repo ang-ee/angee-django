@@ -44,6 +44,11 @@ live in code docstrings.
   took 33 processes and 15.6 GiB on a 32-core host. `0` still opts into CPU
   count. A stack keeps the value its answers file records;
   `angee stack update --template --input serve_workers=<n>` changes it.
+- Addons require django-zed-rebac 0.37.0. On PostgreSQL, where an actor's grant profile
+  folds constant arms, each id set keeps one planner bound instead of one per arm, so a
+  role an actor does not hold costs it nothing; rows, decisions and statement counts are
+  unchanged. The member planner-memory ceilings are lowered to the new costs: person
+  351 to 327 MiB, selected 711 to 695 MiB (projects, connections and related keep theirs).
 - `@angee/ui`: `FormView` (and so `Form` and every registered form) takes an
   optional `renderUnavailable(id, unavailable)`: what a saved record's form
   shows when its id reads no record, given the default "Record unavailable"
