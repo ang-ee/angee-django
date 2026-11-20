@@ -681,10 +681,6 @@ export function useFormViewSurface({
     t,
     readOnly,
   });
-  const visibleRailGroups = React.useMemo(
-    () => visibleRecordRailGroups(railGroups, save.displayRecord, modelMetadata, railAdmits),
-    [railGroups, save.displayRecord, modelMetadata, railAdmits],
-  );
   const canonicalTabSelection = React.useMemo(
     () => refineFieldsFromPaths(["id", ...canonicalTabFields]),
     [canonicalTabFields],
@@ -794,8 +790,14 @@ export function useFormViewSurface({
     },
     [declaredGroupSequences, gridFields, gridGroups, isCreate, save.displayRecord, save.linesActive, sectionAdmits],
   );
-  const sectionValues = useWatch({ control: save.form.control, disabled: !hasConditionalFields });
-  const shownSections = hasConditionalFields ? visibleSections(allSections, sectionValues) : allSections;
+  // The values the sheet's sections and the rail decide their conditional fields by, watched while
+  // any field is conditional (`formFields` holds the rail's, so they count) and read only by those.
+  const conditionValues = useWatch({ control: save.form.control, disabled: !hasConditionalFields });
+  const shownSections = hasConditionalFields ? visibleSections(allSections, conditionValues) : allSections;
+  const visibleRailGroups = React.useMemo(
+    () => visibleRecordRailGroups(railGroups, save.displayRecord, conditionValues, modelMetadata, railAdmits),
+    [railGroups, save.displayRecord, conditionValues, modelMetadata, railAdmits],
+  );
   // A `pane` group fills its own pane beneath the sheet; every other section is the sheet.
   const sections = React.useMemo(() => shownSections.filter((section) => section.pane === undefined), [shownSections]);
   const paneSections = React.useMemo(() => shownSections.filter((section) => section.pane !== undefined), [shownSections]);
