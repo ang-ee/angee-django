@@ -689,14 +689,16 @@ class Party(
         when the survivor folds in an older record (:meth:`merge_fields`), so a
         survivor a person chose takes the earliest time of what it folds in. A
         tracked update compared in SQL: history records the move, and a party
-        already as old writes nothing, no version and no live event.
+        already as old writes nothing, no version and no live event. The stamp
+        only ever moves earlier, so a time no earlier than the one this instance
+        holds cannot move it, and is answered without a query.
 
         So a batch merge's "oldest" (``PartyManager.merge_duplicates``) is the
         source-oldest record. No reader of a party's ``created_at`` means "arrived
         here since" (``CreatedAtField`` names what was searched).
         """
 
-        if at is None:
+        if at is None or (self.created_at is not None and at >= self.created_at):
             return False
         now = timezone.now()
         at = min(at, now)
