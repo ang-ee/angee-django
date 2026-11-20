@@ -251,6 +251,7 @@ export const enPartiesMessages: Record<string, string> = {
   "duplicates.loading": "Reading the records…",
   "duplicates.error": "Could not read these records.",
   "duplicates.pageError": "Could not read the next page of sets; nothing can be merged until every page is read.",
+  "duplicates.rereadError": "Could not read these records again. Retry before merging.",
   "duplicates.retry": "Retry",
   "duplicates.loadedOf": "Loaded {loaded} of {total} sets…",
   "duplicates.totals": "{count} sets: {merge} will merge, {look} need a look.",

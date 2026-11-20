@@ -27,7 +27,8 @@ live in code docstrings.
   first render until every page is listed and previewed, and every dialog uses a
   preview only as it read it itself, fetched since it opened and not being read
   again: a reopened dialog reads its previews again rather than ticking from
-  cached ones.
+  cached ones. A preview read's error shows only while that read is enabled, as
+  the listing's does, so a disabled read never shows another reader's error.
 - `@angee/ui`: a record form's rail shows a field exactly when the sheet would:
   visible for the form's current values (`showWhen`, resolved through
   `resolve`) and not `hidden`, decided by the same `visibleFields` the draft
