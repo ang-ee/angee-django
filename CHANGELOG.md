@@ -616,6 +616,13 @@ live in code docstrings.
   reads already use; a request whose `variables` throw takes its error through
   `errorFromUnknown`, the one normaliser.
 
+- `@angee/refine`: `groupByVariables` returns a named shape, `GroupByVariables`,
+  in place of a plain record: `group_by`, `where`, `having`, `order_by`, `limit`,
+  `offset` and the `rows` members, as the builder sets them. A page handing them
+  to a generated groups document narrows `group_by` to its resource's own spec at
+  that one member and no longer casts the whole object; every other member is
+  assignable as it is. The built values are unchanged.
+
 - `angee.parties`: one owner proposes same-person pairs. A pull-only
   directory's contact that may only claim an address another live party is
   linked to proposes them through `Party.objects.propose_same_person_as_system`

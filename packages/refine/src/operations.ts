@@ -357,9 +357,28 @@ export function actionRequest(
   };
 }
 
-export function groupByVariables(
-  options: GroupByRequestOptions,
-): Record<string, unknown> {
+/**
+ * The variables of a `<resource>_groups` read, as {@link groupByVariables} builds them.
+ * The builder knows no schema, so a groupable field and a granularity are strings here:
+ * a caller handing the variables to a generated document narrows `group_by` to that
+ * resource's own spec at its schema boundary, and every other member is assignable as it
+ * is. A closed alias, not an interface, so it also passes where variables are a plain
+ * record and a misspelt member is an error.
+ */
+export type GroupByVariables = {
+  group_by: { field: string; granularity?: string }[];
+  where?: Record<string, unknown>;
+  having?: Record<string, unknown>;
+  order_by?: { field: string; direction?: GroupOrderDirection; nulls?: GroupNullsPosition | null }[];
+  limit?: number;
+  offset?: number;
+  /** Set with a `rows` request: each group carries its first page. */
+  with_rows?: true;
+  rows_limit?: number;
+  rows_order_by?: unknown;
+};
+
+export function groupByVariables(options: GroupByRequestOptions): GroupByVariables {
   return {
     group_by: options.dimensions.map(groupBySpecVariable),
     ...(options.where !== undefined ? { where: options.where } : {}),
@@ -576,16 +595,14 @@ function groupBucket(group: Record<string, unknown>): AggregateBucket {
   };
 }
 
-function groupBySpecVariable(
-  dimension: GroupDimension,
-): Record<string, string> {
+function groupBySpecVariable(dimension: GroupDimension): GroupByVariables["group_by"][number] {
   return {
     field: dimension.input,
     ...(dimension.granularity ? { granularity: dimension.granularity } : {}),
   };
 }
 
-function groupOrderVariable(order: GroupOrder): Record<string, unknown> {
+function groupOrderVariable(order: GroupOrder): NonNullable<GroupByVariables["order_by"]>[number] {
   return {
     field: order.field,
     ...(order.direction ? { direction: order.direction } : {}),
@@ -611,7 +628,7 @@ function extractMeasures(
 function paginationVariables(
   page: number | undefined,
   pageSize: number | undefined,
-): Record<string, number> {
+): Pick<GroupByVariables, "limit" | "offset"> {
   if (pageSize === undefined) return {};
   const limit = clampPageSize(pageSize);
   return {
