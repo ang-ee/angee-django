@@ -817,6 +817,37 @@ def test_a_pull_only_contact_adopts_the_person_its_email_names_when_the_owner_ow
 
 
 @pytest.mark.usefixtures("adoption")
+def test_a_directory_whose_owner_manages_contacts_adopts_a_person_they_neither_own_nor_edit(pull: Pull) -> None:
+    """The owner's ``adopt`` on the person admits it (``adoption_blocker``), and the contact manager role lends it."""
+
+    with system_context(reason="tests.directory.adoption.contact_manager"):
+        grant_role(actor=pull.directory.owner, role="parties/role:contact_manager")
+        person = _existing(_user("someone-else"))[0]
+    assert person.owner_id != pull.directory.owner.pk
+
+    pull.sync()
+
+    assert pull.link("ada").target_object_id == str(person.pk)
+
+
+@pytest.mark.usefixtures("adoption")
+def test_a_platform_admin_owner_adopts_only_once_the_platform_admins_are_granted_a_contact_role(pull: Pull) -> None:
+    """The documented condition: a role's members may be a userset, and granting the platform admins' set
+    (``angee/role:admin#member``) onto the contact manager role makes every platform admin a member, so every
+    directory, whose owner is a platform admin, adopts the people it names. Without that grant a platform-admin
+    owner adopts nobody it neither owns nor edits (``_refused_admin_owner``)."""
+
+    with system_context(reason="tests.directory.adoption.admin_set"):
+        grant_role(actor=pull.directory.owner, role="angee/role:admin")
+        person = _existing(_user("someone-else"))[0]
+        grant_role(actor=SubjectRef.of("angee/role", "admin", "member"), role="parties/role:contact_manager")
+
+    pull.sync()
+
+    assert pull.link("ada").target_object_id == str(person.pk)
+
+
+@pytest.mark.usefixtures("adoption")
 def test_an_adoption_through_another_spelling_lands_on_the_handle_that_found_the_person(pull: Pull) -> None:
     """The contact spells the address differently: its claim lands on the existing row, never a second one."""
 

@@ -260,7 +260,10 @@ export function DuplicatesDialog({
     : { limit: SETS_PAGE, after: lastPage?.after ?? null };
   const request = JSON.stringify(pageVariables);
   const listingDocument: AuthoredDocument = allGroups?.document ?? CertainSameAsPairs;
-  // The one cast at the schema boundary: a resource's groups read takes its own `group_by` enum, as the list sends it.
+  // The one cast at the schema boundary, and it cannot narrow to `group_by` alone: `groupByVariables` returns
+  // `Record<string, unknown>`, so `group_by` (each resource's own enum, `peopleGroupableField` or
+  // `organizationsGroupableField`) and `where`, `having` and `order_by` all arrive `unknown` to the generated
+  // variables; and `listingDocument`, one of three documents, is typed `AuthoredDocument`, whose variables are `never`.
   // The end-of-run invalidation reaches the listing's pages too, so a later dialog reads them again.
   const pageRead = useAuthoredQuery(listingDocument, pageVariables as never, {
     enabled: paged && !pagesDone, errorNotification: false, models: PARTY_MERGE_INVALIDATES,
@@ -270,7 +273,10 @@ export function DuplicatesDialog({
   // first; a disabled read, which may still answer from the cache, lists nothing and shows no error.
   const pageFresh = paged && pageRead.isFetchedAfterMount && !pageRead.isFetching;
   const pageData = pageFresh ? pageRead.data as ListedData | undefined : undefined;
-  const pageError = paged ? pageRead.error : null;
+  // The listing's error counts only while its read is enabled, as the previews' does: once every page is listed the
+  // read is disabled, and its key (the page past the last) may still hold an error another reader met.
+  const pageReadError = pageRead.error;
+  const pageError = paged && !pagesDone ? pageReadError : null;
   // Typed apart: any authored document types the read's data `undefined`, so checking it destructured beside
   // `refetch` would narrow `refetch` to `never`.
   const cachedPage = pageRead.data as ListedData | undefined;
@@ -351,6 +357,15 @@ export function DuplicatesDialog({
   // A disabled read is none this dialog made, though it may still answer from the cache, as the listing's.
   const previewFresh = previewEnabled && preview.isFetchedAfterMount && !preview.isFetching;
   const previewPage = previewFresh ? preview.data?.duplicate_set_previews : undefined;
+  // Its error counts only while the read is enabled, as its answers do and as the listing's error does: a disabled
+  // read may still hold the error another reader of the same query met. Read on every render, so the query reports
+  // its changes; a run disables the read, so a preview error met before the run is not shown during it.
+  const previewReadError = preview.error;
+  const previewError = previewEnabled ? previewReadError : null;
+  // What the banner shows, and what holds Confirm while it shows: the dialog does not ask the person to confirm what
+  // it has just said it could not read. A successful re-read clears it; a run disables both reads, so a run's own
+  // controls never see it.
+  const readError = previewError || pageError;
   const cachedPreview = preview.data;
   const previewReadHere = preview.isFetchedAfterMount;
   const previewReading = preview.isFetching;
@@ -474,9 +489,12 @@ export function DuplicatesDialog({
             <Alert tone="info">{t("duplicates.valueRule")} {t("duplicates.undo")}</Alert>
             {notes.map((note) => <Alert key={note} tone="info">{note}</Alert>)}
             {derived.error ? <ErrorBanner description={derived.error.message || t("duplicates.error")} /> : null}
-            {preview.error || pageError ? (
+            {readError ? (
               <ErrorBanner
-                description={t(live.length > 0 ? "duplicates.pageError" : "duplicates.error")}
+                // Said by what failed: a re-read of previews already shown, a page not yet shown, or the first read.
+                description={t(previewError && loaded
+                  ? "duplicates.rereadError"
+                  : live.length > 0 ? "duplicates.pageError" : "duplicates.error")}
                 actions={
                   <Button type="button" size="sm" variant="secondary"
                     onClick={() => void (pageError ? pageRead.refetch() : preview.refetch())}>
@@ -497,7 +515,7 @@ export function DuplicatesDialog({
                       total: allCertain && !pagesDone ? allCertain.total : formatNumber(sets.length),
                     })}
                 </Alert>
-                {preview.error || pageError ? null : <LoadingPanel density="inline" loadingLabel={t("duplicates.loading")} />}
+                {readError ? null : <LoadingPanel density="inline" loadingLabel={t("duplicates.loading")} />}
               </>
             ) : !run && !loaded && live.length > 0 ? (
               <Alert tone="info">
@@ -577,7 +595,7 @@ export function DuplicatesDialog({
                 <Button
                   type="button"
                   variant="primary"
-                  disabled={!loaded || sending.length === 0 || preview.isFetching}
+                  disabled={!loaded || sending.length === 0 || preview.isFetching || Boolean(readError)}
                   onClick={() => void submit()}
                 >
                   {t("duplicates.confirm", { count: sending.length })}

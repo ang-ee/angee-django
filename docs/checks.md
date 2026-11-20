@@ -29,6 +29,13 @@ membership, run native lock authoring in its declared image/workspace environmen
 with that same flag, then retain the project lock. Verification must not silently
 change manifests or lockfiles.
 
+A change that adds or edits a web fragment's or a package's `package.json` carries
+this repository's own `pnpm-lock.yaml` change with it. A stack's lock is a
+different file and does not prove it: author the repository's lock in a clean
+clone of the repository, never in a stack slot, and confirm
+`pnpm install --frozen-lockfile --lockfile-only` accepts it there before
+handing the change over.
+
 Commands below using `python -m` invoke the selected environment's modules; this
 is a portable convention, not a claim that ordinary tool entrypoints are broken.
 The pnpm examples disable automatic dependency installation during scripts.

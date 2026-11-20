@@ -30,6 +30,41 @@ live in code docstrings.
   declaration (`showWhen`, `resolve`); its rail row decides only how it
   presents, and one rail row never decides another's. The module-level
   `resolveDescriptorFields`, never exported from `@angee/ui`, is removed.
+- `angee.parties`: roles of its own, `parties/role` (`PartiesRole`):
+  `contact_reader`, `contact_manager` and `contact_admin` hold on every party,
+  and on the handles, addresses, relationships and circle memberships it holds
+  (through the party: a handle no party holds is no role's), and on every folder
+  and circle, what a per-record `reader`, `editor` and owner hold on one, but
+  for what a role's side effects would lend: a party merge takes the new
+  `merge_away` (`Party.MERGED_PERMISSION`) and a per-record read grant the new
+  `share` (`rebac_grantable` on parties and handles), which a contact admin
+  holds and a manager does not; no role writes a record task about a party;
+  and of an account's own person the roles read the identity alone. A contact
+  admin also reads every directory and shares its contacts
+  (`parties/directory#share`, which now manages `contact_reader`), and
+  connecting a directory stays with platform admins. Each choice is one line in
+  `parties/party`: `role_private` (a contact reader reads private fields: yes),
+  `role_delete` (a contact manager trashes a party, person or organization,
+  which is `delete`: no), `role_write_as_subject` (the roles read record tasks
+  about a party and write none), `role_merge_away` and `role_share` (merging a
+  party away and granting per-record reads are a contact admin's) and
+  `role_withheld` (of an account's own person the roles read the identity
+  alone). The batch merge's gate becomes
+  `batch_merge = merge_away & person->active_member`, so a contact manager, who
+  merges no party away, is offered no set. A deployment that grants the platform
+  admins' set onto a contact role makes every directory adopt, as documented and
+  tested. An actor who holds no contact role plans exactly as before; a contact
+  role holder plans one more `EXISTS` (on its role membership) in four of the five
+  planner-gate documents and the account exclusion once in each person, party and
+  organization statement, and stays within the gate's one-block allowance on every
+  document: cheaper than an `editor` grant on every party row for the person and
+  selected documents, a few percent dearer for connections and related. Revision 41.
+  `angee.knowledge`: the people vault takes the roles by install grant rows on
+  `knowledge/vault` relations named for them (`contact_reader`,
+  `contact_manager`, `contact_admin`); a contact admin removes the vault's
+  pages through the new `knowledge/vault#page_delete`, never the vault.
+  Knowledge revision 11, extends revision 9. Nobody holds a role until
+  a deployment grants it. Upgrade: `rebac sync`; load the install tier.
 - `angee.parties`: the batch dialog lists every group a list's "Select all N"
   matched by key, not by offset. It forwards the list's own groups read as the
   list sent it, order included (`AllMatchingGroups.read.orderBy`, always the
@@ -47,7 +82,8 @@ live in code docstrings.
   first render until every page is listed and previewed, and every dialog uses a
   preview only as it read it itself, fetched since it opened and not being read
   again: a reopened dialog reads its previews again rather than ticking from
-  cached ones.
+  cached ones. A preview read's error shows only while that read is enabled, as
+  the listing's does, so a disabled read never shows another reader's error.
 - `@angee/ui`: a record form's rail shows a field exactly when the sheet would:
   visible for the form's current values (`showWhen`, resolved through
   `resolve`) and not `hidden`, decided by the same `visibleFields` the draft
@@ -583,6 +619,66 @@ live in code docstrings.
   list's render that changes nothing it reads (a scroll frame) rebuilds no group
   model; it still corrects a group page set past its last.
 
+- `@angee/ui`: a list's range change (a scroll frame, and the virtualizer's report
+  that the scroll ended) renders the rows that enter its window and none that
+  stay. The flat body hands every row the same props across such a render: the
+  list's `rowHref` under its navigation scope is one function per scope (the
+  gallery's and board's card links too), the empty trailing cell a module
+  function, and each reorderable row's `reorder` is built once per row set. The
+  grouped body's item and header rows are memoised as `RecordRow` is, and a
+  header takes its group's records and selected count, so ticking a record
+  renders only its own groups' headers. `RecordRow` takes `cells`, the row's
+  visible cells, which both bodies pass: its memo kept stale cells when only the
+  shown columns changed, which the flat body's churning props had hidden and a
+  grouped row whose item stayed the same showed. The search box hands Base UI's
+  combobox the search's active items as they are, its items and item callbacks
+  stable, so a re-render with the search unchanged no longer renders its input
+  and chips a second time.
+
+- `@angee/ui`: `RecordRow`'s `cells` is required. A caller hands the row the
+  visible cells it draws (`row.getVisibleCells()`, which TanStack Table keeps per
+  row until a column is shown, hidden, moved or pinned); the row no longer reads
+  them itself as it renders, so no caller can bring back the stale cells its memo
+  held.
+
+- `@angee/ui`: a resource view hands its surfaces the same filter, grouping and
+  sorting until they change. Its validation, and a routed view's decode of its
+  search, built them anew on every change to the view, so showing or hiding a
+  field gave every surface a new group stack and filter and a grouped list
+  rebuilt its group model and items with no read; the view keeps each one while
+  its value holds (`useValueStable`).
+
+- `@angee/ui`: one owner for a list's virtual window options. The flat and
+  grouped surfaces give the same virtualizer their item count and size estimate,
+  and `useVirtualWindow`'s count and estimate are optional, defaulting to the
+  virtualizer's own, so a list body repeats neither. Debt: a surface whose
+  presentation attaches no scroll element (a board, a gallery, the pane list, a
+  collection tree) still creates that virtualizer, since every surface result
+  carries one and a hook cannot be skipped; with no element it stays idle,
+  observing and measuring nothing. Removing it needs the rows body to own the
+  virtualizer, the held move of the virtual window into the body.
+
+- `@angee/ui`: a list's range change no longer renders its table header. The flat
+  and grouped header rows are memoised and take the table's header groups, its
+  sorting, the selection state, the group chevron's groups and the visible fields,
+  each stable across a scroll; a sort, a field shown or hidden and a selection
+  still render them. The measure footer still renders with the body: it reads the
+  visible columns through the table, whose identity never changes.
+
+- `@angee/refine`, `@angee/ui`: a payload a collection source's `select` refuses
+  no longer throws in render. It is that read's error, reported as a failed read
+  is, once per settle of the read, through `useReportRefusedReads`, which
+  `@angee/refine` now exports beside `useDerivedBatch` and its facets and group
+  reads already use; a request whose `variables` throw takes its error through
+  `errorFromUnknown`, the one normaliser.
+
+- `@angee/refine`: `groupByVariables` returns a named shape, `GroupByVariables`,
+  in place of a plain record: `group_by`, `where`, `having`, `order_by`, `limit`,
+  `offset` and the `rows` members, as the builder sets them. A page handing them
+  to a generated groups document narrows `group_by` to its resource's own spec at
+  that one member and no longer casts the whole object; every other member is
+  assignable as it is. The built values are unchanged.
+
 - `angee.parties`: one owner proposes same-person pairs. A pull-only
   directory's contact that may only claim an address another live party is
   linked to proposes them through `Party.objects.propose_same_person_as_system`
@@ -976,7 +1072,7 @@ live in code docstrings.
   page with that address no longer claims an address nobody holds. The
   PostgreSQL lane runs the directory backend's lock tests by node (a page
   against mail ingestion, a merge, a confirmation and an account's adoption);
-  the module's strict expected failure (open decision O15) would read as a skip
+  the module's strict expected failure would read as a skip
   in that lane's zero-skip gate.
 
 - `angee.parties`: the confirm rule is keyed on the address, at the owner of the
@@ -1060,7 +1156,7 @@ live in code docstrings.
   used to bind any organization it was handed, unadmitted, before locking, and
   state its addresses in full there. A link keeps its own organization, and an
   unbound one mints. Matching an existing organization, and its admission rule,
-  come with the organizations stream (open decision O9). No caller outside the
+  come with the organizations stream. No caller outside the
   tests passes one today; no vendor stream lands organizations yet.
 
 - `angee.parties`: a claim stays a claim. An address a pull-only directory
@@ -1186,7 +1282,7 @@ live in code docstrings.
   `credential_blocker` (CardDAV's Basic-auth rule moved there), and an
   `admit_credential` override on a directory backend is no longer called.
 
-- A pull-only directory adopts an existing person (rulings R2 and R9; an option,
+- A pull-only directory adopts an existing person (an option,
   off by default, since the entry above): a contact
   with no person of its own or of a record it replaced lands on the first person
   its emails name (`people_for_emails`, preferred email first) whose adoption
@@ -1273,7 +1369,7 @@ live in code docstrings.
   directory's next sync, since the rule is looked up by key.
 
 - A person's merge never sets two live contacts of one pull-only directory on
-  one person (default pending ruling O16). A survivor takes every link of the
+  one person. A survivor takes every link of the
   records merged into it, and two bound, live links of one pull-only directory
   from different records would put two records the source keeps separate on one
   person, whose statements overwrite each other on every sync:

@@ -459,3 +459,43 @@ test("a source's batch selects again only the request whose read changed", async
   expect(result.current.get("page-1")).toBe(first);
   expect(select).toHaveBeenCalledTimes(selected + 1);
 });
+
+test("a payload a source's select refuses is that read's error, reported once per read, and nothing throws", async () => {
+  // The second page comes back without its total.
+  const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
+    const { request } = meta?.gqlVariables as { request: CollectionPageRequest };
+    const rows = [{ id: `row-${request.page}`, title: `Row ${request.page}` }];
+    return { data: { page: request.page === 2 ? { rows } : { rows, total: 6 } } };
+  });
+  const strict = collectionQuery({
+    document: PageDocument,
+    variables: (request: CollectionPageRequest) => ({ request }),
+    select: (data) => {
+      if (typeof data.page.total !== "number") throw new Error("The page has no total");
+      return data.page;
+    },
+  });
+  const notify = vi.fn();
+  const requests = [1, 2].map((page) => ({ key: `page-${page}`, filter: undefined, order: undefined, page, pageSize: 3 }));
+  // The same reads through another source, which takes the page as it is.
+  const { result, rerender } = renderHook(() => ({
+    strict: useCollectionQueryBatch(strict, requests),
+    other: useCollectionQueryBatch(source.rows, requests),
+  }), {
+    wrapper: ({ children }) => <Provider providerNames={[]} dataProvider={{ custom }}
+      notificationProvider={{ open: notify, close: vi.fn() }}>{children}</Provider>,
+  });
+  await waitFor(() => expect(result.current.strict.get("page-2")?.error?.message).toBe("The page has no total"));
+  expect(result.current.strict.get("page-2")?.data).toBeUndefined();
+  expect(result.current.strict.get("page-1")).toMatchObject({ data: { total: 6 }, error: null });
+  expect(result.current.other.get("page-2")).toMatchObject({ data: { rows: [{ id: "row-2" }] }, error: null });
+  const refused = () => notify.mock.calls.filter(([params]) => params.description === "The page has no total");
+  await waitFor(() => expect(refused()).toHaveLength(1));
+  expect(refused()[0]![0]).toMatchObject({ type: "error" });
+  // A render reports it no more; the read settling again is a new read.
+  rerender();
+  expect(refused()).toHaveLength(1);
+  await act(async () => { result.current.strict.get("page-2")!.refetch(); });
+  await waitFor(() => expect(custom).toHaveBeenCalledTimes(3));
+  await waitFor(() => expect(refused()).toHaveLength(2));
+});

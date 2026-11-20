@@ -2900,7 +2900,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
         A pair is certain when both are people and neither is an account's own
         person, ``actor`` may merge both in a batch (``batch_merge``: an active
-        person account that writes them), both bear a real name that is none of the
+        person account that may merge each away), both bear a real name that is none of the
         pair's cited addresses (``Party.names_an_address``) and equals the other's
         but for case, accents and hyphens (``Party.comparable_name``), and exactly
         these two parties are linked to an address the pair cites
@@ -2950,10 +2950,11 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         ]
 
     def batch_mergeable(self, actor: Any, ids: Iterable[Any]) -> set[Any]:
-        """The parties among ``ids`` that ``actor`` may merge in a batch: an active person who writes them.
+        """The parties among ``ids`` that ``actor`` may merge in a batch: an active person who may merge them away.
 
-        The party's ``batch_merge`` permission (``write & person->active_member``),
-        so a service or agent account may merge none.
+        The party's ``batch_merge`` permission (``merge_away & person->active_member``),
+        so a service or agent account may merge none, and a contact manager, who
+        writes every party but merges none away, is offered none.
         """
 
         # Read on the party, the owner of the permission, whichever model's manager the caller used.
@@ -3909,10 +3910,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         separate on one person, and the directory's statements, keyed by its
         integration, would overwrite each other on every sync. A tombstoned or
         withdrawn link counts for nothing, and a pair already on one record is
-        not this merge's. Any other merge is the merging person's to make: an
-        account's own person, or a person a two-way card names, included
-        (default pending the architect's ruling, O16). ``None`` when nothing
-        refuses.
+        not this merge's. Any other merge is the merging person's to make, an
+        account's own person or a person a two-way card names included. ``None``
+        when nothing refuses.
         """
 
         ids = [survivor.pk, *(row.pk for row in merged)]
@@ -3942,15 +3942,17 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         """Return why ``link``'s directory may not bind its contact ``parsed`` to the existing ``person``, or ``None``.
 
         Adopting a person is an access change: the directory becomes one of their
-        statement sources and its contact readers read them. Every limit must hold
-        (rulings R2 and R9), each read from rows loaded here under the contact
+        statement sources and its contact readers read them. Every limit must hold,
+        each read from rows loaded here under the contact
         locks the caller holds, never from the objects passed in: the link's
         stream is pull-only; the person is live (neither trashed nor merged away)
         and no account's own; no address the contact carries is a person
         account's sign-in address in any spelling (``lookup.sign_in``), whichever
         address found the person and whether or not the account has a person;
-        the directory's owner holds ``adopt`` on them (their owner or an editor of their party:
-        no platform-admin arm), checked for that user though sync runs as system
+        the directory's owner holds ``adopt`` on them (their owner, an editor of their party or a
+        stored member of the contact manager or admin role: no platform-admin arm, so a platform
+        admin adopts only once a deployment grants the platform admins' set onto one of those
+        roles, after which every directory adopts), checked for that user though sync runs as system
         work; no other contact of the directory names them, a tombstoned one
         included, since its statements are keyed by integration, not by link
         (the links of the records ``replaces`` folded into this one are this

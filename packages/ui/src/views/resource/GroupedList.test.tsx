@@ -2,10 +2,10 @@
 
 import * as React from "react";
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { getCoreRowModel, useReactTable, type Row as TableRowModel } from "@tanstack/react-table";
+import { getCoreRowModel, useReactTable, type Cell as TableCellModel, type Row as TableRowModel } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Row } from "@angee/metadata";
-import { expect, test, vi } from "vitest";
+import { expect, expectTypeOf, test, vi } from "vitest";
 
 import { GroupedListBody } from "./GroupedList";
 import { ResourceViewProvider, useResourceView } from "./resource-view-context";
@@ -189,6 +189,47 @@ function GroupedRecordHarness({ selectable, expanded = true, onSetExpanded = () 
   );
 }
 
+const NO_KEYS: ReadonlySet<string> = new Set();
+const ignore = () => undefined;
+const visibilityColumns = [{ id: "title", accessorKey: "title", header: "title" }, { id: "status", accessorKey: "status", header: "status" }];
+const visibilityData = [{ id: "r1", title: "Hello", status: "Open" }];
+
+/** The same items and callbacks every render: only the table's column visibility changes. */
+function VisibilityHarness({ columnVisibility }: { columnVisibility: Record<string, boolean> }): React.ReactElement {
+  const resourceView = useResourceView();
+  const table = useReactTable<Row>({ data: visibilityData, columns: visibilityColumns, state: { columnVisibility },
+    getCoreRowModel: getCoreRowModel(), getRowId: (record) => String(record.id) });
+  const row = table.getRowModel().rows[0]!;
+  const tableScrollRef = React.useRef<HTMLDivElement>(null);
+  const listItems = React.useMemo<GroupedListItem<Row>[]>(() => [
+    { kind: "groupHeader", bucketKey: "open", depth: 0, label: "Open", count: 1, expandable: true, expanded: true,
+      bucket: { key: { status: "Open" }, count: 1 } },
+    { kind: "record", itemKey: "open:r1", row,
+      nav: { filter: undefined, order: undefined, page: 1, pageSize: 20, rows: [], total: 1, fetching: false },
+      place: { page: "open:1", path: [{ group: { field: "status" }, key: "Open", label: "Open", position: 0, bucketKey: "open", page: "statuses:1" }] } },
+  ], [row]);
+  const rowVirtualizer = useVirtualizer({ count: listItems.length, getScrollElement: () => tableScrollRef.current,
+    estimateSize: (index) => estimateGroupedItemSize(listItems[index]) });
+  return (
+    <GroupedListBody
+      table={table} tableColumns={visibilityColumns} visibleColumnCount={table.getVisibleLeafColumns().length}
+      resourceView={resourceView} listItems={listItems} tableScrollRef={tableScrollRef} rowVirtualizer={rowVirtualizer}
+      footerAggregate={null} measures={[]} expandedKeys={NO_KEYS} toggleGroup={ignore} setGroupsExpanded={ignore}
+      setScopePage={ignore} setScopePageSize={ignore} selectedIds={NO_KEYS} interactive emptyContent="Empty" fetching={false} error={null}
+    />
+  );
+}
+
+test("a grouped record row draws the columns shown when only the table's column visibility changes", () => {
+  const view = render(<ResourceViewProvider scope="local"><VisibilityHarness columnVisibility={{}} /></ResourceViewProvider>);
+  const cells = () => screen.getByText("Hello").closest("tr")!.querySelectorAll("td").length;
+  expect(screen.getByText("Open", { selector: "td" })).toBeTruthy();
+  const shown = cells();
+  view.rerender(<ResourceViewProvider scope="local"><VisibilityHarness columnVisibility={{ status: false }} /></ResourceViewProvider>);
+  expect(cells()).toBe(shown - 1);
+  expect(screen.queryByText("Open", { selector: "td" })).toBeNull();
+});
+
 test("a grouped record row reserves the leading chevron column when selection is off", () => {
   const { container } = render(
     <ResourceViewProvider scope="local">
@@ -215,11 +256,18 @@ function FlatRecordRow({ selectable }: { selectable: boolean }): React.ReactElem
   return (
     <table>
       <tbody>
-        <RecordRow row={row} selected={false} onToggleSelected={() => undefined} interactive selectable={selectable} />
+        <RecordRow row={row} cells={row.getVisibleCells()} selected={false} onToggleSelected={() => undefined} interactive
+          selectable={selectable} />
       </tbody>
     </table>
   );
 }
+
+test("a record row is handed the visible cells it draws, so no caller has it read them as it renders", () => {
+  type RecordRowProps = React.ComponentProps<typeof RecordRow<Row>>;
+  expectTypeOf<Omit<RecordRowProps, "cells">>().not.toExtend<RecordRowProps>();
+  expectTypeOf<RecordRowProps["cells"]>().toEqualTypeOf<readonly TableCellModel<Row, unknown>[]>();
+});
 
 test("a non-selectable flat record row emits no leading column cell", () => {
   render(<FlatRecordRow selectable={false} />);
