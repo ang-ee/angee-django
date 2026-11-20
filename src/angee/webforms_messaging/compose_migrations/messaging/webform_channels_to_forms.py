@@ -29,14 +29,21 @@ form's, when another form already has its address, or when it holds a schema or
 a published flag without a slug. Every refusal is raised together. Change the
 channel on the previous release, then apply the migration again.
 
-Not carried over, and reported in the log: a channel's ``max_body_bytes`` and
-``max_field_bytes`` when it changed either (a form's limits are its
-definition's and the deployment's ``ANGEE_WEBFORM_*`` bounds), and the form
-columns of a channel with another backend, which never served a form.
+Not carried over, and each reported in the log with its channel's public id: a
+channel's ``max_body_bytes`` and ``max_field_bytes`` when it changed either (a
+form's limits are its definition's and the deployment's ``ANGEE_WEBFORM_*``
+bounds); a field's ``title`` beside its ``label``, which the form never showed;
+a disabled option; the form columns of a channel with another backend, which
+never served a form; and the form a channel holds when a form already posts on
+that channel.
 
-Running it again makes nothing twice: a channel whose form exists is left as it
-is. The upgrade is **irreversible**: a definition is not written back as a
-FormSpec.
+No ``Response`` is made: the submissions a channel received stay the messages
+they are. Running it again makes nothing twice: a channel a form already posts
+on is left as it is. The upgrade is **irreversible**: a definition is not
+written back as a FormSpec.
+
+``manage.py check_webform_channels`` runs the same judgment (:func:`planned_moves`)
+before ``migrate`` and prints what would be refused, changing nothing.
 
 Every row is read and written through historical models, as a data migration's
 are, so no verb of a form runs here. The template applies the rule the verbs
@@ -51,12 +58,12 @@ from __future__ import annotations
 
 import logging
 from html import escape
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
 from django.apps import apps as installed_apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import migrations
+from django.db import connections, migrations
 from django.db.backends.base.schema import BaseDatabaseSchemaEditor
 from django.db.migrations.state import StateApps
 from django.utils import timezone
@@ -89,16 +96,31 @@ class FormNotMovable(ValueError):
     """A channel's form cannot become a web form as it is stored."""
 
 
-def definition_from_form_spec(schema: Any, *, title: str) -> dict[str, Any]:
-    """Return the definition that asks what a stored FormSpec asks, every text one plain string.
+class Plan(NamedTuple):
+    """What the move would do: the rows to write, the channels it refuses, and what it leaves out."""
+
+    moves: list[tuple[Any, Any, Any]]
+    """One unsaved ``(form, version or None, alias)`` per channel that becomes a form."""
+    refusals: list[str]
+    """One line per channel that cannot become a form, with its public id and the reason."""
+    reports: list[str]
+    """One line per fact that is not carried over, with its channel's public id."""
+
+
+def definition_from_form_spec(schema: Any, *, title: str) -> tuple[dict[str, Any], list[str]]:
+    """Return the definition that asks what a stored FormSpec asks, and what it leaves out.
 
     What carries over: a ``string`` field as a text answer (``widget`` ``email``
     or ``textarea`` makes it an email address or a long text), ``number`` and
     ``boolean`` fields, a ``string`` field's ``enum`` or ``options`` as a
-    dropdown (a disabled option is not offered), ``label`` or else ``title``,
-    ``description``, ``placeholder``, ``maxLength``, ``minimum`` and ``maximum``,
-    the root ``required`` and ``propertyOrder``, and the ``success`` copy as the
-    form's thank-you text. A field without a label shows its name.
+    dropdown, ``label`` or else ``title``, ``description``, ``placeholder``,
+    ``maxLength``, ``minimum`` and ``maximum``, the root ``required`` and
+    ``propertyOrder``, and the ``success`` copy as the form's thank-you text.
+    Every text is one plain string. A field without a label shows its name.
+
+    Left out, and named in the second value: a ``title`` beside a ``label``
+    (the label is what the form showed) and a disabled option (a form offers
+    only what can be chosen).
 
     Anything else raises :class:`FormNotMovable`: an ``integer`` (a number
     question also admits fractions), a read-only, hidden or defaulted field, a
@@ -118,7 +140,8 @@ def definition_from_form_spec(schema: Any, *, title: str) -> dict[str, Any]:
     undeclared = sorted(str(name) for name in required if name not in properties)
     if undeclared:
         raise FormNotMovable(f"it requires {', '.join(undeclared)}, which it does not declare")
-    elements = [_question(name, properties[name], required=name in required) for name in order]
+    left_out: list[str] = []
+    elements = [_question(name, properties[name], required=name in required, left_out=left_out) for name in order]
     if sum(element.get("inputType") == "email" for element in elements) > 1:
         raise FormNotMovable("it declares more than one email field")
     definition: dict[str, Any] = {"title": title, "elements": elements}
@@ -133,24 +156,27 @@ def definition_from_form_spec(schema: Any, *, title: str) -> dict[str, Any]:
     )
     if thanks:
         definition["completedHtml"] = thanks
-    return definition
+    return definition, left_out
 
 
-def version_from_form_spec(schema: Any, *, title: str, language: str, published: bool) -> dict[str, Any]:
-    """Return the content of the one-language version a stored FormSpec becomes, judged by the web forms' rule.
+def version_from_form_spec(
+    schema: Any, *, title: str, language: str, published: bool,
+) -> tuple[dict[str, Any], list[str]]:
+    """Return the content of the one-language version a stored FormSpec becomes, and what it leaves out.
 
-    A published form's version states every question personal, because a
-    FormSpec never said which are, and must be ready to serve
-    (``validate_publishable``). An unpublished one states nothing yet and must
-    only hold together (``validate_version``). The schema's email field is the
-    contact question. What the rule refuses raises :class:`FormNotMovable` with
-    the rule's own words: a choice whose value is not a code, an element named
-    as a submission names its own keys, markup a form does not store.
+    The content is judged by the web forms' own rule. A published form's
+    version states every question personal, because a FormSpec never said which
+    are, and must be ready to serve (``validate_publishable``). An unpublished
+    one states nothing yet and must only hold together (``validate_version``).
+    The schema's email field is the contact question. What the rule refuses
+    raises :class:`FormNotMovable` in the rule's own words: a choice whose value
+    is not a code, an element named as a submission names its own keys, markup a
+    form does not store.
     """
 
-    definition = definition_from_form_spec(schema, title=title)
+    definition, left_out = definition_from_form_spec(schema, title=title)
     asked = definition["elements"]
-    content = {
+    content: dict[str, Any] = {
         "definition": definition,
         "languages": [language],
         "default_language": language,
@@ -161,7 +187,7 @@ def version_from_form_spec(schema: Any, *, title: str, language: str, published:
         (validate_publishable if published else validate_version)(**content)
     except ValidationError as error:
         raise FormNotMovable(_reasons(error)) from error
-    return content
+    return content, left_out
 
 
 def _reasons(error: ValidationError) -> str:
@@ -178,13 +204,13 @@ def _only(holder: dict[str, Any], sayable: frozenset[str], what: str) -> None:
         raise FormNotMovable(f"{what} declares {', '.join(unsaid)}, which a web form does not say")
 
 
-def _question(name: str, field: Any, *, required: bool) -> dict[str, Any]:
-    """Return the question one FormSpec field becomes."""
+def _question(name: str, field: Any, *, required: bool, left_out: list[str]) -> dict[str, Any]:
+    """Return the question one FormSpec field becomes, adding to ``left_out`` what it does not carry."""
 
     if not isinstance(field, dict):
         raise FormNotMovable(f"field {name!r} is not an object")
     _only(field, FIELD_KEYS, f"field {name!r}")
-    choices = _choices(name, field)
+    choices = _choices(name, field, left_out=left_out)
     kind, widget = field.get("type", "string" if choices is not None else None), field.get("widget", "")
     if not isinstance(widget, str):
         raise FormNotMovable(f"field {name!r} names no widget")
@@ -200,6 +226,8 @@ def _question(name: str, field: Any, *, required: bool) -> dict[str, Any]:
         shown = f" shown as {widget!r}" if widget else ""
         offered = " with choices" if choices is not None else ""
         raise FormNotMovable(f"field {name!r} is {kind!r}{shown}{offered}, which no question answers the same way")
+    if "label" in field and "title" in field:
+        left_out.append(f"field {name!r} has a title beside its label, which the form never showed")
     said = {
         "title": field.get("label", field.get("title")),
         "description": field.get("description"),
@@ -214,7 +242,7 @@ def _question(name: str, field: Any, *, required: bool) -> dict[str, Any]:
     return question
 
 
-def _choices(name: str, field: dict[str, Any]) -> list[dict[str, Any]] | None:
+def _choices(name: str, field: dict[str, Any], *, left_out: list[str]) -> list[dict[str, Any]] | None:
     """Return the choices a field offers, or ``None`` when it offers none."""
 
     options, values = field.get("options"), field.get("enum")
@@ -231,6 +259,9 @@ def _choices(name: str, field: dict[str, Any]) -> list[dict[str, Any]] | None:
         for option in options
     ):
         raise FormNotMovable(f"field {name!r} has an option that is not a value, a label and a disabled flag")
+    disabled = sum(bool(option.get("disabled")) for option in options)
+    if disabled:
+        left_out.append(f"field {name!r} has {disabled} disabled option(s), which a form does not offer")
     return [{"value": option["value"], "text": option["label"]} for option in options if not option.get("disabled")]
 
 
@@ -244,38 +275,58 @@ def _checked(row: Any, *, exclude: tuple[str, ...] = ()) -> Any:
     return row
 
 
-def move_webform_channels(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:
-    """Make the form, version and address of every webform channel that holds a form, or refuse them all."""
+def _public_id(pk: Any) -> str:
+    """Return a channel's public id. ``sqid`` is no column, so migration state has no field for it."""
 
-    using = schema_editor.connection.alias
+    field = cast(SqidField, installed_apps.get_model("messaging", "Channel")._meta.get_field("sqid"))
+    return field.public_id_from_value(pk)
+
+
+def planned_moves(apps: StateApps, using: str) -> Plan:
+    """Judge every channel that holds a form and return what the move would do, writing nothing.
+
+    ``apps`` is the migration state in which ``messaging.Channel`` still has its
+    form columns and the web forms' models exist. Forms and addresses a database
+    already holds are read when their tables exist; before the web forms' own
+    migration is applied there are none.
+    """
+
     channels = apps.get_model("messaging", "Channel")._base_manager.using(using)
     forms = apps.get_model("webforms", "Form")._base_manager.using(using)
     versions = apps.get_model("webforms", "FormVersion")._base_manager.using(using)
     aliases = apps.get_model("webforms", "FormAlias")._base_manager.using(using)
-    # ``sqid`` is not a column, so migration state does not carry it: the installed field is the codec.
-    identity = cast(SqidField, installed_apps.get_model("messaging", "Channel")._meta.get_field("sqid"))
+    tables = set(connections[using].introspection.table_names())
+    moved: set[Any] = set()
+    taken: set[str] = set()
+    if forms.model._meta.db_table in tables:
+        moved = {
+            config.get("channel")
+            for config in forms.filter(target_class="message").order_by("pk").values_list("target_config", flat=True)
+            if isinstance(config, dict)
+        }
+    if aliases.model._meta.db_table in tables:
+        taken = set(aliases.order_by("pk").values_list("slug", flat=True))
     language = settings.LANGUAGE_CODE
-    moved = {
-        config.get("channel")
-        for config in forms.filter(target_class="message").order_by("pk").values_list("target_config", flat=True)
-        if isinstance(config, dict)
-    }
-    taken = set(aliases.order_by("pk").values_list("slug", flat=True))
     facts = ("pk", "display_name", *FORM_COLUMNS)
+    plan = Plan([], [], [])
 
     for channel in channels.exclude(backend_class="webform").order_by("pk").values(*facts):
         if channel["slug"] or channel["is_published"] or channel["form_schema"] != EMPTY_SCHEMA:
-            logger.warning(
-                "Channel %s (%s) is not a webform channel and never served a form: its form columns are dropped.",
-                identity.public_id_from_value(channel["pk"]), channel["display_name"],
+            plan.reports.append(
+                f"Channel {_public_id(channel['pk'])} ({channel['display_name']}) is not a webform channel and "
+                "never served a form: its form columns are dropped."
             )
 
-    planned: list[tuple[Any, Any, Any]] = []
-    refusals: list[str] = []
     for channel in channels.filter(backend_class="webform").order_by("pk").values(*facts):
-        public_id, slug, schema = identity.public_id_from_value(channel["pk"]), channel["slug"], channel["form_schema"]
-        published = bool(channel["is_published"])
-        if public_id in moved or not (slug or published or schema != EMPTY_SCHEMA):
+        slug, schema, published = channel["slug"], channel["form_schema"], bool(channel["is_published"])
+        if not (slug or published or schema != EMPTY_SCHEMA):
+            continue
+        public_id = _public_id(channel["pk"])
+        named = f"{public_id} ({channel['display_name'] or slug})"
+        if public_id in moved:
+            plan.reports.append(
+                f"Channel {named} already has a form that posts on it: the form it holds is left behind."
+            )
             continue
         try:
             if not slug:
@@ -288,8 +339,9 @@ def move_webform_channels(apps: StateApps, schema_editor: BaseDatabaseSchemaEdit
             ))
             address = _checked(aliases.model(slug=slug), exclude=("form",))
             version = None
+            left_out: list[str] = []
             if published or schema != EMPTY_SCHEMA:
-                content = version_from_form_spec(
+                content, left_out = version_from_form_spec(
                     schema, title=channel["display_name"] or slug, language=language, published=published,
                 )
                 version = _checked(
@@ -297,19 +349,29 @@ def move_webform_channels(apps: StateApps, schema_editor: BaseDatabaseSchemaEdit
                     exclude=("form",),
                 )
         except FormNotMovable as refusal:
-            refusals.append(f"channel {public_id} ({channel['display_name'] or slug}): {refusal}")
+            plan.refusals.append(f"channel {named}: {refusal}")
             continue
         taken.add(slug)
-        planned.append((form, version, address))
+        plan.moves.append((form, version, address))
+        plan.reports.extend(f"Channel {named}: {note}: left out." for note in left_out)
         if (channel["max_body_bytes"], channel["max_field_bytes"]) != DEFAULT_BYTE_LIMITS:
-            logger.warning(
-                "Channel %s (%s) limited a submission to %s bytes and an answer to %s: neither is carried over.",
-                public_id, channel["display_name"], channel["max_body_bytes"], channel["max_field_bytes"],
+            plan.reports.append(
+                f"Channel {named} limited a submission to {channel['max_body_bytes']} bytes and an answer to "
+                f"{channel['max_field_bytes']}: neither is carried over."
             )
-    if refusals:
-        raise FormNotMovable("These webform channels cannot become forms as they are:\n" + "\n".join(refusals))
+    return plan
 
-    for form, version, address in planned:
+
+def move_webform_channels(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:
+    """Make the form, version and address of every webform channel that holds a form, or refuse them all."""
+
+    using = schema_editor.connection.alias
+    plan = planned_moves(apps, using)
+    for report in plan.reports:
+        logger.warning(report)
+    if plan.refusals:
+        raise FormNotMovable("These webform channels cannot become forms as they are:\n" + "\n".join(plan.refusals))
+    for form, version, address in plan.moves:
         form.save(using=using)
         if version is not None:
             version.form_id = form.pk
