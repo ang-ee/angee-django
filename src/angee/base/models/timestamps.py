@@ -34,7 +34,10 @@ class CreatedAtField(models.DateTimeField):
     again. A save holds the time for each of Django's ``pre_save`` calls of its
     insert (one finds expressions, one builds the statement), and a multi-table
     child's save keeps it on the parent table that holds the column; a bulk
-    insert calls :meth:`pre_save` once per row and takes each row's own.
+    insert calls :meth:`pre_save` once per row and takes each row's own. Only
+    those two keep it: an insert made by calling ``save_base`` directly, without
+    ``save``, gives the stated time to the call that finds expressions and stamps
+    the statement with now, so the row and the instance both hold now.
     Fixtures loaded raw keep the values they carry, as Django always did: a raw
     save never calls :meth:`pre_save`. A save of an existing row stamps nothing.
     History's ``+`` snapshot reads the stored row, so it carries the stated time,
