@@ -10,9 +10,11 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
-- `@angee/ui`: in a record form, a field a preset hides is dropped from the
-  draft; if the form was loaded with a different value for it, the save writes
-  the preset's value. Choosing another kind and then the stored one again is
+- `@angee/ui`: in a record form, the targets a preset hides are dropped from
+  the draft, and on save each preset field whose value changed writes its
+  preset's value for every target that is hidden now and was loaded with a
+  different value. `prefill` is now also called when the form is saved, so it
+  must be pure. Choosing another kind and then the stored one again is
   therefore clean instead of dirty with nothing to save. `prefillReplace` is
   documented as what it is: the fields `prefillPreserveDirty` still replaces.
 - `@angee/ui`: a person's color scheme has one writer and a first-paint cache

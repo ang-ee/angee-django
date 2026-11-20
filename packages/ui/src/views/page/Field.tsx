@@ -57,26 +57,27 @@ export interface FieldDescriptor extends FieldPresentation {
   editOnly?: boolean;
   /** Create-form seed for this field, submitted even when `readOnly`/`createOnly` (see `FieldProps.defaultValue`). */
   defaultValue?: unknown;
-  /** Render and submit this field only when the predicate matches form values, save what a preset that hid it writes (see `prefill`). */
+  /** Render and submit this field only when the predicate matches form values, save what a changed preset writes for it (see `prefill`). */
   showWhen?: (values: Row) => boolean;
   /** Keep this field in form values and mutation data without rendering a control. */
   hidden?: boolean;
   /** Resolve implementation-dependent presentation from current form values. */
   resolve?: (values: Row) => FieldDescriptor;
   /**
-   * The preset this field loads onto sibling fields, from its value, the form's current values and
-   * the values the form was loaded with (this field's scope in a nested form), so a preset may
-   * derive from siblings or give a sibling its loaded value back. It is called when the field
-   * changes and when the form is saved; it must not have effects.
-   * In a record form, a field a preset hides is dropped from the draft; if the form was loaded with
-   * a different value for it, the save writes the preset's value.
+   * The preset this field loads onto sibling fields when it changes, from its value, the form's
+   * current values and the values the form was loaded with (this field's scope in a nested form),
+   * so a preset may derive from siblings or give a sibling its loaded value back; in a record form
+   * the targets it hides are dropped from the draft.
+   * On save, each preset field whose value changed writes its preset's value for every target that
+   * is hidden now and was loaded with a different value, in declaration order (the later wins).
+   * `prefill` therefore also runs at save and must be pure.
    */
   prefill?: (value: unknown, values: Row, loaded?: Row) => Record<string, unknown> | null | undefined;
   /** Keep dirty sibling values when applying a preset, except for names explicitly replaced below. */
   prefillPreserveDirty?: boolean;
   /**
    * The preset fields `prefillPreserveDirty` still replaces when dirty (private implementation
-   * configuration, say), and the only ones it writes for a field it hides; without
+   * configuration, say), and the only ones it writes on save for a hidden target; without
    * `prefillPreserveDirty` a preset replaces every field it names.
    */
   prefillReplace?: readonly string[];

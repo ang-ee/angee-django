@@ -628,7 +628,6 @@ test("bound descriptors scope prefill, null, errors and readonly to the declarin
     name: "operation",
     label: "Operation",
     prefill: () => ({ config: { mode: "fresh" } }),
-    prefillReplace: ["config"],
   };
   const optional: DescriptorField = {
     name: "optional", label: "Optional", nullable: true, omittable: true,
@@ -665,7 +664,6 @@ test("a preset that gives a sibling its loaded value back leaves the form clean,
       loadedSeen.push(loaded);
       return { config: loaded !== undefined && value === loaded.kind ? loaded.config : {} };
     },
-    prefillReplace: ["config"],
   };
   const f = await fixture({
     acknowledgedSource: source,
@@ -700,7 +698,6 @@ const presetFields: readonly FieldDescriptor[] = [
     prefill: (value, _values, loaded) => ({
       settings: loaded !== undefined && value === loaded.kind ? loaded.settings ?? {} : {},
     }),
-    prefillReplace: ["settings"],
   },
   { name: "settings", label: "Settings", widget: "json", showWhen: (values) => values.kind === "rich" && values.mode !== "off" },
   { name: "settings.a", label: "A", showWhen: (values) => values.kind === "split" },
@@ -846,7 +843,7 @@ test("a preset leaves alone what it did not set: an edit hidden by a plain chang
   expect((await screen.findByLabelText("Detail") as HTMLInputElement).value).toBe("edited");
 });
 
-test("a preset that seeds a parent no field declares, of declared children, remembers and writes nothing for it", async () => {
+test("a preset that seeds a parent no field declares, of declared children, writes nothing for it", async () => {
   const fields = presetFields.filter((field) => field.name !== "settings");
   const loose = await presetForm({ kind: "plain" }, { fields });
   await chooseKind("split");
@@ -932,22 +929,31 @@ test("a dirty-preserving preset keeps an edit it skips even where its change hid
   expect(preserving.update).toHaveBeenCalledWith(expect.objectContaining({ variables: { provider: "none" } }));
 });
 
-test("a field a preset dropped and shown again without a seed holds its loaded value, its control not rendered", async () => {
-  const kind: DescriptorField = {
-    name: "kind", label: "Kind",
-    // Leaving the loaded kind empties the settings; coming back seeds nothing.
-    prefill: (value, _values, loaded) => value === loaded?.kind ? null : { settings: {} },
-  };
-  const f = await fixture({
-    resourceMetadata: presetResource,
-    record: { kind: "rich", settings: { depth: 2 } },
-    viewFields: [
-      { name: "title", label: "Title" }, { name: "kind", label: "Kind" },
-      { name: "settings", label: "Settings", widget: "json", showWhen: (values) => values.kind === "rich" },
-    ],
-    mountedFields: ["title"],
-    boundFields: [{ field: kind }],
+// Leaving the loaded kind empties the settings; coming back seeds nothing.
+const leavingEmpties: FieldDescriptor["prefill"] = (value, _values, loaded) => value === loaded?.kind ? null : { settings: {} };
+const richSettings: FieldDescriptor = {
+  name: "settings", label: "Settings", widget: "json", showWhen: (values) => values.kind === "rich",
+};
+
+/**
+ * A saved record's form whose `kind` (and any `bound` field) is bound beside the sheet, the other
+ * controls not rendered; the form declares the bound kind's preset unless `undeclared`.
+ */
+async function boundKindForm(stored: Row, others: readonly FieldDescriptor[], options: {
+  prefill?: FieldDescriptor["prefill"];
+  undeclared?: boolean;
+  bound?: readonly DescriptorField[];
+} = {}) {
+  const kind: DescriptorField = { name: "kind", label: "Kind", prefill: options.prefill ?? leavingEmpties };
+  return fixture({
+    resourceMetadata: presetResource, record: stored, mountedFields: ["title"],
+    boundFields: [kind, ...options.bound ?? []].map((field) => ({ field })),
+    viewFields: [{ name: "title", label: "Title" }, options.undeclared ? { name: "kind", label: "Kind" } : kind, ...others],
   });
+}
+
+test("a field a preset dropped and shown again without a seed holds its loaded value, its control not rendered", async () => {
+  const f = await boundKindForm({ kind: "rich", settings: { depth: 2 } }, [richSettings]);
   edit("Kind", "plain");
   expect(Object.hasOwn(f.surface().form.getValues(), "settings")).toBe(false);
   edit("Kind", "rich");
@@ -956,26 +962,100 @@ test("a field a preset dropped and shown again without a seed holds its loaded v
 });
 
 test("the restore gives a dropped parent of declared fields its loaded value, its controls not rendered", async () => {
-  const kind: DescriptorField = {
-    name: "kind", label: "Kind",
-    prefill: (value, _values, loaded) => value === loaded?.kind ? null : { settings: {} },
-  };
   const split = (values: Row) => values.kind === "split";
-  const f = await fixture({
-    resourceMetadata: presetResource,
-    record: { kind: "split", settings: { a: "one", b: "two" } },
-    viewFields: [
-      { name: "title", label: "Title" }, { name: "kind", label: "Kind" },
-      { name: "settings.a", label: "A", showWhen: split }, { name: "settings.b", label: "B", showWhen: split },
-    ],
-    mountedFields: ["title"],
-    boundFields: [{ field: kind }],
-  });
+  const f = await boundKindForm({ kind: "split", settings: { a: "one", b: "two" } }, [
+    { name: "settings.a", label: "A", showWhen: split }, { name: "settings.b", label: "B", showWhen: split },
+  ]);
   edit("Kind", "plain");
   expect(Object.hasOwn(f.surface().form.getValues(), "settings")).toBe(false);
   edit("Kind", "split");
   expect(f.surface().form.getValues("settings")).toEqual({ a: "one", b: "two" });
   await waitFor(() => expect(f.surface().form.formState.isDirty).toBe(false));
+});
+
+test("a bound field's declared preset drops at the change and writes at the save", async () => {
+  const f = await boundKindForm({ kind: "rich", settings: { depth: 2 } }, [richSettings]);
+  edit("Kind", "plain");
+  expect(Object.hasOwn(f.surface().form.getValues(), "settings")).toBe(false);
+  await act(async () => f.surface().submitForm());
+  expect(f.update).toHaveBeenCalledWith(expect.objectContaining({ variables: { kind: "plain", settings: {} } }));
+});
+
+test("a bound field's preset the form does not declare seeds, but neither drops nor writes a hidden field", async () => {
+  const f = await boundKindForm({ kind: "rich", settings: { depth: 2 } }, [richSettings], { undeclared: true });
+  edit("Kind", "plain");
+  expect(f.surface().form.getValues("settings")).toEqual({});
+  await act(async () => f.surface().submitForm());
+  expect(f.update).toHaveBeenCalledWith(expect.objectContaining({ variables: { kind: "plain" } }));
+});
+
+test("a dropped field comes back with its loaded value after undo and redo, its control not rendered", async () => {
+  const f = await boundKindForm({ kind: "rich", settings: { depth: 2 } }, [richSettings]);
+  edit("Kind", "plain");
+  act(() => f.surface().history.undo());
+  expect(f.surface().form.getValues("settings")).toEqual({ depth: 2 });
+  act(() => f.surface().history.redo());
+  expect(Object.hasOwn(f.surface().form.getValues(), "settings")).toBe(false);
+  edit("Kind", "rich");
+  expect(f.surface().form.getValues("settings")).toEqual({ depth: 2 });
+  await waitFor(() => expect(f.surface().form.formState.isDirty).toBe(false));
+});
+
+test("nothing comes back for a field the form was loaded without", async () => {
+  const f = await boundKindForm({ kind: "plain", settings: { left: "over" } }, [richSettings], {
+    prefill: (value) => value === "rich" ? null : { settings: {} },
+  });
+  edit("Kind", "rich");
+  expect(Object.hasOwn(f.surface().form.getValues(), "settings")).toBe(false);
+});
+
+test("a field left unset keeps that choice through a preset's drop, undo and another edit, its control not rendered", async () => {
+  const mode: DescriptorField = { name: "mode", label: "Mode" };
+  const f = await boundKindForm({ kind: "rich", note: "kept", mode: "" }, [
+    { name: "note", label: "Note", omittable: true, showWhen: (values) => values.kind === "rich" }, mode,
+  ], { prefill: (value, _values, loaded) => ({ note: value === loaded?.kind ? loaded?.note : "" }), bound: [mode] });
+  // What an omittable field's "Not set" leaves: the key, holding no value.
+  act(() => f.surface().form.setValue("note", undefined, { shouldDirty: true }));
+  edit("Kind", "plain");
+  expect(Object.hasOwn(f.surface().form.getValues(), "note")).toBe(false);
+  act(() => f.surface().history.undo());
+  edit("Mode", "m");
+  expect(Object.hasOwn(f.surface().form.getValues(), "note")).toBe(true);
+  expect(f.surface().form.getValues("note")).toBeUndefined();
+});
+
+test("a preset that says nothing for a hidden relation writes nothing for it", async () => {
+  const fields: readonly FieldDescriptor[] = [
+    { ...presetFields[0]!, prefill: (value, _values, loaded) => ({ parent: value === loaded?.kind ? loaded?.parent : undefined }) },
+    { name: "parent", label: "Parent", kind: "relation", widget: "many2one", showWhen: (values) => values.kind === "rich" },
+  ];
+  const related = await presetForm({ kind: "rich", parent: { id: "note-a", title: "Parent A" } }, { fields });
+  await chooseKind("plain");
+  fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+  await waitFor(() => expect(related.update).toHaveBeenCalledOnce());
+  expect(related.update.mock.calls[0]?.[0].variables).toStrictEqual({ kind: "plain" });
+});
+
+test("a nested value a preset wrote fills its path inside the cached record where neither response nor draft holds the parent", async () => {
+  const fields: readonly FieldDescriptor[] = [
+    {
+      ...presetFields[0]!,
+      prefill: (value, _values, loaded) => ({
+        "style.color": value === loaded?.kind ? (loaded?.style as Row | undefined)?.color : "none",
+      }),
+    },
+    { name: "style.color", label: "Color", showWhen: (values) => values.kind === "rich" },
+  ];
+  const submit = vi.fn<FormSubmit>(async (data) => ({ status: "ok", data: { id: "note-1", kind: data.kind } }));
+  const styled = await presetForm({ kind: "rich", style: { color: "red", size: "big" } }, { fields, submit });
+  styled.getOne.mockImplementationOnce(() => new Promise<{ data: Row }>(() => undefined));
+  await chooseKind("plain");
+  expect(Object.hasOwn(styled.values(), "style")).toBe(false);
+  fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+  await waitFor(() => expect(submit).toHaveBeenCalledOnce());
+  expect(submit.mock.calls[0]?.[0]).toEqual({ kind: "plain", style: { color: "none" } });
+  await waitFor(() => expect(styled.surface().displayRecord?.kind).toBe("plain"));
+  expect(styled.surface().displayRecord?.style).toEqual({ color: "none", size: "big" });
 });
 
 test("undo back to a state a preset left writes its value for the hidden field, and redo past it writes none", async () => {
@@ -1020,7 +1100,6 @@ test("a preset's relation value for a hidden field is sent as the related id", a
       prefill: (value, _values, loaded) => ({
         parent: value === loaded?.kind ? loaded?.parent : { id: "note-b", title: "Note B" },
       }),
-      prefillReplace: ["parent"],
     },
     { name: "parent", label: "Parent", kind: "relation", widget: "many2one", showWhen: (values) => values.kind === "rich" },
   ];
@@ -1050,7 +1129,6 @@ test("a preset's value for a nested hidden field is written and kept by path", a
       prefill: (value, _values, loaded) => ({
         "style.color": value === loaded?.kind ? (loaded?.style as Row | undefined)?.color : "none",
       }),
-      prefillReplace: ["style.color"],
     },
     { name: "style.color", label: "Color", showWhen: (values) => values.kind === "rich" },
     { name: "style.size", label: "Size" },
@@ -1109,7 +1187,6 @@ test("a preset's value is never written over what a visible field holds", async 
     prefill: (value: unknown, _values: Row, loaded?: Row) => ({
       "settings.a": value === loaded?.kind ? (loaded?.settings as Row | undefined)?.a : "preset",
     }),
-    prefillReplace: ["settings.a"],
   } : field);
   const raw = await presetForm({ kind: "split", settings: { a: "one", b: "two" } }, { fields });
   await chooseKind("rich");

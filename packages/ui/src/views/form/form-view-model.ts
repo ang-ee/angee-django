@@ -343,10 +343,32 @@ export function hiddenDraftPaths(
 }
 
 /**
- * What a save writes for the fields a preset hid (see `FieldDescriptor.prefill`), derived from the
- * values alone: each visible field the save writes, changed from its loaded value, has its preset
- * evaluated again; of the seeds it replaces, each whose path a field the save writes owns, no
- * visible field holds, and the form was loaded with a different value for is written.
+ * The loaded values a draft lacks: each field visible for `values` whose key the draft does not
+ * own (a dropped field), where `baseline` holds a value. A field left unset owns its key.
+ */
+export function missingDraftValues(
+  values: FormValues,
+  fields: readonly FieldDescriptor[],
+  baseline: FormValues,
+): ReadonlyMap<string, unknown> {
+  const owns = (path: string) => {
+    let node: unknown = values;
+    for (const segment of path.split(".")) {
+      if (node === null || typeof node !== "object" || !Object.hasOwn(node, segment)) return false;
+      node = (node as FormValues)[segment];
+    }
+    return true;
+  };
+  return new Map(visibleFields(fields, values)
+    .filter((field) => !owns(field.name) && hasDottedValue(baseline, field.name))
+    .map((field) => [field.name, dottedValue(baseline, field.name)]));
+}
+
+/**
+ * What a save writes for hidden fields (see `FieldDescriptor.prefill`), derived from the values
+ * alone: each visible field the save writes whose value changed has its preset evaluated again,
+ * and each seed it replaces is written whose path a field the save writes owns, no visible field
+ * holds, and the form was loaded with a different value for.
  */
 export function hiddenResetWrites(
   values: FormValues,
@@ -363,8 +385,8 @@ export function hiddenResetWrites(
     const value = dottedValue(values, field.name);
     if (same(value, dottedValue(options.baseline, field.name))) continue;
     for (const [path, seed] of Object.entries(field.prefill(value, values, options.baseline) ?? {})) {
-      // A dirty-preserving preset's other fields are defaults, never written in a hidden field's place.
-      if (field.prefillPreserveDirty && !field.prefillReplace?.includes(path)) continue;
+      // A seed of nothing says nothing; a dirty-preserving preset's other fields are defaults.
+      if (seed === undefined || (field.prefillPreserveDirty && !field.prefillReplace?.includes(path))) continue;
       const owner = fields.find((candidate) => candidate.name === path);
       if (!owner || !savesField(resolveField(owner, values), options) || pathHolding(visibleNames, path) !== null) continue;
       if (hasDottedValue(options.baseline, path) && !same(seed, dottedValue(options.baseline, path))) {
@@ -456,7 +478,7 @@ export function visibleSections(
 }
 
 /** What decides whether a save writes a field at all. */
-export interface FieldSaveOptions {
+interface FieldSaveOptions {
   isCreate: boolean;
   seededFieldNames?: ReadonlySet<string> | null;
   writableFields?: ReadonlySet<string> | null;

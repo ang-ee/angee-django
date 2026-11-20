@@ -47,11 +47,11 @@ import {
   fieldValidationSummary,
   hiddenDraftPaths,
   hiddenResetWrites,
+  missingDraftValues,
   missingRequiredFieldNames,
   mutationData,
-  pathHolding,
   recordToValues,
-  visibleFields,
+  resolveField,
   type FormValues,
   type LinesSeed,
 } from "./form-view-model";
@@ -242,9 +242,6 @@ export function useFormViewSave({
   );
   const manualSlugFieldsRef = React.useRef<Set<string>>(new Set());
   const prefillSeedsRef = React.useRef<Map<string, unknown>>(new Map());
-  // What presets dropped from the draft and no one has set since. A control may leave a visible
-  // field `undefined` itself (an omittable field "Not set"), so only these get their loaded value back.
-  const droppedPathsRef = React.useRef<Set<string>>(new Set());
   const userEditedFieldsRef = React.useRef<Set<string>>(new Set());
   const localAcknowledgementRef = React.useRef<{
     previous: FormValues | null;
@@ -597,18 +594,23 @@ export function useFormViewSave({
       const submitted = Object.fromEntries((options.submittedFields ?? [])
         .map((name) => [name, options.submitted?.[name]]));
       const acceptedPatch = { ...submitted, ...saved };
-      // What the save wrote for a hidden field fills its path where the response omits it.
-      for (const [path, reset] of options.writtenResets ?? []) {
-        if (get(saved, path) !== undefined) continue;
-        const head = path.split(".", 1)[0]!;
-        if (head !== path) acceptedPatch[head] = structuredClone(acceptedPatch[head]);
-        set(acceptedPatch, path, structuredClone(reset));
-      }
+      // What the save wrote for a hidden field fills its path where the response omits it,
+      // inside whatever the cached row holds around that path.
+      const acceptedRow = (cached: Row | null | undefined): Row => {
+        const row: Row = { ...cached, ...acceptedPatch };
+        for (const [path, reset] of options.writtenResets ?? []) {
+          if (get(saved, path) !== undefined) continue;
+          const head = path.split(".", 1)[0]!;
+          if (head !== path) row[head] = structuredClone(row[head] ?? cached?.[head]);
+          set(row, path, structuredClone(reset));
+        }
+        return row;
+      };
       const accepted = acknowledgedSource !== undefined
         ? { ...(record ?? {}), ...saved }
         : isCreate ? acceptedPatch : queryClient.setQueryData<GetOneResponse<RowRecord>>(
         detailKey,
-        (current) => ({ ...current, data: { ...(current?.data ?? record), ...acceptedPatch } }),
+        (current) => ({ ...current, data: acceptedRow(current?.data ?? record) }),
       )?.data ?? acceptedPatch;
       editBasisRecordRef.current = accepted;
       if (!mounted.current) return;
@@ -755,9 +757,6 @@ export function useFormViewSave({
     [
       clearErrors,
       dataResource,
-      displayRecord,
-      fieldByName,
-      formFields,
       saveFields,
       formReadOnly,
       isCreate,
@@ -813,23 +812,27 @@ export function useFormViewSave({
     (field: FieldDescriptor, value: unknown, scope = ""): void => {
       const scoped = (name: string) => scope ? `${scope}.${name}` : name;
       userEditedFieldsRef.current.add(scoped(field.name));
-      droppedPathsRef.current.delete(scoped(field.name));
       clearErrors(scoped(field.name));
       // What the form compares itself against: a preset may give a sibling its loaded value back.
       const loaded = form.formState.defaultValues;
-      if (isCreate || !field.createOnly) {
-        const seeds = field.prefill?.(
+      // The preset the form declares for this field is the one its save reads again (see
+      // `hiddenResetWrites`); a descriptor's own preset still seeds, but drops nothing.
+      const declared = saveFields.find((candidate) => candidate.name === scoped(field.name));
+      const own = declared && resolveField(declared, form.getValues());
+      const preset = own?.prefill ? own : field;
+      if (isCreate || !preset.createOnly) {
+        const seeds = preset.prefill?.(
           value,
           (scope ? form.getValues(scope) : form.getValues()) as Row,
           ((scope ? get(loaded, scope) : loaded) ?? undefined) as Row | undefined,
         );
         if (seeds) {
-          const replacements = new Set(field.prefillReplace ?? []);
+          const replacements = new Set(preset.prefillReplace ?? []);
           const applied = new Set<string>();
           for (const [name, seed] of Object.entries(seeds)) {
             const target = scoped(name);
             if (
-              field.prefillPreserveDirty &&
+              preset.prefillPreserveDirty &&
               !replacements.has(name) &&
               (userEditedFieldsRef.current.has(target) || (
                 getFieldState(target).isDirty &&
@@ -837,7 +840,7 @@ export function useFormViewSave({
               ))
             ) continue;
             applied.add(target);
-            if (field.prefillPreserveDirty && !replacements.has(name)) {
+            if (preset.prefillPreserveDirty && !replacements.has(name)) {
               setValue(target, seed, { shouldDirty: false, shouldTouch: true });
               prefillSeedsRef.current.set(target, seed);
               continue;
@@ -848,23 +851,13 @@ export function useFormViewSave({
             });
           }
           // The draft holds only the fields visible for its new values, as it was loaded (`emptyDraft`).
-          const hidden = hiddenDraftPaths(form.getValues(), saveFields, [...applied]);
+          const hidden = preset === own ? hiddenDraftPaths(form.getValues(), saveFields, [...applied]) : [];
           if (hidden.length) form.unregister(hidden, { keepDefaultValue: true });
-          for (const target of applied) {
-            if (hidden.includes(target)) droppedPathsRef.current.add(target);
-            else droppedPathsRef.current.delete(target);
-          }
         }
       }
-      // A field a preset dropped that shows again holding nothing holds its loaded value.
-      if (droppedPathsRef.current.size) {
-        const values = form.getValues();
-        const visible = visibleFields(saveFields, values).map(({ name }) => name);
-        for (const path of droppedPathsRef.current) {
-          if (pathHolding(visible, path) !== null && get(values, path) === undefined && get(loaded, path) !== undefined) {
-            setValue(path, get(loaded, path), { shouldDirty: true });
-          }
-        }
+      // A field dropped from the draft that shows again holds its loaded value.
+      for (const [path, restored] of missingDraftValues(form.getValues(), saveFields, (loaded ?? {}) as FormValues)) {
+        setValue(path, restored, { shouldDirty: true });
       }
       if (fieldWidgetId(field) === "slug") {
         manualSlugFieldsRef.current.add(field.name);
