@@ -1628,7 +1628,14 @@ retains its native routing contract.
   own the operational cautions; routine startup never retires history.
 - **Removing a field, model or donor addon whose storage holds data needs a
   declared cutover.** `makemigrations` refuses the autodetected drop through the
-  [composer's drop guard](../composer.md#project-migration-history). An
+  [composer's drop guard](../composer.md#project-migration-history). The guard
+  judges authoring, on the database `makemigrations` runs on. Until the
+  framework pins django-compose 0.1.0.dev14, whose guard also judges pending
+  removals at `migrate`, an addon whose template carries data out of a column
+  refuses the wrong order itself, in a `pre_migrate` receiver and a database
+  check (the web forms bridge's
+  [`refuse_removal_ahead_of_the_move`](../../src/angee/webforms_messaging/signals.py)
+  and `angee.E054`). An
   project authors a native migration that preserves or retires the data and
   removes the field or model; an empty column needs
   nothing, and neither does a table holding only rows its own resource files
