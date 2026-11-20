@@ -348,7 +348,8 @@ export function DuplicatesDialog({
   // A preview is used only as this dialog read it, as a listed page is: fetched since it opened and not being read
   // again. One an earlier dialog left in the cache (fresh for the app's stale time) is read again first, so a reopened
   // dialog's ticks and totals come from previews made after it opened.
-  const previewFresh = preview.isFetchedAfterMount && !preview.isFetching;
+  // A disabled read is none this dialog made, though it may still answer from the cache, as the listing's.
+  const previewFresh = previewEnabled && preview.isFetchedAfterMount && !preview.isFetching;
   const previewPage = previewFresh ? preview.data?.duplicate_set_previews : undefined;
   const cachedPreview = preview.data;
   const previewReadHere = preview.isFetchedAfterMount;
