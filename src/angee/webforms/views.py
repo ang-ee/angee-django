@@ -31,9 +31,7 @@ from angee.server.ingress import (
     guard_anonymous_ingress,
 )
 from angee.webforms.models import FormChanged, FormUnavailable
-from angee.webforms.validators import validate_submission_id
-
-ENVELOPE_FIELDS = frozenset({"submission_id", "version", "language", "answers"})
+from angee.webforms.validators import ENVELOPE_FIELDS, validate_submission_id
 
 
 @csrf_exempt

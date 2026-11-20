@@ -9,7 +9,6 @@ from django.core.checks.registry import registry
 from django.db import connection, models
 from django.test import override_settings
 from django.test.utils import isolate_apps
-from rebac import system_context
 
 from angee.base.apps import BaseConfig
 from angee.base.checks import (
@@ -30,7 +29,6 @@ from angee.base.models.base import AngeeModel
 from angee.base.models.hierarchy import HierarchyMixin, HierarchyQuerySet
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.trash import TrashMixin, TrashQuerySet
-from angee.webforms.testing.models import Form
 from tests.proposals_models import Round
 from tests.test_impl import _BaseImpl
 
@@ -453,27 +451,43 @@ def test_a_seal_names_an_installed_owner_and_its_declared_permissions() -> None:
 
 
 @pytest.mark.django_db
+@override_settings(ANGEE_TEST_IMPLS={"base": "tests.test_impl._BaseImpl"})
 def test_a_stored_implementation_key_nothing_registers_is_named_with_its_rows_and_its_remedy() -> None:
     """Rows stranded by a key that left its registry are found by the database check, never a plain one."""
 
-    with system_context(reason="base checks tests setup"):
-        Form.objects.create(name="Kept")
-        stranded = [Form.objects.create(name=name).pk for name in ("First", "Second")]
-    with connection.cursor() as cursor:
-        cursor.execute(
-            f"UPDATE {Form._meta.db_table} SET target_class = %s WHERE id IN (%s, %s)", ["gone", *stranded],
-        )
+    with isolate_apps("django.contrib.contenttypes") as isolated:
+        class Chosen(models.Model):
+            impl = ImplClassField(_BaseImpl, default="base")
 
-    def found() -> list[checks.CheckMessage]:
-        return [error for error in check_stored_impl_keys(databases=["default"]) if error.obj is Form]
+            class Meta:
+                app_label = "contenttypes"
+                db_table = "base_checks_chosen"
 
-    assert check_stored_impl_keys() == [], "a plain check reads no database"
-    (error,) = found()
-    assert error.id == "angee.E052"
-    assert all(part in error.msg for part in ("webforms.Form.target_class", "2 row(s)", "'gone'"))
-    assert "ANGEE_WEBFORM_TARGET_CLASSES" in error.msg
-    with override_settings(ANGEE_IMPL_KEY_REMEDIES={"ANGEE_WEBFORM_TARGET_CLASSES": {"gone": "Install it."}}):
-        assert found()[0].hint == "Install it."
+        selected = list(isolated.get_app_configs())
+
+        def found() -> list[checks.CheckMessage]:
+            return check_stored_impl_keys(app_configs=selected, databases=["default"])
+
+        assert found() == [], "a table the pending migrations have yet to make is passed over"
+        with connection.cursor() as cursor:
+            cursor.execute("CREATE TABLE base_checks_chosen (id integer PRIMARY KEY, impl varchar(64))")
+            cursor.executemany(
+                "INSERT INTO base_checks_chosen (id, impl) VALUES (%s, %s)", [(1, "base"), (2, "gone"), (3, "gone")],
+            )
+
+        assert check_stored_impl_keys(app_configs=selected) == [], "a plain check reads no database"
+        (error,) = found()
+        assert (error.id, error.obj) == ("angee.E052", Chosen)
+        assert all(part in error.msg for part in ("contenttypes.Chosen.impl", "2 row(s)", "'gone'", "ANGEE_TEST_IMPLS"))
+        with override_settings(ANGEE_IMPL_KEY_REMEDIES={"ANGEE_TEST_IMPLS": {"gone": "Install it."}}):
+            assert found()[0].hint == "Install it."
+        assert check_stored_impl_keys(app_configs=[], databases=["default"]) == [], "only the selected apps are read"
+
+        with connection.cursor() as cursor:
+            cursor.execute("ALTER TABLE base_checks_chosen RENAME COLUMN impl TO renamed")
+        assert found() == [], "a column the pending migrations have yet to add is passed over"
+
+    assert check_stored_impl_keys(databases=["default"]) == [], "every installed model's keys are registered"
     assert check_stored_impl_keys in registry.get_checks()
     assert check_stored_impl_keys.tags == (checks.Tags.database,)
 

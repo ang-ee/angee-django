@@ -131,7 +131,8 @@ SQLite-only tests, and `test_parties_directory_backend.py` its lock nodes becaus
 expected failure would read as a skip;
 the PostgreSQL branches in `test_extraction_models.py` and
 `test_knowledge_access_campaign.py`, the [resource ledger's](../tests/test_resource_ledger.py)
-concurrent upsert, and the composed profiles that carry PostgreSQL contracts also run by
+concurrent upsert, a form's submission, delivery and publication
+[races](../tests/test_webforms_concurrency.py), and the composed profiles that carry PostgreSQL contracts also run by
 node. Every other listed file runs whole, which keeps the SQLite
 floor tests out of the PostgreSQL zero-skip gate. The six groups are assigned
 by pytest-split's `least_duration` algorithm over the

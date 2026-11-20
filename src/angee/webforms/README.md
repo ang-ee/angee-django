@@ -10,10 +10,11 @@ the addon that owns it.
 - A `Form` is what staff manage: its name, whether it takes submissions
   (`status`: draft, published, closed; `open()` and `close()`), the version the
   public answers, its target, the theme its public page wears and how long a
-  delivered response is kept.
+  response is kept.
 - A `FormVersion` holds the questions. It is numbered after its form's last when
-  it is made. While unpublished it may be revised in place; `publish()` freezes
-  it, and a change after that is a new version. A response pins the version it
+  it is made. While unpublished it may be revised in place; `publish()` judges
+  and freezes the stored row under its lock, and a change after that is a new
+  version, through every manager. A response pins the version it
   answered, so its answers stay readable whatever the form asks later.
 - A `FormAlias` is a public address of a form (a unique lower-case slug),
   optionally in one language.
@@ -30,11 +31,24 @@ accepts.
 
 - Question types: `text` (text, email, tel, url, number, date), `comment`,
   `radiogroup`, `dropdown`, `checkbox`, `boolean` and `rating`; `html` blocks,
-  panels and pages lay them out. There are no expressions (`visibleIf` and the
-  like): a definition that carries one is refused.
+  panels and pages lay them out. Panels nest three deep. There are no
+  expressions (`visibleIf` and the like): a definition that carries one is
+  refused.
+- Two texts are markup: an `html` block's `html` and the form's
+  `completedHtml`. They are shown as HTML on a public page of the application's
+  origin, so only simple markup is stored: paragraphs, line breaks, emphasis,
+  lists, headings and links to an `http`, `https` or `mailto` address. Anything
+  else (a script, a style, an image, an event handler, a comment) is refused
+  when the version is saved, and so is markup not written in its one plain
+  spelling; nothing is rewritten. Curly brackets are refused in markup: the
+  page's library fills `{name}` with an answer, which markup would then read as
+  markup. Every other text is plain and is shown as written.
 - A choice is `{"value": <code>, "text": <text>}`. Answers store the code, never
   the label, so they do not depend on language. "Other" is the code `other`,
   with its text in `<name>-Comment`.
+- No element is named `submission_id`, `version`, `language` or `answers`: a
+  refused submission reports each refusal under the name it is about, an
+  envelope key or a question.
 - Every text is one string, the same in every language, or a map with the
   form's default language under `default` and each other language under its
   tag: `{"default": "Your name", "es": "Tu nombre"}`. The version records
@@ -52,8 +66,10 @@ A `Response` is evidence: the answers as received, the language, the client's
 `submission_id` and the version. `Response.objects.receive(form, version=…,
 submission_id=…, language=…, answers=…)` keeps one, once per form and
 `submission_id`: a client that sends the same id again gets the response it
-already made. A form that takes no submission raises `FormUnavailable`; answers
-to a version the form no longer serves raise `FormChanged`.
+already made, even after the form closed. A form that takes no submission
+raises `FormUnavailable`; answers to a version the form no longer serves raise
+`FormChanged`. The answers are judged before the form's row is locked, so a
+slow submission delays no other.
 
 Response rows are closed to generic edits and deletion. Only the owner's verbs
 change one:
@@ -61,16 +77,32 @@ change one:
 - `deliver()` hands it to the form's target and records the outcome
   (`delivery`: pending, delivered, failed, dismissed). The target's verb, the
   link to the record it made (`ResponseRecord`) and the delivered state are one
-  transaction; a failure leaves no record behind and is recorded in
-  `delivery_error`, where staff see it. A response that already has its link is
-  never delivered twice.
+  transaction; a failure leaves no record behind. A response that already has
+  its link is never delivered twice.
+- A failure raises `DeliveryFailed` and is kept in `delivery_error`, where staff
+  see it, by its class alone (`RuntimeError`). A failure's message and the
+  values in its frames may quote an answer, so they are neither stored, logged
+  nor raised; the log says where it was raised.
 - `dismiss()` gives up on one that could not be delivered.
 - `erase()` blanks the answers its version marks as personal and keeps the row.
-- `Response.objects.purge_expired(now=…)` removes delivered responses past
-  their form's `retention_days`; a daily task calls it.
+- `Response.objects.purge_expired(now=…)` removes every response received
+  longer ago than its form's `retention_days` (one day to a century; empty
+  keeps them), delivered or not; a daily task calls it. A form's retention is
+  what it tells its respondents, so it holds whether or not delivery succeeded.
+  A submission is never lost unseen for that: the console counts a form's
+  pending and failed responses and shows when the first of them expires
+  (`undelivered_count`, `undelivered_expires_at`), each response shows its
+  expiry (`expires_at`), and every retry of a delivery has been made within
+  hours, long before the shortest retention; a response past its retention is
+  not queued again.
 
 Delivery runs on a worker after the submission commits
-(`webforms.deliver_response`), retried with backoff.
+(`webforms.deliver_response`). A failed delivery, or one whose task was lost, is
+queued again by `webforms.redeliver_responses` every five minutes when its next
+try has come (`retry_at`): five minutes after the first failure, doubling to six
+hours, eight attempts in all. An attempt is counted, and its next try set,
+before the target runs, so an attempt whose worker dies counts too. After the
+last one the response stays failed until staff deliver or dismiss it.
 
 ## The public address
 
@@ -129,13 +161,29 @@ class EnquiryTarget(FormTarget):
     label = "File an enquiry"
     config_model = EnquiryMapping  # a Pydantic model: which answer fills which field
 
+    def permits(self, actor):
+        return Enquiry(queue=self.config.queue).with_actor(actor).has_access("create")
+
     def deliver(self, response):
         return Enquiry.objects.file(subject=response.answers[self.config.subject], …)
 ```
 
+`permits` says who may point a form at the target, as it is configured. A target
+makes its owner's records as system work, for anyone who submits the form, so
+managing forms is not enough to choose one: the owner answers with its own
+access check. It is asked when a form's target or its configuration changes
+under an acting user, and every target states it. A collection edit
+(`Form.objects.filter(…).update(target_class=…)`) is refused: the owner is asked
+one form at a time. What `deliver` returns must be a record a reference can
+reach (a model with a permission type); anything else fails the delivery, since
+nothing would erase the answers when it goes.
+
 `deliver` runs as named system work inside the transaction that records its
-outcome. It returns the record it made or found, or `None`. The web forms addon
-never names another addon's model.
+outcome. It returns the record it made or found, or `None`. When the owner
+will not take the response as it is, it raises `DeliveryRefused("<code>")`: the
+code (`unknown_category`) is all that is kept of the refusal, and a refused
+response is not tried again by itself. The web forms addon never names another
+addon's model.
 
 ## Personal data
 
@@ -144,9 +192,26 @@ never names another addon's model.
   (`personal_questions`: null is not yet stated, an empty list states none) and
   may name the one whose answer finds a person's responses
   (`contact_question`).
-- A response carries no history, so an erased answer is kept nowhere.
-- The link to the record a response became follows that record through a merge
-  and goes when the record or the response does; it never blocks either.
+- A response carries no history, and a failed delivery keeps only the
+  failure's class, so an erased answer stays nowhere in this addon. The record
+  a response became is its owner's to erase.
+- A response keeps its contact answer beside the answers (`contact`: trimmed,
+  in one letter case), and the contact question is always one the version
+  states personal. `Response.objects.answered_by("<contact>")` finds a person's
+  responses across forms by it, and the console's responses list filters on
+  it: that is how a person's request to be erased is served, one Erase per
+  response found. Erasing blanks it with the answers.
+- `Response.objects.erase_for_record(record)` blanks the personal answers of the
+  responses a record was made from: the owner of that record calls it when it
+  erases the person.
+- The link to the record a response became is evidence of what was made, so a
+  merge of that record rewrites nothing: the survivor's responses are read
+  through it, and a response's record is read as its survivor. The link goes
+  when the record or the response does and never blocks either. When the record
+  is deleted, the response it was made from loses its personal answers first.
+- A form is deleted, with its versions, only while it holds no response; a form
+  that has been answered is archived, and its responses go when their retention
+  has passed.
 
 ## Permissions
 

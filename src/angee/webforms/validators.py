@@ -17,6 +17,8 @@ import re
 from collections.abc import Iterator, Sequence
 from datetime import date
 from functools import cache
+from html import escape
+from html.parser import HTMLParser
 from importlib.resources import files
 from typing import TYPE_CHECKING, Any
 
@@ -36,6 +38,10 @@ OTHER = "other"
 OTHER_SUFFIX = "-Comment"
 """What follows a question's name in the answer that holds its "Other" text."""
 
+ENVELOPE_FIELDS = frozenset({"submission_id", "version", "language", "answers"})
+"""The keys of a submission beside its answers. A refusal is reported under the name it is about, an
+envelope key or a question, so no element of a form carries one of these names."""
+
 QUESTION_TYPES = frozenset({"text", "comment", "radiogroup", "dropdown", "checkbox", "boolean", "rating"})
 TEXT_KEYS = frozenset({
     "title", "description", "completedHtml", "completeText", "pagePrevText", "pageNextText", "requiredErrorText",
@@ -44,9 +50,17 @@ TEXT_KEYS = frozenset({
 })
 LANGUAGE_TAG = re.compile(r"^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$")
 SUBMISSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+LANGUAGE_TAG_LENGTH = 35
+MARKUP_KEYS = frozenset({"html", "completedHtml"})
+"""The only texts that are markup. Every other text is plain and is shown as written."""
+
+MARKUP_TAGS = frozenset({
+    "p", "br", "strong", "em", "b", "i", "ul", "ol", "li", "h1", "h2", "h3", "h4", "h5", "h6", "a",
+})
+MARKUP_LINKS = ("http://", "https://", "mailto:")
 MAX_QUESTIONS = 200
-MAX_PANEL_DEPTH = 3
 TEXT_LIMIT = 2_000
+CONTACT_LIMIT = 320
 COMMENT_LIMIT = 20_000
 DEFAULT_RATING = (1, 5)
 
@@ -81,7 +95,10 @@ def validate_languages(languages: Sequence[str], default_language: str) -> None:
     errors: dict[str, list[str]] = {}
     if not isinstance(languages, (list, tuple)):
         raise ValidationError({"languages": ["A form's languages are a list of language tags."]})
-    bad = [tag for tag in languages if not isinstance(tag, str) or not LANGUAGE_TAG.fullmatch(tag)]
+    bad = [
+        tag for tag in languages
+        if not isinstance(tag, str) or not LANGUAGE_TAG.fullmatch(tag) or len(tag) > LANGUAGE_TAG_LENGTH
+    ]
     if not languages:
         errors["languages"] = ["A form is written in at least one language."]
     elif bad:
@@ -107,6 +124,93 @@ def validate_definition(definition: Any, *, languages: Sequence[str], default_la
         errors = list(_disagreements(definition, [tag for tag in languages if tag != default_language]))
     if errors:
         raise ValidationError({"definition": errors[:50]})
+
+
+class _Markup(HTMLParser):
+    """Read stored markup and write it back in its one canonical spelling.
+
+    Markup a form stores is rendered as HTML on a public page of the
+    application's origin. It is admitted only when it is made of the allowed
+    tags, a link's ``href`` and text, AND equals the canonical text rebuilt from
+    what this parser read: then there is nothing a browser could read
+    differently from what was judged. It is a refusal, never a rewrite.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.rebuilt: list[str] = []
+        self.unclosed: list[str] = []
+        self.refusal = ""
+
+    def refuse(self, reason: str) -> None:
+        self.refusal = self.refusal or reason
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag not in MARKUP_TAGS:
+            return self.refuse(f"<{tag}> is not allowed")
+        if tag != "a":
+            if attrs:
+                return self.refuse(f"<{tag}> carries no attribute")
+            self.rebuilt.append(f"<{tag}>")
+        else:
+            if len(attrs) != 1 or attrs[0][0] != "href" or attrs[0][1] is None:
+                return self.refuse("a link carries an href and nothing else")
+            # The parser has decoded the value, so a scheme split by an encoded character is seen whole.
+            address = attrs[0][1]
+            if (
+                address != address.strip()
+                or not address.lower().startswith(MARKUP_LINKS)
+                or any(character.isspace() or ord(character) < 0x20 for character in address)
+            ):
+                return self.refuse("a link goes to an http, https or mailto address")
+            self.rebuilt.append(f'<a href="{escape(address, quote=True)}">')
+        if tag != "br":
+            self.unclosed.append(tag)
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.refuse(f"write <{tag}> without a closing slash")
+
+    def handle_endtag(self, tag: str) -> None:
+        if not self.unclosed or self.unclosed[-1] != tag:
+            return self.refuse(f"</{tag}> closes nothing that is open")
+        self.unclosed.pop()
+        self.rebuilt.append(f"</{tag}>")
+
+    def handle_data(self, data: str) -> None:
+        self.rebuilt.append(escape(data, quote=False))
+
+    def handle_comment(self, data: str) -> None:
+        self.refuse("comments are not allowed")
+
+    def handle_decl(self, decl: str) -> None:
+        self.refuse("declarations are not allowed")
+
+    def handle_pi(self, data: str) -> None:
+        self.refuse("processing instructions are not allowed")
+
+    def unknown_decl(self, data: str) -> None:
+        self.refuse("declarations are not allowed")
+
+
+def markup_refusal(value: str) -> str:
+    """Return why ``value`` is not the simple markup a form may store, or an empty string."""
+
+    reader = _Markup()
+    reader.feed(value)
+    reader.close()
+    if reader.refusal:
+        return reader.refusal
+    if reader.unclosed:
+        return f"<{reader.unclosed[-1]}> is never closed"
+    if "{" in value or "}" in value:
+        # The page's library fills {name} with an answer; inside markup that answer would be read as markup.
+        return "curly brackets are not allowed"
+    if "".join(reader.rebuilt) != value:
+        return (
+            "write it plainly: lower-case tags without spaces, a double-quoted href, "
+            "and &amp;, &lt; and &gt; for those characters in text"
+        )
+    return ""
 
 
 def elements(definition: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any], int]]:
@@ -201,8 +305,21 @@ def validate_answers(definition: dict[str, Any], answers: Any) -> dict[str, Any]
 
     if not isinstance(answers, dict):
         raise ValidationError({"__all__": ["Answers are an object keyed by question name."]})
-    issues = validation_issues(answers_schema(definition), answers)
-    for question in questions(definition):
+    asked = questions(definition)
+    # Refused before the schema reads them: every keyword of a schema runs whatever another found,
+    # and comparing a long list's items pairwise costs seconds within the body cap.
+    oversized = {
+        question["name"]: _offered(question) for question in asked
+        if isinstance(answers.get(question["name"]), list) and len(answers[question["name"]]) > _offered(question)
+    }
+    unreadable = [name for name, value in answers.items() if isinstance(value, str) and "\x00" in value]
+    judged = {name: value for name, value in answers.items() if name not in oversized}
+    issues = validation_issues(answers_schema(definition), judged)
+    for name, most in oversized.items():
+        issues[name] = [f"Choose at most {most}."]
+    for name in unreadable:
+        issues.setdefault(name, ["Remove the character that cannot be stored."])
+    for question in asked:
         name = question["name"]
         comment = f"{name}{OTHER_SUFFIX}"
         if comment in issues and comment not in answers:
@@ -219,6 +336,71 @@ def validate_answers(definition: dict[str, Any], answers: Any) -> dict[str, Any]
     return dict(answers)
 
 
+def validate_version(
+    definition: Any, *, languages: Sequence[str], default_language: str, personal_questions: Any,
+    contact_question: str,
+) -> None:
+    """Refuse a version whose content does not hold together, each refusal under its field.
+
+    The definition is inside the stored subset; the personal questions, once
+    stated, are questions it asks; and the contact question is one of them and,
+    being a way to reach a person, is stated personal.
+    """
+
+    validate_definition(definition, languages=languages, default_language=default_language)
+    asked = {question["name"] for question in questions(definition)}
+    errors: dict[str, str] = {}
+    if personal_questions is not None and (
+        not isinstance(personal_questions, list)
+        or any(not isinstance(name, str) or name not in asked for name in personal_questions)
+    ):
+        errors["personal_questions"] = "Name questions this version asks."
+    if contact_question and contact_question not in asked:
+        errors["contact_question"] = "Name a question this version asks."
+    elif contact_question and isinstance(personal_questions, list) and contact_question not in personal_questions:
+        errors["contact_question"] = "The contact question holds personal data: list it among the personal questions."
+    if errors:
+        raise ValidationError(errors)
+
+
+def validate_publishable(
+    definition: Any, *, languages: Sequence[str], default_language: str, personal_questions: Any,
+    contact_question: str,
+) -> None:
+    """Refuse a version that is not ready to be served.
+
+    Beyond :func:`validate_version`: every text is written in every language of
+    the form, and the version has stated which questions hold personal data,
+    even if none do. :meth:`FormVersion.publish` judges the stored row with it;
+    a migration that carries published forms over judges what it writes with it.
+    """
+
+    validate_version(
+        definition, languages=languages, default_language=default_language,
+        personal_questions=personal_questions, contact_question=contact_question,
+    )
+    missing = missing_translations(definition, languages=languages, default_language=default_language)
+    if missing:
+        raise ValidationError({
+            "definition": [f"{pointer}: not written in every language of the form." for pointer in missing],
+        })
+    if personal_questions is None:
+        raise ValidationError({"personal_questions": "State which questions hold personal data, even if none do."})
+
+
+def contact_of(answers: dict[str, Any], contact_question: str) -> str:
+    """Return the contact answer as it is kept for finding a person's responses: trimmed, in one letter case."""
+
+    value = answers.get(contact_question) if contact_question else None
+    return "" if value is None else str(value).strip().casefold()[:CONTACT_LIMIT]
+
+
+def _offered(question: dict[str, Any]) -> int:
+    """How many choices a question offers, its "Other" included; none for a question without choices."""
+
+    return len(question.get("choices", ())) + (1 if question.get("showOtherItem") else 0)
+
+
 def _chose_other(value: Any) -> bool:
     return value == OTHER or (isinstance(value, list) and OTHER in value)
 
@@ -232,12 +414,13 @@ def _answer_schema(question: dict[str, Any]) -> dict[str, Any]:
             codes.append(OTHER)
         if kind != "checkbox":
             return {"enum": codes}
-        chosen: dict[str, Any] = {"type": "array", "uniqueItems": True, "items": {"enum": codes}}
+        chosen: dict[str, Any] = {
+            "type": "array", "uniqueItems": True, "items": {"enum": codes},
+            "maxItems": min(question.get("maxSelectedChoices", len(codes)), len(codes)),
+        }
         least = max(question.get("minSelectedChoices", 0), 1 if needed else 0)
         if least:
             chosen["minItems"] = least
-        if "maxSelectedChoices" in question:
-            chosen["maxItems"] = question["maxSelectedChoices"]
         return chosen
     if kind == "boolean":
         return {"type": "boolean"}
@@ -295,13 +478,13 @@ def _disagreements(definition: dict[str, Any], other_languages: Sequence[str]) -
             yield f"/pages/{index}: the name {page['name']!r} is used twice."
         names.add(page["name"])
     count = 0
-    for pointer, element, depth in elements(definition):
+    for pointer, element, _depth in elements(definition):
         name = element["name"]
         if name in names:
             yield f"{pointer}: the name {name!r} is used twice."
+        if name in ENVELOPE_FIELDS:
+            yield f"{pointer}: the name {name!r} is the submission's own; call the element something else."
         names.add(name)
-        if depth >= MAX_PANEL_DEPTH and element["type"] == "panel":
-            yield f"{pointer}: panels nest at most {MAX_PANEL_DEPTH} deep."
         if element["type"] in QUESTION_TYPES:
             count += 1
             yield from (f"{pointer}: {problem}" for problem in _question_disagreements(element))
@@ -311,6 +494,16 @@ def _disagreements(definition: dict[str, Any], other_languages: Sequence[str]) -
         yield f"A form asks at most {MAX_QUESTIONS} questions."
     allowed = {"default", *other_languages}
     for pointer, value in texts(definition):
+        if pointer.rsplit("/", 1)[-1] in MARKUP_KEYS:
+            written = value.items() if isinstance(value, dict) else (("", value),)
+            for language, markup in written:
+                refusal = markup_refusal(markup)
+                if refusal:
+                    where = f"{pointer}/{language}" if language else pointer
+                    yield (
+                        f"{where}: {refusal}. Only paragraphs, line breaks, emphasis, lists, headings and "
+                        "links are stored here."
+                    )
         if isinstance(value, dict):
             unknown = sorted(set(value) - allowed)
             if unknown:
