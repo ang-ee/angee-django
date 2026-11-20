@@ -140,6 +140,19 @@ The addon declares the bounds, and a deployment may change them:
 A token hook that cannot be loaded closes every form (`503`) and fails the
 system check `angee.E033`.
 
+A form that has closed is not described and takes nothing new, but a resend of
+a submission it kept is still answered `202 {"submission_id"}`:
+`Response.objects.receive` decides, and the view resolves the address alone.
+
+## The public page
+
+A browser that opens `forms/<alias>` gets a page of its own, not the
+application. It is a standalone page: the addon's web package declares it
+(`angee.pages` in `web/package.json`, on the paths under the same prefix), and
+the ingress serves it to a request that asks for HTML. It loads nothing of the
+application. Everything else at that address reaches Django: the page asks it
+for the JSON description above and posts the submission to it.
+
 ## What a response becomes
 
 A form selects one target by key (`Form.target_class`). `store`, the default,
