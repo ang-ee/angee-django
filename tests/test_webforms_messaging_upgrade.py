@@ -33,16 +33,17 @@ from django.db.migrations.graph import MigrationGraph
 from django.db.migrations.operations.base import Operation
 from django.db.migrations.recorder import MigrationRecorder
 from django.db.migrations.state import ModelState, ProjectState
-from django.db.models.signals import post_migrate
+from django.db.models.signals import post_migrate, pre_migrate
+from django.test import override_settings
 from django_compose.migrations import DropGuardAutodetector
 from rebac import system_context
 
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedThread
 from angee.messaging.testing.models import Channel, Message
+from angee.messaging.webform_columns import check_form_columns_leave_with_the_move
 from angee.messaging.webforms import default_webform_schema
 from angee.webforms.models import FormStatus
 from angee.webforms.testing.models import Form, FormAlias, FormVersion, Response
-from angee.webforms_messaging.checks import check_form_columns_leave_with_the_move
 from angee.webforms_messaging.compose_migrations.messaging import webform_channels_to_forms as template
 from angee.webforms_messaging.targets import MessageTarget
 from tests.conftest import Vendor, create_user
@@ -569,13 +570,25 @@ def test_the_drop_guard_refuses_an_autodetected_removal_of_form_columns_that_hol
 
 
 @pytest.mark.django_db(transaction=True)
-def test_the_check_command_asks_for_the_projects_copy_of_the_template_while_the_columns_are_there() -> None:
-    rows = _channels(open="webform")
-    with (
-        _previous_release(**{str(rows["open"].pk): {"slug": "open-form"}}),
-        pytest.raises(CommandError, match="holds no copy of the webform channel template"),
-    ):
-        call_command("check_webform_channels")
+def test_the_check_command_asks_for_the_template_only_where_a_channel_holds_a_form(messaging_history: Any) -> None:
+    """The columns are there and the project has no copy: what it is told depends on what the channels hold."""
+
+    rows = _channels(open="webform", unused="webform", mailbox="manual")
+    said = StringIO()
+    with _previous_release(**{str(rows["mailbox"].pk): {"slug": "stray"}}) as before:
+        call_command("check_webform_channels", stdout=said)
+
+        before.apps.get_model("messaging", "Channel")._base_manager.filter(pk=rows["open"].pk).update(slug="open-form")
+        with pytest.raises(CommandError) as asked:
+            call_command("check_webform_channels")
+
+    assert said.getvalue() == (
+        "No webform channel holds a form: nothing to move. makemigrations messaging removes the empty columns.\n"
+    )
+    assert str(asked.value).startswith(
+        "1 webform channel(s) hold a form, and this project's messaging history holds no copy of the webform "
+        "channel template."
+    )
 
 
 def _held_forms(rows: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -732,6 +745,10 @@ def test_migrate_refuses_a_removal_of_form_columns_that_is_not_the_move_and_appl
     with _previous_release(**_held_forms(rows)) as before:
         legacy = before.apps.get_model("messaging", "Channel")._base_manager
         stored = list(legacy.order_by("pk").values("pk", *template.FORM_COLUMNS))
+        # Django sends the signal once for every app; only messaging's turn judges, so a run is judged once.
+        plan = MigrationExecutor(connection).migration_plan([("messaging", "0002_remove_channel_form_columns")])
+        elsewhere = apps.get_app_config("webforms")
+        pre_migrate.send(sender=elsewhere, app_config=elsewhere, using="default", plan=plan, apps=before.apps)
         with pytest.raises(CommandError) as refused:
             _migrate()
 
@@ -761,6 +778,9 @@ def test_migrate_applies_the_move_and_whatever_removal_loses_nothing(messaging_h
 
         assert _form_columns() == set()
         assert ("messaging", "0002_webform_channels_to_forms") in MigrationRecorder(connection).applied_migrations()
+        said = StringIO()
+        call_command("check_webform_channels", stdout=said)
+        assert said.getvalue().startswith("messaging.0002_webform_channels_to_forms is applied: the move is done")
     with system_context(reason="webform upgrade tests read"):
         assert {_form_of(rows[key]).status for key in ("open", "draft")} == {FormStatus.PUBLISHED, FormStatus.DRAFT}
 
@@ -811,3 +831,54 @@ def test_a_project_whose_channels_never_held_a_form_is_left_alone(messaging_hist
     assert said.getvalue() == "The webform columns are already removed from messaging's channels: nothing to move.\n"
     assert named == []
     assert ("messaging", "0003_a_later_release") in MigrationRecorder(connection).applied_migrations()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_faked_removal_is_refused_while_forms_are_at_stake_and_recorded_once_the_columns_are_gone(
+    messaging_history: Any,
+) -> None:
+    """Faking the removal records it as applied: the move could then never run, so it is refused all the same."""
+
+    rows = _channels(open="webform", draft="webform")
+    messaging_history("0002_remove_channel_form_columns", removal=True)
+    recorder = MigrationRecorder(connection)
+    with _previous_release(**_held_forms(rows)), pytest.raises(CommandError, match="Nothing was applied"):
+        _migrate(fake=True)
+    refused = ("messaging", "0002_remove_channel_form_columns") in recorder.applied_migrations()
+
+    _migrate(fake=True)  # The columns are gone: nothing is at stake.
+
+    recorded = ("messaging", "0002_remove_channel_form_columns") in recorder.applied_migrations()
+    assert (refused, recorded) == (False, True)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_project_without_the_bridge_is_judged_the_same(messaging_history: Any) -> None:
+    """Nothing registers the ``webform`` backend there, and the channels that store it still hold their forms.
+
+    The refusal is messaging's own, so it reads a channel's backend as it is
+    stored, never through a registry the project may not have filled.
+    """
+
+    rows = _channels(open="webform", draft="webform", unused="webform")
+    registry = {key: path for key, path in settings.ANGEE_CHANNEL_BACKEND_CLASSES.items() if key != "webform"}
+    messaging_history("0002_remove_channel_form_columns", removal=True)
+    with override_settings(ANGEE_CHANNEL_BACKEND_CLASSES=registry):
+        with _previous_release(**_held_forms(rows)) as before:
+            (named,) = check_form_columns_leave_with_the_move(databases=["default"])
+            with pytest.raises(CommandError) as refused:
+                _migrate()
+
+            assert _form_columns() == set(template.FORM_COLUMNS)
+            # With no form held, the same removal is the right migration, and it applies.
+            before.apps.get_model("messaging", "Channel")._base_manager.update(
+                slug="", is_published=False, form_schema=default_webform_schema(),
+            )
+            _migrate()
+            assert _form_columns() == set()
+
+    assert named.id == "angee.E054"
+    assert str(refused.value).startswith(
+        "messaging.0002_remove_channel_form_columns removes the form columns of 2 webform channel(s) that hold a "
+        f"form ({rows['open'].sqid}, {rows['draft'].sqid})"
+    )
