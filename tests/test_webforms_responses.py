@@ -24,10 +24,12 @@ from angee.webforms import tasks
 from angee.webforms.models import (
     FIRST_RETRY,
     MAX_DELIVERY_ATTEMPTS,
+    MIN_RETENTION_DAYS,
     REDELIVERY_LEASE,
     Delivery,
     DeliveryFailed,
     FormChanged,
+    FormQuerySet,
     FormStatus,
     FormUnavailable,
     retry_delay,
@@ -545,6 +547,51 @@ def test_retention_removes_every_response_received_longer_ago_than_its_form_keep
     with system_context(reason="webforms tests read"):
         left = set(Response._base_manager.values_list("submission_id", flat=True))
     assert left == {"fresh", "unlimited"}
+
+
+def test_what_is_undelivered_is_counted_with_the_day_the_first_of_it_expires() -> None:
+    """Retention removes an undelivered response too, so staff are shown it, and by when, first."""
+
+    form, _version = published("failing", retention_days=30)
+    kept_forever, _other = published("failing")
+    with system_context(reason="webforms tests setup"):
+        oldest, _ = receive(form, "oldest")
+        failed, _ = receive(form, "failed")
+        done, _ = receive(form, "done")
+        receive(kept_forever, "kept")
+        with pytest.raises(DeliveryFailed):
+            stored(failed).deliver()
+        Response.objects.filter(pk=done.pk).owner_update(delivery=Delivery.DELIVERED)
+        received = timezone.now() - timedelta(days=20)
+        Response.objects.filter(pk=oldest.pk).owner_update(created_at=received)
+
+        annotated = Form.objects.annotate(**FormQuerySet.undelivered_expressions()).get(pk=form.pk)
+        counted = (stored(form).undelivered(), annotated.undelivered(), stored(kept_forever).undelivered())
+
+    expiry = received + timedelta(days=30)
+    assert counted == ((2, expiry), (2, expiry), (1, None))
+    assert (stored(oldest).expires_at, stored(done).expires_at is not None) == (expiry, True)
+    with system_context(reason="webforms tests read"):
+        assert Response._base_manager.get(form=kept_forever).expires_at is None
+
+
+def test_every_retry_is_made_long_before_the_shortest_retention_and_none_after_it() -> None:
+    """A delivery gives up well inside a day, and a response past its retention is not queued again."""
+
+    tick = timedelta(minutes=5)
+    longest = FIRST_RETRY + sum(
+        (retry_delay(attempt) + REDELIVERY_LEASE + tick for attempt in range(1, MAX_DELIVERY_ATTEMPTS)), timedelta(),
+    )
+    assert longest < timedelta(days=MIN_RETENTION_DAYS) * 2 / 3, longest
+
+    form, _version = published("tag", retention_days=MIN_RETENTION_DAYS)
+    with system_context(reason="webforms tests setup"):
+        late, _ = receive(form, "late")
+        now = timezone.now()
+        Response.objects.filter(pk=late.pk).owner_update(created_at=now - timedelta(days=2), retry_at=now)
+
+    assert Response.objects.redeliver(now=now) == 0
+    assert Response.objects.purge_expired(now=now) == 1
 
 
 @pytest.mark.parametrize("days", [0, 36_501])

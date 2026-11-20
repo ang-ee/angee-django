@@ -8,6 +8,9 @@ none of them is a writable field.
 
 from __future__ import annotations
 
+from datetime import datetime
+from typing import Any, cast
+
 import strawberry
 import strawberry_django
 from django.apps import apps
@@ -17,7 +20,7 @@ from angee.graphql.actions import ActionResult, action_guard, authorized_action_
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
-from angee.webforms.models import Delivery, DeliveryFailed
+from angee.webforms.models import Delivery, DeliveryFailed, FormQuerySet
 
 Form = apps.get_model("webforms", "Form")
 FormVersion = apps.get_model("webforms", "FormVersion")
@@ -39,6 +42,18 @@ class WebformType(AngeeNode):
     is_archived: auto
     created_at: auto
     updated_at: auto
+
+    @strawberry_django.field(annotate=FormQuerySet.undelivered_expressions())
+    def undelivered_count(self) -> int:
+        """How many of the form's responses still wait for delivery (pending or failed)."""
+
+        return cast(int, cast(Any, self).undelivered()[0])
+
+    @strawberry_django.field(annotate=FormQuerySet.undelivered_expressions(), only=["retention_days"])
+    def undelivered_expires_at(self) -> datetime | None:
+        """When the first undelivered response is removed by the form's retention; null while none is."""
+
+        return cast("datetime | None", cast(Any, self).undelivered()[1])
 
 
 @strawberry_django.type(FormVersion)
@@ -84,6 +99,12 @@ class WebformResponseType(AngeeNode):
     retry_at: auto
     delivered_at: auto
     created_at: auto
+
+    @strawberry_django.field(select_related=["form"], only=["created_at", "form__retention_days"])
+    def expires_at(self) -> datetime | None:
+        """When the form's retention removes this response, delivered or not; null while the form keeps it."""
+
+        return cast("datetime | None", cast(Any, self).expires_at)
 
 
 _FORM_DECODE = {"form": public_pk_decoder(Form)}

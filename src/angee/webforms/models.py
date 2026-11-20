@@ -33,7 +33,7 @@ from __future__ import annotations
 import logging
 import traceback
 from datetime import datetime, timedelta
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Self
 
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -79,6 +79,8 @@ SLUG = RegexValidator(r"^[a-z0-9]+(?:-[a-z0-9]+)*$", "Use lower-case letters and
 THEME_ID = RegexValidator(r"^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$", "Enter a theme id, such as acme.paper.")
 LANGUAGE = RegexValidator(LANGUAGE_TAG, "Enter a language tag, such as en or pt-BR.")
 
+MIN_RETENTION_DAYS = 1
+"""A day: every retry of a delivery has been made well before the shortest retention removes a response."""
 MAX_RETENTION_DAYS = 36_500
 """A century: past it a form keeps its responses by leaving ``retention_days`` empty."""
 MAX_DELIVERY_ATTEMPTS = 8
@@ -90,6 +92,19 @@ REDELIVERY_LEASE = timedelta(minutes=15)
 REDELIVERY_BATCH = 500
 
 logger = logging.getLogger(__name__)
+
+
+def past_retention(now: datetime) -> models.Q:
+    """Select the responses received longer ago than their form keeps one."""
+
+    # One bound per retention length in use: a duration multiplied in SQL is not portable.
+    lengths = _model("Form")._base_manager.filter(
+        retention_days__range=(MIN_RETENTION_DAYS, MAX_RETENTION_DAYS),
+    ).values_list("retention_days", flat=True).order_by().distinct()
+    past = models.Q(pk__in=())
+    for days in lengths:
+        past |= models.Q(form__retention_days=days, created_at__lt=now - timedelta(days=days))
+    return past
 
 
 def retry_delay(attempts: int) -> timedelta:
@@ -145,6 +160,16 @@ class Delivery(models.TextChoices):
 class FormQuerySet[FormT: Form](ArchiveQuerySet[FormT], AngeeHistoryQuerySet[FormT]):
     """Archive read scopes over the REBAC-scoped form queryset."""
 
+    @staticmethod
+    def undelivered_expressions() -> dict[str, Any]:
+        """How many of a form's responses still wait for delivery, and when the oldest was received."""
+
+        waiting = models.Q(responses__delivery__in=(Delivery.PENDING, Delivery.FAILED))
+        return {
+            "_undelivered_count": models.Count("responses", filter=waiting),
+            "_undelivered_since": models.Min("responses__created_at", filter=waiting),
+        }
+
     def accepting(self) -> FormQuerySet[FormT]:
         """Keep the forms that take submissions now: published, with a version, and not archived."""
 
@@ -175,7 +200,8 @@ class Form(HistoryMixin, ArchiveMixin, AngeeDataModel, concrete=True):
     theme_id = models.CharField(max_length=64, blank=True, default="", validators=[THEME_ID])
     """The theme the public page wears; empty follows the deployment's default."""
     retention_days = models.PositiveIntegerField(
-        null=True, blank=True, validators=[MinValueValidator(1), MaxValueValidator(MAX_RETENTION_DAYS)],
+        null=True, blank=True,
+        validators=[MinValueValidator(MIN_RETENTION_DAYS), MaxValueValidator(MAX_RETENTION_DAYS)],
     )
     """How many days a response is kept after it was received, whatever became of it; empty keeps it."""
 
@@ -215,6 +241,26 @@ class Form(HistoryMixin, ArchiveMixin, AngeeDataModel, concrete=True):
         """Return this form's target, bound to it and to its checked configuration."""
 
         return self.get_target_class_impl()(self)
+
+    def undelivered(self) -> tuple[int, datetime | None]:
+        """Return how many responses still wait for delivery, and when the first of them is removed.
+
+        Retention removes a response whatever became of it, so this is what
+        staff are shown before an undelivered one goes: the count of pending
+        and failed responses, and the oldest one's expiry (``None`` while there
+        is none, or while the form keeps its responses). It reads the
+        annotations of :meth:`FormQuerySet.undelivered_expressions` when the row
+        carries them, and the acting user's own view of the responses otherwise.
+        """
+
+        if "_undelivered_count" in self.__dict__:
+            count, since = self.__dict__["_undelivered_count"], self.__dict__["_undelivered_since"]
+        else:
+            waiting = _model("Response").objects.filter(form_id=self.pk).undelivered()
+            found = waiting.aggregate(count=models.Count("pk"), since=models.Min("created_at"))
+            count, since = found["count"], found["since"]
+        expires = since + timedelta(days=self.retention_days) if since and self.retention_days else None
+        return int(count or 0), expires
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Refuse a target, or a configuration of it, the acting user may not choose."""
@@ -414,7 +460,7 @@ class FormVersion(ImmutableFieldsMixin, AngeeDataModel, concrete=True):
 class FormAliasQuerySet(AngeeQuerySet):
     """Public addresses, and the ones that lead somewhere now."""
 
-    def serving(self) -> FormAliasQuerySet:
+    def serving(self) -> Self:
         """Keep the aliases of forms that take submissions now."""
 
         return self.filter(
@@ -453,33 +499,28 @@ class FormAlias(AngeeDataModel, concrete=True):
 class ResponseQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet):
     """Responses are kept as received; only the owner verbs change or remove one."""
 
-    def undelivered(self) -> ResponseQuerySet:
+    def undelivered(self) -> Self:
         """Keep the responses still to be handed to their target."""
 
         return self.filter(delivery__in=(Delivery.PENDING, Delivery.FAILED))
 
-    def due(self, *, now: datetime) -> ResponseQuerySet:
-        """Keep the undelivered responses whose next try has come."""
+    def due(self, *, now: datetime) -> Self:
+        """Keep the undelivered responses whose next try has come and whose retention has not passed."""
 
-        return self.undelivered().filter(retry_at__lte=now)
+        return self.undelivered().filter(retry_at__lte=now).exclude(past_retention(now))
 
-    def expired(self, *, now: datetime) -> ResponseQuerySet:
+    def expired(self, *, now: datetime) -> Self:
         """Keep the responses received longer ago than their form keeps one.
 
         Every response counts, delivered or not: what a form says it keeps for
-        a time is not kept longer because nothing came of it.
+        a time is not kept longer because nothing came of it. Staff see what is
+        still undelivered and when it goes (:meth:`Form.undelivered`,
+        :attr:`Response.expires_at`), and every retry has been made long before.
         """
 
-        # One bound per retention length in use: a duration multiplied in SQL is not portable.
-        lengths = _model("Form")._base_manager.filter(retention_days__range=(1, MAX_RETENTION_DAYS)).values_list(
-            "retention_days", flat=True,
-        ).order_by().distinct()
-        past = models.Q(pk__in=())
-        for days in lengths:
-            past |= models.Q(form__retention_days=days, created_at__lt=now - timedelta(days=days))
-        return self.filter(past)
+        return self.filter(past_retention(now))
 
-    def answered_by(self, contact: str) -> ResponseQuerySet:
+    def answered_by(self, contact: str) -> Self:
         """Keep the responses whose contact answer is ``contact``, whatever the letter case.
 
         The contact answer is the one a response's version names
@@ -501,14 +542,17 @@ class ResponseQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet):
             found |= models.Q(version__contact_question=name, **{f"contact_{index}__iexact": wanted})
         return rows.filter(found)
 
-    def for_record(self, record: models.Model) -> ResponseQuerySet:
+    def for_record(self, record: models.Model) -> Self:
         """Keep the responses ``record`` was made from."""
 
         links = _model("ResponseRecord")
         return self.filter(pk__in=links._base_manager.filter(links.record_filter(record)).values("response_id"))
 
 
-class ResponseManager(AngeeManager.from_queryset(ResponseQuerySet)):  # type: ignore[misc]
+_ResponseManagerBase = AngeeManager.from_queryset(ResponseQuerySet)
+
+
+class ResponseManager(_ResponseManagerBase):
     """Receive and retire responses."""
 
     def receive(self, form: Any, *, version: int, submission_id: Any, language: Any, answers: Any) -> tuple[Any, bool]:
@@ -557,7 +601,7 @@ class ResponseManager(AngeeManager.from_queryset(ResponseQuerySet)):  # type: ig
                 kept = self._kept(form.pk, receipt)
                 if kept is not None:
                     return kept, False
-                row = self.model(
+                row: Any = self.model(
                     form_id=form.pk, version_id=published.pk, submission_id=receipt,
                     language=tag or published.default_language, answers=checked,
                     # Should the task queued below be lost, the reconciler finds the response then.
@@ -656,6 +700,13 @@ class Response(AppendOnlyModel, AngeeDataModel, concrete=True):
         """Return the form and the receipt id."""
 
         return f"{self.form}: {self.submission_id}"
+
+    @property
+    def expires_at(self) -> datetime | None:
+        """When this response is removed: its form's retention after it was received; ``None`` while kept."""
+
+        days = self.form.retention_days
+        return self.created_at + timedelta(days=days) if days else None
 
     def _stored(self) -> Any:
         """This row's collection, for a compare-and-set owner write."""

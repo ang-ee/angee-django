@@ -7,6 +7,7 @@ and address is invented.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -34,6 +35,7 @@ PUBLISH = "mutation($id: ID!) { publish_webform_version(version: $id) { ok messa
 CLOSE = "mutation($id: ID!) { close_webform(form: $id) { ok message } }"
 ERASE = "mutation($id: ID!) { erase_webform_response(response: $id) { ok message } }"
 DISMISS = "mutation($id: ID!) { dismiss_webform_response(response: $id) { ok message } }"
+DELIVER = "mutation($id: ID!) { deliver_webform_response(response: $id) { ok message } }"
 
 
 def schema() -> Any:
@@ -151,6 +153,33 @@ def test_a_manager_closes_a_form_and_erases_and_dismisses_a_response() -> None:
     assert (stored(form).status, kept.answers, kept.erased_at is not None, kept.delivery) == (
         FormStatus.CLOSED, {}, True, Delivery.DISMISSED,
     )
+
+
+def test_a_manager_sees_what_is_undelivered_and_when_it_expires_and_a_failed_delivery_as_a_failure() -> None:
+    form, _version, response = kept_form()
+    actor = manager()
+    with system_context(reason="webforms tests setup"):
+        Form._base_manager.filter(pk=form.pk).update(target_class="failing", retention_days=30)
+
+    failed = result_data(execute_schema(schema(), DELIVER, {"id": response.sqid}, user=actor))
+    seen = result_data(execute_schema(schema(), """{
+      webforms { undelivered_count undelivered_expires_at }
+      webform_responses(where: {delivery: {_in: ["pending", "failed"]}}) {
+        delivery delivery_error delivery_attempts retry_at expires_at
+      }
+      webform_responses_aggregate(where: {delivery: {_in: ["pending", "failed"]}}) { aggregate { count } }
+    }""", user=actor))
+
+    kept = stored(response)
+    expiry = (kept.created_at + timedelta(days=30)).isoformat()
+    assert failed["deliver_webform_response"] == {"ok": False, "message": "Delivery failed: RuntimeError."}
+    assert seen["webforms"] == [{"undelivered_count": 1, "undelivered_expires_at": expiry}]
+    (row,) = seen["webform_responses"]
+    assert (row["delivery"], row["delivery_error"], row["delivery_attempts"], row["expires_at"]) == (
+        "FAILED", "RuntimeError", 1, expiry,
+    )
+    assert row["retry_at"] is not None
+    assert seen["webform_responses_aggregate"]["aggregate"]["count"] == 1
 
 
 def test_the_status_and_what_became_of_a_response_are_not_writable_fields() -> None:

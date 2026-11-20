@@ -31,9 +31,7 @@ from angee.server.ingress import (
     guard_anonymous_ingress,
 )
 from angee.webforms.models import FormChanged, FormUnavailable
-from angee.webforms.validators import validate_submission_id
-
-ENVELOPE_FIELDS = frozenset({"submission_id", "version", "language", "answers"})
+from angee.webforms.validators import ENVELOPE_FIELDS, validate_submission_id
 
 # The endpoint's bounds are the ``ANGEE_WEBFORM_*`` settings. Messaging's autoconfig declares
 # them while its own public form path exists, and one setting has one declaring addon, so

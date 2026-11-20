@@ -45,6 +45,9 @@ accepts.
 - A choice is `{"value": <code>, "text": <text>}`. Answers store the code, never
   the label, so they do not depend on language. "Other" is the code `other`,
   with its text in `<name>-Comment`.
+- No element is named `submission_id`, `version`, `language` or `answers`: a
+  refused submission reports each refusal under the name it is about, an
+  envelope key or a question.
 - Every text is one string, the same in every language, or a map with the
   form's default language under `default` and each other language under its
   tag: `{"default": "Your name", "es": "Tu nombre"}`. The version records
@@ -83,7 +86,14 @@ change one:
 - `erase()` blanks the answers its version marks as personal and keeps the row.
 - `Response.objects.purge_expired(now=…)` removes every response received
   longer ago than its form's `retention_days` (one day to a century; empty
-  keeps them), delivered or not; a daily task calls it.
+  keeps them), delivered or not; a daily task calls it. A form's retention is
+  what it tells its respondents, so it holds whether or not delivery succeeded.
+  A submission is never lost unseen for that: the console counts a form's
+  pending and failed responses and shows when the first of them expires
+  (`undelivered_count`, `undelivered_expires_at`), each response shows its
+  expiry (`expires_at`), and every retry of a delivery has been made within
+  hours, long before the shortest retention; a response past its retention is
+  not queued again.
 
 Delivery runs on a worker after the submission commits
 (`webforms.deliver_response`). A failed delivery, or one whose task was lost, is

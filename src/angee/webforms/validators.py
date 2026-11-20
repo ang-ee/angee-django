@@ -38,6 +38,10 @@ OTHER = "other"
 OTHER_SUFFIX = "-Comment"
 """What follows a question's name in the answer that holds its "Other" text."""
 
+ENVELOPE_FIELDS = frozenset({"submission_id", "version", "language", "answers"})
+"""The keys of a submission beside its answers. A refusal is reported under the name it is about, an
+envelope key or a question, so no element of a form carries one of these names."""
+
 QUESTION_TYPES = frozenset({"text", "comment", "radiogroup", "dropdown", "checkbox", "boolean", "rating"})
 TEXT_KEYS = frozenset({
     "title", "description", "completedHtml", "completeText", "pagePrevText", "pageNextText", "requiredErrorText",
@@ -415,6 +419,8 @@ def _disagreements(definition: dict[str, Any], other_languages: Sequence[str]) -
         name = element["name"]
         if name in names:
             yield f"{pointer}: the name {name!r} is used twice."
+        if name in ENVELOPE_FIELDS:
+            yield f"{pointer}: the name {name!r} is the submission's own; call the element something else."
         names.add(name)
         if element["type"] in QUESTION_TYPES:
             count += 1

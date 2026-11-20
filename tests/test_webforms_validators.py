@@ -214,6 +214,15 @@ def test_markup_outside_the_allowlist_is_refused_at_its_text(markup: str) -> Non
     assert any(message.startswith("/pages/1/elements/0/elements/5/html:") for message in refusal(in_an_element))
 
 
+@pytest.mark.parametrize("name", ["submission_id", "version", "language", "answers"])
+def test_no_element_carries_a_name_of_the_submission_itself(name: str) -> None:
+    """A refusal is reported under the name it is about: an envelope key and a question never share one."""
+
+    form = changed((*PANEL, 0, "name"), name)
+
+    assert any("the submission's own" in message for message in refusal(form))
+
+
 def test_a_title_is_plain_text_and_is_not_read_as_markup() -> None:
     validate_definition(changed(("title",), "1 < 2 & <b>bold</b>"), languages=LANGUAGES, default_language="en")
 
