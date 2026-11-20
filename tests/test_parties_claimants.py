@@ -1,10 +1,10 @@
-"""The person a source makes of a contact it was given: ``PartyManager.claimant_as_system`` and the claims behind it."""
+"""The person a source makes of a contact its record carried: ``PartyManager.claimant_as_system`` and its claims."""
 
 from __future__ import annotations
 
 import re
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Iterator
 from dataclasses import dataclass
 from itertools import count
 from typing import Any, NamedTuple
@@ -23,7 +23,6 @@ from angee.integrate.testing.models import RecordLink
 from angee.messaging.testing.models import Channel, Handle, Organization, Party, Person
 from angee.provenance.evidence import EvidenceReference
 from tests.conftest import create_user, current_stream, make_integration
-from tests.recordrefdemo.models import RecordRefPlainTarget as Entry
 from tests.test_parties_same_as import _pairs, _reconcile
 
 pytestmark = pytest.mark.django_db
@@ -46,14 +45,19 @@ class Given(NamedTuple):
 
 @dataclass
 class Source:
-    """A stand-in source: the records it keeps, and the verb called the way a source calls it."""
+    """A stand-in integration: its record links are the records it keeps, and it calls the verb as its importer does."""
 
+    stream: Any
     own: Any
-    """Its own records, as the queryset the verb takes."""
-    record: Callable[..., Any]
-    """Keep one more record that carries a contact."""
+    """Its own records, as the queryset the verb takes: the links of this integration."""
     owner: Any
     reason: str
+    keys: Iterator[int]
+
+    def record(self, **facts: Any) -> Any:
+        """Keep one more record that carries a contact."""
+
+        return RecordLink.objects.observe(self.stream, f"contact-{next(self.keys)}", **facts)
 
     def given(self, *, evidence: Any = None, **contact: str) -> Given:
         """Hand the verb one contact, on a new record unless ``evidence`` names the one that carried it."""
@@ -65,30 +69,16 @@ class Source:
         return Given(person, email, phone, evidence)
 
 
-def _importer(name: str, owner: Any) -> Source:
-    """A source whose own records are the links of one integration."""
-
+def _source(name: str, owner: Any) -> Source:
     with system_context(reason="tests.parties.claimants"):
         bridge = make_integration(name, model=Channel, backend_class="manual")
         stream = current_stream(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
-    keys = count(1)
     return Source(
+        stream=stream,
         own=RecordLink._base_manager.filter(stream__integration_id=bridge.pk),
-        record=lambda **facts: RecordLink.objects.observe(stream, f"contact-{next(keys)}", **facts),
         owner=owner,
         reason=f"tests.{name}.contact",
-    )
-
-
-def _book(owner: Any) -> Source:
-    """A source whose own records are all the rows of one model: a book of entries."""
-
-    names = count(1)
-    return Source(
-        own=Entry._default_manager.all(),
-        record=lambda: Entry._default_manager.create(name=f"entry-{next(names)}"),
-        owner=owner,
-        reason="tests.book.contact",
+        keys=count(1),
     )
 
 
@@ -98,16 +88,26 @@ def owner(db: None) -> Any:
     return create_user("claimant-owner")
 
 
+@pytest.fixture
+def source(owner: Any) -> Source:
+    return _source("source", owner)
+
+
 def _person(owner: Any, name: str) -> Any:
     with system_context(reason="tests.parties.claimants"):
         return Person.objects.create(display_name=name, created_by=owner)
 
 
+def _row(owner: Any, value: str, *, platform: str = "email") -> Any:
+    with system_context(reason="tests.parties.claimants"):
+        return Handle.objects.upsert(platform=platform, value=value, created_by_id=owner.pk)
+
+
 def _holds(party: Any, value: str, owner: Any, *, platform: str = "email") -> Any:
     """State in full that ``value`` is ``party``'s, as a source that vouches for it does; return the row they hold."""
 
+    handle = _row(owner, value, platform=platform)
     with system_context(reason="tests.parties.claimants"):
-        handle = Handle.objects.upsert(platform=platform, value=value, created_by_id=owner.pk)
         rule = Party.objects.rule_source("normalized_twin")
         Party.objects.assert_handle(party, handle, asserted_by=rule, evidence=[handle])
         handle.refresh_from_db()
@@ -116,7 +116,7 @@ def _holds(party: Any, value: str, owner: Any, *, platform: str = "email") -> An
 
 
 def _claimed_for(party: Any, handle: Any, evidence: Any) -> None:
-    """Record, as some other source does, that ``handle`` was claimed for ``party`` with ``evidence`` behind it."""
+    """Record, as some other caller of the claim owner does, that ``handle`` was claimed for ``party``."""
 
     with system_context(reason="tests.parties.claimants"):
         Party.objects.propose_claimed_handle_as_system(party, handle, evidence=evidence, reason="tests.other.claim")
@@ -172,12 +172,10 @@ def _merge(owner: Any, survivor: Any, merged: Any) -> None:
         Party.objects.get(pk=survivor.pk).merge(records=[Party._base_manager.get(pk=merged.pk).public_id])
 
 
-def test_a_first_contact_makes_a_person_who_claims_the_address_and_holds_nothing(owner: Any) -> None:
+def test_a_first_contact_makes_a_person_who_claims_the_address_and_holds_nothing(owner: Any, source: Source) -> None:
     """Named system work with no actor around it: the address is recorded for review and decides nothing."""
 
-    desk = _book(owner)
-
-    ada = desk.given(email=ADDRESS, display_name="  Ada   Example ", given_name="Ada ", family_name=" Example")
+    ada = source.given(email=ADDRESS, display_name="  Ada   Example ", given_name="Ada ", family_name=" Example")
 
     person = Person._base_manager.get(pk=ada.person.pk)
     assert (person.display_name, person.given_name, person.family_name) == ("Ada Example", "Ada", "Example")
@@ -192,45 +190,38 @@ def test_a_first_contact_makes_a_person_who_claims_the_address_and_holds_nothing
     assert (claim.applied, claim.confidence < Party.REVIEW_CONFIDENCE) == (False, True)
 
 
-def test_a_sources_next_record_finds_the_person_it_made_and_stands_behind_their_claim(owner: Any) -> None:
+def test_a_sources_next_record_finds_the_person_it_made_and_stands_behind_their_claim(source: Source) -> None:
     """Found again, they have nothing new stated of them; their claim gains one reference per record, once."""
 
-    desk = _book(owner)
-    first = desk.given(email=ADDRESS, display_name="Ada Example")
+    first = source.given(email=ADDRESS, display_name="Ada Example")
 
-    second = desk.given(email=ADDRESS, display_name="A. Example", given_name="A.")
+    second = source.given(email=ADDRESS, display_name="A. Example", given_name="A.")
 
     assert (second.person.pk, second.email.pk, _people()) == (first.person.pk, first.email.pk, 1)
     kept = Person._base_manager.get(pk=first.person.pk)
     assert (kept.display_name, kept.given_name) == ("Ada Example", "")
     assert _claims(kept) == {ADDRESS: {behind(first.record), behind(second.record)}}
     # A record handed over twice stands behind the claim once.
-    desk.given(email=ADDRESS, evidence=second.record)
+    source.given(email=ADDRESS, evidence=second.record)
     (claim,) = _stances(kept)
     assert [reference["id"] for reference in claim.evidence] == [behind(first.record).id, behind(second.record).id]
 
 
-@pytest.mark.parametrize(
-    "other",
-    [
-        pytest.param("book", id="every-row-of-one-model"),
-        pytest.param("importer", id="the-links-of-another-integration"),
-    ],
-)
-def test_another_sources_record_for_the_address_makes_its_own_person_and_takes_nobodys(owner: Any, other: str) -> None:
-    importer = _importer("importer", owner)
-    second = _book(owner) if other == "book" else _importer("another", owner)
-    theirs = importer.given(email=ADDRESS, display_name="Ada Example")
+def test_another_sources_record_for_the_address_makes_its_own_person_and_takes_nobodys(
+    owner: Any, source: Source,
+) -> None:
+    other = _source("another", owner)
+    theirs = other.given(email=ADDRESS, display_name="Ada Example")
 
-    ours = second.given(email="Ada@Example.test", display_name="A. Example")
+    ours = source.given(email="Ada@Example.test", display_name="A. Example")
 
     assert ours.person.pk != theirs.person.pk
     assert (ours.email.pk, _holder_of(ours.email)) == (theirs.email.pk, None)
     assert _claims(theirs.person) == {ADDRESS: {behind(theirs.record)}}
     assert _claims(ours.person) == {ADDRESS: {behind(ours.record)}}
     # Each finds its own again, and only its own.
-    assert importer.given(email=ADDRESS).person.pk == theirs.person.pk
-    assert second.given(email=ADDRESS).person.pk == ours.person.pk
+    assert other.given(email=ADDRESS).person.pk == theirs.person.pk
+    assert source.given(email=ADDRESS).person.pk == ours.person.pk
     assert _people() == 2
 
 
@@ -243,7 +234,7 @@ def test_another_sources_record_for_the_address_makes_its_own_person_and_takes_n
         pytest.param("claimant", id="a-person-someone-else-claimed-it-for"),
     ],
 )
-def test_nobody_elses_person_is_taken_whoever_is_linked_to_the_address(owner: Any, linked: str) -> None:
+def test_nobody_elses_person_is_taken_whoever_is_linked_to_the_address(owner: Any, source: Source, linked: str) -> None:
     """Whether the two are one is for the same-person review: the source's person only claims the address."""
 
     with system_context(reason="tests.parties.claimants"):
@@ -257,35 +248,32 @@ def test_nobody_elses_person_is_taken_whoever_is_linked_to_the_address(owner: An
     if linked in ("holder", "organization"):
         _holds(known, ADDRESS, owner)
     elif linked == "claimant":
-        with system_context(reason="tests.parties.claimants"):
-            row = Handle.objects.upsert(platform="email", value=ADDRESS, created_by_id=owner.pk)
+        row = _row(owner, ADDRESS)
         _claimed_for(known, row, row)
     held, stated = list(Handle._base_manager.filter(party=known)), _standing(subject_id=known.pk)
-    desk = _book(owner)
 
-    ada = desk.given(email="Ada@Example.test", display_name="Ada Example")
+    ada = source.given(email="Ada@Example.test", display_name="Ada Example")
 
     assert ada.person.pk != known.pk
     assert (list(Handle._base_manager.filter(party=known)), _standing(subject_id=known.pk)) == (held, stated)
     assert Handle._base_manager.filter(platform="email").count() == 1
     assert _claims(ada.person) == {ada.email.value: {behind(ada.record)}}
-    assert desk.given(email=ADDRESS).person.pk == ada.person.pk
+    assert source.given(email=ADDRESS).person.pk == ada.person.pk
 
 
-def test_a_person_the_source_adopted_from_someone_else_is_not_its_own(owner: Any) -> None:
+def test_a_person_the_source_adopted_from_someone_else_is_not_its_own(owner: Any, source: Source) -> None:
     """A record that points at a person does not make them the source's: only a claim's evidence says who made them."""
 
-    desk, importer = _book(owner), _importer("importer", owner)
-    theirs = desk.given(email=ADDRESS, display_name="Ada Example")
-    adopted = importer.record(target=theirs.person)
+    theirs = _source("another", owner).given(email=ADDRESS, display_name="Ada Example")
+    adopted = source.record(target=theirs.person)
     assert adopted.target_object_id == str(theirs.person.pk)
 
-    made = importer.given(email=ADDRESS, display_name="Ada Example", evidence=adopted)
+    made = source.given(email=ADDRESS, display_name="Ada Example", evidence=adopted)
 
     assert made.person.pk != theirs.person.pk
     assert _claims(theirs.person) == {ADDRESS: {behind(theirs.record)}}
     assert _claims(made.person) == {ADDRESS: {behind(adopted)}}
-    assert importer.given(email=ADDRESS).person.pk == made.person.pk
+    assert source.given(email=ADDRESS).person.pk == made.person.pk
 
 
 @pytest.mark.parametrize(
@@ -295,9 +283,8 @@ def test_a_person_the_source_adopted_from_someone_else_is_not_its_own(owner: Any
         pytest.param("dismissed", id="a-person-ruled-against-it"),
     ],
 )
-def test_a_claim_that_no_longer_stands_finds_nobody(owner: Any, ruling: str) -> None:
-    desk = _book(owner)
-    first = desk.given(email=ADDRESS, display_name="Ada Example")
+def test_a_claim_that_no_longer_stands_finds_nobody(owner: Any, source: Source, ruling: str) -> None:
+    first = source.given(email=ADDRESS, display_name="Ada Example")
     party = Party._base_manager.get(pk=first.person.pk)
     if ruling == "withdrawn":
         _withdraw_claims(party)
@@ -306,7 +293,7 @@ def test_a_claim_that_no_longer_stands_finds_nobody(owner: Any, ruling: str) -> 
         claim.with_actor(owner).dismiss()
     assert _claims(party) == {}
 
-    second = desk.given(email=ADDRESS, display_name="Ada Example")
+    second = source.given(email=ADDRESS, display_name="Ada Example")
 
     assert second.person.pk != first.person.pk
     assert second.email.pk == first.email.pk
@@ -314,42 +301,60 @@ def test_a_claim_that_no_longer_stands_finds_nobody(owner: Any, ruling: str) -> 
     assert _claims(second.person) == {ADDRESS: {behind(second.record)}}
 
 
-def test_a_trashed_person_is_nobodys_answer(owner: Any) -> None:
-    desk = _book(owner)
-    first = desk.given(email=ADDRESS, display_name="Ada Example")
+def test_a_trashed_person_is_nobodys_answer(source: Source) -> None:
+    first = source.given(email=ADDRESS, display_name="Ada Example")
     with system_context(reason="tests.parties.claimants"):
         Party._base_manager.get(pk=first.person.pk).trash(reason="Removed by their owner")
 
-    second = desk.given(email=ADDRESS, display_name="Ada Example")
+    second = source.given(email=ADDRESS, display_name="Ada Example")
 
     assert second.person.pk != first.person.pk
-    assert desk.given(email=ADDRESS).person.pk == second.person.pk
+    assert source.given(email=ADDRESS).person.pk == second.person.pk
 
 
-def test_a_claimant_merged_into_the_person_who_holds_the_address_is_found_as_the_survivor(owner: Any) -> None:
+def test_of_several_people_the_source_stands_behind_for_an_address_the_earliest_is_found(
+    owner: Any, source: Source,
+) -> None:
+    """The earliest by key, whichever of them the source made or claimed for last."""
+
+    elder = _person(owner, "Ada Example")
+    made = source.given(email=ADDRESS, display_name="A. Example")
+    _claimed_for(elder, made.email, source.record())
+    people = _people()
+
+    found = source.given(email=ADDRESS)
+
+    assert elder.pk < made.person.pk
+    assert (found.person.pk, _people()) == (elder.pk, people)
+
+
+def test_a_claimant_merged_into_the_person_who_holds_the_address_is_found_as_the_survivor(
+    owner: Any, source: Source,
+) -> None:
     holder = _person(owner, "Ada Example")
     held = _holds(holder, ADDRESS, owner)
-    desk = _book(owner)
-    made = desk.given(email=ADDRESS, display_name="A. Example")
+    made = source.given(email=ADDRESS, display_name="A. Example")
     _merge(owner, holder, made.person)
     people = _people()
 
-    again = desk.given(email=ADDRESS)
+    again = source.given(email=ADDRESS)
 
     assert (again.person.pk, again.email.pk) == (holder.pk, held.pk)
     assert (_people(), _holder_of(held)) == (people, holder.pk)
 
 
-def test_two_sources_claimants_of_one_address_merged_are_each_found_as_the_survivor(owner: Any) -> None:
+def test_two_sources_claimants_of_one_address_merged_are_each_found_as_the_survivor(
+    owner: Any, source: Source,
+) -> None:
     """The merge folds the two claims into one: the records that carried the address for either stay behind it."""
 
-    importer, desk = _importer("importer", owner), _book(owner)
-    theirs = importer.given(email=ADDRESS, display_name="Ada Example")
-    ours = desk.given(email=ADDRESS, display_name="A. Example")
+    other = _source("another", owner)
+    theirs = other.given(email=ADDRESS, display_name="Ada Example")
+    ours = source.given(email=ADDRESS, display_name="A. Example")
     _merge(owner, theirs.person, ours.person)
     people = _people()
 
-    again = importer.given(email=ADDRESS), desk.given(email=ADDRESS)
+    again = other.given(email=ADDRESS), source.given(email=ADDRESS)
 
     assert {found.person.pk for found in again} == {theirs.person.pk}
     assert _people() == people
@@ -358,116 +363,106 @@ def test_two_sources_claimants_of_one_address_merged_are_each_found_as_the_survi
     }
 
 
-def test_a_claim_a_merge_superseded_makes_nothing_stand_by_itself(owner: Any) -> None:
+def test_a_claim_a_merge_superseded_makes_nothing_stand_by_itself(owner: Any, source: Source) -> None:
     """Once the claim it was folded under is withdrawn, the superseded one finds nobody."""
 
-    importer, desk = _importer("importer", owner), _book(owner)
-    theirs = importer.given(email=ADDRESS, display_name="Ada Example")
-    ours = desk.given(email=ADDRESS, display_name="A. Example")
+    other = _source("another", owner)
+    theirs = other.given(email=ADDRESS, display_name="Ada Example")
+    ours = source.given(email=ADDRESS, display_name="A. Example")
     _merge(owner, theirs.person, ours.person)
     survivor = Party._base_manager.get(pk=theirs.person.pk)
     assert sorted(stance.superseded_id is not None for stance in _stances(survivor)) == [False, True]
     _withdraw_claims(survivor)
 
-    again = importer.given(email=ADDRESS), desk.given(email=ADDRESS)
+    again = other.given(email=ADDRESS), source.given(email=ADDRESS)
 
     assert len({survivor.pk, *(found.person.pk for found in again)}) == 3
 
 
-def test_a_claim_still_naming_a_merged_away_person_answers_through_their_survivor(owner: Any) -> None:
+def test_a_claim_still_naming_a_merged_away_person_answers_through_their_survivor(owner: Any, source: Source) -> None:
     """A redirect is identity: whatever still names the merged row is read as its survivor's."""
 
-    desk = _book(owner)
-    made = desk.given(email=ADDRESS, display_name="A. Example")
+    made = source.given(email=ADDRESS, display_name="A. Example")
     survivor = _person(owner, "Ada Example")
     Party._base_manager.filter(pk=made.person.pk).update(merged_into=survivor)
     people = _people()
 
-    again = desk.given(email=ADDRESS)
+    again = source.given(email=ADDRESS)
 
     assert (again.person.pk, again.email.pk, _people()) == (survivor.pk, made.email.pk, people)
     assert _claims(survivor) == {ADDRESS: {behind(again.record)}}
 
 
-def test_one_person_with_two_addresses_is_found_again_by_each_addresss_own_claim(owner: Any) -> None:
-    desk = _book(owner)
-    home = desk.given(email=ADDRESS, display_name="Ada Example")
-    work = desk.given(email="ada.work@example.test", display_name="Ada Example")
+def test_one_person_with_two_addresses_is_found_again_by_each_addresss_own_claim(owner: Any, source: Source) -> None:
+    home = source.given(email=ADDRESS, display_name="Ada Example")
+    work = source.given(email="ada.work@example.test", display_name="Ada Example")
     assert home.person.pk != work.person.pk
     _merge(owner, home.person, work.person)
     people = _people()
 
-    at_home, at_work = desk.given(email=ADDRESS), desk.given(email="Ada.Work@example.test")
+    at_home, at_work = source.given(email=ADDRESS), source.given(email="Ada.Work@example.test")
 
     assert {at_home.person.pk, at_work.person.pk} == {home.person.pk}
     assert (at_home.email.pk, at_work.email.pk) == (home.email.pk, work.email.pk)
     assert _people() == people
 
 
-def test_another_spelling_of_the_address_is_the_same_address(owner: Any) -> None:
-    desk = _book(owner)
-    first = desk.given(email="Ada.Example@Example.TEST", display_name="Ada Example")
+def test_another_spelling_of_the_address_is_the_same_address(source: Source) -> None:
+    first = source.given(email="Ada.Example@Example.TEST", display_name="Ada Example")
 
-    second = desk.given(email="  ada.example@example.test ")
+    second = source.given(email="  ada.example@example.test ")
 
     assert (second.person.pk, second.email.pk) == (first.person.pk, first.email.pk)
     assert Handle._base_manager.filter(platform="email").count() == 1
 
 
-def test_a_claim_on_any_row_of_the_address_finds_the_person_and_that_row_is_the_one_they_carry(owner: Any) -> None:
+def test_a_claim_on_any_row_of_the_address_finds_the_person_and_that_row_is_the_one_they_carry(
+    owner: Any, source: Source,
+) -> None:
     """Two spellings can be two rows: the person is found by the row their claim names, not only the oldest."""
 
-    desk = _book(owner)
-    with system_context(reason="tests.parties.claimants"):
-        older = Handle.objects.upsert(platform="email", value="Ada@Example.test", created_by_id=owner.pk)
-        newer = Handle.objects.upsert(platform="email", value=ADDRESS, created_by_id=owner.pk)
+    older, newer = _row(owner, "Ada@Example.test"), _row(owner, ADDRESS)
     ada = _person(owner, "Ada Example")
-    entry = desk.record()
-    _claimed_for(ada, newer, entry)
+    _claimed_for(ada, newer, source.record())
 
-    found = desk.given(email="ADA@example.test")
+    found = source.given(email="ADA@example.test")
 
     assert (found.person.pk, found.email.pk) == (ada.pk, newer.pk)
     assert not _standing(handle=older)
 
 
-def test_a_new_persons_number_is_made_and_claimed_beside_the_address(owner: Any) -> None:
-    desk = _book(owner)
-
-    ada = desk.given(email=ADDRESS, phone=f" {NUMBER} ", display_name="Ada Example")
+def test_a_new_persons_number_is_made_and_claimed_beside_the_address(source: Source) -> None:
+    ada = source.given(email=ADDRESS, phone=f" {NUMBER} ", display_name="Ada Example")
 
     assert (ada.phone.platform, ada.phone.value, ada.phone.normalized_value) == ("phone", NUMBER, "+17875550100")
     assert _claims(ada.person) == {ADDRESS: {behind(ada.record)}, NUMBER: {behind(ada.record)}}
     assert not Handle._base_manager.filter(party__isnull=False).exists()
 
 
-def test_a_number_someone_else_holds_is_only_claimed_by_a_new_person(owner: Any) -> None:
+def test_a_number_someone_else_holds_is_only_claimed_by_a_new_person(owner: Any, source: Source) -> None:
     other = _person(owner, "Bo Example")
     held = _holds(other, NUMBER, owner, platform="phone")
-    desk = _book(owner)
 
-    ada = desk.given(email=ADDRESS, phone="+17875550100", display_name="Ada Example")
+    ada = source.given(email=ADDRESS, phone="+17875550100", display_name="Ada Example")
 
     assert (ada.phone.pk, _holder_of(held)) == (held.pk, other.pk)
     assert _claims(ada.person)[NUMBER] == {behind(ada.record)}
 
 
-def test_a_person_found_again_carries_the_number_their_own_claim_names(owner: Any) -> None:
-    desk = _book(owner)
-    first = desk.given(email=ADDRESS, phone=NUMBER, display_name="Ada Example")
+def test_a_person_found_again_carries_the_number_their_own_claim_names(source: Source) -> None:
+    first = source.given(email=ADDRESS, phone=NUMBER, display_name="Ada Example")
 
-    second = desk.given(email=ADDRESS, phone="+17875550100")
+    second = source.given(email=ADDRESS, phone="+17875550100")
 
     assert (second.person.pk, second.phone.pk) == (first.person.pk, first.phone.pk)
     assert _claims(first.person)[NUMBER] == {behind(first.record), behind(second.record)}
 
 
-def test_a_person_found_again_carries_a_number_they_hold(owner: Any) -> None:
-    desk = _book(owner)
-    first = desk.given(email=ADDRESS, display_name="Ada Example")
+def test_a_person_found_again_carries_a_number_they_hold(owner: Any, source: Source) -> None:
+    first = source.given(email=ADDRESS, display_name="Ada Example")
     held = _holds(first.person, NUMBER, owner, platform="phone")
 
-    second = desk.given(email=ADDRESS, phone=NUMBER)
+    second = source.given(email=ADDRESS, phone=NUMBER)
 
     assert (second.person.pk, second.phone.pk) == (first.person.pk, held.pk)
     assert NUMBER not in _claims(first.person)
@@ -481,21 +476,20 @@ def test_a_person_found_again_carries_a_number_they_hold(owner: Any) -> None:
         pytest.param("claimed", id="one-another-source-claimed-for-them"),
     ],
 )
-def test_a_number_new_to_a_person_found_again_is_left_out_and_nothing_is_stated(owner: Any, number: str) -> None:
+def test_a_number_new_to_a_person_found_again_is_left_out_and_nothing_is_stated(
+    owner: Any, source: Source, number: str,
+) -> None:
     """A number given beside a known address may be someone else's: a second mention confirms nothing."""
 
-    desk = _book(owner)
-    first = desk.given(email=ADDRESS, display_name="Ada Example")
+    first = source.given(email=ADDRESS, display_name="Ada Example")
     if number == "held":
         _holds(_person(owner, "Bo Example"), NUMBER, owner, platform="phone")
     elif number == "claimed":
-        with system_context(reason="tests.parties.claimants"):
-            row = Handle.objects.upsert(platform="phone", value=NUMBER, created_by_id=owner.pk)
-        _claimed_for(first.person, row, _importer("importer", owner).record())
+        _claimed_for(first.person, _row(owner, NUMBER, platform="phone"), _source("another", owner).record())
     numbers = list(Handle._base_manager.filter(platform="phone").values_list("pk", "party_id"))
     stated = _standing(handle__platform="phone")
 
-    second = desk.given(email=ADDRESS, phone=NUMBER)
+    second = source.given(email=ADDRESS, phone=NUMBER)
 
     assert (second.person.pk, second.phone) == (first.person.pk, None)
     assert list(Handle._base_manager.filter(platform="phone").values_list("pk", "party_id")) == numbers
@@ -509,36 +503,30 @@ def test_a_number_new_to_a_person_found_again_is_left_out_and_nothing_is_stated(
         pytest.param("7" * 600, id="refused-by-the-handle-owner"),
     ],
 )
-def test_a_number_the_handle_owner_cannot_read_is_left_out(owner: Any, number: str) -> None:
-    desk = _book(owner)
-
-    ada = desk.given(email=ADDRESS, phone=number, display_name="Ada Example")
+def test_a_number_the_handle_owner_cannot_read_is_left_out(source: Source, number: str) -> None:
+    ada = source.given(email=ADDRESS, phone=number, display_name="Ada Example")
 
     assert (ada.email.value, ada.phone) == (ADDRESS, None)
     assert not Handle._base_manager.filter(platform="phone").exists()
     assert _claims(ada.person) == {ADDRESS: {behind(ada.record)}}
 
 
-def test_a_contact_with_no_address_and_no_number_states_nothing(owner: Any) -> None:
-    desk = _book(owner)
-
-    named = desk.given(given_name="Bo", family_name="Example")
-    unnamed, *handles = Party.objects.claimant_as_system(evidence=desk.record(), own=desk.own, reason=desk.reason)
+def test_a_contact_with_no_address_and_no_number_states_nothing(source: Source) -> None:
+    named = source.given(given_name="Bo", family_name="Example")
+    unnamed = source.given()
 
     assert (named.person.display_name, named.email, named.phone) == ("Bo Example", None, None)
-    assert unnamed.pk != named.person.pk
-    assert (unnamed.display_name, unnamed.created_by_id, handles) == (Party.PLACEHOLDER_NAME, None, [None, None])
+    assert unnamed.person.pk != named.person.pk
+    assert (unnamed.person.display_name, unnamed.email, unnamed.phone) == (Party.PLACEHOLDER_NAME, None, None)
     assert not Handle._base_manager.exists()
     assert not _stance_model()._base_manager.exists()
 
 
-def test_a_contact_without_an_address_finds_nobody_again(owner: Any) -> None:
+def test_a_contact_without_an_address_finds_nobody_again(source: Source) -> None:
     """The email decides: a number alone names a new person each time, and each only claims it."""
 
-    desk = _book(owner)
-
-    first = desk.given(phone=NUMBER, display_name="Bo Example")
-    second = desk.given(phone=NUMBER, display_name="Bo Example")
+    first = source.given(phone=NUMBER, display_name="Bo Example")
+    second = source.given(phone=NUMBER, display_name="Bo Example")
 
     assert first.person.pk != second.person.pk
     assert (first.email, second.email, second.phone.pk) == (None, None, first.phone.pk)
@@ -547,12 +535,10 @@ def test_a_contact_without_an_address_finds_nobody_again(owner: Any) -> None:
     )
 
 
-def test_two_records_in_one_transaction_decide_one_after_the_other(owner: Any) -> None:
-    desk = _book(owner)
-
+def test_two_records_in_one_transaction_decide_one_after_the_other(source: Source) -> None:
     with transaction.atomic():
-        first = desk.given(email=ADDRESS, phone=NUMBER, display_name="Ada Example")
-        second = desk.given(email=ADDRESS, phone=NUMBER)
+        first = source.given(email=ADDRESS, phone=NUMBER, display_name="Ada Example")
+        second = source.given(email=ADDRESS, phone=NUMBER)
 
     assert (second.person.pk, second.email.pk, second.phone.pk) == (first.person.pk, first.email.pk, first.phone.pk)
     assert _people() == 1
@@ -560,7 +546,7 @@ def test_two_records_in_one_transaction_decide_one_after_the_other(owner: Any) -
 
 _ARRIVALS = st.lists(
     st.tuples(
-        st.sampled_from(("book", "importer")),
+        st.sampled_from(("first", "second")),
         st.sampled_from((ADDRESS, "Ada@Example.TEST", "bo@example.test")),
     ),
     min_size=1,
@@ -578,26 +564,25 @@ def test_the_order_records_arrive_in_never_changes_whom_each_source_finds(
     del db
     with transaction.atomic():
         owner = create_user("claimant-arrivals-owner")
-        sources = {"book": _book(owner), "importer": _importer("importer", owner)}
+        sources = {name: _source(name, owner) for name in ("first", "second")}
         found: defaultdict[tuple[str, str], set[Any]] = defaultdict(set)
-        for source, address in arrivals:
-            ada = sources[source].given(email=address, display_name="Ada Example")
-            found[source, address.casefold()].add(ada.person.pk)
+        for name, address in arrivals:
+            ada = sources[name].given(email=address, display_name="Ada Example")
+            found[name, address.casefold()].add(ada.person.pk)
         assert [len(people) for people in found.values()] == [1] * len(found)
         assert len(set().union(*found.values())) == len(found)
         assert not Handle._base_manager.filter(party__isnull=False).exists()
         transaction.set_rollback(True)
 
 
-def test_the_number_is_held_with_the_address_before_any_claim_is_read(owner: Any) -> None:
+def test_the_number_is_held_with_the_address_before_any_claim_is_read(source: Source) -> None:
     """One read by key takes the rows of both (a row lock where the database has one), then the claims are read."""
 
-    desk = _book(owner)
-    first = desk.given(email=ADDRESS, phone=NUMBER, display_name="Ada Example")
-    record = desk.record()
+    first = source.given(email=ADDRESS, phone=NUMBER, display_name="Ada Example")
+    record = source.record()
 
     with CaptureQueriesContext(connection) as queries:
-        desk.given(email=ADDRESS, phone=NUMBER, evidence=record)
+        source.given(email=ADDRESS, phone=NUMBER, evidence=record)
 
     statements = [query["sql"] for query in queries]
     handles = connection.ops.quote_name(Handle._meta.db_table)
@@ -613,63 +598,55 @@ def test_the_number_is_held_with_the_address_before_any_claim_is_read(owner: Any
         assert " FOR " in statements[held]
 
 
+def test_whether_a_claim_is_the_sources_own_is_asked_by_key_and_never_reads_its_records(source: Source) -> None:
+    """One existence read per standing claim: what a call reads does not grow with the source's records."""
+
+    source.given(email=ADDRESS, phone=NUMBER, display_name="Ada Example")
+    links = connection.ops.quote_name(RecordLink._meta.db_table)
+
+    def reads() -> list[str]:
+        record = source.record()
+        with CaptureQueriesContext(connection) as queries:
+            source.given(email=ADDRESS, phone=NUMBER, evidence=record)
+        return [query["sql"] for query in queries if f"FROM {links}" in query["sql"]]
+
+    few = reads()
+    for _ in range(25):
+        source.record()
+    many = reads()
+
+    assert len(few) == len(many) == 2
+    assert all(sql.startswith("SELECT 1 ") for sql in many)
+
+
 def test_the_verb_proposes_no_pair_and_the_pairing_pass_proposes_the_claimant(
-    owner: Any, django_capture_on_commit_callbacks: Any,
+    owner: Any, source: Source, django_capture_on_commit_callbacks: Any,
 ) -> None:
     """A claim links its person to the address, so the scheduled pass pairs them with whoever else is linked."""
 
     holder = _person(owner, "A. Example")
     held = _holds(holder, ADDRESS, owner)
-    desk = _book(owner)
 
     with django_capture_on_commit_callbacks(execute=True):  # a proposal deferred to the commit would run here
-        ada = desk.given(email=ADDRESS, display_name="Ada Example")
+        ada = source.given(email=ADDRESS, display_name="Ada Example")
 
     assert _pairs() == []
     assert _reconcile() == 1
     assert _pairs() == [({holder.pk, ada.person.pk}, (held,))]
 
 
-def test_a_claimant_needs_a_named_reason(owner: Any) -> None:
-    desk = _book(owner)
-
+def test_a_claimant_needs_a_named_reason(source: Source) -> None:
     with pytest.raises(ValueError, match="named reason"):
-        Party.objects.claimant_as_system(email=ADDRESS, evidence=desk.record(), own=desk.own, reason="  ")
+        Party.objects.claimant_as_system(email=ADDRESS, evidence=source.record(), own=source.own, reason="  ")
 
     assert (_people(), Handle._base_manager.count()) == (0, 0)
 
 
-@pytest.mark.parametrize(
-    "evidence",
-    [
-        pytest.param("another", id="another-sources-record"),
-        pytest.param("model", id="a-row-of-another-model"),
-        pytest.param("unsaved", id="a-record-never-saved"),
-    ],
-)
-def test_evidence_that_is_not_one_of_the_callers_own_records_is_refused(owner: Any, evidence: str) -> None:
-    """The person could never be found again: no record of the caller's would stand behind their claim."""
-
-    importer = _importer("importer", owner)
-    importer.record()
-    record = {
-        "another": lambda: _importer("another", owner).record(),
-        "model": lambda: _book(owner).record(),
-        "unsaved": lambda: RecordLink(external_key="unsaved"),
-    }[evidence]()
-
-    with pytest.raises(ValueError, match="own records"):
-        importer.given(email=ADDRESS, display_name="Ada Example", evidence=record)
-
-    assert (_people(), Handle._base_manager.count()) == (0, 0)
-
-
-def test_standing_claims_narrow_by_handle_or_by_party_and_keep_each_claims_records(owner: Any) -> None:
+def test_standing_claims_narrow_by_handle_or_by_party_and_keep_each_claims_records(owner: Any, source: Source) -> None:
     """The read a caller's own rules compose: who still claims these handles, and which records said so."""
 
-    importer, desk = _importer("importer", owner), _book(owner)
-    ada = desk.given(email=ADDRESS, phone=NUMBER, display_name="Ada Example")
-    other = importer.given(email=ADDRESS, display_name="A. Example")
+    ada = source.given(email=ADDRESS, phone=NUMBER, display_name="Ada Example")
+    other = _source("another", owner).given(email=ADDRESS, display_name="A. Example")
 
     assert _standing(handle=ada.email) == {
         (ada.person.pk, ada.email.pk): frozenset({behind(ada.record)}),

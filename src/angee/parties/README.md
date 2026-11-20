@@ -296,12 +296,12 @@ which a directory's claim rule, its adoption when on, and the holding rule read;
 the connections import shares its holding rule. Only a `HELD` answer holds the
 address.
 
-A source that is no directory and was only given a contact (a name, an email
-address, a phone number typed into a form or at a checkout) makes its person
-through one verb, [PartyManager.claimant_as_system](managers.py), under the same
-rule: each source creates its own people. The caller hands over the record that
-carried the contact (`evidence`) and its own records as a queryset (`own`: the
-links of one integration, every row of one model), which must hold that record.
+An integration that is no directory, whose records carry a contact (a name, an
+email address, a phone number), makes its person through one verb,
+[PartyManager.claimant_as_system](managers.py), under the same rule: each
+source creates its own people. The caller hands over the record that carried
+the contact (`evidence`). Which records are its own is the caller's rule, and
+`own` carries it: a queryset of them, the record links of its integration.
 The email decides. The person found again is one whose standing claim on a
 handle of that address has a row of `own` behind it, never one a column names:
 a person a record of the source merely points at (one it adopted from someone

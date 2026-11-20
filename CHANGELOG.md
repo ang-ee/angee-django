@@ -25,22 +25,23 @@ live in code docstrings.
   record form asks whenever a resource its metadata marks `mergeable` misses, so
   no form passes a hook and parties keeps only its concrete page
   (`party_record`'s `concrete_kind`).
-- `angee.parties`: one verb makes the person of a contact a source was only
-  given (a name, an email address, a phone number), `Party.objects.claimant_as_system`.
-  Each source creates its own people: the caller hands over the record that
-  carried the contact (`evidence`) and its own records as a queryset that holds
-  it (`own`: the links of one integration, every row of one model), and the
-  person found again is one whose standing claim on a handle of the email
-  address has a row of `own` behind it, never a person another source, a user
-  or a person made, whoever holds or claims the address. A trashed person is
-  nobody's answer, a merged one is found as its survivor, of several the
-  earliest. What the person does not hold is recorded as a claim for review
-  with the record behind it (`propose_claimed_handle_as_system`) and moves
-  nothing; a person found again has nothing new stated of them and carries a
-  phone only when they hold it or a record of the caller stands behind their
-  claim on it. The rows of the address and of the number are locked in one
-  call before any claim is read. The verb proposes no pair: a claim links its
-  person to the address, so the pairing job proposes them. The read behind it,
+- `angee.parties`: one verb makes the person of a contact an integration's
+  record carried (a name, an email address, a phone number),
+  `Party.objects.claimant_as_system`. Each source creates its own people: the
+  caller hands over the record that carried the contact (`evidence`) and its
+  rule of which records are its own, as a queryset of them (`own`: the record
+  links of its integration). The person found again is one whose standing
+  claim on a handle of the email address has a row of `own` behind it, never a
+  person another source, a user or a person made, whoever holds or claims the
+  address. A trashed person is nobody's answer, a merged one is found as its
+  survivor, of several the earliest. What the person does not hold is recorded
+  as a claim for review with the record behind it
+  (`propose_claimed_handle_as_system`) and moves nothing; a person found again
+  has nothing new stated of them and carries a phone only when they hold it or
+  a record of the caller stands behind their claim on it. The rows of the
+  address and of the number are locked in one call before any claim is read.
+  The verb proposes no pair: a claim links its person to the address, so the
+  pairing job proposes them. The read behind it,
   `PartyStatementQuerySet.standing_claims()`, answers which claims on the
   handle statements a caller narrows still stand, each with the records its
   evidence names, those of a claim a merge superseded under it included: two

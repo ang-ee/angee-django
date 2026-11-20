@@ -68,7 +68,7 @@ from angee.base.fields.identity import SqidField
 from angee.base.hooks import resolve_hooks
 from angee.base.lineage import concrete_child
 from angee.base.models.hierarchy import HierarchyQuerySet
-from angee.base.models.identity import instances_from_public_ids, public_id_for
+from angee.base.models.identity import instances_from_public_ids, public_id_for, public_id_lookup
 from angee.base.models.trash import ArchiveQuerySet
 from angee.base.pagination import clamp_page_size
 from angee.base.permissions import actor_user_id, reader_queryset
@@ -1852,16 +1852,16 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         owner_id: Any = None,
         reason: str,
     ) -> tuple[Any, Any | None, Any | None]:
-        """Return the person a source makes of a contact it was given, with the email and phone handles they carry.
+        """Return the person a source makes of a contact its record carried, with their email and phone handles.
 
         Each source creates its own people. ``evidence`` is the caller's record
-        that carried the contact and ``own`` the caller's records, as a queryset
-        (the links of one integration, every row of one model) that holds
-        ``evidence``. The email decides. The person found again is one whose
-        standing claim on a handle of that address has a row of ``own`` behind it
-        (:meth:`PartyStatementQuerySet.standing_claims`), never one a column
-        names: another spelling of the address is the same address, a trashed
-        person is nobody's answer, a merged one is found as its survivor
+        that carried the contact. Which records are the caller's own is the
+        caller's rule, and ``own`` carries it: a queryset of them, the record
+        links of its integration. The email decides. The person found again is
+        one whose standing claim on a handle of that address has a row of ``own``
+        behind it (:meth:`PartyStatementQuerySet.standing_claims`), never one a
+        column names: another spelling of the address is the same address, a
+        trashed person is nobody's answer, a merged one is found as its survivor
         (``Party.canonical_ids``), and of several the earliest. Nobody else's
         person is taken, whoever holds or claims the address, an account's own
         person included; otherwise a new ``Person`` is made, named as given
@@ -1905,8 +1905,6 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         address = email.strip()
         number = phone.strip() if handle_model.normalize_value(platforms.PHONE, phone) else ""
         with system_context(reason=reason), transaction.atomic():
-            if not (isinstance(evidence, own.model) and own.filter(pk=evidence.pk).exists()):
-                raise ValueError("A claimant's evidence is one of the caller's own records.")
             emails = self._address_handles(platforms.EMAIL, address)
             if address and not emails:
                 emails = [
@@ -1930,7 +1928,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 return next((row for row in rows if row.party_id == person_id), None)
 
             def vouched(person_id: Any, rows: Sequence[Any]) -> Any | None:
-                # One read per standing claim of this person, and only of the rows its evidence names.
+                # One existence read per standing claim of this person, by the keys its evidence names.
                 return next(
                     (row for row in rows if self._evidence_names(claims.get((person_id, row.pk), ()), own)), None
                 )
@@ -1987,17 +1985,20 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
     @staticmethod
     def _evidence_names(references: Collection[EvidenceReference], records: models.QuerySet[Any]) -> bool:
-        """Whether one of ``references`` names a row of ``records``, read by key alone.
+        """Whether one of ``references`` names a row of ``records``, asked as one existence read by key.
 
         A reference names a record by the model its generic pointers resolve to
         and its public id (``EvidenceReference.of``); labels compare without
-        case, as provenance compares them. Only the rows the references name are
-        looked up, never ``records`` as a whole.
+        case, as provenance compares them. No row is loaded, ``records`` is never
+        read as a whole, and nothing is read when no reference is of its model.
         """
 
         model = generic_pointer_model(records.model)
-        named = [reference.id for reference in references if reference.model.lower() == model._meta.label_lower]
-        return bool(named) and bool(instances_from_public_ids(model, named, queryset=records.only("pk")))
+        named = Q(pk__in=[])
+        for reference in references:
+            if reference.model.lower() == model._meta.label_lower:
+                named |= Q(**public_id_lookup(model, reference.id))
+        return records.filter(named).exists()
 
     def suggest_for(self, handle: Any) -> Any:
         """Propose a party for a freshly-seen, unresolved ``handle`` (the EMAIL_MATCH producer).
