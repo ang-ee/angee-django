@@ -196,7 +196,8 @@ Production framework stacks build the frontend after codegen with
 `pnpm --dir <web_path> build`. Caddy serves `dist` with an `index.html` SPA
 fallback, answers the composed standalone pages (`runtime/web/pages.caddy`)
 ahead of the declared Django paths it proxies (`INGRESS_DJANGO_PATHS` in
-[`angee.web.build`](../src/angee/web/build.py)), and strips `/operator` only for the
+[`angee.web.build`](../src/angee/web/build.py), published in the web manifest as
+`ingressDjangoPaths`), and strips `/operator` only for the
 narrow `/operator/graphql` route. It sets the operator allowed origin to the
 stack's browser origin. The inner Caddy waits for the edge's Compose alias on
 public ingress and trusts its connected Compose network CIDRs with strict

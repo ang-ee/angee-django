@@ -63,7 +63,9 @@ page requests, so they must reach Django on the page's paths: a page path sits
 under a prefix listed here. Only ``PAGE_PREFIXES`` are open to pages. Every other
 entry is the framework's own endpoint, whose browser navigations a page would take
 over, and a path this list does not hold (an app route, the build's ``/assets/``,
-the operator's ``/operator/``) falls to the app and never reaches Django.
+the operator's ``/operator/``) falls to the app and never reaches Django. The
+manifest publishes the list, in this order, as its top-level ``ingressDjangoPaths``,
+so a dev server's proxy can read it rather than keep a copy.
 """
 
 PAGE_ACCEPT = "text/html"
@@ -223,6 +225,7 @@ class WebRuntime:
             "codegen": codegen_entries,
             "pageAccept": {PAGE_ACCEPT: PAGE_ACCEPT_PATTERN},
             "pageCsp": build_policy(PAGE_CSP),
+            "ingressDjangoPaths": list(INGRESS_DJANGO_PATHS),
             "documentRoots": [
                 {"kind": "package", "package": entry["package"], "path": f"node_modules/{entry['package']}/src"}
                 for entry in (*core_packages, *addon_packages)
