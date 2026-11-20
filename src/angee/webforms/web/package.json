@@ -16,7 +16,7 @@
       "webforms.form": {
         "entry": "./src/standalone/form.html",
         "paths": [
-          "/forms/w/*"
+          "/forms/*"
         ],
         "accept": "text/html"
       }
