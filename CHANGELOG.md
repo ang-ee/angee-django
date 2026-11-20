@@ -10,6 +10,17 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: a person's color scheme has one writer and a first-paint cache
+  that follows it. Under an appearance provider the user menu no longer mounts
+  the browser-local scheme (`useColorSchemePreference`), which wrote its own
+  preference (`system` there) over the saved one when the shell mounted, on an
+  OS scheme change and on a storage event; the menu's toggle reads and sets the
+  provider's scheme, and the browser-local scheme is read, applied and followed
+  only in a tree without a provider, as before. A locked app now writes the
+  boot cache (`angee:appearance:3`) with the person's own theme, options and
+  scheme, resolved as if the app were not locked, so a scheme chosen there
+  paints on the next load instead of only once React applies the saved
+  preference.
 - `@angee/ui`: `FormView` (and so `Form` and every registered form) takes an
   optional `renderUnavailable(id, unavailable)`: what a saved record's form
   shows when its id reads no record, given the default "Record unavailable"

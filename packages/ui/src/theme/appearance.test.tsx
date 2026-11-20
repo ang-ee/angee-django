@@ -17,6 +17,7 @@ import { bootstrapAppearance, defineTheme } from "./runtime.mjs";
 import type { ThemeContribution } from "./index";
 import {
   APPEARANCE_CACHE_KEY,
+  APPEARANCE_CACHE_SCHEMA,
   APPEARANCE_PREFERENCE_KEY,
   AppearanceProvider,
   useAppearance,
@@ -414,9 +415,27 @@ test("a lock with no app theme leaves the person's theme in place", () => {
   expect(result.current.effectiveThemeId).toBe(paper.definition.id);
 });
 
-test("a locked app never writes its theme into the device's boot cache", () => {
-  renderAppearance({ themeLocked: true });
-  expect(window.localStorage.getItem(APPEARANCE_CACHE_KEY)).toBeNull();
+test.each([false, true])("the boot cache holds the person's own theme, scheme and token layers (locked app: %s)", async (themeLocked) => {
+  const { result } = renderAppearance({ themeLocked });
+  const cache = () => JSON.parse(window.localStorage.getItem(APPEARANCE_CACHE_KEY) ?? "null");
+  const own = {
+    schema: APPEARANCE_CACHE_SCHEMA,
+    fingerprint: host.fingerprint,
+    actorId: "actor-1",
+    themeId: paper.definition.id,
+    colorSchemePreference: "light",
+    tokenLayers: {
+      shared: { "--brand": "#445566", "--surface-rail": "#223344" },
+      light: paper.definition.tokens.light,
+      dark: paper.definition.tokens.dark,
+    },
+  };
+  expect(cache()).toEqual(own);
+  await act(async () => result.current.setColorScheme("dark"));
+  expect(document.documentElement.dataset).toMatchObject({
+    themeId: themeLocked ? ink.definition.id : paper.definition.id, colorScheme: "dark",
+  });
+  expect(cache()).toEqual({ ...own, colorSchemePreference: "dark" });
 });
 
 test("the person's invalid options raise no notice under a lock", () => {

@@ -147,6 +147,8 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST, themeLocked:
   const hostTheme = hostThemeId ? catalogue.get(hostThemeId) ?? null : null;
   const savedAppearance = resolveAppearance(preferences, saved.notice, catalogue, host, system, lockRequested);
   const { themeLocked } = savedAppearance;
+  // The boot cache holds the person's own choice in every app: a lock never replaces it there.
+  const ownAppearance = themeLocked ? resolveAppearance(preferences, saved.notice, catalogue, host, system, false) : savedAppearance;
   const { effectiveThemeId, effectiveTheme, colorSchemePreference, colorScheme, effectiveTokens, effectiveOptions, notice } =
     draft ? resolveAppearance(draft, null, catalogue, host, system, lockRequested) : savedAppearance;
   let hostOptions: ThemeOptionsEnvelope | undefined;
@@ -167,17 +169,16 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST, themeLocked:
   }, [colorScheme, effectiveThemeId, effectiveTokens, resolvingIdentity]);
 
   useEffect(() => {
-    // A locked app's theme is not the person's; the device's next first paint follows their own choice.
-    if (resolvingIdentity || themeLocked) return;
+    if (resolvingIdentity) return;
     writeAppearanceCache({
       schema: APPEARANCE_CACHE_SCHEMA,
       fingerprint: host.fingerprint ?? "",
       actorId: auth.user?.id ?? "anonymous",
-      themeId: savedAppearance.effectiveThemeId,
-      colorSchemePreference: savedAppearance.colorSchemePreference,
-      tokenLayers: savedAppearance.tokenLayers,
+      themeId: ownAppearance.effectiveThemeId,
+      colorSchemePreference: ownAppearance.colorSchemePreference,
+      tokenLayers: ownAppearance.tokenLayers,
     });
-  }, [auth.user?.id, savedAppearance, host.fingerprint, resolvingIdentity, themeLocked]);
+  }, [auth.user?.id, ownAppearance, host.fingerprint, resolvingIdentity]);
 
   const update = useCallback(async (
     apply: (current: AppearancePreferences) => AppearancePreferences | undefined,
