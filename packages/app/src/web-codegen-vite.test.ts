@@ -660,7 +660,7 @@ function declarePage({ files = true, document = demoDocument, ...published }: { 
     write(join(addon, "pages", "rest.ts"), 'export function open() { document.body.dataset.rest = "standalone page rest"; }');
     write(join(addon, "pages", "demo.css"), ".demo-page { color: var(--text-primary); }");
   }
-  manifest({ pageAccept, ...published, addonPackages: [{
+  manifest({ pageAccept, pageCsp, ...published, addonPackages: [{
     package: "@demo/theme", root: "../../linked-addon", sourceRoot: "src/headless", pages: { "demo.page": pageDeclaration },
   }] });
 }
@@ -682,6 +682,12 @@ test("a declared page whose entry is missing fails the build, naming its package
   declarePage({ files: false });
   await expect(resolveConfig({ ...await config(), configFile: false, logLevel: "silent" }, "build"))
     .rejects.toThrow('@demo/theme page "demo.page" must name an existing file inside its package');
+});
+
+test("a declared page with no published policy fails, naming the manifest's key", async () => {
+  declarePage({ pageCsp: undefined });
+  await expect(resolveConfig({ ...await config(), configFile: false, logLevel: "silent" }, "build"))
+    .rejects.toThrow("The web manifest declares standalone pages but publishes no pageCsp");
 });
 
 test("build emits a declared page as <id>.html beside index.html, with its own files, the tokens and the themes, and no policy of its own", async () => {
@@ -756,8 +762,6 @@ test("dev serves a declared page at its paths to a document request, and nothing
   ]);
   expect(await (await get(sheets[0]!, { headers: { accept: "text/css" } })).text()).toContain("--surface-canvas");
   expect(await (await get(sheets[1]!, { headers: { accept: "text/css" } })).text()).toContain('[data-theme-id="demo.theme"]');
-  // The manifest publishes no policy here, so the document carries none.
-  expect(html).not.toContain("Content-Security-Policy");
   const head = await get("/forms/w/demo", { method: "HEAD", headers: { accept: browserAccept } });
   expect([head.status, await head.text()]).toEqual([200, ""]);
   // This server has no proxy: a request the page does not answer finds no document of the page's.
