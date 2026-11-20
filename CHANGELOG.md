@@ -60,6 +60,11 @@ live in code docstrings.
       checked again at delivery. The staff form does not prefill a target's
       default configuration: `ImplBase.effective_defaults` writes defaults under
       `config` only, and a form's field is `target_config`; a follow-up at base.
+      A form that posts on a messaging channel keeps a copy of the answers in
+      messaging (the message's envelope and body, with the claimed address),
+      which erasing the response does not reach, because messaging has no verb
+      that redacts an ingested message; the fix, a target erase hook and a
+      messaging redaction verb, is a follow-up.
   - **A response posted as a message** is the bridge `angee.webforms_messaging`,
     which requires both addons; neither depends on the other. Its `message`
     target posts a response on a `webform` channel through
@@ -67,9 +72,13 @@ live in code docstrings.
     with the `webform` envelope `Message.webform_submission()` reads, so
     `angee.intake` captures it. The claimed address in the envelope is the
     answer to the version's contact question when that question asks for an
-    email. Someone may point a form at a channel only if they may write on it.
-    Messaging's refusals are kept as `refused: channel_missing` and
-    `refused: message_refused`. The `webform` channel backend is the bridge's,
+    email. Someone may point a form at a channel only if they may write on it,
+    and one channel and slug take one form: a second is refused when it is
+    configured, and by the table when two are saved at once.
+    A response is refused, and not tried again, as `channel_missing`,
+    `message_exists` (the channel already holds a message under that
+    submission's id which the response did not make) or `message_refused`. The
+    `webform` channel backend is the bridge's,
     under the registry key channel rows already store.
   - **Messaging holds no form.** Removed from `angee.messaging`:
     `views.public_webform` and `urls.py`; `ChannelWebform` with `Channel.slug`,
@@ -92,42 +101,64 @@ live in code docstrings.
     to its shape and to the fields intake fills, and a name a submission does
     not carry maps nothing, as an answer the field refuses already did. The
     checks against a channel's form schema are gone with the schema.
-  - **Upgrade.** Every host that composes `angee.webforms` runs
-    `makemigrations webforms`. A host that holds channels with the `webform`
-    backend adds `angee.webforms_messaging` to its roots; until it does, the
-    database check `angee.E052` names those rows before `migrate` and under
-    `check --database`. A host whose webform channels hold a form (a slug, a
-    published flag or a schema) copies the migration template
-    `src/angee/webforms_messaging/compose_migrations/messaging/webform_channels_to_forms.py`
-    into `runtime/messaging/migrations/` and pins its two placeholder
-    dependencies to its own messaging leaf and to its webforms migration; the
-    drop guard refuses `makemigrations messaging` until it has. A host whose
-    channels hold none runs `makemigrations messaging`, which removes the empty
-    columns. Then `migrate` and `rebac sync`.
-    The template makes one form per channel, named after it, with the channel's
-    slug as its address and as the slug of its `message` target, so its
-    conversation continues. The FormSpec becomes the form's first version in
-    the project's `LANGUAGE_CODE`; the email field becomes the contact question;
-    a field without a label shows its name. A published channel becomes a
-    published form whose version states every question personal, to be narrowed
-    in a new version, and is judged by the rule publishing applies
-    (`validate_publishable`); an unpublished one becomes a draft that states
-    nothing yet.
-    The template refuses, with every such channel named and before any column
-    goes: a schema it cannot turn into questions (an `integer`, a read-only,
-    hidden or defaulted field, a pattern), a version the web forms' rules refuse
-    (a choice whose value is not a code, a field named `submission_id`,
-    `version`, `language` or `answers`, a curly bracket in the success text), a
-    slug that cannot be an address, an address a form already has, and a form
-    without a slug. Change the channel on the previous release and apply again.
-    A channel's `max_body_bytes` and `max_field_bytes` are not carried over (a
-    form's limits are its definition's and the `ANGEE_WEBFORM_*` bounds), nor
-    are form columns on a channel of another backend; both are reported in the
-    log. The template does not reverse. Upgrade cutoff: it ships through the 3.x
-    releases and is removed in 4.0, and
-    `messaging.webforms.default_webform_schema` stays while retained migrations
-    import it; a host upgrading from an earlier release applies the template
-    through a 3.x release first.
+  - **Upgrade.** Back up the database first: the move has no reverse, so going
+    back means restoring that backup and running the previous code.
+    - Every host that composes `angee.webforms` runs `makemigrations webforms`.
+    - A host that holds channels with the `webform` backend adds
+      `angee.webforms_messaging` to its roots. Until it does, the database check
+      `angee.E052` names those rows under `check --database`, which a plain
+      `migrate` runs first and `provision` runs only after its migrations.
+    - A host whose webform channels hold a form (a slug, a published flag or a
+      schema) moves them with the bridge's migration template, in this order:
+      delete any autodetected migration that removes `Channel.slug`,
+      `is_published`, `form_schema`, `form_schema_version`, `max_body_bytes`,
+      `max_field_bytes` or `uq_messaging_channel_webform_slug`; copy
+      `src/angee/webforms_messaging/compose_migrations/messaging/webform_channels_to_forms.py`
+      into `runtime/messaging/migrations/`, pinned after the host's current
+      messaging leaf and its webforms initial migration; run
+      `makemigrations messaging`, which must report no changes; run
+      `manage.py check_webform_channels`, which prints what the move would
+      refuse and leave out and changes nothing; then `migrate` and `rebac sync`.
+    - The drop guard does not make a host take that path. It refuses an
+      autodetected removal of those columns at `makemigrations`, and only when
+      the database that command runs on holds a form in them. It never judges a
+      removal that is already on disk: authored where no channel held a form
+      and applied where one does, such a migration drops the forms. Hence the
+      first step above. A host whose channels hold no form anywhere needs no
+      template: `makemigrations messaging` removes the empty columns.
+    - The template makes one form per channel, named after it, with the
+      channel's slug as its address and as the slug of its `message` target, so
+      its conversation continues. The FormSpec becomes the form's first version
+      in the project's `LANGUAGE_CODE`; the email field becomes the contact
+      question; a field without a label shows its name. A published channel
+      becomes a published form whose version states every question personal, to
+      be narrowed in a new version, and is judged by the rule publishing applies
+      (`validate_publishable`); an unpublished one becomes a draft that states
+      nothing yet. It makes no response: the submissions a channel received stay
+      the messages they are.
+    - The template refuses, with every such channel named and before any column
+      goes: a schema it cannot turn into questions (an `integer`, a read-only,
+      hidden or defaulted field, a pattern), a version the web forms' rules
+      refuse (a choice whose value is not a code, a field named `submission_id`,
+      `version`, `language` or `answers`, a curly bracket in the success text),
+      a slug that cannot be an address, an address a form already has, and a
+      form without a slug. Change the channel on the previous release and apply
+      again. Without the check command a refusal first appears at `migrate`,
+      and holds the services that wait on it until the channel is changed.
+    - Not carried over, each reported in the log with its channel's public id:
+      a channel's `max_body_bytes` and `max_field_bytes` (a form's limits are
+      its definition's and the `ANGEE_WEBFORM_*` bounds), a field's `title`
+      beside its `label`, a disabled option, and form columns on a channel of
+      another backend.
+    - A link to `/public/forms/<slug>` stops working and nothing redirects it:
+      publish the new address, `/forms/<slug>`, or add a redirect at the
+      ingress. A webform channel authored as a resource row needs its resource
+      file changed, since the row no longer takes `slug`, `is_published` or
+      `form_schema`; that is the consumer's companion change.
+    - Upgrade cutoff: the template ships through the 3.x releases and is removed
+      in 4.0, and `messaging.webforms.default_webform_schema` stays while
+      retained migrations import it; a host upgrading from an earlier release
+      applies the template through a 3.x release first.
   - Check ids: `angee.E052` is new (`check_stored_impl_keys`: stored rows whose
     implementation key nothing registers, with the remedy an addon states in
     `ANGEE_IMPL_KEY_REMEDIES`). Provenance's merge-history check is now
