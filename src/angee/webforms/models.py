@@ -38,13 +38,13 @@ from typing import Any, ClassVar, Self
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models, transaction
-from django.db.models.fields.json import KeyTextTransform
 from django.utils import timezone
 from rebac import PermissionDenied, system_context
 from rebac.actors import is_sudo
+from rebac.field_backing import canonical_model
 
 from angee.base.fields import DiagnosticTextField, ImplClassField, StateField
 from angee.base.managers import AngeeManager
@@ -67,13 +67,14 @@ from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.webforms.constants import DELIVER_RESPONSE_TASK
 from angee.webforms.targets import DeliveryRefused, FormTarget
 from angee.webforms.validators import (
+    CONTACT_LIMIT,
     LANGUAGE_TAG,
     OTHER_SUFFIX,
-    missing_translations,
-    questions,
+    contact_of,
     validate_answers,
-    validate_definition,
+    validate_publishable,
     validate_submission_id,
+    validate_version,
 )
 
 SLUG = RegexValidator(r"^[a-z0-9]+(?:-[a-z0-9]+)*$", "Use lower-case letters and numbers, with single hyphens between.")
@@ -170,6 +171,13 @@ class FormQuerySet[FormT: Form](ArchiveQuerySet[FormT], AngeeHistoryQuerySet[For
             "_undelivered_count": models.Count("responses", filter=waiting),
             "_undelivered_since": models.Min("responses__created_at", filter=waiting),
         }
+
+    def update(self, **kwargs: Any) -> int:
+        """Refuse a collection edit of a form's target: its owner decides who may choose it, one form at a time."""
+
+        if {"target_class", "target_config"} & set(kwargs):
+            raise ValidationError("A form's target changes through the form's own save.")
+        return super().update(**kwargs)
 
     def accepting(self) -> FormQuerySet[FormT]:
         """Keep the forms that take submissions now: published, with a version, and not archived."""
@@ -372,19 +380,15 @@ class FormVersion(ImmutableFieldsMixin, AngeeDataModel, concrete=True):
         """Refuse a definition outside the stored subset, and personal questions the definition does not ask."""
 
         super().clean()
-        validate_definition(self.definition, languages=self.languages, default_language=self.default_language)
-        asked = {question["name"] for question in questions(self.definition)}
-        errors: dict[str, str] = {}
-        personal = self.personal_questions
-        if personal is not None and (
-            not isinstance(personal, list)
-            or any(not isinstance(name, str) or name not in asked for name in personal)
-        ):
-            errors["personal_questions"] = "Name questions this version asks."
-        if self.contact_question and self.contact_question not in asked:
-            errors["contact_question"] = "Name a question this version asks."
-        if errors:
-            raise ValidationError(errors)
+        validate_version(**self._content())
+
+    def _content(self) -> dict[str, Any]:
+        """This version's content, as its validators take it."""
+
+        return {
+            "definition": self.definition, "languages": self.languages, "default_language": self.default_language,
+            "personal_questions": self.personal_questions, "contact_question": self.contact_question,
+        }
 
     def validate_answers(self, answers: Any) -> dict[str, Any]:
         """Return ``answers`` when this version's definition admits them; raise each refusal under its question."""
@@ -418,17 +422,7 @@ class FormVersion(ImmutableFieldsMixin, AngeeDataModel, concrete=True):
         """Refuse publication while the definition, its translations or its personal-data statement fall short."""
 
         self.clean()
-        missing = missing_translations(
-            self.definition, languages=self.languages, default_language=self.default_language,
-        )
-        if missing:
-            raise ValidationError({
-                "definition": [f"{pointer}: not written in every language of the form." for pointer in missing],
-            })
-        if self.personal_questions is None:
-            raise ValidationError({
-                "personal_questions": "State which questions hold personal data, even if none do.",
-            })
+        validate_publishable(**self._content())
 
     def publish(self) -> None:
         """Publish this version: its form serves it from now on, and it never changes again.
@@ -532,23 +526,13 @@ class ResponseQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet):
         """Keep the responses whose contact answer is ``contact``, whatever the letter case.
 
         The contact answer is the one a response's version names
-        (``FormVersion.contact_question``). This is how a person's responses are
-        found across forms when they ask what is held about them.
+        (``FormVersion.contact_question``), kept beside the answers in
+        ``Response.contact``. This is how a person's responses are found across
+        forms when they ask what is held about them.
         """
 
-        wanted = contact.strip()
-        if not wanted:
-            return self.none()
-        names = _model("FormVersion")._base_manager.exclude(contact_question="").values_list(
-            "contact_question", flat=True,
-        ).order_by().distinct()
-        found = models.Q(pk__in=())
-        rows = self
-        for index, name in enumerate(names):
-            # A key read by name: a question may be called what a lookup is called.
-            rows = rows.alias(**{f"contact_{index}": KeyTextTransform(name, "answers")})
-            found |= models.Q(version__contact_question=name, **{f"contact_{index}__iexact": wanted})
-        return rows.filter(found)
+        wanted = contact_of({"contact": contact}, "contact")
+        return self.filter(contact=wanted) if wanted else self.none()
 
     def for_record(self, record: models.Model) -> Self:
         """Keep the responses ``record`` was made from."""
@@ -563,7 +547,9 @@ _ResponseManagerBase = AngeeManager.from_queryset(ResponseQuerySet)
 class ResponseManager(_ResponseManagerBase):
     """Receive and retire responses."""
 
-    def receive(self, form: Any, *, version: int, submission_id: Any, language: Any, answers: Any) -> tuple[Any, bool]:
+    def receive(
+        self, form: Form, *, version: int, submission_id: object, language: object, answers: object,
+    ) -> tuple[Any, bool]:
         """Keep one submission to ``form``; return the response and whether this call made it.
 
         Named system work for the public endpoint, after its guard. ``version``
@@ -612,6 +598,7 @@ class ResponseManager(_ResponseManagerBase):
                 row: Any = self.model(
                     form_id=form.pk, version_id=published.pk, submission_id=receipt,
                     language=tag or published.default_language, answers=checked,
+                    contact=contact_of(checked, published.contact_question),
                     # Should the task queued below be lost, the reconciler finds the response then.
                     retry_at=timezone.now() + FIRST_RETRY,
                 )
@@ -685,6 +672,8 @@ class Response(AppendOnlyModel, AngeeDataModel, concrete=True):
     """The language the respondent answered in."""
     answers = models.JSONField(default=dict)
     """The answers by question name, as the version's derived schema admitted them."""
+    contact = models.CharField(max_length=CONTACT_LIMIT, blank=True, default="", db_index=True)
+    """The contact answer, trimmed and in one letter case, by which a person's responses are found; erased with it."""
     erased_at = models.DateTimeField(null=True, blank=True)
     delivery = StateField(choices_enum=Delivery, default=Delivery.PENDING)
     delivery_error = DiagnosticTextField(blank=True, default="")
@@ -773,6 +762,11 @@ class Response(AppendOnlyModel, AngeeDataModel, concrete=True):
                 if made is None:
                     made = row.form.target().deliver(row)
                     if made is not None:
+                        if canonical_model(type(made)) is None:
+                            # No record reference reaches it, so nothing would erase the answers when it goes.
+                            raise ImproperlyConfigured(
+                                f"{type(made)._meta.label} is not a record a response can become.",
+                            )
                         content_type, object_id = generic_pointer_target(made)
                         _model("ResponseRecord").objects.create(
                             response_id=row.pk, content_type=content_type, object_id=object_id,
@@ -844,7 +838,9 @@ class Response(AppendOnlyModel, AngeeDataModel, concrete=True):
         kept = {
             name: value for name, value in self.answers.items() if name.removesuffix(OTHER_SUFFIX) not in personal
         }
-        return bool(self._stored().filter(erased_at__isnull=True).owner_update(answers=kept, erased_at=timezone.now()))
+        return bool(self._stored().filter(erased_at__isnull=True).owner_update(
+            answers=kept, contact="", erased_at=timezone.now(),
+        ))
 
 
 class ResponseRecord(RecordRefMixin, AngeeDataModel, concrete=True):

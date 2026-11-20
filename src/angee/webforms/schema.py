@@ -92,6 +92,7 @@ class WebformResponseType(AngeeNode):
     submission_id: auto
     language: auto
     answers: auto
+    contact: auto
     erased_at: auto
     delivery: auto
     delivery_error: auto
@@ -158,7 +159,10 @@ _RESPONSE_RESOURCE = hasura_model_resource(
     WebformResponseType,
     model=Response,
     name="webform_responses",
-    filterable=["id", "form", "version", "language", "delivery", "created_at", "delivered_at", "erased_at"],
+    # `contact`: a person's responses across forms, by their contact answer (trimmed, lower case).
+    filterable=[
+        "id", "form", "version", "language", "contact", "delivery", "created_at", "delivered_at", "erased_at",
+    ],
     sortable=["created_at", "delivered_at"],
     aggregatable=["id"],
     groupable=["form", "version", "language", "delivery"],

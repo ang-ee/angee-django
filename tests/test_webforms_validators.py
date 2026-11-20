@@ -205,6 +205,7 @@ def test_simple_markup_is_admitted_as_written(markup: str) -> None:
     pytest.param("<p>a&nbsp;b</p>", id="a-named-entity"),
     pytest.param("<p>1 < 2</p>", id="a-bare-less-than"),
     pytest.param("<a href='https://example.test/'>x</a>", id="a-single-quoted-address"),
+    pytest.param("<p>Thank you, {name}.</p>", id="a-placeholder-an-answer-would-fill"),
 ])
 def test_markup_outside_the_allowlist_is_refused_at_its_text(markup: str) -> None:
     in_one_language = changed(("completedHtml",), {"default": "<p>Thank you.</p>", "es": markup})

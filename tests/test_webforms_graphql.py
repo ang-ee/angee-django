@@ -182,6 +182,29 @@ def test_a_manager_sees_what_is_undelivered_and_when_it_expires_and_a_failed_del
     assert seen["webform_responses_aggregate"]["aggregate"]["count"] == 1
 
 
+def test_a_manager_finds_a_persons_responses_by_their_contact_and_erases_them() -> None:
+    """What a person asks to have erased is found from the console, whatever case they wrote their address in."""
+
+    form, _version, response = kept_form()
+    Response.objects.receive(
+        form, version=1, submission_id="r-2", language="en", answers={**ANSWERS, "email": "bo@example.test"},
+    )
+    actor = manager()
+    found = """query($contact: String!) {
+      webform_responses(where: {contact: {_eq: $contact}}) { id submission_id contact }
+    }"""
+
+    rows = result_data(execute_schema(schema(), found, {"contact": "ada@example.test"}, user=actor))
+    (row,) = rows["webform_responses"]
+    erased = result_data(execute_schema(schema(), ERASE, {"id": row["id"]}, user=actor))
+    after = result_data(execute_schema(schema(), found, {"contact": "ada@example.test"}, user=actor))
+
+    assert (row["submission_id"], row["contact"]) == ("r-1", "ada@example.test")
+    assert erased["erase_webform_response"]["ok"] is True
+    assert after["webform_responses"] == []
+    assert (stored(response).contact, "email" in stored(response).answers) == ("", False)
+
+
 def test_the_status_and_what_became_of_a_response_are_not_writable_fields() -> None:
     form, _version, response = kept_form()
     actor = manager()
