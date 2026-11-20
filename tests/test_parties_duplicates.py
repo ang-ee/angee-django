@@ -1006,6 +1006,14 @@ def test_a_sets_merge_costs_a_counted_number_of_statements(db: None) -> None:
     party kinds, keep-apart decisions, field values) and the record merge itself (``Party.merge``). The rows the
     sets wrote are published once for the request, on commit, outside this count
     (:func:`test_a_batch_publishes_each_row_its_merge_wrote_once_through_its_own_gate` measures that).
+
+    The record merge also probes, once each, every reference it would move (``Party.moved_references()``, one
+    ``exists()`` per merged record) and every merge blocker (``Party.merge_blockers()``, one ``exists()`` per set).
+    Those lists grow with the models a run registers: collecting ``tests/test_task_create_access.py`` and
+    ``tests/test_task_relation_freshness.py`` adds ``ProjectAccessTask`` and ``FreshnessTask``, whose subject
+    references are two more probes (``scopedemo_projectaccesstask``, ``scopedemo_freshnesstask``), so the same set
+    costs 356 statements with this file alone and 358 with every file collected. The pin counts the rest: 317
+    statements, 18 of them actor-scoped, plus one probe for each entry of those two lists.
     """
 
     del db
@@ -1014,8 +1022,9 @@ def test_a_sets_merge_costs_a_counted_number_of_statements(db: None) -> None:
 
     one = _merge_statements(owner, sets[0])
     two = _merge_statements(owner, *sets[1:])
+    probes = len(Party.moved_references()) + len(Party.merge_blockers())
 
-    assert (two[0] - one[0], two[1] - one[1]) == (356, 18)
+    assert (two[0] - one[0] - probes, two[1] - one[1]) == (317, 18)
 
 
 def _singles(owner: Any, count: int, tag: str) -> list[Any]:
