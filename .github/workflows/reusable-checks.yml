@@ -213,7 +213,9 @@ jobs:
       - name: Verify PostgreSQL contracts execute without skips
         # Every PostgreSQL-only contract (row and advisory locks, MVCC reads,
         # two-writer campaigns, vendor branches by node id) with the workflow,
-        # decision and agent-session selection, in six duration-balanced groups.
+        # decision and agent-session selection, and the authorization contracts
+        # the PostgreSQL lane's rule in docs/checks.md admits, in six
+        # duration-balanced groups.
         # These source tests register bare concrete Django models, so PostgreSQL
         # must create their tables in one sync-app pass.
         # A pull request runs the examples profile alone: its member planner-memory
@@ -319,7 +321,8 @@ jobs:
             tests/test_task_rank_allocation.py tests/test_projects_record_tasks.py \
             tests/test_webforms_concurrency.py tests/test_webforms_messaging_concurrency.py \
             tests/test_webforms_messaging_upgrade.py \
-            tests/test_projects_access_projections.py tests/test_timeline_concurrency.py \
+            tests/test_projects_access_projections.py tests/test_parties_roles.py \
+            tests/test_timeline_concurrency.py \
             tests/test_work_intake_lock_campaign.py tests/test_work_stage_lock_campaign.py \
             tests/test_workflows_integrate_cycle.py tests/test_workflows_integrate_steps.py
           fi
