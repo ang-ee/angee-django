@@ -257,6 +257,29 @@ describe("a form in several pages", () => {
   });
 });
 
+describe("a description the entry already asked for", () => {
+  test("opens the form without asking again, and asks anew for a later version", async () => {
+    const calls = vi.fn(async () => json(200, described(2, SECOND)));
+    vi.stubGlobal("fetch", calls);
+    history.replaceState(null, "", "/forms/semilla?lang=en");
+    await openPage({
+      described: Promise.resolve(json(200, described(1, FIRST))),
+      render: (survey) => (rendered.push(survey), () => undefined),
+      wear,
+    });
+    expect(calls).not.toHaveBeenCalled();
+    expect(survey().getQuestionByName("nickname")).not.toBeNull();
+  });
+
+  test("says the form could not be loaded when that request failed", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    const failed = Promise.reject(new TypeError("offline"));
+    failed.catch(() => undefined);
+    await openPage({ described: failed, render: () => () => undefined, wear });
+    expect(notice().textContent).toBe("The form could not be loaded. Try again in a moment.");
+  });
+});
+
 describe("sending the answers", () => {
   test("sends what the form asks, under one id, with the field a person leaves empty", async () => {
     serve({ get: [() => json(200, described(1, FIRST))], post: [() => json(202, { submission_id: "kept" })] });

@@ -549,6 +549,7 @@ function angeePagesPlugin(themesSheet: string): Plugin & {
   /** The content security policy the ingress sends a page: the manifest's `pageCsp`, when it publishes one. */
   let policy: string | undefined;
   let root = "";
+  let base = "/";
   let building = false;
   const documentId = (page: StandalonePage) => normalizePath(join(root, `${page.id}.html`));
   // A file path resolves in a build; the browser needs Vite's file route.
@@ -583,6 +584,7 @@ function angeePagesPlugin(themesSheet: string): Plugin & {
     owns: (filename) => pages.some((page) => filename === normalizePath(page.file) || filename === documentId(page)),
     configResolved(config) {
       root = config.root;
+      base = config.base;
       building = config.command === "build";
     },
     options(options) {
@@ -608,12 +610,22 @@ function angeePagesPlugin(themesSheet: string): Plugin & {
     transformIndexHtml: {
       order: "post",
       handler(_html, context) {
+        if (building) {
+          // A page's entry may ask for its own data first and import the rest of the page
+          // dynamically, so that the two arrive side by side. Vite preloads only what an entry
+          // imports statically; the document preloads what a page's entry imports dynamically too,
+          // or that download would wait for the entry to run.
+          if (!pages.some((page) => context.filename === documentId(page))) return;
+          return (context.chunk?.dynamicImports ?? []).map((file) => ({
+            tag: "link", attrs: { rel: "modulepreload", crossorigin: true, href: `${base}${encodeURI(file)}` }, injectTo: "head" as const,
+          }));
+        }
         // The ingress sends a page its content security policy as a response header, and the
         // built document carries none of its own. Development cannot send that header: it would
         // refuse the development scripts Vite's pipeline puts in a document's head (the React
         // plugin's inline refresh preamble among them). So the same policy is written into the
         // document here, after those scripts: everything the page itself brings runs under it.
-        if (building || !policy || !pages.some((page) => context.filename === normalizePath(page.file))) return;
+        if (!policy || !pages.some((page) => context.filename === normalizePath(page.file))) return;
         return [{ tag: "meta", attrs: { "http-equiv": "Content-Security-Policy", content: metaPolicy(policy) }, injectTo: "head" }];
       },
     },

@@ -656,7 +656,8 @@ const demoDocument = '<html><head><title>Demo</title><link rel="stylesheet" href
 function declarePage({ files = true, document = demoDocument, ...published }: { files?: boolean; document?: string; pageAccept?: object; pageCsp?: string } = {}) {
   if (files) {
     write(join(addon, "pages", "demo.html"), document);
-    write(join(addon, "pages", "demo.ts"), 'document.title = "standalone page module";');
+    write(join(addon, "pages", "demo.ts"), 'document.title = "standalone page module"; import("./rest").then((rest) => rest.open());');
+    write(join(addon, "pages", "rest.ts"), 'export function open() { document.body.dataset.rest = "standalone page rest"; }');
     write(join(addon, "pages", "demo.css"), ".demo-page { color: var(--text-primary); }");
   }
   manifest({ pageAccept, ...published, addonPackages: [{
@@ -691,6 +692,11 @@ test("build emits a declared page as <id>.html beside index.html, with its own f
   const source = Buffer.from(page.source).toString();
   const chunk = outputs.find((entry) => entry.type === "chunk" && entry.code.includes("standalone page module"));
   expect(source).toContain(`src="/${chunk?.fileName}"`);
+  // What the page's entry imports dynamically downloads beside the entry: the document preloads it.
+  const rest = outputs.find((entry) => entry.type === "chunk" && entry.code.includes("standalone page rest"));
+  expect(rest?.fileName).not.toBe(chunk?.fileName);
+  expect(source).toContain(`<link rel="modulepreload" crossorigin href="/${rest?.fileName}">`);
+  expect(html).not.toContain(rest?.fileName);
   // The app's document keeps its first-paint script. A page applies its own theme: the content
   // security policy the ingress sends it runs no inline script, so it is given the appearance as data.
   expect(html).toContain("data-angee-appearance-bootstrap");

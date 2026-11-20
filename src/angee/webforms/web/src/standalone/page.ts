@@ -27,6 +27,8 @@ export interface PageParts {
   render(survey: Model, host: HTMLElement): () => void;
   /** Wear a form's theme; an empty id follows the deployment's default. */
   wear(themeId: string): void;
+  /** The form's description, when the entry already asked the address for it. */
+  described?: Promise<Response>;
 }
 
 /** The document shows nothing while it carries this class; see `form.css`. */
@@ -45,9 +47,9 @@ function ownName(tag: string): string {
 }
 
 /** Open the form this address serves in the document, and keep it open until its answers are kept. */
-export async function openPage({ render, wear }: PageParts): Promise<void> {
+export async function openPage({ render, wear, described: asked }: PageParts): Promise<void> {
   const address = location.pathname;
-  const asked = new URLSearchParams(location.search).get("lang");
+  const wanted = new URLSearchParams(location.search).get("lang");
   // One id for the page's life: sending the same answers again is the same response.
   const submissionId = newSubmissionId();
   const mount = document.getElementById("form") as HTMLElement;
@@ -67,7 +69,7 @@ export async function openPage({ render, wear }: PageParts): Promise<void> {
   let turned = false;
 
   /** The page's own sentences: in the form's language once one is shown, else in the visitor's. */
-  const text = (): PageMessages => pageMessages(language ? [language] : [asked, ...navigator.languages]);
+  const text = (): PageMessages => pageMessages(language ? [language] : [wanted, ...navigator.languages]);
 
   /** Replace the form with one plain message. */
   function say(message: string): void {
@@ -82,7 +84,9 @@ export async function openPage({ render, wear }: PageParts): Promise<void> {
 
   /** Ask the address for the version the form serves now; nothing when it takes no submissions. */
   async function describe(): Promise<FormDescription | undefined> {
-    const response = await fetch(address, { headers: { Accept: "application/json" } });
+    // The entry's own request answers the first time; a later version is asked for anew.
+    const response = await (asked ?? fetch(address, { headers: { Accept: "application/json" } }));
+    asked = undefined;
     if (response.status === 404) return undefined;
     if (!response.ok) throw new Error(`The form could not be loaded (${response.status}).`);
     return readDescription(await response.json());
@@ -210,7 +214,7 @@ export async function openPage({ render, wear }: PageParts): Promise<void> {
       return option;
     }));
     await speak(described.languages.includes(language) ? language : chooseLanguage({
-      requested: asked,
+      requested: wanted,
       served: described.language,
       preferred: navigator.languages,
       languages: described.languages,
