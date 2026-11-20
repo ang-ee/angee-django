@@ -10,6 +10,43 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: the batch dialog lists every group a list's "Select all N"
+  matched by key, not by offset. It forwards the list's own groups read as the
+  list sent it, order included (`AllMatchingGroups.read.orderBy`, always the
+  group's own key, ascending, nulls last), and each next page is that read with
+  its `where` narrowed to the groups past the last listed key, so a group added
+  or removed while the list is read neither repeats nor skips another. The
+  listing ends on a short page, not on the list's count, and says so when the
+  number of groups it listed differs from that count. The reader takes the named
+  `AllMatching` types from `@angee/ui` and refuses an order of more than the
+  grouped field, which has no one-field cursor, and an order with nulls first or
+  descending (one rule, `cursorField`, shared by the reader and the dialog). A
+  page that ends on a key no `_gt` can step past (null, or not text) ends the
+  listing rather than starting it again from the first page. A paged dialog says
+  how far it has read ("Loaded N of M …", with the loading indicator) from its
+  first render until every page is listed and previewed, and every dialog uses a
+  preview only as it read it itself, fetched since it opened and not being read
+  again: a reopened dialog reads its previews again rather than ticking from
+  cached ones.
+- `@angee/ui`: a record form's rail shows a field exactly when the sheet would:
+  visible for the form's current values (`showWhen`, resolved through
+  `resolve`) and not `hidden`, decided by the same `visibleFields` the draft
+  uses; a rail group left with no field and no content is dropped.
+  `visibleRecordRailGroups` takes the form's values after the record.
+- `@angee/ui`: in a record form, the targets a preset hides are dropped from
+  the draft, and on save each preset field whose value changed writes its
+  preset's value for every target that is hidden now and was loaded with a
+  different value. `prefill` is now also called when the form is saved, so it
+  must be pure. Choosing another kind and then the stored one again is
+  therefore clean instead of dirty with nothing to save. `prefillReplace` is
+  documented as what it is: the fields `prefillPreserveDirty` still replaces.
+- `@angee/ui`: `AppearanceState` has `drafting`, whether a draft is open. The
+  Appearance settings page keeps a draft open by it; it used to rely on `openDraft`
+  being a new function on every render, which re-ran its effect after a Discard.
+- `@angee/ui`: `AppearanceProvider` resolves the appearance once per input (the
+  saved preferences, the catalogue, the host defaults, the system scheme, the lock
+  and the draft), so a render that changes none of them no longer re-applies the
+  token layers to the document or reads and encodes the boot cache.
 - `angee.base`, `angee.resources`, `angee.workflows`: a merge refusal's reason
   names the record by its public id ("This record (tag_…) is loaded from
   angee.tags resources, which would recreate it; keep it instead.", "Workflow
@@ -315,6 +352,100 @@ live in code docstrings.
   record form asks whenever a resource its metadata marks `mergeable` misses, so
   no form passes a hook and parties keeps only its concrete page
   (`party_record`'s `concrete_kind`).
+- `angee.parties`: one verb makes the person of a contact an integration's
+  record carried (a name, an email address, a phone number),
+  `Party.objects.claimant_as_system`. Each source creates its own people: the
+  caller hands over the record that carried the contact (`evidence`) and its
+  rule of which records are its own, as a queryset of them (`own`: the record
+  links of its integration). The email decides, and a contact without one is
+  decided by its number: the person found again is one whose standing claim on
+  a handle of that address has a row of `own` behind it, never a person
+  another source, a user or a person made, whoever holds or claims the
+  address. A trashed person is nobody's answer, a merged one is found as its
+  survivor, of several the earliest. An email that cannot be an address at
+  all is no address and a number the handle owner reads nothing in, or
+  refuses, is no number: each is left out and makes no handle, so two contacts
+  that gave the same non-address are never one person for it. What can be an
+  email address is one predicate on the handle owner,
+  `Handle.is_email_address`: exactly one `@`, a non-empty name part in any
+  script with no whitespace, control or format character, a domain that
+  passes the domain rule of Django's `EmailValidator`, and no longer than an
+  address may be or the handle's value holds. Both spellings of an
+  internationalised domain are one address: `Handle.normalize_value` reads a
+  domain's punycode labels (`xn--`) as Unicode in the comparison key, while
+  `value` keeps what was typed. The rule for a domain is one function,
+  `Handle.normalize_email_domain`, and the organization-domain suggestion
+  reads the handle's domain and `Organization.domain` (stored as typed)
+  through it on both sides, so either spelling of either suggests the
+  organization. What the person does not hold
+  is recorded as a claim for review with the record behind it
+  (`propose_claimed_handle_as_system`) and moves nothing; a person found again
+  has nothing new stated of them and carries a handle only when they hold it
+  or a record of the caller stands behind their claim on it. The rows of the
+  address and of the number are locked in one call before any claim is read,
+  and which claims are the caller's own is one read of its records by key, in
+  batches within the database's parameter budget. The verb proposes no pair: a
+  claim links its person to the address, so the pairing job proposes them.
+  Which claims still stand is one scope, `PartyStatementQuerySet.standing()`
+  (each party's strongest current stance on a handle, where it asserts a
+  value), which `people_for_emails` and the party graph's identity lens now
+  read instead of spelling the rule. The read behind the verb,
+  `standing_claims()`, adds to each standing claim the records its evidence
+  names, those of a claim a merge superseded under it included: two sources'
+  claimants of one address, once merged, are each found as the survivor, where
+  a read of current stances alone had one of the two sources make a new person
+  after every merge. `angee.provenance`: `EvidenceReference.named_record` is
+  the one comparison of which record a reference names (the model's label
+  without case and the public id, the pointer aside); the verb reads it, and a
+  consumer compares the references `standing_claims()` returns with its own
+  the same way. No resource or permission change. Upgrade: a handle stores
+  the comparison key its rule gave when it was last saved, so a change of the
+  rule leaves stored keys behind. The rule now has a version,
+  `Handle.NORMALIZATION_VERSION`, to bump whenever `Handle.normalize_value` or
+  `Handle.normalize_email_domain` returns something else (a test pins the
+  rule's outputs for a fixed sample beside the number), and each handle
+  carries the version its key was computed under in a new column,
+  `Handle.normalized_version` (a small indexed integer, default 0, not
+  editable, not shown in GraphQL), which the handle's save writes together
+  with the key. A host runs `uv run --no-sync python manage.py makemigrations
+  parties` after compose, which authors one migration adding the column to
+  the handle and to its history table, commits it, and provisions. Existing
+  rows are then at version 0, so the provision repair `renormalize_handles`
+  (`HandleManager.renormalize_handles`), which every provision runs, selects
+  them by the column's index and saves each again through the handle's own
+  save. It takes the whole backlog in that provision, because a row left with
+  a stale key is one the lookups that read keys miss, and a writer that
+  misses it makes a second row. So the first provision after the migration
+  saves every existing handle once (`updated_at` stamped, one history version
+  each); its time grows with the table: about 65 rows per second on
+  PostgreSQL 17 in a local container, measured twice with 10,000 handles
+  (155 and 149 seconds) on an 18-core development machine that other work
+  kept under heavy load (load average 75 to 87). The repair saves in batches
+  of `HandleManager.REPAIR_LIMIT` (500) rows, each in its own transaction, so
+  an interrupted provision keeps what it saved and the next one resumes. The
+  provision log prints "Saved the comparison key of N handle(s) again." A row
+  whose save raises is rolled back alone, logged with its error, counted in
+  "The comparison key of N handle(s) could not be saved; ..." and tried again
+  by the next run, while the rest are saved. `manage.py renormalize_handles
+  --limit N` saves a share instead, and only then prints "Stopped at the cap
+  of N handle(s); M more await the next provision or renormalize_handles
+  run". Once no row is behind, the repair is one indexed query per provision
+  and prints "Saved the comparison key of 0 handle(s) again." A handle stored
+  with a punycode-domain key is found by its Unicode spelling after that
+  first provision. A row newer code stamped with a later version is selected
+  too, so a rollback keys it again by the older rule. The PostgreSQL lane
+  runs the repair's two lock races
+  (`tests/test_parties_handle_keys_concurrency.py`): a row another process
+  deletes, and one it saves, after the repair selected its key and before
+  the repair holds its lock.
+  Limits: two callers that meet two spellings of
+  one new address at once each make its row, and so its person, which the
+  pairing job then proposes; a handle is unique by its value as typed, not by
+  its comparison key, so writers that key on the exact value can still make
+  two rows of one address, which every lookup by the key reads together; a
+  number that is no valid international number is read as its digits. The
+  domain codec is the standard library's, IDNA 2003: a punycode label that
+  carries `ß`, `ς` or a joiner does not read back and stays as typed.
 - `angee.parties`: a merged-away party is no longer a row. The `people`,
   `organizations` and `parties` resources read `canonical()` parties, as
   handles, addresses and relationships already did, so a party merged into
@@ -374,15 +505,17 @@ live in code docstrings.
   passes `selectAllMatching` (`ListView`/`List`) offers "Select all N" where its
   pager counts what a verb acts on (a flat list's records, or the groups of a list
   grouped by one server level), and once the person chooses it a page's
-  `bulkActions` receives `collection.allMatching`, a readonly copy of the pager's
-  unit and exact total and the list's own read:
-  `{ unit: "records", total, read: { where } }`, or
-  `{ unit: "groups", total, read: { where, dimensions, having } }` (refine's
-  `GroupByRequestOptions`, which a page turns into variables with
-  `groupByVariables`). Opting in asserts that every page verb honours it or
-  refuses it. The selected ids stay the only ids; the generic Archive,
-  Trash/Restore and Delete, and the Share utility, refuse with their reason while
-  it is on, on every list sharing the selection, where a list reading otherwise
+  `bulkActions` receives `collection.allMatching` (`AllMatching`, exported with
+  its arms beside `SelectedGroup`), a readonly copy of the pager's unit and exact
+  total and the list's own read:
+  `{ unit: "records", total, read: { where } }` (`AllMatchingRecords`), or
+  `{ unit: "groups", total, read: { where, dimensions, having, orderBy } }`
+  (`AllMatchingGroups`; refine's `GroupByRequestOptions`, which a page turns into
+  the variables, the groups' order included, with `groupByVariables`). Opting in
+  asserts that every page verb honours it or refuses it. The selected ids stay the
+  only ids; the generic Archive, Trash/Restore and Delete, and the Share utility,
+  refuse with their reason while it is on, on every list sharing the selection,
+  and the list utilities receive no `selectedIds` then; a list reading otherwise
   renders no page verbs and only the list that chose the mode moves its total and
   ends it by leaving. Unselecting a row or an expanded group leaves it for what
   shows selected, the loaded rows less those unselected; a collapsed group shows
@@ -391,11 +524,44 @@ live in code docstrings.
   `bulkActions` docstring's. A native leaf page (`AngeeListBatchEntry`) states
   when it last settled (`updatedAt`, required), which a grouped selection's split
   reads instead of the page's total.
+  `Checkbox` takes a `disabledReason`, as `Button` does: the box's tooltip and
+  accessible description, `aria-disabled` and still in the tab order, with one
+  element tree as the reason comes and goes.
   `@angee/ui/views/resource-view-list-body`: `ListSelectionBar` takes an optional
   `matching` (`ListSelectionMatching`: "Select all N" and "All N selected") and
-  `deleteDisabledReason`, and `SelectionToggle` a `disabledReason`, its tooltip and
-  accessible description. `@angee/ui/views/resource-view-context` no longer exports
-  the lists' internal selection channel (`useSelectionPlaces`, `SelectionPlaces`).
+  `deleteDisabledReason`, and `SelectionToggle` a `disabledReason`, which it gives
+  its `Checkbox`. `@angee/ui/views/resource-view-context` no longer exports the
+  lists' internal selection channel (`useSelectionPlaces`, `SelectionPlaces`).
+
+- `@angee/refine`: a batch of reads keeps its identity while nothing its callers
+  read changes. Callers of `useAuthoredQueryBatch`: its entries are now
+  `QueryBatchEntry` (exported), the native result's `data`, `dataUpdatedAt`,
+  `error`, `isFetching` and `refetch`, readonly, no longer the whole
+  `UseQueryResult`; a caller needing another property (`status`, `isStale`…) reads
+  it from its own `useQuery`. It and `useAngeeListBatch` give `useQueries` one
+  projection as `combine`, fresh each render, so Query runs it on that render's
+  results (enabling a read shows it fetching at once), keyed by each request's
+  query hash, which Query's structural sharing matches by key: the Map and each
+  entry keep their identity until one of those five or a label's request changes,
+  and a change replaces only the entries it touched, wherever a request is
+  inserted, removed or moved in the batch. A read going stale or a failed attempt
+  Query retries no longer renders the batch's owner. A label without a result
+  fails, naming the hook. `useDerivedBatch` (new) maps a batch, reusing each output
+  while its entry is the same object and its inputs are unchanged:
+  `useAngeeGroupByBatch`, `useAngeeFacets`, `useAngeeListBatch`, `@angee/ui`'s
+  `useCollectionQueryBatch` and the grouped surface's source results derive
+  through it, so a read that settles decodes only itself and opening a group
+  decodes no other. A group payload the decoder refuses is that read's `error`, in
+  a batch and in the facets as in `useAngeeGroupBy`, never a render that throws,
+  and is reported as a failed read is (refine's auth check and error
+  notification), once per settle of the read across its consumers.
+  `useAngeeGroupBy` and `useAngeeAggregate` decode once per read,
+  `useAngeeListBatch` keys its requests on the target's and scopes' contents and
+  shares one request among the labels on it, and a
+  resource's operations (`useGroupOperation`, `useAggregateOperation`,
+  `useDeletePreviewOperation`) keep their target across renders, so a grouped
+  list's render that changes nothing it reads (a scroll frame) rebuilds no group
+  model; it still corrects a group page set past its last.
 
 - `angee.parties`: one owner proposes same-person pairs. A pull-only
   directory's contact that may only claim an address another live party is

@@ -13,9 +13,6 @@ import { UndeliveredNotice } from "./UndeliveredNotice";
 /** What the record reads beside its fields, to say how many responses still wait for delivery. */
 const UNDELIVERED_FIELDS = ["undelivered_count", "undelivered_expires_at"];
 
-/** What choosing a target replaces whole, whatever was typed into it. */
-const TARGET_CONFIG = ["target_config"];
-
 /**
  * A target's configuration is not another's: choosing another target starts its
  * configuration empty. That is also what a target that takes none must be sent,
@@ -67,7 +64,7 @@ function WebformForm({ resource: _resource, recordTabs, returning, headerExtras,
       <Field name="name" title />
       <Field name="status" widget="statusbar" status readOnly />
       <Field name="target_class" label={t("form.target")} widget="select" options={targetOptions}
-        prefill={targetConfigFor} prefillReplace={TARGET_CONFIG} />
+        prefill={targetConfigFor} />
       <Field name="target_config" label={t("form.targetConfig")} widget="json"
         showWhen={(values) => targetConfig.hasSchema(values.target_class)
           && !targetConfig.fields.some((field) => field.showWhen?.(values))} />

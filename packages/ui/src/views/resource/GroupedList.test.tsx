@@ -267,14 +267,28 @@ test("grouped lists select a whole group or every loaded row, and a near miss on
   expect(view.state.rowSelection).toEqual({ r1: true });
 });
 
-test("a collapsed group's checkbox is disabled until its rows are loaded, and says why", () => {
+test("a collapsed group's checkbox is disabled until its rows are loaded, stays in the tab order and says why", () => {
+  let view!: ReturnType<typeof useResourceView>;
   render(
     <ResourceViewProvider scope="local">
-      <GroupedRecordHarness selectable expanded={false} />
+      <GroupedRecordHarness selectable expanded={false} onView={(next) => { view = next; }} />
     </ResourceViewProvider>,
   );
   const group = screen.getByRole("checkbox", { name: "Select the loaded rows in January" });
-  expect(group.getAttribute("aria-disabled") ?? group.getAttribute("data-disabled")).not.toBeNull();
+  expect(group.getAttribute("aria-disabled")).toBe("true");
+  expect(group.hasAttribute("data-disabled")).toBe(true);
+  // A keyboard user reaches the reason: Tab stops on the box, which describes it.
+  expect(group.tabIndex).toBe(0);
+  group.focus();
+  expect(document.activeElement).toBe(group);
   expect(document.getElementById(group.getAttribute("aria-describedby") ?? "")?.textContent)
     .toBe("Expand the group to change its selection");
+  // Space, a click or a near miss beside the box changes nothing.
+  const before = view.state.rowSelection;
+  fireEvent.keyDown(group, { key: " " });
+  fireEvent.keyUp(group, { key: " " });
+  fireEvent.click(group);
+  fireEvent.click(group.parentElement!);
+  expect(view.state.rowSelection).toBe(before);
+  expect(group.getAttribute("aria-checked")).toBe("false");
 });

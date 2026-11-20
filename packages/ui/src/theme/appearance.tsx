@@ -65,6 +65,8 @@ export interface AppearanceState {
   preferences: AppearancePreferences;
   /** Preferences being applied: the open draft, or the saved preferences. */
   currentPreferences: AppearancePreferences;
+  /** A draft is open: edits apply to it, not to the saved preferences, until Save, Discard or Reset closes it. */
+  drafting: boolean;
   dirty: boolean;
   effectiveThemeId: string | null;
   effectiveColorSchemePreference: ColorSchemePreference;
@@ -129,7 +131,7 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST, themeLocked:
     }
     return entries;
   }, [runtime.themes]);
-  const saved = readAppearancePreferences(userPreferences.preferences);
+  const saved = useMemo(() => readAppearancePreferences(userPreferences.preferences), [userPreferences.preferences]);
   const preferences = saved.value;
   const [draft, setDraftState] = useState<AppearancePreferences | null>(null);
   // Commands share the latest draft even when React batches several edits.
@@ -145,12 +147,22 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST, themeLocked:
   const system = useSystemColorScheme();
   const hostThemeId = host.themeId ?? null;
   const hostTheme = hostThemeId ? catalogue.get(hostThemeId) ?? null : null;
-  const savedAppearance = resolvePreferredAppearance(preferences, saved.notice, catalogue, host, system, lockRequested);
+  // Each resolution is made once per input: the effects below key on what they hold, so a
+  // render that changes nothing neither applies the appearance again nor reads the boot cache.
+  const savedAppearance = useMemo(
+    () => resolvePreferredAppearance(preferences, saved.notice, catalogue, host, system, lockRequested),
+    [preferences, saved.notice, catalogue, host, system, lockRequested],
+  );
   const { themeLocked } = savedAppearance;
   // The boot cache holds the person's own choice in every app: a lock never replaces it there.
-  const ownAppearance = themeLocked ? resolvePreferredAppearance(preferences, saved.notice, catalogue, host, system, false) : savedAppearance;
-  const { effectiveThemeId, effectiveTheme, colorSchemePreference, colorScheme, effectiveTokens, effectiveOptions, notice } =
-    draft ? resolvePreferredAppearance(draft, null, catalogue, host, system, lockRequested) : savedAppearance;
+  const ownAppearance = useMemo(
+    () => themeLocked ? resolvePreferredAppearance(preferences, saved.notice, catalogue, host, system, false) : savedAppearance,
+    [themeLocked, preferences, saved.notice, catalogue, host, system, savedAppearance],
+  );
+  const { effectiveThemeId, effectiveTheme, colorSchemePreference, colorScheme, effectiveTokens, effectiveOptions, notice } = useMemo(
+    () => draft ? resolvePreferredAppearance(draft, null, catalogue, host, system, lockRequested) : savedAppearance,
+    [draft, catalogue, host, system, lockRequested, savedAppearance],
+  );
   let hostOptions: ThemeOptionsEnvelope | undefined;
   if (hostTheme?.definition.options) {
     try {
@@ -287,6 +299,7 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST, themeLocked:
   const value = useMemo<AppearanceState>(() => ({
     preferences,
     currentPreferences,
+    drafting: draft !== null,
     dirty,
     effectiveThemeId,
     effectiveColorSchemePreference: colorSchemePreference,
@@ -309,7 +322,7 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST, themeLocked:
     save,
     discard,
     reset,
-  }), [preferences, currentPreferences, dirty, effectiveThemeId, colorSchemePreference, colorScheme, effectiveTheme, hostTheme, hostOptions, effectiveOptions, themeLocked, userPreferences.available, saved.writable, resolvingIdentity, saving, error, notice, setTheme, setColorScheme, setOptions, openDraft, save, discard, reset]);
+  }), [preferences, currentPreferences, draft, dirty, effectiveThemeId, colorSchemePreference, colorScheme, effectiveTheme, hostTheme, hostOptions, effectiveOptions, themeLocked, userPreferences.available, saved.writable, resolvingIdentity, saving, error, notice, setTheme, setColorScheme, setOptions, openDraft, save, discard, reset]);
   return <AppearanceContext.Provider value={value}>{children}</AppearanceContext.Provider>;
 }
 

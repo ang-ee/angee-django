@@ -70,8 +70,7 @@ describe("WebformForm", () => {
     // A new form has no stored target: every choice starts empty.
     expect(target?.prefill?.("store", {}, { target_class: "store" })).toEqual({ target_config: {} });
     expect(target?.prefill?.("enquiry", {})).toEqual({ target_config: {} });
-    // Replaced whole, even when the visitor had typed into it.
-    expect(target?.prefillReplace).toEqual(["target_config"]);
+    // Nothing is kept back: without `prefillPreserveDirty` a preset replaces every field it names.
     expect(target?.prefillPreserveDirty).toBeUndefined();
   });
 

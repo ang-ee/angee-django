@@ -4,7 +4,9 @@ import {
   type CheckboxRootProps as BaseCheckboxRootProps,
 } from "@base-ui/react/checkbox";
 import { Glyph } from "../chrome/Glyph";
+import { shownContent } from "../lib/shown-content";
 import { tv, type VariantProps } from "../lib/variants";
+import { Tooltip } from "./tooltip";
 import { interactiveSurface, widgetControlPresentationProps, type WidgetControlSurfaceProps } from "./widget-control";
 
 /**
@@ -86,28 +88,42 @@ export type CheckboxProps = Omit<
     className?: string;
     onChange?: React.ChangeEventHandler<HTMLInputElement>;
     onCheckedChange?: BaseCheckboxRootProps["onCheckedChange"];
+    /**
+     * Why the box cannot change; a reason disables it (null, false and "" are no
+     * reason), as `Button.disabledReason` does a verb. The reason is the box's tooltip
+     * and its accessible description, and the box stays focusable so keyboard users
+     * reach it; a click, Space or Enter changes nothing, and the box swallows Space so
+     * it does not scroll the page. A box given this prop, even with no reason, keeps
+     * one element tree as its reason comes and goes, so a focused box keeps its focus.
+     */
+    disabledReason?: React.ReactNode;
   };
 
 /**
  * @kind primitive
  */
 export const Checkbox = React.forwardRef<HTMLElement, CheckboxProps>(
-  function Checkbox(
-    {
+  function Checkbox(props, ref) {
+    const {
       size = "md",
       presentation,
-      invalid = false,
+      invalid: invalidProp = false,
       indeterminate = false,
       className,
       children,
       onChange,
       onCheckedChange,
-      ...props
-    },
-    ref,
-  ) {
-    invalid = invalid || props["aria-invalid"] === true || props["aria-invalid"] === "true";
+      disabled,
+      disabledReason,
+      "aria-describedby": describedBy,
+      ...rest
+    } = props;
+    const invalid = invalidProp || rest["aria-invalid"] === true || rest["aria-invalid"] === "true";
     const styles = checkboxVariants({ size, ...widgetControlPresentationProps(presentation), invalid });
+    const reasonId = React.useId();
+    // A box given the prop keeps one element tree while its reason comes and goes.
+    const reasonGiven = "disabledReason" in props;
+    const reason = shownContent(disabledReason);
 
     function handleCheckedChange(
       checked: boolean,
@@ -117,14 +133,26 @@ export const Checkbox = React.forwardRef<HTMLElement, CheckboxProps>(
       onChange?.(checkboxChangeEvent(checked));
     }
 
-    return (
+    // Base UI skips a disabled box's key handlers, so a box a reason keeps focusable
+    // swallows Space itself, which would scroll the page; its capture handler still runs.
+    const swallowSpace: CheckboxProps["onKeyDownCapture"] = (event) => {
+      rest.onKeyDownCapture?.(event);
+      if (event.key === " ") event.preventDefault();
+    };
+
+    const box = (
       <BaseCheckbox.Root
         ref={ref}
         className={styles.root({ className })}
         data-indeterminate={indeterminate ? "" : undefined}
         indeterminate={indeterminate}
         onCheckedChange={handleCheckedChange}
-        {...props}
+        aria-describedby={reason === null ? describedBy : [describedBy, reasonId].filter(Boolean).join(" ")}
+        {...rest}
+        // Base UI ignores a disabled box's activation and marks it `aria-disabled`; a
+        // reason keeps it in the tab order, where Base UI would take it out.
+        disabled={disabled || reason !== null}
+        {...(reason === null ? {} : { tabIndex: rest.tabIndex ?? 0, onKeyDownCapture: swallowSpace })}
       >
         <BaseCheckbox.Indicator
           className={styles.indicator()}
@@ -136,6 +164,13 @@ export const Checkbox = React.forwardRef<HTMLElement, CheckboxProps>(
         />
         {children}
       </BaseCheckbox.Root>
+    );
+    if (!reasonGiven) return box;
+    return (
+      <>
+        <Tooltip label={reason} disabled={reason === null}>{box}</Tooltip>
+        <span id={reasonId} hidden>{reason}</span>
+      </>
     );
   },
 );

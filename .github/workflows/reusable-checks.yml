@@ -272,6 +272,7 @@ jobs:
             tests/test_parties_directory_backend.py::test_a_confirmation_of_a_pages_address_waits_for_the_page \
             tests/test_parties_directory_backend.py::test_an_account_adopting_a_pages_candidate_waits_for_the_page \
             tests/test_parties_same_as_concurrency.py \
+            tests/test_parties_handle_keys_concurrency.py \
             tests/test_agent_sessions.py tests/test_agent_sessions_concurrency.py \
             tests/test_integrate_discovery_concurrency.py \
             tests/test_integrate_jwt_bearer.py::test_concurrent_mints_serialize_across_processes_on_postgresql \

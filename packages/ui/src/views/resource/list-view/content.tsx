@@ -15,7 +15,7 @@ import { type GroupedResourceViewSurface, type ResourceViewSurface } from "../re
 import { GroupedListBody } from "../GroupedList";
 import { FlatListBody, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures, type FlatListBodyProps, type GroupMeasure } from "../resource-view-list-body";
 import { ResourceListFrame } from "../ResourceListFrame";
-import { listChromeState, type BoardCardSpec, type CardActionContext, type ListEmptyContent, type ListViewProps } from "../resource-view-types";
+import { listChromeState, type AllMatching, type BoardCardSpec, type CardActionContext, type ListEmptyContent, type ListViewProps } from "../resource-view-types";
 import { DeclaredBoardCardBody, DefaultBoardCardBody } from "../board/cards";
 import { columnsWithMetadataDefaults } from "../model-metadata-defaults";
 import { createLabelForResource } from "../resource-view-utils";
@@ -23,7 +23,7 @@ import type { ColumnDescriptor } from "../../page";
 import { useRelationFacets } from "../../relation/relation-facet";
 import { useScalarFacets } from "../../relation/scalar-facet";
 import { useBulkDelete } from "../useBulkDelete";
-import { renderBulkActions, useBulkAction, type AllMatching, type PlacedBulkActions } from "../bulk-action";
+import { renderBulkActions, useBulkAction, type PlacedBulkActions } from "../bulk-action";
 import { BulkArchiveActions } from "../archive";
 import { BulkTrashActions } from "../trash";
 import { recordRepresentationValue, titleText } from "../../form/form-view-model";
@@ -172,7 +172,10 @@ export function ListViewContent<TRow extends Row = Row>({
   // The mode holds that read's key, so it is only ever this read's, and the total it
   // last settled with, which it keeps while the read pages, refetches or fails.
   const matching = surface.matching;
-  const matchingKey = matching ? stableSerialize(matching.selects) : null;
+  // The surface holds the read from its own request, so its key and copy follow that
+  // request, not each render (a scroll frame re-renders the list).
+  const selects = matching?.selects;
+  const matchingKey = React.useMemo(() => selects ? stableSerialize(selects) : null, [selects]);
   // Under the mode every loaded row shows selected, and a write starts from them, with
   // the row and the place each shows in.
   const table = surface.table;
@@ -190,10 +193,10 @@ export function ListViewContent<TRow extends Row = Row>({
   // Only the list that chose the mode moves its total; another list with the same read
   // shows the mode's, so two lists whose reads settle apart never write over each other.
   const entered = chosen?.surface === surfaceId ? chosen : null;
+  const chosenTotal = chosen ? (entered ? matching?.total : undefined) ?? chosen.total : undefined;
   // A copy: a page changing what it received changes nothing in the list's reads.
-  const allMatching = useValueStable(matching && chosen ? structuredClone<AllMatching>({
-    ...matching.selects, total: (entered ? matching.total : undefined) ?? chosen.total,
-  }) : undefined);
+  const allMatching = React.useMemo(() => selects && chosenTotal !== undefined
+    ? structuredClone<AllMatching>({ ...selects, total: chosenTotal }) : undefined, [selects, chosenTotal]);
   const { updateAllMatching, leaveAllMatching } = placement;
   // This list reading otherwise, or no longer showing, ends the mode it chose: it never
   // comes back by itself, and another list sharing the selection never ends it.
@@ -280,7 +283,8 @@ export function ListViewContent<TRow extends Row = Row>({
       value={{
         resource: modelMetadata?.resource.modelLabel ?? resource,
         filter: effectiveFilter,
-        selectedIds,
+        // Under the mode a utility gets none: one that ignores the reason acts on nothing.
+        selectedIds: mode ? EMPTY_SELECTED_IDS : selectedIds,
         selectable,
         disabledReason,
         fields: resolvedColumns.flatMap((column) => column.field ? [column.field] : []),

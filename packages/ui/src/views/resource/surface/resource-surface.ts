@@ -191,10 +191,12 @@ export function useResourceViewSurface<TRow extends Row = Row>({
   });
   // The rows read counts its records; its `where` is what "Select all N" selects.
   const where = selectAllMatching && !source ? listQuery.where : undefined;
-  const matching = React.useMemo<SurfaceMatching | undefined>(() => where ? {
-    selects: { unit: "records", read: { where } }, total, loaded: presentation.pageIds,
+  const selects = React.useMemo<SurfaceMatching["selects"] | undefined>(
+    () => where ? { unit: "records", read: { where } } : undefined, [where]);
+  const matching = React.useMemo<SurfaceMatching | undefined>(() => selects ? {
+    selects, total, loaded: presentation.pageIds,
     more: total !== undefined && total > presentation.pageIds.length,
-  } : undefined, [where, total, presentation.pageIds]);
+  } : undefined, [selects, total, presentation.pageIds]);
 
   return {
     kind: "flat",

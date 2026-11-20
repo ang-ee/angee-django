@@ -1,10 +1,9 @@
 import * as React from "react";
-import type { Row } from "@angee/metadata";
-import { ActionFormDialog, SelectionBarAction, useRouteHref, type ListViewProps, type SelectedGroup } from "@angee/ui";
+import { ActionFormDialog, SelectionBarAction, useRouteHref, type AllMatching, type SelectedGroup } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 
 import { OrganizationGroupSets, PeopleGroupSets, type GroupSetsDocument } from "./documents";
-import { DuplicatesDialog, type DuplicateSetInput } from "./DuplicatesDialog";
+import { DuplicatesDialog, cursorField, type DuplicateSetInput } from "./DuplicatesDialog";
 import { usePartiesT } from "./i18n";
 import { useMergeIntoAction } from "./merge-into";
 
@@ -15,9 +14,6 @@ import { useMergeIntoAction } from "./merge-into";
  * the review counts read (``same_as_pair_counts``), not a query of its own.
  */
 const BATCH_SETS = 50;
-
-/** "Select all N" as a list's `bulkActions` receives it (`collection.allMatching`). */
-type AllMatching = NonNullable<Parameters<NonNullable<ListViewProps<Row>["bulkActions"]>>[2]["allMatching"]>;
 
 /**
  * What a parties list's "Select all" merges by: the list resource's own groups
@@ -41,8 +37,9 @@ export const ORGANIZATION_MERGE_GROUPS: MergeGroupsRead = { document: Organizati
  * group level whose single dimension is one of ``groups.fields`` (no date
  * bucket, no relation, no other field), since each set is the records that share
  * a value the dialog can show and mark, read with "Repeated values only" (the
- * read's `having`), so it lists no group of one. A flat list is refused with what
- * to do, and so is a grouping without repeated values only.
+ * read's `having`), so it lists no group of one, and ordered by that field alone,
+ * the one-field order the dialog pages by key (`GroupListing`). A flat list is
+ * refused with what to do, and so is a grouping without repeated values only.
  */
 const ALL_MATCHING_REFUSALS = {
   records: "merge.selection.allRecords",
@@ -61,6 +58,8 @@ export function allMatchingField(
   if (!field || others.length > 0 || dimension?.granularity || !groups.fields.includes(field)) {
     return { refused: "grouping" };
   }
+  // The dialog pages by the list's own order on that field alone (`cursorField`, the one rule of what it can page).
+  if (cursorField(allMatching.read) !== field) return { refused: "grouping" };
   return { field };
 }
 

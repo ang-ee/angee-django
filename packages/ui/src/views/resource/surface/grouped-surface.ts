@@ -10,6 +10,7 @@ import {
   useAngeeAggregate,
   useAngeeGroupByBatch,
   useAngeeListBatch,
+  useDerivedBatch,
   type AngeeListBatchEntry,
 } from "@angee/refine";
 import type { ResourceViewGroupExpansion } from "../resource-view-context";
@@ -243,28 +244,22 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
       enabled: !source && rowGroupStack.length > 0,
     },
   );
-  const authoredGroups = useCollectionQueryBatch(source?.groups, groupScopes);
-  const groupByResults = React.useMemo<ReadonlyMap<string, GroupedQueryResult>>(
-    () =>
-      source
-        ? new Map(
-            [...authoredGroups].map(([key, result]) => [
-              key,
-              {
-                buckets: result.data?.buckets ?? EMPTY_ARRAY,
-                count: result.data?.count ?? 0,
-                totalCount: result.data?.totalCount ?? 0,
-                summary: result.data?.summary,
-                fetching: result.fetching,
-                error: result.error,
-                updatedAt: result.updatedAt,
-                refetch: result.refetch,
-              },
-            ]),
-          )
-        : nativeGroupResults,
-    [source, authoredGroups, nativeGroupResults],
+  // A source's group results, each derived again only when its own read changes.
+  const authoredGroups = useDerivedBatch(
+    useCollectionQueryBatch(source?.groups, groupScopes),
+    (result): GroupedQueryResult => ({
+      buckets: result.data?.buckets ?? EMPTY_ARRAY,
+      count: result.data?.count ?? 0,
+      totalCount: result.data?.totalCount ?? 0,
+      summary: result.data?.summary,
+      fetching: result.fetching,
+      error: result.error,
+      updatedAt: result.updatedAt,
+      refetch: result.refetch,
+    }),
+    [],
   );
+  const groupByResults: ReadonlyMap<string, GroupedQueryResult> = source ? authoredGroups : nativeGroupResults;
   const scopeModel = React.useMemo(
     () =>
       buildGroupedRenderModel<TRow>(
@@ -330,33 +325,28 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     fields: requestedFields,
     enabled: !source && leafScopes.length > 0,
   });
-  const authoredLeaves = useCollectionQueryBatch(source?.rows, leafScopes);
-  const requestedLeafResults = React.useMemo<ReadonlyMap<string, AngeeListBatchEntry>>(
-    () =>
-      source
-        ? new Map(
-            [...authoredLeaves].map(([key, result]) => [
-              key,
-              {
-                rows: result.data?.rows ?? EMPTY_ARRAY,
-                total: result.data?.total,
-                fetching: result.fetching,
-                error: result.error,
-                updatedAt: result.updatedAt,
-                refetch: result.refetch,
-              },
-            ]),
-          )
-        : nativeLeafResults,
-    [source, authoredLeaves, nativeLeafResults],
+  // A source's later group pages, each derived again only when its own read changes.
+  const authoredLeaves = useDerivedBatch(
+    useCollectionQueryBatch(source?.rows, leafScopes),
+    (result): AngeeListBatchEntry => ({
+      rows: result.data?.rows ?? EMPTY_ARRAY,
+      total: result.data?.total,
+      fetching: result.fetching,
+      error: result.error,
+      updatedAt: result.updatedAt,
+      refetch: result.refetch,
+    }),
+    [],
   );
+  const requestedLeafResults: ReadonlyMap<string, AngeeListBatchEntry> = source ? authoredLeaves : nativeLeafResults;
   const leafResults = React.useMemo<ReadonlyMap<string, AngeeListBatchEntry>>(
     () => new Map([...scopeModel.carriedLeaves, ...requestedLeafResults]),
     [scopeModel.carriedLeaves, requestedLeafResults],
   );
 
   // Persist corrections from settled native counts for both subgroup and leaf
-  // pages. Otherwise a later count increase could revive an obsolete old page.
+  // pages, when a count settles or a page is set past it (which may read the last
+  // page again). Otherwise a later count increase could revive an obsolete old page.
   React.useEffect(() => {
     setPaginationByScope((current) => {
       let next = current;
@@ -380,7 +370,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
       }
       return next;
     });
-  }, [groupByResults, requestedLeafResults, setPaginationByScope]);
+  }, [groupByResults, requestedLeafResults, paginationByScope, setPaginationByScope]);
 
   // One table over the in-display-order concatenation of loaded leaf rows: row
   // ids stay the bare public id so selection identity matches the flat surface.
@@ -523,20 +513,26 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   });
   const selectedIds = React.useMemo(() => idsFromRowSelectionState(resourceView.state.rowSelection), [resourceView.state.rowSelection]);
   // The pager counts the root level's groups, which a verb acts on only when that is
-  // the one level: under nested grouping a root group holds records the person never saw.
-  const rootQuery = selectAllMatching && !source && rowGroupStack.length === 1 ? scopeModel.rootQuery : undefined;
-  const matching = React.useMemo<SurfaceMatching | undefined>(() => {
+  // the one level, whose one scope is the root's: under nested grouping a root group
+  // holds records the person never saw.
+  const root = selectAllMatching && !source && rowGroupStack.length === 1 ? scopeModel.groupScopes[0] : undefined;
+  // The level's read as its groups request sent it, which holds while the list renders
+  // or refetches; until that request goes out, as this render asks for it.
+  const rootQuery = root ? requested.get(root.key) ?? root.query : undefined;
+  // Its order included: what the groups are, not which page of them shows.
+  const selects = React.useMemo<SurfaceMatching["selects"] | undefined>(() => {
     if (!rootQuery) return undefined;
-    const { where, dimensions, having } = rootQuery;
+    const { where, dimensions, having, orderBy } = rootQuery;
+    return { unit: "groups", read: { where, dimensions, ...(having ? { having } : {}), ...(orderBy ? { orderBy } : {}) } };
+  }, [rootQuery]);
+  const matching = React.useMemo<SurfaceMatching | undefined>(() => {
+    if (!selects) return undefined;
     const loaded = [...new Set(groupedItems.flatMap((item) => item.kind === "record" ? [item.row.id] : []))];
     // Every record the read holds is loaded only when this page lists all its groups and their records.
     const held = !settledRoot ? 0 : rootPage === 1 && settledRoot.totalCount <= settledRoot.buckets.length
       ? settledRoot.buckets.reduce((count, bucket) => count + bucket.count, 0) : Infinity;
-    return {
-      selects: { unit: "groups", read: { where, dimensions, ...(having ? { having } : {}) } },
-      total: settledRoot?.totalCount, loaded, more: held > loaded.length,
-    };
-  }, [rootQuery, settledRoot, groupedItems, rootPage]);
+    return { selects, total: settledRoot?.totalCount, loaded, more: held > loaded.length };
+  }, [selects, settledRoot, groupedItems, rootPage]);
   return {
     kind: "grouped",
     list,

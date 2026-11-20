@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import {
   useDataProvider,
   useOnError,
@@ -173,11 +173,7 @@ const handledQueryErrors = new WeakMap<Query, {
 
 export function useAuthoredErrorPolicy(keys: readonly QueryKey[], { notify: notifyErrors = true }: { notify?: boolean } = {}): void {
   const client = useQueryClient();
-  const { mutate: checkError } = useOnError();
-  const notify = useHandleNotification();
-  const translate = useTranslate();
-  const callbacks = useRef({ checkError, notify, translate, notifyErrors });
-  callbacks.current = { checkError, notify, translate, notifyErrors };
+  const fail = useReadFailure(notifyErrors);
   const keySignature = JSON.stringify(
     [...new Set(keys.map((queryKey) =>
       client.defaultQueryOptions({ queryKey }).queryHash,
@@ -202,20 +198,7 @@ export function useAuthoredErrorPolicy(keys: readonly QueryKey[], { notify: noti
             && previous?.errorUpdatedAt === errorUpdatedAt
       ) return;
       handledQueryErrors.set(query, { errorUpdateCount, errorUpdatedAt, action });
-      const error = query.state.error as Error & { statusCode?: number };
-      const { checkError, notify, translate, notifyErrors } = callbacks.current;
-      checkError(error);
-      if (!notifyErrors) return;
-      notify(undefined, {
-        key: "post-notification",
-        message: translate(
-          "notifications.error",
-          { statusCode: error.statusCode },
-          error.statusCode === undefined ? "Something went wrong" : `Error (status code: ${error.statusCode})`,
-        ),
-        description: error.message,
-        type: "error",
-      });
+      fail(query.state.error as Error & { statusCode?: number });
     };
     // Subscribe to the native owner instead of relying on observed result props:
     // a data-only consumer does not rerender when a fetch fails with unchanged data.
@@ -227,5 +210,52 @@ export function useAuthoredErrorPolicy(keys: readonly QueryKey[], { notify: noti
     });
     cache.getAll().forEach((query) => report(query));
     return unsubscribe;
-  }, [client, keySignature]);
+  }, [client, fail, keySignature]);
+}
+
+// A settled payload a decoder refused, by the settle it came with: reported once
+// across every consumer of that read, as a native failure is; a later settle is a
+// new read.
+const refusedReads = new WeakMap<object, number>();
+
+/**
+ * Report a read whose settled payload its decoder refused as a failed read is
+ * reported, once per settle of that read across every consumer of it.
+ */
+export function useRefusedReadReport(): (read: { data: unknown; dataUpdatedAt: number }, error: Error) => void {
+  const fail = useReadFailure(true);
+  return useCallback((read: { data: unknown; dataUpdatedAt: number }, error: Error) => {
+    if (typeof read.data === "object" && read.data !== null) {
+      if (refusedReads.get(read.data) === read.dataUpdatedAt) return;
+      refusedReads.set(read.data, read.dataUpdatedAt);
+    }
+    fail(error);
+  }, [fail]);
+}
+
+/**
+ * The one policy for a read that failed, whatever failed it: refine's auth check,
+ * then (unless the read's surface renders it) refine's error notification.
+ */
+function useReadFailure(notifyErrors: boolean): (error: Error & { statusCode?: number }) => void {
+  const { mutate: checkError } = useOnError();
+  const notify = useHandleNotification();
+  const translate = useTranslate();
+  const callbacks = useRef({ checkError, notify, translate, notifyErrors });
+  callbacks.current = { checkError, notify, translate, notifyErrors };
+  return useCallback((error: Error & { statusCode?: number }) => {
+    const { checkError, notify, translate, notifyErrors } = callbacks.current;
+    checkError(error);
+    if (!notifyErrors) return;
+    notify(undefined, {
+      key: "post-notification",
+      message: translate(
+        "notifications.error",
+        { statusCode: error.statusCode },
+        error.statusCode === undefined ? "Something went wrong" : `Error (status code: ${error.statusCode})`,
+      ),
+      description: error.message,
+      type: "error",
+    });
+  }, []);
 }
