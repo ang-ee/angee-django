@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedThread
 from angee.webforms.models import SLUG
-from angee.webforms.targets import FormTarget
+from angee.webforms.targets import DeliveryRefused, FormTarget
 from angee.webforms.validators import OTHER, OTHER_SUFFIX, questions
 from angee.webforms_messaging.backends import WebformChannelBackend
 
@@ -57,14 +57,6 @@ class MessageTargetConfig(BaseModel):
         return slug
 
 
-class MessageChannelMissing(LookupError):
-    """The channel a form's ``message`` target names is gone, or is no webform channel.
-
-    A response keeps the name of what failed its delivery, so this class is what
-    staff read. Point the form at a webform channel and deliver the response again.
-    """
-
-
 class MessageTarget(FormTarget):
     """Post each response as a message on a channel with the ``webform`` backend.
 
@@ -93,18 +85,34 @@ class MessageTarget(FormTarget):
         return channel is not None and bool(channel.with_actor(actor).has_access("write"))
 
     def deliver(self, response: Any) -> Any:
-        """Post ``response`` on the form's channel and return its message."""
+        """Post ``response`` on the form's channel and return its message.
+
+        Messaging refuses a response in two ways, and neither is tried again by
+        itself: ``channel_missing`` when the channel the form names is gone or
+        is no webform channel, and ``message_refused`` when messaging will not
+        take the message as it is (an envelope past its size bound). Any other
+        error is a failure.
+        """
 
         config = cast(MessageTargetConfig, self.config)
         try:
             channel = apps.get_model("messaging", "Channel").objects.require_backend_target(
                 config.channel, backend_class=WebformChannelBackend.key,
             )
-        except ValidationError as error:
-            raise MessageChannelMissing(config.channel) from error
-        (message,) = apps.get_model("messaging", "Message").objects.ingest(
-            [self.message(response)], channel=channel, quote_edges=WebformChannelBackend.quote_edges,
-        )
+        except ValidationError:
+            channel = None
+        if channel is None:
+            raise DeliveryRefused("channel_missing")
+        try:
+            landed = apps.get_model("messaging", "Message").objects.ingest(
+                [self.message(response)], channel=channel, quote_edges=WebformChannelBackend.quote_edges,
+            )
+        except ValidationError:
+            landed = None
+        if landed is None:
+            # Raised outside the handler: what messaging refused may quote an answer; a refusal keeps its code alone.
+            raise DeliveryRefused("message_refused")
+        (message,) = landed
         return message
 
     def message(self, response: Any) -> ParsedMessage:

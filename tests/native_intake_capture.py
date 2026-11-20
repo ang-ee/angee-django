@@ -258,16 +258,19 @@ class FormCaptureTests(TransactionTestCase):
         self.assertFalse(get_user_model()._base_manager.filter(email="alex@example.com").exists())
 
     def test_programming_error_rolls_back_the_message_and_its_request(self):
+        # Imported here: this module also runs on a host that composes no web forms.
+        from angee.webforms.models import DeliveryFailed
+
         channel = self.webform()
         with patch.object(self.Message, "webform_submission", side_effect=TypeError("Invalid contract")):
-            # The response's own verb raises what its owner makes of a failed delivery.
-            with self.assertRaises(Exception):
+            with self.assertRaises(DeliveryFailed) as failed:
                 self.submit(channel)
+        self.assertEqual(failed.exception.reason, "TypeError")
         self.assertEqual(self.Message._base_manager.count(), 0)
         self.assertEqual(self.Need._base_manager.count(), 0)
         response = apps.get_model("webforms", "Response")._base_manager.get()
-        self.assertEqual(response.delivery, "failed")
-        self.assertIn("TypeError", response.delivery_error)
+        self.assertEqual((response.delivery, response.delivery_error), ("failed", "TypeError"))
+        self.assertIsNotNone(response.retry_at)
 
 
 class IntakeAccessCase(TransactionTestCase):

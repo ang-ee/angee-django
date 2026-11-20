@@ -7,6 +7,7 @@ target made is read back from messaging. Every name and address is invented.
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from django.conf import settings
@@ -17,9 +18,9 @@ from rebac import system_context
 from angee.base.checks import check_stored_impl_keys
 from angee.messaging.models import WebformSubmission
 from angee.messaging.testing.models import Channel, Message
-from angee.webforms.models import Delivery
+from angee.webforms.models import Delivery, DeliveryFailed
+from angee.webforms.targets import DeliveryRefused
 from angee.webforms.testing.models import Form, FormVersion, Response, ResponseRecord
-from angee.webforms_messaging.targets import MessageChannelMissing
 from tests.conftest import Vendor, create_platform_admin, create_user
 
 pytestmark = pytest.mark.django_db
@@ -133,21 +134,67 @@ def test_the_claimed_address_is_the_answer_to_a_contact_question_that_asks_for_a
     assert envelope.answers["phone"] == "555 0100"
 
 
-def test_a_target_that_names_no_webform_channel_fails_the_delivery_under_a_name_staff_can_read() -> None:
+def test_a_form_that_names_no_webform_channel_is_refused_its_delivery_and_not_tried_again() -> None:
     mailbox = channel("manual", "Mailbox")
     form = form_on(mailbox)
 
     row, _made = Response.objects.receive(form, version=1, submission_id="r-1", language="en", answers=ANSWERS)
-    with pytest.raises(MessageChannelMissing):
+    with pytest.raises(DeliveryRefused) as refused:
         form.target().deliver(row)
-    # The response's own verb raises what its owner makes of a failure; what it keeps is pinned below.
-    with pytest.raises(Exception):
+    with pytest.raises(DeliveryFailed) as failed:
         row.deliver()
 
     stored = Response._base_manager.get(pk=row.pk)
-    assert stored.delivery == Delivery.FAILED
-    assert "MessageChannelMissing" in stored.delivery_error
+    assert (refused.value.code, failed.value.reason) == ("channel_missing", "refused: channel_missing")
+    assert (stored.delivery, stored.delivery_error, stored.retry_at) == (
+        Delivery.FAILED, "refused: channel_missing", None,
+    )
     assert not Message._base_manager.filter(channel=mailbox).exists()
+
+
+def test_a_message_messaging_will_not_take_is_refused_by_its_code_and_keeps_no_answer() -> None:
+    """An envelope past messaging's size bound: the response is refused as it is, and nothing is posted."""
+
+    target = channel()
+    asked = [{"type": "comment", "name": f"note{index}"} for index in range(10)]
+    with system_context(reason="webforms messaging tests setup"):
+        form = Form.objects.create(
+            name="Long form", target_class="message", target_config={"channel": target.sqid, "slug": "long-form"},
+        )
+        FormVersion.objects.create(
+            form=form, definition={"elements": asked}, languages=["en"], default_language="en", personal_questions=[],
+        ).publish()
+    form.refresh_from_db()
+    row, _made = Response.objects.receive(
+        form, version=1, submission_id="r-1", language="en",
+        answers={question["name"]: "\N{SNOWMAN}" * 20_000 for question in asked},
+    )
+
+    with pytest.raises(DeliveryFailed) as failed:
+        row.deliver()
+
+    stored = Response._base_manager.get(pk=row.pk)
+    assert failed.value.reason == "refused: message_refused"
+    assert (stored.delivery, stored.delivery_error, stored.retry_at) == (
+        Delivery.FAILED, "refused: message_refused", None,
+    )
+    assert not Message._base_manager.filter(channel=target).exists()
+
+
+def test_any_other_error_of_messaging_is_a_failure_that_is_tried_again() -> None:
+    target = channel()
+    form = form_on(target)
+    row, _made = Response.objects.receive(form, version=1, submission_id="r-1", language="en", answers=ANSWERS)
+
+    with patch.object(Message.objects, "ingest", side_effect=RuntimeError("the database went away")):
+        with pytest.raises(DeliveryFailed) as failed:
+            row.deliver()
+
+    stored = Response._base_manager.get(pk=row.pk)
+    assert (failed.value.reason, stored.delivery, stored.delivery_error) == (
+        "RuntimeError", Delivery.FAILED, "RuntimeError",
+    )
+    assert stored.retry_at is not None
 
 
 def test_only_someone_who_may_write_on_the_webform_channel_may_point_a_form_at_it() -> None:

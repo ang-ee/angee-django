@@ -19,9 +19,7 @@ target_config:
 - `channel` is a channel with the `webform` backend. Posting on a channel is
   messaging's to allow, so someone may point a form at one only if they may
   write on it ([`MessageTarget.permits`](targets.py) asks the channel's own
-  `write` check). A response whose form names another kind of channel, or one
-  that is gone, fails its delivery as `MessageChannelMissing`, which the
-  response keeps where staff see it.
+  `write` check).
 - `slug` names the form's messages on that channel. Each response is the message
   `webform:<slug>:<submission id>`, so delivering one again finds the message it
   posted. All of them share the conversation `webform:<slug>`, titled with the
@@ -30,6 +28,16 @@ target_config:
 [`MessageTarget.deliver`](targets.py) hands the response to messaging's one
 ingest path (`Message.objects.ingest`) and returns the message, which the
 response links as the record it became.
+
+Messaging refuses a response in two ways. Each is kept on the response as
+`refused: <code>`, where staff see it, and is not tried again by itself:
+
+| Code | Messaging's refusal | What staff do |
+|---|---|---|
+| `channel_missing` | The channel the form names is gone, or is no webform channel | Point the form at a webform channel, then deliver again |
+| `message_refused` | It will not take the message as it is: its envelope is past messaging's size bound | Dismiss the response, or shorten what the form asks |
+
+Any other error is a failure, which web forms tries again.
 
 ## The envelope
 
