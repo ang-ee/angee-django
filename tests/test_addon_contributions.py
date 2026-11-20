@@ -17,7 +17,7 @@ from django_compose.serving import GENERATED_SENTINEL
 from angee.base.addons import addon_contribution, addon_facts
 from angee.graphql.schema import schema_parts_for
 from angee.mcp.server import tool_registrar
-from angee.web.build import PAGE_ACCEPT_PATTERN, WebRuntime
+from angee.web.build import INGRESS_DJANGO_PATHS, PAGE_ACCEPT_PATTERN, PAGE_PREFIXES, WebRuntime
 from tests.conftest import make_addon, write_addon_package
 
 FORM_PAGE: dict[str, Any] = {"entry": "./src/form.html", "paths": ["/forms/w/*"], "accept": "text/html"}
@@ -223,7 +223,7 @@ def test_web_pages_refuse_an_entry_that_resolves_outside_the_package(tmp_path: P
 
 def test_web_pages_refuse_ids_shared_by_addons(tmp_path: Path) -> None:
     configs = [
-        _page_site(tmp_path / name, {"site.form": {**FORM_PAGE, "paths": [f"/{name}/*"]}}, name=f"tests.{name}")
+        _page_site(tmp_path / name, {"site.form": {**FORM_PAGE, "paths": [f"/forms/{name}/*"]}}, name=f"tests.{name}")
         for name in ("first", "second")
     ]
     with pytest.raises(
@@ -271,10 +271,43 @@ def test_web_pages_refuse_overlapping_paths(tmp_path: Path, packages: list[dict[
     assert str(refusal.value) == f"Overlapping web/package.json angee.pages paths {claims}"
 
 
+@pytest.mark.parametrize("path", ["/forms/*", "/forms/w/*"])
+def test_web_pages_admit_paths_under_a_prefix_the_ingress_sends_to_django_for_pages(tmp_path: Path, path: str) -> None:
+    config = _page_site(tmp_path, {"site.form": {**FORM_PAGE, "paths": [path]}})
+    entry = WebRuntime((config,), dependencies={config.name: ()}).manifest["addonPackages"][0]
+    assert entry["pages"]["site.form"]["paths"] == [path]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        # Unknown to the ingress: the page's own JSON request would fall to the app and receive HTML.
+        pytest.param("/surveys/*", id="unrouted"),
+        pytest.param("/assets/*", id="build-assets"),
+        pytest.param("/operator/*", id="operator"),
+        # Sent to Django, yet the framework's own: a page there would take over its browser navigations.
+        *(
+            pytest.param(owned, id=owned.strip("/*"))
+            for owned in INGRESS_DJANGO_PATHS
+            if owned.endswith("/*") and owned not in PAGE_PREFIXES
+        ),
+        pytest.param("/admin/login/*", id="beneath-a-framework-prefix"),
+    ],
+)
+def test_web_pages_refuse_paths_outside_the_prefixes_open_to_pages(tmp_path: Path, path: str) -> None:
+    config = _page_site(tmp_path, {"site.form": {**FORM_PAGE, "paths": ["/forms/w/*", path]}})
+    with pytest.raises(ImproperlyConfigured) as refusal:
+        WebRuntime((config,), dependencies={config.name: ()})
+    assert str(refusal.value) == (
+        f"tests.site web/package.json angee.pages['site.form'].paths {path!r} "
+        "must sit under a prefix the ingress sends to Django for pages: '/forms/*'"
+    )
+
+
 def test_web_pages_admit_prefixes_that_share_only_leading_segments(tmp_path: Path) -> None:
     pages = {
         "site.form": {**FORM_PAGE, "paths": ["/forms/w/*", "/forms/wide/*"]},
-        "site.list": {**FORM_PAGE, "paths": ["/forms/x/*", "/lists/2024-q1_draft.v2~a/*"]},
+        "site.list": {**FORM_PAGE, "paths": ["/forms/x/*", "/forms/2024-q1_draft.v2~a/*"]},
     }
     config = _page_site(tmp_path, pages)
     assert WebRuntime((config,), dependencies={config.name: ()}).manifest["addonPackages"][0]["pages"] == pages
@@ -305,7 +338,7 @@ def test_the_page_accept_pattern_selects_only_a_leading_text_html(accept: str, s
 
 def test_the_page_ingress_snippet_routes_each_page_by_method_path_and_leading_accept(tmp_path: Path) -> None:
     config = _page_site(tmp_path, {
-        "site.list": {**FORM_PAGE, "paths": ["/lists/*"]},
+        "site.list": {**FORM_PAGE, "paths": ["/forms/lists/*"]},
         "site.form": {**FORM_PAGE, "paths": ["/forms/w/*", "/forms/draft/*"]},
     })
     projection = WebRuntime((config,), dependencies={config.name: ()})
@@ -337,7 +370,7 @@ def test_the_page_ingress_snippet_routes_each_page_by_method_path_and_leading_ac
         "\n"
         "@page_site_list {\n"
         "\tmethod GET HEAD\n"
-        "\tpath /lists/*\n"
+        "\tpath /forms/lists/*\n"
         f"\texpression `{{http.request.header.Accept}}.matches(r'{accept}')`\n"
         "}\n"
         "handle @page_site_list {\n"

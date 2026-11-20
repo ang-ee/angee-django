@@ -995,6 +995,23 @@ def test_static_ingress_imports_the_composed_standalone_pages_ahead_of_django() 
         assert site.count("root *") == 1
 
 
+def test_static_ingress_sends_django_exactly_the_declared_paths() -> None:
+    """The template cannot read Python, so its ``@django`` matcher is pinned to the list the page rule reads."""
+
+    from angee.web.build import INGRESS_DJANGO_PATHS
+
+    for stack in (
+        _render_local_stack(),
+        _render_staging_stack(),
+        _render_dev_stack(_runtime_mode="docker", serve_mode="production"),
+    ):
+        frontend = stack["services"]["frontend" if "frontend" in stack["services"] else "caddy"]
+        matchers = [
+            line.strip() for line in _rendered_caddyfile(frontend).splitlines() if line.strip().startswith("@django ")
+        ]
+        assert matchers == [f"@django path {' '.join(INGRESS_DJANGO_PATHS)}"]
+
+
 def test_local_stack_uses_operator_backed_addon_installer() -> None:
     """Containerized local stacks edit project files through the host operator."""
 

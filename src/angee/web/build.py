@@ -48,6 +48,24 @@ PAGE_ID_RE = re.compile(r"^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$")
 PAGE_PATH_RE = re.compile(r"^/(?:[a-z0-9][a-z0-9._~-]*/)+\*$")
 """A path a standalone page answers: an absolute lower-case prefix of whole segments ending in ``/*``."""
 
+PAGE_PREFIXES: tuple[str, ...] = ("/forms/*",)
+"""The prefixes the ingress sends to Django under which an addon may declare a standalone page."""
+
+INGRESS_DJANGO_PATHS: tuple[str, ...] = (
+    "/graphql/*", "/acp/*", "/auth/csrf", "/auth/csrf/", *PAGE_PREFIXES,
+    "/storage/upload", "/storage/upload/*", "/storage/download", "/storage/download/*",
+    "/admin/*", "/static/*", "/media/*", "/mcp", "/mcp/*",
+)
+"""Every path the stack's static ingress sends to Django: the one list, which its ``@django`` matcher is pinned to.
+
+A standalone page's own requests (the JSON it fetches, what it submits) are not
+page requests, so they must reach Django on the page's paths: a page path sits
+under a prefix listed here. Only ``PAGE_PREFIXES`` are open to pages. Every other
+entry is the framework's own endpoint, whose browser navigations a page would take
+over, and a path this list does not hold (an app route, the build's ``/assets/``,
+the operator's ``/operator/``) falls to the app and never reaches Django.
+"""
+
 PAGE_ACCEPT = "text/html"
 """The media type a standalone page declares as ``accept``; this version admits no other."""
 
@@ -358,7 +376,8 @@ class WebRuntime:
         """Admit standalone pages: static entries of the web build that load none of the app.
 
         A page declares exactly its ``entry`` (an existing file of the package), the
-        ``paths`` it answers and the ``accept`` media type whose requests select it.
+        ``paths`` it answers (each under one of ``PAGE_PREFIXES``) and the ``accept``
+        media type whose requests select it.
         Only the declaration is projected: the entry's bytes are the web build's input.
         """
 
@@ -385,6 +404,12 @@ class WebRuntime:
                     f"{here}.paths must be a non-empty list of absolute lower-case prefixes ending in '/*', "
                     "such as '/forms/w/*'"
                 )
+            for path in paths:
+                if not any(path.startswith(prefix.removesuffix("*")) for prefix in PAGE_PREFIXES):
+                    raise ImproperlyConfigured(
+                        f"{here}.paths {path!r} must sit under a prefix the ingress sends to Django for pages: "
+                        f"{', '.join(map(repr, PAGE_PREFIXES))}"
+                    )
             if page["accept"] != PAGE_ACCEPT:
                 raise ImproperlyConfigured(f"{here}.accept must be {PAGE_ACCEPT!r}")
             pages[name] = {"entry": entry, "paths": list(paths), "accept": PAGE_ACCEPT}

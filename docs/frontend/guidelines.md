@@ -95,7 +95,11 @@ public vault id. See the [knowledge addon](../../src/angee/knowledge/README.md).
   the ingress routes in `runtime/web/pages.caddy`, which the stack's static
   ingress imports ahead of its Django routes. Page `<id>` is the build output's
   `<id>.html`. An id is a dotted lower-case name; a path is an absolute prefix
-  ending in `/*`, and no two pages' paths overlap. A page answers `GET` and `HEAD`
+  ending in `/*`, and no two pages' paths overlap. A path sits under a prefix the
+  ingress sends to Django for pages (`PAGE_PREFIXES`, today `/forms/*`), so the
+  page's own requests reach Django; the other paths the ingress sends to Django
+  (`INGRESS_DJANGO_PATHS`, which the stack template's matcher is pinned to) are
+  the framework's own endpoints and take no page. A page answers `GET` and `HEAD`
   only when `text/html` is the first media type of the request's `Accept` header,
   so `fetch` and API clients reach Django on the same path; the manifest's
   `pageAccept` carries that one pattern for the dev server. The ingress sends
