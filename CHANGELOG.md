@@ -142,6 +142,22 @@ live in code docstrings.
   list's render that changes nothing it reads (a scroll frame) rebuilds no group
   model; it still corrects a group page set past its last.
 
+- `@angee/ui`: a list's range change (a scroll frame, and the virtualizer's report
+  that the scroll ended) renders the rows that enter its window and none that
+  stay. The flat body hands every row the same props across such a render: the
+  list's `rowHref` under its navigation scope is one function per scope (the
+  gallery's and board's card links too), the empty trailing cell a module
+  function, and each reorderable row's `reorder` is built once per row set. The
+  grouped body's item and header rows are memoised as `RecordRow` is, and a
+  header takes its group's records and selected count, so ticking a record
+  renders only its own groups' headers. `RecordRow` takes an optional `cells`,
+  the row's visible cells, which both bodies pass: its memo kept stale cells when
+  only the shown columns changed, which the flat body's churning props had hidden
+  and a grouped row whose item stayed the same showed. The search box hands Base
+  UI's combobox the search's active items as they are, its items and item
+  callbacks stable, so a re-render with the search unchanged no longer renders
+  its input and chips a second time.
+
 - `angee.parties`: one owner proposes same-person pairs. A pull-only
   directory's contact that may only claim an address another live party is
   linked to proposes them through `Party.objects.propose_same_person_as_system`

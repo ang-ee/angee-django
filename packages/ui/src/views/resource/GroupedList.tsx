@@ -386,7 +386,7 @@ interface GroupedItemRowProps<TRow extends Row> {
   t: UiTranslate;
 }
 
-function GroupedItemRow<TRow extends Row>({
+function GroupedItemRowInner<TRow extends Row>({
   renderGroupLabel,
   item,
   colSpan,
@@ -413,23 +413,16 @@ function GroupedItemRow<TRow extends Row>({
 }: GroupedItemRowProps<TRow>): React.ReactElement {
   switch (item.kind) {
     case "groupHeader": {
-      const records = groupRecords.get(item.bucketKey) ?? [];
-      const selectedCount = records.filter(({ row }) => selectedIds.has(row.id)).length;
+      const records = groupRecords.get(item.bucketKey) ?? NO_RECORDS;
       return (
         <GroupedHeaderRow
           renderGroupLabel={renderGroupLabel}
           item={item}
-          selection={selectable ? {
-            label: t("list.selectGroup", { label: item.label }),
-            checked: allMatching || (records.length > 0 && selectedCount === records.length),
-            indeterminate: !allMatching && selectedCount > 0 && selectedCount < records.length,
-            // Only loaded rows can be selected or unselected, so a group with none loaded
-            // (collapsed, or its page loading) cannot change, under "Select all N" too, where
-            // it shows selected; a collapsed one says why.
-            disabled: records.length === 0,
-            disabledReason: item.expandable && !item.expanded ? t("list.expandGroupToChangeSelection") : null,
-            onCheckedChange: (checked: boolean) => onSelectRecords(records, checked),
-          } : undefined}
+          selectable={selectable}
+          records={records}
+          selectedCount={records.filter(({ row }) => selectedIds.has(row.id)).length}
+          allMatching={allMatching}
+          onSelectRecords={onSelectRecords}
           visibleColumns={visibleColumns}
           measuresByColumn={measuresByColumn}
           onToggle={onToggleGroup}
@@ -470,7 +463,12 @@ function GroupedItemRow<TRow extends Row>({
   }
 }
 
+// Memoised, as `RecordRow` is: the surface's items and the body's callbacks are stable,
+// so a range change renders only the items that enter the window.
+const GroupedItemRow = React.memo(GroupedItemRowInner) as typeof GroupedItemRowInner;
+
 type GroupedRecordItem<TRow extends Row> = Extract<GroupedListItem<TRow>, { kind: "record" }>;
+const NO_RECORDS: readonly never[] = [];
 
 /** A record row whose callbacks stay stable across selection toggles, so the memoised row skips them. */
 function GroupedRecordRow<TRow extends Row>({
@@ -495,6 +493,7 @@ function GroupedRecordRow<TRow extends Row>({
   return (
     <RecordRow
       row={item.row}
+      cells={item.row.getVisibleCells()}
       selected={selected}
       onToggleSelected={toggleSelected}
       selectable={selectable}
@@ -515,8 +514,15 @@ function GroupedRecordRow<TRow extends Row>({
 interface GroupedHeaderRowProps<TRow extends Row> {
   renderGroupLabel?: (group: GroupLabelContext) => React.ReactNode;
   item: Extract<GroupedListItem<TRow>, { kind: "groupHeader" }>;
-  /** The group's checkbox, when the list is selectable. */
-  selection?: React.ComponentProps<typeof SelectionToggle>;
+  /** The group has a checkbox, which ticks its loaded records. */
+  selectable: boolean;
+  /** The group's loaded records, nested groups' included. */
+  records: readonly GroupedRecordItem<TRow>[];
+  /** How many of them show selected. */
+  selectedCount: number;
+  /** "Select all N" is on: the group shows selected, a collapsed one too. */
+  allMatching: boolean;
+  onSelectRecords: GroupedItemRowProps<TRow>["onSelectRecords"];
   visibleColumns: readonly TableColumn<TRow, unknown>[];
   measuresByColumn: ReadonlyMap<string, GroupMeasure>;
   onToggle: (key: string) => void;
@@ -527,10 +533,14 @@ interface GroupedHeaderRowProps<TRow extends Row> {
   t: UiTranslate;
 }
 
-function GroupedHeaderRow<TRow extends Row>({
+function GroupedHeaderRowInner<TRow extends Row>({
   renderGroupLabel,
   item,
-  selection,
+  selectable,
+  records,
+  selectedCount,
+  allMatching,
+  onSelectRecords,
   visibleColumns,
   measuresByColumn,
   onToggle,
@@ -541,6 +551,17 @@ function GroupedHeaderRow<TRow extends Row>({
   t,
 }: GroupedHeaderRowProps<TRow>): React.ReactElement {
   const { bucket, bucketKey, depth, label, count, expandable, expanded } = item;
+  const selection: React.ComponentProps<typeof SelectionToggle> | undefined = selectable ? {
+    label: t("list.selectGroup", { label }),
+    checked: allMatching || (records.length > 0 && selectedCount === records.length),
+    indeterminate: !allMatching && selectedCount > 0 && selectedCount < records.length,
+    // Only loaded rows can be selected or unselected, so a group with none loaded
+    // (collapsed, or its page loading) cannot change, under "Select all N" too, where
+    // it shows selected; a collapsed one says why.
+    disabled: records.length === 0,
+    disabledReason: expandable && !expanded ? t("list.expandGroupToChangeSelection") : null,
+    onCheckedChange: (checked: boolean) => onSelectRecords(records, checked),
+  } : undefined;
   // Keep aggregate cells numeric; chrome belongs in the last ordinary column
   // (or the existing action column), not in a measure's accessible value.
   const ordinaryColumns = visibleColumns.filter(
@@ -661,6 +682,10 @@ function GroupedHeaderRow<TRow extends Row>({
     </TableRow>
   );
 }
+
+// Memoised: its group's records, their selected count and the callbacks are stable, so
+// a selection change elsewhere in the list leaves the header alone.
+const GroupedHeaderRow = React.memo(GroupedHeaderRowInner) as typeof GroupedHeaderRowInner;
 
 function GroupedStatusRow<TRow extends Row>({
   item,

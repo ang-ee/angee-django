@@ -166,6 +166,11 @@ export function ListViewContent<TRow extends Row = Row>({
     textFilterField: declaredTextField,
   });
   const interactive = Boolean(onRowClick || rowHref);
+  // The page's href under this list's navigation scope: one function per scope, so a
+  // render that changes neither (a scroll frame) hands every row and card the same one.
+  const navigationScope = surface.listState.navigationScope;
+  const scopedRowHref = React.useMemo(() => rowHref ? (row: TRow) => rowHref(row, navigationScope) : undefined,
+    [rowHref, navigationScope]);
   const resolvedChrome = listChromeState(presentation, chrome, { ...surface.list, queryDirty: resourceView.queryDirty });
   const selectedIds = selectable ? surface.selectedIds : EMPTY_SELECTED_IDS;
   // "Select all N" (opt-in) selects what the surface's read behind its pager matches.
@@ -423,7 +428,7 @@ export function ListViewContent<TRow extends Row = Row>({
           renderCard={galleryRenderCard}
           cardFrame={galleryFrame}
           cardActions={cardActions || renderRowActions ? (row) => boardCardActions(row, cardActionContext) : undefined}
-          cardHref={rowHref ? (row) => rowHref(row, surface.listState.navigationScope) : undefined}
+          cardHref={scopedRowHref}
           onCardClick={onRowClick}
           draggableRow={draggableRow}
           selectedIds={shownSelectedIds}
@@ -500,11 +505,7 @@ export function ListViewContent<TRow extends Row = Row>({
           interactive={interactive}
           fetching={surface.list.fetching}
           emptyContent={emptyContent}
-          rowHref={
-            rowHref
-              ? (row) => rowHref(row, surface.listState.navigationScope)
-              : undefined
-          }
+          rowHref={scopedRowHref}
           onRowClick={onRowClick}
           cardActions={
             cardActions || renderRowActions ? boardCardActions : undefined
@@ -539,11 +540,7 @@ export function ListViewContent<TRow extends Row = Row>({
           onVisibleFieldToggle={surface.toggleVisibleField}
           groupStack={effectiveGroupStack}
           interactive={interactive}
-          rowHref={
-            rowHref
-              ? (row) => rowHref(row, surface.listState.navigationScope)
-              : undefined
-          }
+          rowHref={scopedRowHref}
           renderRowActions={renderRowActions}
           onRowClick={onRowClick}
           emptyContent={emptyContent}
@@ -566,11 +563,7 @@ export function ListViewContent<TRow extends Row = Row>({
           onVisibleFieldToggle={surface.toggleVisibleField}
           groupStack={effectiveGroupStack}
           interactive={interactive}
-          rowHref={
-            rowHref
-              ? (row) => rowHref(row, surface.listState.navigationScope)
-              : undefined
-          }
+          rowHref={scopedRowHref}
           renderRowActions={renderRowActions}
           onRowClick={onRowClick}
           emptyContent={emptyContent}

@@ -104,6 +104,8 @@ export function ListSelectionBar({
   );
 }
 
+const NO_ROW_ACTIONS = (): null => null;
+
 export interface FlatListBodyProps<TRow extends Row> {
   tableLayout?: ResourceTableLayout;
   headerVisibility?: ResourceTableHeaderVisibility;
@@ -174,8 +176,26 @@ export function FlatListBody<TRow extends Row>({
   const fieldsMenu = visibleFields.length > 0
     ? <VisibleFieldsMenu fields={visibleFields} onToggle={onVisibleFieldToggle} /> : null;
   const trailingColumn = hasRowActions || fieldsMenu !== null;
+  // An empty trailing cell keeps rows aligned under the fields-menu header.
+  const rowActions = renderRowActions ?? (trailingColumn ? NO_ROW_ACTIONS : undefined);
   const reorderType = `angee.list-row.${React.useId()}`;
-  const reorderRows = onReorder ? rowModels.filter((row) => !row.getIsGrouped()) : [];
+  // Each record row's reorder, built once per row set, so a render that keeps the rows
+  // (a scroll frame) hands every row the same one and its memo holds.
+  const reorderById = React.useMemo(() => {
+    if (!onReorder) return null;
+    const rows = rowModels.filter((row) => !row.getIsGrouped());
+    const move = (fromId: string, toId: string) => {
+      const from = table.getCoreRowModel().rowsById[fromId];
+      if (from && (canReorderRow?.(from.original) ?? true)) onReorder(fromId, toId);
+    };
+    return new Map(rows.map((row, index) => [row.id, {
+      type: reorderType,
+      onReorder: move,
+      previousId: rows[index - 1]?.id,
+      nextId: rows[index + 1]?.id,
+      locked: canReorderRow ? !canReorderRow(row.original) : false,
+    }]));
+  }, [onReorder, rowModels, table, canReorderRow, reorderType]);
   const colSpan = Math.max(
     1,
     visibleColumnCount + (selectable ? 1 : 0) + (trailingColumn ? 1 : 0) + (onReorder ? 1 : 0),
@@ -253,7 +273,6 @@ export function FlatListBody<TRow extends Row>({
               ) : null}
               {visibleIndexes.map((index) => {
                 const row = rowModels[index];
-                const reorderIndex = row ? reorderRows.indexOf(row) : -1;
                 return row
                   ? renderListRow({
                       row,
@@ -266,18 +285,8 @@ export function FlatListBody<TRow extends Row>({
                       onRowClick,
                       activeRowId,
                       draggableRow,
-                      // An empty trailing cell keeps rows aligned under the fields-menu header.
-                      renderRowActions: renderRowActions ?? (trailingColumn ? () => null : undefined),
-                      reorder: onReorder ? {
-                        type: reorderType,
-                        onReorder: (fromId, toId) => {
-                          const from = table.getCoreRowModel().rowsById[fromId];
-                          if (from && (canReorderRow?.(from.original) ?? true)) onReorder(fromId, toId);
-                        },
-                        previousId: reorderRows[reorderIndex - 1]?.id,
-                        nextId: reorderRows[reorderIndex + 1]?.id,
-                        locked: canReorderRow ? !canReorderRow(row.original) : false,
-                      } : undefined,
+                      renderRowActions: rowActions,
+                      reorder: reorderById?.get(row.id),
                     })
                   : null;
               })}
