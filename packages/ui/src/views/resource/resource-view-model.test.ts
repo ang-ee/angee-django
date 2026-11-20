@@ -218,6 +218,20 @@ describe("resource-view model", () => {
     expect(resourceViewSearchToState({ group: "reviewer.displayName~reviewer~reviewerId" }).queryError?.message).toMatch(/group/);
   });
 
+  test("a level's repeated values ride its URL group spelling and refuse spellings it cannot read", () => {
+    const groupStack = [{ field: "display_name", repeated: true as const }, { field: "created_at", granularity: "month", repeated: true as const }];
+    const search = resourceViewStateToSearch(createResourceViewState({ groupStack }));
+    expect(search).toMatchObject({ group: "display_name:repeated", then: "created_at:month:repeated" });
+    expect(resourceViewSearchToState(search).groupStack).toEqual(groupStack);
+    // Turning it off is the plain level, a change from a repeated default.
+    expect(resourceViewStateToSearch(createResourceViewState({ groupStack: [{ field: "display_name" }] }),
+      { groupStack: [groupStack[0]!] }).group).toBe("display_name");
+    for (const group of ["display_name:repeated:month", "display_name:month:day:repeated", "display_name::repeated"]) {
+      expect(resourceViewSearchToState({ group }).queryError?.message).toMatch(/group/);
+    }
+    expect(resourceViewSearchToState({ group: "display_name", then: "display_name:repeated" }).queryError?.message).toMatch(/duplicate/);
+  });
+
   test("resets page and clears selection when query scope changes", () => {
     const { result } = viewHook({ page: 4, pageSize: 20, selectedIds: ["note-1"] });
     act(() => result.current.setSorting([{ id: "title", desc: false }]));
@@ -267,6 +281,7 @@ describe("resource-view model", () => {
     expect(RESOURCE_VIEW_KINDS).toEqual([
       "list",
       "board",
+      "gallery",
       "calendar",
       "gantt",
       "dashboard",
@@ -282,6 +297,14 @@ describe("resource-view model", () => {
     expect(RESOURCE_VIEW_KIND_CAPABILITIES.dashboard).toEqual({
       grouping: false,
       pagination: false,
+      columns: false,
+      filter: true,
+      requiresSources: true,
+    });
+    // The gallery pages and filters the records as cards; it never groups or picks columns.
+    expect(RESOURCE_VIEW_KIND_CAPABILITIES.gallery).toEqual({
+      grouping: false,
+      pagination: true,
       columns: false,
       filter: true,
       requiresSources: true,
@@ -313,6 +336,8 @@ describe("resource-view model", () => {
       "board",
       "dashboard",
     ]);
+    // The gallery needs a card to draw.
+    expect(availableResourceViewKinds({ gallery: true })).toEqual(["list", "board", "gallery"]);
   });
 
   test("round-trips calendar mode + anchor through the family codec", () => {
@@ -342,6 +367,39 @@ describe("resource-view model", () => {
     });
     expect(parsed.mode).toBe("day");
     expect(parsed.anchor).toBe("2026-06-15");
+  });
+
+  test("round-trips hidden calendar sources through the URL beside mode and anchor", () => {
+    const state = createResourceViewState({ view: "calendar", hiddenSources: ["tasks", "agenda", "agenda"] });
+    expect(state.hiddenSources).toEqual(["agenda", "tasks"]);
+    const search = resourceViewStateToSearch(state);
+    expect(search.hiddenSources).toBe("agenda,tasks");
+    expect(resourceViewSearchToState(search).hiddenSources).toEqual(["agenda", "tasks"]);
+    // Unreadable keys are dropped; a cleared value shows every source over a preset's default.
+    expect(resourceViewSearchToState({ view: "calendar", hiddenSources: "agenda,no way" }).hiddenSources).toEqual(["agenda"]);
+    expect(resourceViewSearchToState({ view: "calendar", hiddenSources: "" }, { hiddenSources: ["agenda"] }).hiddenSources).toEqual([]);
+    expect(resourceViewStateToSearch(createResourceViewState({ view: "calendar" }), { hiddenSources: ["agenda"] }))
+      .toEqual({ view: "calendar", hiddenSources: "" });
+    // Only the calendar kind carries them.
+    expect(resourceViewStateToSearch(createResourceViewState({ hiddenSources: ["agenda"] }))).toEqual({});
+  });
+
+  test("a saved calendar view keeps its hidden sources; a shipped view may name them", () => {
+    const state = createResourceViewState({ view: "calendar", hiddenSources: ["agenda"] });
+    expect(favoriteFromResourceView(state, "Events only")).toMatchObject({ view: "calendar", hiddenSources: ["agenda"] });
+    // An empty list is saved too, so applying the view shows every source.
+    expect(favoriteFromResourceView(createResourceViewState({ view: "calendar" }), "All")).toMatchObject({ hiddenSources: [] });
+    expect(favoriteFromResourceView(createResourceViewState({ view: "list" }), "List")).not.toHaveProperty("hiddenSources");
+    // Stored and shipped views parse through one schema: a key a URL cannot carry is refused.
+    expect(resourceViewFavoritesFromJson(JSON.stringify([
+      { id: "favorite:bad", label: "Bad", view: "calendar", hiddenSources: ["bad key"] },
+      { id: "favorite:events", label: "Events", view: "calendar", hiddenSources: ["agenda"] },
+    ])).map((favorite) => favorite.id)).toEqual(["favorite:events"]);
+  });
+
+  test("reads the list mode from the URL and rejects an unknown mode", () => {
+    expect(resourceViewSearchToState({ view: "calendar", mode: "list" }).mode).toBe("list");
+    expect(resourceViewSearchToState({ view: "calendar", mode: "agenda" }).mode).toBe("month");
   });
 
   test("serializes mode/anchor only under the calendar kind", () => {

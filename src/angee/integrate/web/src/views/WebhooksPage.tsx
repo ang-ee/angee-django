@@ -56,7 +56,8 @@ export function WebhooksPage(): React.ReactElement {
         {/* Write-only signing key — set on create, never read back from the server. */}
         <Field name="secret" widget="text" kind="string" createOnly />
         <Action id="send-test" label={t("webhooks.sendTest")} run={sendTest} />
-        <Action id="rotate-secret" label={t("webhooks.rotateSecret")} run={rotate} />
+        <Action id="rotate-secret" label={t("webhooks.rotateSecret")} danger
+          confirm={{ title: t("webhooks.rotateSecret"), body: t("webhooks.rotateConfirmBody") }} run={rotate} />
       </Form>
     </ResourceList>
   );

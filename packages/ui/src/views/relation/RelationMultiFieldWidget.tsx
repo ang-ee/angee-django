@@ -23,7 +23,7 @@ import {
   useRelationQuickCreate,
   type RelationDialogState,
 } from "./RelationRecordDialog";
-import { relationSelectedOption, useRelationOptions, useRelationSelectedOptions } from "./relation-options";
+import { relationSelectedOption, useRelationPickerSearch, useRelationSelectedOptions } from "./relation-options";
 
 export interface RelationMultiFieldWidgetProps {
   /** Related records (`{ id, … }`) or their public ids, in any mix. */
@@ -43,6 +43,10 @@ export interface RelationMultiFieldWidgetProps {
   filters?: readonly CrudFilter[];
   /** Hasura condition narrowing the related rows offered by the picker. */
   where?: Record<string, unknown>;
+  /** Related-row field whose value groups the offered rows under headings (e.g. `category.name`). */
+  optionGroupField?: string;
+  /** Related-row number ordering those groups (e.g. `category.position`). */
+  optionGroupOrderField?: string;
   /**
    * Explicit inline-create configuration. Overrides the default derived from the
    * related model's metadata, exactly as `RelationFieldWidget` does; pass null to
@@ -77,6 +81,8 @@ export function RelationMultiFieldWidget({
   relation,
   filters,
   where,
+  optionGroupField,
+  optionGroupOrderField,
   create,
   "aria-label": ariaLabel,
   controlRef,
@@ -87,12 +93,14 @@ export function RelationMultiFieldWidget({
   const [searchText] = useDebounce(search, 250);
   const forms = useRelationForms(relation, create);
   const quickCreate = useRelationQuickCreate(forms.create);
-  const { options, list } = useRelationOptions(relation, {
+  const { options, list } = useRelationPickerSearch(relation, {
     enabled: !readOnly,
     filters,
     where,
     sort: true,
     searchText,
+    optionGroupField,
+    optionGroupOrderField,
   });
   // Loaded related records carry their own labels, also outside the option page;
   // bare ids (seeded by an action, or past the first page) are read for theirs.

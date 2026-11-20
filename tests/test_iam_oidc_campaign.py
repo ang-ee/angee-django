@@ -7,9 +7,9 @@ from rebac import system_context
 
 from angee.iam_integrate_oidc import identity
 from angee.iam_integrate_oidc.errors import IDENTITY_RESOLUTION_FAILED, IdentityFlowError
-from angee.iam_integrate_oidc.testing.provider import OidcProvider
 from angee.integrate.oauth import state
 from angee.integrate.testing.http import mock_transport
+from angee.integrate.testing.oidc import OidcProvider
 from tests.conftest import ExternalAccount
 from tests.iam_campaign import Person
 from tests.iam_campaign import legacy_person_emails as legacy_person_emails

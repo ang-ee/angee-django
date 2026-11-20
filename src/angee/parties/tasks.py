@@ -39,6 +39,8 @@ def _refresh_handle_suggestions() -> int:
 
     parties = apps.get_model("parties", "Party").objects
     with system_context(reason="parties.tasks.refresh_handle_suggestions"):
-        changed = int(parties.reconcile_suggestions())
-        changed += int(parties.reconcile_same_as())
+        # The shared-sender providers aggregate all mail: both passes read them once.
+        shared = parties.shared_sender_ids()
+        changed = int(parties.reconcile_suggestions(shared=shared))
+        changed += int(parties.reconcile_same_as(shared=shared))
     return changed

@@ -19,6 +19,7 @@ _Settings = TypedDict(
         "ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER": bool,
         "ANGEE_GRAPHQL_EXTENSION_FACTORIES": tuple[str, ...],
         "COMPOSE_INTEGRATIONS:append": list[str],
+        "COMPOSE_FINGERPRINT_SETTINGS:append": list[str],
         "COMPOSE_EXTERNAL_ARTIFACT_ROOTS:append": list[str],
         "SENTRY_DISABLED_INTEGRATIONS:append": list[type[StrawberryIntegration]],
         "ANGEE_GRAPHQL_RESOURCE_FILTERS": list[str],
@@ -38,6 +39,11 @@ SETTINGS: _Settings = {
     "ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER": False,
     "ANGEE_GRAPHQL_EXTENSION_FACTORIES": (),
     "COMPOSE_INTEGRATIONS:append": ["angee.graphql.sdl.SchemaIntegration"],
+    # SchemaIntegration renders the SDL these shape (strawberry-django's type and
+    # pk options, contributed resource filters), so the snapshot holds them:
+    # `compose --if-stale` recomposes when one alone changes, and, as structural
+    # inputs, the environment cannot set them.
+    "COMPOSE_FINGERPRINT_SETTINGS:append": ["STRAWBERRY_DJANGO", "ANGEE_GRAPHQL_RESOURCE_FILTERS"],
     "COMPOSE_EXTERNAL_ARTIFACT_ROOTS:append": ["schemas"],
     # Native HTTP error capture sees coercion values before our safe log policy.
     "SENTRY_DISABLED_INTEGRATIONS:append": [StrawberryIntegration],

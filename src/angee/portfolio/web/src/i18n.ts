@@ -1,9 +1,11 @@
 import { createNamespaceT } from "@angee/ui/i18n";
 
 export const enPortfolioMessages: Record<string, string> = {
+  "project.promote": "Promote to product",
   "common.health": "Health",
   "common.name": "Name",
-  "common.order": "Order",
+  "common.description": "Description",
+  "common.datePrecision": "Date precision",
   "common.owner": "Owner",
   "common.project": "Project",
   "initiative.empty.projects": "No projects are linked to this initiative.",

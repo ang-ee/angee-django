@@ -137,7 +137,7 @@ describe("DescriptorFieldList", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(input.getAttribute("contenteditable")).toBe("false"));
     await act(async () => finishValidation?.());
-    await waitFor(() => expect(submit).toHaveBeenCalledWith(values("Updated")));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith(values("Updated"), { errorNotification: false }));
   });
 
   test.each(["text", "readOnly"] as const)("discards old editor validity when changing the same field to %s", async (nextMode) => {
@@ -177,7 +177,7 @@ describe("DescriptorFieldList", () => {
     }
     expect(screen.queryByText("Invalid JSON")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(submit).toHaveBeenCalledWith({ payload: nextMode === "text" ? "Updated" : { note: "Retained" } }));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ payload: nextMode === "text" ? "Updated" : { note: "Retained" } }, { errorNotification: false }));
   });
 
   test("default object projection keeps nested read-only values out of editable controls", async () => {
@@ -237,7 +237,7 @@ describe("DescriptorFieldList", () => {
   test("shares sibling values with custom controls and applies prefills in the same form", async () => {
     const submit = vi.fn();
     render(<FormHarness defaultValues={{ source: "", title: "", note: "" }} onSubmit={submit} fields={[
-      { name: "source", label: "Source", prefill: (value) => ({ title: value }),
+      { name: "source", label: "Source", prefill: (value, values) => ({ title: `${String(value)} ${String(values.note)}`.trim() }),
         control: ({ id, value, onChange, dialogValues }) => <input id={id}
           value={typeof value === "string" ? value : ""}
           placeholder={String(dialogValues.note)} onChange={(event) => onChange(event.target.value)} /> },
@@ -252,9 +252,10 @@ describe("DescriptorFieldList", () => {
     expect(source.getAttribute("placeholder")).toBe("Sibling");
     fireEvent.change(source, { target: { value: "Seeded" } });
     await waitFor(() => expect(screen.queryByText("Choose a title")).toBeNull());
-    expect((screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement).value).toBe("Seeded");
+    // A prefill reads the form's current values beside the field's new one.
+    expect((screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement).value).toBe("Seeded Sibling");
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(submit.mock.calls[0]?.[0]).toEqual({ source: "Seeded", title: "Seeded", note: "Sibling" }));
+    await waitFor(() => expect(submit.mock.calls[0]?.[0]).toEqual({ source: "Seeded", title: "Seeded Sibling", note: "Sibling" }));
   });
 
   test("resets only branch fields while retaining discriminator focus and unrelated form state", async () => {

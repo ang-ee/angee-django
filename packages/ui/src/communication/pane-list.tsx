@@ -4,6 +4,7 @@ import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { useInAppLink } from "../lib/in-app-link";
+import { shownContent } from "../lib/shown-content";
 import { Chip } from "../ui/chip";
 import { Avatar, type AvatarProps } from "../ui/avatar";
 import { Popover, type PopoverRootProps } from "../ui/popover";
@@ -15,7 +16,7 @@ import { StatusIcon, type StatusIconTone } from "../ui/status-icon";
  * Links groups, a drill-in's references. A row is a pointer: glyph or avatar, `title ·
  * detail`, a right-aligned meta (time, due), a muted second line and one verb
  * for a distinct secondary action. It is a link when its target has a page, a button when it
- * opens something beside it. Labels name days and sections above rows. Type
+ * opens something beside it; an unavailable row stays listed, muted, with why. Labels name days and sections above rows. Type
  * sits on the 13/12 scale; nothing in a pane list picks its own size.
  */
 
@@ -50,22 +51,36 @@ export interface PaneRowProps {
   onOpen?: () => void;
   /** The native tooltip, usually the verb. */
   label?: string;
+  /**
+   * The row's action is unavailable: it is listed, muted, and neither opens nor
+   * navigates. It stays reachable by keyboard so its `disabledReason` is announced.
+   */
+  disabled?: boolean;
+  /** Why the row is unavailable (implies `disabled`; null, false and "" are no reason): shown in full under the title and read as its description. */
+  disabledReason?: React.ReactNode;
   className?: string;
 }
 
 // The row's box, shared by the row and its loading skeleton so both keep one geometry.
 const ROW_LAYOUT = "flex w-full items-start gap-2 rounded-6 px-2 py-2";
 // The row's own control carries `aria-current`; the wrapper reads it for the selected fill.
-const ROW_CLASS = `group/row ${ROW_LAYOUT} text-left hover:bg-canvas/70 has-[[aria-current=true]]:selected`;
+// An unavailable row takes no hover fill: nothing happens on it.
+const ROW_CLASS = `group/row ${ROW_LAYOUT} text-left has-[[aria-current=true]]:selected`;
+const ROW_HOVER_CLASS = "hover:bg-canvas/70";
 const TARGET_CLASS = "flex min-w-0 flex-1 gap-2 rounded-4 text-left outline-none focus-visible:focus-ring";
+const UNAVAILABLE_TARGET_CLASS = "cursor-not-allowed text-fg-muted";
 
 /**
  * @kind fragment
  */
 export function PaneRow({
-  icon, avatar, tone = "muted", leading, title, detail, meta, sub, verb, needsMe = false, selected, href, target, rel, onOpen, label, className,
+  icon, avatar, tone = "muted", leading, title, detail, meta, sub, verb, needsMe = false, selected, href, target, rel, onOpen, label,
+  disabled = false, disabledReason, className,
 }: PaneRowProps): React.ReactElement {
   const link = useInAppLink(href);
+  const reasonId = React.useId();
+  const reason = shownContent(disabledReason);
+  const unavailable = disabled || reason !== null;
   const glyph = (
     <span className="relative mt-0.5 shrink-0">
       {avatar ? <Avatar size="sm" {...avatar} /> : <StatusIcon tone={tone} icon={icon ?? "activity"} size="sm" />}
@@ -82,17 +97,24 @@ export function PaneRow({
         {meta ? <span className="shrink-0 text-12 tabular-nums text-fg-muted">{meta}</span> : null}
       </span>
       {sub ? <span className="block min-w-0 truncate text-12 text-fg-muted">{sub}</span> : null}
+      {/* The reason wraps rather than truncates; it is the control's description, not part of its name. */}
+      {reason !== null ? <span id={reasonId} aria-hidden="true" className="block min-w-0 text-12 text-fg-muted">{reason}</span> : null}
     </span>
   );
   const common = { title: label ?? (typeof verb === "string" ? verb : undefined), "aria-current": selected ? true : undefined } as const;
   // The leading control and the verb are interactive on their own, so they sit
-  // beside the row's link or button rather than inside it.
-  const control = href
+  // beside the row's link or button rather than inside it. An unavailable row is a
+  // focusable, inert button: keyboard users reach it and hear why it does nothing.
+  const control = unavailable
+    ? <button type="button" aria-disabled="true" aria-current={common["aria-current"]}
+      aria-describedby={reason !== null ? reasonId : undefined}
+      className={cn(TARGET_CLASS, UNAVAILABLE_TARGET_CLASS)}>{leading ? null : glyph}{body}</button>
+    : href
     ? <a href={href} target={target} rel={rel} {...common} {...link} className={TARGET_CLASS}>{leading ? null : glyph}{body}</a>
     : onOpen ? <button type="button" {...common} className={TARGET_CLASS} onClick={onOpen}>{leading ? null : glyph}{body}</button>
       : <span {...common} className={TARGET_CLASS}>{leading ? null : glyph}{body}</span>;
   return (
-    <span className={cn(ROW_CLASS, className)}>
+    <span className={cn(ROW_CLASS, !unavailable && ROW_HOVER_CLASS, className)}>
       {leading ? <span className="mt-0.5 shrink-0">{leading}</span> : null}
       {control}
       {verb && typeof verb !== "string" ? (

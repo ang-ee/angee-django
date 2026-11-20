@@ -7,7 +7,7 @@ import type { ResourceViewKind } from "./capabilities";
 import { Filter } from "./filter";
 import type { ResourceViewSort, ResourceViewInitialState } from "./filter";
 import { createResourceViewState, type ResourceViewState } from "./state";
-import { normaliseGroupStack } from "./search";
+import { isCalendarSourceKey, normaliseGroupStack } from "./search";
 export interface ResourceViewFavorite {
   id: string;
   label: string;
@@ -22,6 +22,8 @@ export interface ResourceViewFavorite {
   /** Named preset whose fixed filter accompanies this saved view. */
   preset?: string;
   columnVisibility?: VisibilityState;
+  /** Calendar source keys this view hides (its `?hiddenSources=`). */
+  hiddenSources?: readonly string[];
 }
 
 /** Code-owned view, sharing the saved-view state contract and query owner. */
@@ -46,7 +48,8 @@ export function resourceViewFavoriteIsActive(favorite: ResourceViewFavorite, sta
       && (favorite.sort === undefined || stableSerialize(expected.sorting) === stableSerialize(state.sorting ?? []))
       && (favorite.view === undefined || expected.view === state.view)
       && (favorite.columnVisibility === undefined || stableSerialize(expected.columnVisibility) === stableSerialize(state.columnVisibility))
-      && (favorite.pageSize === undefined || expected.pagination.pageSize === state.pagination.pageSize);
+      && (favorite.pageSize === undefined || expected.pagination.pageSize === state.pagination.pageSize)
+      && (favorite.hiddenSources === undefined || expected.hiddenSources.join(",") === state.hiddenSources.join(","));
   } catch {
     // Obsolete saved queries remain available to apply and repair at the native boundary.
     return false;
@@ -73,6 +76,7 @@ export const ResourceViewFavoriteSchema = v.object({
   view: v.optional(v.custom<ResourceViewKind>((value) => typeof value === "string" && isResourceViewKind(value))),
   preset: v.optional(v.string()),
   columnVisibility: v.optional(v.record(v.string(), v.boolean())),
+  hiddenSources: v.optional(v.array(v.custom<string>(isCalendarSourceKey, "expected a calendar source key"))),
 });
 
 /** Validate shipped query intent eagerly, using the same owner as URL/favorite state.
@@ -127,6 +131,7 @@ export function resourceViewPresetDefaults(
     ...(preset.filter === undefined ? {} : { filter: Filter.from(preset.filter).value }),
     ...(preset.groupStack === undefined ? {} : { groupStack: v.parse(GroupSpecsSchema, preset.groupStack), groupStacks: undefined }),
     ...(preset.columnVisibility === undefined ? {} : { columnVisibility: preset.columnVisibility }),
+    ...(preset.hiddenSources === undefined ? {} : { hiddenSources: preset.hiddenSources }),
   };
 }
 
@@ -199,5 +204,7 @@ export function favoriteFromResourceView(
     ...(Filter.from(state.filter).hasEntries() ? { filter: state.filter } : {}),
     ...(state.groupStack.length > 0 ? { groupStack: state.groupStack } : {}),
     ...(state.view !== "list" ? { view: state.view } : {}),
+    // A calendar view saves its hidden sources even when none are hidden, so applying it shows them all.
+    ...(state.view === "calendar" ? { hiddenSources: state.hiddenSources } : {}),
   };
 }

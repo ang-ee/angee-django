@@ -9,7 +9,20 @@ from django.db import models
 
 from angee.tags.models import Tag as AbstractTag
 from angee.tags.models import TagAssignment as AbstractTagAssignment
+from angee.tags.models import TagCategory as AbstractTagCategory
 from angee.tags.models import TagRole as AbstractTagRole
+
+
+class TagCategory(AbstractTagCategory):
+    """Concrete tag category used by tags tests."""
+
+    class Meta(AbstractTagCategory.Meta):
+        """Django model options for the canonical test tag category."""
+
+        abstract = False
+        app_label = "tags"
+        db_table = "test_tags_category"
+        rebac_resource_type = "tags/tag_category"
 
 
 class Tag(AbstractTag):

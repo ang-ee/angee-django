@@ -22,8 +22,11 @@ export {
   ListView,
   type ListViewProps,
   type BoardCardSpec,
+  type GalleryCardSpec,
   type ListChrome,
   type CardActionContext,
+  type CardRenderContext,
+  type CardRenderer,
   type ListEmptyAction,
   type ListEmptyContent,
   type ListEmptyState,
@@ -31,6 +34,8 @@ export {
   type ListViewNavigationScope,
   type ResourceListSnapshot,
   type ColumnAlign,
+  type SelectedGroup,
+  type SelectedGroupLevel,
 } from "./resource/ListView";
 export {
   useListRecordNavigation,
@@ -230,13 +235,13 @@ export {
   calendarWindowSource,
   type AnyCalendarWindowSource,
   type CalendarWindowBounds,
+  type CalendarWindowOptions,
   type CalendarWindowSource,
   type UseCalendarWindowResult,
 } from "./calendar/use-calendar-window";
 export {
   CalendarCollectionSurface,
   type CalendarCollectionSurfaceProps,
-  type CalendarWindowFetch,
 } from "./calendar/calendar-collection-surface";
 export {
   Tree,
@@ -362,10 +367,8 @@ export {
   TRASH_PERMISSION,
   TRASH_REASON_MAX_LENGTH,
   TRASH_STAMP_FIELDS,
-  useTrashActions,
   useTrashPrompt,
   useTrashRecord,
-  useTrashRowActions,
   type RemovedDisclosureProps,
   type RemovedItemProps,
   type RemovedListProps,
@@ -405,6 +408,7 @@ export {
 export {
   useRelationOptions,
   useRelationPickerOptions,
+  useRelationPickerSearch,
   useRelationSelectedOption,
   relationSelectedOption,
   type RelationOptionsConfig,
@@ -412,7 +416,18 @@ export {
   type RelationOptionsResult,
 } from "./relation/relation-options";
 export * from "./resource/resource-view-model";
-export * from "./resource/resource-view-context";
+// `useSelectionPlaces` stays internal: a page reads the split through `bulkActions`.
+export {
+  ResourceViewProvider,
+  useResourceView,
+  useResourceViewMaybe,
+  withResourceViewScope,
+  type ResourceViewContextValue,
+  type ResourceViewGroupExpansion,
+  type ResourceViewProviderProps,
+  type ResourceViewProviderScope,
+  type ResourceViewScopeMountOptions,
+} from "./resource/resource-view-context";
 export {
   ResourceViewUtilities,
   useResourceViewUtilities,

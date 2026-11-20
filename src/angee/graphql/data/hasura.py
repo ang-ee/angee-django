@@ -9,8 +9,9 @@ import operator
 import types as _types
 from collections.abc import Awaitable, Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from functools import cache, partial, reduce
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import strawberry
 import strawberry_django
@@ -61,6 +62,7 @@ from angee.base.models.inputs import InputExtensionsMixin
 from angee.base.models.locks import OptimisticLockMixin, RowLockMixin
 from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.refs import RecordRefMixin
+from angee.base.models.trash import ARCHIVE_FLAG_FIELD, TRASH_FLAG_FIELD, ArchiveMixin, TrashMixin
 from angee.base.pagination import MAX_PAGE_SIZE, valid_page_size
 from angee.base.permissions import declared_rebac_definition, relation_read_queryset
 from angee.base.querysets import AngeeQuerySet, row_lock_paths
@@ -94,7 +96,7 @@ from angee.graphql.data.resource_fields import (
     final_required_input_wire_fields,
     final_resource_fields,
 )
-from angee.graphql.deletion import delete_by_public_id
+from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.introspection import (
     FieldPathError,
@@ -196,6 +198,12 @@ class _MutationResultExtension(FieldExtension):
     ) -> Any:
         row = await next_(source, info, **kwargs)
         return await sync_to_async(self.refetch)(row, info)
+
+
+class _DeletePreviewBackend(WriteBackend, Protocol):
+    """Angee's preview extension to the native authorized-write contract."""
+
+    def delete_preview(self, info: strawberry.Info, pk: str, *, confirm: bool) -> DeletePreview: ...
 
 
 class AngeeHasuraWriteBackend:
@@ -432,17 +440,25 @@ class AngeeHasuraWriteBackend:
             full_clean=True,
         )
 
-    def delete(self, info: strawberry.Info, pk: str) -> Any | None:
-        """Delete one public-id-addressed row and return the deleted instance."""
+    def delete_preview(self, info: strawberry.Info, pk: str, *, confirm: bool) -> DeletePreview:
+        """Preview or confirm deletion through this backend's write target scope.
+
+        Custom deletion belongs here so the preview root and the native Hasura
+        delete share the same policy and destructive work.
+        """
 
         del info
-
-        preview = delete_by_public_id(
+        return delete_by_public_id(
             self.model,
             str(pk),
-            confirm=True,
+            confirm=confirm,
             queryset=self.write_target_queryset(),
         )
+
+    def delete(self, info: strawberry.Info, pk: str) -> Any | None:
+        """Confirm deletion and return the deleted instance, raising on blockers."""
+
+        preview = self.delete_preview(info, pk, confirm=True)
         preview.require_no_blockers()
         return preview.deleted_instance
 
@@ -1431,7 +1447,8 @@ def _drill_partition(
             span = getattr(key, cast(str, drill.range_key))
             start, end = span.from_, span.to
             if isinstance(field, models.DateField) and not isinstance(field, models.DateTimeField):
-                start, end = start.date(), end.date()
+                # A date-only column compares dates; a span may already carry them.
+                start, end = (value.date() if isinstance(value, datetime) else value for value in (start, end))
             if (start, end) not in spans:
                 spans.append((start, end))
             values.append(spans.index((start, end)))
@@ -1600,6 +1617,16 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     ``public_id_fields``. Those fields supply the native input/filter decoders;
     explicit ``field_id_decode`` entries override their scalar conversion.
 
+    ``delete=True`` also generates ``<res>_delete(id, confirm=False)`` and its
+    delete-preview metadata. The active write backend must implement
+    ``delete_preview``; an override of ``delete`` must define it as well, keeping
+    both roots on the same deletion policy.
+
+    Models composing ``TrashMixin`` or ``ArchiveMixin`` contribute their flag
+    through a native node type extension when it is not already declared.
+    The archive flag is also filterable. These read capabilities do not change
+    the resource's explicit write fields; field-gated automatic reads fail closed.
+
     ``lines=HasuraLines(field="lines", model=...)`` (F6) declares an editable
     child-lines relation: the insert surface rides the upstream nested-insert
     shape (``insert_<res>_one(object: {..., lines: {data: [...]}})``) and an
@@ -1648,6 +1675,23 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     seams must use new names, distinct from existing resource filters and Hasura
     boolean combinators.
     """
+
+    node_definition = get_object_definition(node, strict=True)
+    node_fields = {field.python_name for field in node_definition.fields}
+    lifecycle_fields = [
+        name
+        for mixin, name in ((TrashMixin, TRASH_FLAG_FIELD), (ArchiveMixin, ARCHIVE_FLAG_FIELD))
+        if issubclass(model, mixin) and name not in node_fields
+    ]
+    assert_no_gated_read_fields(
+        model,
+        lifecycle_fields,
+        "hasura_model_resource lifecycle fields",
+        "automatic lifecycle projections cannot expose field-gated reads",
+        definition_for=declared_rebac_definition,
+    )
+    if issubclass(model, ArchiveMixin):
+        filterable = tuple(dict.fromkeys((*filterable, ARCHIVE_FLAG_FIELD)))
 
     model_aliases, model_filter_aliases = _declared_aliases(cast(Hashable, model))
     expressions = dict(filter_expressions or {})
@@ -1925,6 +1969,12 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         id_decode=id_decode,
         id_column=id_column,
     )
+    if lifecycle_fields:
+        resource.types.append(
+            strawberry_django.type(model, name=node_definition.name, extend=True, fields=lifecycle_fields)(
+                type(f"{node_definition.name}ResourceLifecycle", (), {}),
+            )
+        )
     if contributed_filters:
         resource.types.append(
             _resource_filter_projection(
@@ -1995,6 +2045,15 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
                 )
     if lines is not None:
         resource = _attach_lines_save(resource, node=node, lines=lines, write_backend=active_write_backend)
+    if delete:
+        resource = _attach_delete_preview(
+            resource,
+            node=node,
+            model=model,
+            write_backend=active_write_backend,
+            model_label=model_label,
+            public_id_field=public_id_field,
+        )
     result_roots = {resource.insert_one_root, resource.update_by_pk_root}
     if lines is not None:
         result_roots.add(f"{resource.name}_save")
@@ -2135,6 +2194,57 @@ def _nested_inserts(lines: HasuraLines) -> list[NestedInsert]:
             id_column=PUBLIC_ID_FIELD_NAME,
         )
     ]
+
+
+def _attach_delete_preview(
+    resource: HasuraResource,
+    *,
+    node: type,
+    model: type[models.Model],
+    write_backend: WriteBackend,
+    model_label: str | None,
+    public_id_field: str,
+) -> HasuraResource:
+    """Attach the preview root to the backend that owns this resource's delete."""
+
+    # This is the Angee extension of the native WriteBackend contract. Validate
+    # the effective methods through the MRO, including inherited custom deletes.
+    fix = (
+        f"{model._meta.label} declares delete=True with {type(write_backend).__name__}; "
+        "implement delete_preview(info, pk, *, confirm) on the write backend and "
+        "make delete compose it, or declare delete=False."
+    )
+    if not callable(getattr(write_backend, "delete_preview", None)):
+        raise ImproperlyConfigured(fix)
+    for backend_class in type(write_backend).__mro__:
+        if "delete_preview" in vars(backend_class):
+            break
+        if "delete" in vars(backend_class):
+            raise ImproperlyConfigured(f"{fix} Its delete override has no matching delete_preview.")
+
+    delete_preview = cast(_DeletePreviewBackend, write_backend).delete_preview
+    delete_root = f"{resource.name}_delete"
+
+    def resolve_delete(self: Any, info: strawberry.Info, id: PublicID, confirm: bool | None = False) -> DeletePreview:
+        return delete_preview(info, str(id), confirm=confirm is True)
+
+    holder = strawberry.type(
+        type(
+            f"{resource.name}__delete_preview_mutation",
+            (),
+            {delete_root: strawberry.mutation(resolver=resolve_delete, name=delete_root)},
+        )
+    )
+    mutation = strawberry.type(type(f"{resource.name}__mutation", (resource.mutation, holder), {}))
+    attach_delete_preview_metadata(
+        mutation,
+        model=model,
+        node=node,
+        field=delete_root,
+        model_label=model_label,
+        public_id_field=public_id_field,
+    )
+    return dataclasses.replace(resource, mutation=mutation)
 
 
 def _attach_lines_save(

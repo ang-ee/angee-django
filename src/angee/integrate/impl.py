@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
@@ -31,13 +31,26 @@ class AdapterContractError(TypeError):
     """A bridge implementation violated the record-sync contract."""
 
 
-class IntegrationImpl(ImplBase):
+class OAuthConnectIntent:
+    """How a capability's implementation connects: its OAuth client and the scopes it needs.
+
+    ``oauth_client`` is the client slug (``{vendor}`` expands to the integration's
+    vendor; blank means no OAuth connect). ``oauth_scopes`` are the scopes needed
+    beyond that client's default scopes; each must be in its ``scopes_catalogue``
+    (``OAuthClient.requested_scopes``). Every capability implementation base
+    composes this one declaration.
+    """
+
+    oauth_client: ClassVar[str] = ""
+    oauth_scopes: ClassVar[tuple[str, ...]] = ()
+
+
+class IntegrationImpl(OAuthConnectIntent, ImplBase):
     """Base descriptor for one row-selected integration implementation."""
 
     category = "none"
     label = "Integration"
     icon = ""
-    oauth_client: ClassVar[str] = ""
     requires_connection_discovery: ClassVar[bool] = False
     """Opt into the asynchronous discover/apply connection lifecycle."""
 
@@ -96,15 +109,30 @@ class BridgeImpl(IntegrationImpl):
     def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
         """Declare each independently ordered partition exactly once.
 
-        The generic sync declares once per cycle. A workflow cycle declares once per
-        drained partition (``workflows_integrate.StreamStage``), so an adapter synced
-        through one declares from local state, without transport.
+        An adapter that holds containers declares from local state and writes
+        nothing: a partition held by a record of another stream names that
+        record's link as its ``container`` and is declared only while the link is
+        a live container (``RecordLinkQuerySet.containers_of``); the row the
+        container targets is created on the parent stream's apply path. Adapters
+        without containers may declare by discovery: IMAP and Slack list their
+        mailboxes and conversations over transport, and Notion's declaration
+        still ensures its vault, a write recorded as debt.
+        The generic sync declares at the start of a cycle and again after a wave in
+        which container links appeared. A workflow cycle declares once per drained
+        partition (``workflows_integrate.StreamStage``), so an adapter synced through
+        one declares from local state, without transport.
         """
         raise AdapterContractError("Stream adapters must declare their partitions.")
 
 
     def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
-        """Fetch at most page_bound records outside transactions within the deadline."""
+        """Fetch at most page_bound records outside transactions within the deadline.
+
+        ``deadline`` is the driver's; code nested under any adapter call (a parse,
+        an identity read) reads the same one through
+        :func:`~angee.integrate.sync.sync_deadline`, which every driver given a
+        deadline, and the bridge sync, enter.
+        """
         raise AdapterContractError("Stream adapters must extract bounded pages.")
 
     def read_keys(self, stream: Any, keys: Sequence[str]) -> Iterable[RecordChange]:
@@ -157,8 +185,17 @@ class BridgeImpl(IntegrationImpl):
     def on_revalidated(self, stream: Any, links: Sequence[Any]) -> None:
         """Restore native projection visibility after unchanged-row revalidation."""
 
-    def on_absent(self, stream: Any, links: Sequence[Any]) -> None:
-        """Withdraw native projection visibility when absence changes link status."""
+    def on_absent(self, stream: Any, links: Sequence[Any]) -> Mapping[Any, ApplyResult] | None:
+        """Withdraw native projection visibility when absence changes link status.
+
+        Return the applied evidence of each tombstoned link whose local projection
+        the withdrawal changed, by link primary key: the driver records it as that
+        link's applied base with the tombstone, as it records a page tombstone's
+        ``ApplyResult``, so a record that returns reads as a remote change, never as a
+        local one. ``None`` (the default) records nothing.
+        """
+
+        return None
 
     def finish_page(self, stream: Any, page: StreamPage, outcomes: Sequence[ApplyResult]) -> None:
         """Finish domain batch relationships before the page cursor commits.
@@ -170,12 +207,35 @@ class BridgeImpl(IntegrationImpl):
         """
 
     def local_changes(self, stream: Any, *, keys: frozenset[str] | None = None) -> Iterable[LocalChange]:
-        """Project only selected local identities, or all candidates when keys is None."""
+        """Project only selected local identities, or all candidates when keys is None.
+
+        The driver writes only a projection that differs from its link's base. On a
+        PUSH stream, given ``keys``, yield each selected key's current row under that
+        key with its ``target``, changed or not: a push binds the row it wrote only
+        while this keyed read, under the row's lock, still yields it under the key it
+        was written to (``streams._lock_written``). A row it no longer yields there
+        (deleted, or moved to another key) binds nothing, and its removal follows.
+
+        An adapter whose projection reads only what one exact version names yields
+        it as ``LocalChange.local_version``, read with the projection; without
+        ``keys`` it may then read only the rows changed since their link's base
+        (``RecordLinkManager.changed_since_base``), which reads every row while the
+        stream's sweep is due, so its stream declares a ``reconcile_interval``. Its
+        stream's ``mapping_version`` names the projection: raise it with any change
+        to what the projection returns for an unchanged row.
+        """
 
         raise AdapterContractError("Push adapters must project local changes.")
 
     def write_back(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
-        """Conditionally write a remote record or raise RemoteRejected."""
+        """Conditionally write a remote record or raise RemoteRejected.
+
+        ``projection`` is ``None`` for a removal: on a PUSH stream, a link whose row
+        went (released by its deletion, ``RecordLinkManager.release_pushes``) is
+        written as ``write_back(link, None)``, and a result with ``tombstone=True``
+        tombstones the link. An adapter's :meth:`local_changes` may yield a ``None``
+        projection too, for a record it removes itself.
+        """
 
         raise AdapterContractError("Push adapters must implement conditional write-back.")
 

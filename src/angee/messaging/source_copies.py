@@ -85,7 +85,7 @@ class SourceCopyMixin(MergeableMixin, StatementsMixin, models.Model):
         if self.channel_id is None or other.channel_id is None or self.platform != other.platform:
             raise ValidationError("Source identity requires two occurrences on the same platform.")
         pair = self.same_as.for_pair(self, other)
-        return pair.confirm(aspect="same_as", values={}) if same else pair.dismiss(aspect="same_as")
+        return pair.confirm_statement(aspect="same_as", values={}) if same else pair.dismiss_statement(aspect="same_as")
 
 
 def observe_email_identity(message: Any) -> None:

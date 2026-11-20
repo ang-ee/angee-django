@@ -22,9 +22,9 @@ is a typed, directed party↔party edge whose vocabulary
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import replace
-from datetime import timedelta
+import unicodedata
+from collections.abc import Collection, Iterable, Mapping, Sequence
+from dataclasses import asdict, replace
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
@@ -40,11 +40,10 @@ from phonenumbers import (
     is_valid_number,
     parse,
 )
-from rebac import PermissionDenied, actor_context, system_context
+from rebac import PermissionDenied, SubjectRef, actor_context, backend, system_context, to_object_ref, to_subject_ref
 from rebac.mixins import RebacModelBase
 
 from angee.base.fields.implementation import ImplClassField
-from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.fields.state import StateField
 from angee.base.fields.text import ColorField
 from angee.base.lineage import concrete_child, concrete_child_models, most_derived_concrete
@@ -52,19 +51,20 @@ from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.hierarchy import HierarchyMixin
 from angee.base.models.identity import public_id_of
-from angee.base.models.merge import MergeableMixin
+from angee.base.models.merge import MergeableMixin, merge_maintenance
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.trash import TrashMixin
 from angee.base.permissions import actor_user_id, instance_actor, reader_queryset
 from angee.base.prefetch import prefetched
+from angee.integrate.mixins import LinkedRecordMixin, StatedRecordMixin
 from angee.integrate.models import Bridge, IntegrationCreateMode
-from angee.integrate.states import StreamDefinition, StreamDirection, StreamKind
-from angee.parties.backends import DirectoryBackend, ParsedAddressbook
+from angee.parties.backends import DirectoryBackend
 from angee.parties.connections import ConnectionHandle
-from angee.parties.fields import CountryCodeField
+from angee.parties.fields import CountryCodeField, LanguageCodesField
 from angee.parties.managers import (
     VISIBLE_CIRCLE_MEMBERS,
     CircleManager,
+    DirectoryManager,
     FolderManager,
     HandleManager,
     PartyManager,
@@ -72,6 +72,7 @@ from angee.parties.managers import (
     RelationshipManager,
 )
 from angee.parties.mixins import MembershipDecisionMixin, PartyAspectMixin, PartyStatementMixin
+from angee.provenance.context import current_changeset
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
 from angee.provenance.contrib.angee.managers import AngeeHistoryMergeableUnscopedManager
 from angee.provenance.statements import (
@@ -85,9 +86,20 @@ from angee.provenance.statements import (
 from angee.resources.mixins import ResourceLoadMixin
 from angee.tags.models import TaggedModel
 
+_HYPHENS_AS_SPACES = str.maketrans(dict.fromkeys("-\u2010\u2011", " "))
+"""Hyphens a name may carry, read as the space they separate words with (``Party.comparable_name``)."""
+
 
 class Party(
-    MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataModel, concrete=True
+    MergeableMixin,
+    TrashMixin,
+    LinkedRecordMixin,
+    StatementsMixin,
+    HistoryMixin,
+    TaggedModel,
+    OwnerMixin,
+    AngeeDataModel,
+    concrete=True,
 ):
     """A person or organisation the project tracks.
 
@@ -109,17 +121,54 @@ class Party(
     sqid_prefix = "pty_"
     history = ModelHistory(inherit=True, excluded_fields=("handle_count",))
     REVIEW_CONFIDENCE: ClassVar[float] = 0.5
+    """The confidence at which a normal handle statement applies; below it, a statement awaits review.
+
+    ``parties/handle#stating_directory`` in permissions.zed repeats it: a test holds the two to one number.
+    """
+    CLAIM_CONFIDENCE: ClassVar[float] = 0.4
+    """The confidence of a source's claim for review on an address someone else holds: below review, never applied."""
 
     def handle_candidates(self, candidates: Sequence[Any]) -> Sequence[Any]:
         return [row for row in candidates if row.confidence >= self.REVIEW_CONFIDENCE]
 
-    def apply_handle(self, *, member: Mapping[str, Any], **kwargs: Any) -> None:
-        # The member carries the handle's key; resolution locks and reloads that row itself.
-        apps.get_model("parties", "Handle")(pk=member["handle"]).resolve()
+    def apply_handle(self, *, member: Mapping[str, Any], statement: Any = None, **kwargs: Any) -> None:
+        """Resolve the handle; a person's stance written now that wins it here needs authority over its address.
 
-    record_links = RetainedGenericRelation(
-        "integrate.RecordLink", content_type_field="target_content_type", object_id_field="target_object_id"
-    )
+        Every route that writes a handle statement for a party ends here, in its
+        resolution: a confirmation (the review queue's accept, an identity
+        review's), taking control of an address (``HandleManager.claim_control``,
+        which states a claim for review instead where this would refuse) and a
+        restored confirmation (a history revert). When the stance this
+        party's handle applies is a person's, written by the operation now
+        running, its author must be able to make this party the holder of the
+        address as it is held before the resolution
+        (``PartyManager.holding_blocker``); if the handle then resolves to this
+        party without that, the whole write is refused. The handle's rows are
+        already locked: every statement write locks its subject's handles first
+        (:meth:`lock_subject`). A merge's own maintenance moves stances, never
+        states them, and is admitted (``merge_maintenance``).
+        """
+
+        handles = apps.get_model("parties", "Handle")
+        refusal = None
+        written = current_changeset()
+        if (
+            statement is not None
+            and statement.source_kind == SourceKind.PERSON
+            and statement.snak == statement.StatementSnak.VALUE
+            and written is not None
+            and statement.changeset_id == written.pk
+            and not merge_maintenance()
+        ):
+            refusal = apps.get_model("parties", "Party").objects.holding_blocker(
+                self, handles._base_manager.get(pk=member["handle"]), author=SubjectRef.parse(statement.asserted_by)
+            )
+        # The member carries the handle's key; resolution locks and reloads that row itself.
+        handle = handles(pk=member["handle"])
+        handle.resolve()
+        if refusal is not None and handle.party_id == self.pk:
+            raise PermissionDenied(refusal)
+
     statements = StatementRecords(
         link="integrate.RecordLink",
         aspects={
@@ -135,7 +184,12 @@ class Party(
                 precedence=cast(tuple[SourceKind, ...], (SourceKind.PERSON, SourceKind.DIRECTORY)),
             ),
             "handle": Aspect(
-                member={"handle": models.ForeignKey("parties.Handle", on_delete=models.PROTECT)},
+                # The reverse name lets a handle reach the directories asserting it (parties/handle). It is
+                # the statement model's own name (``partystatement``), as Django names a subject's reverse,
+                # so every statement arm of the parties schema spells its path the same way.
+                member={
+                    "handle": models.ForeignKey("parties.Handle", on_delete=models.PROTECT, related_name="%(class)s")
+                },
                 precedence=cast(
                     tuple[SourceKind, ...],
                     (
@@ -196,6 +250,7 @@ class Party(
         "name_suffix",
         "nickname",
         "birthday",
+        "anniversary",
     )
 
     class Meta:
@@ -226,12 +281,56 @@ class Party(
         owner.lock_identity_rows(party_ids=(self.pk,), handle_ids=handle_ids)
         return super().lock_subject(members)
 
-    def lock_for_merge(self) -> None:
-        """Lock this party's Handles before the shared merge owner locks Parties."""
+    @classmethod
+    def lock_subjects(cls, subjects: Sequence[Any]) -> None:
+        """Lock every one of these parties' Handles, then the parties and statements, in one identity pass.
 
+        A party's Handles are the ones it has a statement on and the ones it holds
+        (a holder written onto its row has no statement). Locking party after party
+        would take a later party's Handles after an earlier party's row, the reverse
+        of the Handle, Party order resolution and the identity verbs keep, so a pair
+        (both endpoints) locks here.
+        """
+
+        cls._lock_identities({row.pk for row in subjects})
+
+    @classmethod
+    def lock_merge_records(cls, records: Sequence[Any]) -> None:
+        """Lock the merge's parties and their same-person partners in one identity pass, before any party row.
+
+        The fold re-keys each merged party's other pairs onto the survivor
+        (``StatementPairManager.merge``), which locks the partner's Handles; taken
+        then, after party rows, they would invert the Handle, Party order, so the
+        partners join this pass, read again under its lock in case a pair committed
+        meanwhile. One top-up closes the set: once the merge's parties are locked
+        no new pair of theirs can start. What it takes late (a partner whose pair,
+        or a Handle a party gained, committed while the first pass waited) is
+        locked after these parties' rows; a deadlock there rolls the merge back,
+        which the batch merge reports as that set's ``stopped``. That is the known
+        limit of one pass.
+        """
+
+        ids = {row.pk for row in records}
+        wanted = ids | cls._same_as_partners(ids)
+        cls._lock_identities(wanted)
+        # Under the lock no new pair of these parties can start (``for_pair`` locks both endpoints first),
+        # but one committed while this pass waited may be missing: read again and top the set up.
+        if missing := cls._same_as_partners(ids) - wanted:
+            cls._lock_identities(wanted | missing)
+
+    @classmethod
+    def _same_as_partners(cls, ids: set[Any]) -> set[Any]:
+        pairs = cls.same_as.model._base_manager.filter(models.Q(left_id__in=ids) | models.Q(right_id__in=ids))
+        return {pk for pair in pairs.untrashed().values_list("left_id", "right_id") for pk in pair}
+
+    @staticmethod
+    def _lock_identities(party_ids: set[Any]) -> None:
         owner = apps.get_model("parties", "Party").objects
-        handle_ids = owner.handle_statements().filter(subject_id=self.pk).values_list("handle_id", flat=True)
-        owner.lock_identity_rows(party_ids=(self.pk,), handle_ids=handle_ids)
+        ids = sorted(party_ids)
+        with system_context(reason="parties.party.lock_identities"):
+            stated = set(owner.handle_statements().filter(subject_id__in=ids).values_list("handle_id", flat=True))
+        held = apps.get_model("parties", "Handle")._base_manager.filter(party_id__in=ids).values_list("pk", flat=True)
+        owner.lock_identity_rows(party_ids=ids, handle_ids={*stated, *held})
 
     def __str__(self) -> str:
         """Return the party's display name for Django displays."""
@@ -255,6 +354,29 @@ class Party(
         if not name or name == self.PLACEHOLDER_NAME:
             return False
         return any(character.isalpha() for character in name)
+
+    def names_an_address(self, handles: Iterable[Any]) -> bool:
+        """Whether ``display_name`` is one of these addresses, read as each one's platform normalizes it.
+
+        A party a source named after its e-mail address carries no name of its
+        own: two such records bear equal names because their addresses are equal.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        return any(
+            handle_model.normalize_value(row.platform, self.display_name) == row.normalized_value for row in handles
+        )
+
+    @property
+    def comparable_name(self) -> str:
+        """``display_name`` as two names compare for being one person's: case, accents and hyphens aside.
+
+        "Zoë Example-Smith" and "zoe example smith" compare equal; whitespace collapses.
+        """
+
+        decomposed = unicodedata.normalize("NFKD", self.display_name or "")
+        letters = "".join(character for character in decomposed if not unicodedata.combining(character))
+        return " ".join(letters.translate(_HYPHENS_AS_SPACES).split()).casefold()
 
     @property
     def concrete_kind(self) -> RelationshipKind.PartyKind | None:
@@ -281,30 +403,65 @@ class Party(
 
     @property
     def merge_scalar_fields(self) -> tuple[str, ...]:
-        """Scalar merge choices this party's native subtype admits; a person adds its name parts and birthday."""
+        """Scalar merge choices this party's native subtype admits; a person adds its name parts and dates."""
 
-        if self.concrete_kind == "person":
-            return self._merge_scalar_fields + self._person_merge_scalar_fields
-        return self._merge_scalar_fields
+        return self.merge_scalar_fields_of(self.concrete_kind)
 
-    def keep_merge_fields(self, source: Party, field_overrides: Any) -> None:
-        """Keep this survivor's merge scalars against ``source``: each chosen override, else its own value.
+    @classmethod
+    def merge_scalar_fields_of(cls, kind: str | None) -> tuple[str, ...]:
+        """The scalar merge choices of a party of ``kind`` (``"person"`` adds its name parts and dates)."""
 
-        Both endpoints must admit an override; a person's name parts and birthday
-        are admitted only between people. The fold then moves ``source``'s
-        statements here, where survivorship could select their values, so the
-        merging person confirms the kept values of every aspect an override or a
-        differing ``source`` value decides: a preferred statement precedes each
-        moved one, at this resolve and every later one. Aspects both records agree
-        on keep resolving over their sources; an override that no person-stated
-        aspect holds saves as an ordinary edit.
+        if kind == "person":
+            return cls._merge_scalar_fields + cls._person_merge_scalar_fields
+        return cls._merge_scalar_fields
+
+    def merge_values(self, merged: Sequence[Any]) -> dict[str, Any]:
+        """The merge choices that keep every value: ``merged``'s value of each merge scalar this survivor leaves empty.
+
+        Where both records carry a value, the survivor's stands. Passed as
+        ``field_overrides``, each is kept and recorded as the merging person's choice
+        (:meth:`keep_merge_fields`). Read without writing.
+        """
+
+        survivor = most_derived_concrete(self)
+        values: dict[str, Any] = {}
+        for row in merged:
+            other = most_derived_concrete(row)
+            for name in sorted(set(self.merge_scalar_fields).intersection(row.merge_scalar_fields)):
+                if values.get(name, getattr(survivor, name)) in (None, "") and getattr(other, name) not in (None, ""):
+                    values[name] = getattr(other, name)
+        return values
+
+    def keep_merge_fields(
+        self,
+        source: Party,
+        field_overrides: Any,
+        *,
+        fills: Mapping[str, Any] | None = None,
+        confirmed: Collection[str] | None = None,
+    ) -> None:
+        """Keep this survivor's merge scalars against ``source``: each override, else each fill, else its own value.
+
+        Both endpoints must admit an override; a person's name parts and dates are
+        admitted only between people. The fold then moves ``source``'s statements
+        here, where survivorship could select their values, so the merging person
+        confirms the kept values of every aspect an override or a differing value
+        decides: a preferred statement precedes each moved one, at this resolve and
+        every later one. Aspects both records agree on keep resolving over their
+        sources; an override that no person-stated aspect holds saves as an
+        ordinary edit. ``confirmed`` narrows what is recorded as the person's choice
+        to those fields and the overrides (a batch merge confirms only what the
+        person saw); a ``fills`` value outside them (``merge_values``) is written as
+        a plain value, no one's statement, so a source that states the field may
+        still replace it. ``None`` confirms every decided field (the Merge page).
         """
 
         overrides = {} if field_overrides is None else field_overrides
         if not isinstance(overrides, Mapping):
             raise ValidationError({"field_overrides": "Expected an object of field values."})
+        filled = {name: value for name, value in (fills or {}).items() if name not in overrides}
         allowed = set(self.merge_scalar_fields).intersection(source.merge_scalar_fields)
-        if unknown := set(overrides) - allowed:
+        if unknown := (set(overrides) | set(filled)) - allowed:
             names = ", ".join(sorted(str(name) for name in unknown))
             raise ValidationError({"field_overrides": f"Unsupported merge field(s): {names}."})
         survivor = most_derived_concrete(self).with_actor(instance_actor(self))
@@ -313,20 +470,35 @@ class Party(
         for name in sorted(allowed):
             field = survivor._meta.get_field(name)
             assert isinstance(field, models.Field)
-            kept[name] = field.clean(overrides[name], survivor) if name in overrides else getattr(survivor, name)
-        decided = {name for name, value in kept.items() if name in overrides or value != getattr(other, name)}
+            chosen = overrides if name in overrides else filled if name in filled else None
+            kept[name] = field.clean(chosen[name], survivor) if chosen is not None else getattr(survivor, name)
+        decided = {
+            name for name, value in kept.items() if name in overrides or name in filled or value != getattr(other, name)
+        }
+        pinned = set(decided) if confirmed is None else (decided & set(confirmed)) | set(overrides)
         for manager in survivor.statement_managers():
             for aspect, declaration in manager.model.statement_aspects.items():
-                if declaration.members or not declaration.admits_person or decided.isdisjoint(declaration.fields):
+                if declaration.members or not declaration.admits_person or pinned.isdisjoint(declaration.fields):
                     continue
                 values = {name: kept[name] if name in kept else getattr(survivor, name) for name in declaration.fields}
-                survivor.confirm(aspect=aspect, values=values)
+                survivor.confirm_statement(aspect=aspect, values=values)
                 decided.difference_update(declaration.fields)
-        edits = [name for name in sorted(decided.intersection(overrides)) if getattr(survivor, name) != kept[name]]
+                pinned.difference_update(declaration.fields)
+        edits = [name for name in sorted(pinned.intersection(overrides)) if getattr(survivor, name) != kept[name]]
         for name in edits:
             setattr(survivor, name, kept[name])
         if edits:
             survivor.save(update_fields=[*edits, "updated_at"])
+        plain = {
+            name: kept[name]
+            for name in sorted(decided - pinned)
+            if name in filled and getattr(survivor, name) != kept[name]
+        }
+        if plain:
+            # No one's statement: a plain write, which survivorship keeps until a source states the field.
+            type(survivor)._base_manager.filter(pk=survivor.pk).update(**plain)
+            for name, value in plain.items():
+                setattr(survivor, name, value)
 
     def apply_identity(
         self,
@@ -501,41 +673,80 @@ class Party(
             super().apply_pair(aspect=aspect, other=other, statement=statement)
 
     def validate_merge(self, merged: Sequence[Any]) -> None:
+        """Refuse a pair a person kept apart, and records of different kinds (a person and an organization)."""
+
         super().validate_merge(merged)
+        kind = self.concrete_kind
         for row in merged:
+            if row.concrete_kind != kind:
+                raise ValidationError("Only people, or only organizations, merge together.")
             if self.same_as.kept_separate(self, row):
                 raise ValidationError("These parties have been marked to stay separate.")
+        # The survivor takes every merged record's links: never two live contacts of one pull-only directory.
+        if refusal := apps.get_model("parties", "Party").objects.directory_merge_blocker(self, merged):
+            raise ValidationError(refusal)
 
-    def merge_fields(self, merged: Sequence[Any], *, field_overrides: Any = None, **options: Any) -> None:
+    def merge_fields(
+        self,
+        merged: Sequence[Any],
+        *,
+        field_overrides: Any = None,
+        fill_empty: bool = False,
+        confirmed_fields: Collection[str] | None = None,
+        **options: Any,
+    ) -> None:
+        """Keep the survivor's merge scalars against each merged record and confirm each pair as the actor's.
+
+        ``fill_empty`` keeps a merged record's value of each field this survivor
+        leaves empty (:meth:`merge_values`, read here, under the merge's locks);
+        ``confirmed_fields`` names the fields the merging person saw, the only ones
+        recorded as their choice beside the overrides (:meth:`keep_merge_fields`).
+        """
+
         super().merge_fields(merged, **options)
+        fills = self.merge_values(merged) if fill_empty else {}
         for row in merged:
-            self.keep_merge_fields(row, field_overrides)
-            self.same_as.for_pair(self, row).with_actor(instance_actor(self)).confirm(aspect="same_as", values={})
+            self.keep_merge_fields(row, field_overrides, fills=fills, confirmed=confirmed_fields)
+            pair = self.same_as.for_pair(self, row).with_actor(instance_actor(self))
+            pair.confirm_statement(aspect="same_as", values={})
+            # The merge decides the pair, so a directory's proposal of it is moot.
+            apps.get_model("parties", "Party").objects.withdraw_directory_match(self, row)
+
+
+_PERSON_FACT_PRECEDENCE = cast(
+    tuple[SourceKind, ...], (SourceKind.PERSON, SourceKind.SYSTEM_OF_RECORD, SourceKind.DIRECTORY, SourceKind.IMPORT)
+)
+"""Who wins a person's own facts: the person, then a system of record, a directory, an import."""
 
 
 class Person(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
-    """A human party — carries name parts and an optional platform-user link."""
+    """A human party — carries name parts, generic facts and an optional platform-user link.
+
+    ``languages`` and ``occupation`` each have a statement group of their own, so a
+    source stating one never states the other empty and a person editing one holds
+    only that one. No neutral contact carries them (:attr:`MAPPED_ASPECTS`): a
+    source states them through a directory mapping.
+    """
 
     statements = StatementRecords(
         link="integrate.RecordLink",
         aspects={
             "name": Aspect(
                 fields=("name_prefix", "given_name", "additional_name", "family_name", "name_suffix", "nickname"),
-                precedence=cast(
-                    tuple[SourceKind, ...],
-                    (SourceKind.PERSON, SourceKind.SYSTEM_OF_RECORD, SourceKind.DIRECTORY, SourceKind.IMPORT),
-                ),
+                precedence=_PERSON_FACT_PRECEDENCE,
             ),
-            "dates": Aspect(
-                fields=("birthday", "anniversary"),
-                precedence=cast(
-                    tuple[SourceKind, ...],
-                    (SourceKind.PERSON, SourceKind.SYSTEM_OF_RECORD, SourceKind.DIRECTORY, SourceKind.IMPORT),
-                ),
-            ),
+            "dates": Aspect(fields=("birthday", "anniversary"), precedence=_PERSON_FACT_PRECEDENCE),
+            "languages": Aspect(fields=("languages",), precedence=_PERSON_FACT_PRECEDENCE),
+            "occupation": Aspect(fields=("occupation",), precedence=_PERSON_FACT_PRECEDENCE),
         },
         sqid_prefix="pns_",
     )
+    MAPPED_ASPECTS: ClassVar[frozenset[str]] = frozenset({"languages", "occupation"})
+    """The person groups parties declares that no neutral contact carries; a source states them through a mapping.
+
+    The contact ingest states every other group parties declares on a person
+    (:meth:`contact_aspects`), and a ``DirectoryMapping`` may declare these.
+    """
 
     name_prefix = models.TextField(blank=True, default="")
     given_name = models.TextField(blank=True, default="")
@@ -545,6 +756,10 @@ class Person(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
     nickname = models.TextField(blank=True, default="")
     birthday = models.DateField(null=True, blank=True)
     anniversary = models.DateField(null=True, blank=True)
+    languages = LanguageCodesField(default=list, blank=True)
+    """The languages the person uses with us, most preferred first; two with no order known are still two."""
+    occupation = models.TextField(blank=True, default="")
+    """What the person does, in their words or a source's; an employment's title stays on its relationship."""
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         null=True,
@@ -559,6 +774,19 @@ class Person(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
         abstract = True
         ordering = ("-updated_at", "display_name", "sqid")
         rebac_resource_type = "parties/person"
+
+    @classmethod
+    def contact_aspects(cls) -> frozenset[str]:
+        """Return the statement groups ``PartyManager.ingest_contact`` states through a contact's link.
+
+        Those parties itself declares on a person, its party's and its own, but
+        :attr:`MAPPED_ASPECTS`, read from parties' declarations rather than the
+        composed tables, so a consumer donor's groups are never among them.
+        """
+
+        # On parties' abstract source models the attribute is still the declaration: StatementRecords keeps it there.
+        declarations = (cast(StatementRecords, Party.statements), cast(StatementRecords, Person.statements))
+        return frozenset(aspect for declaration in declarations for aspect in declaration.aspects) - cls.MAPPED_ASPECTS
 
 
 class Organization(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
@@ -588,7 +816,9 @@ class Organization(Composable, metaclass=RebacModelBase, inherits="parties.Party
         rebac_resource_type = "parties/organization"
 
 
-class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataModel, concrete=True):
+class Handle(
+    ResourceLoadMixin, MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataModel, concrete=True,
+):
     """A reachable address or handle of a party on one platform.
 
     Keyed on ``(platform, value)`` and, when present, ``(platform, external_id)``
@@ -598,6 +828,18 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
     unknown sender is still a valid row. A handle carries tags of its own, apart
     from its party's (a consumer marks a company's accounts-payable address).
     """
+
+    @classmethod
+    def after_resource_load(cls, instances: Iterable[Any], *, tier: str, source: str) -> None:
+        """A seeded row's holder is stated, and one the seed moved or cleared loses its earlier statement.
+
+        ``HandleManager.state_stored_holders`` takes each loaded row's holder as the
+        seed's word, so resolution keeps it.
+        """
+
+        instances = tuple(instances)
+        cast(HandleManager, cls._default_manager).state_stored_holders(instances)
+        super().after_resource_load(instances, tier=tier, source=source)
 
     _angee_base = AngeeHistoryMergeableUnscopedManager()
 
@@ -663,6 +905,17 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
         on_delete=models.SET_NULL,
         related_name="handles",
     )
+    """The holder: the subject of the winning applied handle statement, written only by :meth:`resolve`.
+
+    A source states the link (``PartyManager.assert_handle``); ``HandleManager.upsert``
+    refuses a holder. A holder written onto the row with no statement behind it
+    (a resource row, an older write) is stated by the ``stored_holder`` rule
+    (``HandleManager.state_stored_holders``) after a resource load and by the
+    ``resolve_stale_owners`` repair that provisioning runs, except a confirmed one
+    or one another party's applied statement contests, which the repair leaves for
+    a person, and a trashed one, left until a restore; until then a resolution of
+    the handle clears it.
+    """
     party_link_confirmed = models.BooleanField(default=False, editable=False)
     """Whether the winning link materialised into ``party`` is human-confirmed."""
 
@@ -704,17 +957,37 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
 
         return self.value
 
+    ACCOUNT_PLATFORMS: ClassVar[tuple[str, ...]] = ("email", "phone")
+    """Platforms whose value is itself an account's address: an email address, a phone number."""
+
+    @classmethod
+    def identifies_account(cls, platform: str, external_id: str = "") -> bool:
+        """Whether a handle names one account: an email address, a phone number or a platform id.
+
+        A value on any other platform without a platform id is only a name (a
+        friend an export records by name), which many accounts share.
+        :meth:`identifies_account_filter` is the same rule over stored rows.
+        """
+
+        return bool(external_id) or platform in cls.ACCOUNT_PLATFORMS
+
+    @classmethod
+    def identifies_account_filter(cls, prefix: str = "") -> models.Q:
+        """The handle rows :meth:`identifies_account` admits, through the relation path ``prefix``."""
+
+        return models.Q(**{f"{prefix}platform__in": cls.ACCOUNT_PLATFORMS}) | ~models.Q(**{f"{prefix}external_id": ""})
+
     @classmethod
     def identified_connection(cls, parsed: ConnectionHandle) -> bool:
         """Whether a connection names its account by a real identifier, not by a display name only.
 
-        An email address, a phone number or a platform id identifies one account.
-        An adapter may override that inference with its typed confidence.
+        :meth:`identifies_account` decides, unless the adapter overrides that
+        inference with its typed confidence.
         """
 
         if parsed.confidence is not None:
             return parsed.confidence >= 1.0
-        return bool(parsed.external_id) or parsed.platform in {cls.Platform.EMAIL, cls.Platform.PHONE}
+        return cls.identifies_account(parsed.platform, parsed.external_id)
 
     @classmethod
     def normalize_value(cls, platform: str, value: str) -> str:
@@ -933,6 +1206,51 @@ class AddressManager[AddressT: Address](StatementSubjectManager[AddressT]):
         normalized = self._normalize_components(values)
         return tuple(normalized[field].casefold() for field in self.components)
 
+    def land_addresses(
+        self,
+        party: Any,
+        addresses: Iterable[Any],
+        *,
+        asserted_by: Any,
+        link: Any,
+        created_by_id: Any,
+        replaces: Sequence[Any] = (),
+    ) -> None:
+        """State the addresses ``link`` names for ``party``; withdraw the party's others it or ``replaces`` stated.
+
+        Each parsed address takes its stored form (:meth:`as_stored`) and matches a
+        row of the party by its identity (:meth:`identity_key`), repeated equal
+        addresses included, so a respelled address updates its row and keeps what
+        the source does not carry; an unmatched one is created. ``replaces`` are
+        the links of records a merge at the source folded into ``link``'s. Only
+        those links' statements are withdrawn; rows are never deleted.
+        """
+
+        stored = list(self.model._base_manager.filter(party_id=party.pk).order_by("pk"))
+        landed: list[AddressT] = []
+        for parsed in addresses:
+            values = asdict(self.as_stored(parsed))
+            key = self.identity_key(values)
+            address = next(
+                (
+                    row
+                    for row in stored
+                    if row not in landed
+                    and self.identity_key({name: getattr(row, name) for name in self.components}) == key
+                ),
+                None,
+            )
+            if address is None:
+                address = self.create(party_id=party.pk, created_by_id=created_by_id, **values)
+            address.statements.set(aspect="address", values=values, asserted_by=asserted_by, link=link)
+            landed.append(address)
+        statements = self.model.statements
+        for stating in (link, *replaces):
+            removed = statements.filter(link=stating, subject__party_id=party.pk).exclude(
+                subject_id__in=[row.pk for row in landed]
+            )
+            statements.withdraw(asserted_by, list(removed.values_list("subject_id", flat=True)), link=stating)
+
     def lock_party(self, party_id: Any) -> None:
         """Serialize address writes for one party, including its first address."""
 
@@ -1138,20 +1456,33 @@ class Address(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, AngeeDataM
         return ", ".join(part for part in (self.street, self.city, self.country) if part)
 
 
-class Folder(OwnerMixin, AngeeDataModel, concrete=True):
+class Folder(StatedRecordMixin, HistoryMixin, OwnerMixin, AngeeDataModel, concrete=True):
     """A group of parties — the local mirror of a synced address book.
 
     The contacts counterpart of storage's ``Drive``/``Folder`` and knowledge's
     ``Vault`` container idea, kept to exactly what sync needs today: the directory
-    it mirrors, the collection ``source_href`` (one folder per ``(directory,
-    source_href)`` makes the folder upsert idempotent). Sync progress belongs to
-    ``integrate.SyncStream``. Owned through its transferable ``owner``, which a
-    sync's insert takes from the directory owner it stamps as ``created_by``;
-    deleting a folder leaves its linked parties. Manual creation and a folder
-    tree (``parent``) are deferred until a create path lands to exercise them.
+    it mirrors and its name. The address book's identity is the
+    ``integrate.RecordLink`` of the directory's ``addressbooks`` stream that targets
+    this folder; that link is the container of the address book's contacts stream.
+    The source states the name through that link, so a person's rename outranks a
+    remote one. Owned through its transferable ``owner``, which a sync's insert
+    takes from the directory owner it stamps as ``created_by``. A folder no source
+    has stated stays an ordinary row (``person_stances_once_stated``). Manual
+    creation and a folder tree (``parent``) are deferred until a create path lands
+    to exercise them.
     """
 
     sqid_prefix = "fol_"
+    statements = StatementRecords(
+        link="integrate.RecordLink",
+        aspects={
+            "identity": Aspect(
+                fields=("name",),
+                precedence=cast(tuple[SourceKind, ...], (SourceKind.PERSON, SourceKind.DIRECTORY)),
+            ),
+        },
+        sqid_prefix="fos_",
+    )
     name = models.CharField(max_length=200)
     directory = models.ForeignKey(
         "parties.Directory",
@@ -1160,7 +1491,6 @@ class Folder(OwnerMixin, AngeeDataModel, concrete=True):
         on_delete=models.CASCADE,
         related_name="folders",
     )
-    source_href = models.CharField(max_length=1024, blank=True, default="")
 
     objects = FolderManager()
 
@@ -1170,13 +1500,6 @@ class Folder(OwnerMixin, AngeeDataModel, concrete=True):
         abstract = True
         ordering = ("name", "sqid")
         rebac_resource_type = "parties/folder"
-        constraints = (
-            models.UniqueConstraint(
-                fields=("directory", "source_href"),
-                condition=~models.Q(source_href=""),
-                name="uq_folder_directory_source",
-            ),
-        )
 
     def __str__(self) -> str:
         """Return the folder name for Django displays."""
@@ -1566,13 +1889,21 @@ class Directory(Bridge, inherits="integrate.Integration"):
 
     An ``integrate.Integration`` child (so it draws its credential / owner / status
     from the connection substrate) and a ``Bridge`` (so the scheduler and the eager
-    ``syncIntegration`` mutation drive it). ``backend_class`` selects the protocol —
-    ``carddav`` (contributed by ``parties_integrate_carddav``) — and ``config``
-    carries the source URL. The inherited ``Bridge.sync()`` drives the backend
-    streams; the parties managers own the contact projection and ingest path.
+    ``syncIntegration`` mutation drive it). ``backend_class`` selects the protocol
+    (``carddav`` from ``parties_integrate_carddav``), and ``config`` carries what
+    that backend needs to reach its source (CardDAV's server URL). The backend tests
+    the connection (:meth:`test_connection`), refuses a credential it does not use
+    (:meth:`credential_blocker`) and declares which way the contacts sync
+    (``DirectoryBackend.direction``); every vendor connects through
+    ``Directory.objects.connect`` (:class:`DirectoryManager`). The inherited
+    ``Bridge.sync()`` drives the backend streams; the parties managers own the
+    contact projection and ingest path.
     """
 
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.CONNECT
+    rebac_grantable = {"contact_reader": "write"}
+
+    objects = DirectoryManager()
 
     @property
     def source_kind(self) -> SourceKind:
@@ -1595,35 +1926,50 @@ class Directory(Bridge, inherits="integrate.Integration"):
         verbose_name_plural = "directories"
         rebac_resource_type = "parties/directory"
 
-    def addressbook_stream(self, book: ParsedAddressbook) -> StreamDefinition:
-        """Mirror a discovered address book as a folder and declare its contacts stream.
-
-        The stream's deletion policy seeds from this directory's per-collection config.
-        """
-
-        apps.get_model("parties", "Folder").objects.sync_addressbook(self, book)
-        policy = {
-            "local_delete": "conflict",
-            "remote_delete": "retain",
-            **self.config.get("streams", {}).get("contacts", {}).get(book.href, {}),
-        }
-        if policy["local_delete"] not in {"conflict", "propagate"} or policy["remote_delete"] not in {
-            "retain",
-            "propagate",
-        }:
-            raise ValueError("Unknown Directory deletion policy.")
-        return StreamDefinition(
-            "contacts",
-            partition=book.href,
-            kind=StreamKind.RECORD_REPLICA,
-            direction=StreamDirection.BIDIRECTIONAL,
-            reconcile_interval=timedelta(days=1),
-            config=policy,
-        )
-
     @property
     def backend(self) -> DirectoryBackend:
         """Return this directory's selected backend, bound to this row."""
 
         backend_class = self.get_backend_class_impl()
         return backend_class(self)
+
+    def test_connection(self) -> str:
+        """Exercise the selected backend's connection (the Integration test contract)."""
+
+        return self.backend.test_connection()
+
+    def credential_blocker(self, credential: Any) -> str | None:
+        """Refuse a credential this directory's backend does not use (``DirectoryBackend.credential_blocker``).
+
+        Integrate raises it on every attachment (``Integration.admit_credential``),
+        so neither a connect, the console's credential patch nor a reconnect points
+        a directory at a credential its backend would send elsewhere; the connect
+        picker shows it beside each account.
+        """
+
+        return self.backend.credential_blocker(credential)
+
+    def grant_owner_contact_read(self) -> bool:
+        """Grant this directory's owner ``contact_reader``, the read of its contacts; return whether it was missing.
+
+        The one writer of that grant, a decision made when the directory is
+        connected: ``Directory.objects.connect`` calls it for the connecting
+        owner, and the provision repair (``DirectoryManager.grant_owner_contact_reads``)
+        for every existing directory. It is system work and idempotent: an owner
+        who already reads the contacts (granted, or through a group) is granted
+        nothing. A transfer does not move it: a person grants a later owner
+        through the record-access surface, and the previous owner keeps the
+        grant until someone removes it. A grant that follows ownership would be
+        written by the transfer's owner, a ``transfer_ownership`` override on
+        the directory calling this for the new owner and revoking the previous
+        one in the transfer's transaction.
+        """
+
+        if self.owner_id is None:
+            return False
+        owner = to_subject_ref(self.owner)
+        with system_context(reason="parties.directory.owner_contact_read"):
+            if backend().check_access(subject=owner, action="contact_read", resource=to_object_ref(self)).allowed:
+                return False
+            self.system_grant_record_access("contact_reader", owner)
+        return True

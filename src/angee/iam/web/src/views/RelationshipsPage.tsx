@@ -53,6 +53,8 @@ export function RelationshipsPage(): ReactElement {
   return (
     <ListView<RelationshipResourceRow>
       resource="iam.Relationship"
+      // Relationship tuples are read-only; no action consumes a selection.
+      selectable={false}
       columns={relationshipColumns}
       groupOptions={relationshipGroupOptions(t)}
       defaultGroup={{ field: "resource_type" }}

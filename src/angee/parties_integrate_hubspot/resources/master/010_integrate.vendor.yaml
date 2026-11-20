@@ -1,0 +1,7 @@
+# The HubSpot vendor (master tier). Model inferred from the `integrate.vendor`
+# filename; adopted by slug, so a pre-existing `hubspot` row is linked instead
+# of duplicated.
+- xref: hubspot
+  slug: hubspot
+  display_name: HubSpot
+  website_url: https://www.hubspot.com

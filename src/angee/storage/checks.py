@@ -6,12 +6,12 @@ from functools import partial
 
 from angee.base.checks import check_sealed_permissions
 
-DERIVED_PERMISSIONS = {"storage/file": ("read", "write", "share")}
-"""The file permissions storage derives from their ``*_granted`` arms, which fragments never extend.
+DERIVED_PERMISSIONS = {"storage/file": ("read", "write", "share", "inherit_visibility")}
+"""File permissions whose expressions storage seals against fragment extensions.
 
-Each withholds a trashed file from everyone who cannot delete it. An arm
-unioned straight into one would reach the file outside that withholding;
-fragments widen ``read_granted``, ``write_granted`` and ``share_granted`` instead.
+``read``, ``write`` and ``share`` withhold a trashed file from everyone who
+cannot delete it; fragments widen their ``*_granted`` arms instead.
+``inherit_visibility`` admits only the drive's sharers to restore inheritance.
 """
 
 check_derived_permissions = partial(check_sealed_permissions, "storage", DERIVED_PERMISSIONS, "storage.E001")

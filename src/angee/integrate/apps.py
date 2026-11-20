@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from django.apps import AppConfig
+from django.core import checks
 
 
 class IntegrateConfig(AppConfig):
@@ -10,3 +11,12 @@ class IntegrateConfig(AppConfig):
 
     default = True
     name = "angee.integrate"
+
+    def ready(self) -> None:
+        """Register the credential permission check and connect integrate's model receivers after app population."""
+
+        from angee.integrate import signals
+        from angee.integrate.checks import check_replace_secret_permissions
+
+        checks.register(check_replace_secret_permissions, checks.Tags.security)
+        signals.connect()

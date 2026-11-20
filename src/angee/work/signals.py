@@ -32,8 +32,8 @@ def follow_project(sender: Any, project: Any, **kwargs: Any) -> None:
 
 
 def wake_snoozed_task(sender: Any, instance: Any, **kwargs: Any) -> None:
-    """Clear snooze state when a new message lands on a task chatter thread."""
+    """Wake the held tasks whose chatter carries the new message and that await its author."""
 
     del sender, kwargs
     tasks = apps.get_model("projects", "Task").work.sudo(reason="work.chatter.wake")
-    tasks.wake_from_chatter_thread(instance.thread_id)
+    tasks.wake_on_chatter_reply(instance)

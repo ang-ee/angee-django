@@ -1,6 +1,7 @@
 """Bridge paging and split coverage use real workflow and integration owners."""
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import timedelta
 from threading import Event
 from types import SimpleNamespace
@@ -17,6 +18,7 @@ from rebac import system_context
 from rebac.actors import to_subject_ref
 
 from angee.decisions.testing.models import Decision
+from angee.integrate.errors import IntegrationFailure
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.net import AddressResolutionError
 from angee.integrate.states import (
@@ -398,6 +400,79 @@ def test_map_keeps_each_partition_cursor_and_collects_its_counts(cycle):
     assert cycle.bridge.last_sync_items == 4
 
 
+def _rediscovering(cycle, monkeypatch):
+    """A subject whose capability learns its account at discovery, sent to discover again by a re-entered secret."""
+    monkeypatch.setattr(ConnectionBridge, "capability_impl", property(cycle.adapter_class))
+    with system_context(reason="test a re-entered secret under a sync cycle"):
+        bridge = make_integration("rediscovering-cycle", model=ConnectionBridge)
+        assert bridge.finish_discovery(credential_pk=bridge.credential_id, generation=bridge.discovery_generation)
+        bridge.credential.replace_material({"api_key": "re-entered"})
+        bridge.refresh_from_db()
+    assert bridge.discovery_pending
+    return bridge
+
+
+def test_a_step_waits_for_pending_discovery_without_an_attempt_and_resumes_once_it_settles(cycle, monkeypatch):
+    bridge = _rediscovering(cycle, monkeypatch)
+    run = cycle.start(StreamStage, {"key": "records", "page_bound": 1}, subject=bridge)
+
+    assert runner.execute(step_row(run).pk)
+
+    waiting = step_row(run)
+    assert (waiting.status, waiting.waiting_kind, waiting.retries) == ("waiting", "time", 0)
+    assert waiting.notes[-1]["message"] == "Connection discovery must finish before syncing."
+    attempt = StepAttempt.system_queryset().get(step_run=waiting)
+    assert attempt.effect_started_at is None and attempt.error == ""
+    assert cycle.extracted == []
+    with system_context(reason="test discovery settles under a waiting cycle"):
+        assert bridge.finish_discovery(credential_pk=bridge.credential_id, generation=bridge.discovery_generation)
+    wake(run)
+
+    run_until(run)
+
+    assert run.status == "succeeded" and step_row(run).retries == 0
+    assert run.output["counts"]["cycle_items"] == 2
+
+
+def test_a_step_waiting_on_a_due_discovery_backs_off_and_notes_once_per_attempt(cycle, monkeypatch):
+    bridge = _rediscovering(cycle, monkeypatch)
+    run = cycle.start(StreamStage, {"key": "records", "page_bound": 1}, subject=bridge)
+    message = "Connection discovery must finish before syncing."
+    delays = []
+    # The discovery's retry time has passed: its worker holds the attempt, and the step checks back.
+    for _ in range(3):
+        if delays:
+            wake(run)
+        started = timezone.now()
+        assert runner.execute(step_row(run).pk)
+        delays.append(step_row(run).wake_at - started)
+    assert delays[1] > timedelta(seconds=1.5) and delays[2] > timedelta(seconds=3)
+    assert [note["message"] for note in step_row(run).notes] == [message]
+    with system_context(reason="test discovery starts another attempt"):
+        type(bridge).objects.filter(pk=bridge.pk).update(discovery_attempts=bridge.discovery_attempts + 1)
+    wake(run)
+    assert runner.execute(step_row(run).pk)
+    assert [note["message"] for note in step_row(run).notes] == [message, message]
+    assert step_row(run).retries == 0 and cycle.extracted == []
+
+
+def test_a_step_fails_with_the_discovery_message_once_discovery_failed(cycle, monkeypatch):
+    bridge = _rediscovering(cycle, monkeypatch)
+    with system_context(reason="test rediscovery refused the re-entered secret"):
+        assert bridge.finish_discovery(
+            credential_pk=bridge.credential_id, generation=bridge.discovery_generation,
+            error=IntegrationFailure("This key reads another account."),
+        )
+    run = cycle.start(StreamStage, {"key": "records", "page_bound": 1}, subject=bridge)
+
+    assert runner.execute(step_row(run).pk)
+
+    attempt = StepAttempt.system_queryset().get(step_run=step_row(run))
+    assert (attempt.result, attempt.error) == ("failed", "IntegrationError: This key reads another account.")
+    # A failed discovery needs the operator: the step fails at once, nothing read, rather than retrying.
+    assert step_row(run).status == "failed" and cycle.extracted == []
+
+
 # A resolver that is briefly offline can answer "no such host" (macOS does), so that is transport too.
 @pytest.mark.parametrize("failure", [ConnectionError("The transport is unavailable."), AddressResolutionError()])
 def test_transport_failure_uses_native_retry_without_advancing_cursor(cycle, failure):
@@ -674,3 +749,28 @@ def test_same_cursor_with_changed_replica_hashes_makes_progress(cycle, step):
         "first",
         "second",
     ]
+
+
+def test_a_secret_re_entered_while_the_step_waits_for_the_bridge_lock_holds_its_io_back(cycle, monkeypatch):
+    monkeypatch.setattr(ConnectionBridge, "capability_impl", property(cycle.adapter_class))
+    cycle.transport.parallelism = 1
+    with system_context(reason="test a secret re-entered under a waiting step"):
+        bridge = make_integration("re-entered-under-lock", model=ConnectionBridge)
+        assert bridge.finish_discovery(credential_pk=bridge.credential_id, generation=bridge.discovery_generation)
+    sync_lock = ConnectionBridge.sync_lock
+
+    @contextmanager
+    def re_entered_while_waiting(self):
+        with system_context(reason="test the secret re-entered meanwhile"):
+            self.credential.replace_material({"api_key": "re-entered"})
+        with sync_lock(self) as acquired:
+            yield acquired
+
+    monkeypatch.setattr(ConnectionBridge, "sync_lock", re_entered_while_waiting)
+    ctx = SimpleNamespace(
+        now=timezone.now(), state={}, heartbeat=Mock(), begin_effect=Mock(), wait=lambda **values: Wait(**values),
+    )
+    with steps.bridge_io(ctx, bridge) as result:
+        # Admitted on the row as loaded, asked again under the lock: no IO on the re-entered secret.
+        assert isinstance(result, Wait)
+    ctx.begin_effect.assert_not_called()

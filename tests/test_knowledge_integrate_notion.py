@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from datetime import timedelta
+from urllib import parse
 from uuid import UUID
 
 import httpx2
@@ -14,12 +16,28 @@ from django.db import connection
 from rebac import actor_context, system_context
 
 from angee.graphql.testing.documents import execute_schema
-from angee.integrate.http import HttpClient
+from angee.integrate.credentials import CredentialKind
+from angee.integrate.discovery import ConnectionDiscovery
+from angee.integrate.errors import IntegrationError
+from angee.integrate.http import JSON_MAX_BYTES
+from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.states import SyncFailureKind
 from angee.integrate.streams import advance_stream, open_stream, sync_bridge
+from angee.integrate.testing.http import mock_transport, request_fields
 from angee.knowledge_integrate_notion.backend import NotionBackend, NotionResponseError
 from angee.knowledge_integrate_notion.schema import schemas
-from tests.conftest import Link, MarkdownPage, NotionConnection, Page, addon_schema, create_user, make_integration
+from tests.conftest import (
+    Credential,
+    ExternalAccount,
+    Link,
+    MarkdownPage,
+    NotionConnection,
+    OAuthClient,
+    Page,
+    addon_schema,
+    create_user,
+    make_integration,
+)
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -38,6 +56,22 @@ def node(number, title, *, parent=None, source=False):
     return result
 
 
+WORKSPACE = str(UUID(int=7001))
+"""The workspace the fixture's token ``x`` belongs to."""
+
+
+def bot_user(workspace):
+    """GET /v1/users/me: the token's bot user, whose ``bot`` names its workspace."""
+    return {
+        "object": "user", "id": str(UUID(int=7000)), "name": "Example integration", "type": "bot",
+        "bot": {
+            "owner": {"type": "workspace", "workspace": True},
+            "workspace_id": workspace, "workspace_name": "Example workspace",
+            "workspace_limits": {"max_file_upload_size_in_bytes": 5_368_709_120},
+        },
+    }
+
+
 class NotionAPI:
     """A paginated provider fixture; the real transport boundary and driver stay in use."""
 
@@ -48,6 +82,8 @@ class NotionAPI:
         self.sources = {}
         self.requests = []
         self.refusals = {}
+        # The bot user each token reads at users/me; content reads use the fixture's token ``x``.
+        self.me = {"x": bot_user(WORKSPACE)}
 
     def add(self, value, body="", *, searchable=True):
         self.nodes[value["id"]] = value
@@ -56,15 +92,21 @@ class NotionAPI:
             self.search.append(value["id"])
         return value["id"]
 
-    def request(self, method, url, **kwargs):
+    def __call__(self, request):
         assert not connection.in_atomic_block, "Provider calls must precede the apply transaction"
-        assert kwargs["headers"]["Authorization"] == "Bearer x"
-        path = url.removeprefix("https://api.notion.com/v1/")
-        self.requests.append((method, path))
+        token = request.headers["Authorization"].removeprefix("Bearer ")
+        path = str(request.url).removeprefix("https://api.notion.com/v1/")
+        self.requests.append((request.method, path))
+        if path == "users/me":
+            return httpx2.Response(200, json=self.me[token])
+        assert token == "x"
         if path in self.refusals:
-            return self.refusals[path]
+            refusal = self.refusals[path]
+            if isinstance(refusal, Exception):
+                raise refusal
+            return refusal
         if path == "search" or path.endswith("/query"):
-            payload = json.loads(kwargs["body"])
+            payload = json.loads(request.content)
             keys = self.search if path == "search" else self.sources[path.split("/")[1]]
             start, size = int(payload.get("start_cursor", 0)), payload["page_size"]
             end = start + size
@@ -92,16 +134,46 @@ class NotionAPI:
 
 
 @pytest.fixture
-def api(monkeypatch):
+def api():
+    """Answer Notion's requests at integrate's network seam, so the shared request and its refusals run."""
     provider = NotionAPI()
-    monkeypatch.setattr(HttpClient, "request", lambda self, *args, **kwargs: provider.request(*args, **kwargs))
-    return provider
+    with mock_transport(provider):
+        yield provider
+
+
+def discovered(connection):
+    """Settle the discovery a new connection awaits, as the worker's fenced apply does after its probe."""
+    assert connection.finish_discovery(
+        credential_pk=connection.credential_id, generation=connection.discovery_generation,
+        discovery=ConnectionDiscovery(data={"workspace_id": WORKSPACE}),
+    )
+    return connection
+
+
+def rediscover(connection, api, token, workspace):
+    """Re-enter the connection's token as one of ``workspace`` and run the worker's discovery."""
+    api.me[token] = bot_user(workspace) if workspace else {**bot_user(WORKSPACE), "bot": {}}
+    connection.credential.replace_material({"api_key": token})
+    connection.refresh_from_db()
+    assert connection.discovery_pending
+    outcome = connection.run_discovery(
+        credential_pk=connection.credential_id, generation=connection.discovery_generation,
+    )
+    connection.refresh_from_db()
+    return outcome
+
+
+def replica(connection):
+    """The connection's stream positions and record links, as a refused rediscovery must leave them."""
+    stream = connection.sync_streams.get()
+    return stream.cursor, sorted(stream.links.values_list("pk", "external_key", "source_hash", "target_object_id"))
 
 
 @pytest.fixture
 def bridge(db):
     with system_context(reason="test.notion.sync"):
-        yield make_integration("notion-test", model=NotionConnection)
+        # The stream driver refuses a page while discovery is pending, as admission does.
+        yield discovered(make_integration("notion-test", model=NotionConnection))
 
 
 def targets(bridge):
@@ -286,13 +358,17 @@ def test_rate_limit_preserves_cursor_and_honors_retry_after(bridge, api):
     assert sync_bridge(bridge) == 1
 
 
-def test_rate_limit_after_progress_commits_completed_pages(bridge, api):
+@pytest.mark.parametrize("refusal", [
+    pytest.param(httpx2.Response(429, headers={"Retry-After": "1"}), id="rate-limit"),
+    pytest.param(httpx2.ReadTimeout("slow"), id="transport-failure-is-notions-transient-refusal"),
+])
+def test_a_transient_refusal_after_progress_commits_completed_pages(bridge, api, refusal):
     first = api.add(node(1, "First"), "Imported once")
     second = api.add(node(2, "Second"), "After retry")
     backend = NotionBackend(bridge)
     definition = tuple(backend.streams())[0]
     stream = open_stream(bridge, definition.key, definition.partition, backend, definition=definition)
-    api.refusals[f"pages/{second}/markdown"] = httpx2.Response(429, headers={"Retry-After": "1"})
+    api.refusals[f"pages/{second}/markdown"] = refusal
     assert advance_stream(stream, backend).count == 1
     stream.refresh_from_db()
     assert len(stream.cursor["pending"]) == 1
@@ -302,6 +378,49 @@ def test_rate_limit_after_progress_commits_completed_pages(bridge, api):
     assert sync_bridge(bridge) == 1
     assert api.requests.count(("GET", f"pages/{first}/markdown")) == 1
     assert len(targets(bridge)) == 2
+
+
+@pytest.mark.parametrize(("answer", "transient", "message"), [
+    pytest.param(httpx2.Response(503), True, "Notion is temporarily unavailable (HTTP 503).", id="outage"),
+    pytest.param(httpx2.Response(429), True, "Notion is rate limiting requests (HTTP 429).", id="rate-limit"),
+    pytest.param(httpx2.Response(409), False, "Notion refused the request (HTTP 409).", id="other-status"),
+    pytest.param(httpx2.ReadTimeout("slow"), True, "Notion did not answer.", id="transport-failure"),
+    pytest.param(
+        httpx2.Response(200, text="not json"), False, "Notion returned an unreadable response.", id="unreadable",
+    ),
+    pytest.param(
+        httpx2.Response(200, content=b" " * (JSON_MAX_BYTES + 1)), False, "Notion returned an oversized response.",
+        id="oversized-listing-is-permanent",
+    ),
+])
+def test_a_refused_listing_fails_the_page_in_notions_own_words(bridge, api, answer, transient, message):
+    """The listing is the stream's own request: its refusal is Notion's error, classified by integrate's rule."""
+    api.add(node(1, "Page"), "Body")
+    api.refusals["search"] = answer
+    backend = NotionBackend(bridge)
+    definition = tuple(backend.streams())[0]
+    stream = open_stream(bridge, definition.key, definition.partition, backend, definition=definition)
+    with pytest.raises(IntegrationError) as refused:
+        advance_stream(stream, backend)
+    assert (refused.value.transient, str(refused.value)) == (transient, message)
+
+
+@pytest.mark.parametrize(("answer", "code"), [
+    pytest.param(httpx2.Response(200, content=b" " * (JSON_MAX_BYTES + 1)), "notion_page_oversized", id="oversized"),
+    pytest.param(httpx2.Response(200, text="not json"), "notion_page_unreadable", id="unreadable"),
+])
+def test_a_page_whose_content_cannot_be_read_is_that_pages_refusal_and_its_neighbours_continue(
+    bridge, api, answer, code,
+):
+    """One record's oversized or unreadable answer is quarantined as its own refusal; the stream still completes."""
+    key = api.add(node(1, "Huge"), "Body")
+    api.add(node(2, "Healthy"), "Arrives")
+    api.refusals[f"pages/{key}/markdown"] = answer
+    sync_bridge(bridge)
+    assert Page.objects.filter(vault=bridge.vault, title="Healthy").exists()
+    stream = bridge.sync_streams.get()
+    assert stream.cursor == {}
+    assert stream.links.get(external_key=key).failures(open_only=True)[0].code == code
 
 
 @pytest.mark.parametrize("status", [403, 404])
@@ -438,3 +557,135 @@ def test_rewrite_converts_original_markup_once(bridge, api):
     sync_bridge(bridge)
     assert bridge.sync_streams.get().cursor == {}
     assert "a <b> c" in targets(bridge)[source].markdown.body
+
+
+@pytest.mark.parametrize("token_request_format", ["form", "json"])
+def test_notion_oauth_exchange_uses_basic_auth_and_token_response_identity(token_request_format):
+    """Notion's preset authorizes per user, authenticates with HTTP Basic and labels the account from the token."""
+    with system_context(reason="test.notion.oauth.client"):
+        client = OAuthClient.objects.create(
+            slug="notion", display_name="Notion", provider_type="notion",
+            client_id="notion-client", client_secret="notion-secret", token_request_format=token_request_format,
+        )
+    callback = "https://app.example/integrate/oauth/callback"
+    protocol = OAuthClientProtocol(client)
+    query = parse.parse_qs(parse.urlsplit(protocol.authorize_url(
+        state="state-token", redirect_uri=callback, scopes=client.default_scope_values, code_challenge="challenge",
+    )).query)
+    assert client.configuration_state == "ready"
+    assert (client.token_endpoint_auth_method, client.token_identity_keys) == (
+        "client_secret_basic", ["bot_id", "workspace_id", "workspace_name", "owner"],
+    )
+    assert query["owner"] == ["user"]
+    assert "scope" not in query and "code_challenge" not in query
+
+    token = {
+        "access_token": "notion-access", "token_type": "bearer", "bot_id": "bot-1", "workspace_id": "ws-1",
+        "workspace_name": "Acme", "workspace_icon": None,
+        "owner": {"type": "user", "user": {"id": "user-1", "avatar_url": None, "person": {"email": "a@example.com"}}},
+    }
+    with mock_transport(lambda request: httpx2.Response(200, json=token)) as requests:
+        assert protocol.exchange_code(code="auth-code", redirect_uri=callback) == {"access_token": "notion-access"}
+    [request] = requests
+    assert str(request.url) == "https://api.notion.com/v1/oauth/token"
+    assert request.headers["authorization"] == "Basic " + base64.b64encode(b"notion-client:notion-secret").decode()
+    fields = request_fields(request)
+    assert "client_secret" not in fields
+    assert {"grant_type": "authorization_code", "code": "auth-code", "redirect_uri": callback}.items() <= fields.items()
+    claims = protocol.token_response_claims
+    assert set(claims) == {"bot_id", "workspace_id", "workspace_name", "owner"}
+    assert client.external_id_from_claims(claims) == "bot-1"
+    assert client.email_from_claims(claims) == "a@example.com"
+    assert client.display_name_from_claims(claims, "a@example.com") == "Acme"
+
+
+def test_connect_resolves_the_vendor_registration_and_oauth_credentials_sync(api):
+    """Connect uses the `notion` registration; its OAuth grant reaches Notion as the same bearer token."""
+    with system_context(reason="test.notion.oauth.connect"):
+        connection = discovered(make_integration(
+            "notion", model=NotionConnection, kind=CredentialKind.OAUTH, material={"access_token": "x"},
+        ))
+        assert connection.connection_oauth_slug() == "notion"
+        assert connection.is_oauth_connectable()
+        key = api.add(node(1, "Shared page"), "Body")
+        assert sync_bridge(connection) == 1
+        assert targets(connection)[key].markdown.body == "Body"
+
+
+def test_discovery_reads_the_workspace_its_token_belongs_to(bridge, api):
+    discovery = NotionBackend(bridge).discover_connection(bridge.credential)
+    assert discovery.data == {"workspace_id": WORKSPACE} and discovery.credential is None
+    assert api.requests == [("GET", "users/me")]
+    assert bridge.subscription_state["workspace_id"] == WORKSPACE
+
+
+@pytest.mark.parametrize("workspace", [WORKSPACE, str(UUID(int=7002))])
+def test_a_reentered_token_must_belong_to_the_connection_workspace(bridge, api, workspace):
+    api.add(node(1, "Shared page"), "Body")
+    assert sync_bridge(bridge) == 1
+    before = replica(bridge)
+    outcome = rediscover(bridge, api, "re-entered", workspace)
+    assert replica(bridge) == before
+    assert bridge.subscription_state["workspace_id"] == WORKSPACE
+    if workspace == WORKSPACE:
+        assert outcome == {"ok": True, "reason": "applied"} and bridge.discovery_ready
+        return
+    assert outcome == {"ok": False, "reason": "discovery-failed"} and not bridge.discovery_ready
+    assert bridge.last_error == "This connection belongs to another Notion workspace; create a separate connection."
+    with pytest.raises(IntegrationError, match="discovery must finish"):
+        bridge.request_sync()
+
+
+def test_a_connection_discovered_before_it_kept_a_workspace_records_one(bridge, api):
+    type(bridge)._base_manager.filter(pk=bridge.pk).update(subscription_state={})
+    bridge.refresh_from_db()
+    other = str(UUID(int=7002))
+    assert rediscover(bridge, api, "re-entered", other) == {"ok": True, "reason": "applied"}
+    assert bridge.subscription_state["workspace_id"] == other and bridge.discovery_ready
+
+
+def test_a_token_that_names_no_workspace_is_refused_not_matched(bridge, api):
+    assert rediscover(bridge, api, "re-entered", None) == {"ok": False, "reason": "discovery-failed"}
+    assert bridge.last_error == (
+        "Notion did not say which workspace this token belongs to; "
+        "reconnect Notion or attach an internal integration's API token."
+    )
+    assert bridge.subscription_state["workspace_id"] == WORKSPACE and not bridge.discovery_ready
+
+
+def test_an_oauth_connection_keeps_the_workspace_its_grant_was_authorized_for(api):
+    """A connection made before discovery kept a workspace is checked against its account's token answer."""
+    with system_context(reason="test.notion.oauth.workspace"):
+        connection = discovered(make_integration(
+            "notion-grant", model=NotionConnection, kind=CredentialKind.OAUTH, material={"access_token": "x"},
+        ))
+        account = ExternalAccount.objects.link(
+            connection.credential.oauth_client, "bot-1", owner=connection.owner,
+            identity_claims={"bot_id": "bot-1", "workspace_id": WORKSPACE},
+        )
+        connection.attach_connection(Credential.objects.upsert_for_user(
+            connection.owner, connection.credential.oauth_client, CredentialKind.OAUTH, {"access_token": "x"},
+            external_account=account,
+        ))
+        type(connection)._base_manager.filter(pk=connection.pk).update(subscription_state={})
+        connection.refresh_from_db()
+        token = Credential.objects.create_local_credential(
+            connection.owner, kind=CredentialKind.STATIC_TOKEN, name="Another workspace", material={"api_key": "other"},
+        )
+        api.me["other"] = bot_user(str(UUID(int=7002)))
+        connection.attach_connection(token)
+        assert connection.account_id == account.pk and connection.discovery_pending
+        outcome = connection.run_discovery(
+            credential_pk=connection.credential_id, generation=connection.discovery_generation,
+        )
+        connection.refresh_from_db()
+    assert outcome == {"ok": False, "reason": "discovery-failed"}
+    assert connection.last_error == "This connection belongs to another Notion workspace; create a separate connection."
+
+
+def test_an_apply_without_a_workspace_is_the_no_workspace_refusal(bridge):
+    bridge.await_discovery()
+    with pytest.raises(IntegrationError, match="did not say which workspace"):
+        bridge.finish_discovery(
+            credential_pk=bridge.credential_id, generation=bridge.discovery_generation, discovery=ConnectionDiscovery(),
+        )

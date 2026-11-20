@@ -35,6 +35,42 @@ test("rows without a destination or action remain readable and non-interactive",
   expect(open).toHaveBeenCalledOnce();
 });
 
+test("an empty reason is no reason: the row stays available", () => {
+  const open = vi.fn();
+  render(<PaneRow title="Ada" onOpen={open} disabledReason="" />);
+  const row = screen.getByRole("button", { name: "Ada" });
+  expect(row.hasAttribute("aria-disabled")).toBe(false);
+  fireEvent.click(row);
+  expect(open).toHaveBeenCalledOnce();
+});
+
+test("an unavailable row is listed with its whole reason, reachable by keyboard, and does nothing", () => {
+  const open = vi.fn(), navigate = vi.fn();
+  const reason = "Already connected as the calendar source of another workspace";
+  render(<InAppLinkProvider navigate={navigate}>
+    <PaneRow title="Ada" verb="Use" onOpen={open} disabledReason={reason} />
+    <PaneRow title="Record" href="/records/7" disabled />
+  </InAppLinkProvider>);
+
+  // The reason describes the control rather than joining its name, and wraps instead of truncating.
+  const refused = screen.getByRole("button", { name: "Ada", description: reason });
+  expect(refused.getAttribute("aria-disabled")).toBe("true");
+  expect(refused.hasAttribute("disabled")).toBe(false);
+  expect(screen.getByText(reason).className).not.toContain("truncate");
+  refused.focus();
+  expect(document.activeElement).toBe(refused);
+  fireEvent.click(refused);
+  expect(open).not.toHaveBeenCalled();
+  // No verb tooltip and no hover fill on a row nothing happens on.
+  expect(refused.getAttribute("title")).toBeNull();
+  expect(refused.parentElement?.className).not.toContain("hover:");
+
+  // A disabled destination is not a link.
+  expect(screen.queryByRole("link", { name: "Record" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Record" }));
+  expect(navigate).not.toHaveBeenCalled();
+});
+
 test("primary hints do not displace row text and secondary controls stay independent", () => {
   const open = vi.fn(), related = vi.fn();
   render(<><PaneRow title="Sender" detail={0} verb="Results" onOpen={open} />

@@ -26,7 +26,7 @@ Run `angee-design` first for the owner map; `angee-models` and
 | `src/angee/graphql/data/hasura.py` | `hasura_model_resource`, `AngeeHasuraWriteBackend`, `HasuraLines`, `public_pk_decoder`, `declared_hasura_resource_fields` | `_check_writable_relations_decoded`, the writable-relation decode guard |
 | `src/angee/graphql/data/pydantic_resource.py` | `hasura_pydantic_resource` (computed, read-only rows) | `_ROLE_RESOURCE`, `_GRANT_RESOURCE` in `src/angee/iam/schema.py` |
 | `src/angee/graphql/actions.py` | `ActionResult`, `action_guard`, `authorized_action_target`, `authorized_permission_target`, `resolve_action_target` | `snooze_task` in `src/angee/work/schema.py` |
-| `src/angee/graphql/{node,ids,deletion,capabilities}.py` | `AngeeNode` (`node.py`), `instance_for_id`/`require_instance_for_id` (`ids.py`), `delete_by_public_id`/`attach_delete_preview_metadata` (`deletion.py`), `permissions_field` (`capabilities.py`) | `NoteDeletePreviewMutation` in `examples/src/example/notes/schema.py` |
+| `src/angee/graphql/{node,ids,deletion,capabilities}.py` | `AngeeNode` (`node.py`), `instance_for_id`/`require_instance_for_id` (`ids.py`), `delete_by_public_id`/`attach_delete_preview_metadata` (`deletion.py`), `permissions_field` (`capabilities.py`) | `_NOTE_RESOURCE` in `examples/src/example/notes/schema.py` |
 | `src/angee/graphql/subscriptions.py`, `apps.py` | `changes`; `GraphQLConfig.ready` (`apps.py`) registers the schema checks and connects publishers | `schemas` in `src/angee/knowledge/schema.py` |
 | `src/angee/graphql/sdl.py`, `management/commands/schema.py`, `urls.py` | `GraphQLSdl` renders `runtime/schemas/<name>.graphql` + `<name>.metadata.json`; ready-phase `SchemaIntegration` emits through compose; `schema --check` reads; `graphql/<schema_name>/` (`urlpatterns` in `urls.py`) | `docs/composer.md#serving` |
 | `packages/app/src/web-codegen.mjs`, `<addon>/web/src/documents*.ts` | Shared `generateWebRuntime` emits one `@angee/gql/<name>` per SDL; `documentGlobs` selects authored documents by file name; `buildOperationDocuments` derives action documents. Vite dev/build and the explicit CLI compose this owner | `src/angee/tags/web/src/documents.ts`, `useAuthoredQuery`, `useAuthoredMutation` in `packages/refine/src/dialect/authored-hooks.tsx` |
@@ -34,9 +34,9 @@ Run `angee-design` first for the owner map; `angee-models` and
 ## Reuse first
 
 - `AngeeNode` gives every type `id`, `display_name`, `redacted_fields`; `permissions_field(names)` answers held permissions. Never re-declare them.
-- `hasura_model_resource` + `AngeeHasuraWriteBackend(model, public_id_fields=…)` + `public_pk_decoder` own list/detail/aggregate/groups/insert/update/delete roots and the resource metadata; a model never gets a hand-written CRUD root.
+- `hasura_model_resource` + `AngeeHasuraWriteBackend(model, public_id_fields=…)` + `public_pk_decoder` own list/detail/aggregate/groups/insert/update/delete roots and the resource metadata; a model never gets a hand-written CRUD root. `delete=True` also generates `<res>_delete(id, confirm)`, the cascade preview the shared Delete action calls, served by the write backend's `delete_preview`.
 - Donors other addons already ship: `TaggedNode` + `tags_input_extensions` (`tags/schema.py`), `AuthoredRefMixin` (`iam/audit.py`), `integration_input_extensions` (`integrate/schema.py`).
-- Verbs: `ActionResult` + `action_guard` + `authorized_action_target`/`authorized_permission_target`; cascade preview via `delete_by_public_id` + `attach_delete_preview_metadata`; sharing via `angee.graphql.sharing`.
+- Verbs: `ActionResult` + `action_guard` + `authorized_action_target`/`authorized_permission_target`; sharing via `angee.graphql.sharing`. A custom delete (a purge, extra refusals) overrides the write backend's `delete_preview`, which `delete` composes; it is never a second mutation.
 - Live reads: `changes(Model, field=…)`; computed rows: `hasura_pydantic_resource`.
 - Upstream first: `strawberry_django.type/field` (`only`, `select_related`, `prefetch_related`, `annotate`), `extend=True`, strawberry-django-hasura and -aggregates native knobs (`docs/stack.md#backend` rows).
 - Web: `graphql()` from `@angee/gql/<schema>` with `useAuthoredQuery`/`useAuthoredMutation` (`@angee/refine`), `useRecordActionMutation` (`packages/ui/src/views/resource/record-action.ts`); resource views read metadata and need no documents.
@@ -104,7 +104,7 @@ Run `angee-design` first for the owner map; `angee-models` and
        return ActionResult(ok=True, message="Cycle closed.", id=target.sqid)
    ```
 
-   If the verb is row-authorized → `authorized_action_target` (write scope) or `authorized_permission_target(info, Model, id, "<perm>")` (exact permission). If the actor's role authorizes → `resolve_action_target` plus field `permission_classes`. If delete needs a cascade preview → `delete_by_public_id(Model, str(id), confirm=confirm, queryset=Model.objects.for_write())` wrapped by `attach_delete_preview_metadata` (notes `NoteDeletePreviewMutation.delete_note`).
+   If the verb is row-authorized → `authorized_action_target` (write scope) or `authorized_permission_target(info, Model, id, "<perm>")` (exact permission). If the actor's role authorizes → `resolve_action_target` plus field `permission_classes`. Delete needs no verb: the resource generates `<res>_delete` with its cascade preview. If deleting must do more than the collector delete → override `delete_preview(info, pk, *, confirm)` on the resource's write backend (`_ChannelWriteBackend` in `src/angee/messaging/schema.py`). Author a preview with `delete_by_public_id` + `attach_delete_preview_metadata` only for a `delete=False` resource whose delete is separately gated, and name it `<res>_delete` (`external_accounts_delete` in `src/angee/integrate/schema.py`).
    **Owner rule:** the manager/model verb owns state, locks and policy; the resolver may only translate and dispatch ([Put behavior on the owning object](../../../docs/guidelines.md#put-behavior-on-the-owning-object), [Rules](../../../docs/backend/guidelines.md#rules) "GraphQL resolvers stay thin").
 
 4. **Extend another addon's type or input; never edit it.**
@@ -149,7 +149,7 @@ Run `angee-design` first for the owner map; `angee-models` and
    ```python
    _NOTE_SCHEMA_BUCKET = {
        "query": [_NOTE_RESOURCE.query],
-       "mutation": [_NOTE_RESOURCE.mutation, NoteDeletePreviewMutation],
+       "mutation": [_NOTE_RESOURCE.mutation],
        "types": [NoteType, *_NOTE_RESOURCE.types],
    }
    schemas = {
@@ -200,7 +200,7 @@ Validators: `angee.graphql.E001`/`E002` from Django system checks (every named s
 
 Done means: `check` is clean; `runtime/schemas/<name>.graphql` shows the roots the resource declaration and authored fields imply, and `<name>.metadata.json` lists the resource with those roots as in the notes snapshot (`test_public_note_resource_metadata_snapshot`); `runtime/gql/<name>/` exports each authored document; the composed and per-package web typechecks pass; a non-admin reader test passes and a denied actor reads not-found.
 
-A jj workspace lane has no host, database or JS install: run the focused pytest module (schema build + `execute_schema`), `ruff`, `mypy` and `lint-imports` there; run `check`, `schema`, codegen and every web check only on integrated `src`. False greens: the composed `web` typecheck skips package test files, so the per-package typecheck is separate ([Frontend packages](../../../docs/checks.md#frontend-packages-and-addon-fragments)); addon checks never regenerate documents, so a stale `@angee/gql` passes ([web build pitfalls](../angee-framework/references/web-pitfalls.md)); a failed `check` in one process does not stop a writer process from starting ([Schema lifecycle and change publication](../../../docs/backend/guidelines.md#schema-lifecycle-and-change-publication)).
+A jj workspace lane has no host, database or JS install: run the focused pytest module (schema build + `execute_schema`), `test_authored_documents_validate_against_the_root_closure` in `tests/test_compose.py` (every installed web addon's documents against its own closure's schemas, codegen's rules), `ruff`, `mypy` and `lint-imports` there; run `check`, `schema`, codegen and every web check only on integrated `src`. False greens: the composed `web` typecheck skips package test files, so the per-package typecheck is separate ([Frontend packages](../../../docs/checks.md#frontend-packages-and-addon-fragments)); addon checks never regenerate documents, so a stale `@angee/gql` passes ([web build pitfalls](../angee-framework/references/web-pitfalls.md)); a failed `check` in one process does not stop a writer process from starting ([Schema lifecycle and change publication](../../../docs/backend/guidelines.md#schema-lifecycle-and-change-publication)).
 
 ## Pitfalls
 

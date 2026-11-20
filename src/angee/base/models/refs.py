@@ -12,7 +12,9 @@ and orphans edge rows on delete.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
+from itertools import batched
+from types import MappingProxyType
 from typing import Any, ClassVar, Protocol, cast
 
 from django.apps import apps
@@ -21,12 +23,14 @@ from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
+from django.db.models import BooleanField, ExpressionWrapper
 from django.db.models.deletion import ProtectedError
 from django.utils.text import capfirst
 from rebac import system_context
+from rebac.backends import backend
 from rebac.field_backing import canonical_model
 from rebac.resources import model_for_resource_type
-from rebac.schema import Definition, FieldBinding
+from rebac.schema import Definition, FieldBinding, Schema
 
 from angee.base.identity import public_data_id_field
 from angee.base.models.identity import public_id_for
@@ -34,12 +38,16 @@ from angee.base.models.merge import MergeableMixin
 from angee.base.models.merge_references import MergePolicy, RecordRefMergeContract
 from angee.base.permissions import effective_rebac_definition, reader_queryset, relation_read_queryset
 from angee.base.prefetch import InstancePrefetch
-from angee.base.querysets import MergeableQuerySet
+from angee.base.querysets import MergeableQuerySet, query_batch_size
 from angee.base.refs import RecordRef, generic_pointer_model, generic_pointer_target
 
 
 class _TargetTeardown(Protocol):
     def __call__(self, target: models.Model) -> None: ...
+
+
+_HOLDS_TARGET = "_angee_holds_deleted_target"
+"""The annotation marking a blocking edge's row live while its target is deleted."""
 
 
 class _RecordTargets(InstancePrefetch):
@@ -105,7 +113,17 @@ class RecordRefMixin(RecordRefMergeContract):
     accepts_any_record_target: ClassVar[bool] = False
     """Whether this infrastructure edge may point at every canonical record type."""
     teardown_for_target: ClassVar[_TargetTeardown | None] = None
-    """Optional class hook replacing ordinary deletion policy with the edge owner's cleanup."""
+    """Optional class hook replacing ``on_target_delete`` with the edge owner's cleanup.
+
+    It runs before each collected target instance is deleted, whether the target
+    names the edge through a reverse ``GenericRelation`` or the edge's schema
+    declares the target's type. An MTI child's deletion collects its canonical
+    parent too, so a teardown is idempotent. A teardown never blocks its target's
+    deletion: an edge whose owner declares rows that do (``blocks_target_delete``,
+    narrowed by ``live_reference_filter``) has them refuse first
+    (:func:`delete_record_refs`), and then runs its teardown only while a row of it
+    names the target.
+    """
 
     class Meta:
         """Django model options for record-ref-only abstract inheritance."""
@@ -181,12 +199,20 @@ class RecordRefMixin(RecordRefMergeContract):
 
     @classmethod
     def blocks_target_delete(cls, target: type[models.Model]) -> bool:
-        """Use the same owned edge policy for ordinary deletion and creation undo."""
+        """Use the same owned edge policy for ordinary deletion and creation undo.
+
+        An edge controlling ``target`` (its schema declares the type, or the target
+        names it through a retained reverse relation and it has a teardown) blocks
+        only as a PROTECT edge without a teardown; any other edge blocks. The
+        declared edges are an index lookup, and the target's reverse relations are
+        read only for an edge with a teardown its schema does not declare.
+        """
 
         canonical = canonical_model(target)
         declared = record_edges_by_target().get(canonical, ()) if canonical is not None else ()
-        controlled = {*declared, *record_ref_cleanup_edges_for_target(target)}
-        return cls not in controlled or cls.on_target_delete is models.PROTECT
+        if cls.teardown_for_target is None:
+            return cls.on_target_delete is models.PROTECT or cls not in declared
+        return cls not in declared and cls not in record_ref_cleanup_edges_for_target(target)
 
     @classmethod
     def record_ref_field(cls) -> GenericForeignKey:
@@ -363,17 +389,41 @@ class RecordRefMixin(RecordRefMergeContract):
         return self.record_ref.public_id
 
 
+type RecordEdgeIndex = Mapping[type[models.Model], tuple[type[RecordRefMixin], ...]]
+"""Installed record edges by the canonical target they accept."""
+
+_effective_edges: tuple[Schema, list[type[models.Model]], RecordEdgeIndex] | None = None
+"""The last effective index, with the schema revision and installed-model set it was read from."""
+
+
 def record_edges_by_target(
     *, definition_for: Callable[[type[models.Model]], Definition | None] = effective_rebac_definition,
-) -> dict[type[models.Model], tuple[type[RecordRefMixin], ...]]:
+) -> RecordEdgeIndex:
     """Index installed edges by every canonical target they accept, in label order.
 
     The inverse of :meth:`RecordRefMixin.accepted_target_models`: the polymorphic
     edges a record can carry, keyed by the canonical model
     :func:`rebac.generic_target` names it by. Infrastructure edges can explicitly
     accept every canonical target without declaring an independent row policy.
+    The effective policy's index is read once per schema revision and installed
+    model set, so a deletion reads the policy once rather than once per edge;
+    the shared index is read-only.
     """
 
+    global _effective_edges
+    if definition_for is not effective_rebac_definition:
+        return _index_record_edges(definition_for)
+    schema = backend().schema()
+    installed = apps.get_models()
+    cached = _effective_edges
+    if cached is not None and cached[0] is schema and cached[1] is installed:
+        return cached[2]
+    index = _index_record_edges(effective_rebac_definition)
+    _effective_edges = (schema, installed, index)
+    return index
+
+
+def _index_record_edges(definition_for: Callable[[type[models.Model]], Definition | None]) -> RecordEdgeIndex:
     index: dict[type[models.Model], list[type[RecordRefMixin]]] = {}
     for edge in sorted(apps.get_models(), key=lambda model: model._meta.label):
         if not issubclass(edge, RecordRefMixin):
@@ -387,7 +437,7 @@ def record_edges_by_target(
             targets = edge._declared_target_models(definition)
         for target in targets.values():
             index.setdefault(target, []).append(edge)
-    return {target: tuple(edges) for target, edges in index.items()}
+    return MappingProxyType({target: tuple(edges) for target, edges in index.items()})
 
 
 def record_ref_cleanup_edges_for_target(
@@ -410,33 +460,81 @@ def record_ref_cleanup_edges_for_target(
     return tuple(sorted(edges, key=lambda edge: edge._meta.label))
 
 
+def record_refs_for_delete(
+    instances: Iterable[models.Model], using: str,
+) -> list[tuple[type[RecordRefMixin], models.QuerySet[Any]]]:
+    """Read targets' controlled edges, refusing any live rows that hold them.
+
+    Reads are batched per blocking edge and concrete target type, bounded by the
+    database's parameter budget. Each target keeps its first blocking edge, as a
+    singleton does. An edge's ``live_reference_filter`` owns the refusal, as for
+    creation undo; no rows naming a target means no teardown. This admission is
+    read-only: previews pass their cascade and :func:`delete_record_refs` passes
+    its singleton before any teardown or deletion policy runs.
+    """
+
+    grouped: dict[type[models.Model], list[models.Model]] = {}
+    for instance in instances:
+        grouped.setdefault(type(instance), []).append(instance)
+    references = []
+    blockers: set[models.Model] = set()
+    message = ""
+    for model, targets in grouped.items():
+        cleanup_edges = record_ref_cleanup_edges_for_target(model)
+        target = canonical_model(model)
+        declared = record_edges_by_target().get(target, ()) if target is not None else ()
+        edges = (*cleanup_edges, *(edge for edge in declared if edge not in cleanup_edges))
+        if not edges:
+            continue
+        content_type, _object_id = generic_pointer_target(targets[0])
+        remaining = {str(generic_pointer_target(row)[1]): row for row in targets}
+        for edge in edges:
+            pointer = edge.record_ref_field()
+            rows = edge._base_manager.using(using).filter(**{pointer.ct_field: content_type})
+            if edge.blocks_target_delete(model):
+                live = ExpressionWrapper(edge.live_reference_filter(principal=None), output_field=BooleanField())
+                marked = rows.only("pk", pointer.fk_field).annotate(**{_HOLDS_TARGET: live})
+                for chunk in batched(tuple(remaining), query_batch_size(marked)):
+                    naming = list(marked.filter(**{f"{pointer.fk_field}__in": chunk}))
+                    held = {row for row in naming if getattr(row, _HOLDS_TARGET)}
+                    held_ids = {str(getattr(row, pointer.fk_field)) for row in held}
+                    if held and not message:
+                        first = next(key for key in chunk if key in held_ids)
+                        message = f"{edge._meta.label} rows still refer to {remaining[first]}."
+                    blockers.update(held)
+                    for key in held_ids:
+                        remaining.pop(key, None)
+                    named_ids = {str(getattr(row, pointer.fk_field)) for row in naming} - held_ids
+                    if named_ids:
+                        references.append((edge, rows.filter(**{f"{pointer.fk_field}__in": sorted(named_ids)})))
+            else:
+                for chunk in batched(tuple(remaining), query_batch_size(rows)):
+                    references.append((edge, rows.filter(**{f"{pointer.fk_field}__in": chunk})))
+    if blockers:
+        raise ProtectedError(message, blockers)
+    return references
+
+
 def delete_record_refs(instance: models.Model, using: str, **kwargs: Any) -> None:
-    """Apply each edge owner's declared policy before its target is deleted."""
+    """Admit the collected target, then apply its edges' teardowns or deletion policies.
+
+    :func:`record_refs_for_delete` owns the refusal shared with previews. Each
+    edge's ``teardown_for_target`` replaces its ``on_target_delete`` policy;
+    a teardown never blocks.
+    """
 
     del kwargs
-    cleanup_edges = record_ref_cleanup_edges_for_target(type(instance))
-    for edge in cleanup_edges:
-        teardown = edge.teardown_for_target
-        assert teardown is not None
-        teardown(instance)
-    target = canonical_model(type(instance))
-    declared = record_edges_by_target().get(target, ()) if target is not None else ()
-    content_type, object_id = generic_pointer_target(instance)
-    for edge in declared:
-        if edge in cleanup_edges:
+    for edge, rows in record_refs_for_delete([instance], using):
+        if edge.teardown_for_target is not None:
+            edge.teardown_for_target(instance)
             continue
-        pointer = edge.record_ref_field()
-        rows = edge._base_manager.using(using).filter(
-            **{pointer.ct_field: content_type, pointer.fk_field: object_id}
-        )
         policy = edge.on_target_delete
         if policy is models.PROTECT:
-            protected: set[models.Model] = set(rows)
-            if protected:
-                raise ProtectedError(f"{edge._meta.label} rows still refer to {instance}.", protected)
+            # Its live rows refused above; any other row is evidence its owner keeps.
             continue
         with system_context(reason="record_ref.target_delete"):
             if policy is models.CASCADE:
                 rows.delete()
             elif policy is models.SET_NULL:
+                pointer = edge.record_ref_field()
                 rows.update(**{pointer.ct_field: None, pointer.fk_field: None})

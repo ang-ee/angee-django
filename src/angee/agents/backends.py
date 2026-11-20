@@ -32,7 +32,8 @@ from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.settings import ModelSettings
 
 from angee.base.implementations import ImplBase
-from angee.integrate.errors import IntegrationError
+from angee.integrate.errors import IntegrationError, is_transient_status
+from angee.integrate.impl import OAuthConnectIntent
 
 if TYPE_CHECKING:
     from typesafe_sdk import Content, Question, SystemOneResponse
@@ -82,7 +83,7 @@ class TransientInferenceError(Exception):
     """A provider-classified inference failure that a bounded retry may outlive."""
 
 
-class InferenceBackend(ImplBase):
+class InferenceBackend(OAuthConnectIntent, ImplBase):
     """The strategy one inference provider resolves to.
 
     Subclasses read the API credential, endpoint, and config directly from the
@@ -93,9 +94,8 @@ class InferenceBackend(ImplBase):
     category = "inference"
     label = "Inference"
     icon = "sparkles"
-    # Vendor-neutral: a base backend never pins a product OAuth client. Provider
-    # connect is available only when a vendor backend addon sets this slug.
-    oauth_client: ClassVar[str] = ""
+    # Vendor-neutral: a base backend pins no OAuth client (``OAuthConnectIntent``);
+    # provider connect is available only when a vendor backend addon sets one.
     # The vendor SDK's own API-key env var name(s) — a provider-native fact an agent
     # runtime composes into the container env (see ``angee.agents.runtimes``). An
     # empty tuple means the backend declares no static-key runtime env.
@@ -145,7 +145,7 @@ class InferenceBackend(ImplBase):
         if isinstance(error, (TransientInferenceError, *self.TRANSIENT_MODEL_ERRORS)):
             return True
         if isinstance(error, ModelHTTPError):
-            return error.status_code == 429 or 500 <= error.status_code < 600
+            return is_transient_status(error.status_code)
         cause = error.__cause__ if isinstance(error, ModelAPIError) else error
         return isinstance(
             cause, (TimeoutError, ConnectionError, TimeoutException, NetworkError, *self.transient_error_types())

@@ -14,6 +14,7 @@ projection.
 from __future__ import annotations
 
 import importlib
+import logging
 from typing import Any
 
 import httpx2
@@ -30,12 +31,16 @@ from openai import DefaultHttpxClient, OpenAI
 from rebac import actor_context, system_context
 
 from angee.base.models.identity import public_id_for
+from angee.graphql.actions import ActionResult, action_guard
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema
 from angee.graphql.testing.documents import result_data as _data
 from angee.integrate.credentials import CredentialKind
+from angee.integrate.errors import IntegrationError
 from angee.integrate.events import EventKind
-from angee.integrate.states import StreamKind, SyncFailure, SyncFailureKind, SyncFailureStatus
+from angee.integrate.oauth.errors import ACCOUNT_SWITCH_REFUSED, OAuthFlowError
+from angee.integrate.schema import integration_action_guard
+from angee.integrate.states import StreamDirection, StreamKind, SyncFailure, SyncFailureKind, SyncFailureStatus
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.integrate.webhooks import WebhookDeliveryError
 from angee.messaging.testing.models import Channel
@@ -45,6 +50,7 @@ from tests import (
 )
 from tests.conftest import (
     Credential,
+    ExternalAccount,
     Integration,
     OAuthClient,
     SchemaAddon,
@@ -55,6 +61,7 @@ from tests.conftest import (
     make_integration,
 )
 from tests.conftest import create_platform_admin as _platform_admin
+from tests.integrate_fixtures import ConnectionBridge
 from tests.stream_adapters import failure_state
 from tests.test_agents import InferenceModel, InferenceProvider
 
@@ -663,7 +670,11 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
     assert metadata.roots.group_name == "integrations_groups"
     assert metadata.roots.create_name is None
     assert metadata.roots.update_name == "update_integrations_by_pk"
-    assert metadata.roots.delete_name == "delete_integrations_by_pk"
+    assert metadata.roots.delete_name is None
+    assert metadata.roots.delete_preview_name is None
+    mutation_fields = console_schema._schema.mutation_type.fields
+    assert "delete_integrations_by_pk" not in mutation_fields
+    assert "integrations_delete" not in mutation_fields
     assert {name for name, field in metadata.query.fields.items() if field.filter} == {
         "has_open_decisions",
         "display_name",
@@ -696,7 +707,9 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
     }
     assert metadata.default_measures[0].op == "count"
     assert metadata.aggregate_measures == ()
-    assert metadata.capabilities == ("list", "detail", "aggregate", "groups", "update", "delete", "changes")
+    assert metadata.capabilities == (
+        "list", "detail", "aggregate", "groups", "update", "changes",
+    )
     assert metadata.query.axes["vendor"].field == "vendor"
     assert metadata.query.fields["vendor"].relation.model == "integrate.Vendor"
     assert metadata.query.fields["vendor"].relation.identity_path == "vendor.id"
@@ -715,7 +728,8 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
     assert integration["roots"]["groupsCount"] == "integrations_groups_count"
     assert integration["roots"]["create"] is None
     assert integration["roots"]["update"] == "update_integrations_by_pk"
-    assert integration["roots"]["delete"] == "delete_integrations_by_pk"
+    assert integration["roots"]["delete"] is None
+    assert integration["roots"]["deletePreview"] is None
     assert integration["roots"]["changes"] == "integrationChanged"
     assert integration["capabilities"] == [
         "list",
@@ -723,7 +737,6 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
         "aggregate",
         "groups",
         "update",
-        "delete",
         "changes",
     ]
     assert list(integration["query"]["axes"]) == [
@@ -753,7 +766,7 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
         "labelPath": "vendor.display_name",
     }
     assert "groupAliases" not in integration
-    assert integration["updateFields"] == ["vendor", "credential", "account"]
+    assert integration["updateFields"] == ["vendor", "credential"]
     kind_field = {field["name"]: field for field in integration["fields"]}["kind"]
     assert kind_field["kind"] == "scalar"
     assert integration["query"]["fields"]["concrete_type"]["filter"] is not None
@@ -818,13 +831,7 @@ def test_graphql_oauth_client_create_materializes_omitted_impl_defaults(
     client = OAuthClient.objects.as_user(admin).get(sqid=created["id"])
     assert client.discovery_url == "https://accounts.google.com/.well-known/openid-configuration"
     assert client.authorize_endpoint == "https://accounts.google.com/o/oauth2/v2/auth"
-    assert client.default_scopes == [
-        "openid",
-        "profile",
-        "email",
-        "https://www.googleapis.com/auth/userinfo.email",
-        "https://www.googleapis.com/auth/userinfo.profile",
-    ]
+    assert client.default_scopes == ["openid", "email", "profile"]
 
 
 def test_impl_choices_are_admin_only(db: None) -> None:
@@ -978,10 +985,10 @@ def test_integration_concrete_type_records_child_model(db: None) -> None:
         assert Integration.objects.get(pk=bridge.pk).concrete_type.model_class() is VcsBridge
 
 
-def test_integration_update_delete_are_admin_only(
+def test_integration_update_is_admin_only(
     db: None,
 ) -> None:
-    """Updating then deleting an integration is platform-admin gated."""
+    """The inventory retains its platform-admin-gated update surface."""
 
     plain = User.objects.create_user(username="conn-crud-plain", email="plain@example.com")
     admin = _platform_admin("conn-crud-admin")
@@ -991,36 +998,26 @@ def test_integration_update_delete_are_admin_only(
     integration_id = _public_id(conn)
     update_integration = """
         mutation UpdateIntegration($id: String!) {
-          update_integrations_by_pk(pk_columns: {id: $id}, _set: {account: null}) {
-            account { external_id }
+          update_integrations_by_pk(pk_columns: {id: $id}, _set: {credential: null}) {
+            credential { id }
             vendor { slug }
           }
         }
     """
+    # The account binding follows the credential; it is not a settable field.
+    account_patch = """
+        mutation PatchAccount($id: String!) {
+          update_integrations_by_pk(pk_columns: {id: $id}, _set: {account: null}) { id }
+        }
+    """
+    assert execute_schema(console_schema, account_patch, {"id": _public_id(conn)}, user=admin).errors
 
     assert execute_schema(console_schema, update_integration, {"id": integration_id}, user=plain).errors is not None
 
     updated = _data(execute_schema(console_schema, update_integration, {"id": integration_id}, user=admin))[
         "update_integrations_by_pk"
     ]
-    assert updated == {"account": None, "vendor": {"slug": "conn-crud"}}
-
-    delete_integration = """
-        mutation DeleteIntegration($id: String!) {
-          delete_integrations_by_pk(id: $id) {
-            id
-          }
-        }
-    """
-
-    assert execute_schema(console_schema, delete_integration, {"id": integration_id}, user=plain).errors is not None
-
-    deleted = _data(execute_schema(console_schema, delete_integration, {"id": integration_id}, user=admin))[
-        "delete_integrations_by_pk"
-    ]
-    assert deleted["id"] == integration_id
-    with system_context(reason="test.integrate.integration_crud.after_delete"):
-        assert not Integration.objects.filter(pk=conn.pk).exists()
+    assert updated == {"credential": None, "vendor": {"slug": "conn-crud"}}
 
 
 def test_attach_integration_credential_targets_owned_concrete_child(
@@ -1065,7 +1062,11 @@ def test_attach_integration_credential_targets_owned_concrete_child(
 def test_connect_integration_reuses_live_oauth_for_explicit_concrete_child(
     db: None,
 ) -> None:
-    """OAuth ingress carries the authorized child resource and public id through attach."""
+    """OAuth ingress carries the authorized child resource and public id through attach.
+
+    The integration stays connected as its account, whose live credential (the
+    fixture's account-less credential, adopted by that account) is reused.
+    """
 
     bridge = make_integration(
         "oauth-concrete-target",
@@ -1073,9 +1074,13 @@ def test_connect_integration_reuses_live_oauth_for_explicit_concrete_child(
         backend_class="stub",
         model=VcsBridge,
     )
-    credential = bridge.credential
     with system_context(reason="test.integrate.oauth_concrete_target.disconnect"):
-        VcsBridge.objects.filter(pk=bridge.pk).update(credential=None, lifecycle="disconnected")
+        account = ExternalAccount.objects.link(bridge.credential.oauth_client, "concrete-account", owner=bridge.owner)
+        credential = Credential.objects.upsert_for_user(
+            bridge.owner, bridge.credential.oauth_client, CredentialKind.OAUTH, {"access_token": "token"},
+            external_account=account,
+        )
+        VcsBridge.objects.filter(pk=bridge.pk).update(credential=None, account=account, lifecycle="disconnected")
     mutation = """
         mutation Connect($resource: String!, $id: ID!) {
           connect_integration(resource: $resource, id: $id) {
@@ -2210,7 +2215,7 @@ def test_connect_completion_returns_account_switch_as_a_typed_result(
         )
     )["connect_account_complete"]
     assert result == {
-        "error": "Detach this credential from its integrations before changing the external account.",
+        "error": "This integration is connected to another account; add a new integration for this one.",
         "error_code": "account_switch_refused",
         "account": None,
     }
@@ -2256,3 +2261,71 @@ def test_credential_creation_reports_field_errors_and_accepts_corrected_retry(
         credential = Credential.objects.get(user=admin)
         assert str(credential.sqid) == created["id"]
         assert credential.reveal() == {"private_key": valid["private_key"]}
+
+
+_PENDING_REFUSAL = "Connection discovery must finish before syncing."
+
+
+@pytest.mark.parametrize(
+    ("action", "kind", "keep", "expected"),
+    [
+        # Dismissing a failure changes local state only, so discovery does not hold it back.
+        ("resolveSyncFailure", SyncFailureKind.SEMANTIC, None, {"ok": True, "message": "Failure resolved."}),
+        ("retrySyncFailure", SyncFailureKind.SEMANTIC, None, {"ok": False, "message": _PENDING_REFUSAL}),
+        ("resolveSyncFailure", SyncFailureKind.CONFLICT, "REMOTE", {"ok": False, "message": _PENDING_REFUSAL}),
+    ],
+    ids=["resolve", "retry", "conflict"],
+)
+@pytest.mark.django_db(transaction=True)  # Conflict resolution reads the remote outside a transaction.
+def test_an_integration_refusal_reaches_the_operator_in_band(
+    action: str, kind: SyncFailureKind, keep: str | None, expected: dict[str, Any],
+) -> None:
+    admin = _platform_admin(f"in-band-{action}-{kind}")
+    bridge = make_integration(f"in-band-{action.lower()}-{kind}", model=ConnectionBridge)
+    with system_context(reason="test an operator action while discovery is pending"):
+        assert bridge.finish_discovery(credential_pk=bridge.credential_id, generation=bridge.discovery_generation)
+        stream = current_stream(
+            bridge, "contacts", kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.BIDIRECTIONAL,
+        )
+        link = RecordLink.objects.observe(stream, "one")
+        failure = link.record_failure(kind=kind, code="refused")
+        # A secret re-entered since: discovery is pending again.
+        bridge.await_discovery()
+    arguments = "stream: $stream, link: $link, slot: $slot" + (", keep: $keep" if keep else "")
+    variables = "$stream: ID!, $link: ID, $slot: Int" + (", $keep: ConflictKeep" if keep else "")
+    query = f"mutation Act({variables}) {{ {action}({arguments}) {{ ok message }} }}"
+    values = {"stream": failure.stream_id, "link": failure.link_id, "slot": failure.slot}
+    result = _data(execute_schema(_schema(), query, {**values, **({"keep": keep} if keep else {})}, user=admin))
+    assert result[action] == expected
+    with system_context(reason="test a refused action changed nothing"):
+        assert bool(RecordLink.objects.get(pk=link.pk).failures(open_only=True)) == (not expected["ok"])
+
+
+def test_integrates_actions_show_an_integration_refusal_and_log_a_permanent_one(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    @integration_action_guard("Could not act.")
+    def act(error: Exception) -> ActionResult:
+        raise error
+
+    switch = OAuthFlowError(ACCOUNT_SWITCH_REFUSED, 409)
+    with caplog.at_level(logging.WARNING, logger="angee.integrate.schema"):
+        assert act(IntegrationError("Try later.", transient=True)) == ActionResult(ok=False, message="Try later.")
+        assert act(IntegrationError("The resource is unavailable.")) == ActionResult(
+            ok=False, message="The resource is unavailable.",
+        )
+        assert act(switch) == ActionResult(ok=False, message=switch.public_message, code=ACCOUNT_SWITCH_REFUSED)
+    # A permanent refusal needs the operator, so it is logged; a transient one is retried.
+    assert [(record.levelname, record.getMessage()) for record in caplog.records] == [
+        ("WARNING", "GraphQL action act refused: The resource is unavailable."),
+        ("WARNING", f"GraphQL action act refused: {switch.public_message}"),
+    ]
+
+
+def test_the_shared_action_guard_leaves_an_integration_error_to_its_caller() -> None:
+    @action_guard("Could not act.")
+    def act() -> ActionResult:
+        raise IntegrationError("The resource is unavailable.")
+
+    with pytest.raises(IntegrationError):
+        act()

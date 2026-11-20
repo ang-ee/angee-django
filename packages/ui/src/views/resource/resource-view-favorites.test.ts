@@ -56,7 +56,7 @@ describe("readResourceViewFavoritesSlice", () => {
     expect(slice.document.models["notes.Note"]).toEqual([{ ...FAVORITE, pinned: true }]);
   });
 
-  test("calendar favorites keep the v1 shape without page, mode, or anchor", () => {
+  test("calendar favorites keep the v1 shape without page, mode, or anchor; their hidden sources join it", () => {
     const favorite = favoriteFromResourceView(createResourceViewState({
       page: 3, pageSize: 20, view: "calendar", mode: "week", anchor: "2000-01-01",
     }), "Calendar");
@@ -65,7 +65,7 @@ describe("readResourceViewFavoritesSlice", () => {
 
     expect(slice.document).toEqual({
       version: 1,
-      models: { "notes.Note": [{ id: "favorite:calendar", label: "Calendar", pageSize: 20, view: "calendar" }] },
+      models: { "notes.Note": [{ id: "favorite:calendar", label: "Calendar", pageSize: 20, view: "calendar", hiddenSources: [] }] },
     });
     expect(slice.writable).toBe(true);
   });

@@ -13,15 +13,18 @@ DSN and environment; without a DSN no reporting SDK is loaded. See the
 A top-level menu root is an app. Its menu entry may declare `home` (a route
 name inside the root, where `/` lands when the app is selected), `brand`
 (`{ name, mark }`, the mark a registered glyph; it defaults to the root's label
-and icon), `theme` (an installed theme id), and `railExpanded` (desktop rail
-expansion until a user saves their own choice). They layer like other menu
-fields, and an included app drops them. The deployment's `ANGEE_UI.shell`
-selects the app: `{ brand?, theme?, apps?: { <name>: { rail, brand?, theme?,
-home?, railExpanded? } }, hosts?: { <hostname>: <root id | apps name> } }`. `selectApp` (in
+and icon), `theme` (an installed theme id), `themeLocked` (`true` beside
+`theme`: within this app its theme wins over the person's own theme choice) and
+`railExpanded` (desktop rail expansion until a user saves their own choice).
+They layer like other menu fields, and an included app drops them. The
+deployment's `ANGEE_UI.shell` selects the app: `{ brand?, site?, theme?, apps?: {
+<name>: { rail?, brand?, theme?, themeLocked?, home?, railExpanded? } }, hosts?:
+{ <hostname>: <root id | apps name> }, app?: <root id | apps name> }`; the shell's own `theme` cannot be locked. `selectApp` (in
 [`boot-app.tsx`](src/boot-app.tsx)) takes `?app=`, else the hostname's `hosts`
-entry, else nothing, which shows every root with `shell.brand` and
+entry, else `shell.app`, else nothing, which shows every root with `shell.brand` and
 `shell.theme`. A root id is the one-root app; a named app takes its own brand,
-theme, home and rail default, else its first rail root's. `createApp` reads `location`
+theme, home and rail default, else its first rail root's. A theme lock travels
+with the theme it is declared beside, and boot refuses a lock with no theme. `createApp` reads `location`
 (default `window.location`) and projects the selected rail into the rail, the
 command palette and Refine's resources, keeping the personal Settings roots.
 Pages outside the rail stay reachable and sit in the selection's home root; no
@@ -31,6 +34,10 @@ app and host is checked at boot, selected or not, and an unknown `?app=` warns
 in development and falls back. Only the deployment layer declares `shell`.
 Addons cannot claim the `ui` translation namespace, which belongs to the
 rendered package.
+
+`shell.site` selects the static page head `@angee/app/vite` writes, with files
+addons name in `web/package.json` `angee.assets`; the
+[shell and asset guide](../../docs/frontend/guidelines.md#rules) owns the contract.
 
 Addons shape the menu with a dict keyed by node id (`menus: { … }`). A key in
 the addon's own namespace (its id, or `<id>.…`) declares a node; any other key
@@ -130,8 +137,36 @@ An addon can specialize existing copy and declare named resource views:
     groupStack: [{ field: "status" }], view: "board",
     columnVisibility: { updated_at: false },
     sort: { field: "title", dir: "asc" }, pageSize: 20,
+  }, {
+    id: "desk.recent", label: "Recent reviews", resource: "notes.Note",
+    view: "gallery", sort: { field: "updated_at", dir: "desc" }, pageSize: 6,
   }],
 }
+```
+
+A shipped view opening on `board` or `gallery` draws the model's registered card
+when the page declares none. An addon registers that card once, for a model it
+may not own; the composer refuses a second card for the same model, besides the
+`impl` children and variants that vary it per row:
+
+```tsx
+// render receives any row of the model and is called as a plain function, so it
+// narrows the row to the fields requiredFields selects, narrows the context on
+// kind, and returns a component that holds any hooks.
+type NoteCardRow = Row & { title: string; cover_url: string | null; status: string };
+containers: {
+  "notes.Note#card": {
+    "desk.note-card": {
+      content: {
+        render: (row, context) => (
+          <NoteCard row={row as NoteCardRow} lane={context.kind === "board" ? context.laneId : undefined} />
+        ),
+        frame: "flush",
+      },
+      requiredFields: ["title", "cover_url", "status"],
+    },
+  },
+},
 ```
 
 The referenced app (a root or an included app, flattened ones too), route, menu
@@ -239,7 +274,8 @@ undoes a `hide`, never an `only`. A child may carry `permission`, `requires`
 `requiredFields`, `impl` (shown only on rows of that implementation) or
 `variant: { of, impl }` (stands in for `of` on those rows). An addon declares a
 container of its own on its own node, model-scoped with `models: true` or one
-child per key with `unique: "key"`. The deployment's `ANGEE_UI.containers`
+child per key with `unique: "key"`, or one per rendered address (besides `impl`
+children and variants) with `unique: "address"`. The deployment's `ANGEE_UI.containers`
 alters and narrows last. Unknown addresses or children, duplicate ids and
 foreign-namespace declarations fail composition. The framework's containers
 are `CORE_CONTAINERS` in [`core-containers.ts`](src/core-containers.ts); the

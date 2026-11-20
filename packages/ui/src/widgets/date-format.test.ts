@@ -8,12 +8,12 @@ import {
   formatDateRange,
   formatDateStorage,
   formatDateTime,
-  formatDateTimeStorage,
   formatDayLabel,
   formatMonth,
   formatRelativeTime,
   formatTime,
   formatTimeInput,
+  isStorageDate,
   setHumanDateLocale,
   valueLabel,
 } from "./date-format";
@@ -45,6 +45,15 @@ describe("date formatting", () => {
     expect(formatMonth("2026-09-01", { locale: "fr-FR" })).toBe("septembre 2026");
     expect(formatTime(null)).toBe("");
     expect(formatMonth("")).toBe("");
+  });
+
+  test("reads a GraphQL time of day as written, in any locale and zone", () => {
+    expect(formatTime("13:45", { locale: enUS })).toBe("1:45 PM");
+    expect(formatTime("13:45:30.123456", { locale: "fr-FR" })).toBe("13:45");
+    expect(formatTime("00:05:00", { locale: enUS, timeZone: "America/Los_Angeles" })).toBe("12:05 AM");
+    for (const value of ["24:00", "9:05", "12:60", "12:34:56Z", "12:34:56+02:00", "noon"]) {
+      expect(formatTime(value)).toBe("");
+    }
   });
 
   test("labels day buckets as today, yesterday, a weekday, then the date", () => {
@@ -125,7 +134,22 @@ describe("date formatting", () => {
     expect(dateFromValue(date.getTime())?.getTime()).toBe(date.getTime());
     expect(formatDateStorage(date)).toBe("2026-06-18");
     expect(formatDateStorage(null)).toBeNull();
-    expect(formatDateTimeStorage(date)).toBe("2026-06-18T09:07");
     expect(formatTimeInput(date)).toBe("09:07");
+  });
+
+  test("a storage date is a bare calendar day, never an instant", () => {
+    expect(isStorageDate("2026-11-20")).toBe(true);
+    for (const value of ["2026-11-20T00:00:00Z", "2026-11-20T00:00", "2026-1-2", "20261120", "", null, 20261120]) {
+      expect(isStorageDate(value)).toBe(false);
+    }
+  });
+
+  test("a GraphQL time of day round-trips through the native time control", () => {
+    // The control's `HH:mm` is itself a `Time` input, so it reads back unchanged.
+    for (const wire of ["00:00", "09:07", "23:59"]) expect(formatTimeInput(wire)).toBe(wire);
+    expect(formatTimeInput("09:07:00")).toBe("09:07");
+    expect(formatTimeInput("09:07:59.999999")).toBe("09:07");
+    expect(formatTimeInput("25:00")).toBe("");
+    expect(formatTimeInput(null)).toBe("");
   });
 });

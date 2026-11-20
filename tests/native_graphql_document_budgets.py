@@ -338,14 +338,15 @@ BUDGETS = {
     # that answer wherever the arms' types read no model column, as on every read here, so each
     # actor pays one witness per distinct arm per request.
     ("admin", "inbox"): (18, 13),  # 0.31: 15 -> 14 statements (3 witnesses); 0.33.1: 13
-    ("admin", "transcript"): (3, 31),  # 0.31: 35 -> 32 statements (3 witnesses); 0.33.1: 31
+    # A loaded parts tree answers each part's parent from its own rows: 31 -> 27.
+    ("admin", "transcript"): (3, 27),  # 0.31: 35 -> 32 statements (3 witnesses); 0.33.1: 31
     ("admin", "person"): (2, 20),  # 0.31: 29 -> 20 statements (2 witnesses)
     ("admin", "projects"): (6, 10),  # 0.31: 15 -> 10 statements (2 witnesses)
     ("admin", "identity"): (1, 1),
     ("member", "inbox"): (9, 14),  # 0.31: 123 -> 14 statements (3 witnesses); id sets are CTEs
     # The feed reads its messages under ``read_inbox`` and the reply-parent fields read ``read``
     # through the relation guard; 0.31 compiles both graphs inline instead of deciding their sets.
-    ("member", "transcript"): (3, 32),  # 0.31: 250 -> 32 statements (3 witnesses)
+    ("member", "transcript"): (3, 28),  # 0.31: 250 -> 32 statements (3 witnesses); parts tree: 28
     # The PostgreSQL gate below additionally budgets the sum of SELECT allocations.
     # REBAC 0.33.1 decides constant arms inherited through field arrows in a witness statement;
     # the member person read has no own witness, so it pays that one first-read statement.
@@ -353,30 +354,58 @@ BUDGETS = {
     ("member", "projects"): (3, 10),
     ("member", "identity"): (1, 1),
     # The inbox's selected message, the attachment's connections and its Related target.
-    ("admin", "selected"): (7, 26),
-    ("admin", "connections"): (1, 17),
+    ("admin", "selected"): (7, 24),  # parts tree: 26 -> 24
+    ("admin", "connections"): (1, 15),  # the target is authorized once and its uses counted once: 17 -> 15
     ("admin", "related"): (1, 18),
-    ("member", "selected"): (7, 27),
-    ("member", "connections"): (1, 18),
+    ("member", "selected"): (7, 25),  # parts tree: 27 -> 25
+    ("member", "connections"): (1, 16),  # 18 -> 16
     ("member", "related"): (1, 19),
 }
 
 
+# document: statements beyond the first of each statement text, for either actor. Every
+# other read issues each text once. A repeat is a lookup issued per row or a read asked twice.
+REPEATED = {
+    # The senders and the reply parents' senders each read the same parties, their field
+    # gates and their avatar handles.
+    "transcript": 3,
+    # Two bypass audit rows, the user read twice and one field-gate probe twice.
+    "person": 3,
+    # The MIME type is read twice.
+    "related": 1,
+}
+
+
+# The reads whose rows ``seed_rows`` grows, and the two sizes they are compared at: at one row
+# a conversation has no reply parent, so the smaller size is two.
+ROW_DOCUMENTS = ("inbox", "transcript", "person", "projects", "selected", "connections")
+ROW_SIZES = (2, 6)
+
+
 # SELECT count and total planner allocation rounded up to MiB, measured on PostgreSQL 17,
-# the CI server, with REBAC 0.33.1: person allocates 496,957 KiB across 19 SELECTs (ceil =
-# 486 MiB; its two audit INSERTs keep the 21-statement document ceiling), projects 150,705
-# KiB across all 10 SELECTs (ceil = 148 MiB). PostgreSQL 18 allocates slightly less and is
-# not the gate's reference.
+# the CI server, with django-zed-rebac 0.35.2's actor grant profiles. Person's two audit
+# INSERTs keep its 21-statement document ceiling. PostgreSQL 18 allocates slightly less and
+# is not the gate's reference.
+#
+# The profile compiles each statement for the grants the member can hold, so every row fell
+# about 40% from its 0.34.1 pin (person 592,189, projects 182,705, selected 1,262,880,
+# connections 711,828 and related 884,229 KiB) and reads one SELECT fewer: the witness the
+# profile replaces, net of the profile's own statement (about 512 KiB, counted since the
+# classifier reads a parenthesised compound statement by its first member). The ratchet
+# applies: lower a ceiling when its cost falls; never raise one for a regression.
+#
+# A planner memory context grows in blocks of up to 8 MiB (ALLOCSET_DEFAULT_MAXSIZE), so the
+# same plans can allocate one block more on another runner: person read 600,381 KiB on a
+# web-only change against 592,189 KiB on main. The gate admits that one block over a ceiling.
+PLANNER_BLOCK_KIB = 8 * 1024
 PLANNER_BUDGETS = {
-    # Storage's deliberate trash-hiding file read split adds 8 MiB per file permission read; falls with rebac 0.34.
-    # REBAC 0.33.1: the inherited witness adds one SELECT; 496,957 KiB across 19 SELECTs.
-    "person": (19, 486),
-    "projects": (10, 148),
-    # The member's inbox selection reads plan the merged policy's non-admin id sets, the largest
-    # remaining planner cost: 1,325,377 / 764,084 / 731,636 KiB. Ratchet down as they fall.
-    "selected": (26, 1295),
-    "connections": (17, 747),
-    "related": (19, 715),
+    "person": (18, 351),  # 358,922 KiB
+    "projects": (9, 106),  # 108,209 KiB
+    # The member's inbox selection reads plan the merged policy's non-admin id sets, the
+    # largest remaining planner cost.
+    "selected": (23, 711),  # 727,499 KiB
+    "connections": (14, 397),  # 405,618 KiB
+    "related": (18, 493),  # 504,291 KiB
 }
 
 
@@ -472,7 +501,7 @@ class ConsoleDocumentBudgetTests(TransactionTestCase):
                 first_met_note="Met at a lecture.",
                 introduced_by=introducer,
             )
-            person.with_actor(actor).confirm(aspect="handle", handle=handles[0], values={})
+            person.with_actor(actor).confirm_statement(aspect="handle", handle=handles[0], values={})
             apps.get_model("parties", "Address").objects.create(
                 party=person,
                 label="home",
@@ -497,6 +526,97 @@ class ConsoleDocumentBudgetTests(TransactionTestCase):
             "person": person.sqid,
             "message": messages[-3].sqid,
             "file": attached.file.sqid,
+        }
+
+    def seed_rows(self, actor, key, count):
+        """Give ``actor`` reads that return ``count`` rows each; return the read ids.
+
+        One conversation of ``count`` chained messages whose first carries ``count``
+        attachments, ``count`` single-message conversations that attach one shared
+        file, a contact with ``count`` addresses and ``count`` projects.
+        """
+
+        Message = apps.get_model("messaging", "Message")
+        Person = apps.get_model("parties", "Person")
+        contacts = [
+            ParsedHandle(platform="email", value=f"{name}.{key}@example.test", display_name=f"{name} Contact")
+            for name in ("ada", "grace", "alan")
+        ]
+        own = ParsedRecipient(handle=ParsedHandle(platform="email", value=actor.email))
+
+        def attachment(name, content):
+            return ParsedPart(type="application/pdf", disposition="attachment", name=name, content=content.encode())
+
+        parsed = [
+            ParsedMessage(
+                external_id=f"<{key}-long-{index}@example.test>",
+                platform="email",
+                subject="Long conversation",
+                sender=contacts[index % 3],
+                recipients=(own,),
+                sent_at=T0 + timedelta(days=40, hours=index),
+                in_reply_to=f"<{key}-long-{index - 1}@example.test>" if index else "",
+                body=ParsedPart(
+                    type="multipart/mixed",
+                    children=(
+                        ParsedPart(text=f"Message {index} of the long conversation."),
+                        *(
+                            [attachment(f"brief-{number}.pdf", f"%PDF-1.4 {key} {number}") for number in range(count)]
+                            if index == 0
+                            else []
+                        ),
+                    ),
+                ),
+            )
+            for index in range(count)
+        ] + [
+            ParsedMessage(
+                external_id=f"<{key}-single-{index}@example.test>",
+                platform="email",
+                subject=f"Single {index}",
+                sender=contacts[index % 3],
+                recipients=(own,),
+                sent_at=T0 + timedelta(days=index, hours=1),
+                in_reply_to="",
+                body=ParsedPart(
+                    type="multipart/mixed",
+                    children=(
+                        ParsedPart(text=f"Single message {index}."),
+                        attachment("shared.pdf", f"%PDF-1.4 {key} shared"),
+                    ),
+                ),
+            )
+            for index in range(count)
+        ]
+        with system_context(reason="tests.document_budgets.rows"):
+            vendor = apps.get_model("integrate", "Vendor").objects.create(slug=f"budget-{key}", display_name=key)
+            channel = apps.get_model("messaging", "Channel").objects.create(
+                vendor=vendor,
+                owner=actor,
+                backend_class="manual",
+                lifecycle="connected",
+                display_name=f"{key} mail",
+            )
+            messages = Message.objects.ingest(parsed, channel=channel)
+            shared = apps.get_model("messaging", "Part").objects.filter(message=messages[count], file__isnull=False)[0]
+        with actor_context(actor):
+            person = Person.objects.create(display_name=f"Ada {key}", given_name="Ada")
+            for index in range(count):
+                apps.get_model("parties", "Address").objects.create(
+                    party=person,
+                    label=f"home {index}",
+                    street=f"{index} St James's Square",
+                    city="London",
+                    country="GB",
+                )
+                apps.get_model("projects", "Project").objects.create(
+                    title=f"{key} project {index}", lead=actor, target_date=date(2027, 1, 1)
+                )
+        return {
+            "thread": messages[0].thread.sqid,
+            "person": person.sqid,
+            "message": messages[0].sqid,
+            "file": shared.file.sqid,
         }
 
     def documents(self, ids):
@@ -563,7 +683,42 @@ class ConsoleDocumentBudgetTests(TransactionTestCase):
                     measure_graphql_document(schema, document, variables, actor=actor)
                     read = measure_graphql_document(schema, document, variables, actor=actor)
                     self.assertEqual(ROWS[name](read.data), rows)
-                    read.assert_ceiling(statements=statements)
+                    read.assert_ceiling(statements=statements, repeated=REPEATED.get(name, 0))
+
+    def test_console_reads_issue_no_statement_per_row(self):
+        """A read issues the same statements for six rows as for two.
+
+        The fixed ceilings read one seed size, where a lookup issued per row hides
+        inside the pinned total. Here each read returns more rows and must cost
+        the same statements.
+        """
+
+        users = get_user_model().objects
+        schema = GraphQLSchemas.from_discovery().build("console")
+        reads = {}
+        for size in ROW_SIZES:
+            member = users.create_person_as_system(
+                username=f"budget-rows-{size}",
+                email=f"budget-rows-{size}@example.test",
+                reason="tests.document_budgets.rows",
+            )
+            documents = self.documents(self.seed_rows(member, f"rows{size}", size))
+            for name in ROW_DOCUMENTS:
+                document, variables = documents[name]
+                measure_graphql_document(schema, document, variables, actor=member)
+                read = measure_graphql_document(schema, document, variables, actor=member)
+                reads[name, size] = ROWS[name](read.data), read.statements
+        few, many = ROW_SIZES
+        for name in ROW_DOCUMENTS:
+            with self.subTest(document=name):
+                (few_rows, few_statements), (many_rows, many_statements) = reads[name, few], reads[name, many]
+                self.assertGreater(many_rows, few_rows, "The larger seed must return more rows.")
+                self.assertEqual(
+                    many_statements,
+                    few_statements,
+                    f"{name}: {few_statements} statements for {few_rows} rows and {many_statements} for "
+                    f"{many_rows}. A statement is issued per row: batch it, never raise a ceiling.",
+                )
 
     def test_member_reads_planner_memory(self):
         """Budget every SELECT planned by the member's person, projects and inbox selection documents."""
@@ -587,7 +742,8 @@ class ConsoleDocumentBudgetTests(TransactionTestCase):
                 allocated_kib = sum(plan.allocated_kib for plan in plans)
                 self.assertLessEqual(
                     allocated_kib,
-                    memory_mib * 1024,
+                    memory_mib * 1024 + PLANNER_BLOCK_KIB,
                     f"{name}: PostgreSQL allocated {allocated_kib} KiB across {selects} SELECTs; "
-                    f"ceiling {memory_mib} MiB. Ratchet downward when cost falls; never raise for a regression.",
+                    f"ceiling {memory_mib} MiB plus one {PLANNER_BLOCK_KIB} KiB planner block. "
+                    "Ratchet downward when cost falls; never raise for a regression.",
                 )

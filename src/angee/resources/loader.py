@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import functools
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -45,6 +47,24 @@ class DryRunRollback(Exception):
     """Signal that a successful dry run should roll back its transaction."""
 
 
+_created_in_load: ContextVar[set[tuple[str, Any]] | None] = ContextVar("angee.resources.created_in_load", default=None)
+
+
+@contextmanager
+def load_scope() -> Iterator[None]:
+    """Scope one load, so a row any entry creates in it counts as created for every later entry.
+
+    An entry's ``create_only`` fields then also reach a row another entry of the
+    same load created moments earlier, which no operator can have edited yet.
+    """
+
+    token = _created_in_load.set(set())
+    try:
+        yield
+    finally:
+        _created_in_load.reset(token)
+
+
 @dataclass(frozen=True)
 class ResourceResolution:
     """Existing row target and retained ledger target, which may differ after adoption."""
@@ -80,6 +100,7 @@ class AngeeResource(resources.ModelResource):
         self._instances: dict[str, models.Model | None] = {}
         self._row_hashes: dict[str, str] = {}
         self._hash_skips: set[str] = set()
+        self._creating: set[str] = set()
         super().__init__()
         for field in self.fields.values():
             if isinstance(field.widget, XrefWidgetMixin):
@@ -96,11 +117,16 @@ class AngeeResource(resources.ModelResource):
 
     @classmethod
     def get_fk_widget(cls, field: Any) -> functools.partial[Any]:
-        """Return the foreign-key widget factory: model labels for content types, xrefs otherwise."""
+        """Return the foreign-key widget factory: model labels for content types, xrefs otherwise.
+
+        An xref widget is bound to the column the relation targets, so a
+        ``to_field`` foreign key stores and exports that column, not the primary key.
+        """
 
         model = get_related_model(field)
-        widget = ContentTypeForeignKeyWidget if model is ContentType else XrefForeignKeyWidget
-        return functools.partial(widget, model=model)
+        if model is ContentType:
+            return functools.partial(ContentTypeForeignKeyWidget, model=model)
+        return functools.partial(XrefForeignKeyWidget, model=model, field=field.target_field.attname)
 
     @classmethod
     def get_m2m_widget(cls, field: Any) -> functools.partial[Any]:
@@ -116,7 +142,9 @@ class AngeeResource(resources.ModelResource):
         del kwargs
         self._validate_catalogue_tier()
         self._validate_headers(list(dataset.headers or []))
+        self._validate_headers(list(self.entry.create_only), declared="create_only field(s)")
         self._hash_skips = set()
+        self._creating.clear()
         self._instances.clear()
         self._row_hashes.clear()
         self._prime_existing_ledgers(dataset)
@@ -153,8 +181,15 @@ class AngeeResource(resources.ModelResource):
     def after_init_instance(
         self, instance: models.Model, new: bool, row: dict[str, Any], **kwargs: Any,
     ) -> None:
-        """Leave live state intact on existing targets, including adopted rows."""
+        """Leave live state and ``create_only`` fields intact on existing targets, including adopted rows.
 
+        A target created earlier in the same load (``load_scope``) still takes the
+        entry's ``create_only`` fields: no one can have edited it yet.
+        """
+
+        if not new and not self._created_in_this_load(instance):
+            for column in self._create_only_columns:
+                row.pop(column, None)
         if not new:
             for field in self._transition_state_fields:
                 if field.column_name in row and not field.readonly:
@@ -187,9 +222,11 @@ class AngeeResource(resources.ModelResource):
         row: Mapping[str, Any],
         **kwargs: Any,
     ) -> None:
-        """Restore auto-managed source values and upsert the ledger row."""
+        """Restore auto-managed source values, record a created row for the load, and upsert the ledger row."""
 
         xref = self.entry.normalize_xref(row.get("_xref"), kwargs["row_number"])
+        if xref in self._creating and (created := _created_in_load.get()) is not None:
+            created.add((instance._meta.label_lower, instance.pk))
         self._restore_auto_fields(instance, row)
         self._existing_ledgers[xref] = self.ledger_model.objects.upsert_target(
             entry=self.entry,
@@ -206,8 +243,14 @@ class AngeeResource(resources.ModelResource):
         row: Mapping[str, Any],
         **kwargs: Any,
     ) -> None:
-        """Select imported columns for saving and mark them before impl defaults."""
+        """Select imported columns for saving and mark them before impl defaults.
 
+        A row the load found nothing to adopt for is remembered as created, whether
+        the native save or an owner verb (``resource_class``) persists it.
+        """
+
+        if instance._state.adding:
+            self._creating.add(self.entry.normalize_xref(row.get("_xref"), kwargs["row_number"]))
         del kwargs
         imported_fields = {
             field.attribute
@@ -378,9 +421,13 @@ class AngeeResource(resources.ModelResource):
             )
 
     def _row_content_hash(self, row: Mapping[str, Any]) -> str:
-        """Hash updateable seed values, excluding identity and initial state."""
+        """Hash updateable seed values, excluding identity and initial state (transition and ``create_only``)."""
 
-        excluded = {"_xref", *(field.column_name for field in self._transition_state_fields)}
+        excluded = {
+            "_xref",
+            *(field.column_name for field in self._transition_state_fields),
+            *self._create_only_columns,
+        }
         payload = {key: value for key, value in sorted(row.items()) if key not in excluded}
         digest = canonical_json_sha256(chunks=(ASCII_JSON.encode(json_safe(payload)),))
         return f"sha256:{digest}"
@@ -594,7 +641,7 @@ class AngeeResource(resources.ModelResource):
         """Return one condition value normalized for model-field comparison."""
 
         if isinstance(field, models.ForeignKey) and isinstance(value, models.Model):
-            value = value.pk
+            value = getattr(value, field.target_field.attname)
         return field.get_prep_value(value)
 
     def _unique_adoption_field(
@@ -684,8 +731,23 @@ class AngeeResource(resources.ModelResource):
 
         return not field.primary_key and bool(field.unique)
 
-    def _validate_headers(self, headers: Sequence[str]) -> None:
-        """Reject primary-key and unknown field headers."""
+    @functools.cached_property
+    def _create_only_columns(self) -> tuple[str, ...]:
+        """Project the entry's ``create_only`` field names onto import columns."""
+
+        return tuple(
+            self.fields[name].column_name if name in self.fields else name for name in self.entry.create_only
+        )
+
+    @staticmethod
+    def _created_in_this_load(instance: models.Model) -> bool:
+        """Whether the current load created ``instance`` (through any entry)."""
+
+        created = _created_in_load.get()
+        return created is not None and (instance._meta.label_lower, instance.pk) in created
+
+    def _validate_headers(self, headers: Sequence[str], *, declared: str = "field(s)") -> None:
+        """Reject primary-key and unknown field headers (or ``create_only`` names)."""
 
         allowed = set(self.fields) | {field.column_name for field in self.fields.values()}
         pk = self._meta.model._meta.pk
@@ -700,7 +762,7 @@ class AngeeResource(resources.ModelResource):
         if unknown:
             names = ", ".join(unknown)
             raise ResourceLoadError(
-                f"{self.entry.display}: unknown field(s) for {self._meta.model._meta.label}: {names}"
+                f"{self.entry.display}: unknown {declared} for {self._meta.model._meta.label}: {names}"
             )
 
     def _validate_catalogue_tier(self) -> None:

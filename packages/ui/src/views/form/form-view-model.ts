@@ -137,12 +137,17 @@ export function formViewFieldLayout(
   metadata: ModelMetadata | null,
   isCreate = false,
 ): FormViewFieldLayout {
-  const titleField = titleFieldFor(formFields, metadata);
-  const titlePlacementField = isCreate ? undefined : formFields.find((field) => field.placement === "title");
-  const statusField = formFields.find(
+  // Explicit pane placement wins over automatic hero inference. Otherwise a
+  // description or status in a secondary pane is pulled back above every tab.
+  const paneFields = new Set(resolvedGroups.filter((group) => group.pane !== undefined)
+    .flatMap((group) => group.fields.map((field) => field.name)));
+  const sheetFields = formFields.filter((field) => !paneFields.has(field.name));
+  const titleField = titleFieldFor(sheetFields, metadata);
+  const titlePlacementField = isCreate ? undefined : sheetFields.find((field) => field.placement === "title");
+  const statusField = sheetFields.find(
     (field) => fieldWidgetId(field) === "statusbar" || (field.status && !field.showWhen),
   );
-  const bodyField = bodyFieldFor(formFields, titleField, statusField);
+  const bodyField = bodyFieldFor(sheetFields, titleField, statusField);
   const excluded = new Set(
     [titleField?.name, titlePlacementField?.name, statusField?.name, bodyField?.name].filter(
       (name): name is string => name !== undefined,
@@ -519,7 +524,7 @@ function isEmptyFieldValue(value: unknown): boolean {
 
 function isNullableScalarWidget(field: FieldDescriptor): boolean {
   const id = fieldWidgetId(field);
-  return id === "date" || id === "datetime";
+  return id === "date" || id === "datetime" || id === "time";
 }
 
 function isNumericField(field: FieldDescriptor): boolean {

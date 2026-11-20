@@ -13,6 +13,7 @@ import {
   MutationDialog,
   emptyValueForField,
   mutationDialogValueCodecs,
+  submitMutationDialog,
 } from "./MutationDialog";
 import { deserializeFormSpec } from "./form-spec";
 import type { FormSubmitResult } from "./validation-errors";
@@ -98,7 +99,7 @@ describe("MutationDialog", () => {
     const button = screen.getByRole("button", { name: "Start" }) as HTMLButtonElement;
     await waitFor(() => expect(button.disabled).toBe(false));
     fireEvent.click(button);
-    await waitFor(() => expect(submit).toHaveBeenCalledWith({}));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({}, { errorNotification: false }));
   });
 
   test("a domain readiness gate blocks buttons and form submission until ready", async () => {
@@ -300,7 +301,7 @@ describe("MutationDialog", () => {
     fireEvent.keyDown(screen.getByRole("combobox", { name: "Outcome" }), { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
 
-    await waitFor(() => expect(submit).toHaveBeenCalledWith({ source: "b", outcome: "legacy" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ source: "b", outcome: "legacy" }, { errorNotification: false }));
   });
 
   test("revalidates resolved required and read-only state while retaining declared field identity", async () => {
@@ -340,7 +341,7 @@ describe("MutationDialog", () => {
     fireEvent.change(value, { target: { value: "kept" } });
     await waitFor(() => expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(submit).toHaveBeenCalledWith({ mode: "custom", value: "kept" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ mode: "custom", value: "kept" }, { errorNotification: false }));
   });
 
   test("a required nullable FormSpec value accepts explicit null", async () => {
@@ -354,7 +355,7 @@ describe("MutationDialog", () => {
     const button = screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
     await waitFor(() => expect(button.disabled).toBe(false));
     fireEvent.click(button);
-    await waitFor(() => expect(submit).toHaveBeenCalledWith({ note: null }));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ note: null }, { errorNotification: false }));
   });
 
   test("hidden required fields do not block the editable dialog", async () => {
@@ -371,7 +372,7 @@ describe("MutationDialog", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Ready" } });
     await waitFor(() => expect(button.disabled).toBe(false));
     fireEvent.click(button);
-    await waitFor(() => expect(submit).toHaveBeenCalledWith({ name: "Ready", token: "" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ name: "Ready", token: "" }, { errorNotification: false }));
   });
 
   test("keeps submit invalid for a missing nested required list constraint", async () => {
@@ -386,7 +387,7 @@ describe("MutationDialog", () => {
     }, defaultWidgets);
     render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
       <MutationDialog open onOpenChange={vi.fn()} title="Slots" fields={[slots!]}
-        submitLabel="Save" parseValues={parseRawValues} onSubmit={vi.fn()} />
+        submitLabel="Save" parseValues={parseRawValues} onSubmit={vi.fn().mockResolvedValue(ok)} />
     </AppRuntimeProvider>);
 
     fireEvent.click(await screen.findByRole("button", { name: "Add item" }));
@@ -411,7 +412,7 @@ describe("MutationDialog", () => {
           ]}
           submitLabel="Connect"
           parseValues={parseRawValues}
-          onSubmit={vi.fn()}
+          onSubmit={vi.fn().mockResolvedValue(ok)}
         />
       </AppRuntimeProvider>,
     );
@@ -482,7 +483,7 @@ describe("MutationDialog", () => {
             ]}
             submitLabel="Assign"
             parseValues={parseRawValues}
-            onSubmit={vi.fn()}
+            onSubmit={vi.fn().mockResolvedValue(ok)}
           />
         </AppRuntimeProvider>
       </Provider>,
@@ -529,7 +530,7 @@ describe("MutationDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() =>
-      expect(onSubmit).toHaveBeenCalledWith({ name: "Ada", note: null }),
+      expect(onSubmit).toHaveBeenCalledWith({ name: "Ada", note: null }, { errorNotification: false }),
     );
   });
 
@@ -627,4 +628,67 @@ test("the dialog submission owner displays the successful result's message once"
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
   expect(await screen.findAllByText("Request accepted")).toHaveLength(1);
   expect(onSubmitted).toHaveBeenCalledExactlyOnceWith("accepted", {});
+});
+
+test("a refusal bound to a field is reported once: under the field, with no banner and no toast", async () => {
+  const refusal = { graphQLErrors: [{ message: "The calendar feed address is not allowed.", extensions: {
+    code: "VALIDATION", validationErrors: { url: ["The calendar feed address is not allowed."] },
+  } }] };
+  const mutation = vi.fn().mockRejectedValue(refusal);
+  render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+    <MutationDialog open onOpenChange={() => undefined} title="Subscribe" fields={[{ name: "url", label: "Feed address", required: true }]}
+      initialValues={{ url: "webcal://127.0.0.1/feed.ics" }} submitLabel="Subscribe" errorFallback="Could not subscribe to the calendar feed."
+      parseValues={parseRawValues} mutation={mutation} />
+  </AppRuntimeProvider>);
+  const button = () => screen.getByRole("button", { name: "Subscribe" }) as HTMLButtonElement;
+  await waitFor(() => expect(button().disabled).toBe(false));
+  fireEvent.click(button());
+
+  expect(await screen.findAllByText("The calendar feed address is not allowed.")).toHaveLength(1);
+  expect(screen.getByRole("textbox", { name: /Feed address/ }).getAttribute("aria-invalid")).toBe("true");
+  expect(screen.queryByText("Could not subscribe to the calendar feed.")).toBeNull();
+  // The dialog runs the call with refine's generic error notification off: no toast repeats it.
+  expect(mutation).toHaveBeenCalledExactlyOnceWith({ url: "webcal://127.0.0.1/feed.ics" }, { errorNotification: false });
+});
+
+test("validate and onSubmit get the call options that keep refine from toasting what the dialog renders", async () => {
+  const transport = new Error("The daemon is unreachable.");
+  const validate = vi.fn().mockResolvedValue(null);
+  const onSubmit = vi.fn().mockRejectedValue(transport);
+  render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+    <MutationDialog open onOpenChange={() => undefined} title="Create workspace" fields={[]} submitLabel="Create"
+      errorFallback="Could not create the workspace." parseValues={parseRawValues}
+      validate={validate} onSubmit={onSubmit} />
+  </AppRuntimeProvider>);
+  fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+  // The dialog renders the failure; each call it makes for its caller runs quiet, so no toast repeats it.
+  expect(await screen.findAllByText("The daemon is unreachable.")).toHaveLength(1);
+  expect(validate).toHaveBeenCalledExactlyOnceWith({}, { errorNotification: false });
+  expect(onSubmit).toHaveBeenCalledExactlyOnceWith({}, { errorNotification: false });
+});
+
+test("a mutation's data acknowledges the dialog; missing data fails with the dialog's fallback", async () => {
+  const onSubmitted = vi.fn();
+  const mutation = vi.fn().mockResolvedValueOnce(undefined).mockResolvedValueOnce({ subscribe: { id: "src_1" } });
+  render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+    <MutationDialog open onOpenChange={() => undefined} title="Subscribe" fields={[]} submitLabel="Subscribe"
+      errorFallback="Could not subscribe." parseValues={parseRawValues} closeOnSubmit={false}
+      mutation={mutation} mutationResult={(data: { subscribe: { id: string } }) => ({ status: "ok", data: data.subscribe.id })}
+      onSubmitted={onSubmitted} />
+  </AppRuntimeProvider>);
+  fireEvent.click(screen.getByRole("button", { name: "Subscribe" }));
+  expect(await screen.findByText("Could not subscribe.")).toBeTruthy();
+  await waitFor(() => expect((screen.getByRole("button", { name: "Subscribe" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "Subscribe" }));
+  await waitFor(() => expect(onSubmitted).toHaveBeenCalledExactlyOnceWith("src_1", {}));
+});
+
+test("a submission settles its promise whatever its call does, a synchronous throw included", async () => {
+  const refusal = new Error("Refused before any request.");
+  const mutation = vi.fn((): Promise<{ id: string } | undefined> => { throw refusal; });
+  await expect(submitMutationDialog({ mutation }, {}, "Could not save.")).rejects.toBe(refusal);
+  const onSubmit = vi.fn((): FormSubmitResult<string> => { throw refusal; });
+  await expect(submitMutationDialog({ onSubmit }, {}, "Could not save.")).rejects.toBe(refusal);
+  expect(mutation).toHaveBeenCalledExactlyOnceWith({}, { errorNotification: false });
 });

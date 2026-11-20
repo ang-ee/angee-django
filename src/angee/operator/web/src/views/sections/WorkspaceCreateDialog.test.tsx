@@ -140,7 +140,7 @@ describe("WorkspaceCreateDialog", () => {
     expect(mocks.create).not.toHaveBeenCalled();
   });
 
-  test("creates with preflighted answers and navigates to the workspace detail", async () => {
+  test("creates with preflighted answers, both daemon calls quiet, and navigates to the workspace detail", async () => {
     mocks.preflight.mockResolvedValue({
       workspaceCreatePreflight: {
         ok: true,
@@ -167,6 +167,7 @@ describe("WorkspaceCreateDialog", () => {
     await waitFor(() => expect(submit.disabled).toBe(false));
     fireEvent.click(submit);
 
+    // The dialog renders a failure of either call itself, so each runs with refine's toast off.
     await waitFor(() =>
       expect(mocks.preflight).toHaveBeenCalledWith({
         input: {
@@ -176,7 +177,7 @@ describe("WorkspaceCreateDialog", () => {
             { key: "topic", value: "slice-5" },
           ],
         },
-      }),
+      }, { errorNotification: false }),
     );
     expect(mocks.create).toHaveBeenCalledWith({
       object: {
@@ -184,7 +185,7 @@ describe("WorkspaceCreateDialog", () => {
         name: "slice-5",
         inputs: [{ key: "topic", value: "slice-5" }],
       },
-    });
+    }, { errorNotification: false });
     expect(mocks.navigate).toHaveBeenCalledWith({
       to: "/operator/workspaces/slice-5",
     });

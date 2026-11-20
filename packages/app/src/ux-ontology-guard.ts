@@ -181,8 +181,12 @@ export function uxGuardViolations(file: string, text: string): UxGuardViolation[
           `the owner's variants (${RECIPE_OWNERS.filter((owner) => uiImports.has(owner)).join(", ")})`,
         );
       }
-    } else if (ts.isObjectLiteralExpression(node) && isLocalToneMap(node) && !statusToneBindings.has(node)) {
-      report("local-tone-map", node, "maps status values to tones locally", "statusTones in the addon manifest + statusTone / StatusBadge");
+    } else if (
+      (ts.isObjectLiteralExpression(node) && isLocalToneMap(node)
+        && !statusToneBindings.has(node) && !isVocabularyToneContribution(node))
+      || (ts.isSwitchStatement(node) && isLocalToneSwitch(node))
+    ) {
+      report("local-tone-map", node, "maps status values to tones locally", "statusTones or vocabulary field tones in the addon manifest + statusTone / StatusBadge");
     }
     ts.forEachChild(node, visit);
   };
@@ -258,14 +262,54 @@ function insideJsxExpression(node: ts.Node): boolean {
   return false;
 }
 
-/** `{ DONE: "success", FAILED: "danger" }`: two or more upper-case enum keys, every value a tone name. */
+/** Two or more status keys (including computed enum members), every value a tone name. */
 function isLocalToneMap(node: ts.ObjectLiteralExpression): boolean {
   if (node.properties.length < 2) return false;
   return node.properties.every((property) =>
     ts.isPropertyAssignment(property)
-    && /^[A-Z][A-Z0-9_]*$/.test(propertyKeyText(property.name))
     && ts.isStringLiteralLike(property.initializer)
     && TONE_NAMES.has(property.initializer.text));
+}
+
+/** A switch returning tones is the same local mapping expressed as control flow. */
+function isLocalToneSwitch(node: ts.SwitchStatement): boolean {
+  const returns: ts.ReturnStatement[] = [];
+  const visit = (child: ts.Node): void => {
+    if (ts.isFunctionLike(child) || ts.isSwitchStatement(child)) return;
+    if (ts.isReturnStatement(child)) returns.push(child);
+    else ts.forEachChild(child, visit);
+  };
+  visit(node.caseBlock);
+  return returns.length >= 2 && returns.every(({ expression }) =>
+    expression && ts.isStringLiteralLike(expression) && TONE_NAMES.has(expression.text));
+}
+
+/**
+ * AddonManifest.vocabulary (define-addon.ts) carries @angee/ui's AppVocabulary;
+ * @angee/metadata's ResourceVocabulary.fields owns `tones`, projected into
+ * StatusBadge's column tone by @angee/ui's model-metadata-defaults.ts. Only the exact property path
+ * in a defineBaseAddon / defineAddon manifest is that declaration seam.
+ */
+function isVocabularyToneContribution(node: ts.ObjectLiteralExpression): boolean {
+  let current: ts.Node = node;
+  for (const key of ["tones", null, "fields", null, "resources"]) {
+    const property = current.parent;
+    if (!ts.isPropertyAssignment(property) || property.initializer !== current
+      || (key !== null && propertyKeyText(property.name) !== key)
+      || !ts.isObjectLiteralExpression(property.parent)) return false;
+    current = property.parent;
+  }
+  // Step through the AppVocabulary array without allowing arbitrary nesting.
+  if (ts.isArrayLiteralExpression(current.parent)) current = current.parent;
+  const vocabulary = current.parent;
+  if (!ts.isPropertyAssignment(vocabulary) || vocabulary.initializer !== current
+    || propertyKeyText(vocabulary.name) !== "vocabulary"
+    || !ts.isObjectLiteralExpression(vocabulary.parent)) return false;
+  const manifest = vocabulary.parent;
+  const call = manifest.parent;
+  return ts.isCallExpression(call) && call.arguments[0] === manifest
+    && ts.isIdentifier(call.expression)
+    && (call.expression.text === "defineBaseAddon" || call.expression.text === "defineAddon");
 }
 
 function propertyKeyText(name: ts.PropertyName): string {

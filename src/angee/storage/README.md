@@ -34,6 +34,13 @@ definition storage/file {
 }
 ```
 
+A record-scoped file takes its access from its records. Its drive and folder
+grant nothing, and its owner (the uploader, by default) holds it only while the
+upload is a draft, then manages it only while its records let the owner write it.
+Whoever loses the record therefore loses its record files; besides the records,
+only the file's direct viewers and admins reach it. Widening it back to inherited
+makes its drive, folder and owner count again.
+
 The model owner decides record read/write permissions. Storage checks the
 effective arm before accepting a record upload, `record_files` offers uploads
 (`can_upload`) only where it exists and the actor can write the record, and the
@@ -60,6 +67,12 @@ without a route remain non-interactive.
 uploads and bulk actions), and `FilePreviewFrame` (preview, inline Details and
 the shell's Download/Trash control band, reading its own file). Upload state survives list/record
 navigation, and the shared explorer keeps its mounted tree and selection.
+
+A file's removal is the trash. The `files` resource declares `delete=False`;
+clients use the shared `trash_record` and `restore_record` verbs, both gated by
+the file's `delete` permission. Trashing keeps the row and backend bytes.
+For model callers, `File.delete()` moves the file to the trash and `File.purge()`
+permanently removes it. Folders retain their resource delete surface.
 
 Folders compose the native hierarchy and transferable ownership, scoped to their
 drive. Files, folders and FileAttachment edges retain changeset history; a merge

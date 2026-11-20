@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.db.models import Prefetch
 from django.urls import reverse
 from graphql import GraphQLError
@@ -25,7 +25,6 @@ from angee.base.prefetch import prefetched
 from angee.graphql.actions import ActionResult, action_guard, resolve_action_target
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
-from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import (
     PublicID,
     instance_for_id,
@@ -84,6 +83,15 @@ class BackendType(AngeeNode):
     created_at: auto
     updated_at: auto
 
+    @strawberry_django.field(only=["backend_class"])
+    def writable(self) -> bool:
+        """Whether new objects may be stored here (``Backend.writable``); an unknown class stores none."""
+
+        try:
+            return bool(cast(Any, self).writable)
+        except ImproperlyConfigured:
+            return False
+
 
 @strawberry_django.type(Drive)
 class DriveType(AngeeNode):
@@ -137,7 +145,7 @@ class FolderType(AngeeNode):
 class FileType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
     """GraphQL projection of a file row."""
 
-    permissions = permissions_field(("read", "write", "share", "delete"))
+    permissions = permissions_field(("read", "write", "share", "delete", "inherit_visibility"))
     """The verbs record chrome gates on (``holdsPermission``), e.g. a contributed
     ``storage.File#actions`` child declaring ``permission: "read"``."""
 
@@ -424,6 +432,7 @@ _FILE_RESOURCE = hasura_model_resource(
         "mime_type__mime_type",
     ],
     insert=False,
+    delete=False,
     updatable=["filename", "title", "folder", "metadata"],
     # A file reads as its title or filename; that computed label is not filterable,
     # so lists and file pickers search the two columns behind it. The filename
@@ -518,42 +527,6 @@ class StorageMutation:
         except exceptions.UploadError as error:
             return FileUploadFinalizePayload(error=str(error), error_code=error.code)
         return FileUploadFinalizePayload(file=row)
-
-    @strawberry.mutation(name="delete_file")
-    def delete_file(self, id: PublicID, confirm: bool = False) -> DeletePreview:
-        """Preview or confirm moving one file to Trash."""
-
-        return delete_by_public_id(
-            File,
-            str(id),
-            confirm=confirm,
-            queryset=File.objects.for_write(),
-        )
-
-    @strawberry.mutation(name="delete_folder")
-    def delete_folder(self, id: PublicID, confirm: bool = False) -> DeletePreview:
-        """Preview or confirm deleting one folder."""
-
-        return delete_by_public_id(
-            Folder,
-            str(id),
-            confirm=confirm,
-            queryset=Folder.objects.for_write(),
-        )
-
-
-attach_delete_preview_metadata(
-    StorageMutation,
-    model=File,
-    node=FileType,
-    field="delete_file",
-)
-attach_delete_preview_metadata(
-    StorageMutation,
-    model=Folder,
-    node=FolderType,
-    field="delete_folder",
-)
 
 
 @strawberry.type

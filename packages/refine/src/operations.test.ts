@@ -75,7 +75,7 @@ describe("Hasura custom operations", () => {
       definitions: [],
     } as unknown as DocumentNode;
     const request = deletePreviewRequest(
-      target("delete_note"),
+      target("notes_delete"),
       {
         id: "note_123",
         confirm: true,
@@ -84,7 +84,7 @@ describe("Hasura custom operations", () => {
     );
 
     expect(request.dataProviderName).toBe("console");
-    expect(request.root).toBe("delete_note");
+    expect(request.root).toBe("notes_delete");
     expect(request.meta.gqlVariables).toEqual({
       id: "note_123",
       confirm: true,
@@ -188,7 +188,7 @@ describe("Hasura custom operations", () => {
     expect(
       extractDeletePreview(
         {
-          delete_note: {
+          notes_delete: {
             total_deleted_count: 2,
             has_blockers: false,
             refusals: [],
@@ -210,7 +210,7 @@ describe("Hasura custom operations", () => {
             },
           },
         },
-        "delete_note",
+        "notes_delete",
       ),
     ).toEqual({
       totalDeletedCount: 2,
@@ -237,7 +237,7 @@ describe("Hasura custom operations", () => {
 
   test("preserves the server's refusal list and blocker flag", () => {
     expect(extractDeletePreview({
-      delete_note: {
+      notes_delete: {
         total_deleted_count: 2,
         has_blockers: false,
         refusals: ["Stop active work first.", "Stop active work first.", "Release the note first.", 3],
@@ -246,7 +246,7 @@ describe("Hasura custom operations", () => {
         blocked: [{ label: "comments", count: 1 }],
         root: { label: "note", object_label: "Draft", object_id: "note_123", children: [] },
       },
-    }, "delete_note")).toMatchObject({
+    }, "notes_delete")).toMatchObject({
       hasBlockers: false,
       refusals: ["Stop active work first.", "Stop active work first.", "Release the note first."],
       blocked: [{ label: "comments", count: 1 }],

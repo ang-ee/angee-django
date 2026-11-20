@@ -123,6 +123,75 @@ def test_system_creation_has_no_actor_logs_named_reason_and_emits_once(iam_admin
     assert len(person_events) == 1
 
 
+def test_system_creation_adopts_the_identity_the_ingress_resolved(iam_admin, person_events):
+    """An imported contact becomes the account's Person: no second Person is created for the user."""
+
+    with system_context(reason="test.imported.contact"):
+        contact = Person._base_manager.create(display_name="Imported Contact")
+    before = Person._base_manager.count()
+    user = User.objects.create_person_as_system(
+        "imported", "imported@example.com", reason="test.channel.capture", identity=contact
+    )
+    assert Person._base_manager.count() == before
+    adopted = Person._base_manager.get(user=user)
+    assert (adopted.pk, adopted.display_name, adopted.owner_id) == (contact.pk, "Imported Contact", user.pk)
+    assert person_events == [{"sender": User, "user": user, "atomic": True}]
+    # A replayed event adopts nothing new.
+    person_created.send(sender=User, instance=user, identity=contact)
+    assert Person._base_manager.filter(user=user).count() == 1
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected"), [("system_of_record", "Ada Source"), ("person", "Ada Renamed")]
+)
+def test_an_adopted_persons_stated_name_stays_with_its_source(iam_admin, monkeypatch, kind, expected):
+    """The account's later rename leaves a Person whose name a source states; a person's own statement follows it."""
+
+    from django.apps import apps  # noqa: PLC0415 - the statement source is this test's own fixture
+
+    from angee.integrate.models import IntegrationLifecycle  # noqa: PLC0415
+    from angee.integrate.states import StreamDirection, StreamKind  # noqa: PLC0415
+    from angee.messaging.backends import ManualChannelBackend  # noqa: PLC0415
+    from angee.provenance.statements import SourceKind  # noqa: PLC0415
+
+    monkeypatch.setattr(ManualChannelBackend, "source_kind", SourceKind(kind))
+    with system_context(reason="test.imported.contact"):
+        contact = Person._base_manager.create(display_name="Ada Source")
+    user = User.objects.create_person_as_system(
+        "ada", "ada@example.com", reason="test.channel.capture", identity=contact
+    )
+    with system_context(reason="test.imported.contact.statement"):
+        vendor = apps.get_model("integrate", "Vendor").objects.create(slug="adopt-source", display_name="Adopt")
+        channel = apps.get_model("messaging", "Channel").objects.create(
+            vendor=vendor, owner=iam_admin, backend_class="manual", lifecycle=IntegrationLifecycle.CONNECTED,
+            display_name="Adopt source",
+        )
+        stream = apps.get_model("integrate", "SyncStream").objects.create(
+            integration=channel.integration_ptr, key="people", kind=StreamKind.RECORD_REPLICA,
+            direction=StreamDirection.PULL, authoritative=True,
+        )
+        link = apps.get_model("integrate", "RecordLink").objects.create(stream=stream, external_key="people-1")
+        apps.get_model("integrate", "RecordLink").objects.bind_target(link, contact)
+        party = apps.get_model("parties", "Party")._base_manager.get(pk=contact.pk)
+        party.statements_for("identity").set(
+            aspect="identity", values={"display_name": "Ada Source"}, asserted_by=channel.integration_ptr, link=link,
+        )
+        user.first_name, user.last_name = "Ada", "Renamed"
+        user.save(update_fields=["first_name", "last_name"])
+    assert Person._base_manager.get(pk=contact.pk).display_name == expected
+
+
+def test_system_creation_refuses_an_identity_another_account_holds(iam_admin):
+    """Adoption never moves a Person between accounts; the refused account rolls back with it."""
+
+    holder = User.objects.create_person_as_system("holder", "holder@example.com", reason="test.channel.capture")
+    held = Person._base_manager.get(user=holder)
+    with pytest.raises(ValidationError, match="already have other identities"):
+        User.objects.create_person_as_system("taker", "taker@example.com", reason="test.channel.capture", identity=held)
+    assert not User._base_manager.filter(username="taker").exists()
+    assert Person._base_manager.get(pk=held.pk).user_id == holder.pk
+
+
 @pytest.mark.parametrize("reason", ["", " \t\n"])
 def test_system_creation_requires_a_named_reason(iam_admin, person_events, reason):
     with pytest.raises(ValueError, match="named reason"):

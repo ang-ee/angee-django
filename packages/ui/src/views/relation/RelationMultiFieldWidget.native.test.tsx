@@ -47,6 +47,22 @@ test("one chips field offers create for an unmatched query, from the related mod
   expect(screen.queryByRole("option", { name: /Create/ })).toBeNull();
 });
 
+test("declared related-row fields group the offered rows under headings, in their order", async () => {
+  const getList = vi.fn(async () => ({ data: [
+    { id: "tag-1", name: "Partner", category: { name: "Relationship", position: 2 } },
+    { id: "tag-2", name: "Enterprise", category: { name: "Segment", position: 1 } },
+    { id: "tag-3", name: "Free text", category: null },
+  ], total: 3 }));
+  render(<Provider dataProvider={{ getList }}>
+    <RelationMultiFieldWidget value={[]} relation={relation} aria-label="Tags" create={null}
+      optionGroupField="category.name" optionGroupOrderField="category.position" />
+  </Provider>);
+  await typeQuery("e");
+  expect(await screen.findByRole("group", { name: "Segment" })).toBeTruthy();
+  expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["Enterprise", "Partner", "Free text"]);
+  expect(screen.getByRole("group", { name: "Other" })).toBeTruthy();
+});
+
 test("a cell keeps an icon create; a declined or uncreatable relation offers none", async () => {
   const getList = vi.fn(async () => ({ data: [], total: 0 }));
   const { unmount } = render(<Provider dataProvider={{ getList }}>

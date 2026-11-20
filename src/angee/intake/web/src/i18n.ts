@@ -1,6 +1,8 @@
 import { createNamespaceT } from "@angee/ui/i18n";
 
 export const enIntakeMessages: Record<string, string> = {
+  "needs.convert": "Convert to task",
+  "needs.queue": "Queue",
   "access.label": "Requester access",
   "access.hint": "An account for whoever filed this request, so they can follow it signed in.",
   "access.error": "Access decisions could not be loaded.",

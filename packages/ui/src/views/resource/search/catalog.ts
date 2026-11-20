@@ -1,5 +1,6 @@
 import * as React from "react";
-import { Filter, isClientRowModel, useSchemaFieldMetadata, type ModelMetadata, type ResourceQuery, type Row } from "@angee/metadata";
+import { resourceLifecycle, Filter, isClientRowModel, useSchemaFieldMetadata, type GroupSpec, type ModelMetadata, type ResourceQuery, type Row } from "@angee/metadata";
+import { useUiT } from "../../../i18n";
 import type { FilterClauseField, ResourceToolbarFilterOption, ResourceToolbarGroupOption } from "../../../toolbars";
 import type { ColumnDescriptor } from "../../page";
 import { fieldLabel, relationFieldInfo, relationFieldInfoForQueryField } from "../model-metadata-defaults";
@@ -16,6 +17,8 @@ export interface UseSearchCatalogInput<TRow extends Row> {
   search?: ListSearchDeclaration;
   inferOptions?: boolean;
   serverGrouping?: boolean;
+  /** The list groups through the native server group read, the one read that applies `GroupSpec.repeated` (its list decides). */
+  appliesRepeated?: boolean;
   columns: readonly ColumnDescriptor<TRow>[];
   rows: readonly TRow[];
   modelMetadata: ModelMetadata | null;
@@ -37,6 +40,7 @@ const EMPTY = [] as const;
 
 /** Resolve declaration > contribution > inference once for every collection kind. */
 export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<TRow>): SearchCatalog {
+  const t = useUiT();
   const schema = useSchemaFieldMetadata();
   const reported = React.useRef(new Set<string>()).current;
   const { columns, rows, modelMetadata, resourceView, inferOptions = true } = input;
@@ -50,6 +54,9 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
     const axis = query.axes[group.field];
     return serverGrouping ? Boolean(axis?.server) : Boolean(axis?.identityPath);
   }), [columns, modelMetadata, defaults, query, serverGrouping]);
+  // Per level: a date axis can list repeated days, say, yet not repeated weekdays.
+  const repeatable = React.useMemo(() => input.appliesRepeated
+    ? (level: GroupSpec) => query.axis(level.field, level.granularity).repeatable : undefined, [input.appliesRepeated, query]);
   const inferredFields = React.useMemo(() => buildFilterFields(columns, inferOptions ? rows : EMPTY, modelMetadata, schema, query), [columns, inferOptions, rows, modelMetadata, schema, query]);
   const contributedFacets = React.useMemo(() => {
     const seen = new Set<string>();
@@ -64,7 +71,14 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
       mergeFilterFields(contributedFacets.filter((facet) => facet.source === "relation" || facet.options.length > 0).map(facetField), inferredFields)))
     .filter((field) => Boolean(query.fields[field.field ?? field.id]?.filter?.operators.length)),
   [input.customFilterFields, input.contributedCustomFilterFields, contributedFacets, inferredFields, query]);
-  const filters = React.useMemo(() => mergeFilterOptions(input.filterOptions, input.contributedFilterOptions ?? EMPTY, query, reported), [input.filterOptions, input.contributedFilterOptions, query, reported]);
+  const archiveFlag = resourceLifecycle(modelMetadata ? { ...modelMetadata.resource, query: query.contract } : null, modelMetadata).archiveFilter?.flag;
+  const contributedFilterOptions = React.useMemo(() => [
+    ...(input.contributedFilterOptions ?? EMPTY),
+    ...(archiveFlag ? [{
+      id: "archived", label: t("record.archive.archived"), filter: { [archiveFlag]: { exact: true } },
+    }] : EMPTY),
+  ], [input.contributedFilterOptions, archiveFlag, t]);
+  const filters = React.useMemo(() => mergeFilterOptions(input.filterOptions, contributedFilterOptions, query, reported), [input.filterOptions, contributedFilterOptions, query, reported]);
   const facets = React.useMemo(() => {
     const choices = buildFilterOptions(columns, inferOptions ? rows : EMPTY, fields);
     const predicates = new Set(filters.map((option) => JSON.stringify(query.toWhere(option.filter))));
@@ -91,6 +105,10 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
       return [{ field: name, label: field.label ?? contributed?.label ?? fieldLabel(name, undefined),
         source: declared?.options ? "declared" : contributed?.source ?? "scalar",
         ...(contributed?.group !== undefined ? { group: contributed.group } : {}),
+        ...(contributed?.optionGroupField ? {
+          optionGroupField: contributed.optionGroupField,
+          ...(contributed.optionGroupOrderField ? { optionGroupOrderField: contributed.optionGroupOrderField } : {}),
+        } : {}),
         ...(relation && axis ? { relation, optionForValue: (value: string, label: React.ReactNode = value) => {
           const bucket = { key: { [axis.groupBy().valueKey]: value } };
           const filter = axis.drill(bucket);
@@ -117,8 +135,9 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
   const text = React.useMemo(() => searchTextFields(query, input.textFilterField, shortcutTextFields).map((field) => ({
     field, label: fieldLabel(field, modelMetadata, columns.find((column) => column.field === field)?.header),
   })), [query, input.textFilterField, shortcutTextFields, modelMetadata, columns]);
-  return React.useMemo(() => ({ query, text, filters, facets, fields, groups, curatedGroups, favorites: resourceView.savedFavorites }),
-    [query, text, filters, facets, fields, groups, curatedGroups, resourceView.savedFavorites]);
+  return React.useMemo(() => ({ query, text, filters, facets, fields, groups, curatedGroups, favorites: resourceView.savedFavorites,
+    ...(repeatable ? { repeatable } : {}) }),
+  [query, text, filters, facets, fields, groups, curatedGroups, resourceView.savedFavorites, repeatable]);
 }
 
 /**

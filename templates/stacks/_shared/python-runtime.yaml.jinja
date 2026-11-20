@@ -25,7 +25,14 @@
       REDIS_URL: "{{ redis_url }}"
       CACHE_URL: "{{ redis_url }}"
       CELERY_BROKER_URL: "{{ celery_broker_url }}"
-{% if ingress_domain_value == "localhost" %}{% else %}      ANGEE_PUBLIC_ORIGIN: "https://{{ ingress_domain_value }}"
+{% if public_origin %}      ANGEE_PUBLIC_ORIGIN: "{{ public_origin }}"
+{% if effective_serve_mode == "production" %}      # A public production host overrides the project's development defaults: no
+      # debug pages, and only its own names (plus the compose-internal ones the MCP
+      # endpoint and the readiness probe use) are accepted as Host.
+      YAMLCONF_DEBUG: "false"
+      YAMLCONF_ALLOWED_HOSTS: '["{{ ingress_domain_value }}"{% for alias in ingress_aliases|split:"," %}{% if alias %}, "{{ alias|cut:" " }}"{% endif %}{% endfor %}, "django", "localhost", "127.0.0.1"]'
+{% endif %}{% endif %}{% if settings_file %}      # The final settings layer, loaded after the host's settings.yaml.
+      YAMLCONF_CONFFILE: "{% if runtime_mode == "docker" %}{{ container_project_dir }}/{% endif %}{{ settings_file }}"
 {% endif %}{% if uv_cache_dir %}      UV_CACHE_DIR: "{{ uv_cache_dir }}"
 {% endif %}{% if sentry_dsn %}      SENTRY_DSN: "{{ sentry_dsn }}"
       SENTRY_ENVIRONMENT: "{{ effective_serve_mode }}"

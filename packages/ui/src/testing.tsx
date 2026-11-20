@@ -19,6 +19,8 @@ import type {
   MutationDialogProps,
   MutationDialogValues,
 } from "./views/form/MutationDialog";
+import { submitMutationDialog } from "./views/form/MutationDialog";
+import { SURFACE_RENDERS_FAILURE } from "./views/form/validation-errors";
 
 type UiModule = typeof import("./index");
 export type UiTestDoubles = Partial<Record<keyof UiModule, unknown>>;
@@ -129,7 +131,8 @@ export interface MutationDialogTestDoubleOptions {
  * Minimal shared test rendering for consumers that own MutationDialog
  * declarations rather than its interaction ceremony. Callers spread the real
  * `@angee/ui` module in their mock, so codecs and every unrelated UI owner stay
- * production-accurate.
+ * production-accurate. Like the dialog, a submit runs the declared `validate`
+ * first, with the same quiet call options, and submits nothing it refuses.
  */
 export function createMutationDialogTestDouble({
   capture,
@@ -168,9 +171,12 @@ export function createMutationDialogTestDouble({
             ...props.initialValues,
             ...rawValues,
           });
-          void Promise.resolve(props.onSubmit(parsed)).then((result) => {
-            if (result.status === "ok") props.onSubmitted?.(result.data, parsed);
-          });
+          void Promise.resolve(props.validate?.(parsed, SURFACE_RENDERS_FAILURE))
+            .then(async (validation) => {
+              if (validation) return;
+              const result = await submitMutationDialog(props, parsed, String(props.errorFallback ?? ""));
+              if (result.status === "ok") props.onSubmitted?.(result.data, parsed);
+            });
         }}
       >
         <button type="submit">{buttonLabel}</button>

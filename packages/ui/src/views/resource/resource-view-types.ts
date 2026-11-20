@@ -11,6 +11,9 @@ import type {
   ResourceViewKind,
 } from "./resource-view-model";
 import type { ButtonVariant } from "../../ui/button";
+import { cardFrameVariants, type CardFrame } from "../../ui/card";
+import { recipeAxes } from "../../lib/variants";
+import type { ResourceCardContent } from "../../runtime/containers";
 
 import type {
   FilterClauseField,
@@ -57,8 +60,8 @@ export interface CalendarViewSpec {
     start: Date,
     end: Date | null,
   ) => void | Promise<unknown>;
-  /** Quick-create seam: a range select seeds and opens the create form. */
-  onSelectRange?: (start: Date, end: Date) => void;
+  /** Quick-create seam: a range select (whole days when `allDay`) seeds and opens the create form. */
+  onSelectRange?: (start: Date, end: Date, allDay: boolean) => void;
 }
 
 export interface BoardLaneSource {
@@ -133,9 +136,118 @@ export interface BoardCardSpec {
   fields?: readonly string[];
 }
 
+/** Declared default gallery card: an image, a title and a secondary line, each a readable field. */
+export interface GalleryCardSpec<TRow extends Row = Row> {
+  image?: keyof TRow & string;
+  title?: keyof TRow & string;
+  subtitle?: keyof TRow & string;
+}
+
 export interface CardActionContext {
   /** Re-pull the collection backing the board/list surface. */
   refresh: () => void;
+}
+
+/** One group of the list's grouping as its header shows it. */
+export interface SelectedGroupLevel {
+  /** The axis as the resource declares it: `display_name`. */
+  field: string;
+  /**
+   * The group's identity as text (`String` of it): a text column's stored value, a
+   * relation's id, a date bucket's start, a number's or a boolean's text (`"3"`,
+   * `"true"`), a JSON value's serialization; null when the rows have no value (the
+   * blank text group is "").
+   */
+  key: string | null;
+  /** What the group header shows, the list's own wording for an empty group included. */
+  label: string;
+}
+
+/**
+ * What a list surface hands `bulkActions`: the public collection with the split
+ * stated. Every surface builds this type, so one that groups cannot leave the split
+ * out and read as "not grouped"; the public member stays optional so a caller that
+ * builds a collection by hand (a consumer's test) need not name it.
+ */
+export type PlacedBulkCollection<TRow> = {
+  filter: QueryFilter;
+  selectedRows: readonly TRow[];
+  selectedGroups: readonly SelectedGroup[] | null | undefined;
+};
+
+/** The selected rows of one innermost group (`bulkActions` → `selectedGroups`). */
+export interface SelectedGroup extends SelectedGroupLevel {
+  /** The enclosing groups, outermost first; [] at the root. */
+  parents: readonly SelectedGroupLevel[];
+  /** The group's selected rows in selection-map (object key) order: selection order,
+   * except that integer-like ids come first, ascending. */
+  ids: readonly string[];
+}
+
+/**
+ * The groups the server-grouped surface shows a record under: one level per grouping
+ * level, outermost first, with the group's ordinal among its level's groups, its
+ * header's bucket key and the key of the level page that lists it
+ * (`GroupedRenderShown.pages`). Internal to the list; `SelectedGroup` is the public split.
+ */
+export type SelectionGroupPath = readonly {
+  group: ResourceViewGroup;
+  key: string | null;
+  label: string;
+  position: number;
+  bucketKey: string;
+  page: string;
+}[];
+
+/** Where the server-grouped surface shows a record: its groups and the key of its group's row page. Internal. */
+export interface SelectionPlace {
+  path: SelectionGroupPath;
+  page: string;
+}
+
+/**
+ * What a card renderer knows about the card it draws, discriminated by the
+ * surface: narrow on `kind` before reading a board-only fact.
+ * One renderer serves both surfaces.
+ */
+export type CardRenderContext =
+  | {
+      kind: "gallery";
+      /** The collection has this card selected. */
+      selected: boolean;
+    }
+  | {
+      kind: "board";
+      selected: boolean;
+      /** The card is being dragged. */
+      dragging: boolean;
+      /** The lane's group value (`RowGroup.identity`): the related record's id or the
+       * grouped value, `null` for the records with no value; absent on an ungrouped board. */
+      laneId?: string | null;
+    };
+
+/**
+ * Draw one card's body; the surface keeps the frame, link, selection and actions.
+ * The surface calls it as a plain function while it renders, so it must not call
+ * hooks: return elements, and put hooks in a component it returns
+ * (`(row, context) => <EventCard row={row} context={context} />`). The body is
+ * inside the card's link or button, so it holds no interactive element.
+ */
+export type CardRenderer<TRow extends Row = Row> = (row: TRow, context: CardRenderContext) => ReactNode;
+
+/**
+ * Check a registered card's content (`<app.Model>#card`) as app creation does:
+ * `render` is a function and `frame`, when set, a card frame.
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
+export function validateResourceCard(content: unknown, id: string): asserts content is ResourceCardContent {
+  const card = typeof content === "object" && content !== null ? content as Record<string, unknown> : null;
+  if (!card || typeof card.render !== "function") throw new Error(`Card "${id}" needs a render function.`);
+  const frames: readonly string[] = recipeAxes(cardFrameVariants).frame;
+  if (card.frame !== undefined && !frames.includes(String(card.frame))) {
+    throw new Error(`Card "${id}" names frame "${String(card.frame)}"; a card frame is ${frames.map((frame) => `"${frame}"`).join(" or ")}.`);
+  }
 }
 
 export interface ListEmptyAction {
@@ -221,8 +333,9 @@ export interface ListViewProps<TRow extends Row = Row> {
   tableLayout?: ResourceTableLayout;
   /** Keep column headers visible or accessible-only. Defaults to visible. */
   headerVisibility?: ResourceTableHeaderVisibility;
-  /** Enable row selection and the bulk-selection column. Defaults to true except
-   * in embedded presentation. Selection survives pagination, page-size and view
+  /** Enable row selection and the bulk-selection column. Outside embedded lists,
+   * defaults on for lifecycle actions, page bulkActions or a grantable model.
+   * A source list counts only page bulkActions; an explicit value always wins. Selection survives pagination, page-size and view
    * changes that keep the same grouping. setView can replace groupStack with the
    * new view's defaults, clearing selection if the grouping changes. Filter, sort,
    * group, preset query/fixed-filter, base-filter, resource and Router-history
@@ -277,6 +390,9 @@ export interface ListViewProps<TRow extends Row = Row> {
   laneSource?: BoardLaneSource;
   /** Card content without replacing the board's shared frame and actions. */
   boardCard?: BoardCardSpec;
+  /** The gallery kind's default card fields (image, title, subtitle). Without it
+   * the gallery draws the board's column card; `renderCard` overrides both. */
+  gallery?: GalleryCardSpec<TRow>;
   /** Default grouping stack; a single group declares one level. */
   defaultGroup?: ResourceViewGroup | readonly ResourceViewGroup[] | null;
   /** Per-view group defaults seeded by the resource list. */
@@ -307,25 +423,58 @@ export interface ListViewProps<TRow extends Row = Row> {
   /** Domain actions, called only when selectable and something is selected.
    * The third argument describes the surface's query: an empty filter ({}) means
    * the whole collection; the server does not check selection membership against
-   * this descriptive filter. selectedRows contains snapshots captured when
+   * this descriptive filter. It is the list's filter: under a repeated grouping it
+   * still describes every filtered record, not only the repeated groups' records.
+   * selectedRows contains snapshots captured when
    * selected, in selection-map (object key) order, surviving page unloads and
    * surface remounts. Ids selected without a row are omitted; retained snapshots
    * are not refreshed until deselection/reselection. Actions needing fresh rows
    * must validate them, for example by revision. Surfaces sharing a selection
    * scope share its snapshots: a row selected through a sibling surface carries
    * that surface's fields, so actions must check the fields they need.
-   * Rendered content replaces generic delete; null, undefined or false keeps it. */
+   * selectedGroups is the selection split by the grouping the list renders, in
+   * three states; never an empty array, since without a selection the bulk actions
+   * do not render. Absent or undefined: the list is not grouped (a gallery never
+   * groups); a list surface always states it (`PlacedBulkCollection`), a collection
+   * built by hand may leave it out.
+   * null: it is grouped but at least one selected id cannot be placed, so no split
+   * is offered, never a partial one: the id was selected while the list was flat or
+   * grouped otherwise, or by a select-all that holds ids without rows; it shows now
+   * under another group than the one it was selected in, or under more than one; a
+   * page that listed it, or listed one of its groups, shows again without it or is
+   * still loading; or the surface never places rows (a client-grouped list, a lane
+   * board, whose every selected card yields null, and `RowsListView`; pane lists do
+   * not select). Otherwise one entry per innermost group holding a selected row,
+   * every selected id in exactly one entry: a row the list shows in the group it
+   * shows in, any other row in the group it was selected in (a collapsed group,
+   * another page of its group or another page of groups cannot tell otherwise).
+   * Entries follow the groups' display order, each group at its current position
+   * where a loaded page lists it, else at the position captured with the
+   * selection; ties keep selection-map order. It is a hint, never proof: like
+   * filter the server does not check it, and a verb acting on it validates the
+   * records' current state there.
+   * Rendered content precedes the generic metadata-driven Archive, Trash/Restore
+   * and Delete actions. A source list receives only these page-owned actions. */
   bulkActions?: (
     selectedIds: ReadonlySet<string>,
     clear: () => void,
-    collection: { filter: QueryFilter; selectedRows: readonly TRow[] },
+    collection: {
+      filter: QueryFilter;
+      selectedRows: readonly TRow[];
+      selectedGroups?: readonly SelectedGroup[] | null;
+    },
   ) => ReactNode;
   /** Optional action content rendered in each board card footer. */
   cardActions?: (row: TRow, context: CardActionContext) => ReactNode;
-  /** Optional board card body override — a rich card (description, chips, badges)
-   * instead of the default title + key/value rows. Board view only; the lane
-   * grouping, frame link/click, and the `cardActions` footer are unchanged. */
-  renderCard?: (row: TRow) => ReactNode;
+  /** Card body override for the board and the gallery — a rich card (art,
+   * description, chips, badges) instead of the default title + key/value rows.
+   * The context names the surface, lane and selection; the lane grouping, frame
+   * link/click, selection and the `cardActions` footer are unchanged. */
+  renderCard?: CardRenderer<TRow>;
+  /** How a card's content meets its frame on both surfaces: `inset` pads it,
+   * `flush` lets an art header reach the card's edges with the controls overlaid.
+   * Defaults to each surface's own (board `inset`, gallery `flush`). */
+  cardFrame?: CardFrame;
   /** Empty-state content shown when the list has no rows. */
   emptyContent?: ListEmptyContent;
   /** Class name applied to the collection renderer root. */

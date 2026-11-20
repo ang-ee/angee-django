@@ -72,8 +72,9 @@ function DeveloperSummary(): ReactElement {
   const facts = [
     [t("developer.route"), runtime.activeRouteName ?? none],
     [t("developer.app"), runtime.activeApp ?? none],
-    [t("developer.selection"), selection?.app && selection.rail
-      ? t("developer.selectionValue", { app: selection.app, rail: selection.rail.join(", ") }) : none],
+    [t("developer.selection"), !selection?.app ? none : selection.rail
+      ? t("developer.selectionValue", { app: selection.app, rail: selection.rail.join(", ") })
+      : t("developer.selectionEveryRoot", { app: selection.app })],
     [t("developer.home"), composition?.home ?? none],
   ] as const;
   return (

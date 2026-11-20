@@ -12,9 +12,10 @@ from django.utils import timezone
 from rebac import system_context
 
 from angee.base.locks import record_lock_key, task_lock
+from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.oauth.client import OAuthClientProtocol
-from tests.conftest import Credential, make_integration
+from tests.conftest import Credential, create_user, make_integration
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -144,6 +145,30 @@ def test_refresh_retains_a_rotated_token_when_only_the_label_changed(monkeypatch
     assert credential.name == "Renamed during provider exchange"
 
 
+def test_a_refresh_that_does_not_rotate_keeps_the_stored_refresh_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The OAuth kind carries the stored refresh token forward over a response that omits it."""
+
+    credential = _expired_credential("refresh-kept", {"access_token": "old", "refresh_token": "long-lived"})
+    monkeypatch.setattr(
+        OAuthClientProtocol, "refresh_token", lambda protocol, *, refresh_token: {"access_token": "new"},
+    )
+    with system_context(reason="test refresh keeps the refresh token"):
+        credential.refresh_now()
+    assert credential.reveal() == {"access_token": "new", "refresh_token": "long-lived"}
+
+
+def test_only_the_oauth_kind_carries_stored_material_forward() -> None:
+    """A rotated refresh token wins; another kind's new material replaces the stored one whole."""
+
+    oauth = CredentialKind.OAUTH.handler
+    assert oauth.carry_forward({"access_token": "a", "refresh_token": "new"}, {"refresh_token": "old"}) == {
+        "access_token": "a", "refresh_token": "new",
+    }
+    assert CredentialKind.STATIC_TOKEN.handler.carry_forward({"api_key": "new"}, {"api_key": "old", "x": 1}) == {
+        "api_key": "new",
+    }
+
+
 def test_refresh_refuses_to_run_inside_a_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
     """The provider exchange is network I/O, so an enclosing transaction is refused."""
 
@@ -156,3 +181,94 @@ def test_refresh_refuses_to_run_inside_a_transaction(monkeypatch: pytest.MonkeyP
     with system_context(reason="test refresh inside atomic"), transaction.atomic():
         with pytest.raises(RuntimeError, match="requires autocommit"):
             credential.refresh_now()
+
+
+def _static_token(owner: Any, path: str, token: str) -> Any:
+    """Store ``token`` on a new static-token credential, or re-enter it over a valid one."""
+
+    if path == "create":
+        return Credential.objects.create_local_credential(
+            owner, kind="static_token", name="Pasted", material={"api_key": token},
+        )
+    credential = Credential.objects.create_local_credential(
+        owner, kind="static_token", name="Pasted", material={"api_key": "valid-token"},
+    )
+    credential.replace_material({"api_key": token})
+    return credential
+
+
+@pytest.mark.parametrize("path", ["create", "re-enter"])
+@pytest.mark.parametrize(
+    ("typed", "stored"), [("  tok-en_1.~/+= \n", "tok-en_1.~/+="), ("tok-en_1.~/+=", "tok-en_1.~/+=")],
+)
+def test_a_static_token_is_stored_without_surrounding_whitespace(path: str, typed: str, stored: str) -> None:
+    owner = create_user(f"static-token-{path}-{len(typed)}")
+    with system_context(reason="test a pasted static token"):
+        credential = _static_token(owner, path, typed)
+        credential.refresh_from_db()
+    assert credential.reveal() == {"api_key": stored}
+    assert credential.auth_headers() == {"Authorization": f"Bearer {stored}"}
+
+
+@pytest.mark.parametrize("path", ["create", "re-enter"])
+@pytest.mark.parametrize(
+    "secret", ["https://feeds.example.test/my team.ics", "https://feeds.example.test/kalender/\u00f6ffentlich.ics"],
+)
+def test_a_secret_that_is_never_a_header_is_kept_as_entered(path: str, secret: str) -> None:
+    """A static token is not always a header: a calendar feed subscription keeps its feed address as one.
+
+    This pins the shape ``calendar_integrate_ics.connect.subscribe_calendar`` stores (``{"api_key": <address>}``)
+    against the handler; the ICS test module is outside this lane.
+    """
+    owner = create_user(f"kept-secret-{path}-{len(secret)}")
+    with system_context(reason="test a secret kept as a static token"):
+        credential = _static_token(owner, path, f"  {secret}\n")
+        credential.refresh_from_db()
+    assert credential.reveal() == {"api_key": secret}
+    # Testing the connection proves the secret without building a header from it.
+    credential.handler.probe(credential)
+
+
+@pytest.mark.parametrize(
+    "secret", ["https://feeds.example.test/my team.ics", "https://feeds.example.test/kalender/\u00f6ffentlich.ics"],
+)
+def test_a_connection_whose_static_token_is_never_a_header_tests_usable(secret: str) -> None:
+    with system_context(reason="test a feed address kept as a static token"):
+        integration = make_integration(f"feed-address-{len(secret)}")
+        integration.credential.replace_material({"api_key": secret})
+        integration.refresh_from_db()
+        assert integration.probe_credential() == "Credential is usable."
+
+
+@pytest.mark.parametrize("token", ["tok en", "tok\u200ben", "tok\x00en", "t\u00f6ken"])
+def test_a_static_token_a_header_cannot_carry_is_refused_when_the_header_is_built(token: str) -> None:
+    owner = create_user(f"unsendable-token-{ord(token[3])}")
+    with system_context(reason="test a stored token no header can carry"):
+        credential = _static_token(owner, "create", token)
+        credential.refresh_from_db()
+    assert credential.reveal() == {"api_key": token}
+    with pytest.raises(IntegrationError) as refused:
+        credential.auth_headers()
+    error = refused.value
+    assert not error.transient
+    assert error.public_message == (
+        "The stored token contains a character that cannot be sent in a request header; re-enter the token."
+    )
+    assert token not in str(error) and token not in repr(error)
+    assert error.__cause__ is None and error.__context__ is None
+
+
+@pytest.mark.parametrize("status", ["revoked", "expired"])
+def test_an_inactive_static_token_produces_no_headers(status: str) -> None:
+    with system_context(reason="test an inactive static token"):
+        credential = make_integration(f"inactive-static-{status}").credential
+        assert credential.auth_headers() == {"Authorization": "Bearer x"}
+        credential.status = status
+        credential.save(update_fields=["status", "updated_at"])
+        credential.refresh_from_db()
+    with pytest.raises(IntegrationError) as refused:
+        credential.auth_headers()
+    # A sync reports the operator's next step, not an unexpected failure.
+    assert (refused.value.public_message, refused.value.transient) == (
+        "This credential is no longer active; re-enter the token to use it again.", False,
+    )

@@ -18,6 +18,10 @@ dependencies = [
     "angee-appearance==3.0.0",
     "angee-appearance-integrate==3.0.0",
     "angee-base==3.0.0",
+    "angee-calendar==3.0.0",
+    "angee-calendar-integrate-google==3.0.0",
+    "angee-calendar-integrate-ics==3.0.0",
+    "angee-checklists==3.0.0",
     "angee-dashboards==3.0.0",
     "angee-decisions==3.0.0",
     "angee-extraction==3.0.0",
@@ -27,6 +31,7 @@ dependencies = [
     "angee-intake==3.0.0",
     "angee-integrate==3.0.0",
     "angee-integrate-github==3.0.0",
+    "angee-integrate-google==3.0.0",
     "angee-integrate-iphone==3.0.0",
     "angee-integrate-vcs==3.0.0",
     "angee-jobs==3.0.0",
@@ -42,6 +47,7 @@ dependencies = [
     "angee-operator==3.0.0",
     "angee-parties==3.0.0",
     "angee-parties-integrate-carddav==3.0.0",
+    "angee-parties-integrate-hubspot==3.0.0",
     "angee-platform==3.0.0",
     "angee-platform-integrate-operator==3.0.0",
     "angee-platform-integrate-vcs==3.0.0",
@@ -49,6 +55,7 @@ dependencies = [
     "angee-portfolio==3.0.0",
     "angee-posts==3.0.0",
     "angee-projects==3.0.0",
+    "angee-projects-calendar==3.0.0",
     "angee-proposals==3.0.0",
     "angee-proposals-work==3.0.0",
     "angee-provenance==3.0.0",
@@ -59,6 +66,7 @@ dependencies = [
     "angee-spaces==3.0.0",
     "angee-storage==3.0.0",
     "angee-storage-integrate==3.0.0",
+    "angee-storage-integrate-google-drive==3.0.0",
     "angee-storage-integrate-iphone==3.0.0",
     "angee-tags==3.0.0",
     "angee-theme-angee==3.0.0",
@@ -89,7 +97,7 @@ postgres = ["psycopg[binary,pool]>=3.2"]
 dev = [
     "angee-base[testing]==3.0.0",
     "daphne>=4.0",
-    "django-zed-rebac[caveats]>=0.34.1,<0.35",
+    "django-zed-rebac[caveats]>=0.36.1,<0.37",
     "faker>=30.0",
     "hypothesis>=6.100",
     "import-linter>=2.1",
@@ -131,6 +139,10 @@ angee-agents-runtime-pydantic = {workspace = true}
 angee-appearance = {workspace = true}
 angee-appearance-integrate = {workspace = true}
 angee-base = {workspace = true}
+angee-calendar = {workspace = true}
+angee-calendar-integrate-google = {workspace = true}
+angee-calendar-integrate-ics = {workspace = true}
+angee-checklists = {workspace = true}
 angee-dashboards = {workspace = true}
 angee-decisions = {workspace = true}
 angee-extraction = {workspace = true}
@@ -140,6 +152,7 @@ angee-iam-integrate-oidc = {workspace = true}
 angee-intake = {workspace = true}
 angee-integrate = {workspace = true}
 angee-integrate-github = {workspace = true}
+angee-integrate-google = {workspace = true}
 angee-integrate-iphone = {workspace = true}
 angee-integrate-vcs = {workspace = true}
 angee-jobs = {workspace = true}
@@ -155,6 +168,7 @@ angee-nexus = {workspace = true}
 angee-operator = {workspace = true}
 angee-parties = {workspace = true}
 angee-parties-integrate-carddav = {workspace = true}
+angee-parties-integrate-hubspot = {workspace = true}
 angee-platform = {workspace = true}
 angee-platform-integrate-operator = {workspace = true}
 angee-platform-integrate-vcs = {workspace = true}
@@ -162,6 +176,7 @@ angee-pm = {workspace = true}
 angee-portfolio = {workspace = true}
 angee-posts = {workspace = true}
 angee-projects = {workspace = true}
+angee-projects-calendar = {workspace = true}
 angee-proposals = {workspace = true}
 angee-proposals-work = {workspace = true}
 angee-provenance = {workspace = true}
@@ -172,6 +187,7 @@ angee-server = {workspace = true}
 angee-spaces = {workspace = true}
 angee-storage = {workspace = true}
 angee-storage-integrate = {workspace = true}
+angee-storage-integrate-google-drive = {workspace = true}
 angee-storage-integrate-iphone = {workspace = true}
 angee-tags = {workspace = true}
 angee-theme-angee = {workspace = true}
@@ -229,8 +245,8 @@ exclude = [
   # the abstract sources instead.
   "**/runtime",
   # Materialized addon migration sources are pinned by digest and immutable.
+  # Addon migration templates (compose_migrations/) are source and stay checked.
   "**/runtime_migrations",
-  "**/compose_migrations",
 ]
 
 [tool.ruff.lint]
@@ -281,6 +297,21 @@ forbidden_modules = [
   "angee.workflows", "angee.workflows_agents", "angee.workflows_extraction", "angee.workflows_integrate",
   "angee.workflows_messaging", "angee.workflows_parties", "angee.workflows_posts",
 ]
+
+[[tool.importlinter.contracts]]
+name = "Checklists do not import workflows"
+type = "forbidden"
+source_modules = ["angee.checklists"]
+forbidden_modules = [
+  "angee.workflows", "angee.workflows_agents", "angee.workflows_extraction", "angee.workflows_integrate",
+  "angee.workflows_messaging", "angee.workflows_parties", "angee.workflows_posts",
+]
+
+[[tool.importlinter.contracts]]
+name = "OAuth and its vendor presets do not import the login addon"
+type = "forbidden"
+source_modules = ["angee.integrate", "angee.integrate_google"]
+forbidden_modules = ["angee.iam_integrate_oidc"]
 
 [[tool.importlinter.contracts]]
 name = "Serving modules never import build owners"
@@ -338,9 +369,10 @@ files = ["src/angee"]
 ignore_missing_imports = true
 mypy_path = ["src", ".mypy_cache"]
 warn_unused_ignores = true
-# Historical addon migrations are digest-pinned executable artifacts, like the
+# Materialized addon migrations are digest-pinned executable artifacts, like the
 # Ruff boundary above; integrity and execution tests validate their bodies.
-exclude = ["(^|/)(runtime_migrations|compose_migrations)/"]
+# Addon migration templates (compose_migrations/) are typed source and checked.
+exclude = ["(^|/)runtime_migrations/"]
 
 [[tool.mypy.overrides]]
 module = ["simple_history.*", "django_sqids.*"]
@@ -348,7 +380,7 @@ module = ["simple_history.*", "django_sqids.*"]
 follow_untyped_imports = true
 
 [[tool.mypy.overrides]]
-module = ["*.runtime_migrations.*", "*.compose_migrations.*"]
+module = ["*.runtime_migrations.*"]
 # Integrity tests still import typed Migration contracts. Preserve those types
 # and caller diagnostics without re-checking immutable historical source bodies.
 follow_imports = "silent"

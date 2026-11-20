@@ -183,6 +183,7 @@ export const RadioGroupItem = React.forwardRef<
   RadioGroupItemProps
 >(function RadioGroupItem(
   {
+    "aria-describedby": describedBy,
     children,
     className,
     description,
@@ -200,8 +201,10 @@ export const RadioGroupItem = React.forwardRef<
   ref,
 ) {
   const styles = radioGroupVariants({ size, variant });
+  // A description of the choice (such as why it is disabled) belongs to the focusable radio, not its label.
   const radio = (
     <RadioGroupRadio
+      aria-describedby={describedBy}
       value={value}
       disabled={disabled}
       readOnly={readOnly}

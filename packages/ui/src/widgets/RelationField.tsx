@@ -19,6 +19,9 @@ export interface RelationOption {
   description?: string;
   /** Status value presented with the shared status vocabulary and tone owner. */
   status?: { value: string; label: string; tone: Tone };
+  /** The picker heading and its order, projected from caller-declared related-row fields. */
+  group?: string;
+  groupOrder?: number;
 }
 
 export interface RelationSearchState {

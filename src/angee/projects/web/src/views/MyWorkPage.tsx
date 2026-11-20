@@ -8,6 +8,7 @@ import * as React from "react";
 import { useProjectsT } from "../i18n";
 import { TASK_MODEL } from "../resources";
 import { TASK_ACTION_FIELDS, useTaskRowActions, useTaskRowHref, type TaskActionRow } from "../task-actions";
+import { TASKS_OUTSIDE_TEMPLATES } from "../task-declarations";
 
 /**
  * The personal projection: the actor's open tasks are the page's one list, owning
@@ -21,7 +22,7 @@ export function MyWorkPage(): React.ReactElement {
   const taskActions = useTaskRowActions<TaskActionRow>();
   const taskFilter = React.useMemo(
     () => userId
-      ? { assignee: { exact: userId }, status: { exact: "OPEN" } }
+      ? { assignee: { exact: userId }, status: { exact: "OPEN" }, ...TASKS_OUTSIDE_TEMPLATES }
       : { id: { inList: [] } },
     [userId],
   );

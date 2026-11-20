@@ -2,19 +2,36 @@ import { PROJECT_MODEL } from "@angee/projects";
 import {
   Column,
   DrawerResourceList,
-  Field,
-  Form,
-  Group,
   List,
-  useEnumOptions,
+  RecordActionBar,
+  useActionResultRun,
+  useRecordChromeActionOutcome,
   useRecordChromeContext,
   useRouteHref,
   type StringIdRow,
 } from "@angee/ui";
 import * as React from "react";
 
+import { initiativeProjectForm, releaseForm } from "./record-forms";
 import { usePortfolioT } from "./i18n";
-import { INITIATIVE_PROJECT_MODEL, RELEASE_MODEL } from "./resources";
+import { INITIATIVE_PROJECT_MODEL, PRODUCT_MODEL, RELEASE_MODEL } from "./resources";
+
+/** Portfolio's maturation verb joins the project's existing record menu. */
+export function PromoteProjectAction(): React.ReactElement | null {
+  const t = usePortfolioT();
+  const { record, recordId, formReadOnly } = useRecordChromeContext();
+  const [promote, state] = useRecordChromeActionOutcome("promote_project_to_product", { invalidateModels: [PRODUCT_MODEL] });
+  const settle = useActionResultRun({ linkTo: PRODUCT_MODEL });
+  if (!record || !recordId || formReadOnly) return null;
+  return <RecordActionBar record={record} actions={[{
+    id: "portfolio-promote-project",
+    label: t("project.promote"),
+    permission: "write",
+    placement: "menu",
+    disabled: state.fetching,
+    run: async () => { await settle(() => promote(recordId)); },
+  }]} />;
+}
 
 interface ProjectRow extends StringIdRow {
   title?: unknown;
@@ -27,6 +44,8 @@ export function InitiativeProjectsTab(): React.ReactElement {
   return (
     <DrawerResourceList
       resource={INITIATIVE_PROJECT_MODEL}
+      form={initiativeProjectForm}
+      presentation="embedded" chrome={{ heading: false }}
       createDefaults={{ initiative: recordId }}
     >
       <List<StringIdRow>
@@ -39,13 +58,7 @@ export function InitiativeProjectsTab(): React.ReactElement {
         <Column field="project.product" />
         <Column field="project.status" widget="statusBadge" />
         <Column field="project.health" widget="statusBadge" />
-        <Column field="sort_order" header={t("common.order")} />
       </List>
-      <Form resource={INITIATIVE_PROJECT_MODEL}>
-        <Field name="project" title />
-        <Field name="initiative" readOnly />
-        <Field name="sort_order" label={t("common.order")} />
-      </Form>
     </DrawerResourceList>
   );
 }
@@ -54,9 +67,8 @@ export function InitiativeProjectsTab(): React.ReactElement {
 export function ProductReleasesTab(): React.ReactElement {
   const t = usePortfolioT();
   const { recordId } = useRecordChromeContext();
-  const statusOptions = useEnumOptions(RELEASE_MODEL, "status");
   return (
-    <DrawerResourceList resource={RELEASE_MODEL} presentation="embedded" createDefaults={{ product: recordId }}>
+    <DrawerResourceList resource={RELEASE_MODEL} form={releaseForm} presentation="embedded" chrome={{ heading: false }} createDefaults={{ product: recordId }}>
       <List
         resource={RELEASE_MODEL}
         baseFilter={{ product: { exact: recordId } }}
@@ -68,16 +80,6 @@ export function ProductReleasesTab(): React.ReactElement {
         <Column field="target_date" />
         <Column field="shipped_on" />
       </List>
-      <Form resource={RELEASE_MODEL} eyebrow={t("release.eyebrow")}>
-        <Field name="name" title />
-        <Field name="status" widget="statusbar" status options={statusOptions} />
-        <Field name="product" readOnly />
-        <Group label={t("release.group.dates")} columns={2}>
-          <Field name="target_date" />
-          <Field name="shipped_on" />
-        </Group>
-        <Field name="notes" widget="markdown.editor" body />
-      </Form>
     </DrawerResourceList>
   );
 }
@@ -91,6 +93,7 @@ export function ProductProjectsTab(): React.ReactElement {
     <List<ProjectRow>
       resource={PROJECT_MODEL}
       presentation="embedded"
+      chrome={{ heading: false }}
       baseFilter={{ product: { exact: recordId } }}
       order={{ sort_order: "ASC" }}
       rowHref={(row) => routeHref("projects.projects.record", { id: row.id })}

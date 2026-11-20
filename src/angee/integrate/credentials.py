@@ -3,12 +3,25 @@
 from __future__ import annotations
 
 import base64
+import json
+import logging
+from collections.abc import Collection, Mapping
 from datetime import datetime, timedelta
 from typing import Any, ClassVar
 
+from authlib.oauth2.rfc7523 import JWTBearerGrant
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
+from joserfc.errors import JoseError
+from joserfc.jwk import RSAKey
+
+from angee.integrate.errors import IntegrationError, is_transient_failure
+from angee.integrate.net import parse_http_url
+from angee.integrate.oauth.client import jwt_bearer_grant
+from angee.integrate.oauth.errors import ENDPOINT_NOT_ALLOWED, TOKEN_EXCHANGE_FAILED, OAuthFlowError
+
+logger = logging.getLogger(__name__)
 
 
 class CredentialKind(models.TextChoices):
@@ -19,6 +32,7 @@ class CredentialKind(models.TextChoices):
     SSH_KEY = "ssh_key", "SSH Key"
     BASIC_AUTH = "basic_auth", "Basic Auth"
     APP_KEYS = "app_keys", "App Keys"
+    JWT_BEARER = "jwt_bearer", "JWT Bearer"
 
     @property
     def handler(self) -> CredentialKindHandler:
@@ -33,21 +47,42 @@ class CredentialKindHandler:
     kind: ClassVar[str]
     material_field: ClassVar[str]
     """The single secret key this kind stores — also the `CredentialInput` field
-    that carries it (e.g. ``api_key``). This handler owns the kind↔secret mapping;
-    callers ask the handler rather than switching on ``kind`` themselves."""
+    that carries it (e.g. ``api_key``). A kind whose input is a document read by
+    :meth:`clean` names that input field here, and it is not stored. This handler
+    owns the kind↔secret mapping; callers ask the handler rather than switching on
+    ``kind`` themselves."""
     material_fields: ClassVar[tuple[str, ...]] = ()
     """The credential-input fields this kind reads into its material when it stores
     more than one (e.g. ``("username", "password")``); empty means just
     ``material_field``. The handler owns its input shape, so the create resolver
     never switches on ``kind``."""
+    mints_per_scope: ClassVar[bool] = False
+    """Whether this kind mints one access token per scope set through
+    :meth:`mint_access_token` (``Credential.scoped_access_token``)."""
 
     def input_material_fields(self) -> tuple[str, ...]:
         """Return the credential-input field names this kind reads into its material."""
 
         return self.material_fields or (self.material_field,)
 
+    def secret_material_fields(self) -> tuple[str, ...]:
+        """Return the stored material keys that hold this kind's own secret.
+
+        ``Credential.update_material`` refuses them: the secret is re-entered
+        through ``Credential.replace_material``, so the integrations it serves
+        discover again. By default the input fields are stored as given; a kind
+        whose :meth:`clean` reads a document names what the document becomes.
+        """
+
+        return self.input_material_fields()
+
     def validate(self, material: dict[str, Any]) -> None:
         """Require the kind's secret material before it is stored."""
+
+        self.validate_replacement(material)
+
+    def validate_replacement(self, material: Mapping[str, Any]) -> None:
+        """Require every replacement input, even for kinds allowing creation placeholders."""
 
         missing = {
             field: "This field is required."
@@ -57,15 +92,73 @@ class CredentialKindHandler:
         if missing:
             raise ValidationError(missing)
 
+    def clean(self, material: Mapping[str, Any]) -> dict[str, Any]:
+        """Return the material this kind stores for its input ``material``, or raise ``ValidationError``.
+
+        Creation and re-entry both store what this returns. By default the input is
+        stored as given once :meth:`validate` accepts it; a kind whose input is a
+        document reads it into its stored fields here.
+        """
+
+        cleaned = dict(material)
+        self.validate(cleaned)
+        return cleaned
+
     def upsert_fields(self, material: dict[str, Any]) -> dict[str, Any]:
-        """Return common credential fields derived from ``material``."""
+        """Return common credential fields derived from ``material``, set on creation and re-entry."""
 
         return {}
 
-    def auth_headers(self, credential: Any) -> dict[str, str]:
-        """Return HTTP auth headers for ``credential``."""
+    def carry_forward(self, material: Mapping[str, Any], stored: Mapping[str, Any]) -> dict[str, Any]:
+        """Return what a new grant's ``material`` stores over the ``stored`` material of the same credential.
+
+        By default the new material replaces the stored one whole.
+        """
+
+        del stored
+        return dict(material)
+
+    def auth_headers(self, credential: Any, *, scopes: Collection[str] = ()) -> dict[str, str]:
+        """Return HTTP auth headers for ``credential``.
+
+        A kind whose token was fixed when it was granted ignores ``scopes``. A kind
+        that mints per scope set (:attr:`mints_per_scope`) requires them: it returns
+        the cached token for that set or, on a miss, mints one. Because a miss is
+        network I/O, it refuses an atomic block even on a cache hit, so the outcome
+        never depends on the cache; every refusal is raised.
+        """
 
         raise NotImplementedError
+
+    def probe(self, credential: Any) -> None:
+        """Prove ``credential`` can authenticate without calling its vendor, or raise.
+
+        The connection test behind ``Integration.probe_credential``. By default the
+        kind produces its authorization headers; a kind that needs a network grant
+        for them proves its material locally instead.
+        """
+
+        self.auth_headers(credential)
+
+    def mint_access_token(self, credential: Any, scope: str) -> dict[str, Any]:
+        """Exchange ``credential``'s material for an access token on ``scope``.
+
+        Returns ``{"access_token": str, "expires_in": int | None, "scope": str}``
+        for ``Credential.scoped_access_token`` to cache; ``scope`` is the granted
+        scope. Only kinds that mint per scope set implement it.
+        """
+
+        raise NotImplementedError(f"{self.kind} credentials do not mint access tokens per scope set.")
+
+    def records_failure(self, error: Exception) -> bool:
+        """Return whether a mint refusal condemns the stored material, so it must be re-entered.
+
+        ``Credential.scoped_access_token`` records ``last_refresh_status="failed"``
+        only for these. By default every refusal that is not transient
+        (:func:`~angee.integrate.errors.is_transient_failure`), the renewal default.
+        """
+
+        return not is_transient_failure(error)
 
     def secret_value(self, credential: Any) -> str:
         """Return the credential's primary secret value."""
@@ -79,9 +172,15 @@ class OAuthCredentialHandler(CredentialKindHandler):
     kind = "oauth"
     material_field = "access_token"
 
-    def auth_headers(self, credential: Any) -> dict[str, str]:
-        """Return OAuth bearer authorization headers."""
+    def secret_material_fields(self) -> tuple[str, ...]:
+        """Return every token a grant stores: the access token, and the refresh and identity tokens beside it."""
 
+        return ("access_token", "refresh_token", "id_token")
+
+    def auth_headers(self, credential: Any, *, scopes: Collection[str] = ()) -> dict[str, str]:
+        """Return OAuth bearer authorization headers; the grant already fixed the token's scopes."""
+
+        del scopes
         return {"Authorization": f"Bearer {self.secret_value(credential)}"}
 
     def upsert_fields(self, material: dict[str, Any]) -> dict[str, Any]:
@@ -100,6 +199,18 @@ class OAuthCredentialHandler(CredentialKindHandler):
         if isinstance(scope, str):
             fields["granted_scopes"] = scope.split()
         return fields
+
+    def carry_forward(self, material: Mapping[str, Any], stored: Mapping[str, Any]) -> dict[str, Any]:
+        """Keep the stored refresh token when the new grant carries none.
+
+        A provider may issue a refresh token on first consent only, and a refresh
+        response that does not rotate it omits it (RFC 6749 §5.1, §6).
+        """
+
+        carried = dict(material)
+        if not carried.get("refresh_token") and stored.get("refresh_token"):
+            carried["refresh_token"] = stored["refresh_token"]
+        return carried
 
     @staticmethod
     def _expires_at(material: dict[str, Any], now: datetime) -> datetime | None:
@@ -129,10 +240,59 @@ class StaticTokenCredentialHandler(CredentialKindHandler):
 
         del material
 
-    def auth_headers(self, credential: Any) -> dict[str, str]:
-        """Return static-token bearer authorization headers."""
+    def clean(self, material: Mapping[str, Any]) -> dict[str, Any]:
+        """Store the token without the whitespace a paste brings around it, and otherwise as entered.
 
-        return {"Authorization": f"Bearer {self.secret_value(credential)}"}
+        Not every static token becomes a header (a calendar feed subscription keeps
+        its feed address as one), so what a header cannot carry is refused where the
+        header is built (:meth:`auth_headers`), not here.
+        """
+
+        cleaned = super().clean(material)
+        if isinstance(token := cleaned.get(self.material_field), str):
+            cleaned[self.material_field] = token.strip()
+        return cleaned
+
+    def auth_headers(self, credential: Any, *, scopes: Collection[str] = ()) -> dict[str, str]:
+        """Return static-token bearer authorization headers; a static token has no scopes to choose.
+
+        An inactive credential (revoked, expired) fails closed, as a minted token does
+        (``Credential.require_active``), with a permanent ``IntegrationError`` asking for
+        the token again. A stored token with a space, a control character or anything
+        outside printable ASCII cannot be sent in a header: it is refused
+        permanently, asking for it to be re-entered, and never quoted.
+        """
+
+        del scopes
+        self._require_active(credential)
+        token = self.secret_value(credential)
+        if any(not "!" <= character <= "~" for character in token):
+            raise IntegrationError(
+                "The stored token contains a character that cannot be sent in a request header; re-enter the token."
+            )
+        return {"Authorization": f"Bearer {token}"}
+
+    def probe(self, credential: Any) -> None:
+        """Prove the token is active and readable, without building a header from it.
+
+        Not every static token becomes a header (a calendar feed subscription keeps
+        its feed address as one), so a connection test does not refuse what only a
+        header cannot carry; :meth:`auth_headers` refuses that where one is built.
+        """
+
+        self._require_active(credential)
+        self.secret_value(credential)
+
+    @staticmethod
+    def _require_active(credential: Any) -> None:
+        """Refuse an inactive credential (``Credential.require_active``) in operator wording."""
+
+        try:
+            credential.require_active()
+        except ValueError as error:
+            raise IntegrationError(
+                "This credential is no longer active; re-enter the token to use it again."
+            ) from error
 
 
 class SshKeyCredentialHandler(CredentialKindHandler):
@@ -148,10 +308,10 @@ class SshKeyCredentialHandler(CredentialKindHandler):
     kind = "ssh_key"
     material_field = "private_key"
 
-    def auth_headers(self, credential: Any) -> dict[str, str]:
+    def auth_headers(self, credential: Any, *, scopes: Collection[str] = ()) -> dict[str, str]:
         """Return no HTTP headers: an SSH key authenticates git transport, not REST."""
 
-        del credential
+        del credential, scopes
         return {}
 
 
@@ -168,9 +328,10 @@ class BasicAuthCredentialHandler(CredentialKindHandler):
     material_field = "password"
     material_fields = ("username", "password")
 
-    def auth_headers(self, credential: Any) -> dict[str, str]:
+    def auth_headers(self, credential: Any, *, scopes: Collection[str] = ()) -> dict[str, str]:
         """Return an HTTP Basic ``Authorization`` header from the username and password."""
 
+        del scopes
         material = credential.reveal()
         raw = f"{material.get('username', '')}:{material.get('password', '')}".encode()
         return {"Authorization": f"Basic {base64.b64encode(raw).decode('ascii')}"}
@@ -183,11 +344,214 @@ class AppKeysCredentialHandler(CredentialKindHandler):
     material_field = "app_secret"
     material_fields = ("app_id", "app_secret")
 
-    def auth_headers(self, credential: Any) -> dict[str, str]:
+    def auth_headers(self, credential: Any, *, scopes: Collection[str] = ()) -> dict[str, str]:
         """Return no HTTP headers because application keys parameterize a client library."""
 
-        del credential
+        del credential, scopes
         return {}
+
+
+class JwtBearerCredentialHandler(CredentialKindHandler):
+    """Handler for a provider-issued signing key exchanged through the JWT bearer grant (RFC 7523 §2.1).
+
+    A deployment pastes the provider's key file once (the ``key_file`` input). The
+    stored material is the signing identity: ``issuer``, the PEM ``private_key``,
+    ``token_endpoint``, optionally ``key_id``, ``subject`` (the delegated principal)
+    and ``audience`` (defaults to the token endpoint), plus ``scope_placement``.
+    Two key-file vocabularies are recognised. A Google service-account key file
+    (``"type": "service_account"``) names the issuer, key id and token endpoint
+    ``client_email``, ``private_key_id`` and ``token_uri``, and Google reads the
+    requested scope from the assertion's ``scope`` claim. Any other key file uses
+    the neutral names, and its scope rides the token request's ``scope``
+    parameter (RFC 7521 §4.1).
+
+    The signing key is never the generic secret: :meth:`secret_value` is empty, so
+    no consumer can send it as a bearer token or reveal it. Each access token is
+    minted for the scope set its consumer asks for, signed RS256 by Authlib's
+    ``AssertionClient`` and posted through the SSRF-pinned integrate transport,
+    which dials public addresses only; ``Credential.scoped_access_token`` caches
+    and renews it.
+    """
+
+    kind = "jwt_bearer"
+    material_field = "key_file"
+    """The input only: :meth:`clean` reads the key file into the signing fields and stores none of it."""
+    mints_per_scope = True
+    signing_fields: ClassVar[tuple[str, ...]] = (
+        "issuer",
+        "private_key",
+        "key_id",
+        "token_endpoint",
+        "subject",
+        "audience",
+    )
+    """The stored signing identity, in the neutral names."""
+    required_fields: ClassVar[tuple[str, ...]] = ("issuer", "private_key", "token_endpoint")
+    google_key_file_names: ClassVar[Mapping[str, str]] = {
+        "issuer": "client_email",
+        "key_id": "private_key_id",
+        "token_endpoint": "token_uri",
+    }
+    """A Google service-account key file's names for the signing fields it renames."""
+    signing_key_refusal: ClassVar[str] = "invalid_signing_key"
+    """The error code a refusal carries when the stored key does not load or sign locally."""
+    recorded_refusals: ClassVar[frozenset[str]] = frozenset(
+        {"invalid_grant", "invalid_client", "unauthorized_client", signing_key_refusal, ENDPOINT_NOT_ALLOWED}
+    )
+    """The RFC 6749 §5.2 errors that refuse the key or identity rather than one request,
+    plus :attr:`signing_key_refusal` and a key file whose token endpoint the address
+    policy refuses (``ENDPOINT_NOT_ALLOWED``)."""
+    algorithm: ClassVar[str] = "RS256"
+
+    def clean(self, material: Mapping[str, Any]) -> dict[str, Any]:
+        """Read the pasted key file into the signing material, refusing a key that cannot mint.
+
+        The key file must be a JSON object whose private key parses as an RSA private
+        key and whose token endpoint is an ``https`` URL with a host (RFC 6749 §3.2
+        requires TLS at the token endpoint); the address policy is the pinned
+        transport's, applied when the grant is sent. Every refusal is reported on
+        ``key_file``, named in the key file's own vocabulary, and never echoes its
+        values. Only the signing fields are stored; the rest of a key file is dropped.
+        """
+
+        self.validate(dict(material))
+        try:
+            document = json.loads(str(material["key_file"]))
+        except ValueError:
+            document = None
+        if not isinstance(document, dict):
+            raise ValidationError({"key_file": "Paste the provider's JSON key file."})
+        google = document.get("type") == "service_account"
+        names = self.google_key_file_names if google else {}
+        signing = {field: str(document.get(names.get(field, field)) or "").strip() for field in self.signing_fields}
+        if missing := [names.get(field, field) for field in self.required_fields if not signing[field]]:
+            raise ValidationError({"key_file": f"The key file has no {', '.join(missing)}."})
+        try:
+            signing_key = RSAKey.import_key(signing["private_key"])
+        except (JoseError, TypeError, ValueError) as error:
+            raise ValidationError({"key_file": "The key file's private_key is not a PEM RSA private key."}) from error
+        if not signing_key.is_private:
+            raise ValidationError({"key_file": "The key file's private_key is a public key."})
+        endpoint = names.get("token_endpoint", "token_endpoint")
+        try:
+            https = parse_http_url(signing["token_endpoint"]).scheme == "https"
+        except ValidationError:
+            https = False
+        if not https:
+            raise ValidationError({"key_file": f"The key file's {endpoint} must be an https URL with a host."})
+        return {**signing, "scope_placement": "claim" if google else "parameter"}
+
+    def secret_material_fields(self) -> tuple[str, ...]:
+        """Return what the key file becomes (:meth:`clean`): the signing identity and its scope placement."""
+
+        return (*self.signing_fields, "scope_placement")
+
+    def upsert_fields(self, material: dict[str, Any]) -> dict[str, Any]:
+        """Clear the mint outcome: a re-entered key file has not been refused yet."""
+
+        del material
+        return {"last_refresh_status": "", "last_refresh_at": None}
+
+    def secret_value(self, credential: Any) -> str:
+        """Return no generic secret: the signing key authenticates only through the grant."""
+
+        del credential
+        return ""
+
+    def auth_headers(self, credential: Any, *, scopes: Collection[str] = ()) -> dict[str, str]:
+        """Return a bearer header carrying a live access token minted for ``scopes``."""
+
+        return {"Authorization": f"Bearer {credential.scoped_access_token(scopes)}"}
+
+    def probe(self, credential: Any) -> None:
+        """Sign one assertion locally, proving the stored key loads and signs, without a request.
+
+        ``Integration.probe_credential`` has already refused a credential that needs
+        reconnecting (inactive, or its key refused), for every kind.
+        """
+
+        material = credential.reveal()
+        try:
+            JWTBearerGrant.sign(
+                RSAKey.import_key(material["private_key"]),
+                issuer=material["issuer"],
+                audience=material["audience"] or material["token_endpoint"],
+                subject=material["subject"] or None,
+                header=self._header(material),
+            )
+        except (JoseError, TypeError, ValueError) as error:
+            raise IntegrationError("The signing key cannot sign an assertion.") from error
+
+    def mint_access_token(self, credential: Any, scope: str) -> dict[str, Any]:
+        """Sign a fresh assertion for ``scope`` and exchange it through the JWT bearer grant.
+
+        The grant (:func:`~angee.integrate.oauth.client.jwt_bearer_grant`) signs
+        ``sub`` when stored and names the key in the header when the key file does,
+        places the scope as ``scope_placement`` says, posts to public addresses only,
+        and refuses with ``OAuthFlowError(TOKEN_EXCHANGE_FAILED, status)`` at the
+        response's real HTTP status, so a 429, a server error,
+        ``temporarily_unavailable`` or a request never sent is transient; the
+        refusal's error code rides ``body`` for :meth:`records_failure`. A key that
+        does not load or sign is the permanent :attr:`signing_key_refusal`. Logs carry
+        the credential id and status only.
+        """
+
+        material = credential.reveal()
+        try:
+            signing_key = RSAKey.import_key(material["private_key"])
+        except (JoseError, TypeError, ValueError) as error:
+            raise self._signing_key_refused(credential) from error
+        try:
+            token = jwt_bearer_grant(
+                material["token_endpoint"],
+                issuer=material["issuer"],
+                key=signing_key,
+                header=self._header(material),
+                scope=scope,
+                scope_in_claim=material["scope_placement"] == "claim",
+                subject=material["subject"],
+                audience=material["audience"],
+                log_subject=f"credential {credential.pk}",
+            )
+        except JoseError as error:
+            raise self._signing_key_refused(credential) from error
+        try:
+            expires_in: int | None = int(token["expires_in"])
+        except KeyError, TypeError, ValueError:
+            expires_in = None
+        # RFC 6749 §5.1: a response may omit ``scope`` when it grants what was asked.
+        return {
+            "access_token": str(token["access_token"]),
+            "expires_in": expires_in,
+            "scope": str(token.get("scope") or scope),
+        }
+
+    def records_failure(self, error: Exception) -> bool:
+        """Return whether a mint refusal condemns the key or identity, so the key file must be re-entered.
+
+        A refused grant, client or client authorization does, and so does a key that
+        does not load or sign or a token endpoint the address policy refuses
+        (:attr:`recorded_refusals`). A refused scope, any other request-specific
+        refusal and every transient failure do not.
+        """
+
+        if not isinstance(error, OAuthFlowError) or error.transient:
+            return False
+        code = error.body.get("error") if isinstance(error.body, Mapping) else None
+        return code in self.recorded_refusals
+
+    def _signing_key_refused(self, credential: Any) -> OAuthFlowError:
+        """Return the permanent, recorded refusal for a stored key that does not load or sign."""
+
+        logger.warning(
+            "JWT bearer token request failed for credential %s: status=%s", credential.pk, self.signing_key_refusal,
+        )
+        return OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400, body={"error": self.signing_key_refusal})
+
+    def _header(self, material: Mapping[str, Any]) -> dict[str, str]:
+        """Return the assertion's JOSE header, naming the key when the key file does."""
+
+        return {"alg": self.algorithm, **({"kid": material["key_id"]} if material["key_id"] else {})}
 
 
 _CREDENTIAL_HANDLERS = {
@@ -196,4 +560,5 @@ _CREDENTIAL_HANDLERS = {
     CredentialKind.SSH_KEY: SshKeyCredentialHandler(),
     CredentialKind.BASIC_AUTH: BasicAuthCredentialHandler(),
     CredentialKind.APP_KEYS: AppKeysCredentialHandler(),
+    CredentialKind.JWT_BEARER: JwtBearerCredentialHandler(),
 }

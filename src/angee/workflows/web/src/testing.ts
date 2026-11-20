@@ -33,7 +33,7 @@ export const runResourceFixture = testDataResource("workflows.WorkflowRun", {
   typeNames: { filter: "workflowrun_bool_exp", order: "workflowrun_order_by",
     groupBySpec: "workflowrunGroupBySpec", groupOrder: "workflowrunGroupOrder", having: "workflowrunHaving" },
   recordRepresentation: "display_name",
-  fields: [...["id", "display_name", "subject_id", "subject_model", "created_at", "finished_at", "outcome", "outcome_label"].map((name) => ({
+  fields: [...["id", "display_name", "subject_id", "subject_model", "created_at", "finished_at", "outcome", "outcome_label", "hold"].map((name) => ({
     name, kind: "scalar" as const, scalar: "String", readable: true, aggregatable: false,
     creatable: false, updatable: false, requiredOnCreate: false,
   })), { name: "version", kind: "relation", relationObject: true, relationModelLabel: "workflows.WorkflowVersion",
@@ -61,6 +61,10 @@ export const runResourceFixture = testDataResource("workflows.WorkflowRun", {
     ].map((name) => [name, testQueryField(name)])),
     status: testQueryField("status", { kind: "enum", values: runStates,
       filter: { field: "status", scalar: "String", values: [], valueMap: statusValues, operators: ["exact", "inList"] } }),
+    hold: testQueryField("hold", { filter: { field: "hold", scalar: "String", values: [], operators: ["exact", "ne", "inList", "isNull"] } }),
+    // Filter-only, as the run resource declares it: the Incidents preset filters on it.
+    is_incident: testQueryField("is_incident", { scalar: "Boolean", nullable: false, row: null,
+      filter: { field: "is_incident", scalar: "Boolean", values: [], operators: ["exact", "ne"] } }),
     "version.workflow": testQueryField("version.workflow", { kind: "relation", scalar: "ID",
       relation: { model: "workflows.Workflow", identityPath: "version.workflow.id", labelPath: "version.workflow.name" },
       row: { path: "version.workflow.id", paths: ["version.workflow.id", "version.workflow.name"] },
@@ -96,7 +100,8 @@ export const stepRunResourceFixture = testDataResource("workflows.StepRun", {
     ...["run", "awaited_run"].map((name) => ({ ...retainedField(name), kind: "relation" as const,
       relationObject: true, relationModelLabel: "workflows.WorkflowRun" })),
     ...["rank", "map_index", "map_settled", "map_total", "attempt", "page_index", "retries"].map((name) => retainedField(name, "Int")),
-    ...["can_retry", "requires_duplicate_acknowledgement", "is_mapped", "is_map"].map((name) => retainedField(name, "Boolean")),
+    ...["can_retry", "requires_duplicate_acknowledgement", "can_reprocess_from", "reprocess_requires_duplicate_acknowledgement", "is_mapped", "is_map"].map((name) => retainedField(name, "Boolean")),
+    retainedField("reprocess_reruns", "JSON"),
     ...["input", "output", "state"].map((name) => retainedField(name, "JSON")),
     { ...retainedField("status"), kind: "enum", values: stepStates },
     { ...retainedField("waiting_kind"), kind: "enum", values: waitKinds },
@@ -104,7 +109,7 @@ export const stepRunResourceFixture = testDataResource("workflows.StepRun", {
   roots: { list: "steprun", detail: "steprun_by_pk", aggregate: "steprun_aggregate" },
   typeNames: { filter: "steprun_bool_exp", order: "steprun_order_by" },
   query: testResourceQuery({ fields: {
-    ...Object.fromEntries(["id", "node_key", "node_label", "outcome", "outcome_label", "attempt", "wait_reason", "input", "output", "can_retry", "requires_duplicate_acknowledgement"].map((name) => [name, testQueryField(name)])),
+    ...Object.fromEntries(["id", "node_key", "node_label", "outcome", "outcome_label", "attempt", "wait_reason", "input", "output", "can_retry", "requires_duplicate_acknowledgement", "can_reprocess_from", "reprocess_requires_duplicate_acknowledgement", "reprocess_reruns"].map((name) => [name, testQueryField(name)])),
     ...Object.fromEntries(["run", "awaited_run"].map((name) => [name, testQueryField(name, {
       kind: "relation", scalar: "ID",
       relation: { model: "workflows.WorkflowRun", identityPath: `${name}.id`, labelPath: `${name}.id` },

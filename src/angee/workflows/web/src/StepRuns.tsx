@@ -1,14 +1,16 @@
+import type { ActionFieldName } from "@angee/gql/console/actions";
 import { DecisionCard } from "@angee/decisions";
 import { useAuthoredQuery } from "@angee/refine";
 import {
   Action, Column, DrawerResourceList, Facet, Field, Form, Group, List, RecordReference,
-  optionToken,
+  optionToken, useActionOutcomeMutation, useRecordActionMutation,
 } from "@angee/ui";
+import type { Row } from "@angee/metadata";
 
-import { STEP_RUN_MODEL, StepDecisionDocument } from "./documents.console";
+import { RUN_MODEL, RUN_MODELS, STEP_RUN_MODEL, StepDecisionDocument } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
 import { formatStepPage, stepPageCodec } from "./step-page";
-import { useStepRetryActions } from "./step-retry";
+import { useDuplicateAcknowledgement, useStepRetryActions } from "./step-retry";
 
 /** Child collections fetch one selected detail; rows never mount their own queries. */
 export function StepRuns({ runId, nodeKeys }: {
@@ -16,6 +18,18 @@ export function StepRuns({ runId, nodeKeys }: {
 }) {
   const t = useWorkflowsT();
   const retryActions = useStepRetryActions();
+  const [reprocessFrom] = useRecordActionMutation<ActionFieldName>("reprocess_workflow_run_from_step", {
+    dataProviderName: "console", invalidateModels: RUN_MODELS, linkTo: RUN_MODEL,
+  });
+  const [reprocessFromDuplicate] = useActionOutcomeMutation<ActionFieldName>(
+    "reprocess_workflow_run_from_step_accepting_duplicate", { dataProviderName: "console", invalidateModels: RUN_MODELS },
+  );
+  const reprocessAcknowledgement = useDuplicateAcknowledgement(t("action.reprocessDuplicateDescription"));
+  // The confirmation names exactly what runs again: the model owns that set (`StepRun.reprocess_reruns`).
+  const reruns = (row: Row) => <div>
+    <p>{t("action.reprocessFromStepDescription")}</p>
+    <ul>{(Array.isArray(row.reprocess_reruns) ? row.reprocess_reruns : []).map((label) => <li key={String(label)}>{String(label)}</li>)}</ul>
+  </div>;
   return <DrawerResourceList resource={STEP_RUN_MODEL} hideCreate presentation="embedded"
     baseFilter={{ run: { exact: runId }, ...(nodeKeys ? { node_key: { inList: nodeKeys } } : {}) }} recordTabs={[
       { id: "attempts", label: t("step.attempts"), render: ({ recordId }) => <StepAttempts stepId={recordId} /> },
@@ -46,7 +60,8 @@ export function StepRuns({ runId, nodeKeys }: {
       <Column field="outcome_label" header={t("run.outcome")} />
       <Column field="attempt" header={t("step.attempts")} />
     </List>
-    <Form readOnly returning={["can_retry", "requires_duplicate_acknowledgement"]}>
+    <Form readOnly returning={["can_retry", "requires_duplicate_acknowledgement", "can_reprocess_from", "reprocess_reruns",
+      "reprocess_requires_duplicate_acknowledgement"]}>
       <Field name="is_mapped" hidden />
       <Field name="is_map" hidden />
       <Field name="node_label" title />
@@ -73,6 +88,13 @@ export function StepRuns({ runId, nodeKeys }: {
       <Field name="output" label={t("run.output")} widget="json" />
       <Field name="state" label={t("step.checkpoint")} widget="json" />
       {retryActions.map((action) => <Action key={action.id} {...action} />)}
+      <Action id="reprocess-from" label={t("action.reprocess_workflow_run_from_step")}
+        visibleWhen={(record) => record.can_reprocess_from === true && record.reprocess_requires_duplicate_acknowledgement !== true}
+        run={reprocessFrom} confirm={(record) => ({ title: t("action.reprocess_workflow_run_from_step"), body: reruns(record) })} />
+      <Action id="reprocess-from-duplicate" label={t("action.reprocess_workflow_run_from_step_accepting_duplicate")} danger
+        args={reprocessAcknowledgement}
+        visibleWhen={(record) => record.can_reprocess_from === true && record.reprocess_requires_duplicate_acknowledgement === true}
+        submit={(_values, { record }, options) => typeof record?.id === "string" ? reprocessFromDuplicate(record.id, {}, options) : null} />
     </Form>
   </DrawerResourceList>;
 }

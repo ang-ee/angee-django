@@ -5,6 +5,8 @@ import { developmentMode } from "../lib/development-mode";
 import { orderById, positionSiblings } from "../lib/position";
 import type { BuiltInResourceViewKind } from "../views/resource/model/capabilities";
 import type { ResourceViewKindCapabilities } from "../views/resource/model/capabilities";
+import type { CardRenderer } from "../views/resource/resource-view-types";
+import type { CardFrame } from "../ui/card";
 import type { ChatterTabContent, DrawerContribution, DrawerEdge, TimelineKindContent, RelatedGroupContent } from "./contracts";
 import { isPresent, sessionPermitted, useAppRuntime } from "./runtime";
 
@@ -26,6 +28,8 @@ export interface ContainerKinds {
   chrome: ReactNode;
   /** The view kinds a resource collection's switcher offers. */
   views: ResourceViewKindContent;
+  /** A model's card on its board and gallery kinds (`<app.Model>#card`), one per model. */
+  card: ResourceCardContent;
   /** Collection utilities beside a resource view's toolbar. */
   utilities: ReactNode;
   /** Notices below the console navigation, above the page controls. */
@@ -63,6 +67,8 @@ export interface ContainerKinds {
   method: ReactNode;
   /** The login page's password help (`auth.login#password-help`). */
   "password-help": ReactNode;
+  /** The login page's one hero (`auth.login#hero`), contributed by a branding fragment. */
+  hero: LoginHeroContent;
 }
 
 /** A docked drawer: its stripe-tab title and glyph, and the panel it renders. */
@@ -82,6 +88,51 @@ export interface ResourceViewKindContent {
   capabilities: ResourceViewKindCapabilities;
   /** A contributed kind's body; it reads the collection's filter and state through `useResourceView()`. */
   render?: ComponentType<{ resource: string }>;
+}
+
+/**
+ * A model's card, registered once as the one child of `<app.Model>#card`: the
+ * board and gallery kinds of that model's lists draw it wherever the page
+ * declares no card of its own. The child's `requiredFields` name the fields the
+ * card reads, which the list selects. `render` receives any row of the model
+ * (`Row`), so narrow it to the model's row type where the fields it reads are
+ * declared, and narrow the context on `kind` before reading a board-only fact;
+ * like every card renderer it is called as a plain function, so it returns a
+ * component that holds any hooks.
+ */
+export interface ResourceCardContent {
+  render: CardRenderer;
+  /** How the card's content meets its frame; each surface's default when omitted. */
+  frame?: CardFrame;
+}
+
+/**
+ * The login page's hero, registered once as the one child of `auth.login#hero`:
+ * `LoginPage` renders it where its caller passes no `hero`, on every host,
+ * branded or not, and on every page composing `LoginPage` (sign-in, sign-in
+ * links). A contribution brings its own presentation and backdrop image; the
+ * page's `presentation` and `backgroundImageUrl` props serve only the page's
+ * own hero.
+ *
+ * The hero renders at every width: beside the card from `lg` up, stacked above
+ * it on small screens. It is responsible for its own small-screen form: it picks
+ * responsive assets (a lighter image or video on phones) through ordinary CSS
+ * or media queries, and its own small-screen height: below `lg` its wrapper has
+ * none, so a hero that fills the `lg` column with `absolute inset-0` sets one
+ * (`relative h-[34svh] lg:absolute lg:inset-0 lg:h-auto`). `LoginPage` passes it
+ * no props and no viewport hint.
+ */
+export interface LoginHeroContent {
+  /** The hero, rendered with no props: beside the sign-in card, or on the backdrop under `"full-bleed"`. */
+  render: ComponentType;
+  /**
+   * `"full-bleed"`: a backdrop fills the page and the card floats over it, the
+   * hero on the backdrop. Unset: the hero takes its own column beside the card,
+   * stacked above it on small screens.
+   */
+  presentation?: "full-bleed";
+  /** The backdrop's image under `"full-bleed"`, one URL at every width (it covers the page). */
+  backgroundImageUrl?: string;
 }
 
 /** When a render-time verb applies: an app or route on the active trail. */
@@ -138,8 +189,12 @@ export type ContainerEntry<TContent> = {
   force?: true;
   /** Where the entry's render verbs (`only`, `except`, `hide`) apply. */
   when?: ContainerCondition;
-  /** On an addon's own container: at most one child per `key`. */
-  unique?: "key";
+  /**
+   * On an addon's own container: `key`, at most one child per `key`; `address`,
+   * at most one child per address a page renders together, besides its `impl`
+   * children and variants.
+   */
+  unique?: "key" | "address";
   /** On an addon's own container: also addressed per model (`<model>#<name>`), inheriting along MTI parents. */
   models?: true;
 } & { readonly [child: `${string}.${string}`]: ContainerChild<TContent> | ContainerAlteration }
@@ -156,6 +211,8 @@ export type ContainersDeclaration = {
 export interface CoreContainer {
   address: `${string}#${string}`;
   models?: boolean;
+  /** `address`: one child per address a page renders together, besides `impl` children and variants. */
+  unique?: "key" | "address";
   /** Children the framework itself declares, under bare ids (`list`, `board`) its owner already persists. */
   children?: Readonly<Record<string, ContainerChild>>;
   /** The owner also adds children at render time (a page's chatter tabs), so `only` may name ids composition cannot know. */
@@ -193,7 +250,7 @@ export interface ContainerRule {
 /** The composed containers the runtime renders from. */
 export interface ComposedContainers {
   /** Every container: its owner (`framework` for core ones) and whether it takes model addresses. */
-  declared: Readonly<Record<string, { owner: string; models: boolean; unique?: "key"; extras?: true }>>;
+  declared: Readonly<Record<string, { owner: string; models: boolean; unique?: "key" | "address"; extras?: true }>>;
   children: Readonly<Record<string, readonly ComposedContainerChild[]>>;
   rules: Readonly<Record<string, readonly ContainerRule[]>>;
   /** Children a layer removed, and who removed them. */
@@ -244,7 +301,8 @@ export function containersFromChildren(
   return {
     ...EMPTY_CONTAINERS,
     declared: Object.fromEntries(core.map((container) => [container.address,
-      { owner: "framework", models: container.models === true, ...(container.extras ? { extras: true as const } : {}) }])),
+      { owner: "framework", models: container.models === true, ...(container.extras ? { extras: true as const } : {}),
+        ...(container.unique ? { unique: container.unique } : {}) }])),
     children: composed,
   };
 }

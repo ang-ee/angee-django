@@ -14,6 +14,7 @@ from angee.base.refs import generic_pointer_model
 from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind, actor_label
 
 KIND = "decisions.decision"
+REMINDER_KIND = "decisions.reminder"
 
 
 class DecisionKind(TimelineKind):
@@ -82,5 +83,30 @@ class DecisionKind(TimelineKind):
         yield from ((type(record), record.pk) for record in row.requesting_records())
 
 
+class DecisionReminderKind(DecisionKind):
+    """A question's reminder, one line at ``reminded_at`` beside the question's own line."""
+
+    id = REMINDER_KIND
+    sequence = 21
+    occurrence = "reminder"
+    at = models.F("reminded_at")
+
+    def occurs(self, record: Any) -> bool:
+        decision = apps.get_model("decisions", "Decision")
+        return decision._base_manager.filter(self._record_filter(record), reminded_at__isnull=False).exists()
+
+    def queryset(self, record: Any, actor: Any) -> models.QuerySet:
+        """Reminded questions only; the line names its kind, so it loads no answerer or assignees."""
+        rows = apps.get_model("decisions", "Decision").objects.with_actor(actor)
+        return rows.filter(self._record_filter(record), reminded_at__isnull=False).scoped()
+
+    def waiting_on(self, record: Any, actor: Any) -> models.QuerySet | None:
+        """Attention stays on the question's own line."""
+        return None
+
+    def present(self, rows: Iterable[Any]) -> dict[int, Presentation]:
+        return {row.pk: Presentation(row.kind_label, "Reminder") for row in rows}
+
+
 def timeline_kinds() -> tuple[TimelineKind, ...]:
-    return (DecisionKind(),)
+    return (DecisionKind(), DecisionReminderKind())

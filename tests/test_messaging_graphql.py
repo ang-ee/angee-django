@@ -20,6 +20,7 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
+from rebac.models import SchemaOverride, SchemaPermission
 
 import tests.test_agents_graphql  # noqa: F401 -- register related models before native database setup
 from angee.base.signals import mute_changes
@@ -46,9 +47,8 @@ User = get_user_model()
 
 # Confirming a channel delete runs `channel.delete()`, whose Django collector queries
 # every reverse FK to the shared Integration parent — including other addons' tables
-# (posts, agents, webhooks, VCS). Those tables must exist for the cascade query to run,
-# so the end-to-end confirm test needs the same comprehensive set the integration-delete
-# test uses, plus the messaging Channel.
+# (posts, agents, webhooks, VCS). The source-model fixtures register those tables
+# before native database setup so the end-to-end channel purge can collect them.
 
 
 @strawberry.type
@@ -120,7 +120,7 @@ def test_console_resource_metadata_declares_message_surface() -> None:
     }
     # Status belongs to delivery; tags use their own tag/untag verbs.
     assert metadata.update_fields == ()
-    assert metadata.capabilities == ("list", "detail", "aggregate", "groups", "delete", "changes")
+    assert metadata.capabilities == ("list", "detail", "aggregate", "groups", "delete", "deletePreview", "changes")
     assert {
         name: (metadata.query.fields[name].relation.model, axis.server.label_key)
         for name, axis in metadata.query.axes.items()
@@ -182,7 +182,7 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
     assert channel.roots.detail_name == "channels_by_pk"
     assert channel.roots.create_name is None
     # Connect owns channel creation. Updates include the operator label, spaces'
-    # team and intake's configuration; the authored delete root previews the purge.
+    # team and intake's configuration; the generated preview forecasts the purge.
     assert channel.roots.update_name == "update_channels_by_pk"
     assert channel.update_fields == (
         "display_name",
@@ -192,7 +192,7 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
         "intake_requester_domains",
     )
     assert channel.roots.delete_name == "delete_channels_by_pk"
-    assert channel.roots.delete_preview_name == "delete_channel"
+    assert channel.roots.delete_preview_name == "channels_delete"
     assert channel.roots.changes_name == "channelChanged"
     assert channel.capabilities == (
         "list",
@@ -480,7 +480,7 @@ def test_message_sender_and_participant_expose_resolved_party(db: None) -> None:
             display_name="Ada Envelope",
             created_by_id=admin.pk,
         )
-        party.with_actor(admin).confirm(aspect="handle", handle=handle, values={})
+        party.with_actor(admin).confirm_statement(aspect="handle", handle=handle, values={})
         message.sender = handle
         message.save(update_fields=("sender", "updated_at"))
         messaging_models.Participant.objects.create(
@@ -542,7 +542,7 @@ def test_inbox_sender_redacts_party_without_party_read(db: None) -> None:
             display_name="Ada Envelope",
             created_by_id=owner.pk,
         )
-        party.with_actor(owner).confirm(aspect="handle", handle=handle, values={})
+        party.with_actor(owner).confirm_statement(aspect="handle", handle=handle, values={})
         message.sender = handle
         message.save(update_fields=("sender", "updated_at"))
     _grant(message, "reader", reader)
@@ -747,7 +747,7 @@ def test_record_thread_sender_projection_omits_party_for_non_admin_reader(
             display_name="Ada Envelope",
             created_by_id=owner.pk,
         )
-        party.with_actor(owner).confirm(aspect="handle", handle=handle, values={})
+        party.with_actor(owner).confirm_statement(aspect="handle", handle=handle, values={})
         message.sender = handle
         message.save(update_fields=("sender", "updated_at"))
     _grant(doc, "reader", reader)
@@ -3106,13 +3106,14 @@ def test_channel_purge_spares_the_same_message_in_another_channel(db: None) -> N
     assert part_b.fragment_id == fragment.pk
 
 
-def test_delete_channel_preview_counts_purge_as_deleted(db: None) -> None:
+@pytest.mark.parametrize("native_delete", (False, True))
+def test_delete_channel_preview_counts_purge_as_deleted(db: None, native_delete: bool) -> None:
     """The channel delete preview forecasts threads/messages as deleted, then purges.
 
     The preview counts the channel + its Integration parent + the thread/message totals
     as ``deleted`` (never as ``updated``/orphaned) with ``.count()``, so it stays fast on
     a large channel and ``has_blockers`` is False; a bare preview deletes nothing. The
-    ``confirm`` mutation runs the purge and removes the channel + Integration row.
+    two generated delete roots each purge the channel + Integration row.
     """
 
     admin = _platform_admin("chan-delete-admin")
@@ -3132,7 +3133,7 @@ def test_delete_channel_preview_counts_purge_as_deleted(db: None) -> None:
             schema,
             """
             mutation Preview($id: ID!) {
-              delete_channel(id: $id) {
+              channels_delete(id: $id) {
                 total_deleted_count has_blockers
                 deleted { label count }
                 updated { label count }
@@ -3142,7 +3143,7 @@ def test_delete_channel_preview_counts_purge_as_deleted(db: None) -> None:
             {"id": channel.sqid},
             user=admin,
         )
-    )["delete_channel"]
+    )["channels_delete"]
     counts = {group["label"]: group["count"] for group in preview["deleted"]}
     assert counts["messages"] == 3
     assert counts["threads"] == 3
@@ -3154,24 +3155,116 @@ def test_delete_channel_preview_counts_purge_as_deleted(db: None) -> None:
     assert Channel._base_manager.filter(pk=channel.pk).exists()
     assert messaging_models.Message._base_manager.filter(channel_id=channel.pk).count() == 3
 
-    _data(
+    deleted = _data(
         execute_schema(
             schema,
             """
+            mutation Confirm($id: String!) {
+              delete_channels_by_pk(id: $id) { id }
+            }
+            """ if native_delete else """
             mutation Confirm($id: ID!) {
-              delete_channel(id: $id, confirm: true) { total_deleted_count has_blockers }
+              channels_delete(id: $id, confirm: true) { total_deleted_count has_blockers }
             }
             """,
             {"id": channel.sqid},
             user=admin,
         )
     )
+    if native_delete:
+        assert deleted["delete_channels_by_pk"]["id"] == str(channel.sqid)
+    else:
+        assert deleted["channels_delete"] == {"total_deleted_count": 8, "has_blockers": False}
     assert not Channel._base_manager.filter(pk=channel.pk).exists()
+    assert not Integration._base_manager.filter(pk=channel.pk).exists()
     assert not messaging_models.Message._base_manager.filter(channel_id=channel.pk).exists()
     assert not messaging_models.Thread._base_manager.filter(channel_id=channel.pk).exists()
 
 
-def test_delete_channel_denied_for_non_admin_reader(db: None) -> None:
+def test_channel_delete_from_inventory_purges_its_threads_and_preserves_other_channels(db: None) -> None:
+    """Inventory rows keep the kind's delete surface and never orphan their threads."""
+
+    channel = make_integration("inventory-delete", model=Channel, backend_class="manual")
+    other = make_integration("inventory-keep", model=Channel, backend_class="manual", owner=channel.owner)
+    with system_context(reason="test.channel.inventory_delete.seed"):
+        thread = messaging_models.Thread.objects.create(channel=channel, external_id="inventory-delete")
+        message = messaging_models.Message.objects.create(
+            channel=channel, thread=thread, external_id="inventory-delete", status="synced",
+        )
+        kept_thread = messaging_models.Thread.objects.create(channel=other, external_id="inventory-keep")
+        kept_message = messaging_models.Message.objects.create(
+            channel=other, thread=kept_thread, external_id="inventory-keep", status="synced",
+        )
+    schema = _schema()
+    inventory = _data(execute_schema(
+        schema, "query { integrations { id } }", user=channel.owner,
+    ))["integrations"]
+    assert str(channel.sqid) in {row["id"] for row in inventory}
+    fields = schema._schema.mutation_type.fields
+    assert "delete_integrations_by_pk" not in fields
+    assert "integrations_delete" not in fields
+
+    deleted = _data(execute_schema(
+        schema,
+        """mutation Delete($id: ID!) {
+          channels_delete(id: $id, confirm: true) { has_blockers }
+        }""",
+        {"id": str(channel.sqid)},
+        user=channel.owner,
+    ))["channels_delete"]
+    assert deleted == {"has_blockers": False}
+    assert not Channel._base_manager.filter(pk=channel.pk).exists()
+    assert not Integration._base_manager.filter(pk=channel.pk).exists()
+    assert not messaging_models.Thread._base_manager.filter(pk=thread.pk).exists()
+    assert not messaging_models.Message._base_manager.filter(pk=message.pk).exists()
+    assert Channel._base_manager.filter(pk=other.pk).exists()
+    kept_thread.refresh_from_db()
+    kept_message.refresh_from_db()
+    assert kept_thread.channel_id == other.pk
+    assert (kept_message.channel_id, kept_message.thread_id) == (other.pk, kept_thread.pk)
+
+
+def test_channel_delete_preview_refuses_a_writer_without_delete(db: None) -> None:
+    """A narrower delete policy refuses the preview before disclosing counts."""
+
+    channel = make_integration("channel-preview-writer", model=Channel, backend_class="manual")
+    with system_context(reason="test.channel.preview_writer.seed"):
+        thread = messaging_models.Thread.objects.create(channel=channel, external_id="preview-writer")
+        message = messaging_models.Message.objects.create(
+            channel=channel, thread=thread, external_id="preview-writer", status="synced",
+        )
+    permission = SchemaPermission.objects.get(definition__resource_type="messaging/channel", name="delete")
+    override = SchemaOverride.objects.create(
+        kind=SchemaOverride.KIND_TIGHTEN, target=permission, expression="nil",
+        reason="test: write access must not disclose a channel delete preview",
+    )
+    try:
+        with actor_context(channel.owner):
+            writable = Channel.objects.for_write().of_concrete_type().get(pk=channel.pk)
+            assert writable.has_access("write")
+            assert not writable.has_access("delete")
+        result = execute_schema(
+            _schema(),
+            """mutation Preview($id: ID!) {
+              channels_delete(id: $id) {
+                total_deleted_count has_blockers deleted { label count } blocked { label count }
+              }
+            }""",
+            {"id": str(channel.sqid)},
+            user=channel.owner,
+        )
+        assert result.errors is not None
+        assert result.errors[0].extensions == {"code": "PERMISSION_DENIED"}
+        assert result.data is None
+        assert Channel._base_manager.filter(pk=channel.pk).exists()
+        assert messaging_models.Thread._base_manager.filter(pk=thread.pk).exists()
+        assert messaging_models.Message._base_manager.filter(pk=message.pk).exists()
+    finally:
+        SchemaOverride.objects.filter(pk=override.pk).delete()
+
+
+@pytest.mark.parametrize("native_delete", (False, True))
+def test_delete_channel_denied_for_non_admin_reader(db: None, native_delete: bool) -> None:
     """A non-admin who cannot write the channel cannot purge it; nothing is deleted."""
 
     admin = _platform_admin("chan-deny-admin")
@@ -3189,8 +3282,12 @@ def test_delete_channel_denied_for_non_admin_reader(db: None) -> None:
     result = execute_schema(
         schema,
         """
+        mutation Confirm($id: String!) {
+          delete_channels_by_pk(id: $id) { id }
+        }
+        """ if native_delete else """
         mutation Confirm($id: ID!) {
-          delete_channel(id: $id, confirm: true) { total_deleted_count }
+          channels_delete(id: $id, confirm: true) { total_deleted_count }
         }
         """,
         {"id": channel.sqid},

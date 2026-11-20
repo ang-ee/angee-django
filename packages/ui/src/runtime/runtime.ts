@@ -36,6 +36,8 @@ import type { StatusToneMap } from "../widgets/status-tones";
 import { setHumanDateLocale } from "../widgets/date-format";
 
 /**
+ * The sign-in URL of a runtime that composes no `auth.login` route (a workshop,
+ * a bare test); a composed `auth.login` route's declaration owns it otherwise.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
@@ -106,6 +108,8 @@ export type ResourceRecordHrefLookup = (
 export interface AppRuntime {
   /** The selected app's brand, else the deployment's; rail, sign-in and document title show it. */
   brand: RuntimeBrand | null;
+  /** The brand only stands in for an undeclared one (the first rail root's label and icon). */
+  brandFallback?: true;
   /** The selected app's rail roots, null showing every root; this shapes navigation, never server access. */
   rail: readonly string[] | null;
   /** The selected app's desktop rail default; a saved expansion preference takes precedence. */
@@ -136,7 +140,7 @@ export interface AppRuntime {
   routesByResource: Readonly<Record<string, RuntimeResourceRoutes>>;
   /** Resolve a composed route name to an encoded href. */
   routeHref: RouteHref;
-  /** App-owned sign-in destination shared by auth gates and chrome. */
+  /** The sign-in destination auth gates and chrome share: the `auth.login` route's path. */
   loginPath: string;
   /** Installed theme catalogue composed from addon contributions. */
   themes: readonly ThemeContribution[];
@@ -172,6 +176,8 @@ export interface RuntimeAuthUser {
   id: string;
   name: string;
   username?: string;
+  /** Session-user fact; absent on identity payloads that did not select it. */
+  hasUsablePassword?: boolean;
   email?: string;
   roles?: readonly string[];
   /**
@@ -342,6 +348,17 @@ export function useRuntimeBrand(): RuntimeBrand | null {
   return useAppRuntime().brand ?? null;
 }
 
+/**
+ * The brand a deployment, an app or a menu root declared; null when the
+ * selection's brand only stands in for a missing one. Chrome that fronts the
+ * brand over several apps (the app chooser and the rail caption) reads this.
+ * @owner AppChooser
+ */
+export function useDeclaredBrand(): RuntimeBrand | null {
+  const { brand, brandFallback } = useAppRuntime();
+  return brandFallback ? null : brand ?? null;
+}
+
 /** Preview state injected by the app; absent injection leaves preview inactive.
  * @owner ViewAsPicker
  */
@@ -489,7 +506,7 @@ export function useActiveRoute<T extends { path: string }>(routes: readonly T[])
   );
 }
 
-/** The app-owned login destination used by shell and IAM surfaces.
+/** The sign-in destination shell and IAM surfaces use: the `auth.login` route's path.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */

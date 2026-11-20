@@ -74,7 +74,7 @@ integrate_schema = importlib.import_module("angee.integrate.schema")
 
 _DELETE_AGENT_PREVIEW = """
     mutation DeleteAgent($id: ID!, $confirm: Boolean! = false) {
-      delete_agent(id: $id, confirm: $confirm) {
+      agents_delete(id: $id, confirm: $confirm) {
         total_deleted_count
         has_blockers
         refusals
@@ -378,14 +378,14 @@ def test_agent_hasura_insert_update_and_delete(db: None) -> None:
         assert not Agent.objects.filter(sqid=created["id"]).exists()
 
 
-def test_agent_resource_exposes_authored_delete_preview() -> None:
+def test_agent_resource_exposes_generated_delete_preview() -> None:
     """Final resource metadata enables the shared UI delete action for agents."""
 
     resource = next(item for item in _schema().angee_resources if item.model_label == "agents.Agent")
-    assert resource.roots.delete_preview_name == "delete_agent"
+    assert resource.roots.delete_preview_name == "agents_delete"
     assert resource.type_names.delete_payload == "DeletePreview"
     assert "deletePreview" in resource.capabilities
-    assert resource.as_wire(schema_name="console")["roots"]["deletePreview"] == "delete_agent"
+    assert resource.as_wire(schema_name="console")["roots"]["deletePreview"] == "agents_delete"
 
 
 def test_agent_delete_preview_hides_other_users_transcripts_and_confirms(db: None) -> None:
@@ -410,7 +410,9 @@ def test_agent_delete_preview_hides_other_users_transcripts_and_confirms(db: Non
             status="completed",
         )
     console = _schema()
-    preview = _data(execute_schema(console, _DELETE_AGENT_PREVIEW, {"id": str(agent.sqid)}, user=owner))["delete_agent"]
+    preview = _data(
+        execute_schema(console, _DELETE_AGENT_PREVIEW, {"id": str(agent.sqid)}, user=owner)
+    )["agents_delete"]
     assert preview["has_blockers"] is False
     assert preview["blocked"] == []
     assert preview["refusals"] == []
@@ -441,7 +443,7 @@ def test_agent_delete_preview_hides_other_users_transcripts_and_confirms(db: Non
             {"id": str(agent.sqid), "confirm": True},
             user=owner
         )
-    )["delete_agent"]
+    )["agents_delete"]
     assert confirmed == preview
     with system_context(reason="test.agents.delete_preview.verify_confirm"):
         assert not Agent.objects.filter(pk=agent.pk).exists()
@@ -463,7 +465,7 @@ def test_agent_delete_preview_reports_provisioned_blocker(db: None, confirm: boo
             {"id": str(agent.sqid), "confirm": confirm},
             user=owner
         )
-    )["delete_agent"]
+    )["agents_delete"]
     assert preview["has_blockers"] is True
     assert preview["blocked"] == []
     assert preview["refusals"] == ["Deprovision this agent before deleting it."]
@@ -493,7 +495,7 @@ def test_agent_delete_preview_reports_hidden_active_turn_blockers(
             {"id": str(agent.sqid), "confirm": confirm},
             user=owner
         )
-    )["delete_agent"]
+    )["agents_delete"]
     assert preview["has_blockers"] is True
     assert preview["blocked"] == []
     messages = set(preview["refusals"])
@@ -529,7 +531,7 @@ def test_agent_delete_preview_has_constant_query_count_across_sessions(db: None)
     for agent in agents:
         with CaptureQueriesContext(connection) as captured:
             result = execute_schema(console, _DELETE_AGENT_PREVIEW, {"id": str(agent.sqid)}, user=owner)
-            preview = _data(result)["delete_agent"]
+            preview = _data(result)["agents_delete"]
         assert preview["blocked"] == []
         assert preview["refusals"] == [
             "Stop all active turns before deleting this agent.",
@@ -572,7 +574,7 @@ def test_graphql_delete_receivers_refuse_after_preview_race(
     )
     message = "An agent turn is still running or awaiting approval; stop it first."
     if surface == "agent":
-        preview = _data(result)["delete_agent"]
+        preview = _data(result)["agents_delete"]
         assert preview["has_blockers"] is True
         assert preview["refusals"] == [message]
         assert preview["blocked"] == []
@@ -862,8 +864,8 @@ def test_agent_delete_refuses_active_turns_in_unreadable_sessions(db: None, stat
     "operation",
     [
         "mutation Delete($id: String!) { delete_agents_by_pk(id: $id) { id } }",
-        "mutation Delete($id: ID!) { delete_agent(id: $id) { total_deleted_count } }",
-        "mutation Delete($id: ID!) { delete_agent(id: $id, confirm: true) { total_deleted_count } }",
+        "mutation Delete($id: ID!) { agents_delete(id: $id) { total_deleted_count } }",
+        "mutation Delete($id: ID!) { agents_delete(id: $id, confirm: true) { total_deleted_count } }",
     ],
 )
 def test_agent_delete_denies_before_locking_or_disclosing_session_counts(
@@ -1035,7 +1037,7 @@ def test_transcript_queryset_delete_refuses_active_turns(
     [
         ("mutation Delete($id: String!) { delete_users_by_pk(id: $id) { id } }", False),
         (
-            "mutation Delete($id: ID!) { delete_user(id: $id, confirm: true) { "
+            "mutation Delete($id: ID!) { users_delete(id: $id, confirm: true) { "
             "has_blockers refusals blocked { label count } } }",
             True,
         ),
@@ -1060,7 +1062,7 @@ def test_user_delete_refuses_active_turn_cascades(
     result = execute_schema(_schema(), mutation, {"id": str(other.sqid)}, user=admin)
     turn_message = "An agent turn is still running or awaiting approval; stop it first."
     if is_preview:
-        preview = _data(result)["delete_user"]
+        preview = _data(result)["users_delete"]
         assert preview["has_blockers"] is True
         assert preview["blocked"] == []
         assert preview["refusals"] == [turn_message]
@@ -1667,12 +1669,17 @@ def test_connect_inference_provider_uses_provider_backend_oauth_client(db: None)
             authorize_endpoint="https://provider.example/authorize",
             token_endpoint="https://provider.example/token",
         )
+        account = ExternalAccount.objects.link(oauth_client, "anthropic-account", owner=provider.owner)
         credential = Credential.objects.upsert_for_user(
             provider.owner,
             oauth_client,
             str(CredentialKind.OAUTH),
             {"access_token": "anthropic-token"},
+            external_account=account,
         )
+        # The provider stays connected as that account, so its live credential is reused.
+        type(provider).objects.filter(pk=provider.pk).update(account=account)
+        provider.refresh_from_db()
         assert provider.connect_oauth_client("Inference provider").pk == oauth_client.pk
     mutation = """
         mutation ConnectProvider($id: ID!) {
@@ -1693,7 +1700,7 @@ def test_connect_inference_provider_uses_provider_backend_oauth_client(db: None)
         "error": None,
         "integration": {
             "lifecycle": "CONNECTED",
-            "credential": {"display_name": "Anthropic Personal"},
+            "credential": {"display_name": "Anthropic Personal (anthropic-account)"},
         },
     }
     provider.refresh_from_db()
@@ -2184,6 +2191,9 @@ def test_reprovision_agent_recreates_service_over_existing_workspace(db: None, m
         def set_secret(self, name: str, value: str) -> None:
             calls.append(("secret", name))
 
+        def update_workspace(self, name: str, *, inputs: dict[str, str], overwrite: bool = False) -> None:
+            calls.append(("update_workspace", name, dict(inputs), overwrite))
+
         def destroy_service(self, name: str) -> None:
             calls.append(("destroy_service", name))
 
@@ -2204,8 +2214,12 @@ def test_reprovision_agent_recreates_service_over_existing_workspace(db: None, m
     result = _data(execute_schema(console, reprovision, {"id": agent_id}, user=admin))["reprovision_agent"]
 
     assert result == {"ok": True, "message": "Recreated service “svc-new”."}
-    # The old service is torn down before the recreate over the preserved workspace.
-    assert ("destroy_service", "svc-old") in calls
+    # The workspace's .mcp.json is re-rendered first, never overwriting a local edit, so its
+    # headers match the env the new service sets; then the old service is torn down.
+    with system_context(reason="test.agents.reprov.mcp_json"):
+        mcp_json = json.dumps(agent.mcp_config(), separators=(",", ":"))
+    update = calls.index(("update_workspace", "ws-keep", {"mcp_json": mcp_json}, False))
+    assert update < calls.index(("destroy_service", "svc-old"))
     assert ("create_service", "ref:claude-code", "ws-keep") in calls
     with system_context(reason="test.agents.reprov.verify"):
         agent.refresh_from_db()
@@ -2249,6 +2263,9 @@ def test_reprovision_agent_failure_clears_destroyed_service_but_keeps_workspace(
             return f"ref:{name}"
 
         def set_secret(self, name: str, value: str) -> None:
+            pass
+
+        def update_workspace(self, name: str, *, inputs: dict[str, str], overwrite: bool = False) -> None:
             pass
 
         def destroy_service(self, name: str) -> None:
@@ -2327,6 +2344,11 @@ class _Operator:
             )
         self.workspaces[name] = (template, dict(inputs))
         return name
+
+    def update_workspace(self, name: str, *, inputs: dict[str, str], overwrite: bool = False) -> None:
+        self._call("update_workspace", name)
+        template, recorded = self.workspaces[name]
+        self.workspaces[name] = (template, {**recorded, **inputs})
 
     def create_service(self, *, template: str, workspace: str, inputs: dict[str, str], start: bool = True) -> str:
         name = f"agent-{workspace}"
@@ -3640,7 +3662,7 @@ def test_mcp_config_emits_secret_ref_auth_header_for_credentialed_server(
     """A credentialed MCP server renders a ``${<env>}`` Authorization header.
 
     The bearer rides through the operator secret store, never the rendered file: the
-    header references the container env var (:meth:`Agent.mcp_bearer_env`), which the
+    header references the container env var (:meth:`Agent.mcp_authorization_env`), which the
     service env sets from the operator secret (the operator resolves ``${secret.<name>}``
     in a service's env, not in file content); :meth:`Agent.mcp_secrets` carries the value
     for the provision flow to sync.
@@ -3664,11 +3686,11 @@ def test_mcp_config_emits_secret_ref_auth_header_for_credentialed_server(
 
     servers = config["mcpServers"]
     assert "headers" not in servers["public"]  # no credential → no auth header
-    assert servers["notes"]["headers"] == {"Authorization": f"Bearer ${{{agent.mcp_bearer_env(secured)}}}"}
+    assert servers["notes"]["headers"] == {"Authorization": f"${{{agent.mcp_authorization_env(secured)}}}"}
     assert secret_name == f"agent-{agent.sqid}-mcp-{credential.sqid}"
-    # The bearer reaches the container via the service env, set from the operator secret.
-    assert f'{agent.mcp_bearer_env(secured)}: "${{secret.{secret_name}}}"' in service_inputs["mcp_env"]
-    assert secrets == {secret_name: "tok-notes"}  # synced server-side, never in the file
+    # The authorization reaches the container via the service env, set from the operator secret.
+    assert f'{agent.mcp_authorization_env(secured)}: "${{secret.{secret_name}}}"' in service_inputs["mcp_env"]
+    assert secrets == {secret_name: "Bearer tok-notes"}  # synced server-side, never in the file
 
 
 @pytest.mark.parametrize("placement", [MCPPlacement.EXTERNAL, MCPPlacement.INTERNAL])
@@ -3682,9 +3704,9 @@ def test_mcp_authenticated_operations_require_a_configured_credential(db: None, 
         assert agent.mcp_secrets() == {}
         assert "headers" not in agent.mcp_config()["mcpServers"][server.name]
         for operation in (
-            lambda: server.bearer_for(agent),
+            lambda: server.authorization_for(agent),
             lambda: agent.mcp_secret_name(server),
-            lambda: agent.mcp_bearer_env(server),
+            lambda: agent.mcp_authorization_env(server),
         ):
             with pytest.raises(ValidationError, match="no authentication credential"):
                 operation()
@@ -3710,7 +3732,7 @@ def test_mcp_secrets_derive_per_agent_bearer_for_internal_server(db: None) -> No
         secret_name = agent.mcp_secret_name(server)
         bearer = server.bearer_for(agent)
 
-    assert secrets[secret_name] == bearer
+    assert secrets[secret_name] == f"Bearer {bearer}"
     assert bearer.startswith(f"{agent.sqid}.")
     assert bearer != "tok-internal"  # the raw credential secret never leaves the platform
 

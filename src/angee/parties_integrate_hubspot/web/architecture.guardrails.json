@@ -1,0 +1,11 @@
+{
+  "dynamicI18nKeyFamilies": [
+    {
+      "namespace": "parties",
+      "owner": "ConnectDirectoryAction i18nPrefix",
+      "prefix": "directory.",
+      "values": ["hubspot"],
+      "suffixes": [".button", ".title", ".description"]
+    }
+  ]
+}

@@ -13,11 +13,13 @@ export const IntegrateConnectAccountStart = graphql(`
     $id: ID!
     $redirectUri: String!
     $next: String!
+    $scopes: [String!]
   ) {
     connect_account_start(
       id: $id
       redirect_uri: $redirectUri
       next: $next
+      scopes: $scopes
     ) {
       authorize_url
       error
@@ -39,6 +41,7 @@ export const IntegrateConnectAccountComplete = graphql(`
       error
       account { id display_name }
       credential { id display_name status }
+      restart { authorize_url mode state redirect_uri }
     }
   }
 `);

@@ -173,3 +173,14 @@ test.each([false, true])("the panel reaches every catalog choice and stacks its 
   fireEvent.click(within(panel).getByRole("combobox", { name: "Filter field" }));
   expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual(expect.arrayContaining(["Amount", "Hidden field"]));
 });
+
+test("the active grouping's chip names a level's repeated values", () => {
+  const catalog = searchFixture({ catalog: { groups: [status] } }).catalog;
+  function Content() {
+    return <SearchBox search={useResourceSearch({ catalog, resourceView: useResourceView(), groupingEnabled: true })} />;
+  }
+  render(<ResourceViewProvider scope="local" initialState={{ groupStack: [{ ...status.group, repeated: true }] }}>
+    <Content />
+  </ResourceViewProvider>);
+  expect(screen.getByRole("button", { name: "Remove Status · Repeated values only" })).toBeTruthy();
+});

@@ -68,13 +68,14 @@ const { Provider, clearClients } = createUiTestProviders({
 });
 afterEach(() => { cleanup(); clearClients(); });
 
-function fixture({ pageSize = 50, error, baseFilter, viewKind = "board", nested = false, customIdentity = false, refreshAction = false }: {
+function fixture({ pageSize = 50, error, baseFilter, viewKind = "board", nested = false, customIdentity = false, refreshAction = false, selectable }: {
   pageSize?: number;
   error?: "root" | "leaf";
   baseFilter?: Record<string, unknown>;
-  viewKind?: "board" | "list";
+  viewKind?: "board" | "list" | "gallery";
   nested?: boolean;
   customIdentity?: boolean;
+  selectable?: boolean;
   refreshAction?: boolean;
 } = {}) {
   const activeResource = customIdentity ? { ...resource,
@@ -130,9 +131,10 @@ function fixture({ pageSize = 50, error, baseFilter, viewKind = "board", nested 
   const onListStateChange = vi.fn((_state: ResourceListSnapshot<MessageRow>) => undefined);
   function Inbox() {
     view = useResourceView();
-    return <ListView<MessageRow> resource={resource.modelLabel} columns={[{ field: "title", header: "Title" }]}
+    return <ListView<MessageRow> selectable={selectable} resource={resource.modelLabel} columns={[{ field: "title", header: "Title" }]}
       baseFilter={baseFilter} rowHref={rowHref} onListStateChange={onListStateChange} emptyContent="No messages"
-      cardActions={refreshAction ? (_row, { refresh }) => <button onClick={refresh}>Refresh cards</button> : undefined} />;
+      cardActions={refreshAction ? (_row, { refresh }) => <button onClick={refresh}>Refresh cards</button> : undefined}
+      renderCard={viewKind === "gallery" ? (row) => <span>{row.title}</span> : undefined} />;
   }
   const root = createRootRoute();
   const route = createRoute({ getParentRoute: () => root, path: "/", component: () =>
@@ -240,6 +242,13 @@ test.each(["board", "list"] as const)("a grouped %s card or row publishes naviga
     rows: expect.arrayContaining([expect.objectContaining({ public_key: "mail-1" })]),
   });
   expect(JSON.stringify(f.custom.mock.calls.at(-1)?.[0].meta?.gqlQuery)).toContain('"value":"public_key"');
+});
+
+test("gallery selection keys are the surface's row ids when the identity field is not id", async () => {
+  const f = fixture({ viewKind: "gallery", customIdentity: true, selectable: true });
+  fireEvent.click(await screen.findByRole("checkbox", { name: "Select mail message 1" }));
+  await waitFor(() => expect(f.view.state.rowSelection).toEqual({ "mail-1": true }));
+  expect(f.view.selectedRows).toEqual([expect.objectContaining({ public_key: "mail-1" })]);
 });
 
 test("nested board groups remain reachable and page records within both parent scopes", async () => {

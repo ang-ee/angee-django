@@ -1,14 +1,13 @@
-// Bespoke console operation for connecting a CardDAV directory — a single action
-// that creates the Basic-auth credential + the Directory (two models), the
-// sanctioned multi-model-create shape. The directories list/detail are model-driven
-// (ResourceList reads the SDL) and sync is the single-id `sync_integration` action, so
-// neither needs a document here.
+// The parties console's authored operations. A directory's connect mutation belongs
+// to its vendor addon, which hands it to `ConnectDirectoryAction`; the directories
+// list/detail are model-driven (ResourceList reads the SDL) and sync is the single-id
+// `sync_integration` action, so neither needs a document here.
 
 import { graphql, type DocumentType } from "@angee/gql/console";
 
 export const PartyRecordRedirectDocument = graphql(`
   query PartyRecordRedirect($id: String!) {
-    parties_by_pk(id: $id) { id concrete_kind }
+    party_record(id: $id) { id concrete_kind }
   }
 `);
 
@@ -95,7 +94,7 @@ export const RemoveCircleMember = graphql(`
 `);
 
 export const PartiesOverview = graphql(`
-  query PartiesOverview($sameAsLimit: Int = 100) {
+  query PartiesOverview {
     contacts: people_aggregate {
       aggregate {
         count
@@ -120,13 +119,8 @@ export const PartiesOverview = graphql(`
         count
       }
     }
-    same_as_pairs(limit: $sameAsLimit) {
-      left {
-        id
-      }
-      right {
-        id
-      }
+    same_as_pair_counts {
+      pairs
     }
   }
 `);
@@ -201,6 +195,7 @@ export const PartyMergeComparison = graphql(`
       name_suffix
       nickname
       birthday
+      anniversary
     }
     right_person: people_by_pk(id: $right) {
       id
@@ -212,13 +207,15 @@ export const PartyMergeComparison = graphql(`
       name_suffix
       nickname
       birthday
+      anniversary
     }
   }
 `);
 
 export const SameAsPairs = graphql(`
-  query SameAsPairs($limit: Int = 50) {
-    same_as_pairs(limit: $limit) {
+  query SameAsPairs($limit: Int = 50, $after: ID) {
+    same_as_pairs(limit: $limit, after: $after) {
+      id
       normalized_value
       left {
         id
@@ -234,6 +231,50 @@ export const SameAsPairs = graphql(`
   }
 `);
 
+export const CertainSameAsPairs = graphql(`
+  query CertainSameAsPairs($limit: Int = 50, $after: ID) {
+    certain_same_as_pairs(limit: $limit, after: $after) {
+      id
+      normalized_value
+      left { id display_name }
+      right { id display_name }
+      survivor { id }
+    }
+  }
+`);
+
+export const DuplicateSetPreviews = graphql(`
+  query DuplicateSetPreviews($sets: [[ID!]!]!, $certain: Boolean = false) {
+    duplicate_set_previews(sets: $sets, certain: $certain) {
+      outcome
+      reason
+      digest
+      survivor { id }
+      members {
+        id
+        display_name
+        concrete_kind
+        created_at
+        first_met_note
+        statements { id source_kind handle { id platform value } }
+      }
+      disagreements { field values shown }
+      fills { field values shown }
+    }
+  }
+`);
+
+export const MergeDuplicates = graphql(`
+  mutation MergeDuplicates($sets: [[ID!]!]!, $digests: [String!]!, $certain: Boolean = false) {
+    merge_duplicates(sets: $sets, digests: $digests, certain: $certain) {
+      members
+      outcome
+      reason
+      survivor { id display_name concrete_kind }
+    }
+  }
+`);
+
 export const PartyReviewCounts = graphql(`
   query PartyReviewCounts {
     party_statements_aggregate(
@@ -244,6 +285,10 @@ export const PartyReviewCounts = graphql(`
       aggregate {
         count
       }
+    }
+    same_as_pair_counts {
+      pairs
+      certain
     }
   }
 `);
@@ -297,3 +342,7 @@ export type MergePartyRecord = NonNullable<
 export type MergePersonRecord = NonNullable<
   DocumentType<typeof PartyMergeComparison>["left_person"]
 >;
+
+export type DuplicateSetPreview = DocumentType<typeof DuplicateSetPreviews>["duplicate_set_previews"][number];
+export type DuplicateSetMember = DuplicateSetPreview["members"][number];
+export type DuplicateSetOutcome = DocumentType<typeof MergeDuplicates>["merge_duplicates"][number];

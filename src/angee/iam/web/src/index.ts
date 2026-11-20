@@ -5,10 +5,13 @@ import { createElement } from "react";
 import {
   ACCOUNT_ACTION_FIELDS,
   IssuePasswordRecordAction,
+  IssueSignInLinkRecordAction,
   RenameRecordAction,
   ResetPasswordRecordAction,
   SetActiveRecordActions,
+  SetPasswordRecordAction,
 } from "./account-actions";
+import { ChangePasswordMenuItem } from "./ChangePasswordMenuItem";
 import { ShareListChrome, ShareRecordChrome } from "./ShareAccess";
 import { enIamMessages } from "./i18n";
 import { subjectsWidget } from "./assignment-subject-widget";
@@ -17,9 +20,11 @@ import { USER_LIST_COLUMNS, USER_LIST_PRESETS } from "./users-list";
 export {
   offersAccountAction,
   useIssuePasswordAction,
+  useIssueSignInLinkAction,
   useRenameAction,
   useResetPasswordAction,
   useSetActiveActions,
+  useSetPasswordAction,
   type UserAccountAction,
 } from "./account-actions";
 export {
@@ -45,6 +50,10 @@ export {
 // The managed people list mounts lazily from `@angee/iam/users` (UsersPage); its columns and presets:
 export { USER_LIST_COLUMNS, USER_LIST_PRESETS, USER_LIST_PRESET_IDS, USER_MODEL } from "./users-list";
 
+// The public route a sign-in link opens; the server builds links to this same
+// path (`SIGN_IN_LINK_PATH` in `angee.iam.models`).
+const SIGN_IN_LINK_PATH = "/sign-in-link";
+
 // IAM is a first-class app-rail destination; a route-less parent inherits its
 // first child's target.
 const identityMenu: MenuDeclarations = {
@@ -67,6 +76,13 @@ const iam = defineBaseAddon({
     assignmentUsers: subjectsWidget({ kinds: ["user"] }),
   },
   routes: [
+    // The page a sign-in link opens, outside the console chrome.
+    {
+      name: "iam.sign-in-link",
+      path: SIGN_IN_LINK_PATH,
+      layout: "public",
+      component: lazyRouteComponent(() => import("./SignInLinkPage"), "SignInLinkPage"),
+    },
     { name: "iam.overview", path: "/iam", component: lazyRouteComponent(() => import("./views/OverviewPage"), "OverviewPage") },
     ...resourcePageRoutes("iam.users", "/iam/users", lazyRouteComponent(() => import("./views/UsersPage"), "UsersPage"), "iam.User"),
     { name: "iam.roles", path: "/iam/roles", resource: "iam.Role", component: lazyRouteComponent(() => import("./views/RolesPage"), "RolesPage") },
@@ -79,6 +95,9 @@ const iam = defineBaseAddon({
   menus: identityMenu,
   i18n: { iam: enIamMessages },
   containers: {
+    "shell#user-menu": {
+      "iam.change-password": { sequence: 30, content: createElement(ChangePasswordMenuItem) },
+    },
     // A model's access owners register their roles and visibility for the Share panel.
     "iam#access-roles": { models: true },
     "iam#access-visibility": { models: true },
@@ -103,6 +122,16 @@ const iam = defineBaseAddon({
         sequence: 8,
         requiredFields: ACCOUNT_ACTION_FIELDS,
         content: createElement(ResetPasswordRecordAction),
+      },
+      "iam.issue-sign-in-link": {
+        sequence: 9,
+        requiredFields: ACCOUNT_ACTION_FIELDS,
+        content: createElement(IssueSignInLinkRecordAction),
+      },
+      "iam.set-password": {
+        sequence: 10,
+        requiredFields: ACCOUNT_ACTION_FIELDS,
+        content: createElement(SetPasswordRecordAction),
       },
     },
     // The users list's columns; other addons add seat columns by sequence.

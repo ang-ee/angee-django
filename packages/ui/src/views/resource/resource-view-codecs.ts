@@ -1,4 +1,4 @@
-import { isClientRowModel, rowPublicId, type DataResourceMetadata, type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
+import { resourceLifecycle, isClientRowModel, rowPublicId, type DataResourceMetadata, type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
 import type {
   GroupingState,
   Row as TableRowModel,
@@ -41,6 +41,9 @@ export function requestedFieldPaths<TRow extends Row>(
       : null;
   const query = queryForColumns(columns, modelMetadata, groups);
   const paths = new Set<string>([query.contract.identity.field]);
+  for (const flag of resourceLifecycle(modelMetadata?.resource, modelMetadata).flagFields) {
+    for (const path of (flag ? query.fields[flag]?.row?.paths : undefined) ?? []) paths.add(path);
+  }
   const addSelections = (
     field: string,
     explicit?: readonly string[],
@@ -166,8 +169,10 @@ function rowGroupFromTableRow<TRow extends Row>(
   const label = groupedRowLabel(row, groupStack, t);
   const path = [...parentPath, label];
   const children = row.subRows.filter((child) => child.getIsGrouped());
+  const value = row.groupingColumnId ? row.getGroupingValue(row.groupingColumnId) : null;
   return {
     key: row.id,
+    identity: value === null || value === undefined || value === "" ? null : String(value),
     label,
     path,
     depth: row.depth,

@@ -8,11 +8,13 @@ import { useUiT } from "../../../i18n";
 import { Glyph } from "../../../chrome/Glyph";
 import { cn } from "../../../lib/cn";
 import type { Tone } from "../../../lib/tones";
+import { Card, CardSelection, cardFrameVariants, cardTitleVariants, type CardFrame } from "../../../ui/card";
 import type { ResourceViewGroup } from "../resource-view-model";
 import { ListCellContent, readPath, type RowGroup } from "../resource-view-list-body";
 import { columnTone } from "../../page";
 import type { ColumnDescriptor } from "../../page";
-import type { CardActionContext } from "../resource-view-types";
+import type { CardActionContext, CardRenderer } from "../resource-view-types";
+import { recordRepresentationValue, titleText } from "../../form/form-view-model";
 import { BOARD_CARD_SHELL_CLASS } from "./view";
 interface BoardRowCardProps<TRow extends Row> {
   columns: readonly ColumnDescriptor<TRow>[];
@@ -26,8 +28,16 @@ interface BoardRowCardProps<TRow extends Row> {
   cardActionContext: CardActionContext;
   dragEnabled: boolean;
   sortable: boolean;
+  /** The lane's drag-and-drop key. */
   laneId: string;
-  renderCard?: (row: TRow) => React.ReactNode;
+  /** The lane's group value a card renderer reads (`RowGroup.identity`). */
+  laneIdentity?: string | null;
+  renderCard?: CardRenderer<TRow>;
+  /** Defaults to the board's `inset` frame. */
+  frame?: CardFrame;
+  selected?: boolean;
+  /** Present when the collection is selectable: toggle this card's selection. */
+  onToggleSelected?: (selected: boolean) => void;
 }
 
 export function BoardRowCard<TRow extends Row>(
@@ -101,7 +111,11 @@ function BoardRowCardContent<TRow extends Row>({
   cardActions,
   cardActionContext,
   dragEnabled,
+  laneIdentity,
   renderCard,
+  frame = "inset",
+  selected = false,
+  onToggleSelected,
   drag,
 }: BoardRowCardProps<TRow> & { drag: BoardCardDrag }): React.ReactElement {
   const t = useUiT();
@@ -122,61 +136,80 @@ function BoardRowCardContent<TRow extends Row>({
         transition,
       }
     : undefined;
+  const styles = cardFrameVariants({
+    frame, handle: dragEnabled, interactive: Boolean(href || onRowClick), selected, dragging: isDragging,
+  });
+  // A card is named by its record representation, as the form header and the gallery are.
+  const title = titleText(recordRepresentationValue(row.original, modelMetadata ?? null), "");
+  const selection = onToggleSelected ? (
+    <CardSelection selected={selected} onSelectedChange={onToggleSelected} className={styles.selection()}
+      label={title ? t("card.select", { title }) : t("card.selectUntitled")} />
+  ) : null;
+  const handle = dragEnabled ? (
+    <button
+      ref={setActivatorNodeRef}
+      type="button"
+      aria-label={t("board.dragCard")}
+      className={cn(
+        "grid size-7 shrink-0 touch-none cursor-grab place-content-center rounded-6 text-fg-subtle outline-none transition-colors hover:bg-inset hover:text-fg focus-visible:focus-ring focus-visible:opacity-100 active:cursor-grabbing",
+        styles.handle(),
+      )}
+      {...attributes}
+      {...listeners}
+    >
+      <Glyph name="grip-vertical" />
+    </button>
+  ) : null;
+  const body = (
+    <div className={styles.body()}>
+      <BoardCardFrame
+        href={href}
+        onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+        onRecordOpen={onRecordOpen ? () => onRecordOpen(row.original) : undefined}
+      >
+        {renderCard ? (
+          renderCard(row.original, {
+            kind: "board",
+            ...(laneIdentity === undefined ? {} : { laneId: laneIdentity }),
+            dragging: isDragging,
+            selected,
+          })
+        ) : (
+          <DefaultBoardCardBody
+            columns={columns}
+            groupFields={groupFields}
+            modelMetadata={modelMetadata}
+            row={row.original}
+          />
+        )}
+      </BoardCardFrame>
+    </div>
+  );
+  // The surface is the shared card recipe; the frame places the body and its controls.
   return (
-    <article
+    <Card
       ref={dragEnabled ? setNodeRef : undefined}
       style={style}
-      className={cn(
-        "board-card-grid group/record grid min-w-0 gap-2 rounded-8 border border-border-subtle bg-sheet p-3 shadow-xs",
-        isDragging
-          ? "transition-none"
-          : "transition hover:-translate-y-0.5 hover:border-border hover:shadow-md",
-        dragEnabled && "select-none",
-        isDragging && "z-10 border-border-focus shadow-lg",
-      )}
+      selected={selected}
+      data-slot="board-card"
+      data-frame={frame}
+      data-dragging={isDragging || undefined}
+      className={cn("board-card-grid group/record grid", styles.root(), dragEnabled && "select-none")}
     >
-      <div className="flex min-w-0 max-w-full items-start gap-2">
-        <div className="min-w-0 flex-1">
-          <BoardCardFrame
-            href={href}
-            onClick={onRowClick ? () => onRowClick(row.original) : undefined}
-            onRecordOpen={onRecordOpen ? () => onRecordOpen(row.original) : undefined}
-          >
-            {renderCard ? (
-              renderCard(row.original)
-            ) : (
-              <DefaultBoardCardBody
-                columns={columns}
-                groupFields={groupFields}
-                modelMetadata={modelMetadata}
-                row={row.original}
-              />
-            )}
-          </BoardCardFrame>
-        </div>
-        {dragEnabled ? (
-          <button
-            ref={setActivatorNodeRef}
-            type="button"
-            aria-label={t("board.dragCard")}
-            className="grid size-7 shrink-0 touch-none cursor-grab place-content-center rounded-6 text-fg-subtle outline-none transition-colors hover:bg-inset hover:text-fg focus-visible:focus-ring active:cursor-grabbing"
-            {...attributes}
-            {...listeners}
-          >
-            <Glyph name="grip-vertical" />
-          </button>
-        ) : null}
+      <div className={styles.row()}>
+        {body}
+        {selection || handle ? <div className={styles.controls()}>{selection}{handle}</div> : null}
       </div>
-      {actions ? (
-        <footer className="flex items-center justify-end gap-2 border-t border-border-subtle pt-2">
-          {actions}
-        </footer>
-      ) : null}
-    </article>
+      {actions ? <footer className={styles.footer()}>{actions}</footer> : null}
+    </Card>
   );
 }
 
-function DefaultBoardCardBody<TRow extends Row>({
+/** A default card's title line, on the shared card title role. */
+const CARD_TITLE_CLASS = cn(cardTitleVariants({ density: "sm" }), "block min-w-0 truncate");
+
+/** The default card: the first column not used for grouping as its title, then up to three detail rows. */
+export function DefaultBoardCardBody<TRow extends Row>({
   columns,
   groupFields,
   modelMetadata,
@@ -194,7 +227,7 @@ function DefaultBoardCardBody<TRow extends Row>({
   return (
     <>
       {titleColumn ? (
-        <span className="block min-w-0 truncate text-sm font-semibold text-fg">
+        <span className={CARD_TITLE_CLASS}>
           <ListCellContent
             column={titleColumn}
             row={row}
@@ -231,7 +264,7 @@ export function DeclaredBoardCardBody<TRow extends Row>({
 }): React.ReactElement {
   const [title, ...details] = columns;
   return <>
-    {title ? <span className="block min-w-0 truncate text-sm font-semibold text-fg">
+    {title ? <span className={CARD_TITLE_CLASS}>
       <ListCellContent column={title} row={row} metadata={modelMetadata} />
     </span> : null}
     {details.filter((column) => {
@@ -260,7 +293,7 @@ function BoardCardFrame({
   const link = useInAppLink(href, undefined, { onFollow: onRecordOpen });
   if (href) {
     return (
-      <a href={href} className={BOARD_CARD_SHELL_CLASS} {...link}>
+      <a href={href} data-slot="card-body" className={BOARD_CARD_SHELL_CLASS} {...link}>
         {children}
       </a>
     );
@@ -269,6 +302,7 @@ function BoardCardFrame({
     return (
       <button
         type="button"
+        data-slot="card-body"
         className={BOARD_CARD_SHELL_CLASS}
         onClick={() => { onRecordOpen?.(); onClick(); }}
       >

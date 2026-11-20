@@ -23,6 +23,9 @@ export interface SearchFacet {
   group?: GroupSpec | false;
   /** Query-resolved target and bucket factory for values beyond the facet page. */
   relation?: RelationFieldInfo;
+  /** Related-record fields grouping a relation facet's options (`FacetProps`). */
+  optionGroupField?: string;
+  optionGroupOrderField?: string;
   optionForValue?: (value: string, label?: ReactNode) => SearchFacetOption | undefined;
 }
 
@@ -36,6 +39,12 @@ export interface SearchCatalog {
   groups: readonly ResourceToolbarGroupOption[];
   curatedGroups: readonly ResourceToolbarGroupOption[];
   favorites: readonly ResourceViewFavorite[];
+  /**
+   * Whether the list can list only a level's repeated values: its group read applies
+   * `GroupSpec.repeated` and the level's axis can at the level's granularity
+   * (`GroupAxis.repeatable`). Absent where the list never can.
+   */
+  repeatable?: (level: GroupSpec) => boolean;
 }
 
 export type SearchActiveItem =

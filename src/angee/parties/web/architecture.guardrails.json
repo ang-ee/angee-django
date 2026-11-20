@@ -14,7 +14,8 @@
         "family_name",
         "name_suffix",
         "nickname",
-        "birthday"
+        "birthday",
+        "anniversary"
       ]
     },
     {

@@ -50,10 +50,16 @@ export interface PreviewProvider extends PreviewContribution {
   component: PreviewProviderComponent;
   /** Higher wins when several providers match; defaults to 0. */
   priority?: number;
+  /**
+   * The largest file, in bytes, this renderer takes. A larger file of known size
+   * falls through to the next matching provider, down to the generic fallback.
+   */
+  maxSize?: number;
 }
 
 /**
- * The highest-priority provider whose matcher accepts `mime`, or null. Pure over
+ * The highest-priority provider whose matcher accepts `mime` and whose `maxSize`
+ * admits a known `size`, or null. Pure over
  * the passed list — `PreviewPane` calls it with the built-ins plus the runtime's
  * addon-contributed providers. Sort is stable, so on a priority tie an earlier
  * entry wins (callers list runtime providers before the built-ins to let an
@@ -64,11 +70,13 @@ export interface PreviewProvider extends PreviewContribution {
 export function resolvePreviewProvider(
   providers: readonly PreviewProvider[],
   mime: string | null | undefined,
+  size?: number | null,
 ): PreviewProvider | null {
   const normalized = normaliseMime(mime);
   return (
     providers
-      .filter((provider) => matchesMime(provider.mime, normalized))
+      .filter((provider) => matchesMime(provider.mime, normalized)
+        && (provider.maxSize === undefined || size == null || size <= provider.maxSize))
       .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))[0] ?? null
   );
 }

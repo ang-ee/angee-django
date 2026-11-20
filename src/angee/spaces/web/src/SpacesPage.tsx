@@ -32,6 +32,8 @@ import { ThreadTranscript } from "@angee/messaging";
 
 import {
   AddSpaceMembership,
+  ConfirmSpaceMembership,
+  DismissSpaceMembership,
   RemoveSpaceMembership,
   SetMembershipNotifications,
   SPACE_MEMBERSHIP_INVALIDATES,
@@ -44,6 +46,8 @@ const MODEL = "spaces.Group";
 type MembershipNotifications = DocumentType<typeof SetMembershipNotifications>["set_membership_notifications"];
 interface MembershipRow extends StringIdRow {
   permissions?: readonly string[];
+  is_confirmed?: boolean;
+  is_dismissed?: boolean;
   notification_policy?: MembershipNotifications["notification_policy"];
   subtype_keys?: MembershipNotifications["subtype_keys"];
 }
@@ -166,6 +170,34 @@ export function GroupRosterTab({ recordId, form }: RecordPanelContext): React.Re
   const rowActions = React.useMemo<readonly RowActionDeclaration<MembershipRow>[]>(
     () => [
       defineRowAction({
+        kind: "authored",
+        id: "confirm-membership",
+        label: t("group.roster.confirm"),
+        document: ConfirmSpaceMembership,
+        variables: rowIdVariables,
+        invalidateModels: SPACE_MEMBERSHIP_INVALIDATES,
+        primary: true,
+        variant: "ghost",
+        visible: (row: MembershipRow) => row.is_confirmed === false && holdsPermission(row, "write"),
+        disabled: () => busy,
+        pendingPolicy: "disable-actions",
+        toast: { successTitle: () => t("group.roster.confirmed"), failureTitle: () => t("group.roster.confirmError"), description: () => t("group.roster.confirmError") },
+      }),
+      defineRowAction({
+        kind: "authored",
+        id: "dismiss-membership",
+        label: t("group.roster.dismiss"),
+        document: DismissSpaceMembership,
+        variables: rowIdVariables,
+        invalidateModels: SPACE_MEMBERSHIP_INVALIDATES,
+        variant: "ghost",
+        placement: "menu",
+        visible: (row: MembershipRow) => row.is_confirmed === false && row.is_dismissed === false && holdsPermission(row, "write"),
+        disabled: () => busy,
+        pendingPolicy: "disable-actions",
+        toast: { successTitle: () => t("group.roster.dismissed"), failureTitle: () => t("group.roster.dismissError"), description: () => t("group.roster.dismissError") },
+      }),
+      defineRowAction({
         kind: "page",
         id: "change-membership-role",
         label: t("group.roster.changeRole"),
@@ -189,7 +221,7 @@ export function GroupRosterTab({ recordId, form }: RecordPanelContext): React.Re
           confirm: () => t("group.roster.remove"),
         },
         toast: {
-          title: () => t("group.roster.removeError"),
+          successTitle: () => t("group.roster.removed"), failureTitle: () => t("group.roster.removeError"),
           description: () => t("group.roster.removeError"),
         },
         icon: "trash",
@@ -218,7 +250,7 @@ export function GroupRosterTab({ recordId, form }: RecordPanelContext): React.Re
         resource="spaces.Membership"
         presentation="embedded"
         fields={[
-          "id", "party.display_name", "role", "is_confirmed", "created_at",
+          "id", "party.display_name", "role", "is_confirmed", "is_dismissed", "created_at",
           "permissions", "notification_policy", "subtype_keys",
         ]}
         baseFilter={{ group: { exact: recordId } }}
@@ -237,14 +269,11 @@ export function GroupRosterTab({ recordId, form }: RecordPanelContext): React.Re
               submittingLabel={t("group.roster.adding")}
               errorFallback={t("group.roster.addError")}
               parseValues={parseAddMembershipValues}
-              onSubmit={async (values) => ({
-                status: "ok",
-                data: await add({
-                  group: recordId,
-                  party: values.party,
-                  role: values.role,
-                }),
-              })}
+              mutation={(values, options) => add({
+                group: recordId,
+                party: values.party,
+                role: values.role,
+              }, options)}
             />
           )
         }
@@ -262,13 +291,10 @@ export function GroupRosterTab({ recordId, form }: RecordPanelContext): React.Re
         submittingLabel={t("group.roster.savingRole")}
         errorFallback={t("group.roster.roleError")}
         parseValues={parseMembershipRoleValues}
-        onSubmit={async (values) => ({
-          status: "ok",
-          data: await updateRole({
-            id: roleRow?.id ?? "",
-            role: values.role,
-          }),
-        })}
+        mutation={(values, options) => updateRole({
+          id: roleRow?.id ?? "",
+          role: values.role,
+        }, options)}
         onSubmitted={() => setRoleRow(null)}
       />
       <MutationDialog
@@ -283,14 +309,11 @@ export function GroupRosterTab({ recordId, form }: RecordPanelContext): React.Re
         submittingLabel={t("group.roster.savingRole")}
         errorFallback={t("group.roster.notificationsError")}
         parseValues={parseNotificationValues}
-        onSubmit={async (values) => ({
-          status: "ok",
-          data: await setNotifications({
-            id: notificationRow?.id ?? "",
-            policy: values.policy,
-            subtype_keys: notificationRow?.subtype_keys ?? [],
-          }),
-        })}
+        mutation={(values, options) => setNotifications({
+          id: notificationRow?.id ?? "",
+          policy: values.policy,
+          subtype_keys: notificationRow?.subtype_keys ?? [],
+        }, options)}
         onSubmitted={() => setNotificationRow(null)}
       />
     </>
@@ -383,12 +406,15 @@ export function SpacesPage(): React.ReactElement {
         <Field name="description" />
         <Action
           id="visibility-public"
+          placement="menu"
           label={t("group.makePublic")}
+          confirm={{ title: t("group.makePublic"), body: t("group.makePublicConfirmBody") }}
           set={{ visibility: "public" }}
           visibleWhen={(record) => record.visibility !== "PUBLIC"}
         />
         <Action
           id="visibility-private"
+          placement="menu"
           label={t("group.makePrivate")}
           set={{ visibility: "private" }}
           visibleWhen={(record) => record.visibility !== "PRIVATE"}

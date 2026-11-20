@@ -1,9 +1,11 @@
 import * as React from "react";
 import type { ActionFieldName } from "@angee/gql/console/actions";
+import type { ActionFieldName as PublicActionFieldName } from "@angee/gql/public/actions";
 import type { Row } from "@angee/metadata";
 import { useAuthoredMutation } from "@angee/refine";
 import {
   RecordActionBar,
+  invalidFormSubmit,
   useActionOutcomeMutation,
   useActionResultMutation,
   useRecordAction,
@@ -18,8 +20,8 @@ import { useIamT } from "./i18n";
 
 const USER_MODEL = "iam.User";
 
-/** Account verbs the server projects per user row, spelled as their Zed permissions. */
-export type UserAccountAction = "set_active" | "rename" | "reset_password" | "issue_password";
+/** Account verbs the server projects per user row through their own admission rules. */
+export type UserAccountAction = "set_active" | "rename" | "reset_password" | "issue_password" | "issue_sign_in_link" | "set_password";
 
 /** Fields every account verb reads from the open user record. */
 export const ACCOUNT_ACTION_FIELDS = ["account_actions", "revision", "username"] as const;
@@ -33,6 +35,63 @@ export function offersAccountAction(record: Row, action: UserAccountAction): boo
 /** The revision the open record was read at, sent so a stale account write is refused. */
 function expectedRevision(record: Row | null): number {
   return Number(record?.revision);
+}
+
+/** The typed new-password pair and its local confirmation rule, shared by both password forms. */
+function newPasswordForm(name: "password" | "new_password", t: ReturnType<typeof useIamT>) {
+  const args: readonly ActionArg[] = [
+    { name, label: t("password.new"), widget: "password", autoComplete: "new-password" },
+    { name: "confirmation", label: t("password.confirm"), widget: "password", autoComplete: "new-password" },
+  ];
+  return {
+    args,
+    validate: (values: Record<string, unknown>) => values[name] === values.confirmation ? undefined
+      : invalidFormSubmit({ fieldErrors: { confirmation: [t("password.mismatch")] }, formErrors: [] }),
+  };
+}
+
+/** Change the signed-in user's password; confirmation remains solely in the shared action form. */
+export function useChangePasswordAction(): ActionDescriptor {
+  const t = useIamT();
+  const passwordForm = newPasswordForm("new_password", t);
+  const [changePassword] = useActionOutcomeMutation<PublicActionFieldName>("change_password", {
+    dataProviderName: "public", idArgument: null, transient: true, errorNotification: false,
+  });
+  return {
+    id: "change-password", label: t("password.change"),
+    args: [
+      { name: "current_password", label: t("password.current"), widget: "password", autoComplete: "current-password" },
+      ...passwordForm.args,
+    ],
+    submit: async (values) => {
+      const invalid = passwordForm.validate(values);
+      if (invalid) return invalid;
+      return changePassword("", {
+        current_password: values.current_password, new_password: values.new_password,
+      });
+    },
+  };
+}
+
+/** Set a chosen password through the account verb, including its observed revision. */
+export function useSetPasswordAction(): ActionDescriptor {
+  const t = useIamT();
+  const passwordForm = newPasswordForm("password", t);
+  const [setPassword] = useActionOutcomeMutation<ActionFieldName>("set_user_password", {
+    transient: true, errorNotification: false, invalidateModels: [USER_MODEL],
+  });
+  return {
+    id: "set-password", label: t("users.setPassword"), danger: true,
+    args: passwordForm.args,
+    visibleWhen: (record) => offersAccountAction(record, "set_password"),
+    submit: async (values, context) => {
+      const invalid = passwordForm.validate(values);
+      if (invalid) return invalid;
+      return setPassword(String(context.record?.id ?? ""), {
+        password: String(values.password ?? ""), expected_revision: expectedRevision(context.record),
+      });
+    },
+  };
 }
 
 interface SignInDetails {
@@ -93,6 +152,18 @@ export function useResetPasswordAction(): ActionDescriptor {
   };
 }
 
+/** Email a person a single-use sign-in link; the link goes to their email and is never shown here. */
+export function useIssueSignInLinkAction(): ActionDescriptor {
+  const t = useIamT();
+  const [issueLink] = useActionResultMutation<ActionFieldName>("issue_user_sign_in_link", { invalidateModels: [USER_MODEL] });
+  const run = useRecordAction((id) => issueLink(id));
+  return {
+    id: "send-sign-in-link", label: t("users.sendSignInLink"), run,
+    confirm: { title: t("users.sendSignInLink.confirmTitle"), body: t("users.sendSignInLink.confirmBody") },
+    visibleWhen: (record) => offersAccountAction(record, "issue_sign_in_link"),
+  };
+}
+
 /** Deactivate and reactivate, each confirmed and offered by the row's server projection. */
 export function useSetActiveActions(): readonly ActionDescriptor[] {
   const t = useIamT();
@@ -125,14 +196,14 @@ export function useRenameAction(): ActionDescriptor {
     { name: "last_name", label: t("users.rename.lastName"), optional: true,
       fromContext: ({ record }) => record?.last_name ?? "" },
   ], [t]);
-  const submit = React.useCallback<NonNullable<ActionDescriptor["submit"]>>(async (values, context) => {
+  const submit = React.useCallback<NonNullable<ActionDescriptor["submit"]>>(async (values, context, options) => {
     const id = typeof context.record?.id === "string" ? context.record.id : "";
     const outcome = await rename(id, {
       first_name: typeof values.first_name === "string" ? values.first_name : "",
       last_name: typeof values.last_name === "string" ? values.last_name : "",
       confirmed: true,
       expected_revision: expectedRevision(context.record),
-    });
+    }, options);
     return outcome ?? { ok: false, message: t("users.rename.error") };
   }, [rename, t]);
   return {
@@ -164,8 +235,20 @@ export function IssuePasswordRecordAction(): React.ReactElement | null {
   return <AccountActionBar actions={[action]} />;
 }
 
+/** `iam.User#actions-menu` child: email the open account a sign-in link. */
+export function IssueSignInLinkRecordAction(): React.ReactElement | null {
+  const action = useIssueSignInLinkAction();
+  return <AccountActionBar actions={[action]} />;
+}
+
 /** `iam.User#actions-menu` child: reset the open account's password. */
 export function ResetPasswordRecordAction(): React.ReactElement | null {
   const action = useResetPasswordAction();
+  return <AccountActionBar actions={[action]} />;
+}
+
+/** `iam.User#actions-menu` child: set a chosen password through the set_user_password account verb. */
+export function SetPasswordRecordAction(): React.ReactElement | null {
+  const action = useSetPasswordAction();
   return <AccountActionBar actions={[action]} />;
 }

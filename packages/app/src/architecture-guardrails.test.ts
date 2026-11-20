@@ -4,7 +4,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
-import { MIME_KINDS, RecordIssues, SaveDiscardActions, baseIcons, dirtyControlBandClassName } from "@angee/ui";
+import { CALENDAR_VIEW_MODES, MIME_KINDS, RecordIssues, SaveDiscardActions, baseIcons, dirtyControlBandClassName } from "@angee/ui";
 import { FILTER_OPERATORS } from "@angee/metadata";
 
 import {
@@ -220,7 +220,7 @@ const UI_DYNAMIC_I18N_KEY_FAMILIES: readonly DynamicI18nKeyFamily[] = [
     namespace: "ui",
     owner: "@angee/ui CalendarViewMode",
     prefix: "calendar.mode.",
-    values: ["month", "week", "day"],
+    values: [...CALENDAR_VIEW_MODES],
   },
   {
     namespace: "ui",
@@ -382,6 +382,13 @@ describe("React architecture guardrails", () => {
     },
   );
 
+  test("every addon web fragment declares the typecheck script the fragment checks run", () => {
+    // `pnpm -r run typecheck` skips a package without the script instead of failing it.
+    const untyped = addonPackageRoots().filter((pkg) =>
+      !JSON.parse(readFileSync(join(pkg.root, "package.json"), "utf8")).scripts?.typecheck);
+    expect(untyped.map((pkg) => `${pkg.name} (${workspaceRelative(pkg.root)})`)).toEqual([]);
+  });
+
   test("addon guardrail registries reject malformed fields with their owning path", () => {
     expect(() => registryArray(
       { criticalExports: {} },
@@ -400,6 +407,21 @@ describe("React architecture guardrails", () => {
     }
     const routing = readFileSync(join(PACKAGES_ROOT, "ui/src/views/resource/resource-routing.ts"), "utf8");
     expect(routing).toContain("recordSearchKeys");
+  });
+
+  test("every Refine root keeps Refine's telemetry beacon off", () => {
+    const files = repositoryPackageRoots()
+      .flatMap((pkg) => sourceFiles(join(pkg.root, "src")))
+      .filter((file) => file.endsWith(".tsx") && !isTestFile(file));
+    expect(files.flatMap((file) => refineTelemetryViolations(file, readFileSync(file, "utf8")))).toEqual([]);
+  });
+
+  test("the Refine telemetry guard reports a root whose options leave it on", () => {
+    expect(refineTelemetryViolations("seed.tsx", "<Refine options={{ syncWithLocation }}>{children}</Refine>"))
+      .toHaveLength(1);
+    expect(refineTelemetryViolations("seed.tsx", "<Refine dataProvider={provider} />")).toHaveLength(1);
+    expect(refineTelemetryViolations("seed.tsx", "<Refine options={{ ...options, disableTelemetry: true }} />"))
+      .toEqual([]);
   });
 
   test("framework-owned dynamic i18n families contain only UI vocabulary", () => {
@@ -671,6 +693,45 @@ describe("React architecture guardrails", () => {
       "const when = formatDate(at);",
     ].join("\n");
     expect(uxGuardViolations("src/fixture/web/src/View.tsx", text)).toEqual([]);
+  });
+
+  test.each(["defineBaseAddon", "defineAddon"])("UX ontology guard accepts %s vocabulary field tones", (define) => {
+    const text = `
+      import { ${define} } from "@angee/app";
+      export default ${define}({
+        id: "notes",
+        vocabulary: [{
+          app: "notes",
+          resources: {
+            "notes.Note": { fields: { status: { tones: { DRAFT: "neutral", DONE: "success" } } } },
+          },
+        }],
+      });
+    `;
+    expect(uxGuardViolations("src/fixture/web/src/View.tsx", text)).toEqual([]);
+  });
+
+  test.each([
+    'const tones = { draft: "neutral", done: "success" };',
+    'const tones: Record<Status, Tone> = { [Status.Draft]: "neutral", [Status.Done]: "success" };',
+    'function tone(status: Status) { switch (status) { case "draft": return "neutral"; default: return "success"; } }',
+  ])("UX ontology guard rejects local tone mapping: %s", (text) => {
+    const file = "src/fixture/web/src/View.tsx";
+    const hits = uxGuardViolations(file, text);
+    expect(hits).toHaveLength(1);
+    expect(formatUxGuardViolation(hits[0]!, file)).toBe(
+      `${file}:1 local-tone-map: maps status values to tones locally — compose statusTones or vocabulary field tones in the addon manifest + statusTone / StatusBadge`,
+    );
+  });
+
+  test.each([
+    'defineBaseAddon({ settings: { tones: { DRAFT: "neutral", DONE: "success" } } });',
+    'defineBaseAddon({ settings: { resources: { "notes.Note": { fields: { status: { tones: { DRAFT: "neutral", DONE: "success" } } } } } } });',
+    'function View() { const config = { vocabulary: [{ resources: { "notes.Note": { fields: { status: { tones: { DRAFT: "neutral", DONE: "success" } } } } } }] }; return null; }',
+  ])("UX ontology guard rejects tones outside the manifest vocabulary seam: %s", (text) => {
+    expect(uxGuardViolations("src/fixture/web/src/index.tsx", text)).toMatchObject([
+      { rule: "local-tone-map", detail: "maps status values to tones locally" },
+    ]);
   });
 
   test(
@@ -1533,6 +1594,30 @@ function isTestFile(file: string): boolean {
 
 function isStoryFile(file: string): boolean {
   return /\.stories\.[^.]+$/.test(file);
+}
+
+/** `<Refine>` elements whose `options` literal does not set `disableTelemetry: true`, as `file:line`. */
+function refineTelemetryViolations(file: string, text: string): string[] {
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  const violations: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if ((ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) && node.tagName.getText(source) === "Refine") {
+      const options = node.attributes.properties.find((attribute): attribute is ts.JsxAttribute =>
+        ts.isJsxAttribute(attribute) && attribute.name.getText(source) === "options");
+      const value = options?.initializer && ts.isJsxExpression(options.initializer)
+        ? options.initializer.expression
+        : undefined;
+      const off = value !== undefined && ts.isObjectLiteralExpression(value) && value.properties.some((property) =>
+        ts.isPropertyAssignment(property) && property.name.getText(source) === "disableTelemetry"
+        && property.initializer.kind === ts.SyntaxKind.TrueKeyword);
+      if (!off) {
+        violations.push(`${workspaceRelative(file)}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}`);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return violations;
 }
 
 function workspaceRelative(file: string): string {

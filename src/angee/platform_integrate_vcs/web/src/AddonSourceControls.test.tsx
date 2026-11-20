@@ -108,13 +108,15 @@ describe("AddonSourceControls contribution", () => {
     ]);
   });
 
-  test("submits parsed source data and delegates its success message to the dialog", async () => {
+  test("submits parsed source data quietly and delegates its success message to the dialog", async () => {
     mocks.addSource.mockResolvedValue({ ok: true, message: "Source added." });
     render(<AddonSourceControls />);
     const dialog = mocks.dialog.mock.calls[0]![0];
     const values = dialog.parseValues({ vcsBridgeId: "bridge-1", name: "angee/framework" });
 
-    const result = await dialog.onSubmit(values);
+    // The dialog runs the action with refine's toast off and renders its outcome itself.
+    expect(dialog.onSubmit).toBeUndefined();
+    const result = dialog.mutationResult!(await dialog.mutation!(values, { errorNotification: false }));
     expect(result).toEqual({ status: "ok", data: { ok: true, message: "Source added." }, message: "Source added." });
     expect(mocks.toast.success).not.toHaveBeenCalled();
     if (result.status !== "ok") throw new Error("Expected a successful source addition.");
@@ -122,7 +124,7 @@ describe("AddonSourceControls contribution", () => {
 
     expect(mocks.addSource).toHaveBeenCalledWith("", {
       data: { vcs_bridge_id: "bridge-1", name: "angee/framework" },
-    });
+    }, { errorNotification: false });
     expect(mocks.toast.success).not.toHaveBeenCalled();
     expect(dialog.onSubmitted).toBeUndefined();
     expect(mocks.settle).not.toHaveBeenCalled();
@@ -134,7 +136,7 @@ describe("AddonSourceControls contribution", () => {
     const dialog = mocks.dialog.mock.calls[0]![0];
     const values = dialog.parseValues({ vcsBridgeId: "bridge-1", name: "angee/framework" });
 
-    await expect(dialog.onSubmit(values)).resolves.toEqual({
+    expect(dialog.mutationResult!(await dialog.mutation!(values, { errorNotification: false }))).toEqual({
       status: "invalid", issues: { fieldErrors: { name: ["Choose another name."] }, formErrors: ["Source refused."] },
     });
 

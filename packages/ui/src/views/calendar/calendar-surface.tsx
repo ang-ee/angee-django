@@ -3,10 +3,12 @@ import FullCalendar from "@fullcalendar/react";
 import dayGridPlugin from "@fullcalendar/daygrid";
 import timeGridPlugin from "@fullcalendar/timegrid";
 import interactionPlugin from "@fullcalendar/interaction";
+import listPlugin from "@fullcalendar/list";
 import allLocales from "@fullcalendar/core/locales-all";
 
 import { useAppRuntime } from "../../runtime";
 import { cn } from "../../lib/cn";
+import { dateFromValue } from "../../widgets/date-format";
 import type { CalendarViewMode, CalendarViewProps, Occurrence } from "./CalendarView";
 import "./calendar-surface.css";
 
@@ -19,9 +21,10 @@ const FC_VIEW: Record<CalendarViewMode, string> = {
   month: "dayGridMonth",
   week: "timeGridWeek",
   day: "timeGridDay",
+  list: "listMonth",
 };
 
-const PLUGINS = [dayGridPlugin, timeGridPlugin, interactionPlugin];
+const PLUGINS = [dayGridPlugin, timeGridPlugin, listPlugin, interactionPlugin];
 
 /** Pill tone by occurrence kind: an all-day agenda marker reads soft, a timed
  *  event solid; a marker with a route target is click-interactive. */
@@ -105,14 +108,17 @@ export default function CalendarSurface({
   const reschedule = onEventDrop
     ? async (arg: CalendarChangeArg): Promise<void> => {
         const occ = arg.event.extendedProps.occurrence as Occurrence | undefined;
+        // An all-day occurrence's own start is a bare day: read it as the viewer's local day, the
+        // day the grid shows, never as UTC midnight.
+        const start = arg.event.start ?? (occ ? dateFromValue(occ.start) : null);
         // Belt to FullCalendar's per-event gate: never reschedule a
         // non-editable occurrence even if a change somehow arrives.
-        if (!occ || !occ.editable) {
+        if (!occ || !occ.editable || !start) {
           arg.revert();
           return;
         }
         try {
-          await onEventDrop(occ, arg.event.start ?? new Date(occ.start), arg.event.end);
+          await onEventDrop(occ, start, arg.event.end);
         } catch {
           arg.revert();
         }
@@ -138,6 +144,9 @@ export default function CalendarSurface({
         height="auto"
         dayMaxEvents={4}
         editable={Boolean(onEventDrop)}
+        // A drop keeps the occurrence's kind: `onEventDrop` hands over new bounds, never a switch
+        // between all day and timed, so FullCalendar withholds a drop across the all-day row.
+        eventAllow={(span, moving) => span.allDay === moving?.allDay}
         selectable={Boolean(onSelectRange)}
         selectMirror
         events={events}
@@ -151,7 +160,7 @@ export default function CalendarSurface({
           emitted.current = key;
           onRangeChange?.({ start: arg.start, end: arg.end });
         }}
-        select={onSelectRange ? (arg) => onSelectRange(arg.start, arg.end) : undefined}
+        select={onSelectRange ? (arg) => onSelectRange(arg.start, arg.end, arg.allDay) : undefined}
         eventDrop={reschedule ? (arg) => void reschedule(arg) : undefined}
         eventResize={reschedule ? (arg) => void reschedule(arg) : undefined}
         eventClick={

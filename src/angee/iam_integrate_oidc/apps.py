@@ -8,9 +8,9 @@ from django.apps import AppConfig
 class IAMIntegrateOidcConfig(AppConfig):
     """Source app manifest for the OIDC login addon.
 
-    OIDC end to end: it extends ``integrate``'s OAuth client with login fields,
-    the OIDC protocol, and ID-token verification, and composes ``iam`` (the user
-    and session) into the login/link flow.
+    OIDC login end to end: it extends ``integrate``'s OAuth client with login
+    policy fields and the nonce-bound login request, and composes ``iam`` (the
+    user and session) into the login/link flow.
     """
 
     default = True

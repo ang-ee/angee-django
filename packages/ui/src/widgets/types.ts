@@ -30,6 +30,10 @@ export interface VisibilityAction {
 export interface WidgetOption {
   value: string;
   label: ReactNode;
+  /** The heading this option lists under in a picker, as a filter option's `group` is. */
+  group?: string;
+  /** Orders the groups (lower first); options of one group share it. */
+  groupOrder?: number;
   /** The option's own `#rrggbb` colour (a related record's `color`), filling its chip. */
   color?: string;
   disabled?: boolean;
@@ -142,6 +146,8 @@ export interface FieldPresentation {
   label?: ReactNode;
   options?: readonly WidgetOption[];
   placeholder?: string;
+  /** Native autocomplete intent, including current-password and new-password for secret inputs. */
+  autoComplete?: string;
   /**
    * For a money widget: the path to the FK owning the row's currency — a sibling
    * field (`"currency"`) or a one-hop related path (`"order.currency"`).

@@ -68,12 +68,12 @@ export function useTriageActions(queueId: string): readonly ActionDescriptor[] {
             filters: acceptStageFilters(queueId),
           },
         ],
-        submit: async (values, context) => {
+        submit: async (values, context, options) => {
           const task = recordId(context.record, t("triage.action.failed"));
           const data = await accept({
             task,
             stage: requiredString(values.stage, t("triage.action.required", { field: t("triage.action.stage") })),
-          } satisfies AcceptTaskVariables);
+          } satisfies AcceptTaskVariables, options);
           return extractActionOutcome(data, "accept_task") ?? {
             ok: false,
             message: t("triage.action.failed"),
@@ -93,11 +93,11 @@ export function useTriageActions(queueId: string): readonly ActionDescriptor[] {
             options: declineReasonOptions,
           },
         ],
-        submit: async (values, context) => {
+        submit: async (values, context, options) => {
           const task = recordId(context.record, t("triage.action.failed"));
           return extractActionOutcome(await decline({ task,
             reason: declineReason(declineReasonOptions, values.reason),
-          }), "decline_task") ?? { ok: false, message: t("triage.action.failed") };
+          }, options), "decline_task") ?? { ok: false, message: t("triage.action.failed") };
         },
       },
       {
@@ -111,11 +111,11 @@ export function useTriageActions(queueId: string): readonly ActionDescriptor[] {
             kind: "datetime" as const,
           },
         ],
-        submit: async (values, context) => {
+        submit: async (values, context, options) => {
           const task = recordId(context.record, t("triage.action.failed"));
           return (await snooze(task, {
             until: requiredString(values.until, t("triage.action.required", { field: t("triage.action.until") })),
-          })) ?? { ok: false, message: t("triage.action.failed") };
+          }, options)) ?? { ok: false, message: t("triage.action.failed") };
         },
       },
       {
@@ -132,11 +132,11 @@ export function useTriageActions(queueId: string): readonly ActionDescriptor[] {
             filters: canonicalTaskFilters(queueId),
           },
         ],
-        submit: async (values, context) => {
+        submit: async (values, context, options) => {
           const task = recordId(context.record, t("triage.action.failed"));
           return (await duplicate(task, {
             canonical: requiredString(values.canonical, t("triage.action.required", { field: t("triage.action.canonical") })),
-          })) ?? { ok: false, message: t("triage.action.failed") };
+          }, options)) ?? { ok: false, message: t("triage.action.failed") };
         },
       },
     ],
@@ -164,10 +164,21 @@ export function TriageRecordActions(): React.ReactElement | null {
   const stage = taskContext.data?.project_tasks_by_pk?.stage ?? record?.stage;
   const [start, startState] = useRecordChromeActionMutation<ActionFieldName>("start_task");
   const [returnToTriage, returnState] = useRecordChromeActionMutation<ActionFieldName>("return_task_to_triage");
-  if (!record || !queueId || context.formReadOnly) return null;
+  const [wake, wakeState] = useRecordChromeActionMutation<ActionFieldName>("wake_task", { idArgument: "task" });
+  const wakeAction: ActionDescriptor = {
+    id: "work-wake-task", label: t("triage.action.wake"),
+    placement: "menu", disabled: wakeState.fetching,
+    visibleWhen: (row) => offersTaskAction(row, "wake") && typeof row.revision === "number",
+    run: async () => {
+      if (typeof record?.revision !== "number") return;
+      await wake(context.recordId, { expected_revision: record.revision });
+    },
+  };
+  if (!record || context.formReadOnly) return null;
+  if (!queueId) return <RecordActionBar record={record} actions={[wakeAction]} />;
   if (!isTaskInTriage(record)) {
     // Start shows where it would act (a waiting stage); the row's task_actions admit both verbs.
-    const verbs: ActionDescriptor[] = [];
+    const verbs: ActionDescriptor[] = [wakeAction];
     if (["BACKLOG", "UNSTARTED"].includes(String(stage?.category).toUpperCase()) && offersTaskAction(record, "start")) verbs.push({
       id: "work-start-task", label: t("task.action.start"), icon: "work-start",
       disabled: startState.fetching || returnState.fetching,
@@ -180,7 +191,7 @@ export function TriageRecordActions(): React.ReactElement | null {
     });
     return <RecordActionBar record={record} actions={verbs} />;
   }
-  return <RecordActionBar record={record} actions={actions} />;
+  return <RecordActionBar record={record} actions={[wakeAction, ...actions]} />;
 }
 
 function canonicalTaskFilters(queueId: string) {

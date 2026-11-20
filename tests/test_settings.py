@@ -181,6 +181,7 @@ def test_iam_auth_throttling_comes_from_axes(tmp_path: Path) -> None:
     assert SETTINGS["AUTHENTICATION_BACKENDS:append"] == [
         "axes.backends.AxesStandaloneBackend",
         "angee.iam.auth.ModelBackend",
+        "angee.iam.auth.SignInLinkBackend",
     ]
     assert settings["AUTHENTICATION_BACKENDS"][0] == "axes.backends.AxesStandaloneBackend"
     assert "rebac.W001" in settings["SILENCED_SYSTEM_CHECKS"]
@@ -252,6 +253,7 @@ def test_auth_user_model_comes_from_iam_autoconfig(
     assert SETTINGS["AUTHENTICATION_BACKENDS:append"] == [
         "axes.backends.AxesStandaloneBackend",
         "angee.iam.auth.ModelBackend",
+        "angee.iam.auth.SignInLinkBackend",
     ]
     assert settings["AUTH_USER_MODEL"] == "iam.User"
 
@@ -441,9 +443,34 @@ def test_mail_provider_environment_belongs_to_messaging(tmp_path, monkeypatch, i
 
 def test_public_origin_joins_csrf_trusted_origins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ANGEE_PUBLIC_ORIGIN", "https://demo.example.com")
-    namespace = {"INSTALLED_APPS": []}
+    namespace = _compose(tmp_path)
+    assert namespace["ANGEE_PUBLIC_ORIGIN"] == "https://demo.example.com"
+    assert "https://demo.example.com" in namespace["CSRF_TRUSTED_ORIGINS"]
+
+
+@pytest.mark.parametrize("origin", ["http://app.example.com", "https://*.example.com", "https://u:p@app.example.com"])
+def test_an_invalid_public_origin_is_never_trusted_for_csrf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, origin: str,
+) -> None:
+    monkeypatch.setenv("ANGEE_PUBLIC_ORIGIN", origin)
+    namespace = _compose(tmp_path)
+    assert namespace["ANGEE_PUBLIC_ORIGIN"] == origin
+    assert origin not in namespace["CSRF_TRUSTED_ORIGINS"]
+
+
+def test_an_authored_public_origin_is_the_resolved_setting_csrf_trusts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ANGEE_PUBLIC_ORIGIN", raising=False)
+    assert _compose(tmp_path / "unset")["ANGEE_PUBLIC_ORIGIN"] == ""
+    namespace: dict[str, Any] = {
+        "INSTALLED_APPS": ("example.notes",),
+        "ANGEE_PUBLIC_ORIGIN": "https://authored.example.com",
+        "CSRF_TRUSTED_ORIGINS": ["https://other.example.com"],
+    }
     _configure(namespace, tmp_path)
-    assert namespace["CSRF_TRUSTED_ORIGINS"] == ["https://demo.example.com"]
+    assert namespace["ANGEE_PUBLIC_ORIGIN"] == "https://authored.example.com"
+    assert namespace["CSRF_TRUSTED_ORIGINS"] == ["https://other.example.com", "https://authored.example.com"]
 
 
 @pytest.mark.parametrize(("project", "environment", "expected"), [(None, None, 60), (30, None, 30), (30, "15", 15)])

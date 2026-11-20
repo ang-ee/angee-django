@@ -2,7 +2,10 @@ import * as React from "react";
 import { useModelMetadata } from "@angee/metadata";
 
 import { Button } from "../../ui/button";
-import { Tabs } from "../../ui/tabs";
+import { Tabs, tabsVariants } from "../../ui/tabs";
+import { DropdownMenu } from "../../ui/dropdown-menu";
+import { useOverflowCount } from "../../lib/use-overflow-count";
+import { useUiT } from "../../i18n";
 import { useBreadcrumbLeafLabel } from "../../chrome/Breadcrumb";
 import { renderGlyph } from "../../chrome/Glyph";
 import { ControlBandProvider } from "../../layouts/ControlBand";
@@ -21,6 +24,7 @@ import { RecordActionBar } from "./RecordActionBar";
 import { SaveDiscardActions, dirtyControlBandClassName } from "./SaveDiscardActions";
 import { ActionFormProvider } from "./ActionFormProvider";
 import type {
+  ActionDescriptor,
   FieldDescriptor,
   PageFieldKind,
 } from "../page";
@@ -112,6 +116,12 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
   lineFooter?: (context: RecordToolbarContext) => React.ReactNode;
   /** Record chrome density and height behavior. */
   recordPresentation?: RecordPresentation;
+  /**
+   * What a saved record's form shows when its id reads no record (loaded, without a load error),
+   * given that id and the default state ("Record unavailable"), which it may render when it has
+   * nothing else to show. Omitted, the default shows.
+   */
+  renderUnavailable?: (id: string, unavailable: React.ReactElement) => React.ReactNode;
   className?: string;
 }
 
@@ -168,6 +178,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     recordPresentation = "document",
     publishBreadcrumbLabel = false,
     hideRecordChrome = false,
+    renderUnavailable,
     className,
   } = props;
   const {
@@ -176,12 +187,14 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     setActiveRecordTab,
     isCreate,
     formReadOnly,
+    formTakesEdits,
     formIsDirty,
     displayRecord,
     loadError,
     saveError,
     saveConflict,
     declaredActions,
+    genericActions,
     actionsBlocked,
     recordChromeContext: surfaceChromeContext,
     recordActions,
@@ -212,22 +225,23 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     () => surfaceChromeContext && { ...surfaceChromeContext, toolbarHost },
     [surfaceChromeContext, toolbarHost],
   );
-  const availableDeclaredActions = readOnly
-    ? declaredActions.filter((action) => action.run || action.submit)
-    : declaredActions;
+  const actionAvailable = (action: ActionDescriptor) => !isCreate && (!formReadOnly || action.run || action.submit);
+  const availableDeclaredActions = declaredActions.filter(actionAvailable);
+  const availableGenericActions = genericActions.filter(actionAvailable);
   useBreadcrumbLeafLabel(
-    titleText(
+    isCreate ? t("resourceToolbar.create") : titleText(
       recordRepresentationValue(displayRecord, surface.modelMetadata),
       "",
     ) || null,
-    publishBreadcrumbLabel && !isCreate,
+    publishBreadcrumbLabel,
   );
   const awaitingRecord = !isCreate && displayRecord == null && loading;
   if (!isCreate && !awaitingRecord && displayRecord == null) {
     if (loadError) return <ErrorBanner title={t("form.loadFailed")}
       description={errorMessage(loadError, t("form.loadFailed"))}
       actions={<Button type="button" size="sm" onClick={() => void reload()}>{t("collection.retry")}</Button>} />;
-    return <EmptyState icon="lock" title={t("record.unavailable")} className="min-h-64 p-8" />;
+    const unavailable = <EmptyState icon="lock" title={t("record.unavailable")} className="min-h-64 p-8" />;
+    return props.id && renderUnavailable ? <>{renderUnavailable(props.id, unavailable)}</> : unavailable;
   }
   const toolbarStartNode =
     typeof toolbarStart === "function"
@@ -274,12 +288,8 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
         {recordExtras(recordPanelContext)}
       </div>
     ) : null;
-  const paneStrip = tabbed ? <Tabs.List>
-    {panes.map((pane) => <Tabs.Tab key={pane.id} value={pane.id} icon={renderGlyph(pane.icon)}>
-      <SectionHeading as="span" label={resolveTabLabel(pane.label, i18n)}
-        count={pane.badge != null ? <Tabs.Count>{pane.badge}</Tabs.Count> : undefined} />
-    </Tabs.Tab>)}
-  </Tabs.List> : lonePane ? <SectionHeading label={resolveTabLabel(lonePane.label, i18n)} count={lonePane.badge}
+  const paneStrip = tabbed ? <FormPaneStrip panes={panes} value={activeRecordTab} onChange={setActiveRecordTab} />
+    : lonePane ? <SectionHeading label={resolveTabLabel(lonePane.label, i18n)} count={lonePane.badge}
     className="border-b border-border-subtle pb-1" /> : null;
   const paneContent = (pane: FormViewPane): React.ReactNode => {
     if (awaitingRecord || recordTabPending) return null;
@@ -338,9 +348,14 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     event.preventDefault();
     void submitForm();
   };
+  // Contributed band buttons render inside the action bar, before its overflow menu:
+  // the menu is the band's last verb control whatever contributes a button.
+  const contributedBandVerbs = !awaitingRecord && !readOnly && recordChromeContext && primaryRecordActions.length > 0
+    ? <ContainerOutlet entries={primaryRecordActions} /> : null;
   const rawControlBand = readOnly && props.hideRecordChrome && !toolbarStartNode && !toolbar ? null : (
     <CommandBand
       className={formIsDirty ? dirtyControlBandClassName : undefined}
+      editable={formTakesEdits}
       verbs={<>
         {toolbarStartNode}
         <SaveDiscardActions
@@ -354,14 +369,16 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
           onSave={() => { void submitForm(); }}
         />
         <span ref={setToolbarHost} className="contents" />
-        {!awaitingRecord && (
+        {!isCreate && !awaitingRecord && (
           availableDeclaredActions.length > 0 ||
+          availableGenericActions.length > 0 ||
           visibleDeleteAction !== undefined ||
           (!readOnly && menuRecordActions.length > 0)
         ) ? (
           <RecordActionBar
             record={displayRecord ?? null}
             actions={availableDeclaredActions}
+            genericActions={availableGenericActions}
             applyPatch={applyPatch}
             reload={reload}
             deleteAction={visibleDeleteAction}
@@ -370,13 +387,12 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
                 <ContainerOutlet entries={menuRecordActions} />
               ) : undefined
             }
+            contributedVerbs={contributedBandVerbs ?? undefined}
             blocked={actionsBlocked}
-            menuPlacement="leading"
+            menuTrigger="icon"
+            fillBand
           />
-        ) : null}
-        {!awaitingRecord && !readOnly && recordChromeContext ? (
-          <ContainerOutlet entries={primaryRecordActions} />
-        ) : null}
+        ) : contributedBandVerbs}
       </>}
       chrome={recordChromeContext && !props.hideRecordChrome ? recordChromeContext : null}
       end={toolbar}
@@ -432,4 +448,46 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     {paneRegions}
     {recordExtrasPanel}
   </Tabs>;
+}
+
+/** Form panes share the app menu's measured overflow; the selected pane stays visible. */
+function FormPaneStrip({ panes, value, onChange }: {
+  panes: readonly FormViewPane[];
+  value: string | undefined;
+  onChange: (value: string) => void;
+}): React.ReactElement {
+  const t = useUiT();
+  const { i18n } = useAppRuntime();
+  const [containerRef, measurementRef, visible, overflow] = useOverflowCount(panes, panes.findIndex((pane) => pane.id === value));
+  const styles = tabsVariants({ variant: "card" });
+  const label = (pane: FormViewPane) => <>{renderGlyph(pane.icon)}{resolveTabLabel(pane.label, i18n)}
+    {pane.badge != null ? <Tabs.Count>{pane.badge}</Tabs.Count> : null}</>;
+  return <div ref={containerRef} className="relative min-w-0 overflow-hidden">
+    <div ref={measurementRef} inert aria-hidden="true"
+      className="pointer-events-none invisible absolute left-0 top-0 flex w-max">
+      {panes.map((pane) => <span key={pane.id} className={styles.tab()}>{label(pane)}</span>)}
+      <span className={styles.tab()}>{t("chrome.more")}{renderGlyph("chevron-down")}</span>
+    </div>
+    <Tabs.List>
+      {visible.map((index) => {
+        const pane = panes[index]!;
+        return <Tabs.Tab key={pane.id} value={pane.id}>{label(pane)}</Tabs.Tab>;
+      })}
+      {overflow.length ? <DropdownMenu.Root modal={false}>
+        <DropdownMenu.Trigger className={styles.tab({ className: "min-w-0" })} aria-label={t("form.moreSections")}>
+          {t("chrome.more")}{renderGlyph("chevron-down")}
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Positioner side="bottom" align="end" sideOffset={4}>
+            <DropdownMenu.Content>
+              {overflow.map((index) => {
+                const pane = panes[index]!;
+                return <DropdownMenu.Item key={pane.id} onClick={() => onChange(pane.id)}>{label(pane)}</DropdownMenu.Item>;
+              })}
+            </DropdownMenu.Content>
+          </DropdownMenu.Positioner>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root> : null}
+    </Tabs.List>
+  </div>;
 }

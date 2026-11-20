@@ -143,6 +143,8 @@ def test_pickers_offer_a_non_manager_their_colleagues(db: None) -> None:
     with actor_context(viewer):
         ticket = ThreadedTicket.objects.create(title="Shared record")
     with system_context(reason="test.directory.followers"):
+        # An ungated record lends its chatter nothing and nobody owns it: the viewer reads it through a grant.
+        ticket.message_thread().grant_reader(user=viewer)
         for person in (follower, former):
             ticket.message_subscribe(user=person)
         User.objects.filter(pk=former.pk).update(is_active=False)
@@ -168,6 +170,7 @@ def test_a_non_manager_reads_no_restricted_field_of_a_colleague_or_service_accou
     with actor_context(viewer):
         ticket = ThreadedTicket.objects.create(title="Shared record")
     with system_context(reason="test.directory.followers"):
+        ticket.message_thread().grant_reader(user=viewer)
         for person in (colleague, service):
             ticket.message_subscribe(user=person)
 
@@ -299,7 +302,8 @@ def test_the_policy_decides_every_iam_permission(db: None) -> None:
             RelationshipTuple(to_object_ref(target), "directory_reader", to_subject_ref(seats["named-reader"])),
         ])
     account_verbs = (
-        "write", "delete", "issue_password", "reset_password", "set_active", "rename", "administer",
+        "write", "delete", "issue_password", "issue_sign_in_link", "reset_password", "set_active", "rename",
+        "administer",
         *(f"write__{field}" for field in (
             "username", "email", "password", "kind", "is_active", "is_staff", "is_superuser", "preferences",
             "date_joined", "last_login",

@@ -1,11 +1,11 @@
 """Record contributions use the native optimized proposal schema."""
 
-import re
 from pathlib import Path
 
-from graphql import parse, validate
+from graphql import concat_ast, validate
 
 from angee.graphql.schema import GraphQLSchemas
+from angee.graphql.testing.documents import authored_documents
 from tests.test_proposals_clarifications import CampaignIdentities, ClarificationCase
 
 
@@ -15,8 +15,7 @@ class RoundRecordTests(CampaignIdentities, ClarificationCase):
     def test_active_round_and_authored_documents(self):
         schema = GraphQLSchemas.from_discovery().build("console")
         path = Path(__file__).resolve().parents[1] / "src/angee/proposals/web/src/documents.ts"
-        document = parse("\n".join(re.findall(r"graphql\(`(.*?)`\)", path.read_text(), flags=re.S)))
-        self.assertEqual(validate(schema._schema, document), [])
+        self.assertEqual(validate(schema._schema, concat_ast(authored_documents(path))), [])
         result = self.execute("""query($project: String!) {
           projects_by_pk(id: $project) {
             active_proposal_round { id can_open can_admit roster { user name track_status } }

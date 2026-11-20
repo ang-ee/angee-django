@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from typing import Any
 
 import pytest
@@ -21,7 +22,7 @@ from rebac.resources import model_resource_type
 from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
 from angee.base.models import refs as record_refs
-from angee.base.models.refs import RecordRefMixin, delete_record_refs, record_edges_by_target
+from angee.base.models.refs import RecordRefMixin, delete_record_refs, record_edges_by_target, record_refs_for_delete
 from angee.base.refs import RecordRef, ancestor_object_refs, generic_pointer_model, generic_pointer_target
 from angee.knowledge import schema as knowledge_schema
 from angee.projects.testing.models import Link, Task
@@ -366,6 +367,78 @@ def test_target_delete_protects_declared_record_edges(
     assert RecordRefSubjectEdge.objects.filter(pk=edge.pk).exists()
 
 
+def test_a_blocking_teardown_edge_refuses_on_its_live_rows_first_and_its_teardown_never_blocks(
+    record_ref_tables: None,
+    record_ref_delete_receiver: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Live rows refuse before the teardown runs; other rows are torn down; a target none names runs no teardown."""
+
+    del record_ref_tables, record_ref_delete_receiver
+    torn: list[Any] = []
+    live: list[Any] = []
+    monkeypatch.setattr(
+        RecordRefTargetEdge, "teardown_for_target", classmethod(lambda cls, target: torn.append(target.pk))
+    )
+    monkeypatch.setattr(RecordRefTargetEdge, "blocks_target_delete", classmethod(lambda cls, target: True))
+    monkeypatch.setattr(
+        RecordRefTargetEdge, "live_reference_filter", classmethod(lambda cls, *, principal: models.Q(pk__in=live))
+    )
+    with system_context(reason="record-ref live teardown"):
+        held = RecordRefTypedTarget.objects.create(name="held")
+        held_pk = held.pk
+        kept = RecordRefTargetEdge.objects.create(target=held)
+        RecordRefTargetEdge.objects.create(target=held)
+        live.append(kept.pk)
+        with pytest.raises(ProtectedError) as forecast:
+            record_refs_for_delete([held], using="default")
+        assert set(forecast.value.protected_objects) == {kept}
+        assert torn == []
+        with pytest.raises(ProtectedError, match=f"{RecordRefTargetEdge._meta.label} rows still refer to ") as refused:
+            held.delete()
+        assert (set(refused.value.protected_objects), torn) == ({kept}, [])
+
+        live.clear()
+        assert any(edge is RecordRefTargetEdge for edge, rows in record_refs_for_delete([held], using="default"))
+        assert torn == []
+        held.delete()
+        unnamed = RecordRefTypedTarget.objects.create(name="unnamed")
+        unnamed.delete()
+
+    # The receiver runs per collected instance and per connected receiver; a teardown is idempotent.
+    assert set(torn) == {held_pk}
+    assert not RecordRefTypedTarget._base_manager.filter(name__in=["held", "unnamed"]).exists()
+
+
+def test_record_delete_holds_batch_within_the_database_parameter_budget(
+    record_ref_tables, record_ref_delete_receiver,
+):
+    """A large group uses bounded edge reads and retains every blocking row."""
+
+    if connection.vendor != "sqlite":
+        pytest.skip("SQLite exposes a runtime parameter limit for this boundary test.")
+    with system_context(reason="record-ref bounded batch"):
+        targets = RecordRefTypedTarget.objects.bulk_create([
+            RecordRefTypedTarget(name=f"Target {index}") for index in range(80)
+        ])
+        edges = RecordRefSubjectEdge.objects.bulk_create([RecordRefSubjectEdge(subject=row) for row in targets])
+    reads = []
+
+    def count_parameters(execute, sql, params, many, context):
+        if "_angee_holds_deleted_target" in sql:
+            reads.append(len(params))
+        return execute(sql, params, many, context)
+
+    old_limit = connection.connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 25)
+    try:
+        with connection.execute_wrapper(count_parameters), pytest.raises(ProtectedError) as refused:
+            record_refs_for_delete(targets, using="default")
+    finally:
+        connection.connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, old_limit)
+    assert set(refused.value.protected_objects) == set(edges)
+    assert len(reads) == 4 and max(reads) <= 25
+
+
 def test_target_delete_nulls_declared_record_edges_from_a_queryset(
     record_ref_tables: None,
     record_ref_delete_receiver: None,
@@ -391,6 +464,19 @@ def test_declared_target_models_read_the_schema_target_relations(db: None) -> No
     with pytest.raises(ValidationError, match="Link may target only: project, task"):
         Link.declared_target_model("knowledge.vault")
     assert {"projects.task", "storage.drive", "mtidemo.mtiparent"} <= set(FileAttachment.declared_target_models())
+
+
+def test_the_effective_edge_index_is_read_once_per_schema_revision(db: None) -> None:
+    """A deletion reads the policy once, not once per edge of every collected instance."""
+
+    del db
+    first = record_edges_by_target()
+    assert record_edges_by_target() is first
+    with pytest.raises(TypeError):
+        first[Task] = ()  # type: ignore[index]
+    with CaptureQueriesContext(connection) as captured:
+        record_edges_by_target()
+    assert len(captured) <= 1
 
 
 def test_record_edges_invert_the_declared_targets_into_resource_metadata(db: None) -> None:

@@ -31,6 +31,7 @@ from angee.messaging.testing.models import Channel
 from tests.conftest import current_stream, make_integration
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.stream_adapters import applied_history, failure_state
+from tests.test_system_queryset import GuardedSystemQueryThing, system_query_tables  # noqa: F401
 
 
 @pytest.fixture
@@ -273,10 +274,10 @@ def test_preview_push_command_reports_current_streams_through_one_adapter(
 
 def test_sweep_absence_unavailable_then_tombstone_and_reappearance(replica: Any) -> None:
     link = RecordLink.objects.observe(replica, "person:1")
-    assert RecordLink.objects.mark_absent(replica, [link.external_key]) == 1
+    assert len(RecordLink.objects.mark_absent(replica, [link.external_key])) == 1
     link.refresh_from_db()
     assert (link.status, link.absence_count, link.tombstoned_at) == (LinkStatus.UNAVAILABLE, 1, None)
-    assert RecordLink.objects.mark_absent(replica, [link.external_key]) == 1
+    assert len(RecordLink.objects.mark_absent(replica, [link.external_key])) == 1
     link.refresh_from_db()
     assert (link.status, link.absence_count) == (LinkStatus.TOMBSTONE, 2)
     retained_time = link.tombstoned_at
@@ -328,18 +329,36 @@ def test_release_target_keeps_the_identity_current_until_its_row_is_rebuilt(repl
     assert (link.target_object_id, link.status) == (str(replica.pk), LinkStatus.CURRENT)
 
 
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("system_query_tables")
+def test_lock_target_finds_a_row_its_default_manager_hides() -> None:
+    """A push judges whether its written row is still there through the base manager: a hidden row is not gone."""
+
+    hidden = GuardedSystemQueryThing._base_manager.create(name="hidden", selected=False)
+    with transaction.atomic(), system_context(reason="tests.integrate.lock_target"):
+        assert RecordLink.objects.lock_target(hidden)
+        assert not RecordLink.objects.lock_target(GuardedSystemQueryThing(pk=hidden.pk + 1))
+
+
 def test_child_absence_requires_parent_absence_evidence(replica: Any) -> None:
     parent = RecordLink.objects.observe(replica, "aggregate:1")
     child = RecordLink.objects.observe(replica, "member:1", parent=parent)
-    assert RecordLink.objects.mark_absent(replica, [child.external_key]) == 0
+    assert len(RecordLink.objects.mark_absent(replica, [child.external_key])) == 0
     child.refresh_from_db()
     assert child.absence_count == 0
-    assert RecordLink.objects.mark_absent(replica, [parent.external_key]) == 1
-    assert RecordLink.objects.mark_absent(replica, [child.external_key]) == 1
+    assert len(RecordLink.objects.mark_absent(replica, [parent.external_key])) == 1
+    assert len(RecordLink.objects.mark_absent(replica, [child.external_key])) == 1
     child.refresh_from_db()
     assert (child.status, child.absence_count) == (LinkStatus.UNAVAILABLE, 1)
     RecordLink.objects.observe(replica, parent.external_key)
-    assert RecordLink.objects.mark_absent(replica, [child.external_key]) == 0
+    assert len(RecordLink.objects.mark_absent(replica, [child.external_key])) == 0
+
+
+def test_a_confirmed_absence_tombstones_at_once_and_reports_only_status_changes(replica: Any) -> None:
+    link = RecordLink.objects.observe(replica, "person:1")
+    (changed,) = RecordLink.objects.mark_absent(replica, [link.external_key], confirmed=True)
+    assert (changed.pk, changed.status, changed.absence_count) == (link.pk, LinkStatus.TOMBSTONE, 1)
+    assert RecordLink.objects.mark_absent(replica, [link.external_key], confirmed=True) == ()
 
 
 def test_record_parent_is_one_root_in_same_stream_and_cannot_be_reassigned(replica: Any) -> None:
@@ -374,11 +393,11 @@ def test_page_records_and_cursor_roll_back_together(replica: Any) -> None:
     assert not RecordLink.objects.filter(stream=replica).exists()
 
 
-def test_retired_epoch_rejects_late_page_before_records(replica: Any) -> None:
+def test_superseded_epoch_rejects_late_page_before_records(replica: Any) -> None:
     SyncStream.objects.bump_generation(replica)
-    with pytest.raises(RuntimeError, match="retired stream generation"):
+    with pytest.raises(RuntimeError, match="superseded stream generation"):
         RecordLink.objects.observe(replica, "person:late")
-    with pytest.raises(RuntimeError, match="retired stream generation"):
+    with pytest.raises(RuntimeError, match="superseded stream generation"):
         SyncStream.objects.advance(replica, {"late": True})
     assert not RecordLink.objects.exists()
 

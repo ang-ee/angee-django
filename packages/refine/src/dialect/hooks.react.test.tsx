@@ -13,6 +13,7 @@ const mutationMock = vi.hoisted(() => ({
   calls: [] as Array<{
     dataProviderName: string;
     values: Record<string, unknown>;
+    errorNotification?: unknown;
   }>,
   response: { ok: true, message: "Done" } as Record<string, unknown>,
   invalidate: vi.fn(async () => {}),
@@ -29,20 +30,28 @@ vi.mock("@tanstack/react-query", async (importOriginal) => ({
 
 vi.mock("@refinedev/core", () => ({
   useCustom: () => ({ query: {}, result: {} }),
-  useCustomMutation: () => ({
+  useCustomMutation: ({ mutationOptions }: { mutationOptions: {
+    onMutate: () => unknown;
+    onSuccess: (response: { data: unknown }, payload: { values: Record<string, unknown> }, context: unknown) => Promise<void>;
+  } }) => ({
     mutateAsync: vi.fn(
       async (payload: {
         dataProviderName: string;
         values: Record<string, unknown>;
+        errorNotification?: unknown;
       }) => {
+        const context = mutationOptions.onMutate();
         mutationMock.calls.push({
           dataProviderName: payload.dataProviderName,
           values: payload.values,
+          ...("errorNotification" in payload ? { errorNotification: payload.errorNotification } : {}),
         });
-        return { data: { run_probe: mutationMock.response } };
+        const response = { data: { run_probe: mutationMock.response } };
+        await mutationOptions.onSuccess(response, payload, context);
+        return response;
       },
     ),
-    mutation: { isPending: false, error: null },
+    mutation: { isPending: false, error: null, reset: vi.fn() },
   }),
   useInvalidate: () => mutationMock.invalidate,
 }));
@@ -98,6 +107,21 @@ describe("useActionMutation", () => {
     expect(mutationMock.calls[0]?.values).toEqual(idArgument === null
       ? { proposals: ["proposal_2"] }
       : { round: "round_1", proposals: ["proposal_2"] });
+  });
+
+  test("a call's options turn refine's error notification off for that call only", async () => {
+    const { result } = renderHook(() => useActionMutation("run_probe"), { wrapper: ConsoleProvider });
+
+    await act(async () => {
+      await result.current[0]("rec_1");
+      await result.current[0]("rec_2", {}, { errorNotification: false });
+    });
+
+    // The surface that renders the failure itself (a dialog) runs the call quiet; others keep the toast.
+    expect(mutationMock.calls).toEqual([
+      { dataProviderName: "console", values: { id: "rec_1" } },
+      { dataProviderName: "console", values: { id: "rec_2" }, errorNotification: false },
+    ]);
   });
 
   test("forwards a required scalar argument beside the target id", async () => {

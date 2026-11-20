@@ -15,6 +15,7 @@ _Settings = TypedDict(
         "ANGEE_INTEGRATE_OAUTH_STATE_TTL": int,
         "ANGEE_INTEGRATE_ALLOW_LOCAL_OAUTH_STATE_CACHE": bool,
         "ANGEE_OIDC_DISCOVERY_TTL": int,
+        "ANGEE_OIDC_JWKS_TTL": int,
         "ANGEE_OAUTH_PROVIDER_TYPE_CLASSES": dict[str, str],
         "ANGEE_RESOURCE_SOURCE_CLASSES.url": str,
         "ANGEE_GRAPHQL_RELATED_COUNTS:append": list[str],
@@ -42,6 +43,8 @@ SETTINGS: _Settings = {
     # Lifetime of a cached metadata discovery document; OAuth and OIDC registrations
     # both discover through integrate (the key keeps its historical OIDC name).
     "ANGEE_OIDC_DISCOVERY_TTL": 3600,
+    # Lifetime of PyJWT's cached JWK set for ID-token verification (connect and login).
+    "ANGEE_OIDC_JWKS_TTL": 3600,
     "ANGEE_OAUTH_PROVIDER_TYPE_CLASSES": {
         "generic_oauth2": "angee.integrate.oauth.providers.GenericOAuth2",
     },

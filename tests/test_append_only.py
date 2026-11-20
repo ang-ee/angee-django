@@ -134,11 +134,29 @@ def test_owner_writes_preserve_downstream_queryset_guards(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(AngeeQuerySet, "update", deny)
     monkeypatch.setattr(AngeeQuerySet, "bulk_create", deny)
+    monkeypatch.setattr(AngeeQuerySet, "delete", deny)
     queryset = RetainedEvidence.objects.filter(pk=1)
     with pytest.raises(PermissionDenied, match="downstream write guard"):
         queryset.owner_update(name="changed")
     with pytest.raises(PermissionDenied, match="downstream write guard"):
         queryset.owner_bulk_create([RetainedEvidence(name="new")])
+    with pytest.raises(PermissionDenied, match="downstream write guard"):
+        queryset.owner_delete()
+
+
+def test_owner_delete_runs_the_native_delete_and_admits_only_its_own_raw_path(db: Any) -> None:
+    """The collector may take the raw path for the owner's own rows; a direct raw delete stays refused."""
+
+    del db
+    with system_context(reason="test append-only owner delete"):
+        kept, deleted = RetainedEvidence.objects.create(name="kept"), RetainedEvidence.objects.create(name="deleted")
+        with pytest.raises(ValidationError):
+            RetainedEvidence._base_manager.filter(pk=kept.pk)._raw_delete(RetainedEvidence._base_manager.db)
+        total, by_model = RetainedEvidence._base_manager.filter(pk=deleted.pk).owner_delete()
+        assert (total, by_model) == (1, {"base.RetainedEvidence": 1})
+        assert list(RetainedEvidence._base_manager.values_list("name", flat=True)) == ["kept"]
+        with pytest.raises(ValidationError):
+            RetainedEvidence._base_manager.filter(pk=kept.pk)._raw_delete(RetainedEvidence._base_manager.db)
 
 
 def test_closed_owner_update_preserves_downstream_independent_guard() -> None:

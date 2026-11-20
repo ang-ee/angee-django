@@ -91,7 +91,7 @@ describe("usePairingConnect", () => {
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
 
     await waitFor(() =>
-      expect(hookMocks.mutate).toHaveBeenCalledWith({ name: "Example" }),
+      expect(hookMocks.mutate).toHaveBeenCalledWith({ name: "Example" }, undefined),
     );
     await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
     expect(hookMocks.pairingProps).toMatchObject({

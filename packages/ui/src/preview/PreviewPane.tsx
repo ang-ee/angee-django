@@ -48,6 +48,7 @@ export function PreviewPane({
   const provider = resolvePreviewProvider(
     [...runtimePreviews, ...builtinPreviewProviders],
     resolvedMime,
+    file.size,
   );
   const empty = fallback ?? <EmptyState title={t("preview.unavailable")} />;
   if (!provider) return <>{empty}</>;

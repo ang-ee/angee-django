@@ -66,24 +66,29 @@ export function ThreadsPage(): React.ReactElement {
         </Group>
         <Action
           id="vis-private"
+          placement="menu"
           label={t("threads.makePrivate")}
           set={{ visibility: "private" }}
           visibleWhen={(record) => record.visibility !== "PRIVATE"}
         />
         <Action
           id="vis-unlisted"
+          placement="menu"
           label={t("threads.makeUnlisted")}
           set={{ visibility: "unlisted" }}
           visibleWhen={(record) => record.visibility !== "UNLISTED"}
         />
         <Action
           id="vis-public"
+          placement="menu"
           label={t("threads.makePublic")}
+          confirm={{ title: t("threads.makePublic"), body: t("threads.makePublicConfirmBody") }}
           set={{ visibility: "public" }}
           visibleWhen={(record) => record.visibility !== "PUBLIC"}
         />
         <Action
           id="vis-restricted"
+          placement="menu"
           label={t("threads.makeRestricted")}
           set={{ visibility: "restricted" }}
           visibleWhen={(record) => record.visibility !== "RESTRICTED"}

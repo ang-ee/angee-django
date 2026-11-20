@@ -4,6 +4,7 @@
 export { cn } from "./cn";
 export { formatNumber, numberFormatter, type NumberInput } from "./format-number";
 export { titleCase } from "./titleCase";
+export { optionGroups } from "./option-groups";
 export { rowValueAtPath } from "@angee/metadata";
 export { isLabelKey, resolveLabelKey, statusLabel, type LabelKey, type LabelKeyResolver } from "./labels";
 export { tv, recipeAxes, type VariantProps } from "./variants";

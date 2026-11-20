@@ -1,8 +1,8 @@
 import type { PaginationState, RowSelectionState, SortingState, VisibilityState } from "@tanstack/react-table";
-import type { ResourceQuery } from "@angee/metadata";
+import { QueryParseError, type ResourceQuery } from "@angee/metadata";
 import { DEFAULT_CALENDAR_VIEW_MODE, DEFAULT_RESOURCE_VIEW_PAGE_SIZE, type CalendarViewMode, type ResourceViewKind } from "./capabilities";
 import { Filter, type ResourceViewFilter, type ResourceViewGroup, type ResourceViewInitialState } from "./filter";
-import { normaliseGroupStack, todayCalendarAnchor } from "./search";
+import { normaliseGroupStack, normaliseSourceKeys, todayCalendarAnchor } from "./search";
 import { normalisePageSize } from "../page-size";
 
 /** Native table state plus the Angee view facts carried by router search. */
@@ -20,6 +20,8 @@ export interface ResourceViewState {
   view: ResourceViewKind;
   mode: CalendarViewMode;
   anchor: string;
+  /** Calendar source keys hidden from the grid, sorted. */
+  hiddenSources: readonly string[];
 }
 
 /** Decode declarative defaults at the view boundary; live state stays native.
@@ -46,15 +48,28 @@ export function createResourceViewState(initial: ResourceViewInitialState = {}):
     view,
     mode: initial.mode ?? DEFAULT_CALENDAR_VIEW_MODE,
     anchor: initial.anchor ?? todayCalendarAnchor(),
+    hiddenSources: normaliseSourceKeys(initial.hiddenSources ?? []),
   };
 }
 
-/** Validate native view query facts through their resource owner before reads. */
-export function validateResourceViewState(state: ResourceViewState, query: ResourceQuery): ResourceViewState {
+/**
+ * Validate native view query facts through their resource owner before reads.
+ * `appliesRepeated` is false where the surface groups its stored stack without the
+ * native server group read (in the browser, or through an authored groups
+ * document): a level asking for `GroupSpec.repeated` there is refused, so the URL
+ * never names a grouping the list does not apply.
+ */
+export function validateResourceViewState(
+  state: ResourceViewState,
+  query: ResourceQuery,
+  { appliesRepeated = true }: { appliesRepeated?: boolean } = {},
+): ResourceViewState {
   if (state.queryError) return state;
   try {
     const filter = query.filterFrom(state.filter);
     const groupStack = query.groupsFrom(state.groupStack).map((axis) => axis.spec);
+    const repeated = appliesRepeated ? undefined : groupStack.find((level) => level.repeated);
+    if (repeated) throw new QueryParseError(`groups.${repeated.field}.repeated`, "this list cannot list only repeated values");
     query.sortFrom(state.sorting?.map(({ id, desc }) => ({ field: id, direction: desc ? "DESC" : "ASC" })));
     return { ...state, filter, groupStack };
   } catch (error) {

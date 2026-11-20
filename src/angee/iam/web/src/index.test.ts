@@ -16,6 +16,12 @@ describe("iam addon manifest", () => {
     expect(iam.menus["iam.users"]?.requires).toBe("iam.User#list");
   });
 
+  test("contributes personal Change password and the projected administrative Set password", () => {
+    expect(iam.containers?.["shell#user-menu"]).toHaveProperty("iam.change-password");
+    expect(iam.containers?.["shell#user-menu"]).toHaveProperty(["iam.change-password", "sequence"], 30);
+    expect(iam.containers?.["iam.User#actions-menu"]).toHaveProperty("iam.set-password");
+  });
+
   test("references the landing route from exactly one menu item (chrome derivation)", () => {
     // Regression: a route-ful root + an Overview child both pointing at
     // iam.overview makes createApp throw "referenced by multiple menu items".
@@ -34,6 +40,13 @@ describe("iam addon manifest", () => {
     const columns = iam.containers?.["iam.users#columns"] as Record<string, { requires?: string }>;
     expect(Object.entries(columns).flatMap(([id, child]) => child.requires ? [[id, child.requires]] : []))
       .toEqual([["iam.last-login", "iam.User#read__last_login"]]);
+  });
+
+  test("opens sign-in links on a public route outside the console chrome", () => {
+    expect(iam.routes?.find((route) => route.name === "iam.sign-in-link")).toMatchObject({
+      path: "/sign-in-link",
+      layout: "public",
+    });
   });
 
   test("publishes login backgrounds as frontend build assets", () => {

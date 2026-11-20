@@ -1,5 +1,6 @@
 import { Button, Glyph, MutationDialog, StatusBadge, actionOutcomeSubmitResult, canonicalOptionValue, formatDateTime, mutationDialogValueCodecs, textRoleVariants, useActionOutcomeMutation, useEnumOptions, useRecordChromeContext, type DescriptorField, type MutationDialogValues, type WidgetOption } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
+import type { ActionOutcome, AuthoredMutateOptions } from "@angee/refine";
 import * as React from "react";
 
 import { usePortfolioT } from "./i18n";
@@ -111,13 +112,10 @@ export function PortfolioUpdateComposer({
       invalidateModels: [UPDATE_MODEL, targetModel],
     },
   );
-  const submit = React.useCallback(
-    async (values: PortfolioUpdateValues) => {
-      const outcome = action === "report_project_update"
-        ? await reportProject(targetId, values)
-        : await reportInitiative(targetId, values);
-      return actionOutcomeSubmitResult(outcome);
-    },
+  const report = React.useCallback(
+    (values: PortfolioUpdateValues, options: AuthoredMutateOptions) => action === "report_project_update"
+      ? reportProject(targetId, values, options)
+      : reportInitiative(targetId, values, options),
     [action, reportInitiative, reportProject, targetId],
   );
   const fields = React.useMemo<readonly DescriptorField[]>(
@@ -139,7 +137,7 @@ export function PortfolioUpdateComposer({
   );
 
   return (
-    <MutationDialog<PortfolioUpdateValues>
+    <MutationDialog<PortfolioUpdateValues, ActionOutcome, ActionOutcome>
       trigger={<Button type="button" variant="primary" size="sm">
         <Glyph decorative name="portfolio-update" />
         {t("update.button")}
@@ -152,7 +150,8 @@ export function PortfolioUpdateComposer({
       submittingLabel={t("update.submitting")}
       errorFallback={t("update.error")}
       parseValues={(values) => parsePortfolioUpdateValues(values, healthOptions, t("update.healthRequired"))}
-      onSubmit={submit}
+      mutation={report}
+      mutationResult={actionOutcomeSubmitResult}
     />
   );
 }

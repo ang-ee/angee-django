@@ -4,6 +4,7 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
@@ -35,7 +36,7 @@ import {
   serializableThemeMetadata,
 } from "@angee/ui/theme-runtime";
 
-import { assertShellSettings } from "@angee/app/shell-runtime";
+import { assertShellSettings, shellSiteHead } from "@angee/app/shell-runtime";
 
 const AGGREGATE_MEASURE_OPERATORS = ["sum", "avg", "min", "max"];
 const DELETE_PREVIEW_SELECTION =
@@ -47,6 +48,7 @@ const DELETE_PREVIEW_SELECTION =
 const SCALARS = {
   DateTime: "string",
   Date: "string",
+  Time: "string",
   BigInt: "string",
   Decimal: "string",
   JSON: "@angee/ui#JsonValue",
@@ -70,6 +72,7 @@ export async function generateWebRuntime({
   const manifest = readManifest(runtimeDir);
   assertShellSettings(manifest.deployment?.shell ?? {});
   const addonSources = addonSourceDirectories(runtimeDir, webRoot, manifest, inputs);
+  const head = resolveSiteAssets(manifest, addonSources, inputs);
   const externalEntries = Array.isArray(manifest.codegen) ? manifest.codegen : [];
   const djangoSchemas = schemaNamesFor(runtimeDir);
   const documentRoots = documentRootsFor(webRoot, manifest, addonSources);
@@ -101,7 +104,51 @@ export async function generateWebRuntime({
   }
   emitThemeArtifacts(runtimeDir, installedThemes, inputs);
   emitAppModule(runtimeDir, manifest, djangoSchemas, addonSources, installedThemes);
-  return { inputs: inputs.snapshot(), themes: installedThemes.definitions };
+  return { inputs: inputs.snapshot(), themes: installedThemes.definitions, ...(head ? { head } : {}) };
+}
+
+/** Resolve only the deployment's selected assets, within their owning package. */
+function resolveSiteAssets(manifest, addonSources, inputs) {
+  const head = shellSiteHead(manifest.deployment?.shell ?? {});
+  if (!head?.site) return head;
+  const assets = new Map((manifest.addonPackages ?? []).flatMap((pkg) =>
+    Object.entries(pkg.assets ?? {}).map(([name, file]) => [name, { file, package: pkg.package }]),
+  ));
+  for (const [slot, extensions] of Object.entries({
+    icon: [".svg", ".png", ".ico"], touchIcon: [".png"], image: [".png", ".jpg", ".jpeg"],
+  })) {
+    const name = head.site[slot];
+    if (name === undefined) continue;
+    const asset = assets.get(name);
+    const where = `ANGEE_UI.shell.site.${slot}`;
+    if (!asset) {
+      throw new Error(`${where} names unknown asset ${JSON.stringify(name)}; declared assets: ${[...assets.keys()].sort().join(", ") || "(none)"}.`);
+    }
+    const root = addonSources.get(asset.package).root;
+    const file = path.resolve(root, asset.file);
+    inputs.file(file);
+    const canonical = packageFile(root, file);
+    if (!canonical) {
+      throw new Error(`${where} asset ${JSON.stringify(name)} must be a regular file inside package ${asset.package}: ${file}`);
+    }
+    if (!extensions.includes(path.extname(canonical).toLowerCase())) {
+      throw new Error(`${where} asset ${JSON.stringify(name)} must use ${extensions.join(", ")}: ${canonical}`);
+    }
+    // Vite's dev file route cannot serve these: encodeURI keeps them and its decodeURI never restores their escapes.
+    if (/[#?]/.test(canonical)) {
+      throw new Error(`${where} asset ${JSON.stringify(name)} must not contain "#" or "?" in its path: ${canonical}`);
+    }
+    head.site[slot] = canonical;
+  }
+  return head;
+}
+
+/** The canonical regular file `target` names inside the canonical package root, else undefined. */
+function packageFile(packageRoot, target) {
+  if (!existsSync(target) || !statSync(target).isFile()) return undefined;
+  const file = realpathSync(target);
+  const relative = path.relative(realpathSync(packageRoot), file);
+  return path.isAbsolute(relative) || relative === ".." || relative.startsWith(`..${path.sep}`) ? undefined : file;
 }
 
 function importThemeModule(entry) {
@@ -331,7 +378,7 @@ async function loadInstalledThemes(addonSources, loadThemeModule, inputs) {
     if (!exported) continue;
     const entry = path.resolve(packageRoot, exported);
     inputs.file(entry);
-    if (!entry.startsWith(`${packageRoot}${path.sep}`) || !existsSync(entry)) {
+    if (!packageFile(packageRoot, entry)) {
       throw new Error(`${packageName} exports ./themes from an invalid or missing path: ${exported}`);
     }
     const sources = collectHeadlessSources(entry, packageRoot, new Set(), inputs);
@@ -365,7 +412,7 @@ function emitThemeArtifacts(runtimeDir, installedThemes, inputs) {
       for (const stylesheet of definition.stylesheets ?? []) {
         const absolute = path.resolve(path.dirname(pkg.entry), stylesheet);
         inputs.file(absolute);
-        if (!absolute.startsWith(`${pkg.packageRoot}${path.sep}`) || !existsSync(absolute)) {
+        if (!packageFile(pkg.packageRoot, absolute)) {
           throw new Error(`Theme ${definition.id} references missing stylesheet ${stylesheet}.`);
         }
         fingerprintSources.set(
@@ -422,7 +469,7 @@ function collectHeadlessSources(entry, packageRoot, seen, inputs) {
   const absolute = path.resolve(entry);
   inputs.file(absolute);
   if (seen.has(absolute)) return seen;
-  if (!absolute.startsWith(`${packageRoot}${path.sep}`) || !existsSync(absolute)) {
+  if (!packageFile(packageRoot, absolute)) {
     throw new Error(`Headless theme source escapes its package or is missing: ${absolute}`);
   }
   seen.add(absolute);
@@ -452,7 +499,7 @@ function stylesheetAssets(source, stylesheet, packageRoot, themeId, inputs) {
     }
     const asset = path.resolve(path.dirname(stylesheet), reference.split(/[?#]/, 1)[0]);
     inputs.file(asset);
-    if (!asset.startsWith(`${packageRoot}${path.sep}`) || !existsSync(asset)) {
+    if (!packageFile(packageRoot, asset)) {
       throw new Error(`Theme ${themeId} stylesheet asset escapes its package or is missing: ${reference}.`);
     }
     assets.push(asset);

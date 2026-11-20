@@ -20,7 +20,8 @@ from angee.base.fields.implementation import ImplClassField
 from angee.base.implementations import impl_choices
 from angee.base.testing.queries import statement_startswith
 from angee.integrate import connect
-from angee.integrate.errors import IntegrationError, RequestNotSentError
+from angee.integrate.credentials import CredentialKind
+from angee.integrate.errors import IntegrationError, RequestNotBuiltError, RequestNotSentError
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol, with_query
 from angee.integrate.oauth.errors import OAuthFlowError
@@ -217,10 +218,14 @@ def test_expired_refreshable_grant_is_reused_but_failed_refresh_requires_consent
         credential = integration.credential
         credential.expires_at = timezone.now() - timedelta(minutes=1)
         credential.save(update_fields=["expires_at"])
-        assert Credential.objects.live_oauth_for_user(credential.user, credential.oauth_client).pk == credential.pk
+        assert Credential.objects.live_oauth_for_user(
+            credential.user, credential.oauth_client, external_account=credential.external_account,
+        ).pk == credential.pk
         credential.last_refresh_status = "failed"
         credential.save(update_fields=["last_refresh_status"])
-        assert Credential.objects.live_oauth_for_user(credential.user, credential.oauth_client) is None
+        assert Credential.objects.live_oauth_for_user(
+            credential.user, credential.oauth_client, external_account=credential.external_account,
+        ) is None
 
 
 @pytest.mark.django_db
@@ -231,7 +236,11 @@ def test_material_and_client_changes_immediately_change_refreshability():
         credential.expires_at = timezone.now() - timedelta(minutes=1)
         credential.save(update_fields=["expires_at"])
         assert credential.is_reconnect_required
-        credential.update_material(refresh_token="fake-refresh")
+        # A consent that grants a refresh token, its access token already expired.
+        credential = Credential.objects.upsert_for_user(
+            credential.user, credential.oauth_client, "oauth",
+            {"access_token": "fake", "refresh_token": "fake-refresh", "expires_in": -60},
+        )
         assert credential.refreshable and not credential.is_reconnect_required
         credential.oauth_client.supports_refresh = False
         credential.oauth_client.save(update_fields=["supports_refresh"])
@@ -239,8 +248,8 @@ def test_material_and_client_changes_immediately_change_refreshability():
         assert not credential.refreshable and credential.is_reconnect_required
         credential.oauth_client.supports_refresh = True
         credential.oauth_client.save(update_fields=["supports_refresh"])
-        credential.update_material(refresh_token=None)
-        assert not credential.refreshable and credential.is_reconnect_required
+        credential.refresh_from_db()
+        assert credential.refreshable and not credential.is_reconnect_required
 
 
 @pytest.mark.django_db(transaction=True)
@@ -278,6 +287,53 @@ def test_transport_failure_during_refresh_preserves_consent_health(forced, not_s
     assert credential.reveal() == {"access_token": "fake", "refresh_token": "fake-refresh"}
     assert credential.status == "active" and credential.refreshable
     assert not credential.is_reconnect_required
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_token_request_the_library_will_not_build_is_a_permanent_refusal():
+    """Not sent, but the same request fails the same way: the refusal reads the failure's own transience."""
+
+    with system_context(reason="test unbuildable refresh"):
+        credential = make_integration(
+            "unbuildable-refresh", kind="oauth", material={"access_token": "fake", "refresh_token": "fake-refresh"},
+        ).credential
+        credential.oauth_client.token_endpoint = "https://provider.example/token"
+        credential.oauth_client.save(update_fields=["token_endpoint"])
+
+    def refuse(request):
+        raise RequestNotBuiltError()
+
+    with (
+        mock_transport(refuse),
+        system_context(reason="test unbuildable refresh"),
+        pytest.raises(OAuthFlowError) as raised,
+    ):
+        credential.refresh_now()
+    error = raised.value
+    assert (error.code, error.http_status, error.transient) == ("token_exchange_failed", 400, False)
+
+
+@pytest.mark.parametrize(("failure", "raised"), [
+    pytest.param(RequestNotSentError(), True, id="a-revocation-not-sent-is-retried"),
+    pytest.param(RequestNotBuiltError(), False, id="one-that-cannot-be-built-is-best-effort"),
+])
+def test_revocation_not_sent_is_retried_only_when_a_later_attempt_can_send_it(failure, raised):
+    protocol = OAuthClientProtocol(OAuthClient(
+        slug="provider", display_name="Provider", client_id="client-id",
+        token_endpoint="https://provider.example/token", revoke_endpoint="https://provider.example/revoke",
+    ))
+
+    def refuse(request):
+        raise failure
+
+    with mock_transport(refuse) as requests:
+        if raised:
+            with pytest.raises(OAuthFlowError) as refused:
+                protocol.revoke_token("access-token")
+            assert (refused.value.http_status, refused.value.transient) == (503, True)
+        else:
+            protocol.revoke_token("access-token")
+    assert len(requests) == 1
 
 
 def test_provider_choices_are_contributed_through_the_native_impl_registry():
@@ -322,9 +378,12 @@ def test_channel_typed_feed_resolves_the_feed_admission_selector():
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("request_format", ["form", "json"])
 @pytest.mark.parametrize("status", [429, 503, None])
 @pytest.mark.parametrize("expired", [False, True])
-def test_preexpiry_refresh_failure_keeps_valid_access_token(status, expired):
+def test_preexpiry_refresh_failure_keeps_valid_access_token(request_format, status, expired):
+    """A rate limit, an outage or a request never sent stays transient on both token request formats."""
+
     with system_context(reason="test preexpiry refresh"):
         credential = make_integration(
             "preexpiry-refresh", kind="oauth", material={"access_token": "fake", "refresh_token": "fake-refresh"},
@@ -332,13 +391,13 @@ def test_preexpiry_refresh_failure_keeps_valid_access_token(status, expired):
         credential.expires_at = timezone.now() + timedelta(minutes=-1 if expired else 2)
         credential.save(update_fields=["expires_at"])
         credential.oauth_client.token_endpoint = "https://provider.example/token"
-        credential.oauth_client.token_request_format = "json"  # the JSON shim keeps the provider's status
+        credential.oauth_client.token_request_format = request_format
         credential.oauth_client.save(update_fields=["token_endpoint", "token_request_format"])
 
     def refuse(request):
         if status is None:
             raise RequestNotSentError()
-        return httpx2.Response(status, json={"error": "temporarily_unavailable"})
+        return httpx2.Response(status, json={"error": "rate_limited" if status == 429 else "server_error"})
 
     with mock_transport(refuse), system_context(reason="test use existing access token"):
         if expired:
@@ -369,6 +428,21 @@ def test_signing_secret_refuses_public_clients_without_reading_storage():
 def test_signing_secret_refuses_a_confidential_client_without_a_secret():
     with pytest.raises(IntegrationError, match="has no client secret"):
         OAuthClientProtocol(OAuthClient(manual_redirect_uri="", client_secret="")).confidential_client_secret()
+
+
+@pytest.mark.parametrize(("response_scope", "granted"), [(None, "openid email"), ("openid", "openid")])
+def test_a_code_exchange_that_omits_scope_granted_the_requested_scopes(response_scope, granted):
+    """RFC 6749 §5.1: a response names ``scope`` only when it differs from the request."""
+
+    client = OAuthClient(slug="scope-omitted", client_id="client", client_secret="secret",
+                         token_endpoint="https://provider.example/token")
+    body = {"access_token": "granted", **({"scope": response_scope} if response_scope else {})}
+    with mock_transport(lambda request: httpx2.Response(200, json=body)):
+        tokens = OAuthClientProtocol(client).exchange_code(
+            code="code", redirect_uri="https://app.example/callback", scopes=("openid", "email"),
+        )
+    assert tokens["scope"] == granted
+    assert CredentialKind.OAUTH.handler.upsert_fields(tokens)["granted_scopes"] == granted.split()
 
 
 @pytest.mark.parametrize("request_format", ["form", "json"])

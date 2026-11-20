@@ -61,6 +61,16 @@ def _user(username: str) -> Any:
     return User.objects.create_user(username=username, password="x")
 
 
+def _contacts_stream(directory: Any, owner: Any) -> Any:
+    """An address book's folder, its link in the directory's address-book stream, and the contacts it holds."""
+
+    href = "https://dav.example/books/contacts/"
+    folder = Folder._base_manager.create(name="Contacts", directory=directory, created_by=owner)
+    addressbooks = current_stream(directory, "addressbooks", kind=StreamKind.RECORD_REPLICA)
+    addressbook = RecordLink.objects.observe(addressbooks, href, target=folder)
+    return current_stream(directory, "contacts", href, kind=StreamKind.RECORD_REPLICA, container=addressbook)
+
+
 def test_manual_contact_is_unconfirmed_and_dismissed_link_stays_dismissed(
     db: None,
 ) -> None:
@@ -135,7 +145,7 @@ def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle
             label="Authoritative label",
             created_by=owner,
         )
-        confirmed_party.with_actor(owner).confirm(aspect="handle", handle=shared, values={})
+        confirmed_party.with_actor(owner).confirm_statement(aspect="handle", handle=shared, values={})
         reader_handle = Handle._base_manager.create(
             platform=Handle.Platform.EMAIL,
             value="reader-shared@example.test",
@@ -379,7 +389,7 @@ def _contested_handle(owner: Any, value: str, *links: tuple[float, bool]) -> tup
         party = Party._base_manager.create(display_name=f"Party {index}", created_by=owner)
         claims.append(
             (
-                party.with_actor(owner).confirm(aspect="handle", handle=handle, values={})
+                party.with_actor(owner).confirm_statement(aspect="handle", handle=handle, values={})
                 if is_confirmed
                 else Party.objects.assert_handle(party, handle, asserted_by=owner, confidence=confidence)
             )
@@ -456,10 +466,10 @@ def test_moving_handle_statements_retains_each_partys_decisions_and_evidence(db:
         confirmed, dismissed, stronger = (
             Party._base_manager.create(display_name=name, created_by=owner) for name in ("Bob", "Robert", "Rob")
         )
-        confirmed.with_actor(owner).confirm(aspect="handle", handle=alias, values={})
+        confirmed.with_actor(owner).confirm_statement(aspect="handle", handle=alias, values={})
         folded = Party.objects.assert_handle(confirmed, phone, asserted_by=owner, confidence=0.6, evidence=[alias])
         Party.objects.assert_handle(dismissed, alias, asserted_by=owner, confidence=0.6)
-        dismissed.with_actor(owner).dismiss(aspect="handle", handle=alias)
+        dismissed.with_actor(owner).dismiss_statement(aspect="handle", handle=alias)
         Party.objects.assert_handle(stronger, alias, asserted_by=owner, confidence=0.3)
         Party.objects.assert_handle(stronger, phone, asserted_by=owner, confidence=0.9)
         alias.refresh_from_db()
@@ -593,7 +603,7 @@ def test_merging_a_handle_fills_only_what_the_kept_handle_lacks_and_moves_its_st
         )
         Handle._base_manager.filter(pk=phone.pk).update(display_name="Bob", metadata={"jid": "p"})
         party = Party._base_manager.create(display_name="Bob", created_by=owner)
-        stance = party.with_actor(owner).confirm(aspect="handle", handle=alias, values={})
+        stance = party.with_actor(owner).confirm_statement(aspect="handle", handle=alias, values={})
 
         kept = phone.fold([alias])
 
@@ -1306,8 +1316,7 @@ def test_ingest_contact_upserts_carddav_employment_in_place(db: None) -> None:
         directory = make_integration(
             owner.username + "-directory", model=Directory, backend_class="carddav", owner=owner
         )
-        folder = Folder._base_manager.create(name="Contacts", directory=directory, created_by=owner)
-        stream = current_stream(directory, "contacts", kind=StreamKind.RECORD_REPLICA)
+        stream = _contacts_stream(directory, owner)
         link = RecordLink.objects.observe(stream, "contact-1")
         employee = RelationshipKind._base_manager.create(
             slug="employee",
@@ -1317,14 +1326,13 @@ def test_ingest_contact_upserts_carddav_employment_in_place(db: None) -> None:
             other_party_kind="organization",
         )
         parsed = ParsedContact(
-            uid="contact-1",
             display_name="Ada Lovelace",
             organization="Analytical Engines",
             title="Mathematician",
             role="Programmer",
         )
 
-        person = Party.objects.ingest_contact(parsed, folder=folder, created_by_id=owner.pk, link=link)
+        person = Party.objects.ingest_contact(parsed, stream=stream, created_by_id=owner.pk, link=link)
         synced = Relationship._base_manager.get(
             party=person,
             kind=employee,
@@ -1341,7 +1349,7 @@ def test_ingest_contact_upserts_carddav_employment_in_place(db: None) -> None:
             created_by=owner,
         )
 
-        again = Party.objects.ingest_contact(parsed, folder=folder, created_by_id=owner.pk, link=link)
+        again = Party.objects.ingest_contact(parsed, stream=stream, created_by_id=owner.pk, link=link, target=person)
         unchanged = Relationship._base_manager.get(
             party=again,
             kind=employee,
@@ -1350,16 +1358,15 @@ def test_ingest_contact_upserts_carddav_employment_in_place(db: None) -> None:
         )
 
         changed = ParsedContact(
-            uid="contact-1",
             display_name="Ada Lovelace",
             organization="Analytical Engines",
             title="Principal Mathematician",
             role="Research lead",
         )
-        Party.objects.ingest_contact(changed, folder=folder, created_by_id=owner.pk, link=link, target=person)
+        Party.objects.ingest_contact(changed, stream=stream, created_by_id=owner.pk, link=link, target=person)
         refreshed = Relationship._base_manager.get(pk=first_pk)
         backend = ManualDirectoryBackend(directory)
-        local = backend._local_states(stream, ("contact-1",), links=(RecordLink.objects.get(pk=link.pk),))
+        local = backend.local_states(stream, ("contact-1",), links=(RecordLink.objects.get(pk=link.pk),))
         assert local["contact-1"][0].pk == person.pk
 
         foreign, _created = get_user_model()._base_manager.get_or_create(
@@ -1372,11 +1379,11 @@ def test_ingest_contact_upserts_carddav_employment_in_place(db: None) -> None:
         foreign_type = foreign_link.target_content_type_id
         with pytest.raises(ValidationError, match="Party"):
             Party.objects.ingest_contact(
-                replace(parsed, uid="foreign-contact", display_name="Wrong identity"),
-                folder=folder, created_by_id=owner.pk, link=foreign_link,
+                replace(parsed, display_name="Wrong identity"),
+                stream=stream, created_by_id=owner.pk, link=foreign_link,
             )
         with pytest.raises(ValidationError, match="Party"):
-            backend._local_states(stream, ("foreign-contact",), links=(foreign_link,))
+            backend.local_states(stream, ("foreign-contact",), links=(foreign_link,))
         foreign_link.refresh_from_db()
         person.refresh_from_db()
         assert foreign_link.target_content_type_id == foreign_type
@@ -1410,12 +1417,11 @@ def test_a_card_pass_keeps_its_addresses_local_facts(db: None) -> None:
         directory = make_integration(
             owner.username + "-directory", model=Directory, backend_class="carddav", owner=owner
         )
-        folder = Folder._base_manager.create(name="Contacts", directory=directory, created_by=owner)
-        stream = current_stream(directory, "contacts", kind=StreamKind.RECORD_REPLICA)
+        stream = _contacts_stream(directory, owner)
         link = RecordLink.objects.observe(stream, "contact-4")
         RelationshipKind._base_manager.create(slug="employee", name="Employee", other_party_kind="organization")
-        card = ParsedContact(uid="contact-4", display_name="Ada Lovelace", addresses=(home, work, work))
-        person = Party.objects.ingest_contact(card, folder=folder, created_by_id=owner.pk, link=link)
+        card = ParsedContact(display_name="Ada Lovelace", addresses=(home, work, work))
+        person = Party.objects.ingest_contact(card, stream=stream, created_by_id=owner.pk, link=link)
         assert Address._base_manager.filter(party=person, label="work").count() == 2
         located = Address._base_manager.get(party=person, label="home")
         located.latitude, located.longitude, located.is_primary = 39.8, -89.6, True
@@ -1425,7 +1431,7 @@ def test_a_card_pass_keeps_its_addresses_local_facts(db: None) -> None:
         office = ParsedAddress(label="office", street="3 Far Rd", city="Ogdenville", country="US")
         Party.objects.ingest_contact(
             replace(card, addresses=(moved, work, office)),
-            folder=folder,
+            stream=stream,
             created_by_id=owner.pk,
             link=link,
             target=person,
@@ -1451,13 +1457,12 @@ def test_ingest_contact_requires_employee_relationship_kind(db: None) -> None:
         directory = make_integration(
             owner.username + "-directory", model=Directory, backend_class="carddav", owner=owner
         )
-        folder = Folder._base_manager.create(name="Contacts", directory=directory, created_by=owner)
-        stream = current_stream(directory, "contacts", kind=StreamKind.RECORD_REPLICA)
+        stream = _contacts_stream(directory, owner)
         link = RecordLink.objects.observe(stream, "contact-2")
-        parsed = ParsedContact(uid="contact-2", display_name="Grace", organization="Navy")
+        parsed = ParsedContact(display_name="Grace", organization="Navy")
 
         with pytest.raises(ValidationError, match="employee.*RelationshipKind"):
-            Party.objects.ingest_contact(parsed, folder=folder, created_by_id=owner.pk, link=link)
+            Party.objects.ingest_contact(parsed, stream=stream, created_by_id=owner.pk, link=link)
 
     assert not Person._base_manager.filter(display_name="Grace").exists()
 
@@ -1534,7 +1539,7 @@ def test_an_authoritative_stream_outranks_a_persons_edit_but_never_a_decision(db
         party.refresh_from_db()
         assert party.display_name == "Ada (me)"
 
-        party.with_actor(owner).confirm(aspect="identity", values={"display_name": "Ada"})
+        party.with_actor(owner).confirm_statement(aspect="identity", values={"display_name": "Ada"})
         SyncStream.objects.set_authoritative(stream, True)
         party.refresh_from_db()
         assert party.display_name == "Ada"
@@ -1605,7 +1610,7 @@ def test_dismissing_an_identity_value_clears_it_and_confirming_the_stance_restor
         owner = _user("dismiss-owner")
         party = Party._base_manager.create(display_name="Ada", created_by=owner)
         stance = party.with_actor(owner).statements.set(aspect="identity", values={"display_name": "Ada"})
-        party.with_actor(owner).dismiss(aspect="identity")
+        party.with_actor(owner).dismiss_statement(aspect="identity")
         party.refresh_from_db()
         assert party.display_name == ""
         assert party.statements.provenance("display_name").get().is_dismissed

@@ -157,7 +157,14 @@ export interface FormViewSaveSurface {
   loading: boolean;
   /** Native detail-query failure; cached record data remains available during refresh failures. */
   loadError: HttpError | null;
+  /** The form takes no edit now: it is read-only, or its record has not arrived. */
   formReadOnly: boolean;
+  /**
+   * The form takes edits, its record's arrival aside: an awaited record counts as
+   * taking them unless the form, its resource or its fields rule edits out, so what
+   * reserves room for an edit's controls keeps it while the record loads.
+   */
+  formTakesEdits: boolean;
   formIsDirty: boolean;
   pending: boolean;
   saveError: string | null;
@@ -324,6 +331,7 @@ export function useFormViewSave({
     document: saveOperation.document,
   });
   const invalidate = useInvalidate();
+  const resourceInvalidates = useResourceInvalidates(dataResource ? [dataResource.modelLabel] : undefined);
   const linesActive =
     linesConfig !== null &&
     linesField !== null &&
@@ -351,13 +359,9 @@ export function useFormViewSave({
   );
   const invalidateResource = React.useCallback(async () => {
     if (!dataResource) return;
-    await invalidate({
-      resource: refineResourceName(dataResource),
-      dataProviderName: dataResource.schemaName,
-      id: id ?? undefined,
-      invalidates: ["list", "many", "detail"],
-    });
-  }, [dataResource, id, invalidate]);
+    await Promise.all(resourceInvalidates.map((target) => invalidate(target)));
+    // The successful-submit path below also invalidates authored reads for this model.
+  }, [dataResource, invalidate, resourceInvalidates]);
 
   const values = React.useMemo(() => {
     if (acknowledgedSource !== undefined || isCreate) {
@@ -373,18 +377,22 @@ export function useFormViewSave({
       ? recordToValues(record, formFields, linesSeed(seedLineRows)) : emptyValues;
   }, [acknowledgedSource, emptyValues, formFields, isCreate, linesSeed, record, seedLineRows]);
   const recordUnavailable = !isCreate && record == null;
-  const formReadOnly = React.useMemo(
-    () =>
+  const formTakesEdits = React.useMemo(
+    () => !(
       readOnly ||
-      recordUnavailable ||
-      (!isCreate && (Array.isArray(record?.permissions) || Boolean(modelMetadata?.fields.permissions))
+      // A form is read-only for a record that projects its permissions without
+      // `write`, whether or not the model's metadata declares the field.
+      (!isCreate && record != null
+        && (Array.isArray(record.permissions) || Boolean(modelMetadata?.fields.permissions))
         && !holdsPermission(record, "write")) ||
-      (!isCreate && record !== null && Boolean(readOnlyWhen?.(record))) ||
+      (!isCreate && record != null && Boolean(readOnlyWhen?.(record))) ||
       (!submitOwner &&
         !Boolean(isCreate ? dataResource?.roots.create : dataResource?.roots.update)) ||
-      (formFields.length > 0 && formFields.every((field) => field.readOnly)),
-    [dataResource, formFields, isCreate, modelMetadata, readOnly, record, readOnlyWhen, recordUnavailable, submitOwner],
+      (formFields.length > 0 && formFields.every((field) => field.readOnly))
+    ),
+    [dataResource, formFields, isCreate, modelMetadata, readOnly, record, readOnlyWhen, submitOwner],
   );
+  const formReadOnly = recordUnavailable || !formTakesEdits;
   const { registerFieldValidation, validateFields } = useFieldValidation();
   const form = useForm<FormValues>({
     defaultValues: emptyValues,
@@ -783,7 +791,7 @@ export function useFormViewSave({
       userEditedFieldsRef.current.add(scoped(field.name));
       clearErrors(scoped(field.name));
       if (isCreate || !field.createOnly) {
-        const seeds = field.prefill?.(value);
+        const seeds = field.prefill?.(value, (scope ? form.getValues(scope) : form.getValues()) as Row);
         if (seeds) {
           const replacements = new Set(field.prefillReplace ?? []);
           for (const [name, seed] of Object.entries(seeds)) {
@@ -865,6 +873,7 @@ export function useFormViewSave({
     loading,
     loadError,
     formReadOnly,
+    formTakesEdits,
     formIsDirty,
     pending,
     saveError,

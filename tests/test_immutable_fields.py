@@ -2,6 +2,8 @@
 
 import pytest
 from django.core.exceptions import ValidationError
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 
 from tests.conftest import create_user
 from tests.core_persistence import ReceiptRow
@@ -66,3 +68,17 @@ def test_deferred_row_can_edit_mutable_content_without_changing_receipts():
     partial.save(update_fields=["title"])
     row.refresh_from_db()
     assert (row.identity, row.title) == ("original", "updated")
+
+
+def test_a_partial_save_checks_only_the_immutable_fields_it_writes():
+    recipient = create_user("recipient")
+    row = ReceiptRow.objects.create(identity="original")
+    row.identity, row.title = "unsaved", "updated"
+    with CaptureQueriesContext(connection) as queries:
+        row.save(update_fields=["title"])
+    assert [query["sql"] for query in queries.captured_queries if query["sql"].startswith("SELECT")] == []
+    row.recipient = recipient
+    with pytest.raises(ValidationError, match="recipient"):
+        row.save(update_fields=["recipient"])
+    row.refresh_from_db()
+    assert (row.identity, row.title, row.recipient_id) == ("original", "updated", None)

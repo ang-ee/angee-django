@@ -31,7 +31,7 @@ import {
   type ContainerChild,
   type FormOverrideMap,
   } from "../../runtime";
-import { modelLabelSegment } from "@angee/metadata";
+import { modelLabelSegment, schemaFieldMetadataFromDataResources } from "@angee/metadata";
 import { testDataResource, withTestResourceInventory } from "@angee/metadata/testing";
 import type { GetOneParams, NotificationProvider } from "@refinedev/core";
 import type {
@@ -47,6 +47,7 @@ import {
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../../feedback";
+import { ControlBandProvider } from "../../layouts/ControlBand";
 import { createUiTestProviders } from "../../testing";
 import { defaultWidgets } from "../../widgets";
 import { deserializeFormSpec } from "./form-spec";
@@ -206,7 +207,7 @@ describe("FormView", () => {
     warn.mockRestore();
   });
 
-  test("renders declared record actions in the action menu", async () => {
+  test("renders a lone declared record action as a secondary button", async () => {
     renderWithProviders(
       <FormView resource="notes.Note" id="note-1">
         <Field name="title" label="Title" title />
@@ -214,8 +215,54 @@ describe("FormView", () => {
       </FormView>,
     );
 
+    const archive = await screen.findByRole("button", { name: "Archive" });
+    expect(archive.classList.contains("bg-inset")).toBe(true);
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+  });
+
+  test.each([null, undefined])("a create form offers only Create, without own, contributed or generic record verbs (id=%s)", async (id) => {
+    sdkMocks.record = null;
+    const run = vi.fn();
+    renderWithProviders(<FormView resource="notes.Note" id={id}
+      deleteAction={{ canDelete: true, isPending: false, onDelete: run }}
+      actions={[{ id: "own-menu", label: "Own menu verb", placement: "menu", run }]}>
+      <Field name="title" label="Title" title />
+      <Action id="refresh" label="Refresh" run={run} />
+      <Action id="review" label="Review" primary submit={run} />
+      <Action id="rename" label="Rename" placement="toolbar" set={{ title: "Renamed" }} />
+    </FormView>, recordActionsMetadata(), undefined, formChildren({
+      "notes.Note#sections": {
+        "notes.inspect": { content: <Action id="inspect" label="Inspect" run={run} /> },
+      },
+      "notes.Note#actions": { "notes.publish": { content: <ActionTrigger>Publish</ActionTrigger> } },
+      "notes.Note#actions-menu": { "notes.export": { content: <ActionTrigger>Export</ActionTrigger> } },
+    }));
+
+    const create = await screen.findByRole("button", { name: "Create" });
+    expect(create).toHaveProperty("disabled", false);
+    expect(within(create.closest('[role="toolbar"]')!).getAllByRole("button")).toEqual([create]);
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+    expect(run).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "New" } });
+    fireEvent.click(create);
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledWith({ data: { title: "New" } }));
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  test.each([false, true])("a section verb stays in the menu without demoting the host's lone verb (primary: %s)", async (primary) => {
+    renderWithProviders(<FormView resource="notes.Note" id="note-1">
+      <Field name="title" label="Title" title />
+      <Action id="publish" label="Publish" run={vi.fn()} />
+    </FormView>, undefined, undefined, formChildren({ "notes.Note#sections": {
+      "imap.reindex": { content: <Action id="reindex" label="Reindex IMAP" primary={primary} run={vi.fn()} /> },
+    } }));
+
+    const publish = await screen.findByRole("button", { name: "Publish" });
+    expect(publish.classList.contains("bg-inset")).toBe(true);
+    expect(screen.queryByRole("button", { name: "Reindex IMAP" })).toBeNull();
     fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
-    await screen.findByRole("menuitem", { name: "Archive" });
+    expect(await screen.findByRole("menuitem", { name: "Reindex IMAP" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Publish" })).toBeNull();
   });
 
   test("a section contribution with a permission is absent for a reader without it", async () => {
@@ -227,6 +274,7 @@ describe("FormView", () => {
       fields: {
         title: { name: "title", kind: "scalar", scalar: "String" },
         reminderAt: { name: "reminderAt", kind: "scalar", scalar: "DateTime" },
+        permissions: { name: "permissions", kind: "list", scalar: "String" },
       },
     } } }, undefined, formChildren({ "notes.Note#sections": {
       "notes.private": { permission: "write", content: <>
@@ -253,23 +301,71 @@ describe("FormView", () => {
     const renderActions = () => renderWithProviders(<FormView resource="notes.Note" id="note-1">
       <Field name="title" title />
       <Action id="archive" label="Archive" permission="write" run={vi.fn()} />
-    </FormView>, undefined, undefined, formChildren({ "notes.Note#actions": {
+    </FormView>, recordActionsMetadata(), undefined, formChildren({ "notes.Note#actions": {
       "notes.reopen": { permission: "write", content: <button type="button">Reopen</button> },
     } }));
     renderActions();
     await screen.findByRole("heading", { name: "First" });
     expect(screen.queryByRole("button", { name: "Reopen" })).toBeNull();
-    // The verb is a menu item: open the menu when there is one and look for it there.
-    const actionsMenu = screen.queryByRole("button", { name: "Actions" });
-    if (actionsMenu) fireEvent.click(actionsMenu);
-    expect(screen.queryByRole("menuitem", { name: "Archive" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Archive" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
 
     cleanup();
     sdkMocks.record = { ...sdkMocks.record, permissions: ["read", "write"] };
     renderActions();
     expect(await screen.findByRole("button", { name: "Reopen" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
-    expect(await screen.findByRole("menuitem", { name: "Archive" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Archive" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+  });
+
+  test("the Actions menu is the band's last verb control, after the form's own and contributed buttons", async () => {
+    sdkMocks.record = { ...sdkMocks.record, permissions: ["read", "write"] };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1">
+      <Field name="title" title />
+      <Action id="sync" label="Sync now" permission="write" run={vi.fn()} />
+      <Action id="copy" label="Copy link" permission="write" placement="menu" run={vi.fn()} />
+    </FormView>, recordActionsMetadata(), undefined, formChildren({ "notes.Note#actions": {
+      "notes.pause": { permission: "write", content: <button type="button">Pause</button> },
+    } }));
+    const trigger = await screen.findByRole("button", { name: "Actions" });
+    const own = screen.getByRole("button", { name: "Sync now" });
+    const contributed = screen.getByRole("button", { name: "Pause" });
+    expect(own.compareDocumentPosition(contributed) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(contributed.compareDocumentPosition(trigger) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(trigger.hasAttribute("data-overflow-trigger")).toBe(true);
+  });
+
+  test("an editable record keeps its command band's layout row from load to its first edit; a read-only record's collapses", async () => {
+    const collapse = "not-has-[>div>:not([hidden]):not(:empty)]:hidden";
+    const kept = "data-layout-band:not-has-[>div>:not([hidden]):not(:empty)]:invisible";
+    const commandBand = () => screen.getByTestId("control-row").querySelector<HTMLElement>("[role=toolbar]");
+    // As a record page renders it: the form's command band claims the layout's control row.
+    function LayoutRow({ children }: { children: ReactElement }) {
+      const [host, setHost] = useState<HTMLElement | null>(null);
+      return <ControlBandProvider host={host}><div data-testid="control-row" ref={setHost} />{children}</ControlBandProvider>;
+    }
+    const renderNote = () => renderWithProviders(<LayoutRow><FormView resource="notes.Note" id="note-1">
+      <Field name="title" label="Title" title />
+    </FormView></LayoutRow>);
+
+    sdkMocks.record = { ...sdkMocks.record, permissions: ["read"] };
+    renderNote();
+    await screen.findByRole("heading", { name: "First" });
+    expect(commandBand()?.classList).toContain(collapse);
+
+    cleanup();
+    sdkMocks.record = { ...sdkMocks.record, permissions: ["read", "write"] };
+    let resolveRecord!: (value: { data: Row }) => void;
+    sdkMocks.getOne.mockImplementationOnce(() => new Promise((resolve) => { resolveRecord = resolve; }));
+    renderNote();
+    // The row is kept while the record loads, so its arrival shifts nothing either.
+    await waitFor(() => expect(commandBand()?.classList).toContain(kept));
+    expect(commandBand()?.classList).not.toContain(collapse);
+    await act(async () => resolveRecord({ data: sdkMocks.record! }));
+    await screen.findByDisplayValue("First");
+    // Save and Discard arrive with the first edit into the row already kept for them.
+    expect(commandBand()?.classList).toContain(kept);
+    expect(commandBand()?.classList).not.toContain(collapse);
   });
 
   test("hides the record delete action when its predicate does not match", async () => {
@@ -312,6 +408,231 @@ describe("FormView", () => {
     expect(await screen.findByRole("menuitem", { name: "Delete" })).toBeTruthy();
   });
 
+  test.each([false, true])("the form supplies %s archive state actions and selects their flags without page declarations", async (archived) => {
+    sdkMocks.record = { ...sdkMocks.record, is_archived: archived, is_trashed: false, permissions: ["read", "write", "delete"] };
+    sdkMocks.projectToSelection = true;
+    renderWithProviders(<FormView resource="notes.Note" id="note-1">
+      <Field name="title" label="Title" title />
+    </FormView>, recordActionsMetadata());
+
+    await screen.findByDisplayValue("First");
+    expect(sdkMocks.recordSelection).toEqual(expect.arrayContaining(["permissions", "is_archived", "is_trashed"]));
+    expect(Boolean(screen.queryByText("Archived"))).toBe(archived);
+    const label = archived ? "Unarchive" : "Archive";
+    expect(screen.queryByRole("button", { name: label })).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
+    expect(await screen.findByRole("menuitem", { name: label })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: archived ? "Archive" : "Unarchive" })).toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Move to trash" })).toBeTruthy();
+    expect(screen.queryByRole("separator")).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: label }));
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledWith({ data: { id: "note-1", is_archived: !archived } }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() => expect(Boolean(screen.queryByText("Archived"))).toBe(!archived));
+  });
+
+  test.each(["explicit", "permission", "record-lock", "fields"] as const)("Archive follows the form's %s read-only rule", async (reason) => {
+    sdkMocks.record = { ...sdkMocks.record, is_archived: false, permissions: reason === "permission" ? ["read"] : ["read", "write", "delete"] };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" readOnly={reason === "explicit"}
+      readOnlyWhen={reason === "record-lock" ? () => true : undefined}>
+      <Field name="title" label="Title" title readOnly={reason === "fields"} />
+      <Action id="inspect" label="Inspect" placement="menu" run={vi.fn()} />
+    </FormView>, recordActionsMetadata());
+
+    await screen.findByRole("heading", { name: "First" });
+    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Inspect" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Archive" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Unarchive" })).toBeNull();
+    if (reason === "explicit") expect(screen.queryByRole("menuitem", { name: "Move to trash" })).toBeNull();
+    expect(sdkMocks.mutate).not.toHaveBeenCalled();
+  });
+
+  test("the generic menu does not prevent a lone page verb from becoming a button", async () => {
+    sdkMocks.record = { ...sdkMocks.record, is_archived: false, is_trashed: false, permissions: ["write", "delete"] };
+    const publish = vi.fn();
+    renderWithProviders(<FormView resource="notes.Note" id="note-1">
+      <Field name="title" label="Title" title />
+      <Action id="publish" label="Publish" run={publish} />
+    </FormView>, recordActionsMetadata());
+
+    const button = await screen.findByRole("button", { name: "Publish" });
+    expect(button.classList.contains("bg-inset")).toBe(true);
+    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Archive" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Move to trash" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Publish" })).toBeNull();
+  });
+
+  test("page menu verbs precede containers, then Archive, Restore and Delete", async () => {
+    sdkMocks.record = { ...sdkMocks.record, is_archived: false, is_trashed: true, permissions: ["write", "delete"] };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1"
+      deleteAction={{ canDelete: true, isPending: false, onDelete: vi.fn() }}>
+      <Field name="title" label="Title" title />
+      <Action id="download" label="Download" placement="menu" run={vi.fn()} />
+    </FormView>, recordActionsMetadata(), undefined, formChildren({
+      "notes.Note#actions-menu": { "notes.export": { content: <ActionTrigger>Export</ActionTrigger> } },
+    }));
+
+    await screen.findByDisplayValue("First");
+    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
+    await screen.findByRole("menuitem", { name: "Archive" });
+    const menu = within(screen.getByRole("menu"));
+    expect(menu.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Download", "Export", "Archive", "Restore", "Delete",
+    ]);
+    expect(menu.getAllByRole("separator")).toHaveLength(1);
+  });
+
+  test.each([false, true])("the form supplies the trash verb for is_trashed=%s even without an update root", async (trashed) => {
+    sdkMocks.record = { ...sdkMocks.record, is_trashed: trashed, permissions: ["read", "delete"] };
+    sdkMocks.projectToSelection = true;
+    renderWithProviders(<FormView resource="notes.Note" id="note-1">
+      <Field name="title" label="Title" title />
+    </FormView>, recordActionsMetadata({ roots: { update: undefined } }));
+
+    await screen.findByRole("heading", { name: "First" });
+    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
+    expect(await screen.findByRole("menuitem", { name: trashed ? "Restore" : "Move to trash" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: trashed ? "Move to trash" : "Restore" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Archive" })).toBeNull();
+    expect(sdkMocks.recordSelection).toContain("is_trashed");
+  });
+
+  test.each([undefined, null, [], ["read"], ["write"], ["delete"]].flatMap((permissions) =>
+    [false, true].map((trashed) => ({ permissions, trashed }))))("record permissions gate writes and Trash, while Delete follows the resource and trash state ($permissions, trashed=$trashed)", async ({ permissions, trashed }) => {
+    sdkMocks.record = { ...sdkMocks.record, is_archived: false, is_trashed: trashed,
+      ...(permissions === undefined ? {} : { permissions }) };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1"
+      deleteAction={{ canDelete: true, isPending: false, onDelete: vi.fn() }}>
+      <Field name="title" label="Title" title />
+      <Action id="inspect" label="Inspect" placement="menu" run={vi.fn()} />
+    </FormView>, recordActionsMetadata());
+
+    if (permissions?.includes("write")) await screen.findByDisplayValue("First");
+    else await screen.findByRole("heading", { name: "First" });
+    expect(Boolean(screen.queryByRole("textbox", { name: "Title" }))).toBe(Boolean(permissions?.includes("write")));
+    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
+    await screen.findByRole("menuitem", { name: "Inspect" });
+    expect(Boolean(screen.queryByRole("menuitem", { name: "Archive" }))).toBe(Boolean(permissions?.includes("write")));
+    for (const name of [trashed ? "Restore" : "Move to trash", "Delete"]) {
+      const action = screen.queryByRole("menuitem", { name });
+      expect(Boolean(action)).toBe(name === "Delete" ? trashed : Boolean(permissions?.includes("delete")));
+      if (action) expect(action.getAttribute("aria-disabled")).not.toBe("true");
+    }
+  });
+
+  test.each([false, true])("a form without permissions still gates Delete on trash state (%s)", async (trashed) => {
+    sdkMocks.record = { ...sdkMocks.record, is_archived: false, is_trashed: trashed };
+    const metadata = recordActionsMetadata();
+    const resource = metadata.labels["notes.Note"]!.resource;
+    renderWithProviders(<FormView resource="notes.Note" id="note-1"
+      deleteAction={{ canDelete: true, isPending: false, onDelete: vi.fn() }}>
+      <Field name="title" label="Title" title />
+    </FormView>, recordActionsMetadata({ fields: resource.fields?.filter((field) => field.name !== "permissions") }));
+    await screen.findByDisplayValue("First");
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    for (const name of ["Archive", trashed ? "Restore" : "Move to trash"]) {
+      expect(await screen.findByRole("menuitem", { name })).toBeTruthy();
+    }
+    expect(Boolean(screen.queryByRole("menuitem", { name: "Delete" }))).toBe(trashed);
+  });
+
+  test.each([undefined, null])("a missing trash state cannot offer hard Delete (%s)", async (is_trashed) => {
+    sdkMocks.record = { ...sdkMocks.record, is_trashed, permissions: ["delete"] };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1"
+      deleteAction={{ canDelete: true, isPending: false, onDelete: vi.fn() }}>
+      <Field name="title" label="Title" title />
+      <Action id="inspect" label="Inspect" placement="menu" run={vi.fn()} />
+    </FormView>, recordActionsMetadata());
+    await screen.findByRole("heading", { name: "First" });
+    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
+    await screen.findByRole("menuitem", { name: "Inspect" });
+    expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
+  });
+
+  test.each([false, true])("a custom submit owns saves and receives no generic archive patch (%s)", async (archived) => {
+    sdkMocks.record = { ...sdkMocks.record, is_archived: archived, is_trashed: false, permissions: ["write", "delete"] };
+    const submit = vi.fn(async () => ({ status: "ok" as const, data: sdkMocks.record! }));
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" submit={submit}>
+      <Field name="title" label="Title" title />
+    </FormView>, recordActionsMetadata());
+    await screen.findByDisplayValue("First");
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Move to trash" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: /^(Archive|Unarchive)$/ })).toBeNull();
+    expect(submit).not.toHaveBeenCalled();
+    expect(sdkMocks.mutate).not.toHaveBeenCalled();
+  });
+
+  test("a dirty form disables Archive without sending a patch", async () => {
+    sdkMocks.record = { ...sdkMocks.record, is_archived: false, permissions: ["write"] };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1">
+      <Field name="title" label="Title" title />
+    </FormView>, recordActionsMetadata());
+    fireEvent.change(await screen.findByRole("textbox", { name: "Title" }), { target: { value: "Unsaved title" } });
+    await screen.findByRole("button", { name: "Save" });
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    const archive = await screen.findByRole("menuitem", { name: "Archive" });
+    expect(archive.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(archive);
+    expect(sdkMocks.mutate).not.toHaveBeenCalled();
+  });
+
+  test("Archive sends the saved expected_revision through the resource update", async () => {
+    sdkMocks.record = { ...sdkMocks.record, is_archived: false, revision: 7, permissions: ["write"] };
+    const resource = recordActionsMetadata().labels["notes.Note"]!.resource;
+    renderWithProviders(<FormView resource="notes.Note" id="note-1">
+      <Field name="title" label="Title" title />
+    </FormView>, recordActionsMetadata({
+      updateArguments: [{ name: "expected_revision", type: "Int" }],
+      fields: [...(resource.fields ?? []), { name: "revision", kind: "scalar", scalar: "Int", readable: true,
+        creatable: false, updatable: false, aggregatable: false, requiredOnCreate: false }],
+    }));
+    await screen.findByDisplayValue("First");
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Archive" }));
+    await waitFor(() => expect(dataProvider.update).toHaveBeenCalledWith(expect.objectContaining({
+      id: "note-1", variables: { is_archived: true },
+      meta: expect.objectContaining({ gqlVariables: { expected_revision: 7 } }),
+    })));
+  });
+
+  test("the form's trash prompt names its record title", async () => {
+    sdkMocks.record = { ...sdkMocks.record, is_trashed: false, permissions: ["delete"] };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1">
+      <Field name="title" label="Title" title />
+    </FormView>, recordActionsMetadata());
+    await screen.findByRole("heading", { name: "First" });
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Move to trash" }));
+    const prompt = await screen.findByRole("alertdialog", { name: "Move “First” to the trash?" });
+    fireEvent.click(within(prompt).getByRole("button", { name: "Keep “First”" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(sdkMocks.mutate).not.toHaveBeenCalled();
+  });
+
+  test("a create form has no generic record actions", () => {
+    sdkMocks.record = null;
+    renderWithProviders(<FormView resource="notes.Note">
+      <Field name="title" label="Title" title />
+    </FormView>, recordActionsMetadata());
+    expect(screen.getByRole("button", { name: "Create" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+  });
+
+  test.each(["document", "workspace"] as const)("an archived read-only record carries the chip in its %s header", async (recordPresentation) => {
+    sdkMocks.record = { ...sdkMocks.record, is_archived: true, permissions: ["read"] };
+    sdkMocks.projectToSelection = true;
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" readOnly recordPresentation={recordPresentation}>
+      <Field name="title" label="Title" title />
+    </FormView>, recordActionsMetadata());
+
+    const title = await screen.findByRole("heading", { name: "First" });
+    expect(within(title.closest("header")!).getByText("Archived")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+  });
+
   test("keeps every record-aware toolbar action operable", async () => {
     const publish = vi.fn();
     renderWithProviders(
@@ -347,8 +668,7 @@ describe("FormView", () => {
       </FormView>,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Archive" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Archive" }));
 
     await waitFor(() =>
       expect(sdkMocks.mutate).toHaveBeenCalledWith({
@@ -366,8 +686,7 @@ describe("FormView", () => {
       </FormView>,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Sync" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Sync" }));
 
     await waitFor(() => expect(run).toHaveBeenCalledTimes(1));
     expect(run.mock.calls[0]?.[0]).toMatchObject({ record: { id: "note-1" } });
@@ -464,6 +783,32 @@ describe("FormView", () => {
     expect(details.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(details);
     expect(details.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  test("overflow sections remain reachable and keep the selected pane and unsaved form visible", async () => {
+    const nativeRect = Element.prototype.getBoundingClientRect;
+    const rect = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (this.querySelector(':scope > [role="tablist"]')) return { width: 310 } as DOMRect;
+      if (this.parentElement?.hasAttribute("inert")) return { width: 100 } as DOMRect;
+      return nativeRect.call(this);
+    });
+    try {
+      renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={fields}
+        recordTabs={["Overview", "Activity", "History", "Related"].map((label) => ({
+          id: label, label, render: () => <p>{label} content</p>,
+        }))} />);
+      const title = await screen.findByLabelText("Title");
+      fireEvent.change(title, { target: { value: "Unsaved title" } });
+      expect(screen.queryByRole("tab", { name: "Related" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "More sections" }));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Related" }));
+      expect(await screen.findByRole("tab", { name: "Related", selected: true })).toBeTruthy();
+      expect(screen.getByText("Related content")).toBeTruthy();
+      expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Unsaved title");
+      expect(screen.getAllByRole("tablist")).toHaveLength(1);
+    } finally {
+      rect.mockRestore();
+    }
   });
 
   test.each(["document", "workspace"] as const)("%s records keep the sheet above one strip of declared and contributed panes", async (recordPresentation) => {
@@ -725,7 +1070,7 @@ describe("FormView", () => {
 
   test("locks the saved form when projected permissions omit write", async () => {
     sdkMocks.record = { ...sdkMocks.record, permissions: ["read"] };
-    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={[{ name: "title", title: true }]} />);
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={[{ name: "title", title: true }]} />, recordActionsMetadata());
     expect(await screen.findByRole("heading", { name: "First" })).toBeTruthy();
     expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
   });
@@ -748,6 +1093,7 @@ describe("FormView", () => {
         title: { name: "title", kind: "scalar", scalar: "String" },
         secret: { name: "secret", kind: "scalar", scalar: "String" },
         redacted_fields: { name: "redacted_fields", kind: "list", scalar: "String" },
+        permissions: { name: "permissions", kind: "list", scalar: "String" },
       } } } },
     );
 
@@ -797,6 +1143,52 @@ describe("FormView", () => {
     expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
     expect(screen.queryByText("Private context")).toBeNull();
     expect(screen.queryByText("Untitled")).toBeNull();
+  });
+
+  test("a missing record renders the form's renderUnavailable with its id and the default state", () => {
+    const renderUnavailable = vi.fn((id: string, unavailable: ReactElement) => <div>
+      <p>{`Moved: ${id}`}</p>
+      {unavailable}
+    </div>);
+    renderWithProviders(<FormView resource="notes.Note" id="missing"
+      fields={[{ name: "title", title: true }]}
+      acknowledgedSource={{ record: null, values: null, loading: false }}
+      renderUnavailable={renderUnavailable} />);
+    expect(screen.getByText("Moved: missing")).toBeTruthy();
+    expect(screen.getByText("Record unavailable")).toBeTruthy();
+    expect(renderUnavailable).toHaveBeenCalledWith("missing", expect.anything());
+  });
+
+  test("a renderUnavailable that returns the element it was passed renders the default unchanged", () => {
+    renderWithProviders(<FormView resource="notes.Note" id="missing"
+      fields={[{ name: "title", title: true }]}
+      acknowledgedSource={{ record: null, values: null, loading: false }}
+      renderUnavailable={(_id, unavailable) => unavailable} />);
+    expect(screen.getByText("Record unavailable")).toBeTruthy();
+  });
+
+  test("renderUnavailable is not called while loading, on a load error, or for a new record", async () => {
+    const renderUnavailable = vi.fn(() => <p>Moved</p>);
+    renderWithProviders(<FormView resource="notes.Note" id="loading"
+      fields={[{ name: "title", title: true }]}
+      acknowledgedSource={{ record: null, values: null, loading: true }}
+      renderUnavailable={renderUnavailable} />);
+    expect(screen.queryByText("Moved")).toBeNull();
+    cleanup();
+
+    sdkMocks.record = null;
+    renderWithProviders(<FormView resource="notes.Note" id="failing"
+      fields={[{ name: "title", title: true }]}
+      renderUnavailable={renderUnavailable} />);
+    expect(await screen.findByText("Could not load this record.")).toBeTruthy();
+    expect(screen.queryByText("Moved")).toBeNull();
+    cleanup();
+
+    renderWithProviders(<FormView resource="notes.Note" fields={[{ name: "title", title: true }]}
+      renderUnavailable={renderUnavailable} />);
+    expect(screen.queryByText("Moved")).toBeNull();
+    expect(screen.queryByText("Record unavailable")).toBeNull();
+    expect(renderUnavailable).not.toHaveBeenCalled();
   });
 
   test("lets a long saved title wrap in the hero", async () => {
@@ -1655,7 +2047,7 @@ describe("FormView", () => {
       workflowRelationMetadata(),
     );
     expect(screen.getByRole("combobox", { name: "Workflow" }).textContent).toContain(
-      "Untitled",
+      "Select…",
     );
     expect(screen.queryByRole("textbox", { name: "Workflow" })).toBeNull();
   });
@@ -2240,7 +2632,7 @@ describe("FormView", () => {
     renderWithProviders(
       <FormView resource="notes.Note" id="note-1">
         <Field name="title" label="Title" title />
-        <Action id="archive" label="Archive" set={{ status: "ARCHIVED" }} />
+        <Action id="archive" label="Archive" placement="menu" set={{ status: "ARCHIVED" }} />
       </FormView>,
       undefined,
       undefined,
@@ -2389,13 +2781,12 @@ describe("FormView", () => {
     // The original and its variant may reuse a tab id: only one reaches the row, as its one pane.
     expect(screen.getByRole("heading", { name: kind === "WHATSAPP" ? "WhatsApp sync" : "Sync" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: kind === "WHATSAPP" ? "Sync" : "WhatsApp sync" })).toBeNull();
-    const actions = screen.queryByRole("button", { name: "Actions" });
+    expect(screen.queryByRole("button", { name: "Reindex IMAP" })).toBeNull();
     if (kind === "IMAP") {
-      fireEvent.click(actions!);
+      fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
       expect(await screen.findByRole("menuitem", { name: "Reindex IMAP" })).toBeTruthy();
-    } else if (actions) {
-      fireEvent.click(actions);
-      await waitFor(() => expect(screen.queryByRole("menu")).toBeTruthy());
+    } else {
+      expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
       expect(screen.queryByRole("menuitem", { name: "Reindex IMAP" })).toBeNull();
     }
   });
@@ -2595,7 +2986,7 @@ describe("FormView", () => {
       <FormView resource="notes.Note" id="note-1">
         <Field name="title" label="Title" title />
       </FormView>,
-      implMetadata(),
+      implMetadata({ permissions: { name: "permissions", kind: "list", scalar: "String" } }),
       undefined,
       formChildren({
         "parties.Party#actions": {
@@ -3489,11 +3880,12 @@ describe("FormView", () => {
     expect(screen.queryByRole("tab")).toBeNull();
   });
 
-  test("read-only records retain declared lifecycle actions while generated edits stay hidden", async () => {
+  test.each(["run", "submit"] as const)("read-only records promote their remaining %s verb after omitting set actions", async (binding) => {
     const run = vi.fn(async () => undefined);
+    const submit = vi.fn(async () => ({ ok: true, message: "Review recorded." }));
     renderWithProviders(<FormView resource="notes.Note" id="note-1" readOnly>
       <Field name="title" label="Title" title />
-      <Action id="review" label="Review" placement="toolbar" primary run={run} />
+      <Action id="review" label="Review" submitLabel="Record review" {...(binding === "run" ? { run } : { submit })} />
       <Action id="rename" label="Rename" set={{ title: "Changed" }} />
     </FormView>);
     expect(await screen.findByRole("heading", { name: "First" })).toBeTruthy();
@@ -3502,8 +3894,25 @@ describe("FormView", () => {
     expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: "Rename" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Review" }));
-    await waitFor(() => expect(run).toHaveBeenCalledOnce());
+    expect(screen.queryByRole("button", { name: "Rename" })).toBeNull();
+    const review = screen.getByRole("button", { name: "Review" });
+    expect(review.classList.contains("bg-inset")).toBe(true);
+    act(() => review.focus());
+    fireEvent.click(review);
+    if (binding === "submit") {
+      const dialog = await screen.findByRole("dialog", { name: "Review" });
+      await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+      fireEvent.click(within(dialog).getByRole("button", { name: "Record review" }));
+      await waitFor(() => expect(submit).toHaveBeenCalledWith(
+        {}, expect.objectContaining({ record: sdkMocks.record }), expect.objectContaining({ errorNotification: false }),
+      ));
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Review" })).toBeNull());
+      await waitFor(() => expect(document.activeElement).toBe(review));
+      expect(run).not.toHaveBeenCalled();
+    } else {
+      await waitFor(() => expect(run).toHaveBeenCalledOnce());
+      expect(submit).not.toHaveBeenCalled();
+    }
   });
 
   test("a title-placed field wraps below the title instead of squeezing it to a sliver", async () => {
@@ -4140,6 +4549,23 @@ function defaultResource(typeName: string, modelLabel: string): DataResourceMeta
     ...testDataResource(modelLabel, { typeNames: { node: typeName } }),
     modelName: modelLabelSegment(modelLabel),
   };
+}
+
+function recordActionsMetadata(overrides: Partial<DataResourceMetadata> = {}): SchemaFieldMetadata {
+  return schemaFieldMetadataFromDataResources([testDataResource("notes.Note", {
+    resourceType: "notes/note",
+    fields: [
+      { name: "title", kind: "scalar", scalar: "String", readable: true, creatable: true,
+        updatable: true, aggregatable: false, requiredOnCreate: false },
+      { name: "is_archived", kind: "scalar", scalar: "Boolean", readable: true, creatable: true,
+        updatable: true, aggregatable: false, requiredOnCreate: false, archivable: true },
+      { name: "is_trashed", kind: "scalar", scalar: "Boolean", readable: true, creatable: false,
+        updatable: false, aggregatable: false, requiredOnCreate: false, trashable: true },
+      { name: "permissions", kind: "list", scalar: "String", readable: true, creatable: false,
+        updatable: false, aggregatable: false, requiredOnCreate: false },
+    ],
+    ...overrides,
+  })]);
 }
 
 function workflowRelationMetadata(): TestSchemaMetadata {

@@ -1,17 +1,22 @@
 import * as React from "react";
 import {
   ResourceQuery,
+  resourceLifecycle,
   isClientRowModel,
   modelMetadataForLabel,
   useModelMetadata,
   useSchemaFieldMetadata,
 } from "@angee/metadata";
-import type { Row } from "@angee/metadata";
+import type { ModelMetadata, Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
 import { useValueStable } from "../../../lib/use-value-stable";
-import { modelChain, useAppRuntime, useContainer, useResourceRecordMatchFields, type ResourceViewKindContent } from "../../../runtime";
+import { modelChain, useAppRuntime, useContainer, useResourceRecordMatchFields, type ResourceCardContent, type ResourceViewKindContent } from "../../../runtime";
+import { useContainerAdmission } from "../../form/container-admission";
+import type { CardFrame } from "../../../ui/card";
 import { withResourceViewScope, useResourceViewMaybe, type ResourceViewContextValue } from "../resource-view-context";
-import { DEFAULT_TEXT_FILTER_FIELD, Filter, isBuiltInResourceViewKind } from "../resource-view-model";
+import { ResourceViewArchiveScopeContext, useArchiveScopeFilter } from "../surface/archive-scope";
+import { useRecordChromeContextMaybe } from "../record-chrome-context";
+import { DEFAULT_TEXT_FILTER_FIELD, Filter, isBuiltInResourceViewKind, resourceViewKindCapabilities } from "../resource-view-model";
 import { ResourceViewKindsProvider, useOfferedResourceViewKinds, useResourceViewKindContent } from "../resource-view-kinds";
 import { ContributedViewSurface } from "./contributed-view-surface";
 import { GanttCollectionSurface } from "../../gantt/gantt-collection-surface";
@@ -19,12 +24,12 @@ import { LinkedGanttCollectionSurface } from "../../gantt/linked-gantt-collectio
 import { CalendarCollectionSurface } from "../../calendar/calendar-collection-surface";
 import { type GroupedResourceViewSurface, type ResourceViewSurface, type UseResourceViewSurfaceProps } from "../resource-view-surface";
 import type { ResolvedBoardLaneSource } from "../resource-view-board-lanes";
-import type { ListViewProps } from "../resource-view-types";
+import type { CardRenderer, ListViewProps } from "../resource-view-types";
 import { resolveResourceViewGroup } from "../resource-view-utils";
 import { columnsWithMetadataDefaults, relationFieldInfo } from "../model-metadata-defaults";
 import { useRelationFacets } from "../../relation/relation-facet";
 import { useScalarFacets } from "../../relation/scalar-facet";
-import { declaredGroupDefaults, validateDeclaredGroupDefaults } from "../search/group-defaults";
+import { declaredGroupDefaults, useAppliedRepeated, validateDeclaredGroupDefaults } from "../search/group-defaults";
 import { initialResourceSorting } from "../resource-view-codecs";
 import { useRowActionsSurface } from "../RowActions";
 import { isBoardFoldField, isBoardRankField, ListViewContent } from "./content";
@@ -49,6 +54,8 @@ function ListViewFrame<TRow extends Row = Row>(
   props: ListViewProps<TRow>,
 ): React.ReactElement {
   const resourceView = useResourceViewMaybe();
+  const recordChrome = useRecordChromeContextMaybe();
+  const archiveScope = props.presentation !== "embedded" || recordChrome === null;
   const metadata = useModelMetadata(props.source ? "" : props.resource);
   const modelMetadata = props.source ? null : metadata;
   const initial = React.useMemo(() => {
@@ -80,7 +87,9 @@ function ListViewFrame<TRow extends Row = Row>(
     presentation: props.presentation,
     initialState: initial.state,
     children: (scopedResourceView) => (
-      <ValidatedListViewBody {...props} resourceView={scopedResourceView} />
+      <ResourceViewArchiveScopeContext.Provider value={archiveScope}>
+        <ValidatedListViewBody {...props} resourceView={scopedResourceView} />
+      </ResourceViewArchiveScopeContext.Provider>
     ),
   });
 }
@@ -92,13 +101,23 @@ function ValidatedListViewBody<TRow extends Row>(
   const metadata = useModelMetadata(props.source ? "" : props.resource);
   const query =
     props.source?.query ?? (metadata ? ResourceQuery.from(metadata) : null);
+  // How this list groups its stored stack, decided once: lanes from a declared
+  // relation, or the server group read (an authored source's groups document
+  // included), whose native form is the one read that applies `GroupSpec.repeated`.
+  const { view } = props.resourceView.state;
+  const group = (view === "board" || view === "gantt") && props.laneSource ? { field: props.laneSource.field } : null;
+  const serverGroups = !isClientRowModel(metadata?.resource) && (view === "list" || (view === "board" && !props.laneSource));
+  const appliesRepeated = serverGroups && !props.source;
+  // Lanes and a kind that never groups leave the stored stack unrendered.
+  const acceptsRepeated = Boolean(group) || !resourceViewKindCapabilities(view).grouping || appliesRepeated;
+  const resourceView = useAppliedRepeated(props.resourceView, acceptsRepeated);
   try {
-    validateDeclaredGroupDefaults("ListView", props.defaultGroup, props.defaultGroups, props.resourceView.defaultState, t);
+    validateDeclaredGroupDefaults("ListView", props.defaultGroup, props.defaultGroups, resourceView.defaultState, t);
   } catch (error) {
     return <ErrorBanner description={error instanceof Error ? error.message : String(error)} />;
   }
-  let error = props.resourceView.state.queryError;
-  if (!error && props.renderPaneRow && props.resourceView.state.view !== "list") {
+  let error = resourceView.state.queryError;
+  if (!error && props.renderPaneRow && view !== "list") {
     error = new Error(`Pane lists support only the list view.`);
   }
   if (!error && query) {
@@ -106,17 +125,11 @@ function ValidatedListViewBody<TRow extends Row>(
       const defaults = declaredGroupDefaults(props.defaultGroup, props.defaultGroups);
       query.groupsFrom(defaults.groupStack);
       for (const stack of Object.values(defaults.groupStacks)) query.groupsFrom(stack);
-      error = validateResourceViewState(
-        props.resourceView.state,
-        query,
-      ).queryError;
-      query.toWhere(props.resourceView.baseFilter, props.resourceView.state.filter);
-      const group =
-        (props.resourceView.state.view === "board" || props.resourceView.state.view === "gantt") && props.laneSource
-          ? { field: props.laneSource.field }
-          : null;
+      // A flag left by a view switch or a URL is dropped above; only an authored default asking for it is refused.
+      error = validateResourceViewState(resourceView.state, query, { appliesRepeated: acceptsRepeated }).queryError;
+      query.toWhere(resourceView.baseFilter, resourceView.state.filter);
       if (group) query.group(group);
-      const groups = query.groupsFrom(props.resourceView.state.groupStack);
+      const groups = query.groupsFrom(resourceView.state.groupStack);
       if (
         props.maxGroupDepth !== undefined &&
         groups.length > props.maxGroupDepth
@@ -125,16 +138,9 @@ function ValidatedListViewBody<TRow extends Row>(
           `This collection supports at most ${props.maxGroupDepth} grouping levels.`,
         );
       }
-      const effectiveGroups =
-        (props.resourceView.state.view === "board" || props.resourceView.state.view === "gantt") && props.laneSource && group
-          ? [group]
-          : groups;
+      const effectiveGroups = group ? [group] : groups;
       if (effectiveGroups.length > 0) {
-        if (
-          !isClientRowModel(metadata?.resource) &&
-          (props.resourceView.state.view === "list" ||
-            (props.resourceView.state.view === "board" && !props.laneSource))
-        ) {
+        if (serverGroups) {
           query.toGroupBy(effectiveGroups);
         } else {
           query.selection(effectiveGroups);
@@ -149,11 +155,11 @@ function ValidatedListViewBody<TRow extends Row>(
     <ResourceViewKinds resource={props.source ? "" : props.resource}>
       {error ? (
         <ResourceQueryError error={error} onReset={() => {
-          if (props.renderPaneRow) props.resourceView.setView("list");
-          props.resourceView.resetQuery();
+          if (props.renderPaneRow) resourceView.setView("list");
+          resourceView.resetQuery();
         }} />
       ) : (
-        <ListViewBody {...props} />
+        <ListViewBody {...props} resourceView={resourceView} serverGroups={serverGroups} appliesRepeated={appliesRepeated} />
       )}
     </ResourceViewKinds>
   );
@@ -174,6 +180,46 @@ function ResourceViewKinds({ resource, children }: { resource: string; children:
 function useResourceModels(resource: string, canonical: string | null | undefined): readonly string[] {
   return React.useMemo(() => modelChain(canonical, resource), [canonical, resource]);
 }
+
+/**
+ * The model's registered card (`<app.Model>#card`) as one renderer: per row, the
+ * most specific model's card the row admits (its `impl` child or variant for the
+ * row's implementation, else the original), the MTI parent's when the model has
+ * none. Its frame is the model's original card's; the list selects every
+ * candidate's `requiredFields` and the implementation fields. A page that declares
+ * a card of its own (`renderCard`, `boardCard` or `gallery`) keeps it.
+ */
+function useModelCard(
+  resource: string,
+  modelMetadata: ModelMetadata | null,
+  pageDeclaresCard: boolean,
+): { render: CardRenderer; frame?: CardFrame; fields: readonly string[] } | undefined {
+  const models = useResourceModels(resource, modelMetadata?.resource?.canonicalLabel);
+  const implFields = modelMetadata?.resource?.implFields;
+  const candidates = useContainer<ResourceCardContent>("resource#card", { models, projection: true });
+  const admits = useContainerAdmission("resource#card", models, implFields);
+  return React.useMemo(() => {
+    if (pageDeclaresCard || candidates.length === 0) return undefined;
+    const specific = [...models].reverse();
+    const original = specific.map((model) => candidates.find((child) =>
+      child.address === `${model}#card` && child.impl === undefined && !child.variant)).find(Boolean);
+    const cardFor = (row: Row): ResourceCardContent | undefined => {
+      for (const model of specific) {
+        const admitted = candidates.filter((child) => child.address === `${model}#card` && admits(child.id, row));
+        const card = admitted.find((child) => child.impl !== undefined || child.variant) ?? admitted[0];
+        if (card) return card.content;
+      }
+      return undefined;
+    };
+    return {
+      render: (row, context) => cardFor(row)?.render(row, context) ?? null,
+      ...(original?.content.frame ? { frame: original.content.frame } : {}),
+      fields: [...new Set([...candidates.flatMap((child) => child.requiredFields ?? []), ...(implFields ?? [])])],
+    };
+  }, [admits, candidates, implFields, models, pageDeclaresCard]);
+}
+
+const NO_GROUPS: readonly never[] = [];
 
 function ListViewBody<TRow extends Row = Row>({
   resource,
@@ -198,6 +244,7 @@ function ListViewBody<TRow extends Row = Row>({
   customFilterFields: explicitCustomFilterFields,
   groupOptions: explicitGroupOptions,
   order,
+  defaultView,
   defaultGroup,
   defaultGroups,
   defaultExpandedGroups,
@@ -205,6 +252,7 @@ function ListViewBody<TRow extends Row = Row>({
   gantt,
   laneSource,
   boardCard,
+  gallery,
   onCreate,
   onCreateInLane,
   createLabel,
@@ -216,14 +264,21 @@ function ListViewBody<TRow extends Row = Row>({
   toolbarActions,
   bulkActions,
   cardActions,
-  renderCard,
+  renderCard: pageRenderCard,
+  cardFrame: pageCardFrame,
   emptyContent,
   className,
   presentation = "page",
   chrome,
   resourceView,
+  serverGroups,
+  appliesRepeated,
 }: ListViewProps<TRow> & {
   resourceView: ResourceViewContextValue;
+  /** The view groups its stored stack through the server group read (`ValidatedListViewBody`). */
+  serverGroups: boolean;
+  /** That read is the native one, which applies `GroupSpec.repeated`. */
+  appliesRepeated: boolean;
 }): React.ReactElement {
   const t = useUiT();
   const rowActionSurface = useRowActionsSurface(rowActions);
@@ -242,6 +297,9 @@ function ListViewBody<TRow extends Row = Row>({
   const modelMetadata = source ? null : discoveredMetadata;
   const textFilterField = declaredTextField === undefined && !modelMetadata ? DEFAULT_TEXT_FILTER_FIELD : declaredTextField;
   const recordMatchFields = useResourceRecordMatchFields(source ? "" : resource);
+  const modelCard = useModelCard(source ? "" : resource, modelMetadata, Boolean(pageRenderCard || boardCard || gallery));
+  const renderCard = pageRenderCard ?? modelCard?.render;
+  const cardFrame = pageCardFrame ?? modelCard?.frame;
   // A declared filter option names the fields its rows need while its filter is active.
   const activeFilter = Filter.from(Filter.combineOptional(resourceView.baseFilter, resourceView.state.filter));
   const filterOptionFields = (explicitFilterOptions ?? []).flatMap(
@@ -250,15 +308,20 @@ function ListViewBody<TRow extends Row = Row>({
   const queryFields = useValueStable([
     ...(fields ?? []), ...filterOptionFields, ...recordMatchFields,
     ...(boardCard ? [boardCard.title, ...(boardCard.fields ?? [])] : []),
+    ...[gallery?.image, gallery?.title, gallery?.subtitle].filter((field): field is string => Boolean(field)),
+    ...(modelCard?.fields ?? []),
   ]);
-  // The Calendar kind is offered only where the page declares occurrence sources;
-  // the switcher's options derive from that (list + board always).
+  // The Calendar kind is offered only where the page declares occurrence sources and
+  // the gallery where there is a card to draw (or a page or view opens on it); the
+  // switcher's options derive from that (list and board always).
   const ganttAvailable = !source && Boolean(gantt && (laneSource || gantt.linked) && modelMetadata);
   const calendarAvailable = (calendar?.sources.length ?? 0) > 0;
   const dashboardAvailable = !source && Boolean(modelMetadata?.resource?.roots.aggregate);
+  const galleryAvailable = Boolean(renderCard || gallery)
+    || defaultView === "gallery" || resourceView.state.view === "gallery";
   const declaredSources = React.useMemo(
-    () => ({ calendar: calendarAvailable, gantt: ganttAvailable, dashboard: dashboardAvailable }),
-    [calendarAvailable, ganttAvailable, dashboardAvailable],
+    () => ({ calendar: calendarAvailable, gantt: ganttAvailable, dashboard: dashboardAvailable, gallery: galleryAvailable }),
+    [calendarAvailable, ganttAvailable, dashboardAvailable, galleryAvailable],
   );
   const offered = useOfferedResourceViewKinds(declaredSources);
   // A page's own list of views is narrowed by what the layers offer; otherwise the container decides.
@@ -330,17 +393,22 @@ function ListViewBody<TRow extends Row = Row>({
     () => Filter.combineOptional(resourceView.baseFilter, resourceView.state.filter),
     [resourceView.state.filter, resourceView.baseFilter],
   );
-  const selectable = declaredSelectable ?? presentation !== "embedded";
+  const facetFilter = useArchiveScopeFilter(modelMetadata?.resource, mergedFilter);
+  const lifecycle = resourceLifecycle(modelMetadata?.resource, modelMetadata);
+  const hasSelectionAction = Boolean(bulkActions) || (!source && Boolean(
+    lifecycle.archiveFlag || lifecycle.trashFlag || lifecycle.canDelete || modelMetadata?.resource.grantable?.length,
+  ));
+  const selectable = declaredSelectable ?? (presentation !== "embedded" && hasSelectionAction);
   const declaredFacets = useRelationFacets(
     source ? "" : resource,
     facets,
-    mergedFilter,
+    facetFilter,
   );
   const scalarFacets = useScalarFacets(
     resource,
     resolvedColumns,
     modelMetadata,
-    mergedFilter,
+    facetFilter,
   );
   const laneSourceGroup = React.useMemo(
     () =>
@@ -351,19 +419,17 @@ function ListViewBody<TRow extends Row = Row>({
   );
   const boardGroupingPinned =
     (resourceView.state.view === "board" || resourceView.state.view === "gantt") && laneSourceGroup !== null;
-  const effectiveGroupStack = React.useMemo(() => boardGroupingPinned
+  // The gallery never groups: it pages the collection's records as cards.
+  const ungrouped = resourceView.state.view === "gallery";
+  const effectiveGroupStack = React.useMemo(() => ungrouped ? NO_GROUPS : boardGroupingPinned
     ? [laneSourceGroup!] : resourceView.state.groupStack,
-  [boardGroupingPinned, laneSourceGroup, resourceView.state.groupStack]);
+  [ungrouped, boardGroupingPinned, laneSourceGroup, resourceView.state.groupStack]);
 
   // A client resource holds the whole set in the browser, so it groups through
   // TanStack row models — never the server _groups/GroupedListBody path (the
   // aggregate it would query does not exist).
   const clientRowModel = isClientRowModel(modelMetadata?.resource);
-  const serverGroupedMode =
-    (resourceView.state.view === "list" ||
-      (resourceView.state.view === "board" && !resolvedLaneSource)) &&
-    effectiveGroupStack.length > 0 &&
-    !clientRowModel;
+  const serverGroupedMode = serverGroups && effectiveGroupStack.length > 0;
   const surfaceProps: UseResourceViewSurfaceProps<TRow> = {
     resource,
     relatedModels,
@@ -405,6 +471,7 @@ function ListViewBody<TRow extends Row = Row>({
       boardGroupingPinned={boardGroupingPinned}
       clientRowModel={clientRowModel}
       serverGroupedMode={serverGroupedMode}
+      appliesRepeated={appliesRepeated}
       declaredFacets={declaredFacets}
       scalarFacets={scalarFacets}
       explicitGroupOptions={explicitGroupOptions}
@@ -427,7 +494,9 @@ function ListViewBody<TRow extends Row = Row>({
       bulkActions={bulkActions}
       cardActions={cardActions}
       boardCard={boardCard}
+      gallery={gallery}
       renderCard={renderCard}
+      cardFrame={cardFrame}
       emptyContent={resolvedEmptyContent}
       className={className}
       presentation={presentation}

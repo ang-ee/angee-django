@@ -8,16 +8,22 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from angee.base.validators import validate_value
+from angee.scheduling.due import DueRule
 
 
 class MilestoneTemplate(BaseModel):
-    """A milestone's name is its stable identity within a setup template."""
+    """A milestone's name is its stable identity within a setup template.
+
+    A person setting a project up picks dates; a template phase carries a
+    ``due_rule`` that resolves the target date in the new project.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     name: str = Field(min_length=1, max_length=200)
     description: str = ""
     start_date: date | None = None
     target_date: date | None = None
+    due_rule: DueRule | None = None
 
     @classmethod
     def values(cls, value: Any) -> dict[str, Any]:

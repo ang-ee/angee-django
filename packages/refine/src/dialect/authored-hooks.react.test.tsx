@@ -136,6 +136,17 @@ describe("useAuthoredMutation", () => {
       .toEqual([false, "default"]);
   });
 
+  test("a surface that renders one call's failure turns off its error notification for that call", async () => {
+    const document = "mutation Probe { probe }" as never;
+    const { result } = renderHook(() => useAuthoredMutation(document), { wrapper: ConsoleProvider });
+    await act(async () => {
+      await result.current[0]({ value: "dialog" } as never, { errorNotification: false });
+      await result.current[0]({ value: "button" } as never);
+    });
+    expect(mutationMock.calls.map((call) => "errorNotification" in call ? call.errorNotification : "default"))
+      .toEqual([false, "default"]);
+  });
+
   test("invalidates authored reads by model labels only", async () => {
     const document = "mutation Probe { probe }" as never;
     const { result } = renderHook(

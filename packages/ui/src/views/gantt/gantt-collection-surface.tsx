@@ -12,6 +12,7 @@ import { useValueStable } from "../../lib/use-value-stable";
 import { useStatusTone } from "../../widgets/use-status-tone";
 import { useRelationOptions } from "../relation/relation-options";
 import { ResourceListFrame } from "../resource/ResourceListFrame";
+import { useArchiveScopeFilter } from "../resource/surface/archive-scope";
 import { useResourceSearch } from "../resource/search/use-resource-search";
 import { useSearchCatalog, type UseSearchCatalogInput } from "../resource/search/catalog";
 import type { ResourceToolbarProps } from "../../toolbars";
@@ -107,9 +108,10 @@ export function GanttCollectionSurface<TRow extends Row>({
         throw new Error(`Gantt marker field "${markerSpec.lane}" must reference the lane resource "${laneSource.relation.resource}".`);
       }
       const label = markerSpec.label ?? markerMetadata.resource.recordRepresentation ?? "id";
+      const filter = ganttLaneFilter(markerQuery, markerSpec.lane, lanes.map((lane) => lane.value), markerSpec.filter);
       return {
         fields: ["id", markerSpec.date, label, ...(markerSpec.tone ? [markerSpec.tone] : []), ...markerQuery.selection([{ field: markerSpec.lane }])],
-        filter: ganttLaneFilter(markerQuery, markerSpec.lane, lanes.map((lane) => lane.value), markerSpec.filter),
+        filter,
         order: markerQuery.fields.id?.sort ? { id: "ASC" as const } : undefined,
         error: null,
       };
@@ -117,9 +119,10 @@ export function GanttCollectionSurface<TRow extends Row>({
       return { fields: [], filter: undefined, order: undefined, error: errorFromUnknown(cause) };
     }
   }, [markerSpec, markerMetadata, laneSource.relation.resource, lanes]);
+  const markerFilter = useArchiveScopeFilter(markerMetadata?.resource, markerSource.filter);
   const markerFields = useValueStable(markerSource.fields);
   const markers = useGanttRecords({
-    resource: markerMetadata?.resource ?? null, fields: markerFields, filter: markerSource.filter, order: markerSource.order,
+    resource: markerMetadata?.resource ?? null, fields: markerFields, filter: markerFilter, order: markerSource.order,
     enabled: Boolean(markerSpec && lanes.length && !barScope.error && !markerSource.error),
   });
   const fetching = catalogue.list.fetching || records.fetching || markers.fetching;

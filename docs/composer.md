@@ -176,6 +176,19 @@ and artifact rendering. Register dotted integration classes in
 owns deterministic publication and receipt checking. Serving code consumes
 published results and never imports an addon build adapter.
 
+An integration's output may depend only on inputs the snapshot holds: the
+selected apps, their fingerprinted files (`COMPOSE_FINGERPRINT_GLOBS`) and
+fingerprinted settings. A setting that shapes an integration's output, read
+directly or through the library it renders, is declared beside the integration,
+`"COMPOSE_FINGERPRINT_SETTINGS:append"` in the addon's autoconfig, as
+[`angee.web`](../src/angee/web/autoconfig.py) does for `ANGEE_UI` and
+[`angee.graphql`](../src/angee/graphql/autoconfig.py) for `STRAWBERRY_DJANGO`
+and `ANGEE_GRAPHQL_RESOURCE_FILTERS`. `compose --if-stale` and serving startup verify only the receipt's
+snapshot digest and owned-file bytes, never a re-render: output that follows an
+undeclared input goes stale under `compose --check` while `--if-stale` skips.
+A fingerprinted setting is structural: it is authored configuration and refused
+from the environment.
+
 ### Project migration history
 
 Each project owns ordinary Django migration files in
@@ -185,19 +198,25 @@ history. Review and commit schema changes before provisioning.
 
 Data upgrades use native `RunPython` or `RunSQL` operations with explicit Django
 dependencies. Use the historical `apps` registry and the schema editor's database
-alias. Addon releases describe required data upgrades; the project authors them
-against its own retained history. Fresh installations need only their applicable
+alias. An addon that needs a data upgrade ships a migration template at
+`src/angee/<addon>/compose_migrations/<app_label>/<name>.py`: typed forward and
+reverse callables and a `Migration` whose operations use them, with a documented
+placeholder dependency list and never `__latest__`. The project copies the module
+into `runtime/<app_label>/migrations/`, replaces the placeholders with its own
+explicit leaves and keeps the bytes; its history stays its own. django-compose 0.1
+has no automatic runtime-migration seam, so hosts copy templates by hand, as the
+release's CHANGELOG entry directs. The addon keeps a template until the
+CHANGELOG's stated upgrade cutoff. Fresh installations need only their applicable
 initialization, not completed upgrades from older deployments.
 
 The django-compose 0.1 migration cutoff removes transition discovery, baseline
 assertions and adoption. Remove `COMPOSE_TRANSITION_SOURCE` from project settings
-and `[tool.angee.migrations.initial_baseline]` from package metadata. Previously
-shipped `compose_migrations/` files are historical upgrade assets, not compiler
-inputs. Before upgrading an existing project, inventory pending data operations
-and author any still required into its native history. Retained materialized
-migrations continue as ordinary Django files; preserve their bytes and required
-Python imports. Do not create empty origins to certify work already represented
-by the project's native history.
+and `[tool.angee.migrations.initial_baseline]` from package metadata. The compiler
+never reads `compose_migrations/`. Before upgrading an existing project, inventory
+pending data operations and author any still required into its native history.
+Retained materialized migrations continue as ordinary Django files; preserve their
+bytes and required Python imports. Do not create empty origins to certify work
+already represented by the project's native history.
 
 `MIGRATION_MODULES` is Django's routing contract. The compiler preserves tracked
 histories, including history-only apps whose source addon has been removed.
@@ -242,7 +261,8 @@ An addon ships its own `pyproject.toml` as package data. Common metadata stays i
 - `[tool.angee.graphql]` owns schema/domain declaration overrides.
 - `AppConfig.rebac_schema` owns the permission schema path.
 - Conventional Python modules own executable contributions.
-- `web/package.json` owns web identity and external `angee.codegen` entries.
+- `web/package.json` owns web identity, external `angee.codegen` entries and
+  named `angee.assets` files.
 
 Resources are resolved relative to the addon's `resources/` directory. The
 resource owner preserves canonical ledger paths and adoption keys. Removing a

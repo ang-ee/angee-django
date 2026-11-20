@@ -7,11 +7,12 @@ that sit the third-party ``Vendor`` catalogue, the first-class ``Integration``
 an integration runs over, addon-owned concrete child integration kinds, and
 outbound ``WebhookSubscription``.
 
-This addon is pure OAuth: it connects *out* to external systems and never
-authenticates a session. OIDC login fields and ID-token verification live one
-level up in ``iam_integrate_oidc``, which extends this OAuth base and composes the
-``iam`` user. Concrete capabilities and their implementation selectors live in
-their owning addons; this addon never imports them.
+This addon connects *out* to external systems and never authenticates a
+session. It owns OIDC metadata (issuer, JWKS) and ID-token verification, which
+identify a connected account; OIDC login policy lives one level up in
+``iam_integrate_oidc``, which extends this OAuth base and composes the ``iam``
+user. Concrete capabilities and their implementation selectors live in their
+owning addons; this addon never imports them.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
-from collections.abc import Collection, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from copy import copy, deepcopy
 from dataclasses import replace
@@ -29,18 +30,31 @@ from itertools import batched
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 from urllib.parse import urlsplit, urlunsplit
 
-from deepdiff import DeepDiff
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
-from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.db import connection, models, transaction
-from django.db.models import OuterRef, Prefetch, Q, Subquery
-from django.db.models.functions import JSONObject
+from django.db.models import (
+    BooleanField,
+    Case,
+    Exists,
+    ExpressionWrapper,
+    OuterRef,
+    Prefetch,
+    Q,
+    Subquery,
+    Value,
+    When,
+)
+from django.db.models.functions import Cast, Concat, JSONObject, NullIf
 from django.utils import timezone
+from django.utils.crypto import salted_hmac
+from django.utils.text import capfirst
+from django.views.decorators.debug import sensitive_variables
 from django_compose.models import Composable
 from rebac import (
     PermissionDenied,
@@ -61,19 +75,22 @@ from angee.base.fields.text import DiagnosticTextField
 from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
 from angee.base.locks import LockKey, record_lock_key, task_lock, task_lock_is_held, task_locks_are_cross_process
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel, record_display_label
+from angee.base.models.base import AngeeDataModel, AngeeModel, record_display_label
 from angee.base.models.implementations import ImplDefaultsMixin
-from angee.base.models.merge_references import MergePolicy, references
+from angee.base.models.locks import ImmutableFieldsMixin
+from angee.base.models.merge_references import ForeignKeyReference, MergePolicy, references
 from angee.base.models.ownership import OwnerMixin, OwnerQuerySet
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.transitions import StateTransitions, save_state, transition
 from angee.base.permissions import actor_user_id, instance_actor
-from angee.base.refs import generic_pointer_target
-from angee.base.serialization import canonical_json
+from angee.base.querysets import row_lock_queryset
+from angee.base.refs import generic_pointer_model, generic_pointer_target
+from angee.base.serialization import canonical_json, canonical_json_sha256, json_equal
 from angee.graphql.capabilities import held_permissions
+from angee.graphql.mixins import ImplementationChoicesMixin
 from angee.integrate.constants import DISCOVERY_ATTEMPT_LIMIT, DISCOVERY_TASK, DISCOVERY_TASK_EXPIRES
 from angee.integrate.credentials import CredentialKind, CredentialKindHandler
-from angee.integrate.discovery import ConnectionDiscovery
+from angee.integrate.discovery import ConnectionDiscovery, DerivedCredential
 from angee.integrate.errors import (
     INTEGRATION_FAILURE_MESSAGE,
     IntegrationError,
@@ -83,17 +100,29 @@ from angee.integrate.errors import (
     transient_retry_delay,
 )
 from angee.integrate.events import EventKind
-from angee.integrate.impl import BridgeImpl, IntegrationImpl, LiveBridgeImpl
+from angee.integrate.impl import BridgeImpl, IntegrationImpl, LiveBridgeImpl, OAuthConnectIntent
 from angee.integrate.live import PairingProjection, PairingState, armed_material_key
 from angee.integrate.mixins import SyncStateMixin
 from angee.integrate.net import validate_public_url
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.discovery import discovery_document as oidc_metadata_document
-from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, OAuthFlowError
+from angee.integrate.oauth.errors import (
+    ACCOUNT_ALREADY_LINKED,
+    ACCOUNT_SWITCH_REFUSED,
+    CLIENT_NOT_CONFIGURED,
+    CONSENT_REQUIRED,
+    INVALID_STATE,
+    OAUTH_CLIENT_NOT_CONNECTABLE,
+    SCOPE_NOT_GRANTED,
+    SCOPE_NOT_IN_CATALOGUE,
+    OAuthFlowError,
+)
 from angee.integrate.oauth.providers import OAuthProviderType
+from angee.integrate.oauth.state import StateFlow
 from angee.integrate.registry import models_with
 from angee.integrate.signals import discovery_finished
 from angee.integrate.states import (
+    EXTERNAL_KEY_LENGTH,
     UNSET,
     ConflictKeep,
     LinkStatus,
@@ -106,11 +135,14 @@ from angee.integrate.states import (
     SyncFailure,
     SyncFailureKind,
     SyncFailureStatus,
+    discovery_exempt,
+    exempt_from_discovery,
 )
 from angee.integrate.streams import (
     PushPreview,
     begin_stream_cycle,
     preview_push,
+    push_candidates,
     push_stream,
     read_stream_keys,
     sync_bridge,
@@ -119,9 +151,10 @@ from angee.integrate.sync import SyncDispatch, progress_bridge_context
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
 from angee.jobs.enqueue import enqueue_task
 from angee.provenance.context import current_changeset
-from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
+from angee.provenance.querysets import model_history
 from angee.provenance.statements import (
     SourceKind,
     Statement,
@@ -132,13 +165,26 @@ from angee.resources.mixins import ResourceLoadMixin
 
 logger = logging.getLogger(__name__)
 
-# Renew an OAuth access token this far ahead of its expiry, so a consumer about to
-# use it (e.g. provisioning) gets a token with life left rather than one about to lapse.
-_OAUTH_REFRESH_MARGIN = timedelta(minutes=5)
+# Renew an access token this far ahead of its expiry, so a consumer about to use it
+# (e.g. provisioning) gets a token with life left rather than one about to lapse. A
+# minted token renews at the earlier of this margin and half its lifetime.
+_TOKEN_RENEWAL_MARGIN = timedelta(minutes=5)
+# A minted token whose response omits ``expires_in`` is assumed to live five minutes:
+# short enough that, renewed at half its lifetime, it is replaced after 150 seconds,
+# well inside the shortest lifetimes token endpoints issue, so an unknown expiry is
+# never outlived; long enough that a steady consumer still mints only every few minutes.
+_DEFAULT_TOKEN_LIFETIME = timedelta(minutes=5)
+# The material key under which a kind that mints per scope set caches its tokens.
+_SCOPED_TOKENS = "scoped_tokens"
 _UNSET = object()
 _INTEGRATION_FAILURE_MESSAGE = INTEGRATION_FAILURE_MESSAGE
 _WEBHOOK_FAILURE_MESSAGE = "Webhook delivery failed."
 _DISCOVERY_RETRY_EXHAUSTED_MESSAGE = "Connection discovery exhausted its retries; retry discovery to continue."
+_DISCOVERY_REQUIRED_MESSAGE = "Connection discovery must finish before syncing."
+_DISCOVERY_FAILED_MESSAGE = "Connection discovery did not succeed; retry discovery to continue."
+_DISCOVERY_ON_RECONNECT_MESSAGE = "Connection discovery runs when this integration is connected again."
+# Times the served integrations and their credential are locked again before the set must settle.
+_SERVED_LOCK_ATTEMPTS = 3
 
 
 class AccountStatus(models.TextChoices):
@@ -151,6 +197,13 @@ class AccountStatus(models.TextChoices):
     ACTIVE = "active", "Active"
     EXPIRED = "expired", "Expired"
     REVOKED = "revoked", "Revoked"
+
+
+class TokenEndpointAuthMethod(models.TextChoices):
+    """How a confidential OAuth client authenticates its token requests (RFC 7591 names)."""
+
+    CLIENT_SECRET_POST = "client_secret_post", "Client secret in the request body"
+    CLIENT_SECRET_BASIC = "client_secret_basic", "HTTP Basic"
 
 
 class CredentialStatus(models.TextChoices):
@@ -210,9 +263,9 @@ _OAuthClientManagerBase = AngeeHistoryManager.from_queryset(OAuthClientQuerySet)
 class OAuthClientManager[OAuthClientT: OAuthClient](_OAuthClientManagerBase[OAuthClientT]):
     """Manager for settings-sourced OAuth client registration.
 
-    OAuth only: settings entries carry the OAuth base fields. The OIDC refinement
-    (issuer/JWKS/discovery + login policy) is owned by the ``iam_integrate_oidc``
-    addon and seeded there, never from here.
+    Settings entries carry the OAuth base fields, OIDC metadata included. Login
+    policy is owned by the ``iam_integrate_oidc`` addon and seeded there, never
+    from here.
     """
 
     seed_fields = frozenset(
@@ -222,10 +275,13 @@ class OAuthClientManager[OAuthClientT: OAuthClient](_OAuthClientManagerBase[OAut
             "icon",
             "client_id",
             "discovery_url",
+            "issuer",
+            "jwks_uri",
             "authorize_endpoint",
             "token_endpoint",
             "revoke_endpoint",
             "token_request_format",
+            "token_endpoint_auth_method",
             "is_enabled",
             "scopes_catalogue",
             "default_scopes",
@@ -237,6 +293,7 @@ class OAuthClientManager[OAuthClientT: OAuthClient](_OAuthClientManagerBase[OAut
             "token_params",
             "manual_redirect_uri",
             "loopback_redirect_path",
+            "token_identity_keys",
         }
     )
     setting_fields = seed_fields | frozenset({"slug", "environment", "client_secret"})
@@ -306,14 +363,14 @@ class OAuthClientManager[OAuthClientT: OAuthClient](_OAuthClientManagerBase[OAut
             raise ValueError(f"ANGEE_INTEGRATE_OAUTH_CLIENTS entry {index} is missing required field(s): {names}")
 
 
-class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
+class OAuthClient(ImplementationChoicesMixin, ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
     """OAuth2 client registration for connecting an external account.
 
     The base of the connection substrate: enough to run the authorization-code and
-    refresh flows and act against a provider's API (Gemini, Grok, Anthropic). It
-    carries no identity or login policy itself — a provider that also
-    authenticates a *login* gains direct fields from the ``iam_integrate_oidc``
-    extension when that addon is installed.
+    refresh flows, act against a provider's API (Gemini, Grok, Anthropic) and
+    verify the ID token that identifies the connected account. It carries no login
+    policy itself — a provider that also authenticates a *login* gains direct
+    fields from the ``iam_integrate_oidc`` extension when that addon is installed.
 
     Self-describing: ``slug`` is its own connect-client key and ``icon``/
     ``display_name`` its own button branding. The third-party catalogue is
@@ -335,6 +392,10 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
     client_id = models.CharField(max_length=255, blank=True)
     client_secret = EncryptedField(blank=True)
     discovery_url = models.URLField(blank=True)
+    issuer = models.URLField(blank=True)
+    """OIDC issuer an ID token must name; blank is filled from discovery."""
+    jwks_uri = models.URLField(blank=True)
+    """JWK set that signs this provider's ID tokens; blank is filled from discovery."""
     authorize_endpoint = models.URLField(blank=True)
     token_endpoint = models.URLField(blank=True)
     revoke_endpoint = models.URLField(blank=True)
@@ -343,6 +404,11 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
     (read through the claim mappings below). Plain OAuth, not OIDC: a connect-only
     provider populates its ``ExternalAccount`` from here without any ID token."""
     token_request_format = models.CharField(max_length=16, default="form", blank=True)
+    token_endpoint_auth_method = models.CharField(
+        max_length=32,
+        choices=TokenEndpointAuthMethod.choices,
+        default=TokenEndpointAuthMethod.CLIENT_SECRET_POST,
+    )
     is_enabled = models.BooleanField(default=True, db_index=True)
     scopes_catalogue = models.JSONField(default=list, blank=True)
     default_scopes = models.JSONField(default=list, blank=True)
@@ -370,6 +436,9 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
     # it to label the account; OIDC login reuses it to identify the user.
     external_id_claim = models.CharField(max_length=128, default="sub", blank=True)
     email_claim = models.CharField(max_length=128, default="email", blank=True)
+    token_identity_keys = models.JSONField(default=list, blank=True)
+    """Non-secret token-response keys connect reads the claims from when userinfo
+    cannot identify the account."""
     display_name_claim = models.CharField(max_length=128, blank=True)
     avatar_url_claim = models.CharField(max_length=128, blank=True)
 
@@ -387,6 +456,14 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
                 name="uniq_integrate_oauth_client_slug_environment",
             ),
         )
+
+    @classmethod
+    def include_impl_choice(cls, field_name: str, implementation: type[object]) -> bool:
+        """Keep retired provider keys out of the provider picker."""
+
+        if field_name == "provider_type" and issubclass(implementation, OAuthProviderType):
+            return not implementation.retired
+        return super().include_impl_choice(field_name, implementation)
 
     def __str__(self) -> str:
         """Return the configured OAuth client display name or slug environment."""
@@ -451,16 +528,49 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
         return self._string_list(self.default_scopes)
 
     @property
+    def token_identity_key_values(self) -> list[str]:
+        """Return the declared token-response identity keys as strings."""
+
+        return self._string_list(self.token_identity_keys)
+
+    @property
     def scopes_catalogue_values(self) -> list[str]:
         """Return the advertised OAuth scopes as strings."""
 
         return self._string_list(self.scopes_catalogue)
+
+    def requested_scopes(self, oauth_scopes: Iterable[str] = (), *, granted: Iterable[str] = ()) -> list[str]:
+        """Return this client's default scopes followed by a consumer's ``oauth_scopes``.
+
+        One registration serves every consumer of a provider (``OAuthConnectIntent``).
+        A consumer may ask only for scopes the registration offers in
+        ``scopes_catalogue``; anything else is refused before the provider redirect.
+        ``granted`` are the scopes the account's current grant holds; the offered
+        ones are asked for again, so one consumer never narrows another's grant.
+        """
+
+        defaults = self.default_scope_values
+        requested = list(dict.fromkeys([*defaults, *oauth_scopes]))
+        offered = {*defaults, *self.scopes_catalogue_values}
+        if missing := [scope for scope in requested if scope not in offered]:
+            raise OAuthFlowError(
+                SCOPE_NOT_IN_CATALOGUE, 400, f"{self.slug} does not offer scope(s): {', '.join(missing)}",
+            )
+        return list(dict.fromkeys([*requested, *(scope for scope in granted if scope in offered)]))
 
     @property
     def authorize_param_values(self) -> dict[str, str]:
         """Return configured provider-specific authorize parameters."""
 
         return self._string_mapping(self.authorize_params)
+
+    def asks_consent_again(self, flow: StateFlow) -> bool:
+        """Whether this provider can be asked for consent again on ``flow``, so restarting with consent helps."""
+
+        configured = self.authorize_param_values
+        return self.provider.authorize_params(flow, configured, consent=True) != self.provider.authorize_params(
+            flow, configured, consent=False,
+        )
 
     @property
     def token_param_values(self) -> dict[str, Any]:
@@ -569,14 +679,16 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
             return ""
         return str(value)
 
-    # OIDC discovery key -> the blank endpoint field this client fills from it. The
-    # OAuth base owns its own transport/userinfo endpoints; discovery fills only
-    # blanks, so explicit configuration is never overwritten.
+    # OIDC discovery key -> the blank field this client fills from it: transport and
+    # userinfo endpoints, and the issuer and JWKS URI that verify an ID token.
+    # Discovery fills only blanks, so explicit configuration is never overwritten.
     DISCOVERY_ENDPOINT_FIELDS = {
         "authorize_endpoint": "authorization_endpoint",
         "token_endpoint": "token_endpoint",
         "revoke_endpoint": "revocation_endpoint",
         "userinfo_endpoint": "userinfo_endpoint",
+        "issuer": "issuer",
+        "jwks_uri": "jwks_uri",
     }
 
     def fill_endpoints_from_discovery(self, discovery: Mapping[str, Any]) -> bool:
@@ -587,13 +699,8 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
         set them by name.
         """
 
-        return self.fill_discovery_fields(discovery, self.DISCOVERY_ENDPOINT_FIELDS)
-
-    def fill_discovery_fields(self, discovery: Mapping[str, Any], fields: Mapping[str, str]) -> bool:
-        """Fill declared blank fields without replacing explicit configuration."""
-
         changed = False
-        for field, key in fields.items():
+        for field, key in self.DISCOVERY_ENDPOINT_FIELDS.items():
             if getattr(self, field, ""):
                 continue
             value = discovery.get(key)
@@ -602,14 +709,8 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
                 changed = True
         return changed
 
-    def fill_extension_fields_from_discovery(self, discovery: Mapping[str, Any]) -> bool:
-        """Hook for composed extensions to project discovery onto their own fields."""
-
-        del discovery
-        return False
-
     def discover_endpoints(self, *, persist: bool = False) -> Mapping[str, Any]:
-        """Fetch OIDC metadata and fill blank OAuth/extension endpoints on this row.
+        """Fetch OIDC metadata and fill blank endpoints, issuer and JWKS URI on this row.
 
         A protocol fills the row in memory for its current request and treats a
         row without a discovery URL as explicitly configured. ``persist`` is the
@@ -623,7 +724,6 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
             return {}
         discovery = oidc_metadata_document(self.discovery_url)
         self.fill_endpoints_from_discovery(discovery)
-        self.fill_extension_fields_from_discovery(discovery)
         if persist:
             self.save()
         return discovery
@@ -670,13 +770,17 @@ class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccount
         tokens: dict[str, Any],
         claims: dict[str, Any],
         reason: str = "integrate.oauth.connect",
+        require_refresh_token: bool = False,
+        required_scopes: Iterable[str] = (),
     ) -> ExternalAccountT:
         """Link ``user``'s verified provider identity and store its OAuth credential in one transaction.
 
         The account is labelled from the provider claims; its credential is the
-        ``(user, provider)`` upsert, so a reconnect replaces the grant in place.
-        Raises ``ValidationError`` (``account_already_linked``) when another user
-        owns the identity.
+        ``(user, provider, account)`` upsert, so a reconnect replaces that account's
+        grant in place and never touches another account's. Raises
+        ``ValidationError`` (``account_already_linked``) when another user owns the
+        identity. ``require_refresh_token`` and ``required_scopes`` are the
+        upsert's grant checks; a refusal links nothing.
         """
 
         email = oauth_client.email_from_claims(claims) or ""
@@ -696,6 +800,8 @@ class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccount
                 CredentialKind.OAUTH,
                 tokens,
                 external_account=account,
+                require_refresh_token=require_refresh_token,
+                required_scopes=required_scopes,
             )
             account.save(update_fields=["credential", "updated_at"])
         return account
@@ -741,7 +847,7 @@ class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccount
             )
             if owner is not None and instance.owner_id not in (None, owner.pk):
                 raise ValidationError(
-                    "This external account is already linked to another user.", code="account_already_linked",
+                    "This external account is already linked to another user.", code=ACCOUNT_ALREADY_LINKED,
                 )
             if not created:
                 for name, value in update_values.items():
@@ -832,6 +938,18 @@ class ExternalAccount(OwnerMixin, AngeeDataModel, concrete=True):
         return self.email or self.display_name or self.external_id
 
     @property
+    def provider_identity(self) -> tuple[str, str]:
+        """Identify the person behind this account: the client's OIDC issuer, or the client, and the subject.
+
+        Two clients of one issuer share the identity of one subject, so a
+        connection may move between them; without an issuer, subjects compare
+        within one client only.
+        """
+
+        issuer = self.oauth_client.issuer
+        return (issuer or f"oauth_client:{self.oauth_client_id}", self.external_id)
+
+    @property
     def provider_slug(self) -> str:
         """Return the originating OAuth client's slug."""
 
@@ -866,6 +984,12 @@ class ExternalAccount(OwnerMixin, AngeeDataModel, concrete=True):
         return email
 
 
+def _records_permanent_refusal(error: Exception) -> bool:
+    """Return whether a renewal refusal marks the credential failed: any refusal that is not transient."""
+
+    return not is_transient_failure(error)
+
+
 class CredentialQuerySet[CredentialT: Credential](AngeeHistoryQuerySet[CredentialT]):
     """REBAC-scoped reads for credential health and connected accounts."""
 
@@ -883,13 +1007,23 @@ class CredentialQuerySet[CredentialT: Credential](AngeeHistoryQuerySet[Credentia
                 "status",
                 "expires_at",
                 "last_refresh_status",
+                "granted_scopes",
                 "kind",
                 "oauth_client__supports_refresh",
             )
         )
 
+    def owned_by(self, user: Any) -> Self:
+        """Return ``user``'s own credentials: the rows whose ``user`` is them, whatever their kind.
+
+        A verb that takes one of the caller's credentials looks it up here, so an
+        unknown id and another user's fail alike.
+        """
+
+        return self.filter(user=user)
+
     def connected_for(self, user: Any) -> Self:
-        """Return ``user``'s external-account-backed credentials.
+        """Return ``user``'s external-account-backed credentials (:meth:`owned_by`, with an account).
 
         Each row is a credential whose ``external_account`` (and that account's
         ``credential``) is preloaded under the ambient actor's scope. Owns the
@@ -897,8 +1031,7 @@ class CredentialQuerySet[CredentialT: Credential](AngeeHistoryQuerySet[Credentia
         connected-accounts surface.
         """
 
-        return self.filter(
-            user=user,
+        return self.owned_by(user).filter(
             external_account__isnull=False,
         ).rebac_select_related("external_account", "external_account__credential")
 
@@ -937,25 +1070,57 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
     def disconnect_account(self, user: Any, external_account_sqid: str) -> bool:
         """Release this user's account and delete its credential in one admitted transaction.
 
-        prepare_disconnect owns vetoes, derived releases and after-commit remote
-        revocation; native owner release and selected credential deletion retain
-        their own persistence contracts. An absent user/account link is false.
+        :meth:`retire` owns vetoes, derived releases, after-commit remote
+        revocation and the delete; the account's native owner release runs between
+        them. An absent user/account link is false. The account row locks first,
+        as an OAuth connect takes it (``ExternalAccountManager.link``), then the
+        credential as its deletion does (:meth:`Credential.lock_for_delete`).
         """
 
-        candidates = self.select_related("oauth_client", "external_account").select_for_update(of=("self",))
         with system_context(reason="integrate.credential.disconnect"), transaction.atomic():
-            credential = (
-                candidates
-                .filter(user=user, external_account__sqid=external_account_sqid)
-                .first()
-            )
+            found = self.filter(user=user, external_account__sqid=external_account_sqid).first()
+            if found is None:
+                return False
+            apps.get_model("integrate", "ExternalAccount").objects.filter(
+                sqid=external_account_sqid,
+            ).lock_if_supported().first()
+            credential = found.lock_for_delete()
             if credential is None:
                 return False
             account = credential.external_account
             assert account is not None
+            return self.retire(
+                credential,
+                rows=self.with_action("delete"),
+                before_delete=lambda: type(account).objects.filter(pk=account.pk).release(user),
+            )
+
+    def retire(
+        self,
+        credential: Any,
+        *,
+        rows: models.QuerySet[Any] | None = None,
+        before_delete: Callable[[], object] | None = None,
+    ) -> bool:
+        """Retire one credential: prepare its disconnect, then delete it; return whether a row went.
+
+        The verb a credential's owner retires it through (an account disconnect, an
+        integration's purge of what it held). :meth:`prepare_disconnect` owns vetoes,
+        derived releases and after-commit remote revocation; ``before_delete`` runs
+        the caller's own release between the two (an account's), and ``rows`` scopes
+        the delete (an actor's ``with_action("delete")``). A credential an
+        integration still attaches directly keeps its ``PROTECT``: detach it first,
+        or use :meth:`retire_unattached`. Two other paths delete a credential
+        without it: the admin delete preview (``credentials_delete``), which runs
+        :meth:`prepare_disconnect` itself, and :meth:`delete_unattached_derived`,
+        which drops discovery-created material without a remote revocation.
+        """
+
+        with system_context(reason="integrate.credential.retire"), transaction.atomic():
             self.prepare_disconnect(credential)
-            type(account).objects.filter(pk=account.pk).release(user)
-            deleted, _details = self.filter(pk=credential.pk).with_action("delete").delete()
+            if before_delete is not None:
+                before_delete()
+            deleted, _details = (rows if rows is not None else self.all()).filter(pk=credential.pk).delete()
         return deleted > 0
 
     def prepare_disconnect(self, credential: Any) -> None:
@@ -982,22 +1147,174 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
             target.attach_credential(None)
         transaction.on_commit(copy(credential).revoke_remote, robust=True)
 
+    def unattached(self) -> models.QuerySet[Any]:
+        """Return the credentials nothing holds: no live row's foreign key points at them, and they name no account.
+
+        What holds a credential is derived from the model's own reverse relations
+        (:func:`~angee.base.models.merge_references.references`, each foreign key
+        under its own live policy, so history holds nothing): an integration's
+        credential or discovery grant, an account's credential, and whatever
+        another addon declares (an agent's inference credential, an MCP server's).
+        An account binds one either way round (``Credential.external_account``, or
+        ``ExternalAccount.credential``): only the account's own disconnect
+        (:meth:`disconnect_account`) retires such a credential, so an integration
+        that borrowed it (one reading with the user's connected account) never
+        retires it when it lets go.
+        """
+
+        rows = self.filter(external_account__isnull=True)
+        for reference in references(self.model):
+            if isinstance(reference, ForeignKeyReference):
+                rows = rows.exclude(reference.live_pointing(self.model))
+        return rows
+
+    def retire_unattached(self, credential: Any) -> bool:
+        """Retire ``credential`` once nothing attaches it (:meth:`retire`); return whether it went.
+
+        A credential shared by several integrations (two subscriptions to one feed
+        keep one) stays while any of them still attaches it, and one an account is
+        bound to stays for the account's own disconnect (:meth:`unattached`). The
+        credential row is
+        locked first, inside the caller's transaction, so two callers that each
+        detach one sharer serialize here: the second waits, sees both detaches, and
+        retires it. An attach takes the same row's key-share lock, so it serializes
+        with this check too.
+        """
+
+        if not connection.in_atomic_block:
+            raise RuntimeError("Retiring an unattached credential requires the caller's transaction.")
+        with system_context(reason="integrate.credential.retire_unattached"):
+            if self.filter(pk=credential.pk).lock_if_supported().first() is None:
+                return False
+            if not self.unattached().filter(pk=credential.pk).exists():
+                return False
+        return self.retire(credential)
+
     def delete_unattached_derived(self, credential_pk: int | None) -> None:
-        """Dispose of discovery-created material after its last attachment releases it."""
+        """Dispose of discovery-created material after its last attachment releases it.
 
-        if credential_pk is not None:
-            self.filter(
-                pk=credential_pk,
-                integrations__isnull=True,
-                discovered_integrations__isnull=True,
-            ).delete()
+        The credential is locked before nothing-holds-it is decided, inside the
+        caller's transaction (as :meth:`retire_unattached` does): an attachment
+        takes the row's key-share lock, so one racing this waits, or is seen. The
+        caller holds the integrations first, the integrate lock order.
+        """
 
-    def live_oauth_for_user(self, user: Any, oauth_client: Any) -> Any | None:
-        """Reuse a credential whenever its owner does not require fresh consent."""
+        if credential_pk is None:
+            return
+        if self.filter(pk=credential_pk).lock_if_supported().first() is not None:
+            self.unattached().filter(pk=credential_pk).delete()
+
+    def served_integrations(self, credential_pk: int) -> models.QuerySet[Any]:
+        """Return the integrations ``credential_pk`` serves, in lock order.
+
+        An integration serves the credential it attaches and the grant its
+        discovered material derives from (``Integration.discovery_credential``).
+        The read is structural: every such row, whoever asks.
+        """
+
+        return (
+            apps.get_model("integrate", "Integration")
+            ._base_manager.filter(Q(credential_id=credential_pk) | Q(discovery_credential_id=credential_pk))
+            .order_by("pk")
+        )
+
+    def lock_with_served_integrations(self, credential_pk: int) -> tuple[Any, list[Any]]:
+        """Lock the integrations ``credential_pk`` serves, then the credential; return both, locked.
+
+        The one place these locks are taken, in integrate's lock order (the
+        README's "Lock order"): each integration's capability rows
+        (``Integration.lock_capability``), in primary-key order, then the
+        credential. Once the credential is locked no attachment can commit (its
+        foreign-key check needs the row), so the integrations it serves are read
+        again: when that read differs (one attached meanwhile, or let go), or one
+        was deleted between the first read and its lock, every lock is released
+        to a savepoint and taken again in the same order, so none is taken after
+        the credential and none that no longer serves it is returned. After
+        ``_SERVED_LOCK_ATTEMPTS`` changed sets it gives up with a transient
+        ``IntegrationError``. Runs inside the caller's transaction.
+        """
+
+        if not connection.in_atomic_block:
+            raise RuntimeError("Locking a credential and the integrations it serves requires the caller's transaction.")
+        for _attempt in range(_SERVED_LOCK_ATTEMPTS):
+            served = list(self.served_integrations(credential_pk))
+            savepoint = transaction.savepoint_create()
+            try:
+                integrations = [integration.lock_capability() for integration in served]
+            except ObjectDoesNotExist:
+                transaction.savepoint_rollback(savepoint)
+                continue
+            credential = self.lock_if_supported().get(pk=credential_pk)
+            if list(self.served_integrations(credential_pk).values_list("pk", flat=True)) == [row.pk for row in served]:
+                transaction.savepoint_commit(savepoint)
+                return credential, integrations
+            transaction.savepoint_rollback(savepoint)
+        raise IntegrationError("The integrations using this credential kept changing; try again.", transient=True)
+
+    @contextmanager
+    def reenter_secret(self, credential_pk: int) -> Iterator[Any]:
+        """Hold one re-entry of ``credential_pk``'s secret; yield the credential, locked, to write it.
+
+        Runs inside the caller's transaction, the integrations the credential
+        serves locked before it (:meth:`lock_with_served_integrations`). A
+        credential one of them attaches as material its discovery derived
+        (:attr:`Integration.derived_credential_id`, read on the locked rows) is
+        refused: its own grant is re-entered instead, or the integration is
+        connected again once that grant is gone. Once the caller's write is
+        done, a re-entry that changed the row's kind or decrypted material is
+        admitted again by every integration it serves
+        (:meth:`Integration.admit_credential`, the rule attachment and
+        the connect picker use; a refusal rolls the re-entry back), and each
+        whose capability requires connection discovery awaits it again
+        (:meth:`Integration.await_discovery`): a new secret may read another
+        remote account than the one discovery found. An unchanged re-entry
+        changes nothing: the kind and its own secret fields
+        (:meth:`CredentialKindHandler.secret_material_fields`) are compared, not
+        a transient answer stored beside them or the tokens minted from them.
+        Only a keyed digest of them is held across the caller's write.
+        """
+
+        @sensitive_variables("material", "secret")
+        def entered(row: Any) -> str:
+            material = row.reveal()
+            secret = {field: material.get(field) for field in row.handler.secret_material_fields()}
+            return salted_hmac(
+                "angee.integrate.reenter_secret", canonical_json({"kind": row.kind, "secret": secret}),
+                algorithm="sha256",
+            ).hexdigest()
+
+        credential, integrations = self.lock_with_served_integrations(credential_pk)
+        if any(integration.derived_credential_id == credential_pk for integration in integrations):
+            raise ValidationError(
+                "Connection discovery derived this credential; re-enter the credential it was derived from, "
+                "or connect the integration again if that one is gone."
+            )
+        before = entered(credential)
+        yield credential
+        credential.refresh_from_db()
+        if entered(credential) == before:
+            return
+        for integration in integrations:
+            integration.admit_credential(credential)
+        for integration in integrations:
+            if integration.requires_connection_discovery:
+                integration.await_discovery()
+
+    def live_oauth_for_user(
+        self, user: Any, oauth_client: Any, *, external_account: Any, oauth_scopes: Iterable[str] = (),
+    ) -> Any | None:
+        """Return the account's OAuth credential when it needs no fresh consent and holds ``oauth_scopes``.
+
+        The consumer's scopes are checked against the scopes the provider reported granting.
+        """
 
         with system_context(reason="integrate.connections.credential.live"):
-            row = self.filter(user=user, oauth_client=oauth_client, kind=CredentialKind.OAUTH).first()
-            return row if row is not None and not row.is_reconnect_required else None
+            row = self.filter(
+                user=user, oauth_client=oauth_client, external_account=external_account, kind=CredentialKind.OAUTH,
+            ).first()
+        if row is None or row.is_reconnect_required:
+            return None
+        return row if row.grants(oauth_scopes) else None
 
     def upsert_for_user(
         self,
@@ -1009,77 +1326,106 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         *,
         external_account: Any | None = None,
         reconnect: bool = True,
+        require_refresh_token: bool = False,
+        required_scopes: Iterable[str] = (),
         **fields: Any,
     ) -> Any:
-        """Create or update one ``(user, oauth_client)`` OAuth credential (connect/login flow)."""
+        """Create or update one ``(user, oauth_client, external_account)`` credential (connect/login flow).
+
+        Each account a user connects at a provider has its own credential, so a
+        second account never replaces the first. A row stored without an account
+        (before credentials were per account) is adopted by the first account that
+        connects, never orphaned beside a new one. The row is updated under its own
+        lock with what the kind carries forward over its stored material
+        (:meth:`CredentialKindHandler.carry_forward`: an OAuth grant without a
+        refresh token keeps the stored one). ``require_refresh_token`` refuses
+        (``consent_required``) a grant that would leave a refreshable client's
+        credential without one. A grant that reports its scopes must cover
+        ``required_scopes`` and those of every integration the credential serves
+        (``scope_not_granted``). A refusal writes nothing. A reconnect re-attaches
+        the integrations whose discovered material derives from the replaced grant.
+        """
 
         handler = CredentialKind(kind).handler
-        operation_values, update_values = self._assemble_values(handler, material, fields)
-        if external_account is not None:
-            update_values["external_account_id"] = external_account.pk
+        material, update_values = self._assemble_values(handler, material, fields)
+        account_id = None if external_account is None else external_account.pk
         create_values = {
-            "external_account_id": external_account.pk if external_account is not None else None,
+            "external_account_id": account_id,
             **self._blank_create_values(),
-            **operation_values,
+            "kind": handler.kind,
+            # A callable default is encoded only when the row is created; an existing
+            # row stores what the kind carries forward over its own material.
+            "material": lambda: self.model.encode_material(material),
             **update_values,
         }
         # Give the credential a human label on create (OAuth rows carry no name of their
         # own). Create-only so an admin rename, and token refreshes, are preserved.
         if not str(create_values.get("name") or ""):
             create_values["name"] = self._oauth_credential_name(oauth_client, external_account)
+        identity = {"user_id": user.pk, "oauth_client_id": oauth_client.pk, "external_account_id": account_id}
         with system_context(reason=self._REASON), transaction.atomic():
-            existing = self.filter(user_id=user.pk, oauth_client_id=oauth_client.pk).only("pk").first()
-            integrations = []
-            attached = False
-            if existing is not None:
-                affected = (
-                    apps.get_model("integrate", "Integration")
-                    .objects.filter(
-                        Q(credential_id=existing.pk) | Q(discovery_credential_id=existing.pk),
-                    )
-                    .order_by("pk")
-                )
+            if account_id is not None and not self.filter(**identity).exists():
+                self._adopt_unlinked(user, oauth_client, external_account)
+            instance, created = self.get_or_create(**identity, defaults=create_values)
+            integrations: list[Any] = []
+            stored = material
+            if not created:
+                # A reconnect locks the integrations it serves before the credential, as
+                # Retry/Resume do. Refresh-only writes never touch integrations and may
+                # already hold the credential lock.
                 if reconnect:
-                    # Match Retry/Resume: concrete integration and ancestors,
-                    # then the source credential. Refresh-only writes never
-                    # touch integrations and may already hold the credential lock.
-                    integrations = [integration.lock_capability() for integration in affected]
-                existing = self.lock_if_supported().get(pk=existing.pk)
-                # An attachment cannot commit while the credential is locked (its
-                # foreign-key check needs the row), so this read is final. A late
-                # arrival attached between the two reads; it is locked after the
-                # credential, as its re-attachment below would lock it anyway.
-                if reconnect:
-                    locked = {integration.pk for integration in integrations}
-                    integrations += [
-                        integration.lock_capability() for integration in affected if integration.pk not in locked
-                    ]
-                    attached = bool(integrations)
+                    instance, integrations = self.lock_with_served_integrations(instance.pk)
                 else:
-                    attached = affected.exists()
-            if (
-                existing is not None
-                and external_account is not None
-                and existing.external_account_id not in (None, external_account.pk)
-                and attached
-            ):
-                raise OAuthFlowError("account_switch_refused", 409)
-            instance, _created = self.update_or_create(
-                user_id=user.pk,
-                oauth_client_id=oauth_client.pk,
-                defaults={**operation_values, **update_values},
-                create_defaults=create_values,
-            )
-            if reconnect and existing is not None:
+                    instance = self.lock_if_supported().get(pk=instance.pk)
+                stored = handler.carry_forward(material, instance.reveal())
+                values = {"kind": handler.kind, "material": self.model.encode_material(stored), **update_values}
+                for name, value in values.items():
+                    setattr(instance, name, value)
+                instance.save(update_fields=[*values, "updated_at"])
+            refreshable_client = handler.kind == CredentialKind.OAUTH and oauth_client.supports_refresh
+            if require_refresh_token and refreshable_client and not stored.get("refresh_token"):
+                raise OAuthFlowError(CONSENT_REQUIRED, 409)
+            if "granted_scopes" in update_values:
+                needed = set(required_scopes).union(
+                    *(integration.connection_oauth_scopes for integration in integrations),
+                )
+                if missing := sorted(needed - set(update_values["granted_scopes"])):
+                    raise OAuthFlowError(SCOPE_NOT_GRANTED, 409, f"Scope(s) not granted: {', '.join(missing)}")
+            if reconnect and not created:
                 for integration in integrations:
-                    if (
-                        existing.external_account_id == instance.external_account_id
-                        and integration.credential_id == instance.pk
-                    ):
+                    if integration.credential_id == instance.pk:
                         continue
                     # Re-consent invalidates resource tokens derived from the old grant.
                     integration.attach_connection(instance, connect_disconnected=False)
         return instance
+
+    def _adopt_unlinked(self, user: Any, oauth_client: Any, external_account: Any) -> None:
+        """Give the user's account-less credential at this client to its first connected account.
+
+        Such a row predates per-account credentials; the integrations attaching
+        it without a binding bind to that account too. The account and the
+        tokens it brings are new to every integration attaching the row, so each
+        whose capability requires connection discovery awaits it again; the
+        reconnect of an account already bound keeps discovery. They lock before
+        the credential (:meth:`lock_with_served_integrations`); saves keep their history.
+        """
+
+        legacy = self.filter(user_id=user.pk, oauth_client_id=oauth_client.pk, external_account__isnull=True).first()
+        if legacy is None:
+            return
+        legacy, integrations = self.lock_with_served_integrations(legacy.pk)
+        if legacy.external_account_id is not None:
+            return
+        legacy.external_account = external_account
+        legacy.save(update_fields=["external_account", "updated_at"])
+        for integration in integrations:
+            if integration.credential_id != legacy.pk:
+                continue
+            if integration.account_id is None:
+                integration.account = external_account
+                integration.save(update_fields=["account", "updated_at"])
+            if integration.requires_connection_discovery:
+                integration.await_discovery()
 
     @staticmethod
     def _oauth_credential_name(oauth_client: OAuthClient, external_account: ExternalAccount | None) -> str:
@@ -1103,29 +1449,57 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         The provider-less counterpart to :meth:`upsert_for_user`: ``oauth_client`` is
         ``NULL`` (the kind/provider invariant forbids one), and ``name`` is the
         credential's identity. OAuth credentials are minted by the connect/login flow only.
+        An existing name re-enters that credential's secret, and may change its
+        kind: its material is replaced through :meth:`reenter_secret`, so the
+        integrations it serves discover again.
         """
 
-        operation_values, update_values = self._local_credential_values(
-            kind=kind,
-            name=name,
-            material=material,
-            fields=fields,
-        )
-        create_values = {
-            "oauth_client": None,
-            "external_account": None,
-            **self._blank_create_values(),
-            **operation_values,
-            **update_values,
-        }
+        values, create_values = self._local_credential_values(kind=kind, name=name, material=material, fields=fields)
         with system_context(reason=self._REASON), transaction.atomic():
-            instance, _created = self.update_or_create(
-                user_id=user.pk,
-                name=name,
-                oauth_client=None,
-                defaults={**operation_values, **update_values},
-                create_defaults=create_values,
-            )
+            identity = {"user_id": user.pk, "name": name, "oauth_client": None}
+            instance, created = self.get_or_create(**identity, defaults=create_values)
+            if not created:
+                with self.reenter_secret(instance.pk) as instance:
+                    for field, value in values.items():
+                        setattr(instance, field, value)
+                    instance.save(update_fields=[*values, "updated_at"])
+        return instance
+
+    def store_derived(self, user: Any, derived: DerivedCredential) -> Any:
+        """Create or update the provider-less credential ``derived`` names for ``user``, keyed like a local one.
+
+        :meth:`Integration.finish_discovery` stores what a discovery derived
+        through this, never through :meth:`create_local_credential`: the material
+        comes from the discovery that is settling, not from a re-entered secret, so
+        the integrations already using a credential of that name are not sent to
+        discover again (two that derive one name would rediscover each other).
+        It overwrites a credential of that name that nothing holds (one left from
+        before integrations removed theirs on delete, say) or that another
+        integration attaches as derived (:attr:`Integration.derived_credential_id`),
+        decided on the locked row; one something else holds (an integration's direct
+        attachment, an account, an agent) is refused, so the discovery fails with
+        a message naming the credential to rename.
+        """
+
+        values, create_values = self._local_credential_values(
+            kind=derived.kind, name=derived.name, material=dict(derived.material), fields={},
+        )
+        with system_context(reason=self._REASON), transaction.atomic():
+            identity = {"user_id": user.pk, "name": derived.name, "oauth_client": None}
+            instance, created = self.get_or_create(**identity, defaults=create_values)
+            if not created:
+                instance = self.lock_if_supported().get(pk=instance.pk)
+                if not (
+                    any(row.derived_credential_id == instance.pk for row in self.served_integrations(instance.pk))
+                    or self.unattached().filter(pk=instance.pk).exists()
+                ):
+                    raise IntegrationError(
+                        f'A credential named "{derived.name}" already exists and is in use other than as '
+                        "discovered material; rename that credential, then retry discovery."
+                    )
+                for field, value in values.items():
+                    setattr(instance, field, value)
+                instance.save(update_fields=[*values, "updated_at"])
         return instance
 
     def prepare_local_credential(
@@ -1139,24 +1513,8 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
     ) -> Any:
         """Return a validated, unsaved provider-less credential for external preflight."""
 
-        operation_values, update_values = self._local_credential_values(
-            kind=kind,
-            name=name,
-            material=material,
-            fields=fields,
-        )
-        create_values = {
-            "external_account": None,
-            **self._blank_create_values(),
-            **operation_values,
-            **update_values,
-        }
-        return self.model(
-            user=user,
-            name=name,
-            oauth_client=None,
-            **create_values,
-        )
+        _values, create_values = self._local_credential_values(kind=kind, name=name, material=material, fields=fields)
+        return self.model(user=user, name=name, oauth_client=None, **create_values)
 
     def _local_credential_values(
         self,
@@ -1166,14 +1524,16 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         material: dict[str, Any],
         fields: dict[str, Any],
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Validate one local credential and return its owned operation/update values."""
+        """Validate one local credential; return the values an update stores and those a create stores."""
 
         handler = CredentialKind(kind).handler
         if handler.kind == CredentialKind.OAUTH:
             raise ValueError("OAuth credentials are minted by the connect/login flow, not create_local_credential().")
         if not name:
             raise ValidationError({"name": "This field is required."})
-        return self._assemble_values(handler, material, fields)
+        material, update_values = self._assemble_values(handler, material, fields)
+        values = {"kind": handler.kind, "material": self.model.encode_material(material), **update_values}
+        return values, {"external_account": None, **self._blank_create_values(), **values}
 
     def _assemble_values(
         self,
@@ -1181,18 +1541,16 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         material: dict[str, Any],
         fields: dict[str, Any],
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Return ``(operation_values, update_values)`` for both create paths."""
+        """Return the handler's cleaned material and the update values both create paths store beside it."""
 
-        handler.validate(material)
+        material = handler.clean(material)
         if owned := self.operation_fields & fields.keys():
             names = ", ".join(sorted(owned))
             raise ValueError(f"Credential field(s) are owned by the manager: {names}")
         update_values = handler.upsert_fields(material)
         update_values.update(_validated_manager_values(self.model, fields, allowed=self.caller_fields))
         update_values["status"] = CredentialStatus.ACTIVE
-        material_value = self.model.encode_material(material)
-        operation_values = {"kind": handler.kind, "material": material_value}
-        return operation_values, update_values
+        return material, update_values
 
     @staticmethod
     def _blank_create_values() -> dict[str, Any]:
@@ -1216,6 +1574,21 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
 
         Contributions may lock admission facts and raise a coded ``ValidationError``.
         """
+
+    def lock_for_delete(self, *, queryset: models.QuerySet[models.Model] | None = None) -> Self | None:
+        """Lock the integrations this credential serves, then the row, in integrate's lock order.
+
+        Its disconnect releases the integrations whose material derives from it
+        (:meth:`CredentialManager.prepare_disconnect`), so they lock first, as an
+        attachment takes them (:meth:`CredentialManager.lock_with_served_integrations`).
+        """
+
+        with system_context(reason="integrate.credential.lock_for_delete"):
+            try:
+                type(self).objects.lock_with_served_integrations(self.pk)
+            except type(self).DoesNotExist:
+                return None
+        return super().lock_for_delete(queryset=queryset)
 
     def revoke_remote(self) -> None:
         """Revoke this credential's OAuth token when its provider supports it."""
@@ -1273,9 +1646,25 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
             and bool(self.reveal().get("refresh_token"))
         )
 
+    def grants(self, scopes: Iterable[str]) -> bool:
+        """Whether this grant covers every scope in ``scopes``, as the provider reported granting them."""
+
+        return set(scopes) <= set(self.granted_scopes or ())
+
+    @property
+    def delegated(self) -> bool:
+        """Whether this credential acts for another principal: a signing key whose assertions name a ``subject``.
+
+        A ``jwt_bearer`` key with a stored ``subject`` mints tokens as that delegated
+        user (domain-wide delegation), not as its own service account.
+        """
+
+        return self.kind == CredentialKind.JWT_BEARER and bool(self.reveal().get("subject"))
+
     @property
     def is_reconnect_required(self) -> bool:
-        """Require consent only for inactive, failed-refresh or unrenewable expired grants."""
+        """Require new consent or key material only for an inactive credential, a failed refresh or
+        mint (``last_refresh_status="failed"``), or an unrenewable expired grant."""
 
         return (
             self.status != CredentialStatus.ACTIVE
@@ -1292,12 +1681,19 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         ordering = ("-updated_at",)
         rebac_resource_type = "integrate/credential"
         constraints = (
-            # OAuth identity: one credential per (user, provider). NULLs are
-            # distinct in SQL unique, so provider-less kinds need their own arm.
+            # Provider identity: one credential per (user, provider, external
+            # account), so one user connects several accounts through one client.
+            # NULLs are distinct in SQL unique, so a provider row without an
+            # account and provider-less kinds need their own arms.
+            models.UniqueConstraint(
+                fields=("user", "oauth_client", "external_account"),
+                condition=Q(oauth_client__isnull=False, external_account__isnull=False),
+                name="uniq_integrate_credential_user_oauth_client_account",
+            ),
             models.UniqueConstraint(
                 fields=("user", "oauth_client"),
-                condition=Q(oauth_client__isnull=False),
-                name="uniq_integrate_credential_user_oauth_client",
+                condition=Q(oauth_client__isnull=False, external_account__isnull=True),
+                name="uniq_integrate_credential_user_oauth_client_unlinked",
             ),
             # Provider-less identity: one named credential per user (named local
             # credentials; provider-bearing rows use the arm above).
@@ -1327,6 +1723,41 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
 
         return CredentialKind(self.kind).handler
 
+    @property
+    def editable_fields(self) -> list[str]:
+        """The manual label; expiry is reported health, never a manual validity limit."""
+
+        return [] if self.kind == CredentialKind.OAUTH else ["name"]
+
+    @property
+    def replacement_fields(self) -> list[str]:
+        """Write-only inputs for manual secret replacement; OAuth uses its connection flow."""
+
+        return [] if self.kind == CredentialKind.OAUTH else list(self.handler.input_material_fields())
+
+    def validate_details(self, changes: Mapping[str, Any]) -> None:
+        """Refuse manual edits of exchange-owned metadata before the native resource update."""
+
+        if refused := (changes.keys() & {"name"}) - set(self.editable_fields):
+            raise ValidationError({field: "OAuth manages this field; reconnect the account instead."
+                                   for field in sorted(refused)})
+
+    @sensitive_variables("material")
+    def replace_secret(self, material: Mapping[str, Any], *, confirmed: bool) -> None:
+        """Confirm a non-OAuth manual replacement, preserving write gates and kind validation.
+
+        The Zed permission composes the administrator and write gates. Other
+        capability owners continue to compose ``replace_material`` after their
+        own admission, such as the IMAP connection's credential edit.
+        """
+
+        self.require_access("replace_secret")
+        if confirmed is not True:
+            raise ValidationError({"confirmed": "Confirm replacing this credential's secret."})
+        if not self.replacement_fields:
+            raise ValidationError("OAuth secrets are managed by the connection flow; reconnect the account instead.")
+        self.replace_material(material)
+
     def reveal(self) -> dict[str, Any]:
         """Decode this row's decrypted JSON material."""
 
@@ -1338,6 +1769,7 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
 
         return canonical_json(dict(material))
 
+    @sensitive_variables("changes", "material")
     def update_material(self, **changes: Any) -> None:
         """Merge encrypted material changes under a row lock; ``None`` deletes.
 
@@ -1346,12 +1778,20 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         same authoritative lock canon as :meth:`Bridge.merge_subscription_state`
         so one key's consume-once edit cannot clobber another writer's material.
         Kind handlers validate required keys at credential creation; transient
-        extra keys remain permitted here.
+        extra keys remain permitted here. A transient key (an answer a live
+        session consumes) is not the kind's secret, so the integrations this
+        credential serves keep their discovery. The fields the kind stores as its
+        own secret (:meth:`CredentialKindHandler.secret_material_fields`) are
+        refused, judged by the kind of the locked row it merges into: the secret
+        is re-entered through :meth:`replace_material`, which sends them to
+        discover again.
         """
 
         with system_context(reason="integrate.credential.material"):
             with transaction.atomic():
                 row: Credential = type(self).objects.lock_if_supported().get(pk=self.pk)
+                if secret := sorted(changes.keys() & set(row.handler.secret_material_fields())):
+                    raise ValueError(f"Re-enter {', '.join(secret)} through replace_material(), not update_material().")
                 material = dict(row.reveal())
                 for key, value in changes.items():
                     if value is None:
@@ -1361,26 +1801,144 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
                 # EncryptedField's descriptor is not modeled by django-stubs.
                 row.material = self.encode_material(material)
                 row.save(update_fields=["material", "updated_at"])
-            self.refresh_from_db(fields=["material", "updated_at"])
+            self.refresh_from_db(fields=["material", "updated_at", "kind"])
 
+    @sensitive_variables("material", "replacement")
     def replace_material(self, material: Mapping[str, Any]) -> None:
         """Re-enter this credential's secret(s) under the kind handler's validation.
 
         The operator's "the password changed" path: ``material`` carries the
-        kind's own input fields (the handler names them), is validated exactly
-        as at creation, then lands through :meth:`update_material` under the row
-        lock — the row, its kind, and its owner stay as they are, so every
-        integration attached to it keeps working without re-attachment.
+        kind's own input fields (the handler names them), is cleaned exactly
+        as at creation, then replaces under the row lock with the fields the handler
+        derives from it (:meth:`CredentialKindHandler.upsert_fields`) in the same
+        save — the row, its kind, and its owner stay as they are, so every
+        integration attached to it keeps its attachment. The handler is the
+        locked row's, so a kind changed meanwhile validates the input. Only
+        material the handler explicitly carries forward survives replacement. In
+        the same transaction the integrations it serves discover again
+        (:meth:`CredentialManager.reenter_secret`).
         """
 
-        replacement = dict(material)
-        self.handler.validate(replacement)
-        self.update_material(**replacement)
+        with system_context(reason="integrate.credential.replace"), transaction.atomic():
+            with type(self).objects.reenter_secret(self.pk) as row:
+                handler = row.handler
+                handler.validate_replacement(material)
+                replacement = handler.clean(material)
+                assigned = handler.upsert_fields(replacement)
+                row.material = self.encode_material(handler.carry_forward(replacement, row.reveal()))
+                for name, value in assigned.items():
+                    setattr(row, name, value)
+                updated = ["material", *assigned, "updated_at"]
+                row.save(update_fields=updated)
+            self.refresh_from_db(fields=[*updated, "kind"])
 
-    def auth_headers(self) -> dict[str, str]:
-        """Return authorization headers through the kind handler."""
+    def auth_headers(self, *, scopes: Collection[str] = ()) -> dict[str, str]:
+        """Return authorization headers through the kind handler.
 
-        return self.handler.auth_headers(self)
+        ``scopes`` names the access a consumer needs from a kind that mints one
+        token per scope set (:meth:`scoped_access_token`); a kind whose token was
+        fixed when it was granted ignores it.
+        """
+
+        return self.handler.auth_headers(self, scopes=scopes)
+
+    def scoped_access_token(self, scopes: Collection[str]) -> str:
+        """Return a live access token for ``scopes`` from a kind that mints one per scope set.
+
+        ``scopes`` is a collection of scope names; each element is split on
+        whitespace (RFC 6749 §3.3), order and repeats do not matter, and one bare
+        string is refused. Tokens are cached in the encrypted material, one per
+        scope set, and renewed at the earlier of ``_TOKEN_RENEWAL_MARGIN`` and half
+        their lifetime before expiry. The call needs autocommit, cached or not,
+        because a miss mints over the network; a kind that does not mint is refused
+        before any request. An inactive credential fails closed: it serves no token,
+        cached or minted (:meth:`require_active`), judged on this instance, on the
+        row re-read under the lock, and again after a mint.
+        Concurrent consumers serialize in :meth:`_renew_locked`: one mints and the
+        others adopt its persisted token. A refusal the kind handler attributes to
+        the key or identity (:meth:`CredentialKindHandler.records_failure`) records
+        ``last_refresh_status="failed"``, so :attr:`is_reconnect_required` asks
+        for a new key; every refusal is raised, and an empty token is never returned.
+        """
+
+        if isinstance(scopes, str):
+            raise TypeError("Pass the scopes as a collection of scope names, not one string.")
+        handler = self.handler
+        if not handler.mints_per_scope:
+            raise ValueError(f"{self.kind} credentials do not mint access tokens per scope set.")
+        if connection.in_atomic_block:
+            raise RuntimeError("A scoped access token requires autocommit.")
+        scope = " ".join(sorted({part for item in scopes for part in str(item).split()}))
+        if not scope:
+            raise ValueError("A scoped access token needs at least one scope.")
+        self.require_active()
+        if token := self._scoped_token(scope):
+            return token
+        live = ""
+
+        def due(current: Self) -> bool:
+            nonlocal live
+            current.require_active()
+            live = current._scoped_token(scope)
+            return not live
+
+        minted = self._renew_locked(
+            due=due,
+            exchange=lambda current: handler.mint_access_token(current, scope),
+            apply=lambda locked, response: locked._store_scoped_token(scope, response),
+            records_failure=handler.records_failure,
+        )
+        if minted is None:
+            return live
+        # A key edit, reconnect or deactivation during the exchange keeps the minted
+        # token out of the cache; the caller still receives it while the row is active.
+        self.require_active()
+        return str(minted["access_token"])
+
+    def require_active(self) -> None:
+        """Refuse a credential that is not active: no scoped token, cached or minted, and no internal MCP key."""
+
+        if self.status != CredentialStatus.ACTIVE:
+            raise ValueError("This credential is not active, so it serves no tokens.")
+
+    def _scoped_token(self, scope: str) -> str:
+        """Return the cached token for ``scope`` until its renewal time, else ``""``."""
+
+        entry = self.reveal().get(_SCOPED_TOKENS, {}).get(scope)
+        if entry is None or entry["renew_at"] <= timezone.now().timestamp():
+            return ""
+        return str(entry["access_token"])
+
+    def _store_scoped_token(self, scope: str, response: Mapping[str, Any]) -> None:
+        """Cache one minted token on this locked row, pruning expired scope sets, and record success.
+
+        The renewal time is the earlier of ``_TOKEN_RENEWAL_MARGIN`` and half the
+        token's lifetime before expiry; a response without a positive ``expires_in``
+        is given ``_DEFAULT_TOKEN_LIFETIME``.
+        """
+
+        now = timezone.now()
+        issued = now.timestamp()
+        expires_in = response["expires_in"]
+        positive = expires_in is not None and expires_in > 0
+        lifetime = float(expires_in) if positive else _DEFAULT_TOKEN_LIFETIME.total_seconds()
+        margin = min(_TOKEN_RENEWAL_MARGIN.total_seconds(), lifetime / 2)
+        material = self.reveal()
+        cached = {key: entry for key, entry in material.get(_SCOPED_TOKENS, {}).items() if entry["expires_at"] > issued}
+        material[_SCOPED_TOKENS] = {
+            **cached,
+            scope: {
+                "access_token": response["access_token"],
+                "scope": response["scope"],
+                "expires_at": int(issued + lifetime),
+                "renew_at": int(issued + lifetime - margin),
+            },
+        }
+        self.material = self.encode_material(material)
+        self.last_refresh_at = now
+        self.last_refresh_status = "ok"
+        with system_context(reason="integrate.credential.mint"):
+            self.save(update_fields=["material", "last_refresh_at", "last_refresh_status", "updated_at"])
 
     def secret_value(self) -> str:
         """Return the primary secret value through the kind handler."""
@@ -1429,7 +1987,7 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         provider exchange is network I/O, so call it in autocommit.
         """
 
-        if self.expires_at is None or self.expires_at > timezone.now() + _OAUTH_REFRESH_MARGIN:
+        if self.expires_at is None or self.expires_at > timezone.now() + _TOKEN_RENEWAL_MARGIN:
             return
         if not self.refreshable:
             return
@@ -1481,63 +2039,93 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         )
 
     def _refresh_locked(self, *, force: bool = False) -> None:
-        """Exchange the refresh grant outside any transaction, then persist it under a fence.
+        """Exchange the refresh grant through :meth:`_renew_locked`, so a rotated refresh token is never replayed.
 
-        A blocking advisory lock serializes exchanges across workers: a second
-        consumer waits for the holder, re-reads the row and adopts the token it
-        persisted, so a rotated refresh token is never replayed. ``force`` renews
-        regardless of expiry for an explicit refresh, and raises ``ValueError`` when
-        the row it reads is inactive or cannot refresh; the lazy path leaves an
-        inactive row's token alone. The provider call holds no
-        transaction; a short row lock then applies the result, or records a
-        permanent refusal, only while :attr:`refresh_fence` still names the grant
-        that was exchanged, so a reconnect, revocation or material edit during the
-        exchange wins. The instance reloads the persisted row either way.
+        ``force`` renews regardless of expiry for an explicit refresh, and raises
+        ``ValueError`` when the row it reads is inactive or cannot refresh; the lazy
+        path leaves an inactive row's token alone.
+        """
+
+        def due(current: Self) -> bool:
+            stale = current.expires_at is not None and current.expires_at <= timezone.now() + _TOKEN_RENEWAL_MARGIN
+            active = current.status == CredentialStatus.ACTIVE
+            if not (force or (active and stale)):
+                return False
+            if not (active and current.refreshable):
+                raise ValueError("This credential cannot be refreshed; reconnect the account.")
+            return True
+
+        def exchange(current: Self) -> dict[str, Any]:
+            refresh_value = str(current.reveal().get("refresh_token") or "")
+            oauth_client = current.oauth_client
+            assert oauth_client is not None  # ``refreshable`` requires the OAuth client.
+            tokens = OAuthClientProtocol(oauth_client).refresh_token(refresh_token=refresh_value)
+            # The response fully describes the new token; the upsert keeps the stored
+            # refresh token when a provider does not rotate it.
+            return dict(tokens)
+
+        def apply(locked: Self, renewed: dict[str, Any]) -> None:
+            type(self).objects.upsert_for_user(
+                locked.user,
+                locked.oauth_client,
+                CredentialKind.OAUTH,
+                renewed,
+                external_account=locked.external_account,
+                reconnect=False,
+            )
+
+        self._renew_locked(due=due, exchange=exchange, apply=apply)
+
+    def _renew_locked[T](
+        self,
+        *,
+        due: Callable[[Self], bool],
+        exchange: Callable[[Self], T],
+        apply: Callable[[Self, T], None],
+        records_failure: Callable[[Exception], bool] = _records_permanent_refusal,
+    ) -> T | None:
+        """Run one grant exchange outside any transaction, then persist it under a fence.
+
+        The shared renewal skeleton of the OAuth refresh and the scoped mint. A
+        blocking advisory lock serializes exchanges across workers: a second
+        consumer waits for the holder, re-reads the row and adopts what it
+        persisted, so no grant is exchanged twice. ``due`` decides on that re-read
+        row and may raise to refuse. The ``exchange`` holds no transaction; a short
+        row lock then runs ``apply``, or records a refusal ``records_failure``
+        admits (by default every refusal that is not transient) as
+        ``last_refresh_status="failed"``, only while :attr:`refresh_fence` still
+        names the material that was exchanged, so a reconnect, revocation or
+        material edit during the exchange wins. Every refusal propagates. The
+        instance reloads the persisted row either way. Returns the exchange
+        result, or ``None`` when the re-read row was no longer due.
         """
 
         if connection.in_atomic_block:
-            raise RuntimeError("Credential refresh requires autocommit.")
-        rows = type(self).objects.sudo(reason="integrate.credential.refresh")
+            raise RuntimeError("Credential renewal requires autocommit.")
+        rows = type(self).objects.sudo(reason="integrate.credential.renewal")
         with task_lock(record_lock_key(self._meta.label_lower, self.pk, "refresh"), blocking=True):
             current = rows.select_related("oauth_client").get(pk=self.pk)
-            stale = current.expires_at is not None and current.expires_at <= timezone.now() + _OAUTH_REFRESH_MARGIN
-            active = current.status == CredentialStatus.ACTIVE
-            if not (force or (active and stale)):
+            if not due(current):
                 self.refresh_from_db()
-                return
-            if not (active and current.refreshable):
-                raise ValueError("This credential cannot be refreshed; reconnect the account.")
-            refresh_value = str(current.reveal().get("refresh_token") or "")
+                return None
             fence = current.refresh_fence
-            oauth_client = current.oauth_client
-            assert oauth_client is not None  # ``refreshable`` requires the OAuth client.
             try:
-                tokens = OAuthClientProtocol(oauth_client).refresh_token(refresh_token=refresh_value)
+                result = exchange(current)
             except (IntegrationError, ValueError) as error:
-                if not (isinstance(error, IntegrationError) and error.transient):
-                    with system_context(reason="integrate.credential.refresh.failed"), transaction.atomic():
+                if records_failure(error):
+                    with system_context(reason="integrate.credential.renewal.failed"), transaction.atomic():
                         locked = rows.lock_if_supported().get(pk=self.pk)
                         if locked.refresh_fence == fence:
                             locked.last_refresh_status = "failed"
                             locked.save(update_fields=["last_refresh_status", "updated_at"])
                 self.refresh_from_db()
                 raise
-            # The response fully describes the new token; a provider that does not
-            # rotate keeps the stored refresh token, so a one-time token is not dropped.
-            renewed = dict(tokens)
-            renewed.setdefault("refresh_token", refresh_value)
             with transaction.atomic():
                 locked = rows.lock_if_supported().get(pk=self.pk)
                 if locked.refresh_fence == fence:
-                    type(self).objects.upsert_for_user(
-                        locked.user,
-                        locked.oauth_client,
-                        CredentialKind.OAUTH,
-                        renewed,
-                        external_account=locked.external_account,
-                        reconnect=False,
-                    )
+                    apply(locked, result)
         self.refresh_from_db()
+        return result
 
 
 def _validated_manager_values(
@@ -1777,7 +2365,11 @@ class IntegrationManager[IntegrationT: Integration](_IntegrationManagerBase[Inte
     def attach_completed_connect(
         self, integration_sqid: str, user: Any, credential: Any, *, exposed_model_labels: set[str],
     ) -> None:
-        """Attach completed OAuth state only to its one owned, exposed concrete capability."""
+        """Attach completed OAuth state only to its one owned, exposed concrete capability.
+
+        ``attach_connection`` refuses another account than the one the target is
+        bound to; the new account's credential stays connected for the user.
+        """
 
         if not integration_sqid:
             return
@@ -1802,17 +2394,33 @@ class IntegrationManager[IntegrationT: Integration](_IntegrationManagerBase[Inte
         if credential.pk != target.credential_id or target.lifecycle == IntegrationLifecycle.DISCONNECTED:
             target.attach_credential(credential)
 
-    def create_capability(self, **fields: Any) -> IntegrationT:
-        """Prepare model-owned defaults and connection identity before native validation."""
+    def build(self, **fields: Any) -> IntegrationT:
+        """Return an unsaved capability row of ``fields``, as a saved one would answer before anything is created.
+
+        It carries the effective actor when there is one, its implementation's
+        defaults (its vendor among them, ``ImplDefaultsMixin.prepare_impl_defaults``;
+        an unknown implementation key is refused on its field) and the account of
+        its credential, unless ``fields`` name one. A connect verb or a connect
+        query builds one to ask what the capability reads with
+        (:meth:`Integration.connectable_credentials`) or connects through
+        (:meth:`Integration.ready_oauth_client`); :meth:`create_capability` saves one.
+        """
 
         instance = self.model(**fields)
-        actor, _sudo = self.effective_actor(strict=True)
+        actor, _sudo = self.effective_actor()
         if actor is not None:
             instance.with_actor(actor)
         instance.prepare_impl_defaults()
         credential = instance.credential
         if "account" not in fields and "account_id" not in fields and credential is not None:
             instance.account = credential.external_account
+        return instance
+
+    def create_capability(self, **fields: Any) -> IntegrationT:
+        """Insert the row :meth:`build` prepares, after native validation; an actor (or sudo) is required."""
+
+        self.effective_actor(strict=True)
+        instance = self.build(**fields)
         instance.full_clean()
         return self.get_queryset().insert(instance)
 
@@ -1974,19 +2582,23 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         raise ImproperlyConfigured(f"{cls._meta.label} has no capability implementation field.")
 
     @property
-    def capability_impl_class(self) -> type[Any]:
-        """Resolve the selected implementation without opening its transport."""
+    def capability_impl_class(self) -> type[OAuthConnectIntent]:
+        """Resolve the selected implementation without opening its transport.
+
+        Every capability implementation base composes ``OAuthConnectIntent``.
+        """
 
         model = self.declared_concrete_model() or type(self)
         field = model.capability_impl_field()
         key = self.__dict__.get("_connection_impl_key")
-        return field.resolve_class(key) if key is not None else field.resolve_for(self.concrete_capability())
+        impl = field.resolve_class(key) if key is not None else field.resolve_for(self.concrete_capability())
+        return cast("type[OAuthConnectIntent]", impl)
 
     @property
     def capability_impl(self) -> Any:
         """Construct the runtime selected by this concrete capability."""
 
-        return self.capability_impl_class(self)
+        return cast(Any, self.capability_impl_class)(self)
 
     @property
     def oauth_client_hint(self) -> str:
@@ -1994,13 +2606,42 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
 
         return self.capability_impl_class.oauth_client
 
+    @property
+    def connection_oauth_scopes(self) -> tuple[str, ...]:
+        """Return the scopes this capability needs beyond its OAuth client's defaults; none without one."""
+
+        if (self.declared_concrete_model() or type(self)) is apps.get_model("integrate", "Integration"):
+            return ()
+        return tuple(self.capability_impl_class.oauth_scopes)
+
+    @property
+    def lacks_oauth_scopes(self) -> bool:
+        """Whether the attached grant misses scopes this capability needs, so Connect can add them."""
+
+        scopes = self.connection_oauth_scopes
+        credential = self._credential_health() if scopes else None
+        return credential is not None and not credential.grants(scopes)
+
+    def bound_account(self, oauth_client_pk: int) -> ExternalAccount | None:
+        """Return the external account this integration is connected as at one OAuth client."""
+
+        if self.account_id is None:
+            return None
+        with system_context(reason="integrate.integration.bound_account"):
+            return cast(
+                "ExternalAccount | None",
+                apps.get_model("integrate", "ExternalAccount")
+                .objects.filter(pk=self.account_id, oauth_client_id=oauth_client_pk)
+                .first(),
+            )
+
     def connection_oauth_slug(self, owner_label: str = "") -> str:
         """Expand this capability's declared OAuth registration hint with its vendor slug."""
 
         hint = str(self.oauth_client_hint or "").strip()
         if not hint:
             raise OAuthFlowError(
-                "oauth_client_not_connectable",
+                OAUTH_CLIENT_NOT_CONNECTABLE,
                 400,
                 f"{owner_label or self._meta.label} has no OAuth client.",
             )
@@ -2013,8 +2654,57 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         with system_context(reason="integrate.integration.connect_oauth_client"):
             oauth_client = apps.get_model("integrate", "OAuthClient").objects.enabled_for_slug(slug)
         if oauth_client is None:
-            raise OAuthFlowError("oauth_client_not_connectable", 400, f"{owner_label} has no enabled OAuth client.")
+            raise OAuthFlowError(OAUTH_CLIENT_NOT_CONNECTABLE, 400, f"{owner_label} has no enabled OAuth client.")
         return oauth_client
+
+    def ready_oauth_client(self) -> Any | None:
+        """Return the enabled OAuth registration another account connects through, or ``None`` while there is none.
+
+        :meth:`connect_oauth_client` under this capability's own label, its refusal
+        (no registration hint, or none enabled) read as ``None``.
+        """
+
+        with system_context(reason="integrate.integration.ready_oauth_client"):
+            try:
+                return self.connect_oauth_client(capfirst(str(self._meta.verbose_name)))
+            except OAuthFlowError:
+                return None
+
+    def reads_with(self, credential: Any) -> bool:
+        """Whether this capability reads with ``credential``: an OAuth grant of its client that covers its scopes.
+
+        Only an OAuth credential of the registration this capability connects
+        through (:meth:`connection_oauth_slug`) qualifies, so one vendor's token is
+        never sent to another's API, and only when its grant covers
+        :attr:`connection_oauth_scopes`. A capability without an OAuth client
+        reads with none. A capability whose reads need such a grant composes this
+        rule in its :meth:`credential_blocker`; :meth:`connectable_credentials`
+        offers the accounts it holds for.
+        """
+
+        if credential.kind != CredentialKind.OAUTH:
+            return False
+        with system_context(reason="integrate.integration.reads_with"):
+            try:
+                oauth_slug = self.connection_oauth_slug()
+            except OAuthFlowError:
+                return False
+            scopes = self.connection_oauth_scopes
+            client = credential.oauth_client
+        return client is not None and client.slug == oauth_slug and credential.grants(scopes)
+
+    def connectable_credentials(self, user: Any) -> models.QuerySet[Credential]:
+        """Return ``user``'s connected accounts this capability reads with (:meth:`reads_with`).
+
+        A capability offers them before it exists through an unsaved row of it
+        (:meth:`IntegrationManager.build`).
+        """
+
+        credential_model = apps.get_model("integrate", "Credential")
+        accounts = credential_model.objects.connected_for(user).filter(kind=CredentialKind.OAUTH)
+        # The grant's scopes are JSON, whose containment is not portable to SQLite; a user's accounts are few.
+        readable = [account.pk for account in accounts.select_related("oauth_client") if self.reads_with(account)]
+        return cast("models.QuerySet[Credential]", accounts.filter(pk__in=readable))
 
     @classmethod
     def credential_projection_expressions(cls) -> dict[str, Any]:
@@ -2029,7 +2719,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         )
         return {
             f"_connection_{name}": Subquery(credential.values(name)[:1])
-            for name in ("status", "expires_at", "last_refresh_status")
+            for name in ("status", "expires_at", "last_refresh_status", "granted_scopes")
         }
 
     @classmethod
@@ -2117,17 +2807,19 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         write_access: bool | None = None,
         ready_slugs: Collection[str] | None = None,
     ) -> bool:
-        """OAuth Connect requires ownership, write, registration and consent need.
+        """OAuth Connect requires ownership, write, registration and a consent need.
 
-        A healthy grant with failed discovery is repaired by Retry, so that row
-        never offers both Retry and Connect.
+        Consent is needed without a credential, when the grant needs renewed
+        consent, or when it lacks scopes the capability now declares. A healthy
+        grant with failed discovery is repaired by Retry, so that row never offers
+        both Retry and Connect.
         """
 
         subject = to_subject_ref(actor) if actor is not None else instance_actor(self)
         return (
             self.owner_id == actor_user_id(subject)
             and (check_permission("write", self, actor=actor).allowed if write_access is None else write_access)
-            and (self.credential_id is None or self.is_reconnect_required)
+            and (self.credential_id is None or self.is_reconnect_required or self.lacks_oauth_scopes)
             and self.is_oauth_connectable(ready_slugs=ready_slugs)
         )
 
@@ -2137,6 +2829,34 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         self.require_access("write", actor)
         if not self.can_connect(actor):
             raise PermissionDenied("Integration OAuth Connect is unavailable to the current user.")
+
+    def transfer_ownership(self, user: Any) -> Self:
+        """Transfer ownership and release the previous owner's connection, so the new owner connects their own.
+
+        In the same transaction an integration running on the previous owner's
+        credential is detached from it and disconnected, and the account binding
+        is released, so that account no longer constrains Connect nor hints it.
+        The release runs on the locked capability row (:meth:`lock_capability`),
+        not on this instance: an owner transferring their own integration lost
+        write with the row, and the actor pinned here would outrank the system context.
+        """
+
+        previous_owner_id = self.owner_id
+        with transaction.atomic():
+            super().transfer_ownership(user)
+            if self.owner_id != previous_owner_id:
+                with system_context(reason="integrate.integration.transfer.release_connection"):
+                    target = self.lock_capability()
+                    credential = target.load_connection_credential()
+                    if credential is not None and credential.user_id == previous_owner_id:
+                        target.attach_connection(None)
+                        target.set_lifecycle(IntegrationLifecycle.DISCONNECTED)
+                    row = target.lock_capability()
+                    if row.account_id is not None:
+                        row.account = None
+                        row.save(update_fields=["account", "updated_at"])
+                self.refresh_from_db()
+        return self
 
     def can_pause(self) -> bool:
         """Whether the guarded Pause verb is eligible for this row."""
@@ -2200,6 +2920,32 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             target = copy(self).sudo(reason="integrate.connection.lock_target").concrete_capability()
         return type(target).objects.lock_if_supported().get(pk=self.pk)
 
+    def lock_for_record_access(self) -> Self:
+        """Lock as bridge work does, the concrete row then its ancestors (:meth:`lock_capability`); reload this row.
+
+        A grant or an ownership transfer then takes integrate's lock order; the
+        reload keeps this row's own type, the resource its relations name.
+        """
+
+        with system_context(reason="integrate.integration.lock_for_record_access"):
+            self.lock_capability()
+        return super().lock_for_record_access()
+
+    def lock_for_delete(self, *, queryset: models.QuerySet[models.Model] | None = None) -> Self | None:
+        """Lock as bridge work does (:meth:`lock_capability`), then reload this row for its delete; ``None`` when gone.
+
+        The base delete lock takes the row with its ancestors in one statement;
+        the capability lock first keeps a delete in integrate's lock order on
+        every delete path (``integrate.signals.lock_integration_for_delete``).
+        """
+
+        with system_context(reason="integrate.integration.lock_for_delete"):
+            try:
+                self.lock_capability()
+            except ObjectDoesNotExist:
+                return None
+        return super().lock_for_delete(queryset=queryset)
+
     def sync_lock_key(self) -> LockKey:
         """Return the advisory task lock held by this capability's sync, live session and discovery work."""
 
@@ -2252,7 +2998,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         model = apps.get_model("integrate", "Credential")
         if "_connection_credential" in self.__dict__:
             return cast(Credential | None, self.__dict__["_connection_credential"])
-        fields = ("status", "expires_at", "last_refresh_status")
+        fields = ("status", "expires_at", "last_refresh_status", "granted_scopes")
         if all(f"_connection_{field}" in self.__dict__ for field in fields):
             values = {field: self.__dict__[f"_connection_{field}"] for field in fields}
             if values["status"] is None:
@@ -2320,15 +3066,20 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     def probe_credential(self) -> str:
         """Prove the attached credential is usable; raise :class:`IntegrationError` when not.
 
-        The credential-only connection test: no vendor round-trip, just the kind
-        handler producing authorization material. Returns the operator message.
+        The credential-only connection test: no vendor round-trip. It fails closed for
+        every kind: a credential that needs reconnecting
+        (:attr:`Credential.is_reconnect_required`) is refused before the kind handler's
+        :meth:`~CredentialKindHandler.probe` proves its material. Returns the operator
+        message.
         """
 
         credential = self.credential
         if credential is None:
             raise IntegrationError("No credential is attached.")
+        if credential.is_reconnect_required:
+            raise IntegrationError("Reconnect this account.")
         try:
-            credential.auth_headers()
+            credential.handler.probe(credential)
         except Exception as error:  # noqa: BLE001 — handler diagnostics stay outside the operator message.
             raise IntegrationError("Credential is not usable.") from error
         return "Credential is usable."
@@ -2475,16 +3226,21 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
 
         fields = dict(fields)
         credential_id = fields.pop("credential_id", _UNSET)
-        if credential_id is not _UNSET:
+        account_id = fields.pop("account_id", None)
+        if credential_id is not _UNSET or account_id is not None:
+            # The account binding follows the credential; only ``attach_connection``
+            # changes it, and a null account keeps it (``transfer_ownership`` releases it).
             actor = instance_actor(self)
             credentials = apps.get_model("integrate", "Credential").objects.for_write()
             accounts = apps.get_model("integrate", "ExternalAccount").objects.for_write()
             if actor is not None:
                 credentials = credentials.with_actor(actor)
                 accounts = accounts.with_actor(actor)
-            credential = None if credential_id is None else credentials.get(pk=credential_id)
-            account_id = fields.pop("account_id", _UNSET)
-            account = account_id if account_id is _UNSET or account_id is None else accounts.get(pk=account_id)
+            if credential_id is _UNSET:
+                credential = self.load_connection_credential()
+            else:
+                credential = None if credential_id is None else credentials.get(pk=credential_id)
+            account = _UNSET if account_id is None else accounts.get(pk=account_id)
             self.concrete_capability().attach_connection(credential, account=account)
             self.refresh_from_db()
         if "lifecycle" in fields:
@@ -2579,14 +3335,22 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     ) -> None:
         """Own every credential attachment, including a fenced derived credential.
 
+        The row stays bound to the provider identity it was connected as: under
+        the row lock, a credential or ``account`` of another identity (issuer, or
+        client without one, plus subject) is refused with ``account_switch_refused``.
+        Detaching, attaching a credential that names no account, or an explicit
+        ``account=None`` keeps the binding; only ownership transfer releases it.
         ``discovery_generation`` is reserved for the apply step already holding
-        this row's lock. Ordinary callers always enter connection discovery.
+        this row's lock. Ordinary callers always enter connection discovery. The
+        capability admits every credential first (:meth:`admit_credential`).
         """
 
-        resolved_account = (
-            (None if credential is None else credential.external_account) if account is _UNSET else account
-        )
+        resolved_account: Any = _UNSET if account is None else account
+        if resolved_account is _UNSET and credential is not None and credential.external_account_id is not None:
+            resolved_account = credential.external_account
         if self.pk is None:
+            if credential is not None:
+                self.admit_credential(credential)
             self._set_connection_fields(credential=credential, account=resolved_account)
             if credential is not None and connect_disconnected and self.lifecycle == IntegrationLifecycle.DISCONNECTED:
                 self.lifecycle_transitions.force_state(
@@ -2597,7 +3361,12 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             return
         with system_context(reason="integrate.connection.attach"), transaction.atomic():
             row = self.lock_capability()
-            derived_pk = row.credential_id if row.discovery_credential_id not in (None, row.credential_id) else None
+            if credential is not None:
+                row.admit_credential(credential)
+            if resolved_account is not _UNSET and row.account is not None and row.account_id != resolved_account.pk:
+                if row.account.provider_identity != resolved_account.provider_identity:
+                    raise OAuthFlowError(ACCOUNT_SWITCH_REFUSED, 409)
+            derived_pk = row.derived_credential_id
             if discovery_generation is not None:
                 if row.discovery_generation != discovery_generation or not row.discovery_pending:
                     raise IntegrationError("Connection discovery has been superseded.")
@@ -2613,6 +3382,32 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
                 row.await_discovery()
             apps.get_model("integrate", "Credential").objects.delete_unattached_derived(derived_pk)
         self.refresh_from_db()
+
+    def credential_blocker(self, credential: Any) -> str | None:
+        """Return a public-safe refusal to attach ``credential`` to this capability, or ``None`` when admitted.
+
+        The capability's one admission rule: :meth:`admit_credential` raises it on
+        every attachment, and the connect picker shows it beside each account the
+        user could choose (``ConnectWithAccount``), so an account the capability
+        refuses is listed as refused rather than refused only once picked. The base
+        admits any credential; a capability whose reads need its OAuth client's
+        grant refuses one it does not :meth:`reads_with`.
+        """
+
+        del credential
+        return None
+
+    def admit_credential(self, credential: Any) -> None:
+        """Refuse ``credential`` before it attaches to this capability, raising ``ValidationError`` on ``credential``.
+
+        :meth:`attach_connection` asks the capability row on every attachment, so
+        no path (connect, the console's credential patch, a reconnect) skips it.
+        It raises :meth:`credential_blocker`, the rule; a capability overrides this
+        only to hold a lock around that rule.
+        """
+
+        if (refusal := self.credential_blocker(credential)) is not None:
+            raise ValidationError({"credential": refusal})
 
     @transition(
         lifecycle,
@@ -2663,6 +3458,25 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         return self.discovery_retry_at is not None
 
     @property
+    def derived_credential_id(self) -> int | None:
+        """The credential this row attaches as material its discovery derived, or ``None``.
+
+        Discovery attaches it beside the grant it derived from
+        (``discovery_credential``). A row whose grant was deleted still attaches
+        it: every attachment since discovery existed records its grant, so a
+        discovered generation with no grant left holds derived material. A row
+        attached before then holds its credential directly. The one rule for
+        derived material: the credential manager's re-entry refusal and
+        ``store_derived``'s overwrite read it on the rows a credential serves.
+        """
+
+        if self.credential_id is None or self.discovery_credential_id == self.credential_id:
+            return None
+        if self.discovery_credential_id is None and self.discovery_generation == 0:
+            return None
+        return self.credential_id
+
+    @property
     def discovery_ready(self) -> bool:
         """One admission rule for sync, workflow dispatch and outbound delivery.
 
@@ -2673,6 +3487,48 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         return not self.discovery_pending and (
             self.discovery_generation == 0 or self.discovery_completed_at is not None
         )
+
+    discovery_readiness_fields: ClassVar[tuple[str, ...]] = (
+        "discovery_retry_at", "discovery_generation", "discovery_completed_at", "lifecycle", "last_error",
+    )
+    """The columns :meth:`require_discovery_ready` reads, so a check loads only them."""
+
+    def require_stored_discovery_ready(self) -> None:
+        """Ask :meth:`require_discovery_ready` of this row as stored now, re-reading only the columns it uses.
+
+        For a check just before a remote effect, under the lock that effect holds
+        (a send, a workflow step's IO), so a secret re-entered while that work
+        waited for its lock holds it back. The re-read updates this instance.
+        """
+
+        self.refresh_from_db(fields=self.discovery_readiness_fields)
+        self.require_discovery_ready()
+
+    def require_discovery_ready(self) -> None:
+        """Stop work already admitted once :attr:`discovery_ready` no longer holds.
+
+        A secret re-entered or a credential attached since a run was admitted
+        leaves discovery pending, so what the run read is on facts discovery has
+        not confirmed. A pending discovery refuses transiently: the next run
+        waits for it. So does a disconnected integration's: its discovery runs
+        when it is connected again (``connect`` awaits it), which is not a
+        failure. A discovery that finished without success refuses
+        permanently with its own operator message (``last_error``), since only
+        an operator clears it. Every stream commit resting on remote facts asks
+        it under the stream lock (:meth:`SyncStreamManager.lock_current`), the
+        stream driver asks it on a freshly read row before each remote write and
+        each reset, conflict resolution before it reads, and delivery before it
+        sends. The row is read, never locked: a page holds its stream lock, and
+        epoch changes lock the integration before the stream.
+        """
+
+        if self.discovery_ready:
+            return
+        if self.discovery_pending:
+            raise IntegrationError(_DISCOVERY_REQUIRED_MESSAGE, transient=True)
+        if self.lifecycle == IntegrationLifecycle.DISCONNECTED:
+            raise IntegrationError(_DISCOVERY_ON_RECONNECT_MESSAGE, transient=True)
+        raise IntegrationError(self.last_error or _DISCOVERY_FAILED_MESSAGE)
 
     def prepare_connection_discovery(self) -> None:
         """Database-only preparation; concrete capabilities may suspend their work."""
@@ -2815,13 +3671,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
                     if credential_pk is None:
                         raise IntegrationError("No credential is attached.")
                     source = apps.get_model("integrate", "Credential").objects.get(pk=credential_pk)
-                    derived = result.credential
-                    credential = type(source).objects.create_local_credential(
-                        source.user,
-                        kind=derived.kind,
-                        name=derived.name,
-                        material=dict(derived.material),
-                    )
+                    credential = type(source).objects.store_derived(source.user, result.credential)
                     row.attach_connection(
                         credential,
                         account=source.external_account,
@@ -3040,6 +3890,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
     """Bridge-scoped settings interpreted by the selected backend."""
     poll_interval = models.PositiveIntegerField(default=300)
     subscription_state = models.JSONField(default=dict, blank=True)
+    """Live-session state and the connection facts a capability learned at discovery (an account or workspace id)."""
     live_retry_at = models.DateTimeField(null=True, blank=True)
     """Earliest time the reconciler may restart a transiently failed live session.
 
@@ -3617,7 +4468,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         """Decide and persist admission from this already-locked capability row."""
 
         if not self.discovery_ready:
-            raise IntegrationError("Connection discovery must finish before syncing.")
+            raise IntegrationError(_DISCOVERY_REQUIRED_MESSAGE)
         recovering = self.sync_stage == self.SyncStage.QUEUED
         admitted = not (self.sync_is_dispatched or self.is_syncing)
         fields: list[str] = []
@@ -3698,7 +4549,8 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
 
         if not any(isinstance(field, ImplClassField) for field in self._meta.fields):
             return False
-        return self.capability_impl_class.requires_connection_discovery
+        impl = self.capability_impl_class
+        return issubclass(impl, IntegrationImpl) and impl.requires_connection_discovery
 
     def discover_connection(self, credential: Credential) -> ConnectionDiscovery:
         """Invoke the adapter's read-only remote hook outside a transaction."""
@@ -3862,7 +4714,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         if self.sync_is_dispatched:
             return SyncDispatch.DISPATCHED
         if not self.mark_sync_started(now=now):
-            raise IntegrationError("Connection discovery must finish before syncing.")
+            raise IntegrationError(_DISCOVERY_REQUIRED_MESSAGE)
         try:
             with progress_bridge_context(self):
                 result = self.sync()
@@ -3932,7 +4784,8 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         This method merges only — a key can never be removed; consumed markers
         settle to a sentinel value defined by their owning flow.
         ``subscription_state`` has disjoint owners — the operator writes
-        ``desired`` (start/stop), a live session writes its own pairing facts —
+        ``desired`` (start/stop), a live session writes its own pairing facts,
+        discovery's apply hook writes the connection facts it learned —
         that may write concurrently from separately-loaded instances. A full
         read-modify-write from a stale instance would clobber the other owner's
         key, so this re-reads the row locked, merges only the given keys, and
@@ -4203,12 +5056,48 @@ class SyncStreamQuerySet[SyncStreamT: SyncStream](AngeeHistoryQuerySet[SyncStrea
         rows = self.sudo(reason="integrate.stream.current_for_bridge").filter(integration_id=bridge.pk)
         if key is not None:
             rows = rows.filter(key=key)
+        return rows.latest_generations().order_by("key", "partition")
+
+    def latest_generations(self) -> Self:
+        """Keep each selected partition's current epoch, whatever its state."""
+
         latest = (
-            rows.filter(key=OuterRef("key"), partition=OuterRef("partition"))
+            self.model._base_manager.filter(
+                integration_id=OuterRef("integration_id"), key=OuterRef("key"), partition=OuterRef("partition")
+            )
             .order_by("-generation")
             .values("generation")[:1]
         )
-        return rows.filter(generation=Subquery(latest)).order_by("key", "partition")
+        return self.filter(generation=Subquery(latest))
+
+    def in_lock_order(self) -> Self:
+        """Order streams as integrate locks them: roots, then contained streams, by key, partition and generation.
+
+        A page or push locks its stream, then the child streams it retires
+        (:meth:`SyncStreamManager.retire_children`). A caller locking several streams
+        of a bridge at once (a purge) takes them in this order, so it never waits on
+        such a page holding them the other way round. A contained stream holds no
+        containers (:meth:`SyncStreamManager.current`), so this is parents before
+        their children at every depth.
+        """
+
+        contained = ExpressionWrapper(Q(container__isnull=False), output_field=BooleanField())
+        return self.order_by(contained, "key", "partition", "generation")
+
+    def retiring(self, stream: models.Model) -> Self:
+        """The current child streams of ``stream`` with a pending retirement pass and a container still gone.
+
+        A container that observes again pauses its child's pass, which the child's
+        reopening drops (:meth:`SyncStreamManager.bump_generation`).
+        """
+
+        return (
+            self.filter(container__stream=stream, state=StreamState.RETIRED)
+            .exclude(reconcile_state={})
+            .exclude(RecordLinkQuerySet.observing_rule("container__"))
+            .latest_generations()
+            .order_by("key", "partition")
+        )
 
 
 _SyncStreamManagerBase = AngeeHistoryManager.from_queryset(SyncStreamQuerySet)
@@ -4220,23 +5109,39 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
     def lock_current(self, stream: Any, *, fenced_to: Any = None) -> Any:
         """Fence one page against epoch changes inside the caller's transaction.
 
-        The stream row lock is shared with epoch retirement. A stale extracted
+        The stream row lock is shared with epoch changes. A stale extracted
         page must fail before any domain records or cursor state are applied.
+        Every commit to a stream or its links passes here (a page, a push's
+        reflection, a sweep, an absence, a conflict decision, a retained
+        failure), so here too it stops while the stream's integration is not
+        discovery-ready (:meth:`Integration.require_discovery_ready`), unless
+        the caller declared its commit exempt (:func:`~angee.integrate.states.exempt_from_discovery`).
+        The integration is read with the stream in one statement, never locked:
+        epoch changes lock it before the stream. Only the columns the check
+        uses are read (``Integration.discovery_readiness_fields``).
         """
 
         if not connection.in_atomic_block:
             raise RuntimeError("Locking a stream requires the page transaction.")
+        integration = self.model._meta.get_field("integration").related_model
+        unread = [
+            f"integration__{field.name}"
+            for field in integration._meta.concrete_fields
+            if not field.primary_key and field.name not in integration.discovery_readiness_fields
+        ]
         with system_context(reason="integrate.stream.lock_current"):
-            locked = self.filter(pk=stream.pk).lock_if_supported().get()
+            locked = self.filter(pk=stream.pk).select_related("integration").defer(*unread).lock_if_supported().get()
             if self.filter(
                 integration_id=locked.integration_id,
                 key=locked.key,
                 partition=locked.partition,
                 generation__gt=locked.generation,
             ).exists():
-                raise RuntimeError("The extracted page belongs to a retired stream generation.")
-            if fenced_to is not None and locked.operation_fence != fenced_to.operation_fence:
+                raise RuntimeError("The extracted page belongs to a superseded stream generation.")
+            if fenced_to is not None and not json_equal(locked.operation_fence, fenced_to.operation_fence):
                 raise RuntimeError("Stream state changed during external work; retry the operation.")
+            if not discovery_exempt():
+                locked.integration.require_discovery_ready()
             return locked
 
     def current(
@@ -4257,20 +5162,42 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         An unknown version is seeded from the oldest applied link mapping, or
         the declaration when no applied links exist, so deployment alone never replays
         records already applied at the declared version.
+        A composed mapping (``StreamDefinition.mapping_contributions``) has no
+        declared version: the generation retains the ordered list it ran with the
+        version it assigned it, and any other list, or a list that no longer names
+        the stream's version, opens one baseline under a version none of the
+        stream's records was applied with (``_mapping_identity``), so its version
+        never lowers.
         ``authoritative`` is the declaration's fact: a changed declaration flips the
         current generation through :meth:`set_authoritative`, so an adapter never
         flips it from inside a page.
+        A child stream's ``container`` is a live container link
+        (:meth:`RecordLinkQuerySet.live_containers`) of a stream of the same bridge,
+        whose external key is the partition, and holds no containers of its own. A
+        stream declared before containers existed adopts it once; otherwise it never
+        changes. A retired generation is reopened by :meth:`bump_generation`.
         """
 
         if definition.absence_threshold < 1:
             raise ValidationError("A stream absence threshold must be positive.")
-        if definition.mapping_version < 1:
-            raise ValidationError("A stream mapping version must be positive.")
+        declared = definition.mapping_parts()
+        if definition.container is not None and definition.holds_containers:
+            # Containers nest one level (a source's address books or calendars, then their records):
+            # ``SyncStreamQuerySet.in_lock_order``'s roots-then-contained order is then a depth order.
+            raise ValidationError("A contained stream cannot hold containers of its own.")
         integration_model = self.model.integration.field.related_model
         if bridge._meta.proxy or integration_model not in bridge._meta.get_parent_list():
             raise ValidationError("A stream bridge must be a concrete Integration child.")
+        container = definition.container
+        links = self.model.container.field.related_model.objects
         with system_context(reason="integrate.stream.current"), transaction.atomic():
             cast(Any, bridge).lock_capability()
+            if container is not None and not links.filter(
+                pk=container.pk, external_key=definition.partition, stream__integration_id=bridge.pk
+            ).live_containers().exists():
+                raise ValidationError(
+                    "A child stream's partition is the external key of a live container link of its bridge."
+                )
             identity = {
                 "integration_id": bridge.pk,
                 "key": definition.key,
@@ -4278,31 +5205,94 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
             }
             stream = self.filter(**identity).order_by("-generation").first()
             if stream is None:
-                return self.create(integration_id=bridge.pk, **definition.stream_fields())
+                version, composed = self._mapping_identity(definition, declared)
+                fields = replace(definition, mapping_version=version).stream_fields()
+                return self.create(integration_id=bridge.pk, **fields, mapping_contributions=composed)
             if stream.kind != definition.kind:
                 raise ValidationError("A stream's kind cannot change between declarations.")
+            if container is not None and stream.container_id is None:
+                stream.container = container
+                stream.allow_immutable_save("container_id")
+                stream.save(update_fields=["container", "updated_at"])
+            if stream.container_id != (container.pk if container is not None else None):
+                raise ValidationError("A stream's container cannot change between declarations.")
+            # One read of the applied stamps: the lowest seeds an unknown version, the highest floors a stream
+            # that composes with no list its version ran. The list is read before the seed, so it trusts none.
+            retained = stream.retained_contributions
+            stamps: dict[str, int | None] = {"lowest": None, "highest": None}
+            if stream.mapping_version is None or (not retained and (declared or retained is None)):
+                stamps = stream.links.filter(applied_at__isnull=False).aggregate(
+                    lowest=models.Min("mapping_version"), highest=models.Max("mapping_version")
+                )
             if stream.mapping_version is None:
-                applied_version = stream.links.filter(applied_at__isnull=False).aggregate(
-                    version=models.Min("mapping_version"),
-                )["version"]
-                stream.mapping_version = applied_version if applied_version is not None else definition.mapping_version
+                stream.mapping_version = definition.mapping_version if stamps["lowest"] is None else stamps["lowest"]
                 stream.save(update_fields=["mapping_version", "updated_at"])
+            version, composed = self._mapping_identity(
+                definition, declared, stream.mapping_version, retained, stamps["highest"]
+            )
             if (
                 stream.direction != definition.direction
                 or stream.snapshot != definition.snapshot
-                or definition.mapping_version > stream.mapping_version
+                or version > stream.mapping_version
+                or stream.state == StreamState.RETIRED
             ):
                 stream = self.bump_generation(
                     stream,
                     direction=definition.direction,
                     snapshot=definition.snapshot,
-                    mapping_version=definition.mapping_version,
+                    mapping_version=version,
+                    mapping_contributions=composed,
                 )
-            elif stream.mapping_version != definition.mapping_version:
-                stream.mapping_version = definition.mapping_version
+            elif stream.mapping_version != version:
+                stream.mapping_version = version
                 stream.save(update_fields=["mapping_version", "updated_at"])
+            if stream.holds_containers != definition.holds_containers:
+                stream.holds_containers = definition.holds_containers
+                stream.save(update_fields=["holds_containers", "updated_at"])
             change_authority = stream.authoritative != definition.authoritative
         return self.set_authoritative(stream, definition.authoritative) if change_authority else stream
+
+    @staticmethod
+    def _mapping_identity(
+        definition: StreamDefinition,
+        declared: tuple[tuple[str, int], ...],
+        stream_version: int | None = None,
+        retained: tuple[tuple[str, int], ...] | None = (),
+        stamped: int | None = None,
+    ) -> tuple[int, dict[str, Any]]:
+        """Return the version ``definition`` runs under after its stream, and the composed mapping to retain.
+
+        ``declared`` is the definition's ordered contributions
+        (:meth:`StreamDefinition.mapping_parts`). For an existing stream,
+        ``stream_version`` is its known or seeded version, ``retained`` its list
+        (:attr:`SyncStream.retained_contributions`) and ``stamped`` the highest
+        version its applied links carry, read only when it composes with no
+        list its version ran; a new stream passes none. A plain declaration on
+        a stream that never composed keeps its declared version, rollback
+        included. Otherwise the ordered contributions are the identity: the list
+        the stream's version ran keeps that version, and any other list (added,
+        removed, exchanged, reordered or re-versioned) takes a version at least
+        the contributions' sum and above the stream's. With no list its version
+        ran (a stream that first composes, or one whose retained list no longer
+        names its version) the version also goes above every version its applied
+        links carry: a plain rollback, the lowest-stamp seed or a release before
+        the retained list can leave records stamped above the stream's version,
+        while a composed stream's version is otherwise at least every stamp. A
+        plain version on a stream that composed reads as the one contribution
+        under the empty key, which no declared contribution may use, so the
+        stream never lowers its version onto one it stamped with another list's
+        output. The composed mapping is JSON-native, as
+        :attr:`SyncStream.mapping_contributions` stores it.
+        """
+
+        if not declared and retained == ():
+            return definition.mapping_version, {}
+        declared = declared or (("", definition.mapping_version),)
+        version = sum(part for _key, part in declared)
+        if stream_version is not None:
+            unchanged = declared == retained
+            version = stream_version if unchanged else max(version, stream_version + 1, (stamped or 0) + 1)
+        return version, {"version": version, "parts": [[key, part] for key, part in declared]}
 
     def bump_generation(
         self,
@@ -4312,16 +5302,28 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         direction: StreamDirection | None = None,
         snapshot: bool | None = None,
         mapping_version: int | None = None,
+        mapping_contributions: dict[str, Any] | None = None,
     ) -> Any:
         """Create one new baseline while retaining identities and history.
 
-        Concurrent requests against a retired epoch return its successor. Links
-        follow the current epoch without changing their verification marker.
+        Concurrent requests against a superseded epoch return its successor. Links
+        follow the current epoch without changing their verification marker. An
+        open predecessor closes. A retired generation reopens only while its
+        container is live (:meth:`RecordLinkQuerySet.live_containers`); otherwise it
+        is returned unchanged, so no resync, cursor expiry or declaration revives a
+        child whose container is gone. A reopened one stays retired, its pending
+        retirement pass dropped: the new baseline verifies its links again.
+        An omitted mapping version or composed mapping keeps its predecessor's;
+        the composed mapping is copied as stored, so one that no longer names the
+        version still does not.
         """
 
         with system_context(reason="integrate.stream.bump_generation"), transaction.atomic():
             latest = self._lock_latest(stream)
             if latest.pk != stream.pk:
+                return latest
+            retired = latest.state == StreamState.RETIRED
+            if retired and not latest.links.model.objects.filter(pk=latest.container_id).live_containers().exists():
                 return latest
             definition = replace(
                 StreamDefinition.from_stream(latest),
@@ -4333,14 +5335,20 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
             successor = self.create(
                 integration_id=latest.integration_id,
                 **definition.stream_fields(),
+                mapping_contributions=(
+                    deepcopy(latest.mapping_contributions) if mapping_contributions is None else mapping_contributions
+                ),
                 generation=latest.generation + 1,
                 last_advanced_at=timezone.now() if cursor else None,
                 inbound=deepcopy(latest.inbound),
             )
             latest.links.model.objects.filter(stream=latest).update(stream=successor)
-            latest.state = StreamState.CLOSED
+            if latest.state == StreamState.OPEN:
+                latest.state = StreamState.CLOSED
+            if retired:
+                latest.reconcile_state = {}
             latest.inbound = []
-            latest.save(update_fields=["state", "inbound", "updated_at"])
+            latest.save(update_fields=["state", "inbound", "reconcile_state", "updated_at"])
             return successor
 
     def request_resync(self, stream: Any) -> Any:
@@ -4415,8 +5423,8 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
 
         with system_context(reason="integrate.stream.advance"), transaction.atomic():
             locked = self.lock_current(stream)
-            if locked.state == StreamState.CLOSED:
-                raise ValidationError("A closed stream requires a new generation before advancement.")
+            if locked.state != StreamState.OPEN:
+                raise ValidationError("A closed or retired stream requires a new generation before advancement.")
             locked.cursor = cursor
             locked.cursor_expires_at = cursor_expires_at
             locked.last_advanced_at = timezone.now()
@@ -4430,16 +5438,69 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 setattr(stream, field, getattr(locked, field))
             return stream
 
+    def retire_children(self, stream: Any) -> int:
+        """Retire the current child streams whose container link in ``stream`` stopped observing.
 
-class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
+        Runs inside the parent's page transaction and flips each child's state
+        only: a retired generation is no longer drained, and its
+        ``reconcile_state`` starts a retirement pass, which
+        :func:`~angee.integrate.streams.reconcile_stream` runs in bounded, resumable
+        batches, tombstoning the child's links (roots before compound children)
+        with the adapter's ``on_absent``; nothing is deleted. A container that is
+        only unavailable pauses its child instead: the child is neither declared
+        nor retired. A retired stream seeds no retirement of its own children.
+        Returns how many streams retired.
+        """
+
+        if stream.state == StreamState.RETIRED:
+            return 0
+
+        with system_context(reason="integrate.stream.retire_children"), transaction.atomic():
+            children = (
+                self.filter(container__stream=stream)
+                .exclude(RecordLinkQuerySet.observing_rule("container__"))
+                .exclude(state=StreamState.RETIRED)
+                .latest_generations()
+                .only("pk")
+                .in_lock_order()
+            )
+            retired = 0
+            for child in children:
+                locked = self.lock_current(child)
+                locked.state = StreamState.RETIRED
+                locked.reconcile_state = {"started_at": timezone.now().isoformat(), "phase": "roots", "after": None}
+                locked.save(update_fields=["state", "reconcile_state", "updated_at"])
+                retired += 1
+            return retired
+
+
+class SyncStream(ImmutableFieldsMixin, SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
     """An epoch's opaque progress and adapter-owned policy for one partition."""
 
     sqid_prefix = "sst_"
+    immutable_fields = ("container_id",)
     integration = models.ForeignKey("integrate.Integration", on_delete=models.PROTECT, related_name="sync_streams")
     key = models.CharField(max_length=160)
-    partition = models.CharField(max_length=255, blank=True)
+    partition = models.CharField(max_length=EXTERNAL_KEY_LENGTH, blank=True)
+    container = models.ForeignKey(
+        "integrate.RecordLink", null=True, blank=True, on_delete=models.PROTECT, related_name="child_streams"
+    )
+    """The parent stream's link whose record holds this partition (an address book, a calendar).
+
+    Its external key is the partition, and it never changes (a stream declared
+    before containers existed adopts it once, :meth:`SyncStreamManager.current`).
+    A child of a container created in this cycle drains after the wave that
+    created it; a container that stops observing retires this stream
+    (:meth:`SyncStreamManager.retire_children`).
+    """
     kind = StateField(choices_enum=StreamKind)
     direction = StateField(choices_enum=StreamDirection)
+    holds_containers = models.BooleanField(default=False)
+    """Whether this stream's records are containers of child streams (address books, calendars).
+
+    Only such a stream makes the driver declare again after a wave, when one of
+    its links became a live container.
+    """
     snapshot = models.BooleanField(default=False)
     authoritative = models.BooleanField(default=False)
     """Whether this stream's source is the system of record for the aspects it asserts.
@@ -4453,7 +5514,21 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
     """
     generation = models.PositiveIntegerField(default=1)
     mapping_version = models.PositiveIntegerField(null=True, blank=True)
-    """Active declared mapping version; unknown until seeded by :meth:`SyncStreamManager.current`."""
+    """The mapping version this generation stamps on its evidence.
+
+    A plain declaration's version, or the one the manager gave the contributions
+    this generation ran; unknown until seeded by :meth:`SyncStreamManager.current`.
+    """
+    mapping_contributions = models.JSONField(default=dict, db_default={}, blank=True)
+    """The composed mapping this generation ran, ``{"version": V, "parts": [[key, version], ...]}``.
+
+    ``parts`` are in applied order and ``version`` is the mapping version the
+    manager assigned them. Stored JSON-native, so a fresh and a reloaded row hold
+    the same value; read it through :attr:`retained_contributions`. Empty for a
+    stream that never composed, which is also what a stream written before this
+    column holds, so it keeps the plain rule. The database default is that empty
+    mapping, so a release before this column still creates stream generations.
+    """
     phase = StateField(choices_enum=StreamPhase, default=StreamPhase.BASELINE)
     state = StateField(choices_enum=StreamState, default=StreamState.OPEN)
     cursor = models.JSONField(default=dict, blank=True)
@@ -4475,8 +5550,25 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
         return f"{self.key} ({self.partition})" if self.partition else self.key
 
     @property
+    def retained_contributions(self) -> tuple[tuple[str, int], ...] | None:
+        """The composed mapping this generation's version ran, as ``(key, version)`` pairs in applied order.
+
+        Empty when the stream never composed. ``None`` when the stored parts no
+        longer name the stream's version: a release before the stored list
+        changed that version in place, or the row holds a bare list stored
+        without its version (an empty one is a stream that never composed).
+        """
+
+        stored = self.mapping_contributions
+        if not stored:
+            return ()
+        if isinstance(stored, list) or stored["version"] != self.mapping_version:
+            return None
+        return tuple((key, version) for key, version in stored["parts"])
+
+    @property
     def operation_fence(self) -> tuple[Any, ...]:
-        """Return all mutable stream facts that external work must fence."""
+        """Return all mutable stream facts that external work must fence, compared as JSON (``json_equal``)."""
 
         return self.state, self.phase, self.cursor, self.reconcile_state, self.resync_required, self.mapping_version
 
@@ -4496,6 +5588,21 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
             self.state == StreamState.OPEN
             and self.direction != StreamDirection.PUSH
             and self.kind == StreamKind.RECORD_REPLICA
+        )
+
+    def sweep_due(self) -> bool:
+        """Whether this generation's periodic sweep is due: ``reconcile_interval`` passed since the last one completed.
+
+        Never without an interval. The sweep compares everything: a pull's absence
+        pass (:func:`~angee.integrate.streams.reconcile_stream`) lists every remote
+        record, and a push compares every local row
+        (:meth:`RecordLinkManager.changed_since_base` narrows nothing while it is
+        due). A push stream, which no absence pass sweeps, completes its sweep with
+        that push (:func:`~angee.integrate.streams.push_stream`).
+        """
+
+        return self.reconcile_interval is not None and (
+            self.last_reconciled_at is None or self.last_reconciled_at + self.reconcile_interval <= timezone.now()
         )
 
     @property
@@ -4597,6 +5704,73 @@ class RecordLinkQuerySet[RecordLinkT: RecordLink](AngeeHistoryQuerySet[RecordLin
 
         return self.filter(Q(last_seen_at__isnull=True) | Q(last_seen_at__lt=started))
 
+    def released(self) -> Self:
+        """Links naming no row now: released ones, and ones still bound to a row that is gone.
+
+        A deletion releases its row's push links (:meth:`RecordLink.teardown_for_target`)
+        only if one names the row when the delete reads them. A delete that locked
+        nothing (a cascade Django's collector reaches) can lose the row after a push
+        bound its link meanwhile, and that link keeps naming the missing row. One
+        anti-join per target content type finds it, the pointer cast to the target's
+        key so the key's index answers. A link whose target model is no longer
+        installed stays bound.
+        """
+
+        gone = Q(target_object_id=None)
+        bound = self.exclude(target_object_id=None).order_by().values_list("target_content_type_id", flat=True)
+        for content_type_id in sorted(bound.distinct()):
+            model = ContentType.objects.get_for_id(content_type_id).model_class()
+            if model is None:
+                continue
+            present = model._base_manager.filter(pk=Cast(OuterRef("target_object_id"), output_field=model._meta.pk))
+            gone |= Q(~Exists(present), target_content_type_id=content_type_id)
+        return self.filter(gone)
+
+    @staticmethod
+    def observing_rule(path: str = "") -> Q:
+        """The observing rule on the link at ``path`` (``"container__"`` from a stream): not tombstoned or withdrawn."""
+
+        return Q(**{f"{path}tombstoned_at__isnull": True}) & ~Q(
+            **{f"{path}status__in": (LinkStatus.TOMBSTONE, LinkStatus.WITHDRAWN)}
+        )
+
+    @classmethod
+    def live_container_rule(cls, path: str = "") -> Q:
+        """The live-container rule on the link at ``path``: observing, bound to a target, no absence counted."""
+
+        return cls.observing_rule(path) & Q(**{f"{path}target_object_id__isnull": False, f"{path}absence_count": 0})
+
+    def observing(self) -> Self:
+        """Identities that still observe their target: neither tombstoned nor withdrawn.
+
+        A container that stops observing retires the child streams it holds.
+        """
+
+        return self.filter(self.observing_rule())
+
+    def live_containers(self) -> Self:
+        """Links that can hold a child stream now: observing, bound to a target and seen in full.
+
+        The one rule for declaring, opening and reopening a child stream. A
+        container whose absence is being counted only pauses its child: it is not
+        live, yet still observing, so the child is neither declared nor retired.
+        """
+
+        return self.filter(self.live_container_rule())
+
+    def containers_of(self, bridge: models.Model, key: str) -> Self:
+        """The live container links of ``bridge``'s ``key`` stream, in key order, each with its stream.
+
+        Links follow their stream's current generation, so the key selects them.
+        """
+
+        return (
+            self.filter(stream__integration_id=bridge.pk, stream__key=key)
+            .live_containers()
+            .select_related("stream")
+            .order_by("external_key")
+        )
+
     def absence_candidates(self, *, started: datetime, children: bool) -> Self:
         """Select a sweep's unseen roots, or the children of the roots it found missing."""
 
@@ -4606,10 +5780,15 @@ class RecordLinkQuerySet[RecordLinkT: RecordLink](AngeeHistoryQuerySet[RecordLin
         parents = self.filter(parent__isnull=True, absence_count__gt=0).unseen_since(started)
         return rows.filter(parent_id__in=parents.values("pk"))
 
-    def with_sync_evidence(self) -> Self:
-        """Load the protected application projection; state is already on the link."""
+    def with_sync_evidence(self, *, source_payload: bool = False) -> Self:
+        """Load the protected application projection; state is already on the link.
+
+        ``source_payload`` also loads the link's latest observation, for a caller
+        that compares it with a new one.
+        """
+        deferred = ("mapped_payload", "applied_base__source_payload")
         return self.select_related("applied_base", "parent", "stream").defer(
-            "source_payload", "mapped_payload", "applied_base__source_payload"
+            *deferred if source_payload else ("source_payload", *deferred)
         )
 
     def with_open_failures(self, *, include_source: bool = False) -> Self:
@@ -4662,6 +5841,12 @@ class RecordLinkQuerySet[RecordLinkT: RecordLink](AngeeHistoryQuerySet[RecordLin
 
 
 _RecordLinkManagerBase = AngeeHistoryManager.from_queryset(RecordLinkQuerySet)
+
+
+def _held_version(mapping_version: int, version: str | None) -> str:
+    """Return the stored form of a local version, framed by the mapping version that projected it; ``""`` for none."""
+
+    return f"{mapping_version}:{version}" if version else ""
 
 
 class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLinkT]):
@@ -4751,12 +5936,148 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
         this is not a withdrawal, the identity is still current.
         """
 
-        with system_context(reason="integrate.record.release_target"), transaction.atomic():
-            locked = self.filter(pk=link.pk).lock_if_supported().get()
-            self._set_target(locked, None)
-            locked.save(update_fields=["target_content_type_id", "target_object_id", "updated_at"])
-            link.target_content_type_id = link.target_object_id = None
-            return locked
+        self.release_targets(self.filter(pk=link.pk))
+        link.target_content_type_id = link.target_object_id = None
+        link.target = None
+        return link
+
+    def release_pushes(self, target: models.Model) -> int:
+        """Let ``target`` go from the push links naming it, so each push writes its removal; return how many.
+
+        A row a push link names is the local side of what it publishes. Once it is
+        deleted (:meth:`RecordLink.teardown_for_target`), or no longer the record a
+        link names, its push links release it, and ``push_stream`` yields each
+        released link's removal. A link that holds the row
+        (:meth:`RecordLink.live_reference_filter`) stays bound; this never refuses.
+        It opens no transaction, so a delete with links takes no extra savepoint.
+        Call inside the transaction that deletes or moves the row, holding the
+        row's lock (its deletion's ``lock_for_delete``, or the lock a move took
+        before changing the row): a push reflecting its write locks the row before
+        binding its link (:meth:`lock_target`), so it either binds first and is
+        released here, or waits and then finds the row gone or moved. The row is
+        locked again here (a plain ``Model.delete()`` took no lock), then its
+        links, the order that push takes them.
+        """
+
+        content_type, object_id = generic_pointer_target(target)
+        pushed = self.model._base_manager.filter(target_content_type=content_type, target_object_id=object_id)
+        self.lock_target(target)
+        return self.release_targets(pushed.exclude(self.model.live_reference_filter(principal=None)))
+
+    def lock_target(self, target: models.Model) -> bool:
+        """Lock a row links name, in its model's delete order; return whether the row is still there.
+
+        An Angee model is locked through its ``lock_for_delete`` hook (its domain
+        locks, then the row), the order its deletion takes before the teardown
+        releases its push links (:meth:`release_pushes`); any other model, its row
+        and multi-table parents. Either way the row is read through its base
+        manager: a row its default manager hides is still there. Lock the row
+        before its links.
+        """
+
+        model = type(target)
+        if isinstance(target, AngeeModel):
+            return target.lock_for_delete(queryset=model._base_manager.all()) is not None
+        return row_lock_queryset(model).filter(pk=target.pk).exists()
+
+    def release_targets(self, links: models.QuerySet[Any]) -> int:
+        """Let every row ``links`` binds go at once, as :meth:`release_target` lets one go; return how many.
+
+        For a domain owner that purges a whole replica (an unsubscribed source's
+        records): one tracked update, the rows locked in primary-key order first.
+        Status, evidence and history stay.
+        """
+
+        with system_context(reason="integrate.record.release_targets"), transaction.atomic():
+            bound = self.filter(pk__in=links.values("pk")).exclude(target_object_id=None).order_by("pk")
+            ids = list(bound.lock_if_supported().values_list("pk", flat=True))
+            return self.filter(pk__in=ids).update(
+                target_content_type=None, target_object_id=None, updated_at=timezone.now()
+            )
+
+    def with_local_versions(self, rows: models.QuerySet[Any], *, context: str = "") -> models.QuerySet[Any]:
+        """Annotate ``rows`` with their ``local_version``: their current version under ``context``, else ``NULL``.
+
+        The version of a projection that reads only the row's own tracked columns
+        and ``context`` (what else it reads, such as its container's zone): every
+        tracked write of the row gives it a new one (``ModelHistory.current_version``),
+        and a changed ``context`` changes every row's. ``context`` enters as its
+        digest, so a version stays within ``LOCAL_VERSION_LENGTH`` whatever it is.
+        A projection that reads other rows needs a version of its own. Yield each
+        row's with its projection (``LocalChange.local_version``), read in the same
+        statement; ``NULL`` (``None``) is a row without a version yet, which a push
+        baselines (:meth:`settle`).
+        """
+
+        history = model_history(rows.model)
+        if history is None:
+            return rows.annotate(local_version=Value(None, output_field=models.CharField()))
+        prefix = Value(f"{canonical_json_sha256(context)}@")
+        version = Concat(prefix, history.current_version(rows.model), output_field=models.CharField())
+        # Without a version the concatenation is the bare prefix, which names no state: NULL.
+        return rows.annotate(local_version=NullIf(version, prefix))
+
+    def changed_since_base(self, stream: Any, rows: models.QuerySet[Any]) -> models.QuerySet[Any]:
+        """Narrow ``rows`` to those that changed since a link of ``stream`` last held them, by local version.
+
+        ``rows`` carry each row's current version as their ``local_version``
+        annotation (:meth:`with_local_versions`; ``NULL`` without one), the version
+        a push adapter yields with its projection (``LocalChange.local_version``).
+        A row a link of the stream names at that version, under the stream's
+        mapping version, is unchanged since that link's base and is left out; a
+        new row, a row without a version, and every row after a mapping change
+        stay. One ``NOT EXISTS`` per row, on the link's target index.
+
+        While the stream's sweep is due (``SyncStream.sweep_due``) every row stays:
+        the push compares them all, so what no version names (a projection change
+        without a mapping version bump, a write that skipped history capture) still
+        converges once per ``reconcile_interval``.
+        """
+
+        if stream.sweep_due():
+            return rows
+        held = self.model._base_manager.filter(
+            stream=stream,
+            target_content_type=ContentType.objects.get_for_model(generic_pointer_model(rows.model)),
+            target_object_id=Cast(OuterRef("pk"), models.CharField()),
+            # The stored form (``_held_version``); a row without a version matches no stored one.
+            local_version=Concat(
+                Value(f"{stream.mapping_version}:"), OuterRef("local_version"), output_field=models.CharField()
+            ),
+        )
+        return rows.exclude(Exists(held))
+
+    def settle(self, stream: Any, unchanged: Iterable[tuple[Any, Any]]) -> int:
+        """Record what a push learned of local changes equal to their link's base; return how many links moved.
+
+        ``unchanged`` pairs a link, read with its base, with a ``LocalChange`` whose
+        projection equals that base (``push_candidates``). A change read at a newer
+        local version advances its link's (``RecordLink.local_version``), in one
+        statement conditional on each link's base: a link whose base moved since
+        keeps its version. A row read without a version (``None``: written before
+        its history, or its history pruned) gets its baseline
+        (``ModelHistory.record_missing_baselines``), so the next push reads it once
+        more at that version and settles it.
+        """
+
+        moves: dict[Any, tuple[Any, str]] = {}
+        unversioned: dict[type[models.Model], list[Any]] = {}
+        for link, change in unchanged:
+            held = _held_version(stream.mapping_version, change.local_version)
+            if held and held != link.local_version:
+                moves[link.pk] = (link.applied_base_id, held)
+            elif change.local_version is None and change.target is not None:
+                model = type(change.target)._meta.concrete_model or type(change.target)
+                unversioned.setdefault(model, []).append(change.target.pk)
+        with system_context(reason="integrate.record.settle"):
+            for model, keys in unversioned.items():
+                if (history := model_history(model)) is not None:
+                    history.record_missing_baselines(model, keys)
+            if not moves:
+                return 0
+            bases = Q(*(Q(pk=pk, applied_base_id=base) for pk, (base, _held) in moves.items()), _connector=Q.OR)
+            versions = [When(pk=pk, then=Value(held)) for pk, (_base, held) in moves.items()]
+            return self.filter(bases).update(local_version=Case(*versions, output_field=models.CharField()))
 
     def promote(
         self,
@@ -4771,12 +6092,15 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
         remote_version: str = "",
         origin: str = "remote",
         tombstone: bool = False,
+        local_version: str | None = "",
     ) -> Any:
         """Append applied evidence and pin its base; the driver owns promotion.
 
         Adapters return their evidence to the driver, never promote its link
         themselves. Omit ``target`` to retain its binding; pass ``None`` to clear
-        it and retain a WITHDRAWN identity.
+        it and retain a WITHDRAWN identity. ``local_version`` is the version of the
+        local state ``mapped_payload`` was read from (a push's write); any other
+        promotion clears the link's, so a held version always projects its base.
         """
 
         with system_context(reason="integrate.record.promote"), transaction.atomic():
@@ -4791,6 +6115,7 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
             if target is not UNSET:
                 self._set_target(locked, target)
             locked.remote_version, locked.origin, locked.status = remote_version, origin, LinkStatus.CURRENT
+            locked.local_version = _held_version(mapping_version, local_version)
             if target is None:
                 locked.status = LinkStatus.WITHDRAWN
             locked.tombstoned_at = timezone.now() if tombstone else None
@@ -4806,6 +6131,7 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
                 "target_content_type_id",
                 "target_object_id",
                 "remote_version",
+                "local_version",
                 "origin",
                 "status",
                 "tombstoned_at",
@@ -4879,11 +6205,17 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
             setattr(link, name, getattr(locked, name))
         return locked
 
-    def mark_absent(self, stream: Any, keys: Iterable[str]) -> int:
-        """Count a bounded batch of missing keys, retaining tombstones.
+    def mark_absent(self, stream: Any, keys: Iterable[str], *, confirmed: bool = False) -> tuple[Any, ...]:
+        """Count a bounded batch of missing keys; return the links whose status the absence changed.
 
         Children may be included only after their parent has absence evidence;
         the sweep supplies bounded child batches after marking missing roots.
+        A link turns UNAVAILABLE, then TOMBSTONE once its count reaches the
+        stream's ``absence_threshold``; a failed link counts but keeps its status.
+        A ``confirmed`` absence (its container is gone) closes the link's open
+        failures, conflicts included, and tombstones it at once, so a retired
+        stream keeps no open failure. The returned transitions are what the
+        adapter's ``on_absent`` receives.
         """
 
         with system_context(reason="integrate.record.mark_absent"), transaction.atomic():
@@ -4894,16 +6226,21 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
                 .order_by("pk")
                 .lock_if_supported()
             )
-            count = 0
+            changed = []
             for link in rows:
+                previous = link.status
+                if confirmed:
+                    for failure in link.failures(open_only=True):
+                        link.resolve_failure(failure.slot, conflict=True)
                 link.absence_count += 1
                 if link.status != LinkStatus.FAILED:
                     link.status = LinkStatus.UNAVAILABLE
-                    if link.absence_count >= stream.absence_threshold:
+                    if confirmed or link.absence_count >= stream.absence_threshold:
                         link.status, link.tombstoned_at = LinkStatus.TOMBSTONE, timezone.now()
                 link.save(update_fields=["absence_count", "status", "tombstoned_at", "updated_at"])
-                count += 1
-            return count
+                if link.status != previous:
+                    changed.append(link)
+            return tuple(changed)
 
     def tombstone(self, link: Any) -> Any:
         """Retain a confirmed remote deletion; never delete the identity."""
@@ -4925,6 +6262,10 @@ class RecordLink(
     ``applied_base`` pins this link's own historical application snapshot; an
     observation never advances it. Its protected FK keeps the active comparison
     base out of native history pruning. ``pinned`` withholds automatic updates.
+    :meth:`RecordLinkManager.promote` is the only writer of ``applied_base``, and
+    the held ``local_version`` relies on it: every promotion sets or clears that
+    version with the base, and :meth:`RecordLinkManager.settle` advances it only
+    while the base it compared is still the applied one.
 
     ``inbound`` retains a list of failures, including closed evidence. Each entry
     carries kind, code, source_hash, mapping_version, details, status, attempts,
@@ -4937,6 +6278,7 @@ class RecordLink(
 
     # A link's history is sync evidence read through its target: no timeline of its own.
     timeline_subject = False
+    history = ModelHistory(inherit=True, excluded_fields=("local_version",))
 
     merge_policy = MergePolicy.MOVE
     accepts_any_record_target = True
@@ -4961,7 +6303,7 @@ class RecordLink(
         return bool(self.stream.authoritative)
 
     parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="children")
-    external_key = models.CharField(max_length=512)
+    external_key = models.CharField(max_length=EXTERNAL_KEY_LENGTH)
     asserted_by = models.TextField(blank=True, editable=False)
     target_content_type = models.ForeignKey(
         ContentType, null=True, blank=True, on_delete=models.PROTECT, related_name="+"
@@ -4983,6 +6325,17 @@ class RecordLink(
     outbox_retry_at = models.DateTimeField(null=True, blank=True)
     outbox_last_error = models.JSONField(default=dict, blank=True)
     remote_version = models.CharField(max_length=512, blank=True)
+    local_version = models.CharField(max_length=255, blank=True, default="", db_default="")
+    """The local version (``LocalChange.local_version``) whose projection the applied base holds; ``""``: unknown.
+
+    A push records the version it read with what it wrote; any other promotion
+    clears it; :meth:`RecordLinkManager.settle` advances it when a newer version
+    still projects the base. Stored framed by the mapping version that projected
+    it, so a mapping change reads every row again; a version is at most
+    ``LOCAL_VERSION_LENGTH`` long, so its framed form fits. It advances without a
+    new base, so the link's history leaves it out. The database default is the
+    unknown version, so a release before this column still creates links.
+    """
     origin = models.CharField(max_length=16, blank=True)
     last_seen_at = models.DateTimeField(null=True, blank=True)
     last_verified_generation = models.PositiveIntegerField(default=0)
@@ -4996,6 +6349,36 @@ class RecordLink(
         """Label this remote identity by its external key."""
 
         return self.external_key
+
+    @classmethod
+    def live_reference_filter(cls, *, principal: SubjectRef | None) -> Q:
+        """Select the links that hold their target: every link but a push stream's.
+
+        A push link names the local row its stream publishes, not a remote record
+        Angee keeps: deleting the row releases it (:meth:`teardown_for_target`) and the
+        push writes the removal. A pull or two-way link keeps its row.
+        """
+
+        del principal
+        return ~Q(stream__direction=StreamDirection.PUSH)
+
+    @classmethod
+    def blocks_target_delete(cls, target: type[models.Model]) -> bool:
+        """A link the live filter keeps blocks its target's deletion, before :meth:`teardown_for_target` runs."""
+
+        del target
+        return True
+
+    @classmethod
+    def teardown_for_target(cls, target: models.Model) -> None:
+        """Release the push links naming a deleted row (``release_pushes``); this never refuses.
+
+        Base runs it inside the deleting transaction, which ``release_pushes``
+        requires (a direct caller opens one); the deleter holds the row's lock
+        (``lock_for_delete``), else ``release_pushes`` takes it.
+        """
+
+        cls.objects.release_pushes(target)
 
     @property
     def failure_stream(self) -> SyncStream:
@@ -5052,13 +6435,10 @@ class RecordLink(
         ]
         observing = (
             type(self)
-            ._base_manager.filter(
-                target_content_type_id=self.target_content_type_id,
-                target_object_id=self.target_object_id,
-                tombstoned_at__isnull=True,
-            )
+            .objects.sudo(reason="integrate.link_evidence_siblings")
+            .filter(target_content_type_id=self.target_content_type_id, target_object_id=self.target_object_id)
+            .observing()
             .exclude(pk=self.pk)
-            .exclude(status__in=(LinkStatus.TOMBSTONE, LinkStatus.WITHDRAWN))
             .select_related("stream__integration")
             .order_by("pk")
         )
@@ -5165,6 +6545,16 @@ class RecordLink(
         read before it and the apply or push after it are adapter I/O, run by the
         stream driver outside the transaction. A follow-through that leaves the
         record unsynchronized reopens the conflict.
+
+        A push stream never applies its remote: keeping the remote there accepts the
+        remote's current version, read through the adapter's identity read. It
+        becomes the link's applied base, with its ``remote_version``, over the local
+        projection as it stands; nothing is copied into the local row. Nothing is
+        pushed until the row changes locally again, and that push writes over the
+        version accepted here. A remote the adapter still reads, even one it reports
+        cancelled, is a live version, not a tombstone. Keeping the remote of a
+        removal (the row was deleted locally) keeps the remote record, which no local
+        row names any more: the push never writes it again, and it stays unmanaged.
         """
 
         if keep not in ConflictKeep.values:
@@ -5179,8 +6569,13 @@ class RecordLink(
             if not row.is_open:
                 return row
             stream = link.stream
-            if stream.state == StreamState.CLOSED:
-                raise ValidationError("Resync the closed stream before resolving its conflict.")
+            # Neither choice reads or writes the remote while the integration awaits discovery.
+            stream.integration.require_discovery_ready()
+            if stream.state != StreamState.OPEN:
+                raise ValidationError(
+                    "Conflicts resolve on an open stream: resync a closed one; a retired one reopens when its"
+                    " container returns."
+                )
             owner = link.parent if link.parent is not None else link
             adapter = stream.integration.concrete_capability().capability_impl
             keys = frozenset((owner.external_key,))
@@ -5193,9 +6588,20 @@ class RecordLink(
                 if keep == ConflictKeep.LOCAL and (not stream.writes_back or not stream.has_completed_baseline()):
                     raise ValidationError("Keeping local changes requires a completed writable baseline.")
                 precondition = owner.sync_precondition
-                remote = read_stream_keys(adapter, stream, tuple(keys))[0] if keep == ConflictKeep.LOCAL else None
+                accepts_remote = keep == ConflictKeep.REMOTE and stream.direction == StreamDirection.PUSH
+                remote = (
+                    read_stream_keys(adapter, stream, tuple(keys))[0]
+                    if keep == ConflictKeep.LOCAL or accepts_remote
+                    else None
+                )
+                # The local side as it stands: a change the push would write, else the base it already matches.
+                local = (
+                    next((change for change, _link in push_candidates(stream, adapter, keys)), None)
+                    if accepts_remote
+                    else None
+                )
                 with transaction.atomic():
-                    type(stream).objects.lock_current(stream, fenced_to=stream)
+                    locked_stream = type(stream).objects.lock_current(stream, fenced_to=stream)
                     locked = type(owner).objects.lock_if_supported().get(pk=owner.pk)
                     current_link = type(link).objects.lock_if_supported().get(pk=link.pk)
                     current = current_link.failure_at(slot)
@@ -5203,7 +6609,20 @@ class RecordLink(
                         return current
                     if not locked.sync_precondition_matches(precondition):
                         raise RuntimeError("Record bases changed during conflict resolution; retry the choice.")
-                    if remote is not None:
+                    if remote is not None and accepts_remote:
+                        type(locked).objects.promote(
+                            locked,
+                            source_payload=remote.source_payload,
+                            source_hash=remote.source_hash,
+                            mapped_payload=UNSET if local is None else local.projection,
+                            mapping_version=locked_stream.mapping_version,
+                            dependency_digest=locked.dependency_digest,
+                            remote_version=remote.remote_version,
+                            origin="remote",
+                            tombstone=remote.tombstone,
+                            local_version="" if local is None else local.local_version,
+                        )
+                    elif remote is not None:
                         type(locked).objects.observe(
                             stream,
                             locked.external_key,
@@ -5213,11 +6632,11 @@ class RecordLink(
                         )
                     current_link.resolve_failure(slot, conflict=True)
                 resolved = True
-                if keep == ConflictKeep.REMOTE:
+                if keep == ConflictKeep.REMOTE and not accepts_remote:
                     prepared = begin_stream_cycle(stream, adapter, force_apply=keys)
                     if prepared.resync_required:
                         raise ValidationError("Complete the requested stream baseline before resolving its conflict.")
-                elif not push_stream(stream, adapter, external_keys=keys).count:
+                elif keep == ConflictKeep.LOCAL and not push_stream(stream, adapter, external_keys=keys).count:
                     raise ValidationError("The selected local record could not be written; its failure remains open.")
                 if type(link).objects.filter(pk__in=(link.pk, owner.pk)).open_failures():
                     raise ValidationError("The record could not be synchronized; its failure remains open.")
@@ -5226,39 +6645,36 @@ class RecordLink(
                 if resolved:
                     fresh = type(link).objects.get(pk=link.pk)
                     if not type(link).objects.filter(pk__in=(link.pk, owner.pk)).open_failures():
-                        fresh.record_failure(
-                            kind=row.kind,
-                            code=row.code,
-                            source_hash=row.source_hash,
-                            mapping_version=row.mapping_version,
-                            details=row.details,
-                            outbox=slot is None,
-                        )
+                        # Reopening restores local state only: a refusal from discovery does not stop it.
+                        with exempt_from_discovery():
+                            fresh.record_failure(
+                                kind=row.kind,
+                                code=row.code,
+                                source_hash=row.source_hash,
+                                mapping_version=row.mapping_version,
+                                details=row.details,
+                                outbox=slot is None,
+                            )
                 raise
             finally:
                 adapter.close()
 
     def local_changed(self, projection: Any) -> bool:
-        """Compare a JSON-native projection with this link's protected applied base."""
+        """Compare a JSON-native projection with this link's protected applied base as JSON values (``json_equal``)."""
         if self.applied_base is None:
             return projection is not None
-        return bool(
-            DeepDiff(
-                json.loads(canonical_json(self.applied_base.mapped_payload)),
-                json.loads(canonical_json(projection)),
-            )
-        )
+        return not json_equal(self.applied_base.mapped_payload, projection)
 
     def pin(self) -> None:
-        """Withhold automatic inbound application and write-back."""
+        """Withhold automatic inbound application and write-back; a pin is local state, so discovery never holds it."""
         self._set_pinned(True)
 
     def unpin(self) -> None:
-        """Resume automatic synchronization on the next cycle."""
+        """Resume automatic synchronization on the next cycle; local state, as :meth:`pin`."""
         self._set_pinned(False)
 
     def _set_pinned(self, pinned: bool) -> None:
-        with transaction.atomic():
+        with exempt_from_discovery(), transaction.atomic():
             locked = self._lock_sync_state()
             locked.pinned = pinned
             locked.save(update_fields=["pinned", "updated_at"])

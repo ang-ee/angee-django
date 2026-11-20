@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 from pathlib import Path
 from types import ModuleType
 
@@ -73,6 +74,55 @@ def test_web_codegen_reads_native_package_metadata(tmp_path: Path) -> None:
     assert projection.manifest["codegen"][0]["package"] == "@example/operator"
     assert projection.manifest["codegen"][0]["types"] is False
     assert "web" not in addon_facts(config.name, "angee")
+
+
+def test_web_assets_project_only_sorted_declarations_on_the_package(tmp_path: Path) -> None:
+    config = make_addon(path=tmp_path, web={"package": "@example/site"})
+    assets = {"site.preview": "./art/preview.png", "site.icon": "./art/icon.svg"}
+    (tmp_path / "web/package.json").write_text(json.dumps({"name": "@example/site", "angee": {"assets": assets}}))
+    projection = WebRuntime((config,), runtime_dir=tmp_path / "runtime", dependencies={config.name: ()})
+    entry = projection.manifest["addonPackages"][0]
+    # The entry's package root resolves the files; compose publishes declarations, never paths or bytes.
+    assert entry["root"] == "../../web"
+    assert entry["assets"] == assets
+    manifest = projection.manifest_json()
+    assert manifest.index('"site.icon"') < manifest.index('"site.preview"')
+    assert str(tmp_path) not in manifest
+
+
+def test_web_assets_omit_an_empty_declaration(tmp_path: Path) -> None:
+    config = make_addon(path=tmp_path, web={"package": "@example/site"})
+    (tmp_path / "web/package.json").write_text(json.dumps({"name": "@example/site", "angee": {"assets": {}}}))
+    assert "assets" not in WebRuntime((config,), dependencies={config.name: ()}).manifest["addonPackages"][0]
+
+
+@pytest.mark.parametrize(
+    "assets",
+    [None, [], "icon.svg", {"": "icon.svg"}, {" ": "icon.svg"}, {" icon": "icon.svg"}, {"icon": ""},
+     {"icon": " "}, {"icon": " ./icon.svg"}, {"icon": 1}, {"icon": "."}, {"icon": "./"}, {"icon": "/icon.svg"},
+     {"icon": "../icon.svg"}, {"icon": "art/../icon.svg"}, {"icon": "art\\icon.svg"},
+     {"icon": "C:\\art\\icon.svg"}, {"icon": "C:/art/icon.svg"}, {"icon": "//server/share/icon.svg"},
+     {"icon": "..\\icon.svg"}],
+)
+def test_web_assets_refuse_malformed_declarations(tmp_path: Path, assets: object) -> None:
+    config = make_addon(path=tmp_path, web={"package": "@example/site"})
+    (tmp_path / "web/package.json").write_text(json.dumps({"name": "@example/site", "angee": {"assets": assets}}))
+    with pytest.raises(ImproperlyConfigured, match="web/package.json angee.assets"):
+        WebRuntime((config,), dependencies={config.name: ()})
+
+
+def test_web_assets_refuse_names_shared_by_addons(tmp_path: Path) -> None:
+    configs = [make_addon(name=f"tests.{name}", path=tmp_path / name, web={"package": f"@example/{name}"})
+               for name in ("first", "second")]
+    for config in configs:
+        (Path(config.path) / "web/package.json").write_text(json.dumps({
+            "name": f"@example/{config.label}", "angee": {"assets": {"site.icon": "./icon.svg"}},
+        }))
+    with pytest.raises(
+        ImproperlyConfigured,
+        match=r"Duplicate web/package.json angee.assets name 'site.icon': tests.first and tests.second",
+    ):
+        WebRuntime(configs, dependencies={config.name: () for config in configs})
 
 
 def test_broken_native_web_package_fails_before_projection(tmp_path: Path) -> None:

@@ -18,7 +18,7 @@ function RelationFilterValue({
   onValueChange,
   ...props
 }: RelationFilterValueProps): ReactElement {
-  const picker = useRelationPickerOptions(relation, { value: props.value });
+  const picker = useRelationPickerOptions(relation, { value: props.value, includeArchived: true });
   return (
     <RelationPicker
       {...props}

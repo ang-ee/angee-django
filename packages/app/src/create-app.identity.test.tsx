@@ -13,13 +13,15 @@ import { captureChrome, TEST_SCHEMAS } from "./testing";
 
 function IdentityProbe() {
   const brand = useRuntimeBrand();
-  const theme = useOptionalAppearance()?.effectiveThemeId;
+  const appearance = useOptionalAppearance();
+  const theme = appearance?.effectiveThemeId;
   const { i18n, railExpanded } = useAppRuntime();
   const uiCopy = i18n?.getFixedT(null, "ui");
   const addonCopy = i18n?.getFixedT(null, "notes");
   return <>
     <output aria-label="Brand">{brand ? `${brand.name}/${brand.mark}` : "unbranded"}</output>
     <output aria-label="Theme">{theme ?? "none"}</output>
+    <output aria-label="Theme lock">{String(appearance?.themeLocked ?? false)}</output>
     <output aria-label="Rail default">{railExpanded === undefined ? "unset" : String(railExpanded)}</output>
     <output aria-label="Base copy">{String(uiCopy?.("modal.copy") ?? "")}</output>
     <output aria-label="Addon copy">{String(addonCopy?.("title") ?? "")}</output>
@@ -42,7 +44,7 @@ const deployment: RuntimeBrand = { name: "Deployment", mark: "notebook-mark" };
 /** The notes page under an `identity` menu root, with the deployment's shell when one is given. */
 function identityApp({ search = "", root = {}, shell, icons = { "notebook-mark": () => null }, appearance }: {
   search?: string;
-  root?: Pick<BaseMenuItem, "brand" | "theme" | "home" | "railExpanded">;
+  root?: Pick<BaseMenuItem, "brand" | "theme" | "themeLocked" | "home" | "railExpanded">;
   shell?: ShellSettings;
   icons?: Readonly<Record<string, unknown>>;
   appearance?: CreateAppInput["appearance"];
@@ -123,6 +125,20 @@ describe("the selected app's identity", () => {
     });
   });
 
+  test("a selected root's locked theme reaches appearance, and an unlocked one does not lock", async () => {
+    history.replaceState(null, "", "/notes");
+    const locked = identityApp({ search: "?app=identity", root: { theme: "notebook.paper", themeLocked: true }, appearance: { themeId: "notebook.ink" } });
+    expect(locked.explain.selection).toMatchObject({ theme: "notebook.paper", themeLocked: true, sources: { themeLocked: 'menu root "identity"' } });
+    await mounted(locked, async () => {
+      await waitFor(() => expect(screen.getByLabelText("Theme").textContent).toBe("notebook.paper"));
+      expect(screen.getByLabelText("Theme lock").textContent).toBe("true");
+    });
+    await mounted(identityApp({ search: "?app=identity", root: { theme: "notebook.paper" } }), async () => {
+      await waitFor(() => expect(screen.getByLabelText("Theme").textContent).toBe("notebook.paper"));
+      expect(screen.getByLabelText("Theme lock").textContent).toBe("false");
+    });
+  });
+
   test("a selected root lands on its home route", async () => {
     history.replaceState(null, "", "/");
     const app = createApp({
@@ -166,6 +182,10 @@ describe("the selected app's identity", () => {
     expect(() => identityApp({ shell: { theme: "missing.theme" } })).toThrow('ANGEE_UI.shell theme "missing.theme" is not installed.');
     expect(() => identityApp({ shell: { apps: { reading: { rail: ["identity"], brand: { name: "Reading", mark: "missing" } } } } }))
       .toThrow('ANGEE_UI.shell.apps.reading brand mark "missing" is not a registered icon.');
+    expect(() => identityApp({ root: { themeLocked: true } }))
+      .toThrow('Menu root "identity" sets themeLocked without a theme beside it.');
+    expect(() => identityApp({ root: { theme: "notebook.paper" }, shell: { apps: { reading: { rail: ["identity"], themeLocked: true } } } }))
+      .toThrow("ANGEE_UI.shell.apps.reading sets themeLocked without a theme beside it.");
   });
 
   test.each([undefined, "not-a-component", { arbitrary: true }])("refuses a brand mark that is no renderable icon: %j", (icon) => {

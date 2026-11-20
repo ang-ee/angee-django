@@ -5,6 +5,7 @@
 import { createNamespaceT } from "@angee/ui/i18n";
 
 export const enStorageMessages: Record<string, string> = {
+  "file.changeVisibility": "Change visibility",
   "record.loading": "Loading attached files",
   "record.loadingDrives": "Loading upload destinations",
   "record.empty": "No files attached",
@@ -27,7 +28,6 @@ export const enStorageMessages: Record<string, string> = {
   "preview.pages": "Pages",
   "preview.pdfPrev": "Previous page",
   "preview.pdfNext": "Next page",
-  "preview.fetchFailed": "The file could not be fetched ({status}).",
   "preview.decodeFailed": "The photo could not be decoded.",
 
   // Primary-pane folder navigator landmark.
@@ -61,15 +61,9 @@ export const enStorageMessages: Record<string, string> = {
   "file.facts": "{type} · {size} · uploaded {date} by {by}",
   "file.factsAnonymous": "{type} · {size} · uploaded {date}",
   "file.inTrash": "In trash",
-  "file.trashTitle": 'Move "{name}" to the trash?',
-  "file.trashBody": "You can restore it from the drive's Trash.",
   "newFolder.placeholder": "Folder name",
   "newFolder.nameLabel": "New folder name",
   "newFolder.create": "Create",
-
-  // Selection-bar bulk verbs.
-  "bulk.restore": "Restore",
-  "bulk.trash": "Trash",
 
   // File list + upload surface.
   "list.emptyUpload": "Drop files here or use Upload.",
@@ -99,7 +93,7 @@ export const enStorageMessages: Record<string, string> = {
   "file.rename": "Rename",
   "file.download": "Download",
   "file.restore": "Restore",
-  "file.trash": "Trash",
+  "file.trash": "Move to trash",
 
   // File detail record form — section + field labels.
   "file.details": "Details",
@@ -128,7 +122,6 @@ export const enStorageMessages: Record<string, string> = {
     "Infrastructure a drive is created against.",
 
   // Settings admin console — drive/backend form field labels.
-  "settings.archived": "Archived",
   "settings.backendClass": "Backend class",
   "settings.config": "Config",
 };

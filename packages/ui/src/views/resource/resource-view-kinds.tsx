@@ -12,6 +12,7 @@ import {
 const BUILT_IN_KINDS: Readonly<Record<BuiltInResourceViewKind, { labelKey: string; icon: string; sequence: number }>> = {
   list: { labelKey: "resourceToolbar.listView", icon: "list", sequence: 10 },
   board: { labelKey: "resourceToolbar.boardView", icon: "grid-2x2", sequence: 20 },
+  gallery: { labelKey: "resourceToolbar.gridView", icon: "layout-grid", sequence: 25 },
   calendar: { labelKey: "resourceToolbar.calendarView", icon: "calendar", sequence: 30 },
   gantt: { labelKey: "resourceToolbar.ganttView", icon: "chart-gantt", sequence: 40 },
   dashboard: { labelKey: "resourceToolbar.dashboardView", icon: "chart-no-axes-combined", sequence: 50 },
@@ -24,6 +25,8 @@ const BUILT_IN_KINDS: Readonly<Record<BuiltInResourceViewKind, { labelKey: strin
  * such as `nexus.graph`; layers narrow either with `only` and `hide` (G-18).
  * `#utilities` holds collection utilities beside the toolbar.
  * `#search` holds shortcut declarations and page extras; the box is never a child.
+ * `#card` holds a model's card for its board and gallery kinds: one child per
+ * model address (`<app.Model>#card`), which `impl` children and variants vary per row.
  * @kind contribution
  */
 export const RESOURCE_CONTAINERS: readonly CoreContainer[] = [
@@ -37,6 +40,7 @@ export const RESOURCE_CONTAINERS: readonly CoreContainer[] = [
   },
   { address: "resource#utilities", models: true },
   { address: "resource#search", models: true, extras: true },
+  { address: "resource#card", models: true, unique: "address" },
 ];
 
 const ResourceViewKindsContext = React.createContext<ReadonlyMap<string, ResourceViewKindContent>>(

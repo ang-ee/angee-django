@@ -26,7 +26,7 @@ from angee.iam_integrate_oidc.errors import IDENTITY_RESOLUTION_FAILED, Identity
 from angee.iam_integrate_oidc.protocol import OAuthClientOidcProtocol
 from angee.integrate.connect import complete_external_account_link
 from angee.integrate.oauth import flow
-from angee.integrate.oauth.errors import INVALID_ID_TOKEN, INVALID_STATE, OAuthFlowError
+from angee.integrate.oauth.errors import ACCOUNT_ALREADY_LINKED, INVALID_ID_TOKEN, INVALID_STATE, OAuthFlowError
 from angee.integrate.oauth.state import StateFlow, StateRecord
 
 if TYPE_CHECKING:
@@ -104,8 +104,9 @@ class OidcLoginCompletion:
         """Complete an authenticated OIDC account-link redirect and return the linked account.
 
         Links the verified external identity to the start-flow user and stores its
-        OAuth credential under ``(user, provider)`` — the same shape as connect, but
-        gated on a verified ID token.
+        OAuth credential under ``(user, provider, account)`` — the same shape as
+        connect, but gated on a nonce-bound ID token. Like connect, a first attempt
+        whose grant lacks a refresh token raises ``ConsentRequired``.
         """
 
         record = flow.consume_validated_state(
@@ -122,6 +123,7 @@ class OidcLoginCompletion:
             claims=claims,
             next_path=record.next_path or "/",
             reason="iam_integrate_oidc.link",
+            flow_record=record,
         )
         return LinkCompletion(
             account=completion.account,
@@ -140,12 +142,9 @@ class OidcLoginCompletion:
             redirect_uri=redirect_uri,
             code_verifier=record.code_verifier,
             state=state_token,
+            scopes=record.scopes,
         )
-        claims = self.protocol.verify_id_token(id_token, nonce=record.nonce)
-        # OIDC Core §5.3.2: userinfo may enrich only the verified token's subject.
-        if userinfo.get("sub") and userinfo["sub"] == claims.get("sub"):
-            claims = {**userinfo, **claims}
-        return tokens, claims
+        return tokens, self.protocol.verified_claims(id_token, userinfo, nonce=record.nonce)
 
     def _required_sub(self, claims: dict[str, Any]) -> str:
         """Return the subject claim or fail the redirect completion."""
@@ -232,7 +231,7 @@ class OidcIdentityResolver:
                     return user
         except ValidationError as error:
             # Django ValidationError omits code on aggregate errors.
-            if getattr(error, "code", None) == "account_already_linked":
+            if getattr(error, "code", None) == ACCOUNT_ALREADY_LINKED:
                 raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 409) from error
             raise
 
@@ -301,7 +300,9 @@ def _claim_login_handle(user: Any, email: str, claims: dict[str, Any]) -> None:
     OIDC first login is the earliest Person-establishing path: the parties owner
     ``Handle.objects.claim_control`` writes both the control fact (``Handle.controller``) and
     the normal person identity statement for ``Person.objects.for_user(user)`` — so the login
-    address resolves to the user's own party.
+    address resolves to the user's own party. An address someone else holds, which the user
+    may not take from them, is only claimed for review: signing in never settles who holds an
+    address.
     """
 
     handle_model = apps.get_model("parties", "Handle")

@@ -1,4 +1,5 @@
 import type { ThemeDefinition } from "@angee/ui/theme-runtime";
+import type { SiteHead } from "./shell-settings.mjs";
 
 /** Declared generation inputs, resolved through workspace symlinks. */
 export interface WebCodegenInputs {
@@ -21,6 +22,8 @@ export interface WebCodegenOptions {
 export interface WebCodegenResult {
   inputs: WebCodegenInputs;
   themes: readonly ThemeDefinition<unknown>[];
+  /** The build-only static head, its selected assets resolved to absolute canonical files. */
+  head?: SiteHead;
 }
 
 /** Generate GraphQL documents and the composed frontend runtime once. */

@@ -1,4 +1,4 @@
-"""Work contracts that need the complete emitted Task graph, one composed host per profile."""
+"""Work and project verb contracts on the complete emitted Task graph, one composed host per profile."""
 
 from pathlib import Path
 
@@ -16,6 +16,7 @@ from tests.composed_host import run_composed_tests
             "tests.test_work_task_access.SchemaImportTests",
             "tests.test_work_task_access.DuplicateLinkTests",
             "tests.test_work_task_actions.TaskActionTests",
+            "tests.test_work_task_holds.TaskHoldTests",
             "tests.test_work_task_audience.TaskAudienceTests",
             "tests.test_work_task_status.TaskStatusTests",
             "tests.test_work_stage_lines.StageLinesTests",

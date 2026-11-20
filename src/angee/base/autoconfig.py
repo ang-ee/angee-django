@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
+from angee.base.origins import public_origin
 from angee.base.paths import resolve_path
 
 _Settings = TypedDict(
@@ -28,6 +29,7 @@ _Settings = TypedDict(
         "REBAC_FIELD_READ_MODE": str,
         "REBAC_ALLOW_SUDO": bool,
         "REBAC_SUPERUSER_BYPASS": bool,
+        "ANGEE_PUBLIC_ORIGIN": str,
     },
 )
 
@@ -51,20 +53,36 @@ SETTINGS: _Settings = {
     "REBAC_ALLOW_SUDO": True,
     # Administrator reach is expressed in schema relations, so every actor uses grants.
     "REBAC_SUPERUSER_BYPASS": False,
+    # The deployment's public browser origin (`https://host`, no path), fed by the
+    # ANGEE_PUBLIC_ORIGIN environment variable the stack sets. A valid one joins
+    # the CSRF trusted origins, and owners that build links without a request
+    # read it through `angee.base.origins.public_origin`.
+    "ANGEE_PUBLIC_ORIGIN": "",
 }
 
 
-class _DerivedSettings(TypedDict):
-    REBAC_DEPTH_LIMIT: int
-    ALLOWED_HOSTS: list[str]
-    ANGEE_DATA_DIR: Path
-    STATIC_ROOT: Path
-    MEDIA_ROOT: Path
-    DATABASES: dict[str, Any]
+_DerivedSettings = TypedDict(
+    "_DerivedSettings",
+    {
+        "REBAC_DEPTH_LIMIT": int,
+        "ALLOWED_HOSTS": list[str],
+        "ANGEE_DATA_DIR": Path,
+        "STATIC_ROOT": Path,
+        "MEDIA_ROOT": Path,
+        "DATABASES": dict[str, Any],
+        "CSRF_TRUSTED_ORIGINS:append": NotRequired[list[str]],
+    },
+)
 
 
 def settings(namespace: Mapping[str, Any]) -> _DerivedSettings:
-    """Derive storage and permission defaults while preserving project settings."""
+    """Derive storage and permission defaults while preserving project settings.
+
+    The resolved ``ANGEE_PUBLIC_ORIGIN``, authored or from the environment,
+    joins ``CSRF_TRUSTED_ORIGINS`` when it is a valid public origin
+    (:func:`angee.base.origins.public_origin`); ``angee.E051`` reports one that
+    is not.
+    """
 
     data = resolve_path(namespace.get("ANGEE_DATA_DIR", resolve_path(namespace["BASE_DIR"]) / ".angee" / "data"))
     databases = namespace.get("DATABASES", {
@@ -89,4 +107,7 @@ def settings(namespace: Mapping[str, Any]) -> _DerivedSettings:
             "REBAC_DEPTH_LIMIT", 8 if engine == "django.db.backends.sqlite3" else 16,
         )),
     }
+    origin = public_origin(namespace.get("ANGEE_PUBLIC_ORIGIN"), debug=bool(namespace.get("DEBUG", False)))
+    if origin and origin not in namespace.get("CSRF_TRUSTED_ORIGINS", ()):
+        derived["CSRF_TRUSTED_ORIGINS:append"] = [origin]
     return derived

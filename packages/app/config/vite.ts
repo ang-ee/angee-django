@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, matchesGlob, resolve } from "node:path";
+import { basename, dirname, join, matchesGlob, posix, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { build, defineConfig, mergeConfig, type Plugin, type UserConfig, type ViteDevServer } from "vite";
-import { generateWebRuntime, type WebCodegenInputs } from "@angee/app/web-codegen";
+import { build, defineConfig, mergeConfig, normalizePath, type HtmlTagDescriptor, type Plugin, type UserConfig, type ViteDevServer } from "vite";
+import { generateWebRuntime, type WebCodegenInputs, type WebCodegenResult } from "@angee/app/web-codegen";
 import {
   resolveThemeOptions,
   type AppearanceBootstrapPayload,
@@ -19,7 +19,7 @@ import {
 // does not resolve extensionless relative imports.
 const ANGEE_WATCH_IGNORED: readonly string[] = ["**/.jj/**"];
 
-// The framework owner of the web Vite defaults: the plugin pair, the dev-server
+// The framework owner of the web Vite defaults: the plugins, the dev-server
 // host/port/proxy wiring, the generated-schema alias, and the project-derived
 // `optimizeDeps` set. A project's `web/vite.config.ts` imports
 // `@angee/app/vite`, calls `defineAngeeWebViteConfig`, and supplies only the two
@@ -288,11 +288,13 @@ export async function defineAngeeWebViteConfig({
   ...overrides
 }: AngeeWebViteConfig): Promise<UserConfig> {
   const appearancePlugin = angeeAppearancePlugin();
+  const sitePlugin = angeeSitePlugin();
   const base = defineConfig({
     root: webRoot,
     plugins: [
-      angeeWebCodegenPlugin({ webRoot, gqlRuntimeDir, appearance, appearancePlugin, prebundleAngeePackages }),
+      angeeWebCodegenPlugin({ webRoot, gqlRuntimeDir, appearance, appearancePlugin, sitePlugin, prebundleAngeePackages }),
       appearancePlugin,
+      sitePlugin,
       preloadSchemaMetadata(),
       react(),
       tailwindcss(),
@@ -372,10 +374,12 @@ function angeeWebCodegenPlugin({
   gqlRuntimeDir,
   appearance,
   appearancePlugin,
+  sitePlugin,
   prebundleAngeePackages,
 }: Pick<AngeeWebViteConfig, "webRoot" | "gqlRuntimeDir" | "appearance" | "prebundleAngeePackages"> & {
   webRoot: string;
   appearancePlugin: ReturnType<typeof angeeAppearancePlugin>;
+  sitePlugin: ReturnType<typeof angeeSitePlugin>;
 }): Plugin {
   const runtimeDir = dirname(gqlRuntimeDir);
   let inputs: WebCodegenInputs = { files: [], globs: [], directories: [], excluded: [] };
@@ -410,6 +414,7 @@ function angeeWebCodegenPlugin({
     inputs = generated.inputs;
     discovering = inputs;
     appearancePlugin.update(payload);
+    sitePlugin.update(generated.head);
     const module = server?.environments.client.moduleGraph.getModuleById(RESOLVED_VIRTUAL_APPEARANCE);
     if (module) server!.environments.client.moduleGraph.invalidateModule(module);
   };
@@ -484,6 +489,132 @@ function angeeWebCodegenPlugin({
   };
 }
 
+/** Write the deployment's static head through Vite's native HTML and asset hooks. */
+function angeeSitePlugin(): Plugin & { update(head: WebCodegenResult["head"]): void } {
+  let head: WebCodegenResult["head"];
+  let root = "";
+  let base = "/";
+  let origin: string | undefined;
+  let building = false;
+  let server: ViteDevServer | undefined;
+  let allowed: string[] = [];
+  const files = () => [...new Set([head?.site?.icon, head?.site?.touchIcon, head?.site?.image]
+    .filter((file): file is string => !!file))].sort();
+  // Vite's own convention for emitted assets, so no build-machine path reaches its manifest.
+  const originalFileName = (file: string) => normalizePath(relative(root, file));
+  const allowFiles = () => {
+    if (!server) return;
+    // Vite resolved the host's list, else its default. Admit the selected files,
+    // never their package directories, and retract only what this plugin added.
+    const allow = server.config.server.fs.allow;
+    for (const file of allowed) if (allow.includes(file)) allow.splice(allow.indexOf(file), 1);
+    allowed = files().map(normalizePath).filter((file) => !allow.includes(file));
+    allow.push(...allowed);
+  };
+  return {
+    name: "angee:site",
+    update(next) {
+      head = next;
+      allowFiles();
+    },
+    config(_config, env) {
+      if (env.isPreview) return;
+      const value = process.env.ANGEE_PUBLIC_ORIGIN;
+      if (!value) return;
+      // Django's public_origin and its check angee.E051 keep the rest of the rule (https outside DEBUG, wildcards).
+      // Errors never echo the value, which can carry credentials.
+      if (!URL.canParse(value)) throw new Error("ANGEE_PUBLIC_ORIGIN is not a URL; it must be a bare http(s) origin such as https://example.com.");
+      const parsed = new URL(value);
+      const web = ["http:", "https:"].includes(parsed.protocol);
+      if (!web || parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash) {
+        throw new Error(`ANGEE_PUBLIC_ORIGIN must be a bare http(s) origin such as ${web ? parsed.origin : "https://example.com"}, with no user info, path, query or fragment.`);
+      }
+      // The platform's normalized form: lower-case scheme and host, punycode, no default port.
+      origin = parsed.origin;
+    },
+    configResolved(config) {
+      root = config.root;
+      base = config.base;
+      building = config.command === "build";
+    },
+    configureServer(value) {
+      server = value;
+      allowFiles();
+    },
+    buildStart() {
+      if (!building) return;
+      for (const file of files()) {
+        this.addWatchFile(file);
+        this.emitFile({ type: "asset", name: basename(file), originalFileName: originalFileName(file), source: readFileSync(file) });
+      }
+    },
+    transformIndexHtml: {
+      order: "post",
+      handler(html, context) {
+        if (!head) return;
+        // Post hooks receive the final bundle; URLs follow schema-metadata-preload.
+        // Native emission supplies names and hashing and never inlines the files.
+        const assetUrl = (file: string) => {
+          if (!building) return `${base}${encodeURI(posix.join("@fs", normalizePath(file)))}`;
+          const asset = Object.values(context.bundle ?? {}).find((entry) =>
+            entry.type === "asset" && entry.originalFileNames.includes(originalFileName(file)));
+          if (!asset) throw new Error(`Missing emitted site asset: ${originalFileName(file)}`);
+          return `${base}${encodeURI(asset.fileName)}`;
+        };
+        const tags: HtmlTagDescriptor[] = [{
+          tag: "title", children: head.title.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
+        }];
+        // Every other fact this head writes, keyed as a host tag declares it.
+        const written = new Set<string>();
+        const { site } = head;
+        if (site) {
+          // A relative base cannot be made absolute, and a full-URL base already is.
+          const absolute = origin !== undefined && base.startsWith("/");
+          const image = site.image ? assetUrl(site.image) : undefined;
+          const meta = (attribute: "name" | "property", name: string, content: string | undefined) => {
+            if (content === undefined) return;
+            tags.push({ tag: "meta", attrs: { [attribute]: name, content } });
+            written.add(`${attribute}=${name}`);
+          };
+          const link = (rel: string, file: string | undefined) => {
+            if (file === undefined) return;
+            tags.push({ tag: "link", attrs: { rel, href: assetUrl(file) } });
+            written.add(`rel=${rel}`);
+          };
+          meta("name", "description", site.description);
+          meta("property", "og:type", "website");
+          meta("property", "og:site_name", site.siteName);
+          meta("property", "og:title", head.title);
+          meta("property", "og:description", site.description);
+          meta("property", "og:url", absolute ? new URL(base, origin).href : undefined);
+          meta("property", "og:image", image && absolute ? new URL(image, origin).href : image);
+          meta("name", "twitter:card", image ? "summary_large_image" : "summary");
+          link("icon", site.icon);
+          link("apple-touch-icon", site.touchIcon);
+        }
+        // Edit only the document's own head: an SVG or script string elsewhere keeps its <title>.
+        const span = /<head(?=[\s>])[^>]*>[\s\S]*?<\/head\s*>/i.exec(html);
+        if (!span) throw new Error(`${context.filename} needs a <head> element for the static head ANGEE_UI.shell declares.`);
+        // Only <title> is the host template's to replace. A host tag for a fact this head
+        // writes, or any Open Graph tag beside it, is a second owner crawlers read first.
+        for (const [tag, attributes = ""] of span[0].matchAll(/<(?:meta|link)(\s[^>]*)?>/gi)) {
+          const value = (key: string) => (new RegExp(`\\s${key}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i")
+            .exec(attributes) ?? []).slice(1).join("").toLowerCase();
+          const keys = [`name=${value("name")}`, `property=${value("property")}`, ...value("rel").split(/\s+/).map((rel) => `rel=${rel}`)];
+          if (keys.some((key) => written.has(key) || (site && key.startsWith("property=og:")))) {
+            throw new Error(`${context.filename} declares ${tag} in its head; ANGEE_UI.shell.site owns that tag.`);
+          }
+        }
+        return {
+          html: html.slice(0, span.index) + span[0].replace(/<title(?=[\s>])[^>]*>[\s\S]*?<\/title\s*>/gi, "")
+            + html.slice(span.index + span[0].length),
+          tags: tags.map((tag) => ({ ...tag, injectTo: "head" as const })),
+        };
+      },
+    },
+  };
+}
+
 // Generated metadata is fetched as data, so start its download with the entry
 // script. Match the source path, not Vite's configurable output asset name.
 function preloadSchemaMetadata(): Plugin {
@@ -507,7 +638,8 @@ function preloadSchemaMetadata(): Plugin {
               rel: "preload",
               as: "fetch",
               crossorigin: "anonymous",
-              href: `${base}${asset.fileName}`,
+              // Emitted names keep spaces and non-ASCII; Vite encodes its own HTML asset URLs.
+              href: `${base}${encodeURI(asset.fileName)}`,
             },
             injectTo: "head" as const,
           }));

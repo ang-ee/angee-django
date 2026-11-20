@@ -1,7 +1,7 @@
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import {
   Action, Column, DrawerResourceList, Field, Form, Group, List, ResourceList,
-  useEnumOptions, useRecordActionMutation, useRouteHref, type StringIdRow,
+  optionToken, useEnumOptions, useRecordActionMutation, useRouteHref, type StringIdRow,
 } from "@angee/ui";
 import { useWorkflowsT } from "./i18n";
 import { TRIGGER_MODEL } from "./triggers";
@@ -9,6 +9,9 @@ import { TriggerEventsList } from "./TriggerEventsPage";
 import { TriggerGrantsTab } from "./TriggerGrantsTab";
 
 export function TriggersPage() { return <TriggersList />; }
+
+/** A schedule names a recurrence; every other source names a model and condition. */
+const scheduled = (row: Record<string, unknown>) => optionToken(row.source) === "schedule";
 
 /** One declaration owns routed triggers and the workflow's filtered record tab. */
 export function TriggersList({ workflowId }: { workflowId?: string }) {
@@ -41,12 +44,18 @@ export function TriggersList({ workflowId }: { workflowId?: string }) {
       <Group columns={2}>
         <Field name="workflow" label={t("run.workflow")} createOnly readOnly={Boolean(workflowId)} defaultValue={workflowId} />
         <Field name="source" label={t("trigger.source")} createOnly widget="select" options={sourceOptions} defaultValue="record_changed" />
-        <Field name="model_label" label={t("catalogue.subjectModel")} createOnly defaultValue="" description={t("trigger.modelHint")} />
+        <Field name="model_label" label={t("catalogue.subjectModel")} createOnly defaultValue="" description={t("trigger.modelHint")}
+          showWhen={(row) => !scheduled(row)} />
         <Field name="source_model" label={t("trigger.resolvedModel")} readOnly showWhen={(row) => Boolean(row.source_model) && !row.model_label} />
+        <Field name="recurrence" label={t("trigger.recurrence")} defaultValue="" description={t("trigger.recurrenceHint")} showWhen={scheduled} />
+        <Field name="recurrence_start" label={t("trigger.recurrenceStart")} showWhen={scheduled} />
+        <Field name="recurrence_zone" label={t("trigger.recurrenceZone")} defaultValue="" showWhen={scheduled} />
         <Field name="enabled" label={t("trigger.enabled")} readOnly widget="boolean" />
+        <Field name="enabled_at" label={t("trigger.enabledAt")} readOnly showWhen={(row) => Boolean(row.enabled_at)} />
+        <Field name="next_occurrence_at" label={t("trigger.nextOccurrence")} readOnly showWhen={(row) => scheduled(row) && Boolean(row.next_occurrence_at)} />
       </Group>
       <Field name="disabled_reason" label={t("trigger.disabledReason")} readOnly widget="textarea" showWhen={(row) => Boolean(row.disabled_reason)} />
-      <Action id="enable" label={t("trigger.enable")} placement="toolbar" primary
+      <Action id="enable" label={t("trigger.enable")} primary
         visibleWhen={(row) => row.can_edit === true && row.enabled === false && row.enable_preview != null}
         confirm={(row) => {
           const preview = row.enable_preview as { grants: string[]; run_readers: string[] };
@@ -62,7 +71,7 @@ export function TriggersList({ workflowId }: { workflowId?: string }) {
             </div>,
           };
         }} run={enable} />
-      <Action id="disable" label={t("trigger.disable")} visibleWhen={(row) => row.can_edit === true && row.enabled === true} run={disable} />
+      <Action id="disable" label={t("trigger.disable")} placement="toolbar" visibleWhen={(row) => row.can_edit === true && row.enabled === true} run={disable} />
     </Form>
   </View>;
 }

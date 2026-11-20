@@ -1,6 +1,6 @@
 """Delivery and feed contracts against the actual composed model graph."""
 
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from smtplib import SMTPDataError, SMTPServerDisconnected
@@ -39,7 +39,7 @@ from angee.base.models.locks import StaleRevisionError
 from angee.graphql.actions import MAX_ACTION_SELECTION, ActionSelectionInput
 from angee.graphql.ids import PublicID
 from angee.graphql.schema import GraphQLSchemas
-from angee.integrate.errors import IntegrationError, RequestNotSentError
+from angee.integrate.errors import IntegrationError, IntegrationFailure, RequestNotSentError
 from angee.integrate.http import RedirectOriginError, ResponseTooLargeError
 from angee.integrate.signals import discovery_finished
 from angee.integrate.states import StreamDefinition
@@ -51,7 +51,14 @@ from angee.messaging.email import AnymailEmailChannelBackend
 from angee.messaging.events import message_ingested
 from angee.messaging.managers import DeliveryReconciliationBusy
 from angee.posts import mcp_tools
-from angee.posts.backends import RECONCILIATION_SKEW_MARGIN, FeedBackend, FeedChannelBackend, ParsedPost, RecordRefusal
+from angee.posts.backends import (
+    RECONCILIATION_SKEW_MARGIN,
+    FeedBackend,
+    FeedChannelBackend,
+    ManualFeedBackend,
+    ParsedPost,
+    RecordRefusal,
+)
 from angee.posts.models import validate_reply_hold
 from angee.provenance.context import changeset_model
 
@@ -121,6 +128,124 @@ class DeliveryFixtures(TransactionTestCase):
 
     def run_delivery(self, message):
         return delivery.run_message_delivery(message._meta.label_lower, message.pk, message.external_id)
+
+
+class DeliveryActionAdmission(DeliveryFixtures):
+    """The row projection and revision-checked mutations agree on delivery admission."""
+
+    def execute(self, document, values, actor=None):
+        actor = actor or self.operator
+        with actor_context(actor):
+            result = GraphQLSchemas.from_discovery().build("console").execute_sync(
+                document, variable_values=values,
+                context_value=SimpleNamespace(request=SimpleNamespace(user=actor)),
+            )
+        self.assertIsNone(result.errors, result.errors)
+        return result.data
+
+    def test_projection_and_mutation_agree_for_retention_conflicts_leases_and_status(self):
+        future = timezone.now() + timedelta(hours=1)
+        past = timezone.now() - timedelta(hours=1)
+        cases = (
+            ({"status": "failed"}, {"retry"}),
+            ({"status": "failed", "channel_id": None}, set()),
+            ({"status": "sent"}, set()),
+            ({"status": "uncertain"}, {"retry", "acknowledge"}),
+            ({"status": "failed", "is_trashed": True}, set()),
+            ({"status": "uncertain", "is_trashed": True, "delivery_possibly_accepted": True}, {"retry", "acknowledge"}),
+            ({"status": "uncertain", "metadata": {"local": {"delivery_conflict": "other"}}}, set()),
+            ({"status": "uncertain", "metadata": {"local": {"delivery_conflict": False}}}, {"retry", "acknowledge"}),
+            ({"status": "uncertain", "delivery_lease_until": future}, set()),
+            ({"status": "uncertain", "delivery_lease_until": past}, {"retry", "acknowledge"}),
+            ({"status": "uncertain", "delivery_lease_until": future, "scheduled_at": future}, {"retry", "acknowledge"}),
+        )
+        query = """query($id: String!) { messages_by_pk(id: $id) { delivery_actions revision } }"""
+        for index, (values, offered) in enumerate(cases):
+            for verb, field in (("retry", "retry_message_delivery"), ("acknowledge", "acknowledge_message_delivery")):
+                with self.subTest(index=index, verb=verb):
+                    row = self.outbound(external_id=f"admission-{index}-{verb}")
+                    with system_context(reason="delivery admission fixture"):
+                        Message.objects.filter(pk=row.pk).update(**values)
+                        row.refresh_from_db()
+                    projected = self.execute(query, {"id": row.public_id})["messages_by_pk"]
+                    self.assertEqual(set(projected["delivery_actions"]), offered)
+                    result = self.execute(
+                        f"mutation($id: ID!, $revision: Int!) {{ "
+                        f"{field}(id: $id, expected_revision: $revision) {{ ok }} }}",
+                        {"id": row.public_id, "revision": row.revision},
+                    )
+                    self.assertEqual(result[field]["ok"], verb in offered)
+
+    def test_retry_requires_the_delivery_envelope_but_acknowledgement_does_not(self):
+        query = """query($id: String!) { messages_by_pk(id: $id) { delivery_actions } }"""
+        for index, invalid in enumerate(({"direction": "inbound"}, {"channel_id": None}, {"external_id": " "})):
+            with self.subTest(invalid=invalid):
+                row = self.outbound(status="uncertain", external_id=f"invalid-envelope-{index}")
+                with system_context(reason="incomplete delivery envelope fixture"):
+                    Message.objects.filter(pk=row.pk).update(**invalid)
+                    row.refresh_from_db()
+                projected = self.execute(query, {"id": row.public_id})["messages_by_pk"]
+                self.assertEqual(projected["delivery_actions"], ["acknowledge"])
+                for verb, allowed in (("retry", False), ("acknowledge", True)):
+                    result = self.execute(
+                        f"mutation($id: ID!, $revision: Int!) {{ "
+                        f"{verb}_message_delivery(id: $id, expected_revision: $revision) {{ ok }} }}",
+                        {"id": row.public_id, "revision": row.revision},
+                    )
+                    self.assertEqual(result[f"{verb}_message_delivery"]["ok"], allowed)
+
+    def test_a_non_admin_channel_owner_can_resolve_delivery_through_graphql(self):
+        owner = get_user_model().objects.create_person_as_system(
+            username="channel-owner", email="channel-owner@example.test", reason="delivery channel owner fixture",
+        )
+        with actor_context(self.operator):
+            self.feed.with_actor(self.operator).transfer_ownership(owner)
+        for verb, expected in (("retry", "queued"), ("acknowledge", "sent")):
+            with self.subTest(verb=verb):
+                row = self.outbound(status="uncertain", external_id=f"owner-{verb}")
+                projected = self.execute(
+                    "query($id: String!) { messages_by_pk(id: $id) { permissions delivery_actions } }",
+                    {"id": row.public_id}, owner,
+                )["messages_by_pk"]
+                self.assertIn("send_held", projected["permissions"])
+                self.assertIn(verb, projected["delivery_actions"])
+                result = self.execute(
+                    f"mutation($id: ID!, $revision: Int!) {{ "
+                    f"{verb}_message_delivery(id: $id, expected_revision: $revision) {{ ok }} }}",
+                    {"id": row.public_id, "revision": row.revision}, owner,
+                )
+                self.assertTrue(result[f"{verb}_message_delivery"]["ok"])
+                with system_context(reason="delivery channel owner result"):
+                    row.refresh_from_db()
+                self.assertEqual(row.status, expected)
+                self.assertEqual(row.acknowledged_by_id, owner.pk)
+
+    def test_reader_gets_no_delivery_verbs_and_list_cost_does_not_grow_per_row(self):
+        self.outbound(status="uncertain", external_id="admission-first")
+        query = """{ messages { id delivery_actions } }"""
+        rows = self.execute(query, {}, self.agent)["messages"]
+        self.assertTrue(rows)
+        self.assertTrue(all(row["delivery_actions"] == [] for row in rows))
+        resolve = Message.delivery_actions
+
+        def without_metadata(row, permissions):
+            self.assertIn("metadata", row.get_deferred_fields())
+            return resolve(row, permissions)
+
+        self.enterContext(patch.object(Message, "delivery_actions", without_metadata))
+        self.execute(query, {})
+        with CaptureQueriesContext(connection) as queries:
+            one = self.execute(query, {})["messages"]
+            self.assertTrue(one)
+            self.assertTrue(all(row["delivery_actions"] for row in one))
+        single_count = len(queries)
+        for index in range(3):
+            self.outbound(status="failed", external_id=f"admission-extra-{index}")
+        with CaptureQueriesContext(connection) as queries:
+            many = self.execute(query, {})["messages"]
+            self.assertTrue(all(row["delivery_actions"] for row in many))
+        self.assertEqual(len(many), len(one) + 3)
+        self.assertEqual(len(queries), single_count)
 
 
 class FakeFeedBackend(FeedBackend):
@@ -316,6 +441,81 @@ class DeliveryContracts(DeliveryFixtures):
             self.assertEqual(row.status, "sent")
             self.assertEqual(row.external_id, "client")
             self.assertEqual(row.local_metadata["delivery_conflict"], "published")
+
+    def test_a_channel_awaiting_discovery_defers_delivery_and_a_failed_discovery_fails_it(self):
+        row = self.outbound()
+        # A capability that learns its account at discovery: attaching a key sends it to discover.
+        self.enterContext(patch.object(ManualFeedBackend, "requires_connection_discovery", True))
+        with system_context(reason="delivery while the channel discovers"):
+            credential = apps.get_model("integrate", "Credential").objects.create_local_credential(
+                self.operator, kind="static_token", name="Feed key", material={"api_key": "feed-key"},
+            )
+            self.feed.attach_connection(credential)
+            self.assertTrue(self.feed.discovery_pending)
+            row.deliver()
+            self.assertEqual(self.run_delivery(row)["status"], "retry")
+            row.refresh_from_db()
+            # Deferred as lock contention is: no attempt spent, nothing sent.
+            self.assertEqual(row.status, "queued")
+            self.assertGreater(row.scheduled_at, timezone.now())
+            self.assertNotIn("delivery_attempts", row.local_metadata)
+            self.backend.deliver.assert_not_called()
+            self.assertTrue(self.feed.finish_discovery(
+                credential_pk=credential.pk, generation=self.feed.discovery_generation,
+                error=IntegrationFailure("This key reads another account."),
+            ))
+            Message.objects.filter(pk=row.pk).update(scheduled_at=None)
+            self.assertEqual(self.run_delivery(row)["status"], "failed")
+            row.refresh_from_db()
+        self.assertEqual(row.local_metadata["delivery_error"], "This key reads another account.")
+        self.backend.deliver.assert_not_called()
+
+    def test_a_key_re_entered_on_a_disconnected_channel_defers_delivery_until_it_reconnects(self):
+        row = self.outbound()
+        self.enterContext(patch.object(ManualFeedBackend, "requires_connection_discovery", True))
+        with system_context(reason="delivery while the channel is disconnected"):
+            credential = apps.get_model("integrate", "Credential").objects.create_local_credential(
+                self.operator, kind="static_token", name="Feed key", material={"api_key": "feed-key"},
+            )
+            self.feed.attach_connection(credential)
+            self.assertTrue(self.feed.finish_discovery(
+                credential_pk=credential.pk, generation=self.feed.discovery_generation,
+            ))
+            self.feed.set_lifecycle("disconnected")
+            # Discovery for the new key runs when the channel is connected again; until then it is not a failure.
+            credential.replace_material({"api_key": "re-entered"})
+            row.deliver()
+            self.assertEqual(self.run_delivery(row)["status"], "retry")
+            row.refresh_from_db()
+        self.assertEqual(row.status, "queued")
+        self.assertNotIn("delivery_attempts", row.local_metadata)
+        self.backend.deliver.assert_not_called()
+
+    def test_a_key_re_entered_while_the_send_waits_for_its_lock_holds_the_send_back(self):
+        row = self.outbound()
+        self.enterContext(patch.object(ManualFeedBackend, "requires_connection_discovery", True))
+        with system_context(reason="delivery while a key is re-entered"):
+            credential = apps.get_model("integrate", "Credential").objects.create_local_credential(
+                self.operator, kind="static_token", name="Feed key", material={"api_key": "feed-key"},
+            )
+            self.feed.attach_connection(credential)
+            self.assertTrue(self.feed.finish_discovery(
+                credential_pk=credential.pk, generation=self.feed.discovery_generation,
+            ))
+
+            @contextmanager
+            def re_entered_while_waiting():
+                credential.replace_material({"api_key": "re-entered"})
+                yield True
+
+            self.backend.delivery_lock = re_entered_while_waiting
+            row.deliver()
+            # Admitted on the channel as loaded, asked again under the lock: nothing is sent on the new key.
+            self.assertEqual(self.run_delivery(row)["status"], "retry")
+            row.refresh_from_db()
+        self.assertEqual(row.status, "queued")
+        self.assertNotIn("delivery_attempts", row.local_metadata)
+        self.backend.deliver.assert_not_called()
 
     def test_bad_due_row_does_not_abort_batch_and_invalid_claim_fails(self):
         row = self.outbound(scheduled_at=timezone.now() - timedelta(seconds=1))

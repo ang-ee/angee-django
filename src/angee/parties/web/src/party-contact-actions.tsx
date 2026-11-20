@@ -1,5 +1,6 @@
 import * as React from "react";
 import type { ActionFieldName } from "@angee/gql/console/actions";
+import type { AuthoredMutateOptions } from "@angee/refine";
 import {
   Action,
   REFINE_CREATE_ID,
@@ -60,6 +61,7 @@ export function usePartyContactActions(): React.ReactElement {
       platform: "email" | "phone",
       values: Record<string, unknown>,
       context: ActionFormContext,
+      options?: AuthoredMutateOptions,
     ) => {
       const partyId = typeof context.record?.id === "string" ? context.record.id : "";
       const value = typeof values.value === "string" ? values.value.trim() : "";
@@ -71,7 +73,7 @@ export function usePartyContactActions(): React.ReactElement {
           validationErrors: { value: [t("party.contact.required")] },
         };
       }
-      return (await proposeManualContact(partyId, { platform, value, label })) ?? {
+      return (await proposeManualContact(partyId, { platform, value, label }, options)) ?? {
         ok: false,
         message: t("party.contact.error"),
       };
@@ -79,11 +81,11 @@ export function usePartyContactActions(): React.ReactElement {
     [proposeManualContact, t],
   );
   const submitEmail = React.useCallback<NonNullable<ActionDescriptor["submit"]>>(
-    (values, context) => proposeContact("email", values, context),
+    (values, context, options) => proposeContact("email", values, context, options),
     [proposeContact],
   );
   const submitPhone = React.useCallback<NonNullable<ActionDescriptor["submit"]>>(
-    (values, context) => proposeContact("phone", values, context),
+    (values, context, options) => proposeContact("phone", values, context, options),
     [proposeContact],
   );
   const savedRecord = React.useCallback<NonNullable<ActionDescriptor["visibleWhen"]>>(

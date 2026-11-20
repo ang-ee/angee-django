@@ -1,6 +1,7 @@
 import {
   Action,
   Column,
+  createClientKey,
   Facet,
   Field,
   Form,
@@ -9,7 +10,11 @@ import {
   ListView,
   type GanttViewSpec,
   useEnumOptions,
+  mutationDialogValueCodecs,
+  relationValueId,
+  useActionOutcomeMutation,
   useActionResultMutation,
+  useActionResultRun,
   useRecordAction,
   defineRowAction,
   type StringIdRow,
@@ -32,7 +37,7 @@ import { TaskManagementTab } from "./task-declarations";
 
 export interface ProjectFormSelection {
   groups?: readonly ("planning" | "details")[];
-  verbs?: readonly ("pause" | "resume" | "complete" | "drop")[];
+  verbs?: readonly ("pause" | "resume" | "complete" | "drop" | "createFromTemplate" | "transfer")[];
   contextLine?: FormProps["contextLine"];
   /** Compact read-only extras the host adds to the record header (a card in `RecordHeader.extra`). */
   headerExtras?: FormProps["headerExtras"];
@@ -43,7 +48,10 @@ export interface ProjectFormSelection {
 }
 
 /** Standard project form, shared by every route mounting projects. */
-export function useProjectFormDeclaration(selection: ProjectFormSelection = {}): React.ReactElement {
+export function useProjectFormDeclaration(
+  selection: ProjectFormSelection = {},
+  props: Omit<FormProps, "resource" | "children"> = {},
+): React.ReactElement {
   const t = useProjectsT();
   const startResolutionOptions = useEnumOptions(PROJECT_MODEL, "start_date_resolution");
   const targetResolutionOptions = useEnumOptions(PROJECT_MODEL, "target_date_resolution");
@@ -63,57 +71,95 @@ export function useProjectFormDeclaration(selection: ProjectFormSelection = {}):
   const resumeProject = useRecordAction((id, context) => resume(id, { expected_revision: context.record?.revision }));
   const completeProject = useRecordAction((id, context) => complete(id, { expected_revision: context.record?.revision }));
   const dropProject = useRecordAction((id, context) => drop(id, { expected_revision: context.record?.revision }));
+  const [transferOwnership, transferState] = useActionOutcomeMutation("transfer_project_ownership", {
+    invalidateModels: [PROJECT_MODEL],
+  });
+  const [createFromTemplate] = useActionOutcomeMutation("create_project_from_template", {
+    invalidateModels: [PROJECT_MODEL],
+  });
+  const settleCreation = useActionResultRun({ linkTo: PROJECT_MODEL });
+  // A retry of the same template reuses its key, so the server replays one creation.
+  const pendingCreation = React.useRef<{ template: string; key: string } | null>(null);
+  const createProject = useRecordAction(async (id) => {
+    if (pendingCreation.current?.template !== id) {
+      pendingCreation.current = { template: id, key: createClientKey("project-template") };
+    }
+    const { key } = pendingCreation.current;
+    await settleCreation(async () => {
+      const outcome = await createFromTemplate(id, { idempotency_key: key });
+      if (outcome?.ok) pendingCreation.current = null;
+      return outcome;
+    });
+  });
+  const verbs = selection.verbs ?? ["pause", "resume", "complete", "drop", "createFromTemplate", "transfer"];
   const standardActions = <>
-    {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("pause") ? <Action
-      id="pause" label={t("project.action.pause")} permission="write"
-      icon="archive" run={pauseProject} visibleWhen={(record) => recordStatus(record) === "open"} /> : null}
-    {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("resume") ? <Action
-      id="resume" label={t("project.action.resume")} permission="write"
+    {verbs.includes("transfer") ? <Action
+      id="transfer-ownership" placement="menu" label={t("project.action.transferOwnership")} permission="transfer"
+      disabled={transferState.fetching}
+      args={[{ name: "owner", label: t("project.action.newOwner"), argKind: "relation", resource: "iam.User", optional: true,
+        fromContext: ({ record }) => relationValueId(record?.owner) }]}
+      submit={(values, context) => transferOwnership(
+        mutationDialogValueCodecs.requiredString(context.record?.id, "id"),
+        { owner: mutationDialogValueCodecs.string(values.owner) },
+      )} /> : null}
+    {verbs.includes("pause") ? <Action
+      id="pause" placement="menu" label={t("project.action.pause")} permission="write"
+      icon="archive" run={pauseProject} visibleWhen={(record) => record.is_template !== true && recordStatus(record) === "open"} /> : null}
+    {verbs.includes("resume") ? <Action
+      id="resume" primary label={t("project.action.resume")} permission="write"
       icon="activity" run={resumeProject}
-      visibleWhen={(record) => ["paused", "dropped"].includes(recordStatus(record))} /> : null}
-    {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("complete") ? <Action
-      id="complete" placement="toolbar" label={t("project.action.complete")} permission="write"
+      visibleWhen={(record) => record.is_template !== true && ["paused", "dropped"].includes(recordStatus(record))} /> : null}
+    {verbs.includes("complete") ? <Action
+      id="complete" primary label={t("project.action.complete")} permission="write"
       icon="check" run={completeProject} visibleWhen={isActiveProject} /> : null}
-    {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("drop") ? <Action
+    {verbs.includes("drop") ? <Action
       id="drop" label={t("project.action.drop")} permission="write"
       icon="circle-x" danger run={dropProject} visibleWhen={isActiveProject} /> : null}
+    {verbs.includes("createFromTemplate") ? <Action
+      id="create-from-template" primary label={t("project.action.createFromTemplate")}
+      icon="projects" run={createProject} visibleWhen={(record) => record.is_template === true} /> : null}
   </>;
   return (
     <Form
+      {...props}
       resource={PROJECT_MODEL}
-      returning={["permissions", "on_path", "status_changed_at", "selectable_milestones.id", "current_milestone.id", "current_milestone.name", ...(selection.returning ?? [])]}
-      contextLine={selection.contextLine}
-      headerExtras={selection.headerExtras}
-      eyebrow={selection.eyebrow ?? t("project.eyebrow")}
+      returning={["owner.id", "permissions", "on_path", "status_changed_at", "is_template", "selectable_milestones.id", "current_milestone.id", "current_milestone.name", ...(props.returning ?? []), ...(selection.returning ?? [])]}
+      contextLine={selection.contextLine ?? props.contextLine}
+      headerExtras={selection.headerExtras ?? props.headerExtras}
+      eyebrow={selection.eyebrow ?? props.eyebrow ?? t("project.eyebrow")}
     >
       <Field name="title" title />
       <Field name="revision" readOnly hidden />
       <Field name="status" readOnly hidden />
       <Field name="current_milestone" status fill widget="projects.phase" />
       {(selection.groups ?? ["planning", "details"]).includes("planning") ? <Group label={t("project.group.planning")} columns={2}>
-        <Field name="owner" readOnly />
         <Field name="lead" />
-        <Field name="start_date" />
-        <Field name="start_date_resolution" options={startResolutionOptions} />
-        <Field name="target_date" />
-        <Field name="target_date_resolution" options={targetResolutionOptions} />
         <Field name="tags" />
+        <Field name="start_date" />
+        <Field name="target_date" />
       </Group> : null}
-      {(selection.groups ?? ["planning", "details"]).includes("details") ? <Group label={t("project.group.details")} columns={2} collapsible defaultOpen={false}>
+      <Group label={t("project.group.description")} pane="description">
+        <Field name="body" label={t("project.group.description")} widget="markdown.editor" />
+      </Group>
+      {(selection.groups ?? ["planning", "details"]).includes("details") ? <Group label={t("project.group.details")} columns={2} pane="project-settings">
+        <Field name="owner" readOnly />
+        <Field name="start_date_resolution" label={t("project.startPrecision")} options={startResolutionOptions} />
+        <Field name="target_date_resolution" label={t("project.targetPrecision")} options={targetResolutionOptions} />
         <Field name="owns_items" />
         <Field name="folder" />
         <Field name="converted_from" readOnly />
+        <Field name="is_template" label={t("project.isTemplate")} />
+        <Field name="created_from_template" readOnly />
       </Group> : null}
-      <Field name="body" widget="markdown.editor" body />
       {standardActions}
       {selection.extraActions}
     </Form>
   );
 }
 
-function isActiveProject(record: { status?: unknown }): boolean {
+function isActiveProject(record: { status?: unknown; is_template?: unknown }): boolean {
   const status = recordStatus(record);
-  return status === "open" || status === "paused";
+  return record.is_template !== true && (status === "open" || status === "paused");
 }
 
 interface MilestoneRow extends StringIdRow {
@@ -140,6 +186,8 @@ function ProjectMilestonesTab({ recordId }: RecordPanelContext): React.ReactElem
     <ListView<MilestoneRow>
       resource={MILESTONE_MODEL}
       scope="local"
+      presentation="embedded"
+      chrome={{ heading: false }}
       fields={["revision"]}
       baseFilter={{ project: { exact: recordId } }}
       order={{ sort_order: "ASC" }}
@@ -162,6 +210,7 @@ function ProjectParticipantsTab({ recordId }: RecordPanelContext): React.ReactEl
     <ListView
       resource={PARTICIPANT_MODEL}
       presentation="embedded"
+      chrome={{ heading: false }}
       fields={["id", "party.display_name", "kind", "created_at"]}
       baseFilter={{ project: { exact: recordId } }}
       columns={[
@@ -180,12 +229,17 @@ export const projectGanttSpec: GanttViewSpec = {
   start: "start_date", end: "target_date", label: "name", current: "current_milestone",
 };
 
+/** Ordinary project collections leave templates out; the templates page lists only them. */
+export const PROJECTS_OUTSIDE_TEMPLATES = { is_template: { exact: false } } as const;
+export const PROJECT_TEMPLATES = { is_template: { exact: true } } as const;
+
 /** The project collection's columns, facets and view-specific initial group. */
 export function useProjectListDeclaration(options: Partial<Omit<ListProps, "resource">> = {}): React.ReactElement {
-  const { children, defaultGroups, ...listOptions } = options;
+  const { children, defaultGroups, baseFilter, ...listOptions } = options;
+  // A caller's scope narrows the list; it does not bring templates back.
   return <List resource={PROJECT_MODEL} defaultGroup={{ field: "status" }}
     defaultGroups={{ gantt: null, ...defaultGroups }} order={{ updated_at: "DESC" }}
-    gantt={projectGanttSpec} {...listOptions}>
+    gantt={projectGanttSpec} baseFilter={{ ...PROJECTS_OUTSIDE_TEMPLATES, ...baseFilter }} {...listOptions}>
     {children ?? <>
     <Facet field="lead" />
     <Column field="title" />
@@ -215,6 +269,7 @@ function ProjectTimelineTab({ recordId }: RecordPanelContext): React.ReactElemen
     resource={MILESTONE_MODEL}
     scope="local"
     presentation="embedded"
+    chrome={{ heading: false }}
     defaultView="gantt"
     columns={[{ field: "name" }]}
     baseFilter={{ project: { exact: recordId } }}

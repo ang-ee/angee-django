@@ -19,7 +19,7 @@ test.describe("notes bulk delete — cascade preview", () => {
     await expect(page.getByText("1 selected")).toBeVisible();
 
     await notes.bulkDeleteButton.click();
-    await expect(page.getByText("Delete 1 records?")).toBeVisible({
+    await expect(page.getByText("Delete 1 record?")).toBeVisible({
       timeout: 10000,
     });
     // The dialog renders the cascade summary + tree, not just the title.

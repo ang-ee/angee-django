@@ -51,10 +51,11 @@ describe("IAM overview page", () => {
     await waitFor(() => expect((submit as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(submit);
 
+    // The dialog runs the grant and reports a refusal itself, so the call raises no generic toast.
     await waitFor(() => expect(mocks.grantRole).toHaveBeenCalledWith({
       subject: "auth/group:7#member",
       role: "angee/role:reader",
-    }));
+    }, { errorNotification: false }));
   });
 
   test("offers every grantable role the overview reads", async () => {
@@ -69,9 +70,13 @@ describe("IAM overview page", () => {
     expect(screen.getByRole("option", { name: "angee / Admin" })).toBeTruthy();
   });
 
-  test.each([false, undefined])("keeps a refused or missing grant result open for retry (%s)", async (granted) => {
+  // `grant_role` answers true or refuses with a GraphQL error; a response without data is no grant either.
+  test.each([
+    ["refused", () => mocks.grantRole.mockRejectedValue(new Error("This role is not grantable.")), "This role is not grantable."],
+    ["missing", () => mocks.grantRole.mockResolvedValue(undefined), "Could not grant role."],
+  ] as const)("keeps a %s grant open for retry", async (_case, answer, message) => {
     mocks.overview.data = overviewData();
-    mocks.grantRole.mockResolvedValue({ grant_role: granted });
+    answer();
     renderPage(<OverviewPage />);
 
     fireEvent.click(screen.getByRole("button", { name: "Grant" }));
@@ -80,7 +85,7 @@ describe("IAM overview page", () => {
     await waitFor(() => expect((submit as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(submit);
 
-    expect(await screen.findByText("Could not grant role.")).toBeTruthy();
+    expect(await screen.findAllByText(message)).toHaveLength(1);
     expect(screen.getByRole("dialog")).toBeTruthy();
     await waitFor(() => expect((submit as HTMLButtonElement).disabled).toBe(false));
   });

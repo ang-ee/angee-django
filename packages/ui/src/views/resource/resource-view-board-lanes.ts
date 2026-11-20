@@ -342,6 +342,7 @@ function laneGroup<TRow extends Row>(
 ): RowGroup<TRow> {
   return {
     key: id,
+    identity: id === "" ? null : id,
     label,
     path: [label],
     depth: 0,

@@ -190,8 +190,9 @@ class PartyWorkflowTests(TransactionTestCase):
 
     def test_unreadable_current_evidence_is_not_disclosed_to_assignee(self):
         party = self.party()
-        with actor_context(self.other):
-            Address.objects.create(party=party, street="Private address")
+        # An address another writer of the party added: its creator reads it, the reviewing owner does not.
+        with system_context(reason="party review unreadable address"):
+            Address.objects.create(party=party, street="Private address", created_by=self.other)
         run = self.run_identity(party)
         self.assertEqual(run.status, "failed")
         self.assertFalse(self.decisions(run))

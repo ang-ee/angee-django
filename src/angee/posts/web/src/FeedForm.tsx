@@ -1,13 +1,10 @@
 import * as React from "react";
-import { Field, Form, Group, registerForm, useRecordChromeContext, useResourceRecordHref, useRouteHref, type RegisteredFormProps } from "@angee/ui";
-import { ConnectIntegration, ConnectOAuthButton, IntegrationSyncFields } from "@angee/integrate";
-import { useAuthoredMutation } from "@angee/refine";
-import { useResourceInvalidates } from "@angee/metadata";
+import { Field, Form, Group, registerForm, type RegisteredFormProps } from "@angee/ui";
+import { IntegrationSyncFields } from "@angee/integrate";
 
 import { usePostsT } from "./i18n";
 
 const FEED_MODEL = "posts.Feed";
-const CONNECT_MODELS = [FEED_MODEL, "integrate.Integration"];
 
 function FeedForm({ resource: _resource, ...props }: RegisteredFormProps): React.ReactElement {
   const t = usePostsT();
@@ -36,21 +33,6 @@ function FeedForm({ resource: _resource, ...props }: RegisteredFormProps): React
       })}
     </Form>
   );
-}
-
-/** Saved-record Connect composes integrate's projection, document and browser flow. */
-export function FeedConnectAction(): React.ReactElement | null {
-  const context = useRecordChromeContext();
-  const href = useResourceRecordHref(FEED_MODEL);
-  const routeHref = useRouteHref();
-  const invalidates = useResourceInvalidates(CONNECT_MODELS);
-  const [connect] = useAuthoredMutation(ConnectIntegration, { invalidateModels: CONNECT_MODELS, invalidates });
-  if (!context.record || context.formReadOnly) return null;
-  return <ConnectOAuthButton row={context.record}
-    disabled={context.actionsBlocked}
-    next={href?.(context.recordId) ?? routeHref("posts.feeds")}
-    start={async ({ id, redirectUri, next }) => (await connect({ resource: FEED_MODEL, id, redirectUri, next }))?.connect_integration}
-  />;
 }
 
 export const feedForm = registerForm(FEED_MODEL, FeedForm);

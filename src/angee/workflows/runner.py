@@ -18,7 +18,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import OperationalError, connection, transaction
 from django.db.models.functions import Now
 from django.utils import timezone
-from rebac import actor_context, generic_target, system_context
+from rebac import actor_context, current_evaluator, evaluator_scope, generic_target, system_context
 from rebac.actors import is_sudo
 
 from angee.base.exceptions import exception_text
@@ -63,7 +63,7 @@ class Runner:
         records: list[Any] | None = None,
         notes: list[dict[str, str]] | None = None,
     ) -> None:
-        """Advance a held run, classifying a failure for the run to record durably.
+        """Advance a locked run, classifying a failure for the run to record durably.
 
         The caller holds the run lock. A lost fence, a retryable database error, or
         a database error settling an IO attempt escapes to roll back the caller's
@@ -91,7 +91,7 @@ class Runner:
         if run_id is None:
             return False
         try:
-            with self.run_model.objects.select_related("version", "run_as").hold(run_id, skip_locked=True) as run:
+            with self.run_model.objects.select_related("version", "run_as").lock_run(run_id, skip_locked=True) as run:
                 if run is None:
                     return False
                 with system_context(reason="workflows.execute.claim"):
@@ -158,12 +158,18 @@ class Runner:
         )
 
     def _run_body(self, ctx: StepContext) -> AttemptRecord:
-        """Validate once with the body, rolling back DATABASE writes on failure."""
+        """Validate once with the body, rolling back DATABASE writes on failure.
+
+        A body is one unit of work: its permission reads share one evaluator scope,
+        as a request's do. A scope the caller already holds is kept.
+        """
         database = ctx.step.mode == StepMode.DATABASE
         try:
             with (
                 database_timeout(ctx.step.timeout) if database else nullcontext()
-            ), (transaction.atomic() if database else nullcontext()), actor_context(ctx.actor), changeset(
+            ), (transaction.atomic() if database else nullcontext()), actor_context(ctx.actor), (
+                evaluator_scope() if current_evaluator() is None else nullcontext()
+            ), changeset(
                 fresh=True, activity="run", origin=ctx.run,
             ) as failed:
                 if is_sudo():
@@ -204,7 +210,7 @@ class Runner:
         remaining = step_run.deadline_at - timezone.now()
         if remaining <= timedelta():
             raise Superseded
-        with self.run_model.objects.hold(step_run.run_id, timeout=remaining) as run:
+        with self.run_model.objects.lock_run(step_run.run_id, timeout=remaining) as run:
             with system_context(reason="workflows.attempt"), (
                 database_timeout(step_run.deadline_at - timezone.now())
             ), transaction.atomic():
@@ -251,11 +257,18 @@ class Runner:
             )
 
     def tick(self) -> dict[str, int]:
-        """Wake waits, reap expired claims and recover missing deliveries in bounded batches."""
+        """Wake waits, reap expired claims and recover missing deliveries in bounded batches.
+
+        Schedules record their due occurrences before the trigger ledger drains, so
+        a due occurrence is admitted in the same tick. Occurrence rows past retention
+        are pruned after the runs that cited them.
+        """
+        triggers = apps.get_model("workflows", "Trigger").objects
         return {"woken": self.wake(), "reaped": self.reap(), "redispatched": self.redispatch(),
                 "decisions": self.wake_decisions(), "runs": self.wake_runs(), "records": self.wake_records(),
-                "drained": apps.get_model("workflows", "Trigger").objects.drain(),
-                "pruned": self.run_model.objects.prune()}
+                "scheduled": triggers.record_occurrences(), "drained": triggers.drain(),
+                "pruned": self.run_model.objects.prune(),
+                "pruned_occurrences": apps.get_model("workflows", "TriggerEvent").objects.prune()}
 
     def wake_runs(self, run_id: Any = None) -> int:
         """After-commit delivery and tick recovery share the existing wake transition."""
@@ -287,7 +300,7 @@ class Runner:
             for pk, run_id in list(candidates.order_by("pk").values_list("pk", "run_id")[:TICK_CANDIDATE_LIMIT]):
                 try:
                     with isolate_failure(f"tick candidate {pk}"):
-                        with self.run_model.objects.hold(run_id, skip_locked=True) as run:
+                        with self.run_model.objects.lock_run(run_id, skip_locked=True) as run:
                             if run is None or run.is_terminal:
                                 continue
                             step_run = candidates.filter(pk=pk).lock_if_supported(no_key=True).first()

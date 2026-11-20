@@ -42,9 +42,10 @@ source addon contributes one adapter class, its registry key and its tests. Refe
 - `Bridge.run_sync`, `claim_sync`, `record_sync_error`, `update_live_state`, `claim_live_account`
   (`src/angee/integrate/models.py`) own lifecycle, telemetry and locks.
 - `Credential.auth_headers`, `ensure_fresh`, `Integration.fresh_credential` and `load_connection_credential`
-  (`src/angee/integrate/models.py`) own token material and refresh; `HttpClientMixin`/`angee.integrate.http` own outbound HTTP with the SSRF pin.
+  (`src/angee/integrate/models.py`) own token material and refresh; `HttpClientMixin`/`angee.integrate.http` own outbound HTTP with the SSRF pin,
+  and `HttpClient.request_model` is a vendor's typed JSON request.
 - `IntegrationError(public_message, transient=, retry_after=)` (`src/angee/integrate/errors.py`) is the only
-  exception an operator sees; `RequestNotSentError` marks safe retries.
+  exception an operator sees; `RequestNotSentError` marks a request not sent, safe to retry when `transient`.
 - `LiveSession` (`src/angee/integrate/session.py`) owns the wake loop, QR reporting and cooperative stop;
   `session_store_path` (`src/angee/integrate/live.py`) owns the store convention.
 - The stack rows for the protocol client ([Backend](../../../../../docs/stack.md#backend): the IMAPClient, neonize and telethon rows); parse with
@@ -95,20 +96,48 @@ source addon contributes one adapter class, its registry key and its tests. Refe
    ```
 
    `streams()` declares each partition once with its `StreamDefinition` knobs (`kind`, `direction`, `cursor`,
-   `reconcile_interval`, `absence_threshold`, `tombstone_retention`, `snapshot`, `authoritative`, `mapping_version`, `config`;
-   `StreamDefinition` in `src/angee/integrate/states.py`). `extract` returns one page and the cursor that covers it; the
-   driver commits both. If the source is a mutable replica → return `RecordChange` rows and implement
+   `reconcile_interval`, `absence_threshold`, `tombstone_retention`, `snapshot`, `authoritative`, `mapping_version`
+   or `mapping_contributions`, `config`, `container`; `StreamDefinition` in `src/angee/integrate/states.py`). If one
+   declarer owns the mapping → bump `mapping_version`. If several declarers compose it (a base plus the consumer
+   addons that map more fields) → declare `mapping_contributions` as one `MappingContribution(key, version,
+   sequence=...)` per part, in any order, and never a version of your own: integrate orders the parts by sequence,
+   then key, and the stream retains the ordered list and gives
+   every change of it a new version (`SyncStreamManager.current` in `src/angee/integrate/models.py`), never a
+   bridge-side column. A directory composes its consumers' `DirectoryMapping` classes into its contacts stream this
+   way (`DirectoryBackend.contacts_stream` in `src/angee/parties/backends.py`); a pull-only vendor backend only asks
+   its source for `mapped_fields()` and passes their values to `observe(..., row=...)`. If a partition is itself a
+   record of another
+   stream (an address book, a calendar) → declare that parent stream with `holds_containers=True`, create the
+   container row in its `apply_record`,
+   report a complete listing's misses as `StreamPage.absent`, and declare one child per
+   `RecordLink.objects.containers_of(bridge, key)` link with `container=<link>` and `partition=<link external key>`
+   (`DirectoryBackend.streams` in `src/angee/parties/backends.py`); the driver pauses the child of an unavailable
+   container and retires the child of one that stops observing. `extract` returns one page and the cursor that
+   covers it; the driver commits both. If the source is a mutable replica → return `RecordChange` rows and implement
    `enumerate_keys`, `read_keys` (set `supports_identity_reads = True`) and, for two-way, `local_changes` +
-   `write_back` (`src/angee/integrate/impl.py`). If the capability base already applies →
-   inherit `apply_record`; otherwise apply through the domain's idempotent ingest verb and return
+   `write_back` (`src/angee/integrate/impl.py`). If the capability base already builds and applies records
+   (`DirectoryBackend` in `src/angee/parties/backends.py`, `CalendarBackend` in `src/angee/calendar/backends.py`) →
+   implement its capability-named hooks (a directory's `extract_contacts`, `read_contacts` and `contact_keys`),
+   make payloads with its `observe` and pages with its `record_changes`, declare its `direction`, and inherit
+   `read_keys`, `enumerate_keys` and `apply_record`; otherwise apply through the domain's idempotent ingest verb and return
    `ApplyResult(target=...)` (`ChannelBackend.apply_record` in `src/angee/messaging/backends.py`). **Owner rule:**
    [Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts): the cursor commits with the records it
    covers, the driver alone promotes links, adapters never persist cursors or credentials.
 
-4. **Credentials and OAuth.** Read material through the row: `self.bridge.fresh_credential()`, then
-   `credential.auth_headers()` or the handler's secret (`src/angee/integrate/models.py`); kinds are
-   `CredentialKind` handlers (`src/angee/integrate/credentials.py`). If the vendor needs an OAuth preset →
-   subclass `OAuthProviderType` with a unique `key` and contribute
+4. **Credentials and OAuth.** Read material through the row, and reload the credential per unit of work
+   (`Integration.fresh_credential()`): a credential instance answers from the snapshot it was loaded with, so a
+   revocation or re-entered key reaches only a reloaded instance. Then call
+   `credential.auth_headers()`, the kind's own authorization (`src/angee/integrate/models.py`); a vendor SDK that
+   takes a raw token reads `credential.secret_value()`, which a key-only kind leaves empty. A
+   minting kind (`jwt_bearer`) needs the backend's scopes: `credential.auth_headers(scopes=...)`, called in
+   autocommit. Kinds are `CredentialKind` handlers (`src/angee/integrate/credentials.py`). If the vendor already
+   has a client (Google's `google` row from `src/angee/integrate_google/providers.py`) → set `oauth_client` to its
+   slug and declare the adapter's extra scopes in `oauth_scopes` (`OAuthConnectIntent` in
+   `src/angee/integrate/impl.py`). If it reads with one of the user's accounts → its `credential_blocker` composes
+   `Integration.reads_with`, and its connect dialog offers `Integration.connectable_credentials` through the
+   `ConnectWithAccount` interface and `ConnectWithAccountAction` (`src/angee/integrate/README.md`), never a
+   local picker. If the vendor needs an OAuth preset → subclass `OAuthProviderType` with a
+   unique `key` and contribute
    `"ANGEE_OAUTH_PROVIDER_TYPE_CLASSES.<key>"` (`src/angee/integrate/README.md`, `RefiningProvider` and `ContributedProvider` in `tests/integrate_fixtures.py`). If the
    connection must locate a remote resource first → `requires_connection_discovery = True` with
    `discover_connection`/`apply_discovery` (`IntegrationImpl` in `src/angee/integrate/impl.py`, `src/angee/integrate/README.md`).
@@ -126,6 +155,15 @@ source addon contributes one adapter class, its registry key and its tests. Refe
 
 6. **Errors and operator messages.** Raise an `IntegrationError` subclass composed from facts the operator owns
    (`ImapError` in `src/angee/messaging_integrate_imap/backend.py`); pass `transient=`/`retry_after=` for throttling.
+   Over HTTP, `HttpRefusal` (`src/angee/integrate/http.py`) classifies every failed answer once: send with
+   `self.http.request_model(method, url, model=..., error=lambda refusal: refusal.as_error(VendorError, "Vendor"))`.
+   The vendor states only its own cases, never a status table of its own, through that hand-off
+   (`as_error(error, service, *, public_message=None, transient=None, retry_after=None)`: its words, a refusing status
+   it knows to be transient, and a wait its body or headers name, used instead of the answer's `Retry-After`), reading
+   their signals from the refusal's `status`, `body` and `headers` (a copy without credentials or cookies). A refused
+   answer keeps its status even when its body is over the cap or cannot be decoded. If the adapter reads one record
+   per request → it raises that record's oversized or unreadable answer as the record's `SemanticError` (the
+   `NotionSnapshot.content_refused` path in `src/angee/knowledge_integrate_notion/backend.py`); integrate does not.
    Record-level refusals raise `SemanticError` (quarantined, page continues); infrastructure errors propagate
    (page rolls back) (`BridgeImpl.apply_record` in `src/angee/integrate/impl.py`). **Owner rule:** [Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts)
    "An integration failure reaches the operator only as an IntegrationError".
@@ -150,6 +188,7 @@ source addon contributes one adapter class, its registry key and its tests. Refe
 ## Do not
 
 - A private cursor table, checkpoint column or `last_synced_at` on the bridge: `SyncStream.cursor` and its generation own position ([Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts) "The cursor commits with the records it covers").
+- A container's remote id in a column (`source_href`, `external_ref`) or a container row created in `streams()`: the parent stream's `RecordLink` owns its identity and its apply path creates the row; the child names it as `container` (`BridgeImpl.streams` in `src/angee/integrate/impl.py`, the container paragraph of `src/angee/integrate/README.md`).
 - Persisting the cursor, promoting a link or writing credential material inside an adapter: the driver and credential manager own those (`BridgeImpl.apply_record` in `src/angee/integrate/impl.py`, `src/angee/integrate/README.md`).
 - Choosing a winner on divergent edits or a remote tombstone against a local edit: conflicts await explicit resolution ([Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts) "Compare both mapped sides with their pinned applied base").
 - Running `extract`/`enumerate_keys` inside an enclosing transaction, or network IO inside `prepare_page`/`apply_record`: extraction runs outside the page transaction and may read the row (the IMAP adapter reloads credentials per page through `fresh_credential`, `ImapChannelBackend._load_credentials` in `src/angee/messaging_integrate_imap/backend.py`, `src/angee/integrate/models.py`); the driver refuses extraction in an atomic block (`advance_stream` in `src/angee/integrate/streams.py`) and application does database work only (`src/angee/integrate/impl.py`; [Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts) "The cursor commits with the records it covers").
@@ -177,7 +216,8 @@ session exits within one wake on stop, shutdown and lost lock.
 
 ## Pitfalls
 
-- Declaration knobs `cursor`, `reconcile_interval`, `absence_threshold`, `tombstone_retention`, `config` seed the first generation only; a changed `direction`/`snapshot` or increased `mapping_version` opens a new baseline and a changed `kind` is refused (`src/angee/integrate/README.md`).
+- Declaration knobs `cursor`, `reconcile_interval`, `absence_threshold`, `tombstone_retention`, `config` seed the first generation only; a changed `direction`/`snapshot`, an increased `mapping_version` or any change of the `mapping_contributions` list opens a new baseline and a changed `kind` is refused (`src/angee/integrate/README.md`).
+- A composed mapping's version is not the sum of its parts: removing a part lowers the sum and exchanging one can keep it, which would skip the replay. Declare the parts as `mapping_contributions` and let the stream retain them (`src/angee/integrate/README.md`); a change of their sequence order is a change, because parts apply in order, and a renumbering that keeps it is none.
 - A declared snapshot without `reconcile_interval` closes after its baseline; a missing interval alone never means read-once ([Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts) "Read-once requires a snapshot source and closure").
 - Advisory locks are process-local on SQLite: `claim_account` is serialized by the lock, not the database (`claim_account` in `src/angee/integrate/impl.py`, `task_locks_are_cross_process` in `src/angee/base/locks.py`).
 - A child capability's second intent axis (live desire) is unset by generic lifecycle verbs; the reconciler selects on lifecycle and closes it ([Integrate pitfalls](references/pitfalls.md) "An Integration child's second intent axis").
@@ -194,7 +234,7 @@ session exits within one wake on stop, shutdown and lost lock.
 
 <!--
 Docs: src/angee/integrate/README.md (whole); docs/backend/guidelines.md sections Record sync, Integrations and workers, Integration and worker contracts (cited by anchor and bullet title); docs/stack.md #backend (messaging-protocol rows and the implementation-registry choice); docs/checks.md #python-and-composition-contracts, #source-addon-test-models, #composition-and-schema, #frontend-packages-and-addon-fragments, #browser-verification, #what-ci-actually-runs; AGENTS.md (Repository Role).
-Code: src/angee/integrate/{impl.py,states.py,streams.py (def list),models.py (def list),session_process.py,live.py,session.py,session_runner.py,sync_runner.py,tasks.py,scheduler.py,queue.py,constants.py,autoconfig.py,pyproject.toml,credentials.py (def list),errors.py (def list),discovery.py (def list),locks.py (def list),testing/*};
+Code: src/angee/integrate/{impl.py,states.py,streams.py (def list),models.py (def list),session_process.py,live.py,session.py,session_runner.py,sync_runner.py,tasks.py,scheduler.py,queue.py,constants.py,autoconfig.py,pyproject.toml,credentials.py (def list),errors.py (def list),http.py (def list),discovery.py (def list),locks.py (def list),testing/*};
 src/angee/messaging/backends.py; src/angee/messaging/models.py; src/angee/messaging_integrate_imap/{pyproject.toml,autoconfig.py,README.md,backend.py,models.py};
 src/angee/platform_integrate_vcs/pyproject.toml; tests/{integrate_fixtures.py,conftest.py,settings.py,stream_adapters.py,test_integrate_streams.py,test_messaging_imap.py,test_integrate_live.py}.
 Doc gaps: no docs/ walkthrough for writing an adapter; the contract is in impl.py docstrings and the README; derived from IMAP and the test adapters.

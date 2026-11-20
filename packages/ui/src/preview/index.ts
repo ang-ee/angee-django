@@ -9,7 +9,10 @@ export { PreviewSkeleton, type PreviewSkeletonProps } from "./PreviewSkeleton";
 export {
   builtinPreviewProviders,
   ImagePreviewSurface,
+  PreviewFileContent,
   type ImagePreviewSurfaceProps,
+  type PreviewFileContentProps,
+  type PreviewFileReadContext,
 } from "./builtins";
 export {
   resolvePreviewProvider,

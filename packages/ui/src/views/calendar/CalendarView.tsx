@@ -23,9 +23,13 @@ export interface Occurrence {
   /** The master event's sqid — click/detail paths resolve the master through it. */
   event_sqid: string;
   title: string;
-  /** ISO-8601 UTC start. */
+  /**
+   * An ISO-8601 instant, shown in the viewer's zone; an all-day occurrence's is its first day
+   * (`yyyy-MM-dd`), which shows on that day in every browser zone. A source reads a stored
+   * all-day bound's day in the zone that owns its dates (`calendarDay(date, timeZone)`).
+   */
   start: string;
-  /** ISO-8601 UTC end. */
+  /** The exclusive end, in the same form as `start`: an all-day occurrence's is the day after its last. */
   end: string;
   all_day: boolean;
   /** `false` whenever the event carries a recurrence — drag/resize is then withheld. */
@@ -57,7 +61,9 @@ export interface CalendarViewProps {
   /**
    * Fires when an editable occurrence is rescheduled to new bounds — by drag or
    * by resize. It can never fire for a non-editable occurrence: the View
-   * withholds drag/resize for one. Return a promise to gate the change: the View
+   * withholds drag/resize for one. A drop keeps the occurrence's kind: the View
+   * withholds a drop that would turn an all-day occurrence timed or a timed one
+   * all day, which new bounds cannot carry. Return a promise to gate the change: the View
    * awaits it and reverts FullCalendar's optimistic move/resize if it rejects,
    * so a rejected server write never leaves the grid showing an unpersisted slot.
    */
@@ -69,8 +75,10 @@ export interface CalendarViewProps {
   /**
    * Fires when a time range is selected — the quick-create seam. The caller
    * opens the create dialog seeding start/end; the View owns no create form.
+   * `allDay` is FullCalendar's: whole days were selected (a month-view day, the
+   * all-day row), so `end` is the exclusive midnight after the last day.
    */
-  onSelectRange?: (start: Date, end: Date) => void;
+  onSelectRange?: (start: Date, end: Date, allDay: boolean) => void;
   /**
    * Fires when an occurrence is clicked. The caller composes the occurrence's
    * source-declared `to` (navigate when set, ignore when absent) or resolves the
@@ -86,7 +94,7 @@ export interface CalendarViewProps {
 const CalendarSurface = lazy(() => import("./calendar-surface"));
 
 /**
- * The month/week/day event calendar — a standalone `@angee/ui` primitive
+ * The month/week/day/list event calendar — a standalone `@angee/ui` primitive
  * (occurrences in, interaction callbacks out, the `GraphView`
  * shape) composed over FullCalendar. Recurrence is not its concern: it renders
  * server-expanded occurrences and wires drag/resize/select/click back to the

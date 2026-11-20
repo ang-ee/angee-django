@@ -143,6 +143,26 @@ const shell: ShellSettings = {
 };
 
 describe("selectApp", () => {
+  test("a theme lock travels with the theme it is declared beside", () => {
+    const locked = roots.map((root) => root.id === "accounting" ? { ...root, themeLocked: true } : root);
+    expect(selectApp({ search: "?app=accounting", shell, roots: locked })).toMatchObject({
+      theme: "books.paper", themeLocked: true,
+      sources: { theme: 'menu root "accounting"', themeLocked: 'menu root "accounting"' },
+    });
+    // A named app inheriting the root's theme inherits its lock.
+    expect(selectApp({ search: "?app=payables", shell, roots: locked })).toMatchObject({ theme: "books.paper", themeLocked: true });
+    // A named app that declares its own theme decides its own lock.
+    expect(selectApp({ search: "?app=payables", roots: locked, shell: {
+      apps: { payables: { rail: ["accounting"], theme: "suite.light" } },
+    } })).not.toHaveProperty("themeLocked");
+    expect(selectApp({ search: "?app=payables", roots, shell: {
+      apps: { payables: { rail: ["accounting"], theme: "suite.light", themeLocked: true } },
+    } })).toMatchObject({ theme: "suite.light", themeLocked: true, sources: { themeLocked: "ANGEE_UI.shell.apps.payables" } });
+    // The shell's own theme never locks.
+    expect(selectApp({ roots: locked, shell })).not.toHaveProperty("themeLocked");
+    expect(selectApp({ search: "?app=library", roots: locked, shell })).not.toHaveProperty("themeLocked");
+  });
+
   test("only the selected app supplies a rail default, and named apps may override their first root", () => {
     const configured = roots.map((root) => root.id === "accounting" ? { ...root, railExpanded: false } : root);
     expect(selectApp({ search: "?app=accounting", shell, roots: configured })).toMatchObject({
@@ -179,6 +199,7 @@ describe("selectApp", () => {
       app: "pm",
       rail: ["pm"],
       brand: { name: "Work", mark: "pm" },
+      brandFallback: true,
       theme: "suite.light",
       home: "projects.my-work",
       sources: {
@@ -203,6 +224,9 @@ describe("selectApp", () => {
     });
     const library = selectApp({ search: "?app=library", shell, roots });
     expect(library).toMatchObject({ app: "library", rail: ["files", "pm"], brand: { name: "Files", mark: "files" }, theme: "suite.light" });
+    // With no brand declared, the first root's label and icon only stand in, which the chooser never shows as a brand.
+    expect(library.brandFallback).toBe(true);
+    expect(selectApp({ hostname: "payables.example.test", shell, roots })).not.toHaveProperty("brandFallback");
     // Its first rail root declares no home, so `/` lands on that root.
     expect(library).not.toHaveProperty("home");
   });
@@ -231,6 +255,38 @@ describe("selectApp", () => {
     expect(selectApp({ search: "?app=constructor", hostname: "constructor", shell, roots })).toMatchObject({ app: null, rail: null });
   });
 
+  test("a named app without a rail is every root, which ?app= reaches on a host that selects another app", () => {
+    const desk: ShellSettings = {
+      ...shell,
+      apps: { ...shell.apps, console: {}, staff: { brand: { name: "Staff", mark: "staff" }, theme: "staff.dark", themeLocked: true } },
+    };
+    expect(selectApp({ search: "?app=console", hostname: "payables.example.test", shell: desk, roots })).toEqual({
+      app: "console",
+      rail: null,
+      brand: { name: "Suite", mark: "suite" },
+      theme: "suite.light",
+      sources: { app: "?app=console", brand: "ANGEE_UI.shell.brand", theme: "ANGEE_UI.shell.theme" },
+      diagnostics: [],
+    });
+    expect(selectApp({ search: "?app=staff", shell: desk, roots })).toMatchObject({
+      app: "staff", rail: null, brand: { name: "Staff", mark: "staff" }, theme: "staff.dark", themeLocked: true,
+      sources: { brand: "ANGEE_UI.shell.apps.staff", theme: "ANGEE_UI.shell.apps.staff", themeLocked: "ANGEE_UI.shell.apps.staff" },
+    });
+    // Without a shell brand or theme it shows none, as nothing selected does.
+    expect(selectApp({ search: "?app=console", shell: { apps: { console: {} } }, roots }))
+      .toEqual({ app: "console", rail: null, brand: null, sources: { app: "?app=console" }, diagnostics: [] });
+  });
+
+  test("ANGEE_UI.shell.app selects when neither ?app= nor the hostname does", () => {
+    const opened: ShellSettings = { ...shell, apps: { ...shell.apps, console: {} }, app: "payables" };
+    expect(selectApp({ hostname: "elsewhere.example.test", shell: opened, roots }))
+      .toMatchObject({ app: "payables", rail: ["accounting", "files"], sources: { app: "ANGEE_UI.shell.app" } });
+    expect(selectApp({ hostname: "work.example.test", shell: opened, roots }).app).toBe("pm");
+    expect(selectApp({ search: "?app=console", shell: opened, roots })).toMatchObject({ app: "console", rail: null });
+    const unknown = "?app=nowhere names no menu root and no ANGEE_UI.shell.apps entry, so it selects nothing.";
+    expect(selectApp({ search: "?app=nowhere", shell: opened, roots })).toMatchObject({ app: "payables", diagnostics: [unknown] });
+  });
+
   test("a rail naming no top-level root, or an app named like a root, fails", () => {
     expect(() => selectApp({ search: "?app=broken", shell: { apps: { broken: { rail: ["pm", "projects"] } } }, roots }))
       .toThrow('ANGEE_UI.shell.apps.broken rail names "projects", which is not a top-level menu root.');
@@ -240,6 +296,26 @@ describe("selectApp", () => {
 });
 
 describe("assertShellSettings", () => {
+  test("accepts deployment site facts while keeping brand strictly name and mark", () => {
+    expect(() => assertShellSettings({ ...shell, site: {
+      description: "Suite tools", icon: "suite.icon", touchIcon: "suite.touch", image: "suite.preview",
+    } })).not.toThrow();
+    expect(() => assertShellSettings({ site: { title: "Standalone" } })).not.toThrow();
+    expect(() => assertShellSettings({ site: { description: "No title" } })).toThrow("needs a title or shell.brand");
+    expect(() => assertShellSettings({ ...shell, site: { themeColor: "red" } })).toThrow('unknown key "themeColor"');
+    expect(() => assertShellSettings({ brand: { name: "Suite", mark: "suite", title: "Site" } }))
+      .toThrow("brand must be { name, mark }");
+    for (const key of ["title", "description", "icon", "touchIcon", "image"]) {
+      for (const value of ["", "  ", null, false, 5]) {
+        expect(() => assertShellSettings({ ...shell, site: { [key]: value } }))
+          .toThrow(`ANGEE_UI.shell.site.${key} must be a non-empty string`);
+      }
+    }
+    for (const site of [null, [], "Site"]) {
+      expect(() => assertShellSettings({ ...shell, site })).toThrow("site must be a mapping");
+    }
+  });
+
   test("accepts ANGEE_UI.shell and refuses what would select the wrong app silently", () => {
     expect(() => assertShellSettings(shell)).not.toThrow();
     expect(() => assertShellSettings({})).not.toThrow();
@@ -250,6 +326,13 @@ describe("assertShellSettings", () => {
     expect(() => assertShellSettings({ theme: " " })).toThrow("ANGEE_UI.shell.theme must be a non-empty string.");
     expect(() => assertShellSettings({ apps: { ap: { rail: "accounting" } } }))
       .toThrow("ANGEE_UI.shell.apps.ap.rail must be a non-empty list of menu root ids.");
+    expect(() => assertShellSettings({ apps: { ap: { rail: [] } } }))
+      .toThrow("ANGEE_UI.shell.apps.ap.rail must be a non-empty list of menu root ids.");
+    expect(() => assertShellSettings({ apps: { console: {} }, app: "console" })).not.toThrow();
+    expect(() => assertShellSettings({ apps: { console: { home: "accounting.bills" } } })).toThrow(
+      "ANGEE_UI.shell.apps.console.home needs a rail; an app without one shows every root and lands where nothing selected does.",
+    );
+    expect(() => assertShellSettings({ app: "" })).toThrow("ANGEE_UI.shell.app must be a non-empty string.");
     expect(() => assertShellSettings({ apps: { ap: { rail: ["accounting", "accounting"] } } }))
       .toThrow("ANGEE_UI.shell.apps.ap.rail lists a root twice.");
     expect(() => assertShellSettings({ apps: { ap: { rail: ["accounting"], hosts: {} } } }))
@@ -257,6 +340,11 @@ describe("assertShellSettings", () => {
     expect(() => assertShellSettings({ apps: { ap: { rail: ["accounting"], home: "" } } }))
       .toThrow("ANGEE_UI.shell.apps.ap.home must be a non-empty string.");
     expect(() => assertShellSettings({ apps: { ap: { rail: ["accounting"], railExpanded: false } } })).not.toThrow();
+    expect(() => assertShellSettings({ apps: { ap: { rail: ["accounting"], theme: "books.paper", themeLocked: true } } })).not.toThrow();
+    expect(() => assertShellSettings({ apps: { ap: { rail: ["accounting"], themeLocked: "yes" } } }))
+      .toThrow("ANGEE_UI.shell.apps.ap.themeLocked must be true or false.");
+    expect(() => assertShellSettings({ theme: "suite.light", themeLocked: true }))
+      .toThrow('ANGEE_UI.shell has unknown key "themeLocked".');
     expect(() => assertShellSettings({ apps: { ap: { rail: ["accounting"], railExpanded: "false" } } }))
       .toThrow("ANGEE_UI.shell.apps.ap.railExpanded must be true or false.");
     expect(() => assertShellSettings({ hosts: { "ap.example.test": ["accounting"] } }))

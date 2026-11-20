@@ -3,11 +3,12 @@ import { stableSerialize } from "@angee/refine";
 import { CALENDAR_ANCHOR_FORMAT, defaultResourceViewPageSize, CALENDAR_VIEW_MODES, isResourceViewKind } from "./capabilities";
 import type { CalendarViewMode, ResourceViewKind } from "./capabilities";
 import { Filter, isResourceViewFilter } from "./filter";
-import { QueryParseError, GroupSpecsSchema } from "@angee/metadata";
+import { QueryParseError, groupAxisId, groupSpecsFrom } from "@angee/metadata";
 import * as v from "valibot";
 import type { ResourceViewFilter, ResourceViewGroup, ResourceViewInitialState, ResourceViewSort } from "./filter";
 import { createResourceViewState, type ResourceViewState } from "./state";
 import { normalisePageSize } from "../page-size";
+import { isStorageDate } from "../../../widgets/date-format";
 const RESOURCE_VIEW_SEARCH_SHAPE = {
   preset: undefined as string | undefined,
   columns: undefined as string | undefined,
@@ -20,6 +21,7 @@ const RESOURCE_VIEW_SEARCH_SHAPE = {
   view: undefined as string | undefined,
   mode: undefined as string | undefined,
   anchor: undefined as string | undefined,
+  hiddenSources: undefined as string | undefined,
 };
 
 export type ResourceViewSearchKey = keyof typeof RESOURCE_VIEW_SEARCH_SHAPE;
@@ -66,6 +68,8 @@ export function resourceViewStateToSearch(
   if (state.view === "calendar") {
     if (state.mode !== base.mode) search.mode = state.mode;
     if (state.anchor !== base.anchor) search.anchor = state.anchor;
+    const hidden = state.hiddenSources.join(",");
+    if (hidden !== base.hiddenSources.join(",")) search.hiddenSources = hidden;
   }
   return search;
 }
@@ -109,6 +113,8 @@ export function resourceViewSearchToState(
       groupStack,
       mode: parseSearchMode(search.mode) ?? base.mode,
       anchor: parseSearchAnchor(search.anchor) ?? base.anchor,
+      hiddenSources: isClearedSearchValue(search.hiddenSources) ? []
+        : parseSearchSourceKeys(search.hiddenSources) ?? base.hiddenSources,
     };
   } catch (error) {
     return { ...base, queryError: error instanceof Error ? error : new QueryParseError("query", "invalid query state") };
@@ -116,10 +122,7 @@ export function resourceViewSearchToState(
 }
 
 export function normaliseGroupStack(groups: unknown): readonly ResourceViewGroup[] {
-  const parsed = v.parse(GroupSpecsSchema, groups);
-  const keys = parsed.map(serializeResourceViewGroup);
-  if (new Set(keys).size !== keys.length) throw new QueryParseError("groups", "duplicate group axis");
-  return parsed;
+  return groupSpecsFrom(groups);
 }
 
 /**
@@ -198,12 +201,31 @@ export function parseSearchMode(value: unknown): CalendarViewMode | null {
 }
 
 export function parseSearchAnchor(value: unknown): string | null {
-  return typeof value === "string" && CALENDAR_ANCHOR_PATTERN.test(value)
-    ? value
-    : null;
+  return isStorageDate(value) ? value : null;
 }
 
-const CALENDAR_ANCHOR_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+/** A calendar source key: letters, digits, `_`, `-` and `.`, so a comma list carries them. */
+const CALENDAR_SOURCE_KEY_PATTERN = /^[A-Za-z0-9_.-]+$/;
+
+/**
+ * Whether a string is a valid calendar source key.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
+export function isCalendarSourceKey(value: unknown): value is string {
+  return typeof value === "string" && CALENDAR_SOURCE_KEY_PATTERN.test(value);
+}
+
+/** Valid source keys, de-duplicated and sorted, so equal sets serialize equally. */
+export function normaliseSourceKeys(keys: readonly unknown[]): readonly string[] {
+  return [...new Set(keys.filter(isCalendarSourceKey))].sort();
+}
+
+/** `?hiddenSources=` is a comma list of source keys; an unreadable value keeps the default. */
+export function parseSearchSourceKeys(value: unknown): readonly string[] | null {
+  if (typeof value !== "string" || value === "") return null;
+  return normaliseSourceKeys(value.split(","));
+}
 
 /** Today as a local `yyyy-MM-dd` anchor (the calendar's default reference day).
  * @kind null
@@ -220,17 +242,22 @@ function parseResourceViewSort(value: string): ResourceViewSort | null {
   return { field, dir };
 }
 
+/** A level's URL spelling: `field`, `field:granularity`, either ending in `:repeated` for `GroupSpec.repeated`. */
+const REPEATED_GROUP = "repeated";
+
 function parseResourceViewGroup(value: string): ResourceViewGroup | null {
   if (!value) return null;
-  const [field, granularity, extra] = value.split(":");
+  const segments = value.split(":");
+  const repeated = segments.length > 1 && segments.at(-1) === REPEATED_GROUP;
+  const [field, granularity, extra] = repeated ? segments.slice(0, -1) : segments;
   if (!field || !/^[_A-Za-z][_0-9A-Za-z]*(?:\.[_A-Za-z][_0-9A-Za-z]*)*$/.test(field) || extra !== undefined || granularity === "") {
-    throw new QueryParseError("group", "expected field or field:granularity");
+    throw new QueryParseError("group", "expected field or field:granularity, optionally followed by :repeated");
   }
-  return { field, ...(granularity ? { granularity } : {}) };
+  return { field, ...(granularity ? { granularity } : {}), ...(repeated ? { repeated: true } : {}) };
 }
 
 export function serializeResourceViewGroup(group: ResourceViewGroup): string {
-  return group.granularity ? `${group.field}:${group.granularity}` : group.field;
+  return [group.field, ...(group.granularity ? [group.granularity] : []), ...(group.repeated ? [REPEATED_GROUP] : [])].join(":");
 }
 
 function parseResourceViewGroupStack(value: string): readonly ResourceViewGroup[] | null {
@@ -254,8 +281,7 @@ export function resourceViewGroupsEqual(
   left: ResourceViewGroup,
   right: ResourceViewGroup,
 ): boolean {
-  return left.field === right.field
-    && left.granularity === right.granularity;
+  return groupAxisId(left) === groupAxisId(right);
 }
 
 function isCalendarViewMode(value: string): value is CalendarViewMode {

@@ -7,25 +7,28 @@ import {
 } from "@refinedev/core";
 import { extractActionOutcome, refineFieldsFromPaths, stableSerialize } from "@angee/refine";
 import {
-  holdsPermission,
+  allowsRecordPermission,
   refineResourceName,
   rowPublicId,
+  resourceLifecycle,
   trashFlagField,
   type DataResourceMetadata,
   type Row,
 } from "@angee/metadata";
 
 import { usePrompt } from "../../feedback";
+import { Glyph } from "../../chrome/Glyph";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
 import { useUiT } from "../../i18n";
 import { Button } from "../../ui/button";
 import { Collapsible } from "../../ui/collapsible";
 import { Pager } from "../../ui/pager";
+import { SelectionBar } from "../../ui/selection-bar";
 import type { ActionDescriptor } from "../page/Action";
 import { useActionResultRun } from "./action-result-run";
 import { useAuthoredResourceMutation } from "./authored-resource-mutation";
 import { RestoreRecord, TrashRecord } from "./documents";
-import { defineRowAction, type RowActionDeclaration } from "./RowActions";
+import { BULK_ACTION_FANOUT_LIMIT, type BulkSelectionProps } from "./bulk-action";
 
 /** The record permission that offers trash and restore — the shared verbs' authority.
  * @kind null
@@ -50,17 +53,18 @@ export type TrashPrompt = (name?: string) => Promise<{ reason: string } | null>;
 
 /**
  * The one trash confirmation: a danger dialog with an optional reason and a
- * cancel label that names the record when the caller knows its name. Domain
+ * cancel label that names the record when the caller knows its name, or counts
+ * the records when the caller supplies a bulk count. Domain
  * verbs with their own transport (record chatter) compose it before their
  * mutation; resource records use {@link useTrashRecord}.
  * @owner ModalsHost
  */
-export function useTrashPrompt(): TrashPrompt {
+export function useTrashPrompt(count?: number): TrashPrompt {
   const prompt = usePrompt();
   const t = useUiT();
   return React.useCallback<TrashPrompt>(async (name) => {
     const values = await prompt({
-      title: name ? t("trash.titleNamed", { name }) : t("trash.title"),
+      title: count !== undefined ? t("trash.bulkTitle", { count }) : name ? t("trash.titleNamed", { name }) : t("trash.title"),
       body: t("trash.body"),
       fields: [{
         name: "reason",
@@ -70,11 +74,11 @@ export function useTrashPrompt(): TrashPrompt {
         maxLength: TRASH_REASON_MAX_LENGTH,
       }],
       confirm: t("trash.confirm"),
-      cancel: name ? t("trash.cancelNamed", { name }) : t("trash.cancel"),
+      cancel: count !== undefined ? t("trash.bulkCancel", { count }) : name ? t("trash.cancelNamed", { name }) : t("trash.cancel"),
       danger: true,
     });
     return values ? { reason: (values.reason ?? "").trim() } : null;
-  }, [prompt, t]);
+  }, [count, prompt, t]);
 }
 
 export interface UseTrashRecordResult {
@@ -87,6 +91,10 @@ export interface UseTrashRecordResult {
   restore: (id: string) => Promise<boolean>;
 }
 
+function trashTargetType(resource: DataResourceMetadata | null | undefined): string | null {
+  return resourceLifecycle(resource).trashFlag ? resource?.resourceType ?? null : null;
+}
+
 /**
  * Run the shared `trash_record` / `restore_record` verbs for one trashable
  * resource, settling their outcome through the shared toast owner and
@@ -96,20 +104,20 @@ export interface UseTrashRecordResult {
 export function useTrashRecord(resource: DataResourceMetadata | null | undefined): UseTrashRecordResult {
   const askTrash = useTrashPrompt();
   const settle = useActionResultRun();
-  const targetType = resource && trashFlagField(resource) ? resource.resourceType ?? null : null;
-  const options = resource
+  const targetType = trashTargetType(resource);
+  const options = targetType && resource
     ? { dataProviderName: resource.schemaName, invalidateModels: [resource.modelLabel] }
-    : {};
-  const [trashRecord, trashState] = useAuthoredResourceMutation(TrashRecord, {
+    : null;
+  const [trashRecord, trashState] = useAuthoredResourceMutation(TrashRecord, options ? {
     ...options,
     errorNotification: false,
     shouldInvalidate: (data) => data?.trash_record.ok === true,
-  });
-  const [restoreRecord, restoreState] = useAuthoredResourceMutation(RestoreRecord, {
+  } : {});
+  const [restoreRecord, restoreState] = useAuthoredResourceMutation(RestoreRecord, options ? {
     ...options,
     errorNotification: false,
     shouldInvalidate: (data) => data?.restore_record.ok === true,
-  });
+  } : {});
   const trash = React.useCallback(async (id: string, name?: string): Promise<boolean> => {
     if (!targetType) return false;
     const answer = await askTrash(name);
@@ -136,6 +144,69 @@ export function useTrashRecord(resource: DataResourceMetadata | null | undefined
   };
 }
 
+/** Generic selection verbs over the same trashable resource contract as the record.
+ * @owner SelectionBar
+ */
+export function BulkTrashActions(props: BulkSelectionProps): React.ReactElement | null {
+  const targetType = trashTargetType(props.modelMetadata.resource);
+  const flag = resourceLifecycle(props.modelMetadata.resource).trashFlag;
+  return targetType && flag ? <TrashSelectionActions {...props} targetType={targetType} flag={flag} /> : null;
+}
+
+function TrashSelectionActions({ modelMetadata, selectedRows, unprocessedCount, bulk, targetType, flag }: BulkSelectionProps & {
+  targetType: string;
+  flag: string;
+}): React.ReactElement {
+  const t = useUiT();
+  const resource = modelMetadata.resource;
+  // List rows do not select `permissions`: the shared verb checks `delete` per row
+  // and a refused row is reported in the outcome.
+  const selections = [false, true].map((restore) => ({
+    restore,
+    ids: selectedRows.flatMap((row) => {
+      const id = rowPublicId(row);
+      return id && row[flag] === restore ? [id] : [];
+    }),
+  }));
+  const askTrash = useTrashPrompt(Math.min(selections[0]!.ids.length, BULK_ACTION_FANOUT_LIMIT));
+  // No per-row cache invalidation or toast: the bulk owner settles the whole run.
+  const options = { dataProviderName: resource.schemaName, errorNotification: false as const };
+  const [trashRecord] = useAuthoredResourceMutation(TrashRecord, options);
+  const [restoreRecord] = useAuthoredResourceMutation(RestoreRecord, options);
+  return <>{selections.map(({ restore, ids }) => {
+    if (!ids.length) return null;
+    return <SelectionBar.Action key={String(restore)} surface="brand" pending={bulk.pending} disabled={bulk.blocked}
+      onClick={() => {
+        let reason = "";
+        void bulk.run({
+          ids, unprocessedCount,
+          confirm: restore ? undefined : async () => {
+            const answer = await askTrash();
+            if (!answer) return false;
+            reason = answer.reason;
+            return true;
+          },
+          perform: async (id) => {
+            const target = { target_type: targetType, target_id: id };
+            const outcome = extractActionOutcome(
+              restore ? await restoreRecord(target) : await trashRecord({ ...target, reason }),
+              restore ? "restore_record" : "trash_record",
+            );
+            if (!outcome) throw new Error(t("action.noResult"));
+            if (!outcome.ok) {
+              const firstReason = Object.values(outcome.validationErrors ?? {}).flat()[0];
+              return { status: "refused", reason: firstReason || outcome.message || t("action.noResult") };
+            }
+          },
+          done: (count) => t(restore ? "trash.bulkRestored" : "trash.bulkDone", { count }),
+          failed: (count) => t(restore ? "trash.bulkRestoreFailed" : "trash.bulkFailed", { count }),
+        });
+      }}>
+      <Glyph name={restore ? "undo-2" : "trash"} />{t(restore ? "trash.restore" : "trash.action")}
+    </SelectionBar.Action>;
+  })}</>;
+}
+
 export interface TrashActionOptions<TRow extends Row = Row> {
   /** The record's display name in the confirmation copy. */
   name?: (record: TRow) => string;
@@ -143,8 +214,8 @@ export interface TrashActionOptions<TRow extends Row = Row> {
 
 /**
  * Record-form verbs for a trashable resource: Trash on an untrashed record,
- * Restore on a trashed one, each offered only when the record projects the
- * `delete` permission. The form must read the trash flag (a hidden field).
+ * Restore on a trashed one, requiring `delete` when the model declares
+ * permissions. The form supplies these menu verbs and selects the trash flag.
  * @owner RecordActionBar
  */
 export function useTrashActions(
@@ -153,7 +224,7 @@ export function useTrashActions(
 ): readonly ActionDescriptor[] {
   const t = useUiT();
   const { available, trash, restore } = useTrashRecord(resource);
-  const flag = trashFlagField(resource);
+  const flag = resourceLifecycle(resource).trashFlag;
   const { name } = options;
   return React.useMemo<readonly ActionDescriptor[]>(() => {
     if (!available || flag === null) return [];
@@ -162,8 +233,8 @@ export function useTrashActions(
         id: "trash",
         label: t("trash.action"),
         icon: "trash",
-        permission: TRASH_PERMISSION,
-        visibleWhen: (record) => record[flag] !== true,
+        placement: "menu",
+        visibleWhen: (record) => allowsRecordPermission(record, TRASH_PERMISSION, resource) && record[flag] === false,
         run: async (context) => {
           const id = rowPublicId(context.record);
           if (id && context.record && await trash(id, name?.(context.record))) context.refresh();
@@ -173,61 +244,15 @@ export function useTrashActions(
         id: "restore",
         label: t("trash.restore"),
         icon: "undo-2",
-        permission: TRASH_PERMISSION,
-        visibleWhen: (record) => record[flag] === true,
+        placement: "menu",
+        visibleWhen: (record) => allowsRecordPermission(record, TRASH_PERMISSION, resource) && record[flag] === true,
         run: async (context) => {
           const id = rowPublicId(context.record);
           if (id && await restore(id)) context.refresh();
         },
       },
     ];
-  }, [available, flag, name, restore, t, trash]);
-}
-
-/** List-row verbs matching {@link useTrashActions}, for `ListView` `rowActions`.
- * @owner Action
- */
-export function useTrashRowActions<TRow extends Row>(
-  resource: DataResourceMetadata | null | undefined,
-  options: TrashActionOptions<TRow> = {},
-): readonly RowActionDeclaration<TRow>[] {
-  const t = useUiT();
-  const { available, trash, restore } = useTrashRecord(resource);
-  const flag = trashFlagField(resource);
-  const { name } = options;
-  return React.useMemo<readonly RowActionDeclaration<TRow>[]>(() => {
-    if (!available || flag === null) return [];
-    const manages = (row: TRow) => holdsPermission(row, TRASH_PERMISSION);
-    return [
-      defineRowAction<TRow>({
-        kind: "page",
-        id: "trash",
-        label: t("trash.action"),
-        icon: "trash",
-        variant: "ghost",
-        placement: "menu",
-        pendingPolicy: "disable-actions",
-        visible: (row) => manages(row) && row[flag] !== true,
-        onSelect: async (row) => {
-          const id = rowPublicId(row);
-          if (id) await trash(id, name?.(row));
-        },
-      }),
-      defineRowAction<TRow>({
-        kind: "page",
-        id: "restore",
-        label: t("trash.restore"),
-        icon: "undo-2",
-        variant: "ghost",
-        pendingPolicy: "disable-actions",
-        visible: (row) => manages(row) && row[flag] === true,
-        onSelect: async (row) => {
-          const id = rowPublicId(row);
-          if (id) await restore(id);
-        },
-      }),
-    ];
-  }, [available, flag, name, restore, t, trash]);
+  }, [available, resource, flag, name, restore, t, trash]);
 }
 
 export interface RemovedDisclosureProps {
@@ -306,6 +331,8 @@ export function RemovedItem({
 }
 
 export interface RemovedListProps<TRow extends Row = Row> {
+  /** The model's permission contract; domain reads may supply their own canRestore. */
+  resource?: DataResourceMetadata | null;
   pagination?: { page: number; pageSize: number; onPageChange: (page: number) => void };
   /** The removed rows, from the shared trash read or a domain read (a queue's removed tasks). */
   rows: readonly TRow[];
@@ -317,7 +344,7 @@ export interface RemovedListProps<TRow extends Row = Row> {
   label: (row: TRow) => string;
   /** Where a row keeps who removed it and why; default: the shared trash stamps. */
   stamps?: (row: TRow) => { trashedByLabel?: string | null; trashReason?: string | null };
-  /** Whether a row offers Restore; default: the reader holds the trash permission on it. */
+  /** Override the resource's permission contract for a domain-owned restore verb. */
   canRestore?: (row: TRow) => boolean;
   /** The restore verb: the shared `restore_record`, or a domain's own. */
   restore?: (row: TRow) => void | Promise<unknown>;
@@ -334,6 +361,7 @@ export interface RemovedListProps<TRow extends Row = Row> {
  * @kind surface
  */
 export function RemovedList<TRow extends Row = Row>({
+  resource,
   pagination,
   rows,
   total,
@@ -355,7 +383,7 @@ export function RemovedList<TRow extends Row = Row>({
           trashedByLabel: typeof row.trashed_by_label === "string" ? row.trashed_by_label : null,
           trashReason: typeof row.trash_reason === "string" ? row.trash_reason : null,
         };
-        const restorable = restore && (canRestore ? canRestore(row) : Boolean(id) && holdsPermission(row, TRASH_PERMISSION));
+        const restorable = restore && (canRestore ? canRestore(row) : Boolean(id) && Boolean(resource) && allowsRecordPermission(row, TRASH_PERMISSION, resource));
         return (
           <RemovedItem
             key={id ?? label(row)}
@@ -387,7 +415,7 @@ type RemovedRecordRow = BaseRecord & Row;
 /**
  * "Removed (n)" for any trashable resource: the trashed rows the reader may
  * still read (Zed withholds them from everyone else), each with Restore when
- * the row projects `delete`. Renders nothing for an untrashable resource.
+ * the model's permission contract allows `delete`. Renders nothing for an untrashable resource.
  * @kind surface
  */
 export function RemovedRecords<TRow extends Row = Row>({
@@ -399,13 +427,14 @@ export function RemovedRecords<TRow extends Row = Row>({
   className,
 }: RemovedRecordsProps<TRow>): React.ReactElement | null {
   const flag = trashFlagField(resource);
+  const declaresPermissions = !allowsRecordPermission(null, TRASH_PERMISSION, resource);
   const { restore, busy } = useTrashRecord(resource);
   const scope = stableSerialize([resource?.modelLabel, filters, pageSize]);
   const [pagination, setPagination] = React.useState({ scope, page: 1 });
   const page = pagination.scope === scope ? pagination.page : 1;
   const selection = React.useMemo(
-    () => refineFieldsFromPaths(["id", "permissions", ...TRASH_STAMP_FIELDS, ...fields]),
-    [fields],
+    () => refineFieldsFromPaths(["id", ...(declaresPermissions ? ["permissions"] : []), ...TRASH_STAMP_FIELDS, ...fields]),
+    [declaresPermissions, fields],
   );
   const list = useList<RemovedRecordRow, HttpError>({
     resource: refineResourceName(resource ?? null),
@@ -424,6 +453,7 @@ export function RemovedRecords<TRow extends Row = Row>({
   if (!flag) return null;
   return (
     <RemovedList
+      resource={resource}
       pagination={{ page, pageSize, onPageChange: (next) => setPagination({ scope, page: next }) }}
       rows={rows}
       total={list.result.total ?? rows.length}

@@ -5,13 +5,13 @@ import type { ResourceViewInitialState } from "./filter";
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
-export const RESOURCE_VIEW_KINDS = ["list", "board", "calendar", "gantt", "dashboard"] as const;
+export const RESOURCE_VIEW_KINDS = ["list", "board", "gallery", "calendar", "gantt", "dashboard"] as const;
 
-/** The calendar kind's window modes; `month` is the default period.
+/** The calendar kind's window modes; `month` is the default period and `list` lists a month's occurrences by day.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
-export const CALENDAR_VIEW_MODES = ["month", "week", "day"] as const;
+export const CALENDAR_VIEW_MODES = ["month", "week", "day", "list"] as const;
 export type CalendarViewMode = (typeof CALENDAR_VIEW_MODES)[number];
 /**
  * @kind null
@@ -66,7 +66,7 @@ export interface ResourceViewKindCapabilities {
   columns: boolean;
   /** The filter/search box applies. */
   filter: boolean;
-  /** The kind is offered only where the page declares its data source. */
+  /** The kind is offered only where the page declares what it needs (its data source, or a card to draw). */
   requiresSources?: boolean;
 }
 
@@ -82,6 +82,10 @@ export const RESOURCE_VIEW_KIND_CAPABILITIES: Record<
   // Board grouping may be backed by a declared laneSource; the kind still uses
   // the group control, but lanes can come from the relation owner instead of rows.
   board: { grouping: true, pagination: true, columns: false, filter: true },
+  // The gallery pages the collection's records as cards; it never groups. It is
+  // offered where the list has a card to draw (a page card, declared gallery fields
+  // or the model's registered card) or a page or view opens on it.
+  gallery: { grouping: false, pagination: true, columns: false, filter: true, requiresSources: true },
   gantt: { grouping: true, pagination: true, columns: false, filter: true, requiresSources: true },
   // A windowed occurrence fetch takes only window args in v1: no pagination, no
   // group-by, no columns chooser, and no filter/search (a filterable calendar is
@@ -136,10 +140,11 @@ export function resourceViewKindCapabilities(
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function availableResourceViewKinds(
-  declared: { calendar?: boolean; gantt?: boolean; dashboard?: boolean } = {},
+  declared: { calendar?: boolean; gantt?: boolean; dashboard?: boolean; gallery?: boolean } = {},
 ): readonly BuiltInResourceViewKind[] {
   return RESOURCE_VIEW_KINDS.filter((kind) => {
     if (!RESOURCE_VIEW_KIND_CAPABILITIES[kind].requiresSources) return true;
+    if (kind === "gallery") return declared.gallery ?? false;
     if (kind === "calendar") return declared.calendar ?? false;
     if (kind === "gantt") return declared.gantt ?? false;
     if (kind === "dashboard") return declared.dashboard ?? false;

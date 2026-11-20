@@ -325,7 +325,7 @@ class CaptureCampaign(TransactionTestCase):
         for key, confirmed in (("suggested", False), ("confirmed", True)):
             with system_context(reason="tests.t3.email"):
                 if confirmed:
-                    party.with_actor(self.actor).confirm(aspect="handle", handle=handle, values={})
+                    party.with_actor(self.actor).confirm_statement(aspect="handle", handle=handle, values={})
                 parsed = ParsedMessage(
                     external_id=key,
                     platform="email",

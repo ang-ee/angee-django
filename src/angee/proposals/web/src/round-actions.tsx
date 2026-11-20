@@ -82,14 +82,14 @@ export function useRoundCeremonyActions(
   const closeSubmit = React.useCallback<
     NonNullable<ActionDescriptor["submit"]>
   >(
-    async (values, context) => {
+    async (values, context, callOptions) => {
       const id = actionRecordId(context.record, t("round.action.failed"));
       return extractActionOutcome(await closeRound({
         round: id, revision: recordRevision(context.record),
         outcome: closeOutcome(closeOutcomeOptions, values.outcome, t("round.action.invalidOutcome")) as CloseOutcome,
         accepted: idList(values.accepted),
         partial: idList(values.partial),
-      }), "close_proposal_round");
+      }, callOptions), "close_proposal_round");
     },
     [closeOutcomeOptions, closeRound, t],
   );
@@ -97,7 +97,7 @@ export function useRoundCeremonyActions(
   const transferSubmit = React.useCallback<
     NonNullable<ActionDescriptor["submit"]>
   >(
-    async (values, context) => {
+    async (values, context, callOptions) => {
       const round = actionRecordId(context.record, t("round.action.failed"));
       return extractActionOutcome(await transferRound({
         round, revision: recordRevision(context.record),
@@ -105,7 +105,7 @@ export function useRoundCeremonyActions(
           values.facilitator,
           t("round.action.invalidFacilitator"),
         ),
-      }), "transfer_proposal_round_facilitation");
+      }, callOptions), "transfer_proposal_round_facilitation");
     },
     [t, transferRound],
   );
@@ -118,19 +118,19 @@ export function useRoundCeremonyActions(
           { name: "responder", label: t("common.responder"), argKind: "relation", resource: USER_MODEL },
           { name: "track", label: t("round.action.track"), widget: "switch", defaultValue: false, optional: true },
         ],
-        submit: async (values, context) => extractActionOutcome(await admit({
+        submit: async (values, context, callOptions) => extractActionOutcome(await admit({
           round: actionRecordId(context.record, t("round.action.failed")),
           responder: requiredId(values.responder, t("round.action.responder")), track: values.track === true,
-        }), "admit_proposal_round_responder"),
+        }, callOptions), "admit_proposal_round_responder"),
         visibleWhen: (record) => record.can_admit === true,
       },
       remove: {
         id: "remove-responder", label: t("round.action.remove"), danger: true,
         args: [{ name: "responder", label: t("common.responder"), argKind: "relation", resource: USER_MODEL }],
-        submit: async (values, context) => extractActionOutcome(await remove({
+        submit: async (values, context, callOptions) => extractActionOutcome(await remove({
           round: actionRecordId(context.record, t("round.action.failed")), revision: recordRevision(context.record),
           responder: requiredId(values.responder, t("round.action.responder")),
-        }), "remove_proposal_round_responder"),
+        }, callOptions), "remove_proposal_round_responder"),
         visibleWhen: (record) => holdsPermission(record, "manage"),
       },
       widen: {
@@ -138,10 +138,10 @@ export function useRoundCeremonyActions(
         args: [{ name: "policy", label: t("round.visibility.opening"), widget: "select", options: [
           "ANSWERS", "ANSWERS_AND_TRACKS", "DRAFTS_AND_TRACKS",
         ].map((value) => ({ value, label: t(openingPolicyLabelKey(value)) })) }],
-        submit: async (values, context) => extractActionOutcome(await widen({
+        submit: async (values, context, callOptions) => extractActionOutcome(await widen({
           round: actionRecordId(context.record, t("round.action.failed")), revision: recordRevision(context.record),
           policy: openingPolicyValue(values.policy, t("round.action.invalidPolicy")),
-        }), "widen_proposal_round_opening_policy"),
+        }, callOptions), "widen_proposal_round_opening_policy"),
         visibleWhen: (record) => holdsPermission(record, "write") && isOpenedRound(record),
       },
       open: {
@@ -159,7 +159,7 @@ export function useRoundCeremonyActions(
         id: "close-round",
         label: t("round.action.close"),
         icon: "proposals-award",
-        danger: true,
+        primary: true,
         args: [
           {
             name: "outcome",

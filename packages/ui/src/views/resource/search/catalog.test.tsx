@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import type { ReactNode } from "react";
-import { cleanup, render, renderHook, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import { ResourceQuery, schemaFieldMetadataFromDataResources, schemaFieldMetadataWithVocabulary } from "@angee/metadata";
@@ -9,8 +10,10 @@ import { useSearchCatalog, searchTextFields, type UseSearchCatalogInput } from "
 import type { SearchFacet } from "./types";
 import { developmentMode } from "../../../lib/development-mode";
 import { SearchControls } from "./SearchControls";
+import { GroupStackPanel } from "./GroupStackPanel";
 import { pageSearchShortcuts } from "./shortcuts";
 import { searchFixture } from "./search-fixture.test-support";
+import { useResourceSearch } from "./use-resource-search";
 
 vi.mock("../../../lib/development-mode", () => ({ developmentMode: vi.fn() }));
 beforeEach(() => vi.mocked(developmentMode).mockReturnValue(true));
@@ -202,4 +205,65 @@ test("metadata-dependent field shortcuts are omitted in production and retain va
   expect(error).toHaveBeenCalledWith('Search shortcut "page.clause.missing": field "missing" is not filterable.');
   expect(error).toHaveBeenCalledWith('Search shortcut "page.text.amount": field "amount" does not support iContains.');
   expect(error).toHaveBeenCalledWith('Search shortcut "page.facet.owner": field "owner" needs a facet catalog.');
+});
+
+function repeatedGroupsFixture(url = "/") {
+  const contract = ResourceQuery.forRows({ fields: {
+    status: { scalar: "String" }, payload: { kind: "json", scalar: "JSON" }, created: { scalar: "DateTime" },
+  } }).contract;
+  contract.axes.status!.server = { input: "STATUS", key: "status" };
+  contract.axes.status!.drill = { kind: "value", field: "status", valueKey: "status", nullMode: "isNull", valueMap: [] };
+  // A month opens through its range; a week has no drill, so it cannot leave out its empty group.
+  const created = contract.axes.created!;
+  contract.axes.created = { ...created, server: { input: "CREATED", key: "created" }, extractions: created.extractions.map((extraction) =>
+    extraction.name === "month" ? { ...extraction, drill: { kind: "range", field: "created", valueKey: "month", rangeKey: "month_range", nullMode: "isNull", valueMap: [] } } : extraction) };
+  // JSON paths are values of their own: this axis cannot tell its empty group apart.
+  contract.axes.payload!.server = { input: "PAYLOAD", key: "payload" };
+  const resourceQuery = ResourceQuery.from(testDataResource("test.Record", { query: contract }));
+  let view!: ReturnType<typeof useResourceView>;
+  function Panel() {
+    view = useResourceView();
+    const result = useSearchCatalog({ resourceView: view, query: resourceQuery, serverGrouping: true, appliesRepeated: true,
+      columns: [{ field: "status", header: "Status" }, { field: "payload", header: "Payload" }, { field: "created", header: "Created" }],
+      rows: [], modelMetadata: null });
+    return <GroupStackPanel search={useResourceSearch({ resourceView: view, catalog: result })} />;
+  }
+  const root = createRootRoute();
+  const route = createRoute({ getParentRoute: () => root, path: "/", component: () => <ResourceViewProvider><Panel /></ResourceViewProvider> });
+  const router = createRouter({ routeTree: root.addChildren([route]), history: createMemoryHistory({ initialEntries: [url] }) });
+  render(<RouterProvider router={router} />);
+  return { router, get view() { return view; } };
+}
+
+test("Repeated values only is a level's toggle while it groups, kept in the URL and cleared with the grouping", async () => {
+  const first = repeatedGroupsFixture();
+  const status = await screen.findByRole("button", { name: "Status" });
+  // Ungrouped, there is no level to toggle.
+  expect(screen.queryByRole("switch", { name: "Repeated values only for Status" })).toBeNull();
+  fireEvent.click(status);
+  await waitFor(() => expect(first.view.state.groupStack).toEqual([{ field: "status" }]));
+  fireEvent.click(screen.getByRole("switch", { name: "Repeated values only for Status" }));
+  await waitFor(() => expect(first.router.state.location.search).toMatchObject({ group: "status:repeated" }));
+  expect(first.view.state.groupStack).toEqual([{ field: "status", repeated: true }]);
+  // An axis that cannot leave its empty group out offers no toggle.
+  fireEvent.click(screen.getByRole("button", { name: "Payload" }));
+  await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(2));
+  expect(screen.getAllByRole("switch").map((toggle) => toggle.getAttribute("aria-label"))).toEqual(["Repeated values only for Status"]);
+  cleanup();
+
+  // A reload reads it back; clearing the grouping clears it.
+  const reloaded = repeatedGroupsFixture("/?group=status%3Arepeated");
+  const toggle = await screen.findByRole("switch", { name: "Repeated values only for Status" });
+  expect(toggle.getAttribute("aria-checked")).toBe("true");
+  expect(reloaded.view.state.groupStack).toEqual([{ field: "status", repeated: true }]);
+  fireEvent.click(screen.getByRole("button", { name: "Clear grouping" }));
+  await waitFor(() => expect(reloaded.view.state.groupStack).toEqual([]));
+  expect(reloaded.router.state.location.search).not.toHaveProperty("group");
+  expect(screen.queryByRole("switch", { name: "Repeated values only for Status" })).toBeNull();
+});
+
+test("the switch is decided per level: a date axis lists repeated months, not weeks it cannot drill", async () => {
+  repeatedGroupsFixture("/?group=created%3Amonth&then=created%3Aweek");
+  await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(2));
+  expect(screen.getAllByRole("switch").map((toggle) => toggle.getAttribute("aria-label"))).toEqual(["Repeated values only for Created · Month"]);
 });

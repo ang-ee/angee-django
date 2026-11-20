@@ -245,8 +245,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **Eligible ActionResult mutations are derived, not authored.** Codegen in
   the shared `@angee/app` generator derives mutations with at least one
   argument when every argument is required (non-null without a default), or
-  when `id: ID!` is the sole required argument and all others are optional or
-  defaulted. Other shapes stay authored. Generated documents preserve the
+  when one `ID!` argument (whatever its name) is the sole required argument and
+  all others are optional or defaulted. Other shapes stay authored. Generated documents preserve the
   schema's argument types and defaults. Call
   `useActionMutation<ActionFieldName>("field")` from `@angee/ui` in headless
   rendered-view code, or
@@ -295,7 +295,12 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   holds selection: entering another inherited scope or selecting at the owner
   clears the previous scope. Collection changes clear them before children
   render; returning to an inherited base-filter scope after entering another
-  never revives its old selection. See the
+  never revives its old selection. Resource metadata supplies the selection bar's
+  generic Archive/Unarchive, Move to trash/Restore and Delete actions. Bulk is a
+  bounded client fan-out over each single-record verb: successful rows leave the
+  selection, refused, failed, unobserved and overflow rows stay, and one refresh
+  and toast settle the run. One runner belongs to the list; generic actions and
+  Clear stay disabled through its preview, confirmation and writes. See the
   [selection and bulk-action contracts](../../packages/ui/src/views/resource/resource-view-context.tsx)
   and [list declarations](../../packages/ui/src/views/resource/resource-view-types.ts).
 - **Derive during render.** Do not store `filteredRows`, selected records,
@@ -316,8 +321,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **An app root declares itself; the deployment selects the app.** A
   top-level menu root is an app. It may declare `home` (a route name inside
   the root), `brand` (`{ name, mark }`, with `mark` a registered glyph; it
-  defaults to the root's label and icon), `theme` (an installed theme id), and
-  `railExpanded` (the desktop rail's default expansion).
+  defaults to the root's label and icon), `theme` (an installed theme id),
+  `themeLocked` (`true` beside `theme`) and `railExpanded` (the desktop rail's
+  default expansion).
   They layer like any menu field, so a dependent addon or `ANGEE_UI.menus`
   overrides them, and an included app drops them. The deployment's
   `ANGEE_UI.shell` selects what the console shows; products never name
@@ -326,17 +332,53 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   ```python
   ANGEE_UI = {"shell": {
       "brand": {"name": "Suite", "mark": "suite"},  # nothing selected: every root
+      "site": {"description": "Tools for the whole team", "icon": "suite.icon", "image": "suite.preview"},
       "theme": "suite.light",
-      "apps": {"payables": {"rail": ["accounting", "files"], "home": "accounting.bills"}},
+      "apps": {
+          "payables": {"rail": ["accounting", "files"], "home": "accounting.bills"},
+          "console": {},  # no rail: every root, reached by ?app=console on any host
+      },
       "hosts": {"payables.example.com": "payables", "work.example.com": "pm"},
+      "app": "payables",  # neither ?app= nor the host selects: open payables
   }}
   ```
 
+  `ANGEE_UI` is authored in the host's or the deployment's `settings.yaml`,
+  never the environment. It is a compiler input, so a change to it alone
+  recomposes on the stack's `compose --if-stale`
+  ([integration inputs](../composer.md#runtime-build-and-import)).
+
+  `brand` owns runtime identity; `site` owns the static HTML head, one per
+  deployment on every ingress alias. Its keys are `title`, `description`,
+  `icon`, `touchIcon` and `image`. The title defaults to `shell.brand.name`, so
+  without a shell brand declare `site.title`; a `brand` with no `site` sets only
+  the static title, and `site: {}` writes the whole head. The addon that ships a
+  public asset declares its name and package-relative path in `web/package.json`
+  (`"angee": { "assets": { "suite.icon": "./src/assets/icon.svg" } }`); the
+  deployment selects names, `icon` a .svg, .png or .ico file, `touchIcon` a .png
+  and `image` a .png, .jpg or .jpeg (see
+  [`ShellSettings`](../../packages/app/src/define-addon.ts) and
+  [`generateWebRuntime`](../../packages/app/src/web-codegen.mjs)). Vite emits the
+  selected files and writes the title, description, Open Graph, `twitter:card`
+  and icon tags before JavaScript runs. It replaces the host `index.html`'s
+  `<title>` and refuses a host head tag for any other fact the site writes, or
+  any Open Graph tag. The web build reads the public origin only from the stack's
+  `ANGEE_PUBLIC_ORIGIN` environment variable, so an origin authored only in a
+  settings file is not seen. `og:url` is written only with an origin and a
+  root-path `base`, which together also make `og:image` absolute. Otherwise
+  `og:image` is the asset's URL under the `base`: absolute under a full-URL
+  `base`, relative under a relative `base` or a root-path one without an origin.
+  Asset declarations are compose inputs; changing only image bytes needs no
+  compose, and Vite rereads them on build or dev reload.
+
   [`selectApp`](../../packages/app/src/boot-app.tsx) takes `?app=<root id |
-  apps name>`, else the hostname's `hosts` entry, else nothing; no choice is
-  stored. A root id is the one-root app with the root's home, brand, theme and rail default.
+  apps name>`, else the hostname's `hosts` entry, else `shell.app`, else
+  nothing; no choice is stored. A root id is the one-root app with the root's home, brand, theme and rail default.
   A named app takes its own, else its first rail root's; an unset theme falls
-  back to `shell.theme`. Nothing selected shows every root with `shell.brand`
+  back to `shell.theme`. A named app without a rail shows every root with its
+  own brand and theme, else the shell's, and declares no home, so a host whose
+  name or `shell.app` opens one app still reaches the full console. Nothing
+  selected shows every root with `shell.brand`
   and `shell.theme`. An unknown `?app=` warns in development and falls back.
   `createApp` checks every root, app and host at boot, selected or not: a
   rail lists top-level roots, an app name is no root id, a home lies inside
@@ -349,7 +391,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   guarded: only a menu `remove` makes a page unavailable. Rail, login, public
   mark and document title read the selected brand through `useRuntimeBrand`;
   shell components hard-code no identity. The selected theme is the appearance
-  default, and the person's own choice still wins. The rail likewise takes its
+  default, and the person's own choice still wins, unless the declaration that
+  supplies the theme sets `themeLocked`: then that theme and its options win
+  within the app, the person's color scheme still applies, their saved theme
+  is kept for other apps, and Appearance says why. A lock travels with the theme
+  it is declared beside; `ANGEE_UI.shell.theme` never locks. The rail likewise takes its
   selected app's `railExpanded` default only when no expansion preference is saved;
   undeclared, it starts expanded at desktop widths. Visiting a route without
   selecting an app does not apply that app's rail default.
@@ -369,7 +415,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   Addon manifest tests call
   `expectValidBaseAddon(manifest)` from `@angee/app/testing` and keep only
   genuinely addon-specific assertions.
-- Route declarations are the only place a URL path is spelled. Menus name their
+- Route declarations are the only place a URL path is spelled. The sign-in URL is
+  the `auth.login` route's path: `createApp` reads it for its auth gates, the auth
+  provider and `useLoginPath`, and takes no separate login path. Menus name their
   target with `route:`; components resolve addon-local routes with
   `useRouteHref`, and resource-backed links use the runtime resource lookup.
   Cross-addon render/event links use the non-throwing route probe and disappear
@@ -605,7 +653,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **A disabled reason is a tooltip.** A band verb that cannot run carries its
   `disabledReason` as a `Tooltip` and stays focusable while disabled; a menu item
   keeps the reason as its description row inside the menu (links stay usable). The
-  band never renders reason sentences. Owner stories:
+  band never renders reason sentences. A selection-bar verb follows the same rule
+  through `SelectionBarAction` `disabledReason`; both compose `Button`
+  `disabledReason`, the reason's tooltip and accessible description, which keeps
+  the button's element (and focus) as the reason comes and goes and drops the
+  `href` of a link it renders. An empty reason is no reason, in pane rows too. Owner stories:
   [record action bar](../../packages/storybook/src/stories/RecordActionBar.stories.tsx) (story id `views-recordactionbar--default`) and
   [tooltip](../../packages/storybook/src/stories/Tooltip.stories.tsx) (story id `primitives-tooltip--default`).
 - **The pane row's verb is a control beside the row**, not text inside its button
@@ -626,10 +678,12 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   [list status message](../../packages/storybook/src/stories/ListStatusMessage.stories.tsx) (story id `fragments-liststatusmessage--default`).
 - **Status → tone is owned once** by
   [`statusTone`](../../packages/ui/src/widgets/status-tones.ts). Framework defaults
-  contain only neutral vocabulary. Addons contribute product values through
-  `defineAddon({ statusTones })`; composition normalizes keys and rejects duplicate
-  claims, including claims on framework defaults. Every React surface resolves
-  tones with [`useStatusTone()`](../../packages/ui/src/widgets/use-status-tone.ts),
+  contain only neutral vocabulary. Addons declare global status tones in the
+  manifest's `statusTones` and field-scoped tones in its `vocabulary` contributions
+  (`resources.<model>.fields.<field>.tones`); composition normalizes global status
+  keys and rejects duplicate claims, including claims on framework defaults.
+  Every React surface resolves tones with
+  [`useStatusTone()`](../../packages/ui/src/widgets/use-status-tone.ts),
   which reads the current app's runtime; custom surfaces use the same hook as
   `statusBadge` and form headers.
   The pure `statusTone` resolver remains for non-React transforms with explicit
@@ -685,14 +739,33 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   or local copies of shared resource-view state.
 - **A list selects only declared fields.** The selection owner
   (`requestedFieldPaths`) fetches the paths its columns declare plus the
-  `ListView fields={[…]}` extras and nothing else; a render callback reads only
-  those fields.
+  `ListView fields={[…]}` extras and shared resource requirements, including the
+  archive and trash flags used by generic actions. A render callback reads only
+  its declared fields.
 - A row verb is a `rowActions` declaration on `ListView`/`RowsListView`, never a
   hand-rolled trailing column with local `useConfirm`/`toast.danger` ceremony.
   Declare `presentation="icon"`, `"label"`, or `"both"`; labelled text is the default
   because a verb must remain understandable without recognizing its icon.
   Mark the state's next descriptor `primary`; keep infrequent descriptors at
   `placement: "menu"`. Secondary inline verbs appear on hover and focus.
+- A page's `bulkActions` render first, added to the generic actions derived from
+  resource metadata; they never replace them. A list with a `source` receives
+  only its page's actions. Generic bulk actions are gated by the resource's roots
+  and flag contract, without requiring projected row permissions; the server
+  authorizes each write. Generic bulk actions share the bounded single-verb
+  fan-out in [the bulk owner](../../packages/ui/src/views/resource/bulk-action.ts),
+  including the view-as write guard; they introduce no server bulk verb.
+  `BULK_ACTION_FANOUT_LIMIT` caps the separate requests at 25 rows per click;
+  the server's `action_selection_limit` bounds a different, server-owned verb.
+  The shared runner is internal; pages add `bulkActions` to the list. Its
+  `selectedGroups`, the only read of the split, splits the selection by the
+  rendered grouping, or is `null` when any selected row cannot be placed or a page
+  it rests on shows again without it; it is a hint the server never trusts
+  (states and surfaces:
+  [`ListViewProps.bulkActions`](../../packages/ui/src/views/resource/resource-view-types.ts)).
+  Outside embedded presentation, selection defaults on only for a lifecycle
+  action, page `bulkActions`, or a grantable model's Share utility. A `source`
+  list counts only page `bulkActions`. An explicit `selectable` always wins.
 - Editable lines are the data view in edit mode; compose `RowsListView` and its column, visibility, action, reorder and footer seams, never form-local tables.
 - A list route declares its shipped `presetIds`, `search` shortcuts, `createAction`,
   and `boardCard` fields on `ResourceList`/`List`. Undeclared search shows the full
@@ -744,8 +817,17 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   memory. Either way a grouped list pages its **root groups**: the server surface
   by its root `_groups` read, the client row model by TanStack's top-level rows
   (`paginateExpandedRows: false`), so the pager counts groups and a page holds its
-  open groups' records; an ungrouped list pages records. A surface clamps its page
-  only once its read settles (`useSettledPageClamp`). A computed/non-model source is exposed **once** as a Hasura resource
+  open groups' records; an ungrouped list pages records. A level's `repeated`
+  ("Repeated values only") is a server group read option
+  (`ResourceQuery.toGroupRead`): HAVING keeps groups of more than one record
+  within its parent group and the read leaves out the records with no value, so
+  its counts and group pages are the repeated groups'; never filter groups in the
+  browser. A flat aggregate cannot apply that HAVING, so a repeated grouping shows
+  no footer totals. The switch is per level, offered where the level's axis at its
+  granularity can leave its empty group out. A view switch or a URL that leaves the
+  flag on a view grouping without that read (in the browser, an authored `source`,
+  a gantt or contributed kind) drops it and keeps the grouping; only an authored
+  default asking for it is refused. A surface clamps its page only once its read settles (`useSettledPageClamp`). A computed/non-model source is exposed **once** as a Hasura resource
   (`hasura_pydantic_resource`) for the uniform fetch + metadata + MCP surface.
   A small one processes client-side over the fetched set; a large one keeps the
   server row model and declares `groupable` columns for the same `_groups`
@@ -847,20 +929,30 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   state. A renderer that knows its final geometry owns a shape-preserving
   skeleton built from `Skeleton` and one `SkeletonStatus`; retain settled content
   during background refresh. The renderer owns loading/error so callers describe
-  only the happy path (cf. `preview/builtins.tsx` `FileText`). `RecordHeader` owns a record's pending and unavailable title (`loading`, `loadingLabel`, `unavailable`): a page passes its read's state, never a title skeleton or a failed-read title of its own, and a failed read ends the skeleton beside the page's error surface. A control owns its pending state: `Select loading` and `Combobox.Status loading` while options load, `Button loading` for a pending verb; never loading copy in a placeholder or a reason. A pane list's pending rows are `PaneRowsSkeleton`, never hand-drawn row blocks.
+  only the happy path (cf. `PreviewFileContent` in `preview/builtins.tsx`). `RecordHeader` owns a record's pending and unavailable title (`loading`, `loadingLabel`, `unavailable`): a page passes its read's state, never a title skeleton or a failed-read title of its own, and a failed read ends the skeleton beside the page's error surface. A control owns its pending state: `Select loading` and `Combobox.Status loading` while options load, `Button loading` for a pending verb; never loading copy in a placeholder or a reason. A pane list's pending rows are `PaneRowsSkeleton`, never hand-drawn row blocks.
 - Forms are declarative even when they branch: a `<Field showWhen={(values) => …}>`
   predicate (mirroring `Action.visibleWhen`) drives a discriminated form — a `kind`
   select that swaps the body — and a hidden field is never submitted. Reach for a
   custom form component only when the declarative DSL genuinely cannot express it.
 - **A record's own fields are its sheet; tabs live only beneath it.** `FormView`
-  renders the header, body field and every group as the sheet; labelled groups are
-  titled sections, so group fields for reading order. A group of secondary facts the
+  renders the header, lead body and primary groups as the sheet. Keep that sheet
+  short: identity, ownership, status and the few facts needed for the next decision.
+  Labelled groups are titled sections; use `groupLayout="paired"` for two unnamed
+  summary groups that read side by side when space permits. Shared `FormGrid`
+  sizing follows the available sheet or drawer width; addons declare groups and
+  fields instead of adding viewport breakpoints or private grids. A group of secondary facts the
   reader opens on demand (a message's envelope) may instead be a pane:
   `<Group label=… pane="id">` renders its fields beneath the sheet as that pane,
-  bound to the record's form. Panes come in strip order: the editable lines when no
+  bound to the record's form. Explicit pane placement wins over inferred title,
+  status and long-text hero placement; a pane's description must not jump above
+  the sheet. Addon contributions place occasional settings in panes instead of
+  extending the primary sheet indefinitely. Panes come in strip order: the editable lines when no
   `<Group lines>` places them in the sheet, then the saved-record tabs left after
   `visibleWhen`, permissions and the record's implementation, then pane groups; all
-  share one id namespace. Two or more panes get a strip; one renders without one,
+  share one id namespace. Two or more panes get one measured strip: excess panes
+  move into More, and the selected pane stays visible when it fits. Reuse
+  `useOverflowCount` and native Tabs/DropdownMenu behavior, never a local clipping
+  or overflow algorithm. One pane renders without a strip,
   beneath the sheet under a `SectionHeading` with its label. A full-bleed pane
   fills the height beneath the sheet, which then scrolls in its own region. `defaultRecordTab` (or its rule), a controlled
   `recordTab` and `?recordTab=` choose among the panes; an id that names no visible
@@ -868,7 +960,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   a sheet field in place and selects the pane holding a pane-group or line field.
 - **Never nest tabs.** A pane is the last level of tabs: its content carries no
   strip of its own and no second heading row repeating what the pane names. An
-  embedded list that fills a pane sets `chrome: { heading: false }`; content that
+  embedded list that fills a pane sets `chrome: { heading: false }` and opens its
+  record in a drawer or the canonical route, so the child's tabs cannot appear
+  inside the parent's tab. Content that
   needs its own sections is a sheet group or another pane, not tabs inside a tab.
 - **The form hero precedes secondary facts.** `FormView` places its status control
   above the title, except statusbar fields: these occupy the title row's right, wrap below on narrow widths, omit their label and body copy, and remain header badges in compact forms. Its lead body precedes the sheet's groups. A domain-owned
@@ -919,15 +1013,39 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   [FormView](../../packages/ui/src/views/form/form-view-surface.ts) selects
   required fields from the resolved children; authored fields and passive chrome
   remain host-owned.
-- **Record verbs compose the shared action owner.** The primary toolbar is
-  reserved for the subject model's lifecycle transitions, the ones its statusbar
-  explains (post, cancel); secondary lifecycle verbs and model-owned utilities
-  (pay, reverse, send, PDF, merge, download) live in the overflow menu; a
-  capability contributed to another model (run a workflow, rate, generate a
+- **Record verbs compose the shared action owner.** On a saved record, the form's
+  own command band fills to two buttons with its visible, unplaced, non-danger
+  verbs in declaration order, counting verbs already placed on that toolbar;
+  the rest go to the `⋮` overflow menu. An overflow menu is the last control of
+  its group of buttons and never sits between two of them, in any toolbar:
+  [`ActionMenu`](../../packages/ui/src/toolbars/ActionMenu.tsx) owns the rule. A
+  menu behind the `more-vertical` or `more-horizontal` glyph, labeled or not,
+  orders its own trigger after every sibling of its row, whichever owner,
+  contribution or portal rendered them; a menu behind any other glyph (New,
+  Connect, a column picker) is a button of its own and stays where it is
+  written. No caller positions an overflow trigger. Owners that compose one also
+  write it last, so keyboard order matches what is drawn: the form renders
+  contributed band buttons before it (`RecordActionBar` `contributedVerbs`). These filled
+  buttons stay secondary. Mark `primary` the subject model's lifecycle transition that its statusbar explains
+  (post, confirm, cancel); secondary lifecycle verbs and model-owned utilities
+  (pay, reverse, send, PDF, merge, download) can fill the remaining places.
+  Declare `placement="menu"` for a utility that should always stay in overflow.
+  `primary` needs no `placement`; explicit placement wins, including
+  `placement="menu"` on a primary verb.
+  [RecordActionBar](../../packages/ui/src/views/form/RecordActionBar.tsx) owns
+  this rule through `fillBand`, which `FormView` enables. Visibility and permission
+  are checked first; danger verbs never fill an unassigned place. Generic actions
+  declare menu placement. `#sections` action contributions default to
+  `placement="menu"` unless they declare one; `#actions` and `#actions-menu`
+  container children are outside this count. Everything inside an `ActionMenu`
+  stays in the menu. A create form shows Save / Create without own, contributed
+  or generic record verbs.
+  A capability contributed to another model (run a workflow, rate, generate a
   delivery, read a file again) uses that model's overflow menu, never its
   toolbar. Classify an action by the subject it changes and its semantic owner:
   a bridge addon implementing an inherited lifecycle (connect a channel) is not
-  a foreign capability because it lives in another package. Process drill-ins
+  a foreign capability because it lives in another package. A contributed
+  capability uses its subject model's declared container. Process drill-ins
   expose the verbs of the inspected run, decision or changeset (answer, stop,
   retry, revert); collection controls stay with their collection. Every
   placement composes the shared action owner, projected permission/admission,
@@ -940,9 +1058,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   not effective access, a reader is not a subscriber, and following or being
   made a recipient never grants access. There is no Access aside tab and
   grants are not a Related group; a model's own audience and role adapters
-  (visibility, responders, rosters) compose the same Share owner. A verb
-  in the toolbar is a
-  `#actions` child and one in the overflow menu a `#actions-menu` child; either
+  (visibility, responders, rosters) compose the same Share owner. Contributed
+  toolbar verbs use `#actions` and overflow verbs use `#actions-menu`; either
   may render [RecordActionBar](../../packages/ui/src/views/form/RecordActionBar.tsx)
   with server-gated descriptors. [Record chrome](../../packages/ui/src/views/form/use-form-view-record-chrome.ts)
   carries the form's dirty/pending gate to toolbar and menu verbs. `<Action>`
@@ -956,14 +1073,61 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   [command band](../../packages/storybook/src/stories/CommandBand.stories.tsx) (story id `page-commandband--default`).
   A read-only inspector with only secondary actions composes `ActionMenu` and
   `RecordChrome` in `RecordHeader.actions`; it does not reserve an empty command
-  band. Collection and transcript controls remain in their owning pane toolbar.
-- **Trash composes the shared owner.** A resource whose metadata marks a field
-  `trashable` gets Trash and Restore from [the trash module](../../packages/ui/src/views/resource/trash.tsx):
-  `useTrashActions` for record forms, `useTrashRowActions` for lists, and
-  `RemovedRecords` (or `RemovedDisclosure` + `RemovedItem` over rows a surface
-  already holds) for its "Removed (n)" list. Each offers its control by the
-  row's projected `delete`. A domain verb with its own transport, such as record
+  band. The band of a record that takes no edits takes no row while none of its
+  items renders (a contribution that offers nothing renders `null`), and returns
+  with the first one. An editable record's band (`CommandBand.editable`, which
+  `FormView` sets from `formTakesEdits`, so it holds while the record loads) keeps
+  the layout's control row blank and out of the accessibility tree, so the Save and
+  Discard its first edit brings move nothing; inline, in a card or a dialog, it
+  collapses as any band. Collection and transcript controls remain in their owning pane toolbar.
+- **The form supplies generic record actions from metadata.** Pages declare
+  nothing for Archive / Unarchive, Move to trash / Restore, or Delete. Archive
+  availability comes from [resourceLifecycle](../../packages/metadata/src/fields.ts),
+  shared by record forms, lists and search. Archive patches the `archivable` flag only when the resource's update root accepts it
+  and the form is writable and saves through that update root, without a custom
+  `submit`; an archived record carries an Archived header chip. Archive and Trash
+  require their flag to be selected as `false`; Unarchive and Restore require `true`.
+  Trash requires a `trashable` flag and a resource type and composes
+  [the shared trash verbs](../../packages/ui/src/views/resource/trash.tsx).
+  Every resource whose model composes `TrashMixin` or `ArchiveMixin` exposes its
+  flag, including multi-table children; trash verbs act on the model storing it.
+  Delete requires the `deletePreview` root. On a trashable resource it is offered
+  only for records whose trash flag is `true`; bulk Delete previews and deletes
+  only those selected records. An authored form Delete action keeps its own
+  admission and shares the same trash-state rule. A resource without a trash flag keeps its existing
+  Delete rule. Delete is gated by the resource's roots, including a resource with
+  only a delete-preview root, without requiring projected row permissions.
+  Record Trash / Restore use `allowsRecordPermission`: `delete` is required
+  when the model declares `permissions`, including when the read omits it;
+  otherwise the resource capability gates the control. Every bulk action is
+  resource-gated, and the server authorizes each write. These verbs
+  stay in the form's overflow menu after page and container verbs, with Delete
+  last. Removed-record lists compose `RemovedRecords` (or `RemovedDisclosure`
+  + `RemovedItem` over rows already held). `RemovedList` requires resource
+  metadata for its default Restore admission, or an explicit domain `canRestore`.
+  A domain verb with its own transport, such as record
   chatter moderation, still asks through `useTrashPrompt`.
+- **Archived rows leave default collections; "Archived" is a shared filter.** A
+  resource whose metadata marks a field `archivable`, and whose query contract
+  supports an `exact` comparison on it, defaults to unarchived rows: shared
+  resource lists (tables, grouped lists, boards, gantt collections, aggregate
+  footers and facets), dashboard data and the relation picker's option search
+  apply [unarchivedFilter](../../packages/metadata/src/fields.ts) after combining their
+  filters. Collection reads compose the internal
+  [useArchiveScopeFilter](../../packages/ui/src/views/resource/surface/archive-scope.ts)
+  hook to carry the saved-record exemption. The scope and the Archived option
+  use the same lifecycle filterability fact, independently of update permission. Any predicate on the resource's own archive flag, in any `AND`, `OR`
+  or `NOT` branch of the base, preset or editable filter, keeps the authored
+  filter instead; a relation path ending in the same field name does not. The
+  [search catalog](../../packages/ui/src/views/resource/search/catalog.ts)
+  offers "Archived" on every such list: it adds the true predicate to the
+  editable filter as a removable chip, and removing it restores the default. A
+  page declares no archive grouping, option or checkbox. The scope never
+  reaches identity reads, selected-relation labels, lane and facet catalogues, a
+  filter editor's value picker (`includeArchived: true`), caller-supplied `RowsListView`
+  rows, the data provider, or a related list inside a saved record's chrome,
+  whose rows and count are the record's. The injected predicate is never a
+  chip, URL state or a saved favorite.
 - **Record rails reuse form fields.** Contribute a `FormView.RailGroup` as a
   `<model>#rail` child with standard field descriptors and optional
   group/row permissions. The form selects those fields and binds them to its
@@ -1010,8 +1174,14 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   contribute that registration through `defineAddon`'s `forms` dictionary.
   Its component composes `Form`, `Field` and `Group` and receives
   `RegisteredFormProps`; it owns any create/edit distinction through the record
-  `id`. Collection routes and relation-picker create/edit dialogs use that same
-  form, so a caller declares the resource instead of repeating its fields.
+  `id`. A saved record whose id reads no record shows the form's "Record
+  unavailable" state; a form that knows where such an id leads passes
+  `renderUnavailable(id, unavailable)` (parties opens a merged record's survivor)
+  and renders `unavailable` when it has nothing else. Collection routes and relation-picker create/edit dialogs use that same
+  form, so a caller declares the resource instead of repeating its fields. Keep
+  the registration in a form module, independent of the lazy collection page.
+  Secondary panes and lifecycle actions travel with that form. A migration removes
+  the page-private form and updates its existing behavior tests at the new owner.
   Inline `fields` remain for a caller-specific form; they are not a second
   per-model registration. Relation pickers also follow the selected record's
   registered route, so creation, editing and navigation compose the same owners.
@@ -1022,20 +1192,51 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   [`useRelationForms`](../../packages/ui/src/views/relation/RelationRecordDialog.tsx).
 - Toolbar and record action menus compose [ActionMenu](../../packages/ui/src/toolbars/ActionMenu.tsx).
   Contributions use `ActionTrigger` to adapt between a toolbar button and a native
-  menu item and report pending state to the menu trigger. Render menu-opened
+  menu item and report pending state to the menu trigger. A menu whose
+  contributions render no item shows no trigger, so a contribution that offers
+  nothing for this record renders `null`. Render menu-opened
   dialogs inside the menu: the shared owner keeps them mounted after it closes
   and returns focus to its toolbar trigger. `DialogContent` resets menu context
   for its body, so nested dialogs return to their own triggers. Pages supply
   domain labels through i18n and alignment through `align`; selection menus keep
   their own native controls.
+- The shared [UserMenu](../../packages/ui/src/chrome/UserMenu.tsx) gives contributed
+  dialogs the same lifetime and focus contract: its portal uses `keepMounted` and
+  provides `DialogReturnFocusContext` with the menu trigger. A dialog-opening
+  item declares `aria-haspopup="dialog"` and lets the menu close normally; it
+  does not hold the menu open with `closeOnClick={false}`.
 - Toolbar dialogs compose [MutationDialog](../../packages/ui/src/views/form/MutationDialog.tsx).
   Declare `DescriptorField`s; the shared [DescriptorFieldList](../../packages/ui/src/views/form/DescriptorFieldList.tsx)
   owns controls and requires a native RHF `FormProvider`. Decode raw controls with
   `parseValues` and `mutationDialogValueCodecs`; required/verbatim codecs express
-  authored field contracts. Record actions declare `args` + `submit` on `<Action>`;
-  `RecordActionBar` composes `ActionFormDialog` for their inputs. Record-specific
+  authored field contracts. An authored mutation, or an owner's call returning its
+  data (an action's outcome, a store binding's result), is the dialog's `mutation`
+  (with `mutationResult` to read its data), never an `onSubmit` wrapping it. The
+  dialog reports a failure once, under the field it names, else in the dialog: every
+  call it makes for its caller (`validate`, `onSubmit`, `mutation`) gets the
+  `AuthoredMutateOptions` that turn refine's generic error notification off, and the
+  caller passes them on to the authored call it makes; an owner that wraps an
+  authored mutation (`ActionMutate`, a store binding, the operator's `run`) takes
+  them per call. `onSubmit` is for any other submission. Record actions declare `args` + `submit` on `<Action>`;
+  `RecordActionBar` composes `ActionFormDialog` for their inputs. The action form
+  (`useActionForm`) and a row's direct submit render a failure the same way, so
+  `submit(values, context, options)` gets the same options to pass on. Record-specific
   schemas compose `jsonSchemaActionArgs` in the action's `args` callback; the
   shared form owns branching, validation and draft retention across record refreshes.
+- Password and credential fields declare `autoComplete` on the shared field or
+  action argument: `current-password` for verification and `new-password` for a
+  chosen password or token. The shared password widget passes it to the native
+  input. Whitespace-sensitive keys use the shared `textarea` widget, which also
+  passes autocomplete and preserves line breaks; non-secret identifiers use text.
+  Creation and replacement compose one addon-owned presentation table; the
+  server projects replacement fields and eligibility.
+- Mutations carrying secret inputs or one-time secret results use `transient`.
+  [useActionMutation](../../packages/refine/src/dialect/hooks.tsx) delegates that
+  lifecycle to `useAuthoredMutation`: native observers reset on settlement and
+  entries are collected on the next tick. Action forms use
+  `useActionOutcomeMutation` with `errorNotification: false`, so field refusals
+  stay in the form; record-chrome actions pass the same options through their
+  shared hooks. Use the ambient provider for record verbs.
 - Submit owners return [FormSubmitResult](../../packages/ui/src/views/form/validation-errors.ts):
   `ok` acknowledges saved data; `invalid` carries `ValidationErrors`; `conflict`
   preserves edits and offers reload. Typed GraphQL successes use
@@ -1202,7 +1403,16 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   its baseline, so it is not dirty. A `kind:"list"` field with *no* relation target
   (a plain string array) stays the `tagInput`. This mirrors the to-one
   `relationFieldInfo` + `RelationFieldWidget` — compose those, never hand-roll a
-  relation-list control.
+  relation-list control. `optionGroupField` and `optionGroupOrderField` (related-row
+  paths, as `optionDescriptionField` is) group the offered rows under headings: on
+  `RelationMultiFieldWidget` and on a relation `Facet`, whose panel reads its
+  options' related rows once while it is open. Options carry `group` and
+  `groupOrder`, and [`optionGroups`](../../packages/ui/src/lib/option-groups.ts) is
+  the one grouping rule for every picker (`Select`, the search panel's filter
+  sections and facets, the relation multi-picker): ordered groups first, then the
+  rest, the ungrouped options included, in first-appearance order. The tags addon's
+  categories provide this contract: a tag's `category.name` heads its group and
+  `category.position` orders the groups, so uncategorised tags list last.
 - **Tags show only where an owner places them, never as a chatter tab, and save
   with the record.** An owner composes the backend's `TaggedModel` on the model
   and declares its type's `tags/tag_assignment` relation, `TaggedNode` on its
@@ -1212,8 +1422,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   metadata projects `tags` as a writable relation list to `tags.Tag`, so the form
   edits it as its standard to-many chips field: a pick or removal dirties the
   form, Save writes the id list with the row (the backend diffs the edges in the
-  row's transaction) and Discard drops it, on create forms too. No tags-specific
-  widget exists; the list cell keeps the shared relation-list chips.
+  row's transaction) and Discard drops it, on create forms too. The list cell
+  keeps the shared relation-list chips. Only a record whose scalar fields are
+  read-only places the `angee.tags.recordTags` widget instead: it writes through
+  the independent `tag`/`untag` verbs and shows one picker per tag category.
 - **Resource relation pickers support server-backed search.** Compose
   `RelationFieldWidget`; its
   [relation-options owner](../../packages/ui/src/views/relation/relation-options.ts)
@@ -1250,9 +1462,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **`ResourceList` owns the record surface.** Use a `<Form>` child or `formFields`
   for generated forms, including read-only records; use `renderRecord` for a
   domain-owned transcript or detail surface. An all-read-only form never assembles
-  an update mutation. Delete affordances are
-  schema-capability gated: if the resource has no `delete` root, `ResourceList`/`ListView`
-  omit record and bulk delete instead of requiring a delete-only `crud(...)`.
+  an update mutation. The form supplies metadata-driven Archive and Trash;
+  `ResourceList` binds its Delete through the shared preview owner. Delete
+  affordances require the `deletePreview` root, without projected row permissions;
+  a trashable record must already be in the trash. Pages declare no generic actions
+  and need no delete-only `crud(...)`.
 - **An addon contributes one menu root.** The app rail renders apps and their
   included, non-flattened sub-apps, at most two levels. The selected app's own
   items live in [`AppMenu`](../../packages/ui/src/chrome/AppMenu.tsx) in the top
@@ -1417,6 +1631,12 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `text-sm` (14), `text-15`, `text-base` (16), `text-lg` (18), `text-22`, `text-28`,
   `text-34` — every step reads a public `--fs-*`/`--lh-*` theme token. Tailwind's
   `text-xs` is not bridged; 12px is `text-12`. No arbitrary `text-[Npx]`.
+- **Headings read the display face:** the `display`, `title` and `heading` roles of
+  [`textRoleVariants`](../../packages/ui/src/ui/text.tsx) carry `font-display`, the
+  theme's `--font-family-display`, which follows `--font-family-sans` when unset. A
+  heading takes the role rather than spelling `font-display`; an owner with its own
+  size composes the role and sets the size after it, as the card, dialog and popover
+  titles do.
 - **Control heights are tokens:** `h-control-xs` (28px) is the pane control — tabs,
   toggles, pane toolbar buttons, tree rows, select triggers; `h-btn-sm/md/lg` are
   26/30/36. Never a raw `h-7`/`size-7` on a control.
@@ -1552,7 +1772,9 @@ presentation of the timeline kinds its Python source implements:
 An addon declares a container of its own by naming an address on its own node,
 with no children or with its own: `"messaging.channels#toolbar": {}`. Two
 entry keys apply only there. `unique: "key"` makes every child carry a `key`
-and fails two children with one key. `models: true`
+and fails two children with one key; `unique: "address"` fails two children at
+an address a page renders together, besides their `impl` children and variants
+(the framework's `resource#card` is one). `models: true`
 makes the container model-scoped: IAM declares `iam#access-roles`, and
 [proposals](../../src/angee/proposals/web/src/record-rounds.tsx) adds
 children at `proposals.Round#access-roles`; the owner passes the record's
@@ -1652,6 +1874,7 @@ the toolbar through `RecordChromeContext.toolbarHost`
 | `resource#views` | view kinds a collection's switcher offers | `ResourceViewKindContent` |
 | `resource#utilities` | collection utilities beside a resource view's toolbar | `ReactNode` |
 | `resource#search` | separate controls over the list search model; page shortcuts are `page.*` extras | `SearchShortcut` |
+| `<model>#card` | the model's one card on its board and gallery kinds where the page declares none; `requiredFields` names what it reads | `ResourceCardContent` |
 | `record#aside` | context-aside tabs (`strip: true`) and drill-ins (`strip: false`, with a target) | `ChatterTabContent` |
 | `timeline#kinds` | presentation of a timeline kind a Python source implements | `TimelineKindContent` |
 | `reference#preview`, `<model>#preview` | opt-in record previews composed by `RecordReferencePreview`; addon content reads `useRecordReference` identity/navigation | React node |
@@ -1661,6 +1884,7 @@ the toolbar through `RecordChromeContext.toolbarHost`
 | `shell#drawers-right`, `shell#drawers-bottom` | non-modal drawers docked on that edge | `DockedDrawerContent` |
 | `auth.login#method` | sign-in methods on the login page | `ReactNode` |
 | `auth.login#password-help` | password help on the login page | `ReactNode` |
+| `auth.login#hero` | the login page's one hero, from a branding fragment; see [Login hero](#login-hero) | `LoginHeroContent` |
 
 The `form`, `resource` and `record` containers also take model addresses. The
 declarations are `FORM_CONTAINERS`, `RESOURCE_CONTAINERS`, `CHATTER_CONTAINERS`
@@ -1668,6 +1892,57 @@ and `SHELL_CONTAINERS` in `@angee/ui` and `LOGIN_CONTAINERS` in `@angee/app`.
 Addons own theirs, such as `messaging.channels#toolbar`,
 `parties.overview#items`, `appearance.settings#tools`, `decisions#origin`
 and `iam#access-visibility`.
+
+### Login hero
+
+A theme or branding fragment owns the sign-in presentation by declaring the one
+child of `auth.login#hero`; installing the fragment is enough, and a host's
+`main.tsx` keeps mounting `IamLoginPage` on `auth.login`:
+
+```tsx
+export default defineBaseAddon({
+  id: "theme.acme",
+  themes: [defineThemeContribution({ definition: themes[0] })],
+  containers: {
+    "auth.login#hero": {
+      "theme.acme.login-hero": {
+        content: { render: AcmeLoginHero, presentation: "full-bleed", backgroundImageUrl: acmeBackdropUrl },
+      },
+    },
+  },
+});
+```
+
+[`LoginPage`](../../packages/app/src/auth/LoginPage.tsx) renders it on every
+page composing it (`/login`, `/sign-in-link`), on branded and unbranded hosts. An
+explicit `hero` prop wins: a node replaces the contribution and `null` removes
+it; with neither, an unbranded host shows the framework hero. `presentation:
+"full-bleed"` puts a backdrop behind the whole page with the card floating over
+it; unset, the hero takes its own column beside the card. A contribution brings
+its own presentation and `backgroundImageUrl`. The page's `presentation` and
+`backgroundImageUrl` props serve only the page's own hero (the `hero` prop or the
+framework's), so IAM's rotating backdrops never show behind a contributed hero.
+
+The hero renders at every width: beside the card from `lg` up, stacked above it
+on small screens. `LoginPage` passes it no props and no viewport hint; the hero
+picks its own responsive assets (a lighter image or video on phones) through
+ordinary CSS or media queries. Below `lg` the hero's wrapper has no height of its
+own, so a hero built to fill the `lg` column (`absolute inset-0`) collapses there:
+the hero gives itself a small-screen height, for example
+`relative h-[34svh] lg:absolute lg:inset-0 lg:h-auto`. The backdrop image is one
+URL that covers the page at every width.
+
+The container is unique per address, as a model's card is: two installed
+contributors fail at boot ("… are both its one child"). Keep one by removing the
+other from a layer that depends on both, usually the deployment's
+`ANGEE_UI.containers`:
+
+```yaml
+ANGEE_UI:
+  containers:
+    "auth.login#hero":
+      "theme.other.login-hero": { remove: true }
+```
 
 ### Context aside
 
@@ -1852,17 +2127,41 @@ independently of the record aside. See the
 
 `resource#views` holds the view kinds a collection's switcher offers. The
 framework declares the built-in kinds under the bare ids URLs and saved views
-already carry: `list`, `board`, `calendar`, `gantt` and `dashboard`. An addon
+already carry: `list`, `board`, `gallery`, `calendar`, `gantt` and `dashboard`.
+The `gallery` kind pages the collection's records as cards with the list's search,
+presets, selection, bulk actions and record links; it never groups. It is offered
+where the list has a card to draw (a page `renderCard`, declared `gallery` fields
+or the model's registered card) and wherever a page's `defaultView`, a shipped
+view, a favourite or the URL opens on it. Board and
+gallery share one card seam: `renderCard(row, context)` draws a card on either
+(the context names the surface, lane, drag and selection state), `cardFrame`
+picks the `inset` or `flush` frame, `boardCard` and `gallery` declare default
+card fields, and with none the gallery draws the board's column card. A model's
+card is registered once as the one child of `<app.Model>#card` (content
+`{ render, frame? }`, its `requiredFields` joining the list's selection); every
+list of that model whose page declares no card draws it, so a shipped view
+naming `view: "gallery"` or `"board"` needs no page code. An addon may register
+the card of a model it does not own; replacing another addon's card removes it
+first (`remove: true`), since the composer allows one card per model
+(`unique: "address"`). `impl` children and variants vary the card per row: the
+list draws, for each row, the card its implementation admits. App creation
+checks each card's content (`validateResourceCard`) and resolves its
+`requiredFields` paths through the model's metadata, and refuses a card on
+`resource#card`. The most specific model's card wins over its MTI parent's. An addon
 contributes a kind as a `<model>#views` child with a namespaced id. Its
 `ResourceViewKindContent` carries `label` (or a ui `labelKey`), `icon`,
 `capabilities` (which collection controls apply while it is active) and
 `render`, a component receiving `{ resource }` that reads the collection's
 filter and state through `useResourceView()`. `?view=` selects a kind by id,
 and presets and favourites name it. Whether a built-in kind can run on a page
-(calendar, Gantt and dashboard need declared sources) stays the kind's
+(calendar, Gantt and dashboard need declared sources, the gallery a card) stays the kind's
 capability check; whether a
 kind is offered is the container's, so layers narrow kinds per model with
 `only`, `except` and `hide`. See [resource view kinds](../../packages/ui/src/views/resource/resource-view-kinds.tsx).
+The calendar filters by the sources its page declares, never by a wire field: a
+source with a `key` and a `label` gets a toolbar toggle, and the hidden keys are
+view state carried in the URL (`?hiddenSources=`) beside `?mode=` and `?anchor=`,
+so shipped views, favourites and deep links reproduce the calendar.
 
 `resource#search` has model inheritance and accepts page-declared `page.*`
 extras alongside contributed typed shortcuts. `only`/`except` reach both;
@@ -1916,6 +2215,15 @@ reused by tests sets `angeeOwnRuntime: true` and passes
 `appearance={storyAppearance(context.globals)}` into the same owner. Each story
 has one provider stack — appearance, data, toasts and modals.
 
+Full-product workshops use `ComposedRuntimeFixture` from `@angee/storybook/testing`.
+It mounts the real `createApp` composition with native memory history and requires
+fixture transports with live queries disabled. The `@angee/storybook/host` entry
+exposes the stack's emitted addons and schema loader; it adds no product registry.
+`resourceSnapshotOperations` supplies small read-only sample collections through
+metadata-owned filters, relations and grouping. Product packages own their sample
+records, authored report handlers and named CSF stories. Their page maps should
+derive from those stories and check coverage against the addon declarations.
+
 ### Developer mode
 
 Developer mode's composition dialog lists container narrowing (each layer's
@@ -1963,7 +2271,8 @@ queue's stages or a document's lines. Declare them with `lines=HasuraLines(...)`
 the form renders them as one ordered section, saved by its one Save, with row
 order as the position. `linePrimaryFields` chooses the columns shown first (the
 rest wait in the data view's visible-fields menu) and `lineFields` their headers,
-choices and help. `<Group label lines />` places the lines as a section; carried
+choices and help, and `readOnlyWhen` locks a cell on the rows the domain says
+carry no such fact (a section row has no price). `<Group label lines />` places the lines as a section; carried
 by a `<model>#sections` child it narrows like any section, so a product keeps only
 the lines on its route with `only` under `when`, and narrowed away they are gone.
 Undeclared, the lines trail the form. A record with a life of its own (its own verbs, revision,

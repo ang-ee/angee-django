@@ -79,6 +79,8 @@ def test_execution_resources_expose_reads_without_engine_crud(schema):
         "start_workflow_run",
         "cancel_workflow_run",
         "reprocess_workflow_run",
+        "reprocess_workflow_run_from_step",
+        "reprocess_workflow_run_from_step_accepting_duplicate",
         "retry_step",
         "retry_step_accepting_duplicate",
         "enable_workflow_trigger",
@@ -87,6 +89,7 @@ def test_execution_resources_expose_reads_without_engine_crud(schema):
         "insert_trigger_one",
         "update_trigger_by_pk",
         "delete_trigger_by_pk",
+        "trigger_delete",
         "save_workflow_draft",
         "publish_workflow",
     }

@@ -1,10 +1,11 @@
 import * as React from "react";
 
 import { cn } from "../lib/cn";
-import { dateFromUnknown, formatDate, formatDateTime, formatTime } from "../widgets/date-format";
+import { dateFromUnknown, formatDate, formatDateTime, formatTime, isStorageDate } from "../widgets/date-format";
 
 export interface AbsoluteTimeProps
   extends Omit<React.TimeHTMLAttributes<HTMLTimeElement>, "children" | "dateTime"> {
+  /** An instant, or a bare calendar day (`yyyy-MM-dd`), which reads as that date in every zone, with no time. */
   value: Date | string | number | null | undefined;
   /** `time` (default) reads the clock time, `date` the day, `datetime` both; the full stamp is the tooltip. */
   display?: "time" | "date" | "datetime";
@@ -29,12 +30,14 @@ export function AbsoluteTime({
 }: AbsoluteTimeProps): React.ReactElement | null {
   const date = dateFromUnknown(value);
   if (!date) return fallback ? <>{fallback}</> : null;
-  const options = timeZone ? { timeZone } : {};
-  const full = formatDateTime(date, options);
-  const label = display === "time" ? formatTime(date, options) : display === "date" ? formatDate(date, options) : full;
+  // A day has no clock time and no zone: its label and its full stamp are both the date.
+  const day = isStorageDate(value);
+  const options = timeZone && !day ? { timeZone } : {};
+  const full = day ? formatDate(date, { density: "full" }) : formatDateTime(date, options);
+  const label = display === "datetime" ? full : display === "time" && !day ? formatTime(date, options) : formatDate(date, options);
   return (
     <time
-      dateTime={date.toISOString()}
+      dateTime={day ? value : date.toISOString()}
       title={display === "datetime" ? undefined : full}
       className={cn("tabular-nums", className)}
       {...props}

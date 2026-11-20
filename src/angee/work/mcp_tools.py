@@ -32,8 +32,16 @@ def register(server: FastMCP) -> None:
                 name="snooze_task",
                 fields=ACTION_RESULT,
                 id_arg="task",
-                args=("until",),
-                description="Snooze a triage task until the supplied time.",
+                args=("until", "expected_revision"),
+                description="Hold a triage task until the supplied time, or undated until it is woken.",
+            ),
+            GraphQLTool(
+                operation="wake_task",
+                name="wake_task",
+                fields=ACTION_RESULT,
+                id_arg="task",
+                args=("expected_revision",),
+                description="End a held task's hold by hand at its observed revision, resuming its review.",
             ),
             GraphQLTool(
                 operation="mark_task_duplicate",

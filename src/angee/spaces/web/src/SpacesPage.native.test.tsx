@@ -24,8 +24,8 @@ const resources = [
     roots: { list: "space_memberships", aggregate: "space_memberships_aggregate", detail: "space_memberships_by_pk" },
     typeNames: { node: "SpaceMembershipType", filter: "space_memberships_bool_exp", order: "space_memberships_order_by" },
     fields: [field("id"), choices("role", ["OWNER", "MODERATOR", "MEMBER", "VIEWER"]),
-      choices("notification_policy", ["INBOX", "EMAIL", "MUTED"]), field("is_confirmed", "Boolean"), field("created_at", "DateTime")],
-    query: queryFields(["id", "group", "party.display_name", "role", "is_confirmed", "created_at"]),
+      choices("notification_policy", ["INBOX", "EMAIL", "MUTED"]), field("is_confirmed", "Boolean"), field("is_dismissed", "Boolean"), field("created_at", "DateTime")],
+    query: queryFields(["id", "group", "party.display_name", "role", "is_confirmed", "is_dismissed", "created_at"]),
   }),
   testDataResource("spaces.GroupThread", {
     capabilities: ["list", "detail"],
@@ -44,10 +44,16 @@ const resources = [
 ];
 
 const memberships = [
-  { id: "mem_ada", party: { display_name: "Ada Lovelace" }, role: "MEMBER", is_confirmed: true, created_at: "2026-10-01T09:00:00Z",
+  { id: "mem_ada", party: { display_name: "Ada Lovelace" }, role: "MEMBER", is_confirmed: true, is_dismissed: false, created_at: "2026-10-01T09:00:00Z",
     permissions: ["write", "write__role", "delete"], notification_policy: "INBOX", subtype_keys: [] },
-  { id: "mem_self", party: { display_name: "Grace Hopper" }, role: "OWNER", is_confirmed: true, created_at: "2026-10-02T09:00:00Z",
+  { id: "mem_self", party: { display_name: "Grace Hopper" }, role: "OWNER", is_confirmed: true, is_dismissed: false, created_at: "2026-10-02T09:00:00Z",
     permissions: ["set_notifications"], notification_policy: "EMAIL", subtype_keys: ["comment"] },
+  { id: "mem_suggested", party: { display_name: "Suggested member" }, role: "MEMBER", is_confirmed: false, is_dismissed: false,
+    permissions: ["write"], notification_policy: "INBOX", subtype_keys: [] },
+  { id: "mem_dismissed", party: { display_name: "Dismissed member" }, role: "MEMBER", is_confirmed: false, is_dismissed: true,
+    permissions: ["write"], notification_policy: "INBOX", subtype_keys: [] },
+  { id: "mem_readonly", party: { display_name: "Read-only suggestion" }, role: "MEMBER", is_confirmed: false, is_dismissed: false,
+    permissions: [], notification_policy: "INBOX", subtype_keys: [] },
 ];
 const threadsByGroup: Record<string, readonly Record<string, unknown>[]> = {
   grp_1: [
@@ -72,6 +78,8 @@ function groupSchemas(requests: GraphQLWireRequest[]) {
     space_memberships_aggregate: () => count(memberships),
     update_space_memberships_by_pk: (args) => ({ id: (args.pk_columns as { id: string }).id, role: (args._set as { role: string }).role }),
     set_membership_notifications: (args) => ({ id: args.id, notification_policy: args.policy, subtype_keys: args.subtype_keys }),
+    confirm_membership: (args) => ({ id: args.id, is_confirmed: true, is_dismissed: false }),
+    dismiss_membership: (args) => ({ id: args.id, is_confirmed: false, is_dismissed: true }),
     space_threads: scoped,
     space_threads_aggregate: (args) => count(scoped(args)),
     space_threads_by_pk: (args) => Object.values(threadsByGroup).flat().find((thread) => thread.id === args.id) ?? null,
@@ -132,6 +140,27 @@ test("the roster lists the open group's members and offers each row only the ver
   expect(within(grace).queryByRole("button", { name: "Remove" })).toBeNull();
 });
 
+test.each([
+  { label: "Confirm", mutation: "confirm_membership" },
+  { label: "Dismiss", mutation: "dismiss_membership" },
+])("$label reviews only a writable suggested membership and sends that row's id", async ({ label, mutation }) => {
+  const { requests } = renderGroupTab("roster");
+  for (const name of ["Ada Lovelace", "Read-only suggestion"]) {
+    const row = await membershipRow(name);
+    expect(within(row).queryByRole("button", { name: label })).toBeNull();
+    expect(within(row).queryByRole("button", { name: "Actions" })).toBeNull();
+  }
+  const suggestion = await membershipRow("Suggested member");
+  if (label === "Dismiss") {
+    fireEvent.click(within(suggestion).getByRole("button", { name: "Actions" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: label }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  } else {
+    fireEvent.click(within(suggestion).getByRole("button", { name: label }));
+  }
+  await waitFor(() => expect(requests.find(({ fields }) => fields.includes(mutation))?.variables).toEqual({ id: "mem_suggested" }));
+});
+
 test("a role change submits the chosen role in the update's lowercase wire casing", async () => {
   const { requests } = renderGroupTab("roster");
   fireEvent.click(within(await membershipRow("Ada Lovelace")).getByRole("button", { name: "Change role" }));
@@ -190,4 +219,15 @@ test("the threads tab opens the group's first conversation, follows the picked o
   await waitFor(() => expect(transcript()).toBe("thr_3"));
   showGroup("grp_empty");
   expect((await screen.findAllByText("No group conversations in this space yet.")).length).toBeGreaterThan(0);
+});
+
+
+test("Confirm restores a writable dismissed membership", async () => {
+  const { requests } = renderGroupTab("roster");
+  const row = await membershipRow("Dismissed member");
+  expect(within(row).queryByRole("button", { name: "Actions" })).toBeNull();
+  fireEvent.click(within(row).getByRole("button", { name: "Confirm" }));
+  await waitFor(() => expect(requests.find(({ fields }) => fields.includes("confirm_membership"))?.variables)
+    .toEqual({ id: "mem_dismissed" }));
+  expect(await screen.findByText("Membership confirmed")).toBeTruthy();
 });

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -17,7 +18,7 @@ from anthropic import AsyncAnthropic
 from asgiref.sync import async_to_sync, sync_to_async
 from django.contrib.auth import get_user_model
 from openai import AsyncOpenAI, DefaultAsyncHttpxClient
-from pydantic_ai import DeferredToolRequests
+from pydantic_ai import DeferredToolRequests, ModelRetry
 from pydantic_ai.messages import (
     FunctionToolCallEvent,
     FunctionToolResultEvent,
@@ -47,10 +48,10 @@ from rebac import (
 )
 
 from angee.agents.context import render_view_context
-from angee.agents.models import AgentLifecycle, RuntimeStatus, SessionStatus, TurnStatus
+from angee.agents.models import AgentLifecycle, MCPPlacement, RuntimeStatus, SessionStatus, TurnStatus
 from angee.agents.runtimes import ANTHROPIC_OAUTH_CLIENT_HEADERS, ANTHROPIC_OAUTH_SYSTEM_PREAMBLE
 from angee.agents.tasks import run_session
-from angee.agents.testing.models import Agent, AgentSession
+from angee.agents.testing.models import Agent, AgentSession, AgentTurn, MCPServer
 from angee.agents_integrate_anthropic.backend import AnthropicInferenceBackend
 from angee.agents_integrate_ollama.backend import OllamaInferenceBackend
 from angee.agents_integrate_openai.backend import OpenAIInferenceBackend
@@ -59,7 +60,7 @@ from angee.agents_runtime_pydantic.acp import updates_for_event
 from angee.agents_runtime_pydantic.runner import PydanticAISessionRunner, _usage_limits
 from angee.agents_runtime_pydantic.toolsets import _transport_for
 from angee.integrate.credentials import CredentialKind
-from tests.conftest import create_platform_admin
+from tests.conftest import Credential, create_platform_admin
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -241,23 +242,115 @@ def test_acp_events_emit_reducer_shapes_and_one_tool_call() -> None:
     assert sum(update["sessionUpdate"] == "tool_call" for update in updates) == 1
 
 
-def test_external_mcp_transport_carries_its_agent_bearer() -> None:
-    """External servers retain the authenticated HTTP transport."""
+@pytest.mark.parametrize("outcome", ["retried", "failed", "denied", "interrupted"])
+def test_acp_unsuccessful_tool_results_are_saved_failed(outcome: Any) -> None:
+    """Every tool return outcome but success settles the saved call as failed."""
 
-    credential = _Credential("agent-bearer")
-    server = SimpleNamespace(
-        name="Angee",
-        resolved_url="http://angee.test/mcp",
-        builtin="",
-        credential_id=1,
-        credential=credential,
+    result = ToolReturnPart(tool_name="read_note", content="Note missing.", tool_call_id="call-1", outcome=outcome)
+
+    assert list(updates_for_event(FunctionToolResultEvent(result))) == [
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "call-1",
+            "status": "failed",
+            "rawOutput": "Note missing.",
+        }
+    ]
+
+
+def test_retried_tool_call_of_a_real_turn_is_saved_failed(db: Any) -> None:
+    """A tool raising ``ModelRetry`` is saved failed and its successful retry completed."""
+
+    del db
+    searches: list[str] = []
+
+    async def web_search(query: str = "a") -> str:
+        searches.append(query)
+        if len(searches) == 1:
+            raise ModelRetry("Search backend offline.")
+        return "Two results."
+
+    async def fetch_url(url: str = "a") -> str:
+        return "Page text."
+
+    saved: list[dict[str, Any]] = []
+    outcome = async_to_sync(PydanticAISessionRunner()._run_async)(
+        prompt="Search, then fetch.",
+        history=[],
+        deferred=None,
+        instructions="",
+        inference_model=TestModel(call_tools=["web_search", "fetch_url"], custom_output_text="done"),
+        toolsets=[FunctionToolset([web_search, fetch_url])],
+        limits=_usage_limits(),
+        emit=saved.append,
+        deadline=monotonic() + 30,
     )
 
-    transport = _transport_for(server)
+    assert (outcome.kind, len(searches)) == ("completed", 2)
+    assert [(call.title, call.status) for call in AgentTurn(updates=saved).tool_calls()] == [
+        ("web_search", "failed"),
+        ("fetch_url", "completed"),
+        ("web_search", "completed"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("kind", "material", "authorization"),
+    [
+        pytest.param(CredentialKind.STATIC_TOKEN, {"api_key": "agent-bearer"}, "Bearer agent-bearer", id="bearer"),
+        pytest.param(
+            CredentialKind.BASIC_AUTH,
+            {"username": "agent", "password": "pass"},
+            f"Basic {base64.b64encode(b'agent:pass').decode()}",
+            id="basic-auth",
+        ),
+    ],
+)
+def test_external_mcp_transport_sends_the_same_authorization_as_the_provisioned_config(
+    kind: str, material: dict[str, str], authorization: str,
+) -> None:
+    """The in-process transport and the provisioned ``.mcp.json`` send one server-owned header."""
+
+    owner = create_platform_admin(f"mcp-transport-{kind}")
+    with system_context(reason="test.mcp.transport"):
+        credential = Credential.objects.create_local_credential(owner, kind=kind, name="mcp", material=material)
+        server = MCPServer.objects.create(name="external", url="http://angee.test/mcp", credential=credential)
+        agent = Agent.objects.create(name="MCP transport agent", owner=owner)
+        agent.mcp_servers.add(server)
+        provisioned = agent.mcp_secrets()[agent.mcp_secret_name(server)]
+        rendered = agent.mcp_config()["mcpServers"]["external"]["headers"]
+        transport = _transport_for(server, agent)
 
     assert transport.url == "http://angee.test/mcp"
-    assert transport.headers == {"Authorization": "Bearer agent-bearer"}
-    assert credential.freshened == 1
+    assert transport.headers == {"Authorization": authorization}
+    assert provisioned == authorization
+    assert rendered == {"Authorization": f"${{{agent.mcp_authorization_env(server)}}}"}
+
+
+def test_internal_mcp_transport_sends_the_per_agent_bearer() -> None:
+    """A non-builtin internal server receives the agent's derived bearer in process, never the raw key."""
+
+    owner = create_platform_admin("mcp-transport-internal")
+    key = "k" * 40
+    with system_context(reason="test.mcp.transport.internal"):
+        credential = Credential.objects.create_local_credential(
+            owner, kind=CredentialKind.STATIC_TOKEN, name="internal-key", material={"api_key": key}
+        )
+        server = MCPServer(
+            name="internal", url="http://internal.test/mcp", credential=credential, placement=MCPPlacement.INTERNAL
+        )
+        server.full_clean()
+        server.save()
+        agent = Agent.objects.create(name="Internal transport agent", owner=owner)
+        agent.mcp_servers.add(server)
+        transport = _transport_for(server, agent)
+        provisioned = agent.mcp_secrets()[agent.mcp_secret_name(server)]
+        bearer = server.bearer_for(agent)
+
+    assert server.builtin == ""
+    assert transport.headers == {"Authorization": f"Bearer {bearer}"}
+    assert provisioned == transport.headers["Authorization"]
+    assert bearer.startswith(f"{agent.sqid}.") and key not in bearer
 
 
 def test_usage_limits_allow_a_multi_request_tool_turn(db: Any) -> None:

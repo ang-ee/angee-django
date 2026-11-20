@@ -1,7 +1,19 @@
 import * as React from "react";
-import { extractActionOutcome, publicGraphQLErrorsFromUnknown, type ActionOutcome } from "@angee/refine";
+import {
+  extractActionOutcome, publicGraphQLErrorsFromUnknown, type ActionOutcome, type AuthoredMutateOptions,
+} from "@angee/refine";
 import type { FieldValues, Path, UseFormReturn } from "react-hook-form";
 import { errorFromUnknown, graphQLErrorsFromUnknown } from "../../data/errors";
+
+/**
+ * The call options of a surface that renders a submission's failure itself (a dialog's
+ * banner, an action form's fields, an action's settle toast): refine's generic error
+ * notification is off, so the failure is reported once. Pass them on to the authored
+ * call the submission makes.
+ * @kind null
+ * @reason Transport infrastructure: the one quiet-call value form surfaces hand their callers.
+ */
+export const SURFACE_RENDERS_FAILURE: AuthoredMutateOptions = { errorNotification: false };
 
 export type DottedPathFieldErrorMap = Readonly<
   Record<string, readonly string[]>
@@ -91,6 +103,8 @@ function assertNeverResult(_result: never): never {
 }
 
 /** Narrow one submit result and bind its issues to RHF; malformed results fail loudly.
+ * A failure is shown once: a message bound to a rendered field stays under that field,
+ * and `fallback` stands in only for a failure no field and no form-level message names.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
@@ -143,7 +157,7 @@ export function applyFormErrors<TValues extends FieldValues, TData>(
   }
   const unclaimedSummary = dottedPathErrorSummary(unclaimed);
   if (unclaimedSummary) summary.push(unclaimedSummary);
-  const message = summary.join(" ") || options.fallback;
+  const message = summary.join(" ") || (Object.keys(bound).length > 0 ? "" : options.fallback);
   if (message) form.setError("root.server", { type, message });
   return true;
 }

@@ -319,10 +319,10 @@ def test_t16_redispatch_and_settlement_follow_both_lock_orders(execution, regist
         StepRun.objects.filter(pk=step_run.pk).update(dispatched_at=Now() - timedelta(seconds=61))
     entered, release = Event(), Event()
     role = local()
-    original_hold = WorkflowRunQuerySet.hold
+    original_hold = WorkflowRunQuerySet.lock_run
 
     @contextmanager
-    def hold(self, run_id, *, skip_locked=False, **kwargs):
+    def lock_run(self, run_id, *, skip_locked=False, **kwargs):
         with original_hold(self, run_id, skip_locked=skip_locked, **kwargs) as held:
             if getattr(role, "tick", False) and held is not None:
                 entered.set()
@@ -341,7 +341,7 @@ def test_t16_redispatch_and_settlement_follow_both_lock_orders(execution, regist
             return ctx.done(ctx.input)
 
     register_step(BlockingWorker)
-    monkeypatch.setattr(WorkflowRunQuerySet, "hold", hold)
+    monkeypatch.setattr(WorkflowRunQuerySet, "lock_run", lock_run)
     with ThreadPoolExecutor(max_workers=2) as pool:
         action = tick if first_holder == "tick" else lambda: runner.execute(step_run.pk)
         first = pool.submit(in_connection, action)
@@ -422,10 +422,10 @@ def test_t15_duplicate_delivery_holder_restores_busy_sibling(execution, monkeypa
     left, right = row(run, "left"), row(run, "right")
     pending, allow_lock, locked, release = Event(), Event(), Event(), Event()
     role = local()
-    original_hold = WorkflowRunQuerySet.hold
+    original_hold = WorkflowRunQuerySet.lock_run
 
     @contextmanager
-    def hold(self, run_id, *, skip_locked=False, **kwargs):
+    def lock_run(self, run_id, *, skip_locked=False, **kwargs):
         duplicate = getattr(role, "duplicate", False)
         if duplicate:
             pending.set()
@@ -441,7 +441,7 @@ def test_t15_duplicate_delivery_holder_restores_busy_sibling(execution, monkeypa
         role.duplicate = True
         return runner.execute(left.pk)
 
-    monkeypatch.setattr(WorkflowRunQuerySet, "hold", hold)
+    monkeypatch.setattr(WorkflowRunQuerySet, "lock_run", lock_run)
     with ThreadPoolExecutor(max_workers=2) as pool:
         stale = pool.submit(in_connection, duplicate)
         assert pending.wait(10)
@@ -465,11 +465,11 @@ def test_t15_duplicate_delivery_holder_restores_busy_sibling(execution, monkeypa
 def cancel_while_database_body_runs(workflow, run, actor, monkeypatch, register_step):
     """Request cancel on another connection while the real worker holds the run lock."""
     entered, cancel_waiting, release = Event(), Event(), Event()
-    original_hold = WorkflowRunQuerySet.hold
+    original_hold = WorkflowRunQuerySet.lock_run
     role = local()
 
     @contextmanager
-    def hold(self, run_id, *, skip_locked=False, **kwargs):
+    def lock_run(self, run_id, *, skip_locked=False, **kwargs):
         if getattr(role, "cancel", False):
             cancel_waiting.set()
         with original_hold(self, run_id, skip_locked=skip_locked, **kwargs) as held:
@@ -488,7 +488,7 @@ def cancel_while_database_body_runs(workflow, run, actor, monkeypatch, register_
             return ctx.done(ctx.input)
 
     register_step(BlockingBody)
-    monkeypatch.setattr(WorkflowRunQuerySet, "hold", hold)
+    monkeypatch.setattr(WorkflowRunQuerySet, "lock_run", lock_run)
     with ThreadPoolExecutor(max_workers=2) as pool:
         worker = pool.submit(in_connection, runner.execute, row(run, "entry").pk)
         assert entered.wait(10)
@@ -610,7 +610,7 @@ def test_commit_dispatch_skips_a_ready_row_locked_by_another_claim(execution):
             assert release.wait(10)
 
     def dispatch():
-        with WorkflowRun.objects.hold(run.pk):
+        with WorkflowRun.objects.lock_run(run.pk):
             pass
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -905,11 +905,11 @@ def test_t16_io_reap_and_settlement_follow_both_run_lock_orders(execution, regis
     actor, _ = execution
     entered, return_body, locked, release, settling = (Event() for _ in range(5))
     role = local()
-    original_hold = WorkflowRunQuerySet.hold
+    original_hold = WorkflowRunQuerySet.lock_run
     original_settle = StepRunQuerySet.settle
 
     @contextmanager
-    def hold(self, run_id, *, skip_locked=False, **kwargs):
+    def lock_run(self, run_id, *, skip_locked=False, **kwargs):
         current = getattr(role, "operation", None)
         if current == "settlement":
             settling.set()
@@ -941,7 +941,7 @@ def test_t16_io_reap_and_settlement_follow_both_run_lock_orders(execution, regis
             return ctx.done(ctx.input)
 
     register_step(RacingSettlement)
-    monkeypatch.setattr(WorkflowRunQuerySet, "hold", hold)
+    monkeypatch.setattr(WorkflowRunQuerySet, "lock_run", lock_run)
     monkeypatch.setattr(StepRunQuerySet, "settle", settle)
     workflow = load_workflow(document("entry"), key="io_reap_settle_race", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)

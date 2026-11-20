@@ -4,9 +4,8 @@ import { type ResourceQuery } from "@angee/metadata";
 import type { DndPayload } from "../../lib/dnd";
 import { useUiT } from "../../i18n";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
-import { GalleryView } from "../GalleryView";
+import { GalleryView, useGalleryRows } from "../GalleryView";
 import {
-  ResourceViewSwitcher,
   type FilterClauseField,
   type ResourceToolbarFilterOption,
   type ResourceToolbarGroupOption,
@@ -16,8 +15,9 @@ import {
   useResourceViewMaybe,
   type ResourceViewContextValue,
 } from "./resource-view-context";
-import { DEFAULT_TEXT_FILTER_FIELD, type ResourceViewGroup } from "./resource-view-model";
+import { DEFAULT_TEXT_FILTER_FIELD, resourceViewKindCapabilities, type ResourceViewGroup, type ResourceViewKind } from "./resource-view-model";
 import { EMPTY_SELECTED_IDS } from "./resource-view-codecs";
+import { selectedGroupsOf } from "./resource-view-grouped-model";
 import { validateResourceViewState } from "./model/state";
 import { filterForTextSearch, queryForColumns } from "./resource-query";
 import { ResourceQueryError } from "./ResourceQueryError";
@@ -34,17 +34,19 @@ import { ResourceListFrame } from "./ResourceListFrame";
 import { columnsWithMetadataDefaults } from "./model-metadata-defaults";
 import {
   listChromeState,
+  type CardRenderer,
   type ListSearchDeclaration,
   type ListEmptyContent,
   type ResourceCollectionPresentation,
   type ResourceTableHeaderVisibility,
   type ResourceTableLayout,
   type ListViewProps,
+  type PlacedBulkCollection,
 } from "./resource-view-types";
 import { useResourceSearch } from "./search/use-resource-search";
 import { useSearchCatalog } from "./search/catalog";
 import type { ResourceToolbarProps } from "../../toolbars";
-import { declaredGroupDefaults, validateDeclaredGroupDefaults } from "./search/group-defaults";
+import { declaredGroupDefaults, useAppliedRepeated, validateDeclaredGroupDefaults, withoutRepeated } from "./search/group-defaults";
 import {
   useRowActionsSurface,
   type RowActionDeclaration,
@@ -85,9 +87,10 @@ export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
   /** Controls rendered in the toolbar's leading slot, beside the filter. */
   toolbarActions?: React.ReactNode;
   /**
-   * Opt into a List/Grid switcher: when set, the toolbar gains a layout toggle
-   * and the Grid mode renders each row as a {@link GalleryView} card over the
-   * same filtered/paged surface. Navigation reuses `rowHref`/`onRowClick`.
+   * Offer the `gallery` view beside the list: the switcher toggles the view
+   * state (`?view=gallery` where the collection owns the URL), and the gallery
+   * renders each row as a {@link GalleryView} card over the same filtered, paged
+   * surface. Navigation reuses `rowHref`/`onRowClick`.
    */
   gallery?: RowsGalleryConfig<TRow>;
   /** Bulk actions rendered in the selection bar when rows are selected. */
@@ -99,15 +102,17 @@ export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
   scope?: "inherit" | "local";
 }
 
+/** The kinds an in-memory list with a gallery offers. */
+const ROWS_GALLERY_KINDS: readonly ResourceViewKind[] = ["list", "gallery"];
+const NO_GROUPS: readonly ResourceViewGroup[] = [];
+
 /** Card presentation for {@link RowsListViewProps.gallery}; mirrors GalleryView. */
 export interface RowsGalleryConfig<TRow extends StringIdRow = StringIdRow> {
   image?: keyof TRow & string;
   title?: keyof TRow & string;
   subtitle?: keyof TRow & string;
-  renderCard?: (row: TRow) => React.ReactNode;
+  renderCard?: CardRenderer<TRow>;
 }
-
-type RowLayout = "list" | "grid";
 
 /**
  * @kind surface
@@ -143,9 +148,13 @@ function ValidatedRowsListView<TRow extends StringIdRow>(
     () => props.query ?? queryForColumns(props.columns, null, defaults.groups),
     [props.query, props.columns, defaults],
   );
-  let state = props.resourceView.state;
+  // Local rows group in the browser, which cannot apply `GroupSpec.repeated`; the
+  // gallery never groups, so it leaves a stored flag alone, as ListView's gallery does.
+  const { grouping } = resourceViewKindCapabilities(props.resourceView.state.view);
+  const resourceView = useAppliedRepeated(props.resourceView, !grouping);
+  let state = resourceView.state;
   try {
-    validateDeclaredGroupDefaults("RowsListView", props.defaultGroup, undefined, props.resourceView.defaultState, t);
+    validateDeclaredGroupDefaults("RowsListView", props.defaultGroup, undefined, resourceView.defaultState, t);
   } catch (error) {
     return <ErrorBanner description={error instanceof Error ? error.message : String(error)} />;
   }
@@ -154,13 +163,14 @@ function ValidatedRowsListView<TRow extends StringIdRow>(
     state = validateResourceViewState({
       ...state,
       filter: filterForTextSearch(query, state.filter, "title", props.columns.map(({ field }) => field)),
-    }, query);
+      groupStack: grouping ? state.groupStack : withoutRepeated(state.groupStack),
+    }, query, { appliesRepeated: false });
   } catch (error) {
     state = { ...state, queryError: error instanceof Error ? error : new Error("Invalid query.") };
   }
   return state.queryError
-    ? <ResourceQueryError error={state.queryError} onReset={props.resourceView.resetQuery} />
-    : <RowsListViewBody {...props} />;
+    ? <ResourceQueryError error={state.queryError} onReset={resourceView.resetQuery} />
+    : <RowsListViewBody {...props} resourceView={resourceView} />;
 }
 
 function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
@@ -201,8 +211,9 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   // `subline` into its cell column, as the list frame does for a resource.
   const columns = React.useMemo(() => columnsWithMetadataDefaults(declaredColumns, null), [declaredColumns]);
   const rowActionSurface = useRowActionsSurface(rowActions);
-  const [layout, setLayout] = React.useState<RowLayout>("list");
-  const effectiveGroupStack = resourceView.state.groupStack;
+  // The gallery never groups (its kind's capability), as in `ListView`.
+  const effectiveGroupStack = resourceViewKindCapabilities(resourceView.state.view).grouping
+    ? resourceView.state.groupStack : NO_GROUPS;
 
   const surface = useRowsResourceViewSurface({
     rows,
@@ -228,6 +239,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
     textFilterField: DEFAULT_TEXT_FILTER_FIELD,
   });
   const selectedIds = selectable ? surface.selectedIds : EMPTY_SELECTED_IDS;
+  const galleryRows = useGalleryRows(surface.rowModels);
   const interactive = Boolean(onRowClick || rowHref);
   const filtered = Object.keys(resourceView.state.filter).length > 0;
   const resolvedEmptyContent = filtered
@@ -245,9 +257,9 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   const chrome = listChromeState(presentation, undefined, { ...surface.list, queryDirty: search.queryDirty });
   const toolbar: ResourceToolbarProps = {
     search, chrome, searchDeclaration, actions: toolbarActions, pager: surface.list,
-    viewSwitcher: gallery ? (
-      <ResourceViewSwitcher<RowLayout> mode="layout" view={layout} onViewChange={setLayout} />
-    ) : undefined,
+    ...(gallery ? {
+      view: resourceView.state.view, availableViews: ROWS_GALLERY_KINDS, onViewChange: resourceView.setView,
+    } : {}),
     onPageChange: resourceView.setPage, onPageSizeChange: resourceView.setPageSize,
   };
 
@@ -267,7 +279,9 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
                   filter: surface.mergedFilter,
                   // Scope snapshots are shared Rows; narrow to the declared row type (see bulkActions).
                   selectedRows: resourceView.selectedRows as readonly TRow[],
-                })
+                  // Rows grouped in the browser are never placed: a grouped list reports null.
+                  selectedGroups: selectedGroupsOf(selectedIds, effectiveGroupStack, null),
+                } satisfies PlacedBulkCollection<TRow>)
                 : undefined,
             }
           : undefined
@@ -275,9 +289,10 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
       error={error}
       loadingFooter={fetching && surface.rowModels.length > 0}
     >
-      {gallery && layout === "grid" ? (
+      {gallery && resourceView.state.view === "gallery" ? (
         <GalleryView<TRow>
-          rows={surface.rowModels.map((model) => model.original)}
+          rows={galleryRows.rows}
+          getRowId={galleryRows.getRowId}
           imageField={gallery.image}
           titleField={gallery.title}
           subtitleField={gallery.subtitle}
@@ -289,9 +304,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
           onCardClick={onRowClick}
           draggableRow={draggableRow}
           selectedIds={selectedIds}
-          onToggleSelected={selectable ? (id, selected) => resourceView.toggleSelectedId(
-            id, selected, surface.table.getCoreRowModel().rowsById[id]?.original,
-          ) : undefined}
+          onToggleSelected={selectable ? resourceView.toggleSelectedId : undefined}
           fetching={fetching}
           emptyContent={resolvedEmptyContent}
         />

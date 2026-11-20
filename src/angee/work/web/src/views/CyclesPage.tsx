@@ -39,6 +39,8 @@ export function CyclesPage(): React.ReactElement {
       {queue.error ? <ErrorBanner description={queue.error.message} /> : null}
       <List<WorkCycleRow>
         resource={CYCLE_MODEL}
+        // Cycles have per-row lifecycle verbs and no selection actions.
+        selectable={false}
         scope="local"
         baseFilter={{
           queue: { exact: queueId },

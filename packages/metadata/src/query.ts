@@ -13,6 +13,7 @@ export type FilterPrimitive = string | number | boolean | null;
 export type FilterValue = FilterPrimitive | readonly FilterValue[] | { readonly [key: string]: FilterValue };
 export type QueryFilter = { readonly [field: string]: FilterValue };
 export type FilterRecord = QueryFilter;
+
 export interface FilterChoice { value: FilterPrimitive; description?: string | null }
 export interface GroupBucket { key?: Readonly<Record<string, unknown>> | null }
 export interface GroupDimension { input: string; key: string; granularity?: string; rangeKey?: string }
@@ -21,6 +22,31 @@ export interface GroupProjection {
   orderBy: readonly { field: string; direction: "ASC"; nulls: "LAST" }[];
   valueKey: string;
   labelKey?: string;
+}
+/** One level's server group read (`ResourceQuery.toGroupRead`). */
+export interface GroupRead {
+  dimensions: GroupProjection["dimensions"];
+  orderBy: GroupProjection["orderBy"];
+  where: Record<string, unknown>;
+  /** A `repeated` level's HAVING: only groups of more than one record. */
+  having?: { readonly count_gt: number };
+}
+
+/** A group level's axis identity, its field and granularity: a stack names each axis once. */
+export function groupAxisId(spec: Pick<GroupSpec, "field" | "granularity">): string {
+  return spec.granularity ? `${spec.field}:${spec.granularity}` : spec.field;
+}
+
+/** Decode a group stack: valid level specs, each axis once (`groupAxisId`). */
+export function groupSpecsFrom(value: unknown): GroupSpec[] {
+  const specs = parse(GroupSpecsSchema, value, "groups");
+  const seen = new Set<string>();
+  for (const spec of specs) {
+    const id = groupAxisId(spec);
+    if (seen.has(id)) fail("groups", `duplicate group "${id}"`);
+    seen.add(id);
+  }
+  return specs;
 }
 
 const TEXT_OPERATORS: readonly FilterOperator[] = [
@@ -155,21 +181,14 @@ export class ResourceQuery {
   }
 
   groupsFrom(value: unknown = []): GroupAxis[] {
-    const specs = parse(GroupSpecsSchema, value, "groups");
-    const axes = specs.map((spec) => this.group(spec));
-    const seen = new Set<string>();
-    for (const axis of axes) {
-      if (seen.has(axis.id)) throw new QueryParseError("groups", `duplicate group "${axis.id}"`);
-      seen.add(axis.id);
-    }
+    const axes = parse(GroupSpecsSchema, value, "groups").map((spec) => this.group(spec));
+    // Canonical specs, so an identity path and its axis are one level.
+    groupSpecsFrom(axes.map((axis) => axis.spec));
     return axes;
   }
 
   axis(field: string, granularity?: string): GroupAxis {
-    const canonical = this.canonicalAxisField(field);
-    const declaration = canonical === undefined ? undefined : this.contract.axes[canonical];
-    if (canonical === undefined || !declaration) throw new QueryParseError(`groups.${field}`, "unknown group axis");
-    return new GroupAxis(this, declaration, { field: canonical, ...(granularity ? { granularity } : {}) });
+    return this.group({ field, ...(granularity ? { granularity } : {}) });
   }
 
   /** Resolve a declared axis or its unique identity path; labels never identify axes. */
@@ -180,7 +199,14 @@ export class ResourceQuery {
     return matches[0]?.[0];
   }
 
-  group(spec: GroupSpec): GroupAxis { return this.axis(spec.field, spec.granularity); }
+  group(spec: GroupSpec): GroupAxis {
+    const canonical = this.canonicalAxisField(spec.field);
+    const declaration = canonical === undefined ? undefined : this.contract.axes[canonical];
+    if (canonical === undefined || !declaration) throw new QueryParseError(`groups.${spec.field}`, "unknown group axis");
+    return new GroupAxis(this, declaration, {
+      field: canonical, ...(spec.granularity ? { granularity: spec.granularity } : {}), ...(spec.repeated ? { repeated: true } : {}),
+    });
+  }
 
   relation(field: string): QueryField["relation"] { return this.fields[field]?.relation; }
 
@@ -266,6 +292,18 @@ export class ResourceQuery {
     return { ...this.axis(field).groupBy(), where: this.toWhere(this.withoutFields(filter, [field])) };
   }
 
+  /**
+   * One level's server group read over `filter`. A `repeated` level reads only the
+   * records with a value on its axis and keeps its groups of more than one record,
+   * both on the server, so its counts and group pages are the repeated groups'.
+   */
+  toGroupRead(group: GroupSpec | GroupAxis, filter?: unknown): GroupRead {
+    const axis = this.resolveAxis(group);
+    const { dimensions, orderBy } = axis.groupBy();
+    const repeated = axis.spec.repeated ? axis.valued() : undefined;
+    return { dimensions, orderBy, where: this.toWhere(filter, repeated), ...(repeated ? { having: { count_gt: 1 } } : {}) };
+  }
+
   sortFrom(value: unknown = this.contract.sort.default): QuerySort[] {
     const entries: unknown[] = Array.isArray(value)
       ? value
@@ -311,6 +349,7 @@ export class ResourceQuery {
     const value = this.filterInputValue(declaration, selected);
     const scalar = declaration.filter?.scalar ?? declaration.scalar;
     if (value != null && (scalar === "Date" || scalar === "DateTime")) return temporalValue(value, scalar);
+    if (value != null && scalar === "Time") return clockValue(value);
     return value;
   }
 
@@ -464,12 +503,29 @@ export class GroupAxis {
   readonly id: string;
   readonly extraction: QueryExtraction | undefined;
   constructor(private readonly query: ResourceQuery, readonly declaration: QueryAxis, readonly spec: GroupSpec) {
-    this.id = spec.granularity ? `${spec.field}:${spec.granularity}` : spec.field;
+    this.id = groupAxisId(spec);
     this.extraction = spec.granularity ? declaration.extractions.find((item) => item.name === spec.granularity) : undefined;
     if (spec.granularity && !this.extraction) throw new QueryParseError(`groups.${spec.field}.granularity`, `unsupported extraction "${spec.granularity}"`);
+    if (spec.repeated && !this.repeatable) throw new QueryParseError(`groups.${spec.field}.repeated`, "axis cannot list only its repeated values");
   }
   get field(): string { return this.spec.field; }
   get granularity(): string | undefined { return this.spec.granularity; }
+  /** Whether a server group read can list only this axis's repeated values (`GroupSpec.repeated`). */
+  get repeatable(): boolean { return this.valued() !== undefined; }
+  /**
+   * The records with a value on this axis: the null group, and a text column's blank
+   * group, left out, since a missing value is not a repeated one. Undefined when the
+   * axis has no server read or its drill cannot tell those groups apart.
+   */
+  valued(): QueryFilter | undefined {
+    const drill = this.extraction ? this.extraction.drill : this.declaration.drill;
+    if (!this.declaration.server || !drill || drill.nullMode !== "isNull") return undefined;
+    const filter = this.query.fields[drill.field]?.filter;
+    if (!filter?.operators.includes("isNull")) return undefined;
+    const blank = filter.scalar === "String" || filter.values.some(({ value }) => value === "");
+    if (blank && !filter.operators.includes("ne")) return undefined;
+    return this.query.filterFrom({ [drill.field]: { isNull: false, ...(blank ? { ne: "" } : {}) } });
+  }
   get selection(): string[] {
     if (!this.declaration.identityPath) throw new QueryParseError(`groups.${this.field}`, "axis does not support client grouping");
     return [...this.declaration.paths];
@@ -681,6 +737,7 @@ function matchesComparison(value: unknown, operator: FilterOperator, operand: Fi
     if (value == null) return value === right;
     if (scalar === "JSON") return JSON.stringify(jsonValue(value, path)) === JSON.stringify(jsonValue(right, path));
     if (scalar === "Date" || scalar === "DateTime") return temporalValue(value, scalar) === temporalValue(right, scalar);
+    if (scalar === "Time") return clockValue(value) === clockValue(right);
     if (scalar === "Decimal") return compareDecimal(value, right, path) === 0;
     return value === right;
   };
@@ -761,6 +818,13 @@ function validTime(value: string): boolean {
     && Number(match[5] ?? 0) < 24 && Number(match[6] ?? 0) < 60 && Number(match[7] ?? 0) < 60;
 }
 
+/** A comparable clock, as SQL compares `time`: "09:30" equals "09:30:00", fractions at nanosecond width. */
+function clockValue(value: unknown): string {
+  if (typeof value !== "string" || !validTime(value)) return fail("time", "invalid time value");
+  const [, hours, minutes, seconds = "00", fraction = "", offset] = /^(\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?(.*)$/.exec(value)!;
+  return `${hours}:${minutes}:${seconds}.${fraction.slice(0, 9).padEnd(9, "0")}${offset}`;
+}
+
 function validCalendarDate(value: string, scalar: string): boolean {
   const match = /^(\d{4})-(\d{2})-(\d{2})(.*)$/.exec(value);
   if (!match || match[0] !== value || (scalar === "Date" ? match[4] !== "" : match[4] !== "" && !match[4]!.startsWith("T"))) return false;
@@ -771,7 +835,8 @@ function validCalendarDate(value: string, scalar: string): boolean {
 }
 function compareValues(left: unknown, right: unknown, scalar: string, path: string): number {
   if (scalar === "Decimal") return compareDecimal(left, right, path);
-  const comparable = (value: unknown): string | number => scalar === "Date" || scalar === "DateTime" ? temporalValue(value, scalar) : typeof value === "number" ? value : String(value);
+  const comparable = (value: unknown): string | number => scalar === "Date" || scalar === "DateTime" ? temporalValue(value, scalar)
+    : scalar === "Time" ? clockValue(value) : typeof value === "number" ? value : String(value);
   const a = comparable(left), b = comparable(right);
   return a < b ? -1 : a > b ? 1 : 0;
 }

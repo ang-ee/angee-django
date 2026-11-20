@@ -198,6 +198,13 @@ describe("createApp selection", () => {
     });
     expect(select({ search: "?app=nowhere", hostname: "elsewhere.localhost" })).toMatchObject({ app: null, rail: null, brand: null });
     expect(select({ search: "" })).toMatchObject({ app: null, rail: null, diagnostics: [] });
+    // A host that opens one app still reaches every root through a named app without a rail.
+    const console = deployment({ apps: { console: {} }, app: "requests.files" });
+    const opened = (search: string) => createApp({ ...testAppInput([...addons, console], layouts), location: { search } });
+    expect(opened("").explain.selection).toMatchObject({ app: "requests.files", rail: ["requests.files"] });
+    const full = opened("?app=console");
+    expect(full.explain.selection).toMatchObject({ app: "console", rail: null, sources: { app: "?app=console" } });
+    expect(full.explain.selection.rail).toBeNull();
     // Without a location the page's own URL selects.
     const { location: _location, ...unlocated } = input;
     history.replaceState(null, "", "/files?app=requests");
@@ -233,6 +240,11 @@ describe("createApp selection", () => {
     expect(() => createApp(input(valid, { hosts: { "requests.localhost": "nothing" } }))).toThrow(
       'ANGEE_UI.shell.hosts["requests.localhost"] selects "nothing", which is neither a menu root id nor an ANGEE_UI.shell.apps name.',
     );
+    expect(() => createApp(input(valid, { app: "nothing" }))).toThrow(
+      'ANGEE_UI.shell.app selects "nothing", which is neither a menu root id nor an ANGEE_UI.shell.apps name.',
+    );
+    expect(() => createApp(input(valid, { apps: { console: {} }, app: "requests", hosts: { "requests.localhost": "console" } })))
+      .not.toThrow();
     expect(() => createApp(input(valid, { hosts: { "Requests.localhost": "requests" } }))).toThrow(
       'ANGEE_UI.shell.hosts["Requests.localhost"] must be a lower-case hostname.',
     );
@@ -256,6 +268,7 @@ describe("createApp selection", () => {
       app: "focus",
       rail: ["requests", "requests.files"],
       brand: { name: "Requests", mark: "requests" },
+      brandFallback: true,
       home: "requests.all",
       sources: {
         app: "?app=focus",
@@ -881,7 +894,6 @@ describe("createApp auth routing", () => {
       ],
       defaultSchema: "console",
       subscriptionSchema: "console",
-      loginPath: "/sign-in",
       layouts: {
         public: {
           chrome: TestChrome,
@@ -923,7 +935,6 @@ describe("createApp auth routing", () => {
         public: { chrome: TestChrome, requireAuth: false, schema: "public" },
         console: { chrome: TestChrome, requireAuth: true },
       }),
-      loginPath: "/sign-in",
     });
     const host = document.createElement("div");
     document.body.append(host);
@@ -1930,12 +1941,11 @@ describe("createApp route tree", () => {
     const app = createApp({
       ...testAppInput([{ id: "pages", routes: [
         { name: "private", path: "/private", component: () => createElement("p", null, "Private page") },
-        { name: "sign-in", path: "/sign-in", layout: "public", component: () => createElement("p", null, "Sign-in page") },
+        { name: "auth.login", path: "/sign-in", layout: "public", component: () => createElement("p", null, "Sign-in page") },
       ] }], {
         console: { chrome: TestChrome, requireAuth: true },
         public: { chrome: TestChrome, requireAuth: false, schema: "public" },
       }),
-      loginPath: "/sign-in",
       schemas: {
         public: { ...TEST_SCHEMAS.public, fetch: unauthorizedFetch },
         console: { ...TEST_SCHEMAS.console, fetch: unauthorizedFetch },
@@ -2564,6 +2574,65 @@ test("a mount serves the mounted page in the borrowing app, which keeps its link
       filter: undefined,
     }));
   } finally { root.unmount(); host.remove(); }
+});
+
+test("a model's card is its one child at <app.Model>#card, reading fields the model has", () => {
+  const card = { render: () => null };
+  const notes = testDataResource("notes.Note", { fields: [{ name: "title", kind: "scalar", scalar: "String", readable: true,
+    aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false }] });
+  const input = (...addons: BaseAddon[]): CreateAppInput => ({
+    ...testAppInput([{
+      id: "desk",
+      routes: resourcePageRoutes("desk.all", "/desk", EmptyPage, "notes.Note"),
+      menus: { desk: { route: "desk.all" } },
+    }, ...addons]),
+    schemas: testSchemasWithConsoleResources([notes]),
+  });
+  const cards: BaseAddon = { id: "cards", containers: { "notes.Note#card": { "cards.note": { content: card, requiredFields: ["title"] } } } };
+  expect(() => createApp(input(cards))).not.toThrow();
+  // The composer allows one card per model (unique: "address").
+  expect(() => createApp(input(cards, { id: "skin", containers: { "notes.Note#card": { "skin.note": { content: card } } } })))
+    .toThrow(/Children "cards.note" and "skin.note" of "notes.Note#card" are both its one child/);
+  // Impl children and variants vary the one card per row.
+  expect(() => createApp(input(cards, { id: "skin", dependsOn: ["cards"], containers: { "notes.Note#card": {
+    "skin.note-pinned": { content: card, variant: { of: "cards.note", impl: "pinned" } },
+    "skin.note-archived": { content: card, impl: "archived" },
+  } } }))).not.toThrow();
+  // The card owner checks the content as the search owner checks shortcuts.
+  // Untyped manifests (JavaScript, JSON-built) reach the content check too.
+  const untyped = (content: unknown) => ({ id: "cards", containers: { "notes.Note#card": { "cards.note": { content } } } }) as BaseAddon;
+  expect(() => createApp(input(untyped({ render: "card" })))).toThrow(/Card "cards.note" needs a render function/);
+  expect(() => createApp(input(untyped({ ...card, frame: "bleed" })))).toThrow(/Card "cards.note" names frame "bleed"/);
+  // A field path resolves through the metadata path owner: a scalar has no sub-field.
+  expect(() => createApp(input({ id: "cards", containers: { "notes.Note#card": { "cards.note": { content: card, requiredFields: ["title.length"] } } } })))
+    .toThrow(/reads unknown fields "title.length"/);
+  // A layer replaces a model's card by removing the one its dependency declared.
+  expect(() => createApp(input(cards, { id: "skin", dependsOn: ["cards"], containers: { "notes.Note#card": {
+    "cards.note": { remove: true }, "skin.note": { content: card },
+  } } }))).not.toThrow();
+  expect(() => createApp(input({ id: "cards", containers: { "resource#card": { "cards.any": { content: card } } } })))
+    .toThrow(/a card belongs to one model/);
+  expect(() => createApp(input({ id: "cards", containers: { "notes.Note#card": { "cards.note": { content: card, requiredFields: ["missing"] } } } })))
+    .toThrow(/Card "cards.note" of "notes.Note" reads unknown fields "missing"/);
+});
+
+test("the login page takes one contributed hero: two fail at boot until a layer removes one, and its content is checked", () => {
+  const hero = { render: () => createElement("p", null, "Hero"), presentation: "full-bleed" as const, backgroundImageUrl: "/brand.webp" };
+  const brand: BaseAddon = { id: "brand", containers: { "auth.login#hero": { "brand.login-hero": { content: hero } } } };
+  const other: BaseAddon = { id: "other", containers: { "auth.login#hero": { "other.login-hero": { content: { render: () => null } } } } };
+  expect(() => createApp(testAppInput([brand]))).not.toThrow();
+  // The framework declares the hero unique per address, as a model's card.
+  expect(() => createApp(testAppInput([brand, other])))
+    .toThrow(/Children "brand.login-hero" and "other.login-hero" of "auth.login#hero" are both its one child/);
+  // The deployment's ANGEE_UI.containers, which depends on every addon, removes the one it does not want.
+  const deployment: BaseAddon = { id: "deployment", dependsOn: ["brand", "other"],
+    containers: { "auth.login#hero": { "other.login-hero": { remove: true } } } };
+  expect(() => createApp(testAppInput([brand, other, deployment]))).not.toThrow();
+  // Untyped manifests (JavaScript, JSON-built) reach the content check too.
+  const untyped = (content: unknown) => ({ id: "brand", containers: { "auth.login#hero": { "brand.login-hero": { content } } } }) as BaseAddon;
+  expect(() => createApp(testAppInput([untyped({ render: "hero" })]))).toThrow(/Login hero "brand.login-hero" needs a render component/);
+  expect(() => createApp(testAppInput([untyped({ ...hero, presentation: "split" })]))).toThrow(/names presentation "split"/);
+  expect(() => createApp(testAppInput([untyped({ ...hero, backgroundImageUrl: 1 })]))).toThrow(/needs a string backgroundImageUrl/);
 });
 
 test("a preset opening on a contributed view kind needs a resource#views child offering it", () => {

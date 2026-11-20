@@ -15,6 +15,7 @@ import { useUiT } from "../../../i18n";
 import { createLabelForResource } from "../resource-view-utils";
 import type { ListComponent } from "../List";
 import { useBulkDelete } from "../useBulkDelete";
+import { useBulkAction } from "../bulk-action";
 import { useResourceView } from "../resource-view-context";
 import type { CalendarViewSpec } from "../resource-view-types";
 import { mergePageFacets } from "../../page";
@@ -60,6 +61,8 @@ export function ResourceListBody<TRow extends Row = Row>({
   calendar,
   laneSource,
   boardCard,
+  gallery,
+  renderCard,
   fields,
   relatedModels,
   list: ListRenderer = ListView as ListComponent<TRow>,
@@ -75,6 +78,7 @@ export function ResourceListBody<TRow extends Row = Row>({
   defaultRecordTab,
   toolbarActions,
   cardActions,
+  cardFrame,
   emptyContent,
   draggableRow,
   className,
@@ -126,10 +130,13 @@ export function ResourceListBody<TRow extends Row = Row>({
     rowHref: resolvedRowHref,
     toolbarActions,
     cardActions,
+    cardFrame,
     draggableRow,
     emptyContent,
     laneSource: resolvedLaneSource,
     boardCard,
+    gallery,
+    renderCard,
     ...(declarations.list
       ? listElementRenderProps(declarations.list.props)
       : {}),
@@ -200,8 +207,8 @@ export function ResourceListBody<TRow extends Row = Row>({
     handleSelectRecord?.(null);
   }, [handleSelectRecord]);
   const handleCalendarSelectRange = React.useCallback(
-    (start: Date, end: Date) => {
-      setQuickCreateDefaults(calendar?.createDefaults?.(start, end));
+    (start: Date, end: Date, allDay: boolean) => {
+      setQuickCreateDefaults(calendar?.createDefaults?.(start, end, allDay));
       handleSelectRecord?.(null);
     },
     [calendar, handleSelectRecord],
@@ -251,7 +258,8 @@ export function ResourceListBody<TRow extends Row = Row>({
   const handleRecordDeleted = React.useCallback(() => {
     handleCloseRecord?.();
   }, [handleCloseRecord]);
-  const recordDelete = useBulkDelete(resource, recordDeleteIds, handleRecordDeleted);
+  const recordBulk = useBulkAction(modelMetadata?.resource, handleRecordDeleted);
+  const recordDelete = useBulkDelete(resource, recordDeleteIds, recordBulk);
   const recordDeleteAction = open && recordDelete.canDelete
     ? {
         canDelete: recordDeleteIds.size > 0,
@@ -332,7 +340,7 @@ export function ResourceListBody<TRow extends Row = Row>({
       toolbarStart={formRenderProps.toolbarStart}
       toolbar={composeNodes(formRenderProps.toolbar, recordHeaderActions)}
       deleteAction={recordDeleteAction}
-      publishBreadcrumbLabel={routed && !resolvedCreating}
+      publishBreadcrumbLabel={routed}
     />
   ) : null;
   const recordContent = renderRecord && !resolvedCreating

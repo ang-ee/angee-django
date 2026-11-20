@@ -1,6 +1,8 @@
 import { createNamespaceT } from "@angee/ui/i18n";
 
 export const enWorkMessages: Record<string, string> = {
+  "triage.action.wake": "Wake",
+  "project.team": "Team",
   "access.manager": "Manager",
   "common.category": "Category",
   "common.completed": "Completed",
@@ -15,6 +17,13 @@ export const enWorkMessages: Record<string, string> = {
   "queue.group.estimates": "Estimates",
   "queue.stages.title": "Stages",
   "stage.behaviour": "Rules",
+  "stage.description": "Description",
+  "stage.description.help": "What this stage requires before a task moves on.",
+  "stage.fold": "Folded",
+  "stage.fold.help": "Boards show this stage collapsed until someone expands it.",
+  "stage.rottingDays": "Rotting after (days)",
+  "stage.rottingDays.help":
+    "Days a task may rest in this stage before it needs attention; leave empty for no limit.",
   "stage.ruleOwned": "Moved by rules",
   "stage.ruleOwned.help":
     "Only automation rules move tasks into or out of this stage; hand moves and the default stage are refused.",

@@ -37,6 +37,7 @@ from rebac import (
     system_context,
     to_subject_ref,
 )
+from rebac.actors import is_sudo
 from rebac.errors import MissingActorError
 from rebac.mixins import RebacModelBase
 from rebac.resources import model_resource_type
@@ -54,7 +55,7 @@ from angee.base.models.ownership import OwnerMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.trash import TrashMixin, TrashQuerySet
 from angee.base.permissions import actor_user_id, scoped_relation_read
-from angee.base.querysets import row_lock_paths
+from angee.base.querysets import row_lock_queryset
 from angee.base.signals import send_created_batch
 from angee.knowledge.retrieval import MAX_SEARCH_PAGE_SIZE, RetrievalBackend, RetrievalHit, RetrievalResult
 from angee.messaging.models import ThreadedModelMixin
@@ -338,6 +339,13 @@ class Vault(OwnerMixin, TrashMixin, HistoryMixin, AngeeDataModel, concrete=True)
 
     rebac_grantable = {"viewer": "share"}
 
+    PEOPLE: ClassVar[str] = "knowledge.vault_people"
+    """The resource handle of the people vault, provisioned by knowledge's install tier (``for_resource``).
+
+    One unowned vault holds a folder page per person (:meth:`RecordBindingManager.party_folder`). Its readers and
+    writers are a vault's own; nobody reads it until a deployment grants it, but its administrators.
+    """
+
     sqid_prefix = "vlt_"
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True, default="")
@@ -413,7 +421,9 @@ class PageManager[PageT: Page](_PageManagerBase[PageT]):
 
         The preflight evaluates the schema's ``create = vault->write`` with
         the relations the new row would carry, so only actors who can write
-        the vault may add pages to it. A parent from another vault is
+        the vault may add pages to it. Without an actor, inside a system
+        context (an import), the page is system work: no preflight, and no
+        author. A parent from another vault is
         refused — the vault is the permission boundary, and a foreign
         parent would extend ``parent->read``/``parent->write`` across it.
         """
@@ -422,18 +432,21 @@ class PageManager[PageT: Page](_PageManagerBase[PageT]):
         if parent is not None and parent.vault_id != vault.pk:
             raise ValueError("Page parent must belong to the same vault.")
         actor = current_actor()
-        if actor is None:
+        if actor is None and not is_sudo():
             raise MissingActorError("Creating a knowledge page requires an actor.")
         relationships = {"vault": (to_subject_ref(vault),)}
         if parent is not None:
             relationships["parent"] = (to_subject_ref(parent),)
         resource_type = model_resource_type(self.model)
-        if resource_type is None or not check_new(
-            subject=to_subject_ref(actor),
-            action="create",
-            resource_type=resource_type,
-            relationships=relationships,
-        ).allowed:
+        if actor is not None and (
+            resource_type is None
+            or not check_new(
+                subject=to_subject_ref(actor),
+                action="create",
+                resource_type=resource_type,
+                relationships=relationships,
+            ).allowed
+        ):
             raise PermissionDenied(f"Denied: {actor} cannot create {resource_type or 'knowledge/page'}")
         kind = fields.pop("kind", self.model.PageKind.NOTE)
         page_model: type[Page] = self.model
@@ -447,7 +460,8 @@ class PageManager[PageT: Page](_PageManagerBase[PageT]):
         page = page_model(vault=vault, **fields).sudo(reason="knowledge.page.create")
         page.full_clean()
         page.save()
-        return self.model._base_manager.get(pk=page.pk).with_actor(actor)
+        created = self.model._base_manager.get(pk=page.pk)
+        return created.with_actor(actor) if actor is not None else created
 
     def _copy_tree_in(
         self, vault: Vault, pages: Mapping[Any, Page], *, actor: SubjectRef,
@@ -615,6 +629,18 @@ class Page(
 
 
 
+class SourcedWrite(StrEnum):
+    """What :meth:`RecordBindingManager.write_sourced_page` did with a source's text."""
+
+    WRITTEN = "written"
+    UNCHANGED = "unchanged"
+    EDITED = "edited"
+
+
+SOURCED_TEXT_MARKER = "Newer text from the source, not written over this page's edits:"
+"""The line that introduces a source's newer text appended below a person's edit of a sourced page."""
+
+
 class RecordBindingQuerySet[BindingT: RecordBinding](AngeeHistoryQuerySet[BindingT]):
     """Binding selections that keep the selected population and its actor."""
 
@@ -650,6 +676,120 @@ class RecordBindingManager[BindingT: RecordBinding](_RecordBindingManagerBase[Bi
     """
 
     DEFAULT_ROLE = "related"
+    FOLDER_ROLE = "folder"
+    """The role a party's folder page is bound under (:meth:`party_folder`); like every role, it grants nothing."""
+
+    def party_folder(self, party: models.Model, *, vault: Vault, title: str) -> Any:
+        """Return ``party``'s folder page in ``vault``: the oldest live page bound to it under :attr:`FOLDER_ROLE`.
+
+        When it has none, create a folder page titled ``title`` (a title is unique
+        in its vault) and bind it under that role. The party's row is locked
+        before its folders are read, as :meth:`upsert` locks a target, so two
+        requests for one party serialize and the second finds the first's
+        folder. A merge moves every folder of the merged party to the survivor:
+        the oldest is its folder, none is made, and a person tidies the others.
+        A person makes it by the vault's own permissions and the binding's (write
+        on the page and on the party); an import, in a system context, as
+        system work. The folder's pages read and write through the vault alone.
+        """
+
+        page_model = self.model._meta.apps.get_model("knowledge", "Page")
+        with transaction.atomic():
+            found = self._oldest_bound_page(party, vault=vault, role=self.FOLDER_ROLE)
+            if found is None:
+                created = page_model.objects.create_in(vault, title=title, kind=page_model.PageKind.FOLDER)
+                self.upsert(target=party, page=created, role=self.FOLDER_ROLE)
+                return created
+            return self._readable(page_model, found)
+
+    def write_sourced_page(
+        self, party: models.Model, *, vault: Vault, role: str, folder_title: str, title: str, body: str,
+        written: str | None,
+    ) -> SourcedWrite:
+        """Write a source's text ``body`` into ``party``'s note bound to it under ``role``, never over a person's edit.
+
+        The note is the oldest live markdown page of ``vault`` bound to the party
+        under ``role`` (normalized as every role is: stripped, a slug; knowledge's
+        own :attr:`DEFAULT_ROLE` and :attr:`FOLDER_ROLE` are refused), so a person
+        may rename or move it and it stays the source's; after a merge the
+        survivor's oldest is it, and none is made. When there is none, a note
+        titled ``title`` is made under the party's folder (:meth:`party_folder`,
+        ``folder_title``) and bound under ``role``: the title must be free in the
+        vault. ``written`` is the text this source last wrote there, ``None`` for
+        none (a directory mapping reads it from its link:
+        ``DirectoryMapping.applied``). The same text again, or an empty first one,
+        writes nothing, not even the folder (``UNCHANGED``). A new note, or one
+        that still holds ``written`` (an empty one when there is none), takes
+        ``body``, compare-and-set on the hash it holds (``WRITTEN``). A note a
+        person has edited since keeps their text, and the newer text is appended
+        below it under a marker, quoted, so it is neither applied over theirs nor
+        lost (``EDITED``); the source's record history keeps it too. A concurrent
+        edit refuses the write (``StaleBodyError``). An import calls it as system
+        work. The binding shows the note in the party's Pages group, by its title.
+        """
+
+        role = self.model.normalize_role(role)
+        if role in (self.DEFAULT_ROLE, self.FOLDER_ROLE):
+            raise ValidationError({"role": f"{role!r} is a role of knowledge's own: name the source's text."})
+        if body == (written or ""):
+            return SourcedWrite.UNCHANGED
+        apps_ = self.model._meta.apps
+        page_model, markdown_model = apps_.get_model("knowledge", "Page"), apps_.get_model("knowledge", "MarkdownPage")
+        bodies = markdown_model.objects
+        with transaction.atomic():
+            found = self._oldest_bound_page(party, vault=vault, role=role, page__markdown__isnull=False)
+            if found is None:
+                if page_model._base_manager.filter(vault=vault, title=title, is_trashed=False).exists():
+                    raise ValidationError(
+                        {"title": f"Another page of this vault already uses the title {title!r}: give the source's "
+                         "new note a title of its own."}
+                    )
+                folder = self.party_folder(party, vault=vault, title=folder_title)
+                note = page_model.objects.create_in(vault, parent=folder, title=title, body=body)
+                self.upsert(target=party, page=note, role=role)
+                return SourcedWrite.WRITTEN
+            markdown = self._readable(markdown_model, found)
+            if markdown.body_hash == markdown.hash_body(written or ""):
+                bodies.write_body(markdown, body, expected_hash=markdown.body_hash)
+                return SourcedWrite.WRITTEN
+            quoted = "\n".join(f"> {line}" if line else ">" for line in body.splitlines())
+            bodies.append(markdown, f"{SOURCED_TEXT_MARKER}\n\n{quoted}", expected_hash=markdown.body_hash)
+            return SourcedWrite.EDITED
+
+    def _oldest_bound_page(self, party: models.Model, *, vault: Vault, role: str, **filters: Any) -> Any | None:
+        """Lock ``party``'s row, then return the id of its oldest live page of ``vault`` bound under ``role``.
+
+        The lock is the one :meth:`upsert` takes on a target, so two requests for
+        one party's page serialize and the second reads the first's binding.
+        """
+
+        party_model = apps.get_model("parties", "Party")
+        reference = generic_target(self.model.require_saved(party, "party"))
+        if reference.content_type.model_class() is not party_model:
+            raise ValidationError("A person's pages belong to a person or an organization.")
+        with system_context(reason="knowledge.party_page"):
+            row_lock_queryset(party_model, no_key=True).get(pk=reference.object_id)
+            return (
+                self.model._base_manager.filter(
+                    **reference.lookups(self.model, "target"),
+                    role=role,
+                    page__vault=vault,
+                    page__is_trashed=False,
+                    **filters,
+                )
+                .order_by("page_id")
+                .values_list("page_id", flat=True)
+                .first()
+            )
+
+    @staticmethod
+    def _readable(model: type[models.Model], pk: Any) -> Any:
+        """Return the row ``pk`` as the caller reads it; refuse one the caller cannot read."""
+
+        row = model._default_manager.filter(pk=pk).first()
+        if row is None:
+            raise PermissionDenied("The page is not readable.")
+        return row
 
     def create_note(
         self, *, target: models.Model, vault: Vault, body: str,
@@ -724,18 +864,12 @@ class RecordBindingManager[BindingT: RecordBinding](_RecordBindingManagerBase[Bi
                 canonical = reference.content_type.model_class()
                 if canonical is None:
                     raise ValueError("Knowledge binding target model is unavailable.")
-                canonical._base_manager.select_for_update(of=row_lock_paths(canonical), no_key=True).get(
-                    pk=reference.object_id
-                )
+                row_lock_queryset(canonical, no_key=True).get(pk=reference.object_id)
             owner = page
             if owner is not None:
                 # Serialize binding admission with page trash.
                 with system_context(reason="knowledge.record_binding.page_lock"):
-                    owner = (
-                        type(owner)
-                        ._base_manager.select_for_update(of=row_lock_paths(type(owner)), no_key=True)
-                        .get(pk=owner.pk)
-                    )
+                    owner = row_lock_queryset(type(owner), no_key=True).get(pk=owner.pk)
                     assert isinstance(owner, TrashMixin)
                     if owner.is_trashed:
                         raise ValidationError("Cannot bind a page in the trash.")

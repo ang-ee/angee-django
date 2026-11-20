@@ -6,6 +6,9 @@ cycling back through model discovery.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timedelta
@@ -23,6 +26,49 @@ if TYPE_CHECKING:
 
 UNSET = object()
 """Omitted record binding; ``None`` explicitly clears the target."""
+
+_discovery_exempt: ContextVar[bool] = ContextVar("angee_integrate_discovery_exempt", default=False)
+
+
+@contextmanager
+def exempt_from_discovery() -> Iterator[None]:
+    """Let the stream commits inside commit while the stream's integration is not discovery-ready.
+
+    The one way past ``SyncStreamManager.lock_current``'s discovery check, for a
+    commit that rests on no remote fact discovery confirms: local state (a pin, a
+    dismissed failure, a conflict reopened after its follow-through was refused)
+    and the reflection of a write already sent, whose remote effect has landed, so
+    leaving it unrecorded would write it again or conflict. Each caller names it
+    where it commits; everything else stays fenced. It is a context of the running
+    code, so a caller needs no stream row to declare it.
+    """
+
+    token = _discovery_exempt.set(True)
+    try:
+        yield
+    finally:
+        _discovery_exempt.reset(token)
+
+
+def discovery_exempt() -> bool:
+    """Whether the stream commits running here were declared exempt (:func:`exempt_from_discovery`)."""
+
+    return _discovery_exempt.get()
+
+EXTERNAL_KEY_LENGTH = 512
+"""The longest remote identity: a ``RecordLink.external_key``, and so a ``SyncStream.partition``.
+
+A child stream's partition is its container's external key, one fact, so both
+columns take this one length; the driver refuses a longer record identity.
+"""
+
+LOCAL_VERSION_LENGTH = 244
+"""The longest local version a push adapter yields (``LocalChange.local_version``); the driver refuses a longer one.
+
+A link holds it behind the mapping version that projected it
+(``RecordLink.local_version``): a positive integer of at most ten digits and a
+colon, within that column's 255 characters.
+"""
 
 
 class StreamKind(models.TextChoices):
@@ -48,10 +94,16 @@ class StreamPhase(models.TextChoices):
 
 
 class StreamState(models.TextChoices):
-    """Reopening a closed generation starts a fresh baseline."""
+    """Reopening a closed generation starts a fresh baseline.
+
+    A retired generation's container link stopped observing (tombstoned or
+    withdrawn), so it is no longer drained; it reopens only once its container is
+    live again (``SyncStreamManager.bump_generation``).
+    """
 
     OPEN = "open", "Open"
     CLOSED = "closed", "Closed"
+    RETIRED = "retired", "Retired"
 
 
 class LinkStatus(models.TextChoices):
@@ -98,6 +150,21 @@ class ConflictKeep(models.TextChoices):
 
 
 @dataclass(frozen=True, slots=True)
+class MappingContribution:
+    """One declarer's part of a composed stream mapping (``StreamDefinition.mapping_contributions``).
+
+    Parts apply in ``sequence`` order, ties broken by ``key``. Integrate orders
+    them and the stream retains only their keys and versions in that order, so
+    the order never depends on how a declarer collected its parts, and
+    renumbering that keeps the order changes nothing.
+    """
+
+    key: str
+    version: int
+    sequence: int = field(kw_only=True)
+
+
+@dataclass(frozen=True, slots=True)
 class StreamDefinition:
     """The declaration-owned facts for one independently ordered partition."""
 
@@ -113,18 +180,93 @@ class StreamDefinition:
     snapshot: bool = False
     authoritative: bool = False
     mapping_version: int = 1
-    """Increase when mapping changes require a fresh baseline of existing records."""
+    """The version of a mapping one declarer owns; increase it to replay existing records.
+
+    A lower version is a rollback that keeps progress, on a stream that never
+    composed its mapping. A stream whose mapping is composed from several
+    declarers declares ``mapping_contributions`` instead and leaves this at its
+    default; any other version beside them is refused.
+    """
+    # No stream column holds this declaration, so the mark keeps it out of the copy into a stream; dropping
+    # the mark would mean probing the model's fields instead, which fails silently on a missing column.
+    mapping_contributions: tuple[MappingContribution, ...] = field(default=(), metadata={"stream_field": False})
+    """A mapping composed from several declarers, one :class:`MappingContribution` each.
+
+    :meth:`mapping_parts` validates and orders them. The stream then owns the
+    version (``SyncStreamManager.current``): any change
+    of the ordered keys and versions replays every record once, under a version
+    none of its records was applied with. The stream retains the ordered keys and
+    versions, not this declaration.
+    """
+    holds_containers: bool = False
+    """Whether this stream's records are containers of other partitions; a changed value updates the stream."""
+    container: RecordLink | None = None
+    """The parent stream's link whose record this partition belongs to.
+
+    The partition is the container's external key. An unavailable container
+    pauses this stream; one that stops observing retires it.
+    """
 
     @classmethod
     def from_stream(cls, stream: SyncStream) -> StreamDefinition:
-        """Read declaration facts from a persisted generation without another field inventory."""
+        """Read declaration facts from a persisted generation without another field inventory.
 
-        return cls(**{item.name: deepcopy(getattr(stream, item.name)) for item in fields(cls)})
+        A field marked ``stream_field=False`` is no stream column of the same
+        shape: the stream manager writes what the stream keeps of it.
+        """
+
+        return cls(**{name: _independent(getattr(stream, name)) for name in _stream_facts(cls)})
 
     def stream_fields(self) -> dict[str, Any]:
         """Return independent values suitable for creating a stream generation."""
 
-        return {item.name: deepcopy(getattr(self, item.name)) for item in fields(self)}
+        return {name: _independent(getattr(self, name)) for name in _stream_facts(self)}
+
+    def mapping_parts(self) -> tuple[tuple[str, int], ...]:
+        """Validate the declared mapping; return its contributions as ``(key, version)`` parts in applied order.
+
+        Integrate owns the order, by sequence then key, so a list collected in
+        registration order never depends on load order, and renumbering that
+        keeps the order is no change. A version is an integer of at least 1,
+        never a boolean or a float. Beside contributions only the default plain
+        version passes; an explicit 1 is indistinguishable from it.
+        """
+
+        def is_version(value: Any) -> bool:
+            return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+        if not is_version(self.mapping_version):
+            raise ValidationError("A stream mapping version must be a positive integer.")
+        parts = self.mapping_contributions
+        if not isinstance(parts, tuple | list) or not all(
+            isinstance(part, MappingContribution)
+            and isinstance(part.key, str)
+            and part.key
+            and is_version(part.version)
+            and isinstance(part.sequence, int)
+            for part in parts
+        ):
+            raise ValidationError(
+                "Mapping contributions are MappingContribution parts with a nonempty key, a positive integer "
+                "version and an integer sequence."
+            )
+        if len({part.key for part in parts}) != len(parts):
+            raise ValidationError("Mapping contribution keys must be distinct.")
+        if parts and self.mapping_version != 1:
+            raise ValidationError("A stream declares a mapping version or mapping contributions, not both.")
+        return tuple((part.key, part.version) for part in sorted(parts, key=lambda part: (part.sequence, part.key)))
+
+
+def _stream_facts(definition: StreamDefinition | type[StreamDefinition]) -> tuple[str, ...]:
+    """The declaration fields a stream generation stores under the same name and shape."""
+
+    return tuple(item.name for item in fields(definition) if item.metadata.get("stream_field", True))
+
+
+def _independent(value: Any) -> Any:
+    """Copy a declaration value; a row such as the container keeps its identity."""
+
+    return value if isinstance(value, models.Model) else deepcopy(value)
 
 
 class SyncFailure(BaseModel):

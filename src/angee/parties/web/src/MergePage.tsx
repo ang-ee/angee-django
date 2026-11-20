@@ -5,7 +5,7 @@ import {
   LoadingPanel, MetaGrid, Page, PageBody, PageFooter, PageHeader, RadioGroup, RailPanel, avatarInitials, optionLabel,
   rowValueAtPath, useConfirm, useEnumOptions, useRouteHref, useRouteParam, type WidgetOption,
 } from "@angee/ui";
-import { useNavigate } from "@tanstack/react-router";
+import { useCanGoBack, useNavigate, useRouter } from "@tanstack/react-router";
 
 import {
   MergeParties,
@@ -152,10 +152,15 @@ function SurvivorOption({
   );
 }
 
-/** Compare two parties, select the survivor, and execute the model-owned merge. */
+/**
+ * Compare two parties, select the survivor, and execute the model-owned merge.
+ * Cancel and Keep separate go back to where the comparison was opened.
+ */
 export function MergePage(): React.ReactElement {
   const t = usePartiesT();
   const navigate = useNavigate();
+  const router = useRouter();
+  const canGoBack = useCanGoBack();
   const routeHref = useRouteHref();
   const leftId = useRouteParam("left") ?? "";
   const rightId = useRouteParam("right") ?? "";
@@ -218,16 +223,19 @@ export function MergePage(): React.ReactElement {
     : 0;
   const busy = mergeState.fetching || dismissState.fetching;
 
-  // The merge flow's home is the review queue (its route parent).
+  // Back is where the comparison was opened (the review queue, a person, a list in
+  // whichever app mounts it), restored by the router's history; a comparison
+  // opened directly falls back to the review queue, its route parent.
   const goBack = React.useCallback(() => {
-    void navigate({ to: routeHref("parties.review") });
-  }, [navigate, routeHref]);
+    if (canGoBack) router.history.back();
+    else void navigate({ to: routeHref("parties.review") });
+  }, [canGoBack, navigate, routeHref, router]);
 
   const submitMerge = React.useCallback(async () => {
     if (!left || !right) return;
     const into = survivor === "left" ? left : right;
     const source = survivor === "left" ? right : left;
-    // Merging is irreversible: the source record disappears into the survivor.
+    // The source record folds into the survivor; the merge reverts from its changeset, as the confirmation says.
     const ok = await confirm({
       title: t("merge.confirmTitle", { name: into.display_name }),
       body: t("merge.confirmBody", { source: source.display_name, name: into.display_name }),

@@ -57,7 +57,7 @@ export function TriageInboxPage(): React.ReactElement {
                   stage: { exact: triageStageId },
                   started_triage_at: { isNull: false },
                   triaged_at: { isNull: true },
-                  snoozed_until: { isNull: true },
+                  snoozed_at: { isNull: true },
                 }
               : { id: { inList: [] } }
           }

@@ -113,6 +113,22 @@ class WorkCampaignTests(TransactionTestCase):
         self.assertTrue(accepted["result"][0]["ok"])
         self.assertEqual(accepted["result"][0]["sqid"], triage["sqid"])
 
+    def test_hold_tools_refuse_a_caller_without_task_write_and_keep_the_hold(self):
+        task = self.task(category="triage")
+        with actor_context(self.actor):
+            task.with_actor(self.actor).snooze()
+        task.refresh_from_db()
+        held = (task.snoozed_at, task.snoozed_by_id, task.revision)
+        tools = {tool.name: tool for tool in async_to_sync(mcp_server().list_tools)()}
+        for name in ("wake_task", "snooze_task"):
+            with self.subTest(tool=name), actor_context(self.outsider):
+                refused = async_to_sync(tools[name].run)(
+                    {"sqid": task.sqid, "expected_revision": task.revision},
+                ).structured_content
+                self.assertFalse(refused["ok"], refused)
+        task.refresh_from_db()
+        self.assertEqual((task.snoozed_at, task.snoozed_by_id, task.revision), held)
+
     def test_every_hand_verb_can_write_existing_zero_after_policy_tightens(self):
         verbs = ("start", "complete", "reopen", "accept", "decline", "drop", "drop_duplicate",
                  "return_to_triage", "mark_duplicate", "snooze")
@@ -226,6 +242,16 @@ class WorkCampaignTests(TransactionTestCase):
         self.assertIn("provision_stages", schema.get_type("work_queues_insert_input").fields)
         self.assertNotIn("provision_stages", schema.get_type("work_queues_set_input").fields)
         self.assertNotIn("provision_stages", schema.get_type("work_queues_bool_exp").fields)
+
+    def test_stage_entered_at_is_server_owned_on_tasks(self):
+        schema = GraphQLSchemas.from_discovery().build("public")._schema
+        self.assertIn("stage_entered_at", schema.get_type("TaskType").fields)
+        self.assertIn("stage_entered_at", schema.get_type("project_tasks_bool_exp").fields)
+        self.assertNotIn("stage_entered_at", schema.get_type("project_tasks_insert_input").fields)
+        self.assertNotIn("stage_entered_at", schema.get_type("project_tasks_set_input").fields)
+        stage_inputs = (schema.get_type("work_stages_insert_input"), schema.get_type("work_stages_set_input"))
+        for stage_input in stage_inputs:
+            self.assertTrue({"description", "fold", "rotting_days"} <= set(stage_input.fields))
 
     def test_project_reader_cannot_resolve_an_unreadable_team_relation(self):
         schema = GraphQLSchemas.from_discovery().build("public")

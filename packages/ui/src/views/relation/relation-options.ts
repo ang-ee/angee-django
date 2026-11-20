@@ -1,12 +1,15 @@
 import * as React from "react";
 import {
+  QueryParseError,
   ResourceQuery,
   modelFieldForPath,
   refineResourceName,
   rowPublicId,
   rowValueAtPath,
+  unarchivedFilter,
   useModelMetadata,
   useSchemaFieldMetadata,
+  type QueryFilter,
   type Row,
 } from "@angee/metadata";
 import {
@@ -51,6 +54,10 @@ export interface RelationOptionsConfig {
   optionStatusField?: string;
   /** Context values required by the computed status field. */
   optionStatusArguments?: readonly ListQueryFieldArgument[];
+  /** Related-row field whose value heads the option's picker group (e.g. a category's name). */
+  optionGroupField?: string;
+  /** Related-row number ordering those groups (e.g. a category's position); ungrouped options trail. */
+  optionGroupOrderField?: string;
   /** One-based server page, shared by pickers and row catalogues. */
   page?: number;
   pageSize?: number;
@@ -59,8 +66,8 @@ export interface RelationOptionsConfig {
   /**
    * Server-side filters narrowing which related rows are offered — for a
    * relation whose target holds more kinds of row than the field accepts (e.g.
-   * only `app_keys` credentials). Omitted, the picker offers every row the
-   * resource's own queryset exposes.
+   * only `app_keys` credentials). Picker searches also apply the resource's
+   * default archive scope unless an authored filter references its archive flag.
    */
   filters?: readonly CrudFilter[];
   where?: Record<string, unknown>;
@@ -83,6 +90,8 @@ export interface RelationOptionsResult {
 
 export interface RelationPickerOptionsConfig
   extends Omit<RelationOptionsConfig, "enabled" | "searchText" | "page"> {
+  /** Read the full catalogue, including archived rows, when choosing a filter value. */
+  includeArchived?: boolean;
   value?: string | null;
   /** Folded selected row supplied by a parent record read, when available. */
   selectedOption?: RelationOption;
@@ -171,7 +180,7 @@ export function useRelationPickerOptions(
   );
   const selected = React.useMemo(() => suppliedSelected ?? (resolved?.value === value ? resolved : undefined)
     ?? (value ? { value, label: value } : undefined), [resolved, suppliedSelected, value]);
-  const result = useRelationOptions(relation, {
+  const result = useRelationPickerSearch(relation, {
     ...optionsConfig, page,
     enabled: opened,
     searchText,
@@ -216,6 +225,38 @@ export function useRelationPickerOptions(
   );
 }
 
+/** Collection search shared by the single and multi pickers. Catalogue searches
+ * and conditions the query contract cannot decode retain their unscoped reads.
+ * @owner RelationFieldWidget
+ */
+export function useRelationPickerSearch(
+  relation: RelationFieldInfo | null,
+  config: RelationOptionsConfig & Pick<RelationPickerOptionsConfig, "includeArchived"> = {},
+): RelationOptionsResult {
+  const resource = useModelMetadata(relation?.resource ?? "")?.resource;
+  const { includeArchived = false, ...options } = config;
+  const { filters, where } = options;
+  const scopedWhere = React.useMemo(() => {
+    if (includeArchived) return where;
+    const empty = {};
+    const defaultFilter = unarchivedFilter(resource, empty, filters);
+    // Preserve raw conditions when metadata or a native predicate disables scope.
+    if (!resource || defaultFilter === empty) return where;
+    const query = ResourceQuery.from(resource);
+    if (!where) return query.toWhere(defaultFilter);
+    let filter: QueryFilter;
+    try {
+      filter = query.fromWhere(where);
+    } catch (error) {
+      if (error instanceof QueryParseError) return where;
+      throw error;
+    }
+    const scoped = unarchivedFilter(resource, filter, filters);
+    return scoped === filter ? where : query.toWhere(scoped);
+  }, [includeArchived, resource, filters, where]);
+  return useRelationOptions(relation, { ...options, where: scopedWhere });
+}
+
 /** Search executable text fields on the server, otherwise labels in the loaded page.
  * @owner RelationFieldWidget
  */
@@ -232,6 +273,8 @@ export function useRelationOptions(
     optionDescriptionField,
     optionStatusField,
     optionStatusArguments,
+    optionGroupField,
+    optionGroupOrderField,
     page = 1,
     pageSize = RELATION_OPTION_LIMIT,
     sort = false,
@@ -286,6 +329,8 @@ export function useRelationOptions(
     ...(extraFields ?? []),
     ...(optionDescriptionField ? [optionDescriptionField] : []),
     ...(optionStatusField ? [optionStatusField] : []),
+    ...(optionGroupField ? [optionGroupField] : []),
+    ...(optionGroupField && optionGroupOrderField ? [optionGroupOrderField] : []),
   ])]);
   const stableWhere = useValueStable(where);
   const stableStatusArguments = useValueStable(optionStatusArguments);
@@ -344,6 +389,8 @@ export function useRelationOptions(
       colorField,
       descriptionField: optionDescriptionField,
       statusField: optionStatusField,
+      groupField: optionGroupField,
+      groupOrderField: optionGroupOrderField,
       statusLabel: (value) => {
         const option = statusMetadata?.values?.find((item) => item.value === value);
         return option ? enumValueLabel(option) : statusLabel(value);
@@ -354,7 +401,7 @@ export function useRelationOptions(
       ? options.filter((option) => `${option.label} ${option.description ?? ""} ${option.status?.label ?? ""}`
         .toLocaleLowerCase().includes(labelSearch))
       : options;
-  }, [colorField, labelField, labelSearch, optionDescriptionField, optionStatusField, resolveStatusTone, rows, sort, statusMetadata, statusTones]);
+  }, [colorField, labelField, labelSearch, optionDescriptionField, optionGroupField, optionGroupOrderField, optionStatusField, resolveStatusTone, rows, sort, statusMetadata, statusTones]);
   return React.useMemo(() => ({ list, options, rows }), [list, options, rows]);
 }
 
@@ -390,6 +437,8 @@ function relationOptionsFromRows(
     statusField?: string;
     statusLabel?: (value: string) => string;
     statusTone?: (value: string) => Tone;
+    groupField?: string;
+    groupOrderField?: string;
   } = {},
 ): readonly RelationOption[] {
   const options = rows.flatMap((row) => {
@@ -399,6 +448,9 @@ function relationOptionsFromRows(
     const description = descriptionValue == null ? "" : String(descriptionValue).trim();
     const statusValue = config.statusField ? rowValueAtPath(row, config.statusField) : undefined;
     const status = statusValue == null ? "" : String(statusValue).trim();
+    const groupValue = config.groupField ? rowValueAtPath(row, config.groupField) : undefined;
+    const groupLabel = groupValue == null ? "" : String(groupValue).trim();
+    const groupOrder = config.groupOrderField ? rowValueAtPath(row, config.groupOrderField) : undefined;
     return [{
       value,
       label: relationOptionLabel(row, labelField, value),
@@ -409,6 +461,10 @@ function relationOptionsFromRows(
         label: config.statusLabel?.(status) ?? statusLabel(status),
         tone: config.statusTone?.(status) ?? "brand",
       } } : {}),
+      ...(groupLabel ? {
+        group: groupLabel,
+        ...(typeof groupOrder === "number" && Number.isFinite(groupOrder) ? { groupOrder } : {}),
+      } : {}),
     }];
   });
   return config.sort

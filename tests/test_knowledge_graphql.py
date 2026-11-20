@@ -701,7 +701,7 @@ def test_delete_vault_previews_blast_radius(db: None) -> None:
             schema,
             """
             mutation Preview($id: ID!) {
-              delete_vault(id: $id) {
+              vaults_delete(id: $id) {
                 total_deleted_count has_blockers deleted { label count }
               }
             }
@@ -709,7 +709,7 @@ def test_delete_vault_previews_blast_radius(db: None) -> None:
             {"id": vault_id},
             user=alice,
         )
-    )["delete_vault"]
+    )["vaults_delete"]
     assert preview["total_deleted_count"] >= 2
     assert preview["has_blockers"] is False
     assert {group["label"] for group in preview["deleted"]} >= {"vaults", "pages"}
@@ -720,7 +720,7 @@ def test_delete_vault_previews_blast_radius(db: None) -> None:
             schema,
             """
             mutation Confirm($id: ID!) {
-              delete_vault(id: $id, confirm: true) { total_deleted_count }
+              vaults_delete(id: $id, confirm: true) { total_deleted_count }
             }
             """,
             {"id": vault_id},
@@ -735,7 +735,7 @@ def test_delete_vault_previews_blast_radius(db: None) -> None:
 def test_knowledge_delete_preview_requires_delete_permission(
     db: None, resource: str, confirm: bool,
 ) -> None:
-    """Readers cannot inspect deletion counts through either authored endpoint."""
+    """Readers cannot inspect deletion counts through either generated endpoint."""
 
     owner = create_user("knowledge-delete-owner")
     reader = create_user("knowledge-delete-reader")
@@ -752,7 +752,7 @@ def test_knowledge_delete_preview_requires_delete_permission(
     result = execute_schema(
         _schema("public"),
         f"""mutation Delete($id: ID!, $confirm: Boolean!) {{
-          delete_{resource}(id: $id, confirm: $confirm) {{ total_deleted_count blocked {{ label count }} }}
+          {resource}s_delete(id: $id, confirm: $confirm) {{ total_deleted_count blocked {{ label count }} }}
         }}""",
         {"id": _public_id(target), "confirm": confirm},
         user=reader,

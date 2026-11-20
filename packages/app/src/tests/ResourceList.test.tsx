@@ -1619,7 +1619,7 @@ describe("ResourceList", () => {
     );
   });
 
-  test("folds record actions into the Actions menu", async () => {
+  test("promotes an unplaced record verb to the band and keeps explicit menu verbs and Delete in Actions", async () => {
     render(
       <TestUrlState>
         <ResourceList
@@ -1631,6 +1631,7 @@ describe("ResourceList", () => {
           <Form>
             <Field name="title" label="Title" title />
             <Action id="archive" label="Archive" set={{ status: "ARCHIVED" }} />
+            <Action id="reopen" label="Reopen" placement="menu" set={{ status: "ACTIVE" }} />
           </Form>
         </ResourceList>
       </TestUrlState>,
@@ -1638,11 +1639,13 @@ describe("ResourceList", () => {
 
     await screen.findByLabelText("Title");
     expect(screen.getAllByRole("button", { name: "Actions" })).toHaveLength(1);
-    expect(screen.queryByRole("button", { name: "Archive" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Archive" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Reopen" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Actions" }));
     expect(await screen.findByRole("menuitem", { name: "Delete" })).toBeTruthy();
-    expect(screen.getByRole("menuitem", { name: "Archive" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Reopen" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Archive" })).toBeNull();
   });
 
   test("omits record Delete when the resource exposes no delete root", async () => {

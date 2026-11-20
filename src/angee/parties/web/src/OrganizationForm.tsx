@@ -5,6 +5,7 @@ import { usePartiesT } from "./i18n";
 import { PartyAddresses } from "./PartyAddresses";
 import { IdentityTab } from "./IdentityTab";
 import { usePartyContactActions } from "./party-contact-actions";
+import { renderPartyUnavailable } from "./PartyRecordRedirect";
 
 const MODEL = "parties.Organization";
 
@@ -39,7 +40,9 @@ export function useOrganizationFields(): React.ReactElement {
         <Field name="domain" label={t("organization.field.domain")} />
       </Group>
       {containerContents(extraFields)}
-      <Field name="notes" />
+      <Group label={t("common.notes")} pane="notes" columns={1}>
+        <Field name="notes" />
+      </Group>
     </>
   );
 }
@@ -50,7 +53,8 @@ export function OrganizationForm({ resource: _resource, recordTabs, ...props }: 
   const fields = useOrganizationFields();
   const contactActions = usePartyContactActions();
   return (
-    <Form {...props} resource={MODEL} eyebrow={t("organization.eyebrow")} recordTabs={recordTabs ?? organizationTabs(t)}>
+    <Form {...props} resource={MODEL} eyebrow={t("organization.eyebrow")} recordTabs={recordTabs ?? organizationTabs(t)}
+      renderUnavailable={renderPartyUnavailable}>
       {fields}
       <Field name="tags" />
       {contactActions}

@@ -6,6 +6,7 @@ import { describe, expect, test, vi } from "vitest";
 
 import { DialogForm } from "../fragments/DialogForm";
 import { Dialog } from "../ui/dialog";
+import { DropdownMenu } from "../ui/dropdown-menu";
 import { AppRuntimeProvider, createAngeeI18nInstance } from "../runtime";
 import { ActionMenu, ActionTrigger } from "./ActionMenu";
 
@@ -19,6 +20,27 @@ describe("ActionMenu", () => {
     fireEvent.click(trigger);
     const menu = await screen.findByRole("menu");
     expect(menu.closest("[data-align]")?.getAttribute("data-align")).toBe("end");
+  });
+
+  test.each([
+    ["the default labeled Actions menu", {}],
+    ["an icon-only vertical menu", { label: null, "aria-label": "Actions" }],
+    ["a horizontal more menu", { glyph: "more-horizontal", label: "More actions" }],
+  ])("%s is an overflow menu: its trigger orders itself last in its row", (_name, props) => {
+    render(<div className="flex">
+      <ActionMenu {...props}><ActionTrigger>Inspect example</ActionTrigger></ActionMenu>
+      <button type="button">Pause</button>
+    </div>);
+    const trigger = screen.getAllByRole("button").find((button) => button.textContent !== "Pause");
+    expect(trigger?.hasAttribute("data-overflow-trigger")).toBe(true);
+    expect(trigger?.classList.contains("order-last")).toBe(true);
+  });
+
+  test.each(["plus", "columns", "layout-dashboard", null])("a menu behind the %s glyph is a button of its own and stays where it is written", (glyph) => {
+    render(<ActionMenu glyph={glyph} label="New"><ActionTrigger>Folder</ActionTrigger></ActionMenu>);
+    const trigger = screen.getByRole("button", { name: "New" });
+    expect(trigger.hasAttribute("data-overflow-trigger")).toBe(false);
+    expect(trigger.classList.contains("order-last")).toBe(false);
   });
 
   test("uses UI vocabulary and adapts toolbar actions into native menu items", async () => {
@@ -127,6 +149,24 @@ describe("ActionMenu", () => {
     expect(run).toHaveBeenCalledOnce();
   });
 
+  test("shows no trigger while its contributions render no item, and shows it once one does", () => {
+    const menu = (item: React.ReactNode) => (
+      <React.StrictMode><ActionMenu label="Commands"><RendersNothing />{item}</ActionMenu></React.StrictMode>
+    );
+    const { rerender } = render(menu(null));
+    expect(screen.queryByRole("button", { name: "Commands" })).toBeNull();
+
+    rerender(menu(<ActionTrigger>Run command</ActionTrigger>));
+    expect(screen.getByRole("button", { name: "Commands" })).toBeTruthy();
+
+    // A contributed submenu counts as an item too.
+    rerender(menu(<DropdownMenu.SubmenuRoot><DropdownMenu.SubmenuTrigger>Run workflow</DropdownMenu.SubmenuTrigger></DropdownMenu.SubmenuRoot>));
+    expect(screen.getByRole("button", { name: "Commands" })).toBeTruthy();
+
+    rerender(menu(<DropdownMenu.Separator />));
+    expect(screen.queryByRole("button", { name: "Commands" })).toBeNull();
+  });
+
   test("aggregates pending contributions and clears loading on settling or unmounting", () => {
     const menu = (first: boolean, second: boolean, includeSecond = true) => (
       <React.StrictMode><ActionMenu label="Connect">
@@ -145,6 +185,10 @@ describe("ActionMenu", () => {
     expect(trigger.disabled).toBe(false);
   });
 });
+
+function RendersNothing(): null {
+  return null;
+}
 
 function NestedDialogAction({ onInspect }: { onInspect?: () => void }): React.ReactElement {
   const [open, setOpen] = React.useState(false);

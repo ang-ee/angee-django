@@ -32,7 +32,7 @@ export function useRoleGrantActions(): readonly RowActionDeclaration<IAMGrant>[]
       cancel: () => t("grants.revoke.cancel"),
     },
     toast: {
-      title: () => t("grants.revoke.failedTitle"),
+      successTitle: () => t("grants.revoke.succeededTitle"), failureTitle: () => t("grants.revoke.failedTitle"),
       description: () => t("grants.revoke.error"),
     },
     variant: "danger",

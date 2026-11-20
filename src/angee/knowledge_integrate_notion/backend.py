@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable, Sequence
-from datetime import datetime, timedelta
+from datetime import datetime
 from time import monotonic
 from typing import Any, ClassVar, Literal, cast
 from uuid import UUID
@@ -12,19 +11,25 @@ from uuid import UUID
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 from rebac import actor_context
 
 from angee.base.serialization import canonical_json_sha256
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.errors import IntegrationError
-from angee.integrate.http import HttpClientMixin
+from angee.integrate.http import HttpClientMixin, HttpRefusal
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.states import StreamDefinition, StreamKind, SyncFailureKind
 from angee.integrate.streams import ApplyResult, CursorInvalid, RecordChange, SemanticError, StreamPage
 from angee.knowledge.models import Page
 from angee.knowledge_integrate_notion.markdown import NotionMarkdownConverter
+
+
+class NotionBot(BaseModel):
+    """A bot user's details; a token's own bot names the workspace it belongs to."""
+
+    workspace_id: str = ""
 
 
 class NotionUser(BaseModel):
@@ -33,6 +38,7 @@ class NotionUser(BaseModel):
     object: Literal["user"]
     id: UUID
     name: str | None = None
+    bot: NotionBot | None = None
 
 
 class NotionText(BaseModel):
@@ -113,20 +119,35 @@ class NotionMarkdown(BaseModel):
     unknown_block_ids: list[UUID]
 
 
+_CONTENT_REFUSED = {
+    "oversized": "Notion returned more content for this page than one sync reads.",
+    "unreadable": "Notion returned content for this page that the sync cannot read.",
+}
+"""What an observation whose content integrate refused (``HttpRefusal.cause``) tells the operator."""
+
+
 class NotionSnapshot(BaseModel):
     """One source observation retained by RecordLink, including database properties."""
 
     node: NotionNode
     content: NotionMarkdown | None = None
     unavailable: bool = False
+    content_refused: Literal["oversized", "unreadable"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    """Why integrate refused Notion's answer for this page's content; left out of an observation without it."""
 
     @property
     def failure(self) -> SemanticError | None:
-        """Incomplete or inaccessible observations must never replace a good body."""
+        """Incomplete, inaccessible, oversized or unreadable observations must never replace a good body."""
         if self.unavailable:
             return SemanticError(
                 "notion_page_unavailable",
                 details={"message": "Notion could not return this page. Check that it is shared with the connection."},
+            )
+        if self.content_refused is not None:
+            return SemanticError(
+                f"notion_page_{self.content_refused}", details={"message": _CONTENT_REFUSED[self.content_refused]}
             )
         if self.content is not None and (self.content.truncated or self.content.unknown_block_ids):
             return SemanticError(
@@ -150,21 +171,26 @@ class NotionCursor(BaseModel):
     after: str = ""
 
 
-class NotionResponseError(IntegrationError):
-    """A provider status with a safe message, never the provider's response body."""
+_PUBLIC_MESSAGES = {
+    401: "Notion rejected this credential. Reconnect Notion or check that the API token has not been revoked.",
+    403: "The Notion connection needs read-content capability and access to the source pages.",
+    404: "The Notion page is unavailable or is no longer shared with this connection.",
+}
+"""The statuses Notion's error words itself; every other refusal takes integrate's public message."""
 
-    def __init__(self, status: int, *, retry_after: timedelta | None = None) -> None:
-        self.status = status
-        messages = {
-            401: "Notion rejected this API token. Check that it is valid and has not been revoked.",
-            403: "The Notion connection needs read-content capability and access to the source pages.",
-            404: "The Notion page is unavailable or is no longer shared with this connection.",
-        }
-        super().__init__(
-            messages.get(status, f"Notion request failed (HTTP {status})."),
-            transient=status == 429 or status >= 500,
-            retry_after=retry_after,
-        )
+
+class NotionResponseError(IntegrationError):
+    """A Notion refusal whose ``refusal`` keeps the facts of its answer; its message never repeats the answer."""
+
+    refusal: HttpRefusal
+
+    @classmethod
+    def of(cls, refusal: HttpRefusal) -> NotionResponseError:
+        """Return Notion's error for ``refusal``, in Notion's words for a refused credential, grant or page."""
+
+        error = refusal.as_error(cls, "Notion", public_message=_PUBLIC_MESSAGES.get(refusal.status or 0))
+        error.refusal = refusal
+        return error
 
 
 class NotionBackend(BridgeImpl, HttpClientMixin):
@@ -174,12 +200,11 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
     key = "notion"
     label = "Notion"
     icon = "integration"
-    oauth_client = ""
     defaults = {"vendor": "notion"}
     requires_connection_discovery = True
     supports_identity_reads = True
     sync_parallelism = 1
-    mapping_version: ClassVar[int] = 4
+    mapping_version: ClassVar[int] = 5
 
     def _request[T: BaseModel](
         self,
@@ -190,39 +215,51 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
         credential: Any = None,
     ) -> T:
         credential = credential or self.bridge.fresh_credential()
-        if credential is None or credential.kind != CredentialKind.STATIC_TOKEN:
-            raise IntegrationError("Attach an API token credential for Notion.")
+        # Notion's OAuth connect and an internal integration's API token are both bearer tokens.
+        if credential is None or credential.kind not in (CredentialKind.OAUTH, CredentialKind.STATIC_TOKEN):
+            raise IntegrationError("Connect Notion or attach a Notion API token credential.")
         if not credential.secret_value():
-            raise IntegrationError("The Notion API token is empty.")
-        response = self.http.request(
+            raise IntegrationError("The Notion credential has no token.")
+        return self.http.request_model(
             "GET" if payload is None else "POST",
             f"https://api.notion.com/v1/{path}",
-            headers={
-                **credential.auth_headers(),
-                "Notion-Version": "2026-03-11",
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            },
-            body=None if payload is None else json.dumps(payload).encode(),
-            max_bytes=8 * 1024 * 1024,
+            headers={**credential.auth_headers(), "Notion-Version": "2026-03-11"},
+            json=payload,
+            model=model,
+            error=NotionResponseError.of,
         )
-        if not response.is_success:
-            hint = response.headers.get("Retry-After", "")
-            delay = timedelta(seconds=int(hint)) if hint.isdecimal() and 0 < int(hint) <= 86400 else None
-            raise NotionResponseError(response.status_code, retry_after=delay)
-        try:
-            return model.model_validate_json(response.content)
-        except ValidationError as error:
-            raise IntegrationError("Notion returned an invalid response.") from error
 
     def probe(self, credential: Any) -> NotionUser:
         """Authenticate using the same transport and error policy as synchronization."""
         return self._request(NotionUser, "users/me", credential=credential)
 
     def discover_connection(self, credential: Any) -> ConnectionDiscovery:
-        """Let Integration own credential validation, retries and completion state."""
-        self.probe(credential)
-        return ConnectionDiscovery()
+        """Read the workspace the token's bot belongs to; :meth:`apply_discovery` judges it."""
+        bot = self.probe(credential).bot
+        return ConnectionDiscovery(data={"workspace_id": bot.workspace_id if bot is not None else ""})
+
+    def apply_discovery(self, discovery: ConnectionDiscovery) -> None:
+        """Keep the connection's workspace; refuse a token of another, or one that names none.
+
+        The kept workspace is the first one discovery recorded or, before that,
+        the one the connection's Notion account was authorized for: Notion's OAuth
+        token answer names it, and connect keeps it in the account's
+        ``identity_claims``. A connection with neither (an API token connected
+        before discovery kept a workspace) records the workspace it reads.
+        """
+        workspace = discovery.data.get("workspace_id")
+        if not workspace:
+            raise IntegrationError(
+                "Notion did not say which workspace this token belongs to; "
+                "reconnect Notion or attach an internal integration's API token."
+            )
+        recorded = self.bridge.subscription_state.get("workspace_id")
+        account = None if recorded else self.bridge.account
+        kept = recorded or (account.identity_claims.get("workspace_id") if account is not None else None)
+        if kept and kept != workspace:
+            raise IntegrationError("This connection belongs to another Notion workspace; create a separate connection.")
+        if not recorded:
+            self.bridge.merge_subscription_state(workspace_id=workspace)
 
     def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
         """Keep one identity namespace even when pages move between data sources."""
@@ -261,9 +298,9 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
             try:
                 listing = self._request(NotionListing, path, payload=payload)
             except NotionResponseError as error:
-                if error.status == 400 and cursor.start_cursor:
+                if error.refusal.status == 400 and cursor.start_cursor:
                     raise CursorInvalid() from error
-                if source is None or error.status not in {403, 404}:
+                if source is None or error.refusal.status not in {403, 404}:
                     raise
                 source_snapshot = NotionSnapshot.model_validate(source.source_payload)
                 snapshots.append(NotionSnapshot(node=source_snapshot.node, unavailable=True))
@@ -304,7 +341,10 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
             try:
                 content = self._request(NotionMarkdown, f"pages/{node.id}/markdown")
             except NotionResponseError as error:
-                if error.status not in {403, 404}:
+                # A page whose content is refused, like an unavailable one, is its own refusal: its neighbours go on.
+                if (cause := error.refusal.cause) in ("oversized", "unreadable"):
+                    return NotionSnapshot(node=node, content_refused=cause)
+                if error.refusal.status not in {403, 404}:
                     raise
                 return NotionSnapshot(node=node, unavailable=True)
             if content.id != node.id:
@@ -321,7 +361,7 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
                 path = "pages" if node.object == "page" else "data_sources"
                 node = self._request(NotionNode, f"{path}/{node.id}")
             except NotionResponseError as error:
-                if error.status not in {403, 404}:
+                if error.refusal.status not in {403, 404}:
                     raise
                 yield from self._changes(stream, [NotionSnapshot(node=previous.node, unavailable=True)])
                 continue

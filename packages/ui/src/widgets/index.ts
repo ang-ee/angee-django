@@ -21,6 +21,7 @@ import { booleanToggleWidget, switchWidget } from "./switch";
 import { tagInputWidget } from "./tagInput";
 import { textareaWidget } from "./textarea";
 import { textWidget } from "./text";
+import { timeWidget } from "./time";
 import { toneWidget } from "./tone";
 import { visibilityWidget } from "./visibility";
 import { userRefWidget } from "./userRef";
@@ -60,6 +61,8 @@ export {
   DATE_STORAGE_FORMAT,
   DATETIME_STORAGE_FORMAT,
   TIME_INPUT_FORMAT,
+  calendarDay,
+  dateFromUnknown,
   dateFromValue,
   formatDate,
   formatDateRange,
@@ -71,6 +74,7 @@ export {
   formatRelativeTime,
   formatTime,
   formatTimeInput,
+  isStorageDate,
   setHumanDateLocale,
   valueLabel,
   type DateFormatValue,
@@ -155,6 +159,7 @@ export const defaultWidgets = {
   date: dateWidget,
   json: jsonWidget,
   datetime: datetimeWidget,
+  time: timeWidget,
   combobox: comboboxWidget,
   statusBadge: statusBadgeWidget,
   progressBar: progressBarWidget,

@@ -48,7 +48,7 @@ test("allows bulk confirmation when only part of the selection is refused", () =
   />);
 
   expect(screen.getByText("Release the note first.")).toBeTruthy();
-  expect(screen.getByText("1 selected records have deletion blockers.")).toBeTruthy();
+  expect(screen.getByText("1 selected record has deletion blockers.")).toBeTruthy();
   const button = screen.getByRole<HTMLButtonElement>("button", { name: "Delete" });
   expect(button.disabled).toBe(false);
   fireEvent.click(button);
@@ -69,4 +69,26 @@ test("allows confirmation when the preview has no refusals or blockers", () => {
   expect(button.disabled).toBe(false);
   fireEvent.click(button);
   expect(confirm).toHaveBeenCalledOnce();
+});
+
+test("titles the preview by the record count through the i18n plural forms", () => {
+  const { rerender } = render(<DeletePreviewDialog
+    preview={preview}
+    recordCount={1}
+    isPending={false}
+    onConfirm={vi.fn()}
+    onCancel={vi.fn()}
+  />);
+  expect(screen.getByText("Delete 1 record?")).toBeTruthy();
+
+  rerender(<DeletePreviewDialog
+    preview={{ ...preview, hasBlockers: true }}
+    recordCount={3}
+    blockedRecordCount={2}
+    isPending={false}
+    onConfirm={vi.fn()}
+    onCancel={vi.fn()}
+  />);
+  expect(screen.getByText("Delete 3 records?")).toBeTruthy();
+  expect(screen.getByText("2 selected records have deletion blockers.")).toBeTruthy();
 });

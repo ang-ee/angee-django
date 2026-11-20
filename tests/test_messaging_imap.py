@@ -1742,7 +1742,7 @@ def test_extract_reloads_credential_between_pages(db: None, change: str) -> None
         credentials = type(cached).objects
         if change == "rotate":
             current = credentials.get(pk=cached.pk)
-            current.update_material(password="rotated-password")
+            current.replace_material({"username": "ada@example.com", "password": "rotated-password"})
         else:
             current = credentials.create_local_credential(
                 channel.owner,
