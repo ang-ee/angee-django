@@ -57,7 +57,9 @@ PAGE_ACCEPT_PATTERN = r"^[\t\x20]*[Tt][Ee][Xx][Tt]/[Hh][Tt][Mm][Ll][\t\x20]*(?:;
 It matches only when ``text/html`` is the FIRST media type listed, in any case and
 with any parameters. A browser navigation lists it first; ``fetch``, ``curl`` and
 API clients send ``*/*`` or ``application/json`` and must reach Django on the same
-path, so neither a wildcard nor a later ``text/html`` selects a page. The ingress
+path, so neither a wildcard nor a later ``text/html`` selects a page. It is tested
+against the header's field lines joined in order with a comma, so a client that
+lists another type first reaches Django however its header is folded. The ingress
 snippet and the Vite dev server apply this one string, published as the manifest's
 top-level ``pageAccept`` (each admitted ``accept`` media type to its pattern); it
 therefore uses only syntax Go RE2, JavaScript and Python read alike without flags,
@@ -267,6 +269,7 @@ class WebRuntime:
                 "# A page answers only when text/html is the FIRST media type of the Accept header. A browser",
                 "# navigation lists it first; fetch, curl and API clients send */* or application/json and must",
                 "# reach Django on the same path, so neither a wildcard nor a later text/html selects a page.",
+                "# The placeholder joins the header's field lines in order, so folding never changes the first type.",
                 "# Only GET and HEAD read a file, and the answer varies by Accept for every cache.",
                 "# A page renders staff-written markup on the application's origin, so its content security",
                 "# policy runs no inline script and forbids framing, wherever the built file is requested.",
@@ -274,12 +277,14 @@ class WebRuntime:
         policy = f'{CSP.HEADER_ENFORCE} "{build_policy(PAGE_CSP)}"'
         for name in sorted(pages):
             matcher = f"@page_{name.replace('.', '_')}"
+            accept = self.manifest["pageAccept"][pages[name]["accept"]]
             lines += [
                 "",
                 f"{matcher} {{",
                 "\tmethod GET HEAD",
                 f"\tpath {' '.join(sorted(pages[name]['paths']))}",
-                f"\theader_regexp Accept `{self.manifest['pageAccept'][pages[name]['accept']]}`",
+                # header_regexp would test each field line alone and admit a later line that leads with text/html.
+                f"\texpression `{{http.request.header.Accept}}.matches(r'{accept}')`",
                 "}",
                 f"handle {matcher} {{",
                 "\theader +Vary Accept",

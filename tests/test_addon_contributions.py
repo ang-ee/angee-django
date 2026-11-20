@@ -292,6 +292,9 @@ def test_web_pages_admit_prefixes_that_share_only_leading_segments(tmp_path: Pat
         pytest.param("text/*", False, id="type-wildcard"),
         pytest.param("application/json, text/html", False, id="text-html-not-first"),
         pytest.param("application/xhtml+xml,text/html", False, id="xhtml-first"),
+        # The ingress joins a header's field lines in order with a comma before it applies the pattern.
+        pytest.param("application/json,text/html", False, id="two-lines-json-first"),
+        pytest.param("text/html,application/json", True, id="two-lines-text-html-first"),
         pytest.param("text/html5", False, id="longer-subtype"),
         pytest.param("", False, id="absent"),
     ],
@@ -317,11 +320,12 @@ def test_the_page_ingress_snippet_routes_each_page_by_method_path_and_leading_ac
         "style-src 'self' 'unsafe-inline'; form-action 'none'\""
     )
     # Pages and their paths are sorted; page <id> is the web build's /<id>.html under the importing site's root.
+    # The Accept condition reads the header's joined field lines, never one line alone.
     assert routes == (
         "@page_site_form {\n"
         "\tmethod GET HEAD\n"
         "\tpath /forms/draft/* /forms/w/*\n"
-        f"\theader_regexp Accept `{accept}`\n"
+        f"\texpression `{{http.request.header.Accept}}.matches(r'{accept}')`\n"
         "}\n"
         "handle @page_site_form {\n"
         "\theader +Vary Accept\n"
@@ -334,7 +338,7 @@ def test_the_page_ingress_snippet_routes_each_page_by_method_path_and_leading_ac
         "@page_site_list {\n"
         "\tmethod GET HEAD\n"
         "\tpath /lists/*\n"
-        f"\theader_regexp Accept `{accept}`\n"
+        f"\texpression `{{http.request.header.Accept}}.matches(r'{accept}')`\n"
         "}\n"
         "handle @page_site_list {\n"
         "\theader +Vary Accept\n"

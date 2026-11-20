@@ -22,12 +22,15 @@ live in code docstrings.
   the other `runtime/web` outputs and holding only its sentinel when no page is
   declared. Page `<id>` is the build output's `<id>.html`. A page answers `GET`
   and `HEAD` on its paths only when `text/html` is the first media type of the
-  request's `Accept` header, so every other request reaches Django, and carries
+  request's `Accept` header, however the header is folded into field lines, so
+  every other request reaches Django, and carries
   one fixed content security policy (no inline script, never framed). The stack
   templates' static ingress declares its site root once and imports the snippet
   ahead of its Django routes. **Upgrade:** re-render a stack together with the
   framework it runs: the ingress imports `runtime/web/pages.caddy`, which an
   earlier composer does not emit, and Caddy refuses to start on a missing import.
+  A stack re-rendered from the new template must run a framework that emits
+  `runtime/web/pages.caddy`, or its ingress will not start.
 - `@angee/ui`: `FormView` (and so `Form` and every registered form) takes an
   optional `renderUnavailable(id, unavailable)`: what a saved record's form
   shows when its id reads no record, given the default "Record unavailable"
