@@ -56,8 +56,10 @@ live in code docstrings.
       the console's filter.
     - A target is chosen only by someone its owner lets make its records
       (`FormTarget.permits`).
-    - Known gap: who chose a form's target is not recorded, and it is not
-      checked again at delivery.
+    - Known gaps: who chose a form's target is not recorded, and it is not
+      checked again at delivery. The staff form does not prefill a target's
+      default configuration: `ImplBase.effective_defaults` writes defaults under
+      `config` only, and a form's field is `target_config`; a follow-up at base.
   - **A response posted as a message** is the bridge `angee.webforms_messaging`,
     which requires both addons; neither depends on the other. Its `message`
     target posts a response on a `webform` channel through
