@@ -256,6 +256,10 @@ def test_busy_bridge_wait_preserves_checkpoint_without_beginning_an_effect(cycle
 def test_two_partition_runs_wait_without_retry_or_effect_while_bridge_io_is_owned(cycle, monkeypatch):
     """The execution lock covers independent runs, beyond a single map planner."""
     bridge = make_integration("serialized-workflow", model=ConnectionBridge)
+    # Its capability learns its account at discovery, which a new bridge awaits: settled, so only the bridge's
+    # IO lock holds the second run back (a run on a bridge awaiting discovery waits before any IO or lock).
+    with system_context(reason="test serialized bridge discovered"):
+        assert bridge.finish_discovery(credential_pk=bridge.credential_id, generation=bridge.discovery_generation)
     adapter_type = cycle.adapter_class
     cycle.transport.parallelism = 1
     monkeypatch.setattr(ConnectionBridge, "capability_impl", property(adapter_type))

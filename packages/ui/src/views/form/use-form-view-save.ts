@@ -24,7 +24,7 @@ import {
   type Fields,
   type HttpError,
 } from "@refinedev/core";
-import { set, useForm, type FieldErrors } from "react-hook-form";
+import { get, set, useForm, type FieldErrors } from "react-hook-form";
 import { replaceEqualDeep, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import type { UiTranslate } from "../../i18n";
@@ -45,9 +45,13 @@ import {
   dirtyArrayValues,
   emptyDraft,
   fieldValidationSummary,
+  hiddenDraftPaths,
+  hiddenResetWrites,
+  missingDraftValues,
   missingRequiredFieldNames,
   mutationData,
   recordToValues,
+  resolveField,
   type FormValues,
   type LinesSeed,
 } from "./form-view-model";
@@ -294,6 +298,11 @@ export function useFormViewSave({
     ? acknowledgedSource.record
     : read.result ?? null;
   const displayRecord = record;
+  // The record's own fields: where an original and its variant both declare one, the admitted declaration saves.
+  const saveFields = React.useMemo(
+    () => formFieldsFor?.(displayRecord) ?? formFields,
+    [displayRecord, formFields, formFieldsFor],
+  );
   const editBasisRecordRef = React.useRef<Row | null>(displayRecord);
   const loading = acknowledgedSource?.loading ?? (nativeReadEnabled && (read.query.isPending || read.query.isFetching));
   const loadError = acknowledgedSource === undefined ? read.query.error : null;
@@ -570,6 +579,8 @@ export function useFormViewSave({
     (saved: Row, options: {
       submitted?: FormValues;
       submittedFields?: readonly string[];
+      /** What the save wrote for fields a preset hid, which the submitted draft does not hold. */
+      writtenResets?: ReadonlyMap<string, unknown>;
       acceptedValues?: FormValues;
       reconcile?: FormSubmitAcknowledgement["reconcile"];
       createdLines?: boolean;
@@ -583,11 +594,23 @@ export function useFormViewSave({
       const submitted = Object.fromEntries((options.submittedFields ?? [])
         .map((name) => [name, options.submitted?.[name]]));
       const acceptedPatch = { ...submitted, ...saved };
+      // What the save wrote for a hidden field fills its path where the response omits it,
+      // inside whatever the cached row holds around that path.
+      const acceptedRow = (cached: Row | null | undefined): Row => {
+        const row: Row = { ...cached, ...acceptedPatch };
+        for (const [path, reset] of options.writtenResets ?? []) {
+          if (get(saved, path) !== undefined) continue;
+          const head = path.split(".", 1)[0]!;
+          if (head !== path) row[head] = structuredClone(row[head] ?? cached?.[head]);
+          set(row, path, structuredClone(reset));
+        }
+        return row;
+      };
       const accepted = acknowledgedSource !== undefined
         ? { ...(record ?? {}), ...saved }
         : isCreate ? acceptedPatch : queryClient.setQueryData<GetOneResponse<RowRecord>>(
         detailKey,
-        (current) => ({ ...current, data: { ...(current?.data ?? record), ...acceptedPatch } }),
+        (current) => ({ ...current, data: acceptedRow(current?.data ?? record) }),
       )?.data ?? acceptedPatch;
       editBasisRecordRef.current = accepted;
       if (!mounted.current) return;
@@ -674,13 +697,16 @@ export function useFormViewSave({
       if (!dataResource) {
         throw new Error(`Resource metadata for "${resource}" is not available.`);
       }
-      // The record's own fields: where an original and its variant both declare one, the admitted declaration saves.
-      const data = mutationData(value, formFieldsFor?.(displayRecord) ?? formFields, {
+      const saveOptions = { isCreate, seededFieldNames: createSeedNames, writableFields: writableFieldNames };
+      const resets = hiddenResetWrites(value, saveFields, {
+        ...saveOptions,
+        baseline: (form.formState.defaultValues ?? {}) as FormValues,
+      });
+      const data = mutationData(value, saveFields, {
+        ...saveOptions,
         dirtyFields: dirtyFields as Record<string, unknown>,
         fieldMetadata: modelMetadata?.fields,
-        isCreate,
-        seededFieldNames: createSeedNames,
-        writableFields: writableFieldNames,
+        hiddenResets: resets,
       });
       const linesDiff =
         linesActive && linesConfig && linesField
@@ -715,7 +741,7 @@ export function useFormViewSave({
             submittedFields: acknowledgement
               ? []
               : [...Object.keys(data), ...(linesDiff && linesField ? [linesField] : [])],
-            ...(acknowledgement ? { acceptedValues: acknowledgement.values } : {}),
+            ...(acknowledgement ? { acceptedValues: acknowledgement.values } : { writtenResets: resets }),
             ...(acknowledgement?.reconcile ? { reconcile: acknowledgement.reconcile } : {}),
             createdLines: Boolean(linesDiff?.created.length),
             notify: true,
@@ -731,10 +757,7 @@ export function useFormViewSave({
     [
       clearErrors,
       dataResource,
-      displayRecord,
-      fieldByName,
-      formFields,
-      formFieldsFor,
+      saveFields,
       formReadOnly,
       isCreate,
       previewBlockedRef,
@@ -790,21 +813,34 @@ export function useFormViewSave({
       const scoped = (name: string) => scope ? `${scope}.${name}` : name;
       userEditedFieldsRef.current.add(scoped(field.name));
       clearErrors(scoped(field.name));
-      if (isCreate || !field.createOnly) {
-        const seeds = field.prefill?.(value, (scope ? form.getValues(scope) : form.getValues()) as Row);
+      // What the form compares itself against: a preset may give a sibling its loaded value back.
+      const loaded = form.formState.defaultValues;
+      // The preset the form declares for this field is the one its save reads again (see
+      // `hiddenResetWrites`); a descriptor's own preset still seeds, but drops nothing.
+      const declared = saveFields.find((candidate) => candidate.name === scoped(field.name));
+      const own = declared && resolveField(declared, form.getValues());
+      const preset = own?.prefill ? own : field;
+      if (isCreate || !preset.createOnly) {
+        const seeds = preset.prefill?.(
+          value,
+          (scope ? form.getValues(scope) : form.getValues()) as Row,
+          ((scope ? get(loaded, scope) : loaded) ?? undefined) as Row | undefined,
+        );
         if (seeds) {
-          const replacements = new Set(field.prefillReplace ?? []);
+          const replacements = new Set(preset.prefillReplace ?? []);
+          const applied = new Set<string>();
           for (const [name, seed] of Object.entries(seeds)) {
             const target = scoped(name);
             if (
-              field.prefillPreserveDirty &&
+              preset.prefillPreserveDirty &&
               !replacements.has(name) &&
               (userEditedFieldsRef.current.has(target) || (
                 getFieldState(target).isDirty &&
                 replaceEqualDeep(prefillSeedsRef.current.get(target), form.getValues(target)) !== prefillSeedsRef.current.get(target)
               ))
             ) continue;
-            if (field.prefillPreserveDirty && !replacements.has(name)) {
+            applied.add(target);
+            if (preset.prefillPreserveDirty && !replacements.has(name)) {
               setValue(target, seed, { shouldDirty: false, shouldTouch: true });
               prefillSeedsRef.current.set(target, seed);
               continue;
@@ -814,7 +850,14 @@ export function useFormViewSave({
               shouldTouch: true,
             });
           }
+          // The draft holds only the fields visible for its new values, as it was loaded (`emptyDraft`).
+          const hidden = preset === own ? hiddenDraftPaths(form.getValues(), saveFields, [...applied]) : [];
+          if (hidden.length) form.unregister(hidden, { keepDefaultValue: true });
         }
+      }
+      // A field dropped from the draft that shows again holds its loaded value.
+      for (const [path, restored] of missingDraftValues(form.getValues(), saveFields, (loaded ?? {}) as FormValues)) {
+        setValue(path, restored, { shouldDirty: true });
       }
       if (fieldWidgetId(field) === "slug") {
         manualSlugFieldsRef.current.add(field.name);
@@ -831,7 +874,7 @@ export function useFormViewSave({
         });
       }
     },
-    [clearErrors, defaultSlugSource, formFields, getFieldState, isCreate, setValue],
+    [clearErrors, defaultSlugSource, form, formFields, getFieldState, isCreate, saveFields, setValue],
   );
   const fieldReadOnly = React.useCallback(
     (field: FieldDescriptor): boolean =>

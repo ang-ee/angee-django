@@ -4,6 +4,7 @@ import { holdsPermission, type ModelMetadata, type Row } from "@angee/metadata";
 import type { ComposedContainerChild } from "../../runtime";
 import { pageChildren, type FieldDescriptor } from "../page";
 import { rowDependentChildren } from "./container-admission";
+import { visibleFields, type FormValues } from "./form-view-model";
 
 export interface RecordRailField {
   field: FieldDescriptor;
@@ -70,10 +71,16 @@ function assertUniqueRailGroups(groups: readonly RecordRailGroupProps[]): void {
   }
 }
 
-/** Only the server-authorized, projected rows reach the record rail, from the children the record admits. */
+/**
+ * Only the server-authorized, projected rows reach the record rail, from the children the record
+ * admits; of those, a field shows as the sheet's do: visible for the form's `values`
+ * (`visibleFields`, resolved against them) and not `hidden`. A group left with no field and no
+ * content is dropped.
+ */
 export function visibleRecordRailGroups(
   groups: readonly ContributedRailGroup[],
   record: Row | null,
+  values: FormValues,
   metadata: ModelMetadata | null,
   admits: (child: string, record: Row) => boolean = () => true,
 ): readonly ContributedRailGroup[] {
@@ -84,11 +91,12 @@ export function visibleRecordRailGroups(
   return admitted.flatMap((group) => {
     if (group.permission && !holdsPermission(record, group.permission)) return [];
     if (group.childPermission && !holdsPermission(record, group.childPermission)) return [];
-    const fields = (group.fields ?? []).filter(({ field, permission }) =>
-      !field.hidden
-      && (!permission || holdsPermission(record, permission))
-      && Boolean(metadata?.fields[field.name])
-      && metadata?.fields[field.name]?.readable !== false,
+    const fields = (group.fields ?? []).flatMap((row) =>
+      (!row.permission || holdsPermission(record, row.permission))
+      && Boolean(metadata?.fields[row.field.name])
+      && metadata?.fields[row.field.name]?.readable !== false
+        ? visibleFields([row.field], values).flatMap((field) => field.hidden ? [] : [{ ...row, field }])
+        : [],
     );
     return fields.length > 0 || group.content != null ? [{ ...group, fields }] : [];
   });

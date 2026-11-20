@@ -296,6 +296,97 @@ which a directory's claim rule, its adoption when on, and the holding rule read;
 the connections import shares its holding rule. Only a `HELD` answer holds the
 address.
 
+An integration that is no directory, whose records carry a contact (a name, an
+email address, a phone number), makes its person through one verb,
+[PartyManager.claimant_as_system](managers.py), under the same rule: each
+source creates its own people. The caller hands over the record that carried
+the contact (`evidence`). Which records are its own is the caller's rule, and
+`own` carries it: a queryset of them, the record links of its integration.
+The email decides, and a contact without one is decided by its number. The
+person found again is one whose standing claim on a handle of that address has
+a row of `own` behind it, never one a column names: a person a record of the
+source merely points at (one it adopted from someone else) is not its own.
+Another spelling is the same address, a trashed person is nobody's answer, a
+merged one is found as its survivor, and of several the earliest. Nobody else's
+person is taken, whoever holds or claims the address, an account's own person
+included; the verb makes a new person instead, named as given and created by
+the owner the caller names. A contact with neither an address nor a number finds
+nobody again. An email that cannot be an address at all is no address, and a
+number the handle owner reads nothing in, or refuses, is no number: each is
+left out and makes no handle, so two contacts that gave the same non-address
+are never one person for it. What can be an email address is the handle owner's
+one predicate, `Handle.is_email_address`: exactly one `@`, a non-empty name
+part in any script (`jörg@`, `peña@`) with no whitespace, control or format
+character (a zero-width space, a direction mark), a domain that passes the
+domain rule of Django's `EmailValidator` (an internationalised one as typed or
+punycoded), and no longer than an address may be or the handle's value holds.
+Both spellings of an internationalised domain are one address: the handle keeps
+its `value` as typed, and `Handle.normalize_value` reads the punycode labels of
+a domain as Unicode in the comparison key (`normalized_value`), the column
+every lookup of an address reads. A label the standard library's `idna` codec
+cannot read stays as typed. That is one rule, `Handle.normalize_email_domain`,
+for whoever compares a domain: the organization-domain suggestion
+(`PartyManager.suggest_for`) reads the handle's domain and
+`Organization.domain`, which is stored as typed, through it on both sides, so
+either spelling of either suggests the organization. A handle stores the key
+its rule gave when it was last saved (`normalized_value`) and, beside it, the
+version the rule had then (`normalized_version`; 0 for a row stored before the
+rule had one). The handle's save is the one writer of the key and writes the
+two together. Changing what `Handle.normalize_value` or
+`Handle.normalize_email_domain` returns means bumping
+`Handle.NORMALIZATION_VERSION`; a test pins the rule's outputs for a fixed
+sample beside the number, so an output that changes under one number fails.
+The `renormalize_handles` repair (`HandleManager.renormalize_handles`), which
+every provision runs (`PartiesConfig.compose_provision`), selects the handles
+of every platform whose version is not the rule's, by that column's index, and
+saves each again through the handle's own save, under its row lock: an earlier
+version, 0, or a later one that newer code wrote before a rollback. A row
+whose key is already what the rule gives has it written again unchanged beside
+its version, and leaves the selection. With no row behind, the repair is that
+one indexed query. A run takes the whole backlog, because a row left with a
+stale key is one the lookups that read keys miss, and a writer that misses it
+makes a second row. It saves in batches of `HandleManager.REPAIR_LIMIT` (500)
+rows, each in its own transaction, so an interrupted provision keeps what it
+saved and the next one resumes. Every batch starts after the last key the run
+selected, so a run selects no row twice and ends: a row deleted or already
+saved by another process is passed, and a row whose save raises is rolled
+back alone, logged, counted ("The comparison key of N handle(s) could not be
+saved; ...") and left for the next run while the rest are saved.
+`renormalize_handles --limit N` saves a share instead, and only then ends
+with "Stopped at the cap of N handle(s); M more await the next provision or
+renormalize_handles run". Nothing is stated in full:
+each handle the person does not hold is recorded as a claim for review
+(`propose_claimed_handle_as_system`)
+with the record behind it, which decides nothing and moves nothing. A claim
+gains one evidence reference per record that carried the address, deduplicated,
+and that is how the next record finds the person. A person found again has
+nothing new stated of them and carries a handle only when they hold it or a
+record of the source stands behind their claim on it; a new person's number is
+known or made. The rows of the address and of the number, their parties and
+their statements are locked in one `lock_identity_rows` call before any claim
+is read, and which claims are the source's own is then one read of its records
+by key, in batches within the database's parameter budget, however many
+records stand behind a claim and however many parties claim the address. The
+verb proposes no pair, and no caller needs to: a claim links its person to the
+address, so identity matching (below) proposes the claimant and whoever else is
+linked to it.
+
+Which claims still stand is one scope,
+[PartyStatementQuerySet.standing](managers.py), over handle statements the
+caller narrows by handle or by party: each party's strongest current stance on
+a handle, where it asserts a value. A stance its source withdrew or a merge
+superseded makes nothing stand, and a person's dismissal outranks every claim.
+`people_for_emails` and the identity lens of the party graph read it, and a
+caller that asks only who still claims what reads no evidence.
+`standing_claims` adds the records behind each claim, as its evidence names
+them. When two parties merge, the claims one source made for each collapse into
+one and the superseded one's records stay behind it, so two sources' claimants
+of one address, once merged, are each found as the survivor. A caller's own
+rule about which of its records may name a claimed address composes that read,
+and compares the references it returns with its own by the record each names
+(`EvidenceReference.named_record`: the label without case and the public id,
+the pointer aside), as the verb does.
+
 [PartyManager.ingest_organization](managers.py) lands a `ParsedOrganization`
 from a directory stream the same way: it binds the link, mints an Organization
 for an unbound link and, until matching an existing one is ruled, refuses an
@@ -435,11 +526,22 @@ records disagree on a merge field, the merging person confirms the value kept
 
 Nothing merges unattended. A person may also merge in a batch: confirmed sets of
 two to ten records each (`PartyManager.merge_duplicates`, the `merge_duplicates`
-mutation; at most 50 sets), either the certain pairs the Review page lists
-(`certain_same_as_pairs`) or a selection from the People or Organizations list.
+mutation; at most 50 sets a request), either every certain pair awaiting review
+(`certain_same_as_pairs`, listed page by page, at most 1,000 a confirm, from the
+Review page's "Merge all certain pairs") or a selection from the People or
+Organizations list.
 There, one selected record opens "Merge into…" to choose the other, two open
-their compare page, and three or more are one explicit set, the whole
-selection, which the dialog lists before anything merges. Only an active person account that writes every record may (the party's
+their compare page, and three or more on an ungrouped list are the duplicate
+sets the server finds among them (`PartyManager.selection_duplicate_sets`, under
+the person's own read): the same-person pairs the person may review between
+selected records (`selection_pairs`, the one rule), joined into connected groups,
+with the records that have no duplicate selected left out and counted; three to
+ten with no pair among them are one set, as selected, and above ten with none the
+dialog says what to do. A grouped list gives a set per group. Under the list's
+"Select all N" (`selectAllMatching`), a list grouped by one text merge field
+gives every group its read matches, each a set, listed page by page through the
+list resource's own groups read (at most 1,000 a confirm). The dialog lists the
+sets before anything merges. Only an active person account that writes every record may (the party's
 `batch_merge` permission, `write & person->active_member`); a service or agent
 account merges nothing, and no agent tool offers it. A set never holds an account's
 own person (merged by hand, on the compare page), records of two kinds, a trashed

@@ -131,7 +131,10 @@ def seeded_record_merge_guard(record: models.Model) -> str | None:
         ledger = apps.get_model("resources", "Resource").objects.seeding(record).first()
     if ledger is None:
         return None
-    return f"{record} is loaded from {ledger.source_addon} resources, which would recreate it; keep it instead."
+    return (
+        f"This record ({public_id_of(record)}) is loaded from {ledger.source_addon} resources, which would recreate "
+        "it; keep it instead."
+    )
 
 
 _ResourceManagerBase = AngeeManager.from_queryset(ResourceQuerySet)

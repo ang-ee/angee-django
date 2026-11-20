@@ -81,6 +81,8 @@ members = [
     "angee-timeline",
     "angee-uom",
     "angee-web",
+    "angee-webforms",
+    "angee-webforms-messaging",
     "angee-work",
     "angee-workflows",
     "angee-workflows-agents",
@@ -206,6 +208,8 @@ dependencies = [
     { name = "angee-timeline" },
     { name = "angee-uom" },
     { name = "angee-web" },
+    { name = "angee-webforms" },
+    { name = "angee-webforms-messaging" },
     { name = "angee-work" },
     { name = "angee-workflows" },
     { name = "angee-workflows-agents" },
@@ -318,6 +322,8 @@ requires-dist = [
     { name = "angee-timeline", editable = "src/angee/timeline" },
     { name = "angee-uom", editable = "src/angee/uom" },
     { name = "angee-web", editable = "src/angee/web" },
+    { name = "angee-webforms", editable = "src/angee/webforms" },
+    { name = "angee-webforms-messaging", editable = "src/angee/webforms_messaging" },
     { name = "angee-work", editable = "src/angee/work" },
     { name = "angee-workflows", editable = "src/angee/workflows" },
     { name = "angee-workflows-agents", editable = "src/angee/workflows_agents" },
@@ -337,7 +343,7 @@ dev = [
     { name = "angee-mypy", specifier = "==2.1.0" },
     { name = "angee-server", extras = ["profiling"], editable = "src/angee/server" },
     { name = "daphne", specifier = ">=4.0" },
-    { name = "django-zed-rebac", extras = ["caveats"], specifier = ">=0.36.1,<0.37" },
+    { name = "django-zed-rebac", extras = ["caveats"], specifier = ">=0.37.0,<0.38" },
     { name = "example-notes", editable = "examples/src/example/notes" },
     { name = "example-theme", editable = "examples/src/example/theme" },
     { name = "faker", specifier = ">=30.0" },
@@ -551,7 +557,7 @@ requires-dist = [
     { name = "django-environ", specifier = ">=0.12" },
     { name = "django-sqids", specifier = ">=0.1" },
     { name = "django-yamlconf", specifier = ">=1.5.0" },
-    { name = "django-zed-rebac", specifier = ">=0.36.1,<0.37" },
+    { name = "django-zed-rebac", specifier = ">=0.37.0,<0.38" },
     { name = "jsonschema", extras = ["format-nongpl"], specifier = ">=4.26" },
     { name = "packaging", marker = "extra == 'testing'", specifier = ">=24" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
@@ -817,7 +823,7 @@ requires-dist = [
     { name = "channels", specifier = ">=4.0" },
     { name = "channels-redis", specifier = ">=4.2" },
     { name = "django-compose", specifier = ">=0.1.0.dev13,<0.2" },
-    { name = "django-zed-rebac", extras = ["strawberry-django"], specifier = ">=0.36.1,<0.37" },
+    { name = "django-zed-rebac", extras = ["strawberry-django"], specifier = ">=0.37.0,<0.38" },
     { name = "graphql-core", specifier = ">=3.3.1,<3.4" },
     { name = "pydantic", specifier = ">=2.14" },
     { name = "sentry-sdk", specifier = ">=2.71.0" },
@@ -1997,6 +2003,50 @@ requires-dist = [
 ]
 
 [[package]]
+name = "angee-webforms"
+version = "3.0.0"
+source = { editable = "src/angee/webforms" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-graphql" },
+    { name = "angee-iam" },
+    { name = "angee-jobs" },
+    { name = "angee-provenance" },
+    { name = "angee-resources" },
+    { name = "angee-server" },
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-jobs", editable = "src/angee/jobs" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-resources", editable = "src/angee/resources" },
+    { name = "angee-server", editable = "src/angee/server" },
+    { name = "angee-web", editable = "src/angee/web" },
+]
+
+[[package]]
+name = "angee-webforms-messaging"
+version = "3.0.0"
+source = { editable = "src/angee/webforms_messaging" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-messaging" },
+    { name = "angee-webforms" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-messaging", editable = "src/angee/messaging" },
+    { name = "angee-webforms", editable = "src/angee/webforms" },
+]
+
+[[package]]
 name = "angee-work"
 version = "3.0.0"
 source = { editable = "src/angee/work" }
@@ -3093,15 +3143,15 @@ wheels = [
 
 [[package]]
 name = "django-zed-rebac"
-version = "0.36.1"
+version = "0.37.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
     { name = "django-cte" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/69/22/24ee3a43e39b553e52066c878ee25b436a2b442c8a0c15a9b1095239c3ad/django_zed_rebac-0.36.1.tar.gz", hash = "sha256:c4ca94394b1168f00daa9b3786c5ac1d9f3ff8ab1add747dbfb78319065a51d0", size = 760312, upload-time = "2026-11-19T15:48:44.913Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/28/1a/692afc60518ed8157a76367d1a7f5de114368b1e955c1fc880a791c23dff/django_zed_rebac-0.37.0.tar.gz", hash = "sha256:87f7e7589dd0402be567c8dab39dc8f43d8d0c068d0535ec22fbdc0e7824b6c0", size = 762083, upload-time = "2026-11-20T00:39:33.383Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/69/b8/015f2b97b2e0fba2c3275d6eaf83ea9a7f4633679b62786616cfb258cb64/django_zed_rebac-0.36.1-py3-none-any.whl", hash = "sha256:03f46129f78fb30858e660672640268deb9cbcfd260cfc75228b700cc349a6b2", size = 376343, upload-time = "2026-11-19T15:48:43.735Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/a7/f768af503bd8c2ca82a020a9a9e412023a865e364f1f0c4cc8c363f793c7/django_zed_rebac-0.37.0-py3-none-any.whl", hash = "sha256:8c25cd5679b21be7d8683d207d267e2f156cbec7cc99053336aa1fabae0d2148", size = 376920, upload-time = "2026-11-20T00:39:31.916Z" },
 ]
 
 [package.optional-dependencies]

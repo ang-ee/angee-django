@@ -4,6 +4,7 @@ import gc
 import sys
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
+from io import StringIO
 from typing import Any
 
 import pytest
@@ -14,6 +15,7 @@ from django.db import DEFAULT_DB_ALIAS, connections, transaction
 from django.db.backends.base.base import BaseDatabaseWrapper
 from django.db.models.fields.related_descriptors import ReverseManyToOneDescriptor, ReverseOneToOneDescriptor
 from django.db.models.signals import post_migrate
+from django.test import override_settings
 from pytest_django.plugin import DjangoDbBlocker
 from rebac.backends import reset_backend
 
@@ -100,6 +102,44 @@ def monkeypatch(installed_app_registry: None) -> Iterator[pytest.MonkeyPatch]:
 
     with pytest.MonkeyPatch.context() as patch:
         yield patch
+
+
+@contextmanager
+def relationship_storage(mode: str) -> Iterator[None]:
+    """Run the block on REBAC's ``mode`` relationship storage, the session baseline carried there.
+
+    ``mode`` is ``"denormalized"`` or ``"registry"``. The baseline's relationships
+    (every install tier's grants) live in the storage the host configures, and
+    ``REBAC_LOCAL_BACKEND_STORAGE`` only names the table REBAC reads: a bare switch
+    reads the other table, where none of them is. When ``mode``
+    is not the active storage, the block copies the relationships there with REBAC's
+    own ``rebac migrate-storage --to <mode>``, then selects it through
+    ``override_settings``, whose ``setting_changed`` signal clears REBAC's settings
+    cache; REBAC keys its compiled statements by the active table and the process
+    backend is rebuilt on each side. On exit, also when the block raises, the setting
+    is restored and that table loses every row added since the block began (the copy
+    and the block's own writes), so later reads, in this test or a later one, find the
+    baseline where the host keeps it. Inside a test's transaction the copy and its
+    removal also roll back with the test. When ``mode`` is already active the block
+    runs unchanged and copies nothing.
+    """
+
+    from rebac.conf import app_settings
+    from rebac.models import Relationship, RelationshipRegistry
+
+    if mode == app_settings.REBAC_LOCAL_BACKEND_STORAGE:
+        yield
+        return
+    table = RelationshipRegistry if mode == "registry" else Relationship
+    kept = set(table._base_manager.values_list("pk", flat=True))
+    call_command("rebac", "migrate-storage", "--to", mode, verbosity=0, stdout=StringIO())
+    try:
+        with override_settings(REBAC_LOCAL_BACKEND_STORAGE=mode):
+            reset_backend()
+            yield
+    finally:
+        reset_backend()
+        table._base_manager.exclude(pk__in=kept).delete()
 
 
 SESSION_BASELINE = pytest.StashKey[Rows]()

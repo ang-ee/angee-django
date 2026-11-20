@@ -8,7 +8,7 @@ import {
   PeopleWorkbench,
 } from "./documents";
 import { usePartiesT } from "./i18n";
-import { mergeSelectionActions } from "./merge-selection";
+import { peopleMergeSelectionActions } from "./merge-selection";
 import { personForm } from "./PersonForm";
 
 const MODEL = "parties.Person";
@@ -169,7 +169,7 @@ export function PeoplePage(): React.ReactElement {
         baseFilter={baseFilter}
         draggableRow={personDragPayload}
       >
-        <List resource={MODEL} bulkActions={mergeSelectionActions}>
+        <List resource={MODEL} bulkActions={peopleMergeSelectionActions} selectAllMatching>
           <Column field="display_name" />
           <Column field="circle_names" header={t("people.circles.heading")} />
           <Column field="given_name" />

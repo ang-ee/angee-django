@@ -1,271 +1,85 @@
-"""Versioned public-webform schema and submission validation.
+"""What messaging keeps of the form a channel held, for the migrations that end it.
 
-The stored shape is the serializable ``@angee/ui`` form-spec vocabulary: an
-object schema with named ``properties`` and a root ``required`` list.  Public
-ingress deliberately accepts only scalar fields; relation, object, array, and
-``any`` descriptors are rejected so a form answer can never become a record
-target or another executable instruction.
-
-Messaging also accepts optional root ``success.title`` and ``success.body`` copy.
-The published description exposes those validated strings separately from the
-generic field descriptors.
+A channel held a public form in six columns of its own until web forms took
+forms over. Every name here is imported by migrations that projects retain:
+``default_webform_schema`` by their materialized messaging history, and the rest
+by their copy of the web forms bridge's template, which carries each channel's
+form to a ``webforms.Form`` and then removes the columns. Keep these names and
+what they mean for as long as such a migration can be in a project's history.
 """
 
 from __future__ import annotations
 
-import json
-import re
-from dataclasses import dataclass
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, cast
 
-from django.core.exceptions import ValidationError
-from django.core.validators import EmailValidator
+from django.apps import apps as installed_apps
+from django.apps.registry import Apps
+from django.db import models
+from django.db.migrations import Migration
+from django.db.models.functions import Cast
 
-from angee.base.schemas.forms import validate_form_spec
-from angee.base.validators import validation_issues
+from angee.base.fields.identity import SqidField
 
-SCHEMA_VERSION = 1
-SCALAR_TYPES = frozenset({"string", "integer", "number", "boolean"})
-SUBMISSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
-FIELD_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
-MAX_FIELDS = 100
+FORM_COLUMNS = ("slug", "is_published", "form_schema_version", "form_schema", "max_body_bytes", "max_field_bytes")
+"""The columns a channel's form lived in. Retained migrations import this."""
 
 
 def default_webform_schema() -> dict[str, Any]:
-    """Return a migration-safe empty v1 form-spec object."""
+    """Return the default of the removed ``Channel.form_schema`` column, which those migrations name."""
 
     return {"type": "object", "properties": {}}
 
 
-class WebformUnavailable(LookupError):
-    """The observed public form is no longer published when the submission lands."""
+def holds_form(channel: Mapping[str, Any]) -> bool:
+    """Whether a channel's form columns say anything: a slug, a published flag or a schema of its own.
+
+    ``channel`` maps the form columns to their values. This is the one judgment
+    of "this channel holds a form": the bridge's template moves the channels it
+    admits, and messaging refuses to let the columns go while it admits any.
+    Retained migrations import it.
+    """
+
+    return bool(channel["slug"] or channel["is_published"] or channel["form_schema"] != default_webform_schema())
 
 
-class WebformChanged(ValueError):
-    """The form schema or bounds changed after the submission's answers were validated."""
+def channels_holding_forms(apps: Apps, using: str) -> list[dict[str, Any]]:
+    """Return the form columns of every webform channel that holds a form, oldest first.
 
+    ``apps`` is a migration state in which ``messaging.Channel`` still has its
+    form columns; each row carries ``pk``, ``display_name`` and the columns.
+    The backend is read as it is stored: a project that has not installed the
+    web forms bridge registers no ``webform`` backend, and the field refuses a
+    key it does not know. Retained migrations import it.
+    """
 
-@dataclass(frozen=True)
-class WebformField:
-    """One validated scalar property in a public form spec."""
-
-    name: str
-    label: str
-    required: bool
-    read_only: bool
-    email: bool
-    schema: dict[str, Any]
-
-    def validate(self, value: Any, *, max_bytes: int) -> str | None:
-        """Apply the native scalar contract, then the public ingress policies."""
-        issues = validation_issues(self.schema, value)
-        if issues:
-            return next(iter(issues.values()))[0]
-        # Public JSON ingress preserves its exact integer representation contract.
-        if self.schema["type"] == "integer" and type(value) is not int:
-            return "Enter an integer."
-        if self.required and isinstance(value, str) and not value.strip():
-            return "This field is required."
-        if self.email and value:
-            try:
-                EmailValidator()(value)
-            except ValidationError:
-                return "Enter a valid email address."
-        if _scalar_size(value) > max_bytes:
-            return f"This field exceeds {max_bytes} bytes."
-        return None
-
-
-@dataclass(frozen=True)
-class WebformSpec:
-    """Messaging public-ingress policy over the canonical FormSpec contract."""
-
-    version: int
-    fields: tuple[WebformField, ...]
-    success_title: str | None
-    success_body: str | None
-
-    @classmethod
-    def deserialize(cls, value: Any, *, version: int) -> WebformSpec:
-        """Validate the stored schema and return its scalar field owners."""
-
-        if version != SCHEMA_VERSION:
-            raise ValidationError({"form_schema_version": f"Unsupported webform schema version {version}."})
-        if not isinstance(value, dict):
-            raise ValidationError({"form_schema": "A form schema must be an object."})
-        try:
-            validate_form_spec({key: item for key, item in value.items() if key != "success"})
-        except ValidationError as error:
-            raise ValidationError({"form_schema": error.messages}) from error
-        properties = value.get("properties", {})
-        if len(properties) > MAX_FIELDS:
-            raise ValidationError({"form_schema": f"A public form may declare at most {MAX_FIELDS} fields."})
-        required_value = value.get("required", [])
-        if not isinstance(required_value, list) or any(not isinstance(item, str) for item in required_value):
-            raise ValidationError({"form_schema": "Form schema required must be a list of field names."})
-        if len(set(required_value)) != len(required_value):
-            raise ValidationError({"form_schema": "Form schema required field names must be unique."})
-        unknown_required = sorted(set(required_value).difference(properties))
-        if unknown_required:
-            raise ValidationError({"form_schema": f"Required fields are not declared: {', '.join(unknown_required)}."})
-
-        fields = tuple(
-            _deserialize_field(name, descriptor, required=name in required_value)
-            for name, descriptor in properties.items()
-        )
-        email_fields = [field.name for field in fields if field.email]
-        if len(email_fields) > 1:
-            raise ValidationError({"form_schema": "A public form may declare at most one email field."})
-        success = value.get("success", {})
-        if not isinstance(success, dict):
-            raise ValidationError({"form_schema": "Form success copy must be an object."})
-        for key in ("title", "body"):
-            text = success.get(key)
-            if text is not None and (not isinstance(text, str) or not text.strip()):
-                raise ValidationError({"form_schema": f"Form success {key} must be non-empty text."})
-        return cls(version=version, fields=fields, success_title=success.get("title"), success_body=success.get("body"))
-
-    @property
-    def email_field(self) -> WebformField | None:
-        """Return the schema-declared email field, if any."""
-
-        return next((field for field in self.fields if field.email), None)
-
-    def validate_answers(self, value: Any, *, max_field_bytes: int) -> dict[str, Any]:
-        """Reject undeclared/non-scalar answers and return a lossless clean mapping."""
-
-        if not isinstance(value, dict):
-            raise ValidationError({"answers": "Answers must be a JSON object."})
-        accepted = {field.name: field for field in self.fields if not field.read_only}
-        extras = sorted(set(value).difference(accepted))
-        errors: dict[str, str] = {}
-        if extras:
-            errors["answers"] = f"Unknown answer field(s): {', '.join(extras)}."
-        for field in accepted.values():
-            if field.name not in value:
-                if field.required:
-                    errors[field.name] = "This field is required."
-                continue
-            error = field.validate(value[field.name], max_bytes=max_field_bytes)
-            if error:
-                errors[field.name] = error
-        if errors:
-            raise ValidationError(errors)
-        return {field.name: value[field.name] for field in self.fields if field.name in value and not field.read_only}
-
-    def render_markdown(self, answers: dict[str, Any]) -> str:
-        """Render validated answers in declaration order for the Message body."""
-
-        blocks: list[str] = []
-        for field in self.fields:
-            if field.name not in answers:
-                continue
-            label = " ".join(field.label.split()) or field.name
-            blocks.append(f"## {label}\n\n{_render_scalar(answers[field.name])}")
-        return "\n\n".join(blocks)
-
-
-def validate_submission_id(value: Any) -> str:
-    """Return the caller's stable opaque receipt id after syntax validation."""
-
-    if not isinstance(value, str) or not SUBMISSION_ID_RE.fullmatch(value):
-        raise ValidationError({"submission_id": "Use 1-128 letters, numbers, dots, underscores, colons, or hyphens."})
-    return value
-
-
-def _deserialize_field(name: Any, value: Any, *, required: bool) -> WebformField:
-    if not isinstance(name, str) or not FIELD_NAME_RE.fullmatch(name):
-        raise ValidationError({"form_schema": f"Invalid public form field name {name!r}; use a letter-led identifier."})
-    if name in {"answers", "submission_id"}:
-        raise ValidationError({"form_schema": f"Field name {name!r} is reserved for the submission envelope."})
-    if not isinstance(value, dict):
-        raise ValidationError({"form_schema": f"Field {name!r} must be an object."})
-    if "relation" in value:
-        raise ValidationError({"form_schema": f"Field {name!r} cannot declare a relation."})
-    kind = value.get("type")
-    if kind is None and isinstance(value.get("enum"), list):
-        kind = "string"
-    if kind not in SCALAR_TYPES:
-        raise ValidationError({"form_schema": f"Field {name!r} must declare string, integer, number, or boolean type."})
-    widget = value.get("widget")
-    email = widget == "email"
-    if email and kind != "string":
-        raise ValidationError({"form_schema": f"Email field {name!r} must have string type."})
-    label = value.get("label", name)
-    read_only = value.get("readOnly", False)
-    if required and read_only:
-        raise ValidationError({"form_schema": f"Required field {name!r} cannot be read-only."})
-    max_length = value.get("maxLength")
-    if max_length is not None and (
-        kind != "string" or isinstance(max_length, bool) or not isinstance(max_length, int) or max_length < 1
-    ):
-        raise ValidationError(
-            {"form_schema": f"Field {name!r} maxLength must be a positive integer on a string field."}
-        )
-    enum_value = value.get("enum")
-    options_value = value.get("options")
-    enum = None
-    if enum_value is not None and options_value is not None:
-        raise ValidationError({"form_schema": f"Field {name!r} cannot declare both enum and options."})
-    if options_value is not None:
-        if kind != "string" or not isinstance(options_value, list) or not options_value:
-            raise ValidationError(
-                {"form_schema": f"Field {name!r} options must be a non-empty list on a string field."}
-            )
-        option_values: list[str] = []
-        for index, option in enumerate(options_value):
-            option_value = option["value"]
-            if not isinstance(option_value, str) or not option_value:
-                raise ValidationError(
-                    {"form_schema": f"Field {name!r} option {index} value must be a non-empty string."}
-                )
-            if option_value in option_values:
-                raise ValidationError({"form_schema": f"Field {name!r} option values must be unique."})
-            option_values.append(option_value)
-        enum = tuple(option["value"] for option in options_value if not option.get("disabled", False))
-        if not enum:
-            raise ValidationError({"form_schema": f"Field {name!r} must have an enabled option."})
-    elif enum_value is not None:
-        if not isinstance(enum_value, list) or not enum_value:
-            raise ValidationError({"form_schema": f"Field {name!r} enum must be a non-empty list."})
-        if kind != "string" or any(not isinstance(item, str) for item in enum_value):
-            raise ValidationError({"form_schema": f"Field {name!r} enum must contain only strings."})
-        if len(set(enum_value)) != len(enum_value):
-            raise ValidationError({"form_schema": f"Field {name!r} enum values must be unique."})
-        enum = tuple(enum_value)
-    scalar_schema = {**value, "type": kind}
-    if enum is not None:
-        scalar_schema["enum"] = list(enum)
-    field = WebformField(
-        name=name,
-        label=label,
-        required=required,
-        read_only=read_only,
-        email=email,
-        schema=scalar_schema,
+    channels = apps.get_model("messaging", "Channel")._base_manager.using(using)
+    webform = (
+        channels.annotate(stored_backend=Cast("backend_class", models.CharField()))
+        .filter(stored_backend="webform")
+        .order_by("pk")
+        .values("pk", "display_name", *FORM_COLUMNS)
     )
-    if enum is not None:
-        # Choice declarations must themselves satisfy the field's native constraints.
-        enum_schema = {key: item for key, item in scalar_schema.items() if key != "const"}
-        if any(validation_issues(enum_schema, item) for item in enum):
-            raise ValidationError({"form_schema": f"Field {name!r} enum contains an invalid {kind} value."})
-    for default_key in ("defaultValue", "const"):
-        if default_key in value:
-            error = field.validate(value[default_key], max_bytes=1_048_576)
-            if error:
-                raise ValidationError({"form_schema": f"Field {name!r} {default_key} is invalid: {error}"})
-    return field
+    return [channel for channel in webform if holds_form(channel)]
 
 
-def _scalar_size(value: Any) -> int:
-    if isinstance(value, str):
-        return len(value.encode("utf-8"))
-    return len(json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8"))
+def channel_public_id(pk: Any) -> str:
+    """Return a channel's public id from its key.
+
+    ``sqid`` is no column, so a migration state has no field for it; the
+    installed channel's own field says it. Retained migrations import it.
+    """
+
+    field = cast(SqidField, installed_apps.get_model("messaging", "Channel")._meta.get_field("sqid"))
+    return field.public_id_from_value(pk)
 
 
-def _render_scalar(value: Any) -> str:
-    if isinstance(value, bool):
-        return "Yes" if value else "No"
-    if isinstance(value, str):
-        return value
-    return json.dumps(value, ensure_ascii=False, allow_nan=False)
+def is_move(migration: Migration) -> bool:
+    """Whether ``migration`` carries the channels' forms away before it removes their columns.
+
+    Such a migration says so itself, with ``moves_webform_channels = True`` on
+    its ``Migration``: the bridge's template declares it, so every project's
+    copy does, under whatever name the project gave it.
+    """
+
+    return bool(getattr(migration, "moves_webform_channels", False))

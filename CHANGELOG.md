@@ -10,6 +10,333 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: the batch dialog lists every group a list's "Select all N"
+  matched by key, not by offset. It forwards the list's own groups read as the
+  list sent it, order included (`AllMatchingGroups.read.orderBy`, always the
+  group's own key, ascending, nulls last), and each next page is that read with
+  its `where` narrowed to the groups past the last listed key, so a group added
+  or removed while the list is read neither repeats nor skips another. The
+  listing ends on a short page, not on the list's count, and says so when the
+  number of groups it listed differs from that count. The reader takes the named
+  `AllMatching` types from `@angee/ui` and refuses an order of more than the
+  grouped field, which has no one-field cursor, and an order with nulls first or
+  descending (one rule, `cursorField`, shared by the reader and the dialog). A
+  page that ends on a key no `_gt` can step past (null, or not text) ends the
+  listing rather than starting it again from the first page. A paged dialog says
+  how far it has read ("Loaded N of M …", with the loading indicator) from its
+  first render until every page is listed and previewed, and every dialog uses a
+  preview only as it read it itself, fetched since it opened and not being read
+  again: a reopened dialog reads its previews again rather than ticking from
+  cached ones.
+- `@angee/ui`: a record form's rail shows a field exactly when the sheet would:
+  visible for the form's current values (`showWhen`, resolved through
+  `resolve`) and not `hidden`, decided by the same `visibleFields` the draft
+  uses; a rail group left with no field and no content is dropped.
+  `visibleRecordRailGroups` takes the form's values after the record.
+- `@angee/ui`: in a record form, the targets a preset hides are dropped from
+  the draft, and on save each preset field whose value changed writes its
+  preset's value for every target that is hidden now and was loaded with a
+  different value. `prefill` is now also called when the form is saved, so it
+  must be pure. Choosing another kind and then the stored one again is
+  therefore clean instead of dirty with nothing to save. `prefillReplace` is
+  documented as what it is: the fields `prefillPreserveDirty` still replaces.
+- `@angee/ui`: `AppearanceState` has `drafting`, whether a draft is open. The
+  Appearance settings page keeps a draft open by it; it used to rely on `openDraft`
+  being a new function on every render, which re-ran its effect after a Discard.
+- `@angee/ui`: `AppearanceProvider` resolves the appearance once per input (the
+  saved preferences, the catalogue, the host defaults, the system scheme, the lock
+  and the draft), so a render that changes none of them no longer re-applies the
+  token layers to the document or reads and encodes the boot cache.
+- `angee.base`, `angee.resources`, `angee.workflows`: a merge refusal's reason
+  names the record by its public id ("This record (tag_…) is loaded from
+  angee.tags resources, which would recreate it; keep it instead.", "Workflow
+  runs still working on this record (…) must finish or be canceled first.", and
+  the merge's own refusals of a shared, still-referred-to or vanished record),
+  never by its display name, which is personal data in any log or response that
+  carries the reason. The merge module's docstring states the rule for every
+  `ANGEE_MERGE_GUARDS` guard, and a test triggers each registered guard on a
+  named record and fails for a guard it does not yet trigger.
+- `angee.base`: `mute_changes(collect=MutedChanges())` is a collecting mode of
+  the mute. The block also keeps the `(concrete model label, pk)` key of every
+  row it suppressed, deduplicated and never the row itself, joining as the
+  write's transaction commits, so a block or savepoint that rolled back
+  contributes nothing. `MutedChanges.publish()` then observes each row once, as
+  a full update in `(model label, pk)` order, through `transaction.on_commit` of
+  the outermost scope, so each passes every adapter's own read gate. A row
+  deleted inside the block, or a write that asked for no transport, is not
+  observed. An ordinary mute is unchanged, including one nested inside a
+  collecting mute, so the callers that mute on purpose and publish their own
+  summary (workflows settlement, decisions, messaging teardown and fan-out) are
+  untouched; `publish_bulk_update` coalesces under a collecting mute only.
+- `angee.base.testing.fixtures`: `relationship_storage(mode)` runs a block on the
+  other REBAC relationship storage with the session baseline carried there (copied
+  with `rebac migrate-storage`), restoring the setting and that table on exit. A
+  test that sets `REBAC_LOCAL_BACKEND_STORAGE` alone reads a table without the
+  baseline's grants and is refused what they grant; storage-parametrized tests
+  switch through it. Parties claims through a rule source are covered in both
+  storages.
+- Stack templates `dev`, `local` and `staging`: `serve_workers` defaults to 2
+  instead of CPU count. Each production Django worker loads the whole
+  application, about 550 MiB with nothing shared, so the CPU-count default
+  took 33 processes and 15.6 GiB on a 32-core host. `0` still opts into CPU
+  count. A stack keeps the value its answers file records;
+  `angee stack update --template --input serve_workers=<n>` changes it.
+- Addons require django-zed-rebac 0.37.0. On PostgreSQL, where an actor's grant profile
+  folds constant arms, each id set keeps one planner bound instead of one per arm, so a
+  role an actor does not hold costs it nothing; rows, decisions and statement counts are
+  unchanged. The member planner-memory ceilings are lowered to the new costs: person
+  351 to 327 MiB, selected 711 to 695 MiB (projects, connections and related keep theirs).
+- `@angee/ui`: a person's color scheme has one writer and a first-paint cache
+  that follows it. Under an appearance provider the user menu no longer mounts
+  the browser-local scheme (`useColorSchemePreference`), which wrote its own
+  preference (`system` there) over the saved one when the shell mounted, on an
+  OS scheme change and on a storage event; the menu's toggle reads and sets the
+  provider's scheme, and the browser-local scheme is read, applied and followed
+  only in a tree without a provider, as before. A locked app now writes the
+  boot cache (`angee:appearance:3`) with the person's own theme, options and
+  scheme, resolved as if the app were not locked, so a scheme chosen there
+  paints on the next load instead of only once React applies the saved
+  preference.
+- **Public web forms: the new addon `angee.webforms`, and its bridge to
+  messaging, `angee.webforms_messaging`.**
+  - **What it holds.** A form (`Form`) is what staff manage: whether it takes
+    submissions, which version the public answers, and what a response becomes.
+    A version (`FormVersion`) holds the questions in every language the form is
+    written in, as a checked subset of a SurveyJS definition. An address
+    (`FormAlias`) is a public slug of a form, optionally in one language. A
+    response (`Response`) is one submission, kept as received before anything is
+    made from it, once per form and `submission_id`. A target (`FormTarget`,
+    `ANGEE_WEBFORM_TARGET_CLASSES`) turns a response into a record of the addon
+    that owns it; `store`, the default, keeps the response as the record. A
+    target's addon declares the type its target makes, as a relation on
+    `webforms/response_record` in its `permissions.extends.zed`; a delivery
+    that returns a record of a type nobody declared fails. Forms
+    are managed by platform admins and the `webforms_admin` role, from the
+    console's forms, versions, addresses and responses.
+  - **The public address** of a form is `forms/<alias>`, and it answers by what
+    the request accepts. A browser, whose first `Accept` type is `text/html`,
+    gets the public page from the ingress. Every other request reaches Django:
+    `GET` describes the version the form serves, and `POST` keeps one submission
+    (`{submission_id, version, language, answers}`) and answers
+    `202 {"submission_id"}`, and only that again for a resend, even after the
+    form closed. The shared guard (`angee.server.ingress`) runs before anything
+    is read, within the `ANGEE_WEBFORM_*` bounds the addon declares (body bytes,
+    rate-limit burst and window, honeypot field, token hook).
+  - **The public page** is a standalone page: the addon's web package declares
+    it (`angee.pages` in `web/package.json`), the web build emits it and the
+    ingress serves it. It loads nothing of the application, reads the JSON
+    description from the same address and posts the submission to it.
+  - **The rules.**
+    - A published version never changes; a change is a new version, and a
+      response pins the version it answered.
+    - Stored markup (`html` blocks and `completedHtml`) is an allowlist of simple
+      tags in one plain spelling, and anything else is refused when the version
+      is saved.
+    - A failed delivery keeps its failure's class and never its message, which
+      could quote an answer.
+    - Delivery is retried by `webforms.redeliver_responses`, eight attempts in
+      all, and a response its target's owner refused (`DeliveryRefused`) is not
+      retried.
+    - Retention removes every response once its form's `retention_days` since
+      receipt have passed, delivered or not, and before that the console shows
+      what is undelivered and when it expires.
+    - Erasing is per response, or by the record a response became
+      (`Response.objects.erase_for_record`, and automatically when that record
+      is deleted), and a person's responses are found by their contact through
+      the console's filter.
+    - A target is chosen only by someone its owner lets make its records
+      (`FormTarget.permits`).
+    - Known gaps: who chose a form's target is not recorded, and it is not
+      checked again at delivery. The staff form does not prefill a target's
+      default configuration: `ImplBase.effective_defaults` writes defaults under
+      `config` only, and a form's field is `target_config`; a follow-up at base.
+      A form that posts on a messaging channel keeps a copy of the answers in
+      messaging (the message's envelope and body, with the claimed address),
+      which erasing the response does not reach, because messaging has no verb
+      that redacts an ingested message; the fix, a target erase hook and a
+      messaging redaction verb, is a follow-up. Messaging's refusal of a
+      removal of the channel's form columns at `migrate` (below), with its
+      check `angee.E054`, is interim: deleted once the framework pins
+      django-compose 0.1.0.dev14, whose drop guard judges pending removals at
+      migrate time. With that pin the bridge's template keeps its `RunPython`
+      and its `RemoveConstraint`, writes each of its six removals as
+      django-compose's `IntendedRemoveField`, and can drop
+      `moves_webform_channels`; the template's update ships with the pin,
+      because an unapplied host copy that still uses plain `RemoveField` is
+      then refused at `migrate` (it fails safe) and must be copied again.
+  - **A response posted as a message** is the bridge `angee.webforms_messaging`,
+    which requires both addons; neither depends on the other. Its `message`
+    target posts a response on a `webform` channel through
+    `Message.objects.ingest`, as the message `webform:<slug>:<submission id>`,
+    with the `webform` envelope `Message.webform_submission()` reads, so
+    `angee.intake` captures it. The claimed address in the envelope is the
+    answer to the version's contact question when that question asks for an
+    email. The bridge declares `messaging/message` as a type a response can
+    become (`permissions.extends.zed`). Someone may point a form at a channel
+    only if they may write on it, and one channel and slug take one form: a
+    second is refused when it is configured, and by the table when two are
+    saved at once.
+    A response is refused, and not tried again, as `channel_missing`,
+    `message_exists` (the channel already holds a message under that
+    submission's id which the response did not make) or `message_refused`. The
+    `webform` channel backend is the bridge's,
+    under the registry key channel rows already store.
+  - **Messaging holds no form.** Removed from `angee.messaging`:
+    `views.public_webform` and `urls.py`; `ChannelWebform` with `Channel.slug`,
+    `is_published`, `form_schema`, `form_schema_version`, `max_body_bytes`,
+    `max_field_bytes`, `uq_messaging_channel_webform_slug`, `webform_spec`,
+    `webform_message` and `submit_webform`; `Channel.validate_webform_answers`;
+    `ChannelQuerySet.published_webforms`; those columns on GraphQL
+    `ChannelType`; `WebformChannelBackend` (now
+    `angee.webforms_messaging.backends`); the `ANGEE_WEBFORM_*` settings and the
+    token-hook check (now `angee.webforms`, with the same names and defaults);
+    and from `messaging.webforms` `WebformSpec`, `WebformField`,
+    `WebformUnavailable`, `WebformChanged`, `validate_submission_id` and the
+    schema constants. The module keeps what projects' retained migrations
+    import: `default_webform_schema`, and what the bridge's template reads of a
+    channel's form (`FORM_COLUMNS`, `holds_form`, `channels_holding_forms`,
+    `channel_public_id`). Removed from
+    `@angee/messaging`: `PublicWebform`, `PublicWebformPage`, the
+    `/public/forms` routes, the channel form's "Public form" group and their
+    translations. A client of the earlier `forms/<slug>` JSON contract follows
+    the new one.
+  - `angee.intake` reads only the message's envelope: `intake_field_map` is held
+    to its shape and to the fields intake fills, and a name a submission does
+    not carry maps nothing, as an answer the field refuses already did. The
+    checks against a channel's form schema are gone with the schema.
+  - **Upgrade.** Back up the database first: the move has no reverse, so going
+    back means restoring that backup and running the previous code.
+    - Every host that composes `angee.webforms` runs `makemigrations webforms`.
+    - A host that holds channels with the `webform` backend adds
+      `angee.webforms_messaging` to its roots. Until it does, the database check
+      `angee.E052` names those rows under `check --database`, which a plain
+      `migrate` runs first and `provision` runs only after its migrations.
+    - A host whose webform channels hold a form (a slug, a published flag or a
+      schema) moves them with the bridge's migration template, in this order:
+      delete any autodetected migration that removes `Channel.slug`,
+      `is_published`, `form_schema`, `form_schema_version`, `max_body_bytes`,
+      `max_field_bytes` or `uq_messaging_channel_webform_slug`; copy
+      `src/angee/webforms_messaging/compose_migrations/messaging/webform_channels_to_forms.py`
+      into `runtime/messaging/migrations/`, pinned after the host's current
+      messaging leaf and its webforms initial migration; run
+      `makemigrations messaging`, which must report no changes; run
+      `manage.py check_webform_channels`, which prints what the move would
+      refuse and leave out and changes nothing; then `migrate` and `rebac sync`.
+    - `migrate` refuses the wrong order by itself, also under `provision`,
+      which skips system checks, and on a host that has not installed the
+      bridge: the columns are messaging's, so messaging listens to
+      `pre_migrate`
+      (`angee.messaging.webform_columns.refuse_removal_ahead_of_the_move`). A
+      run whose plan removes those columns with a migration that neither is the
+      move nor follows it is stopped before anything is applied, while a webform
+      channel of that database holds a form. The refusal names the migration,
+      counts the channels and names a few by public id, and gives the remedy;
+      `check --database` says the same beforehand as `angee.E054`. Until now
+      nothing did: the composer's drop guard judges authoring only, at
+      `makemigrations` and on the database that command runs on, so a removal
+      authored where no channel held a form was applied where channels did, and
+      dropped their forms. What is read from a plan is `RemoveField` on the
+      channel, also inside `SeparateDatabaseAndState`; a column dropped by
+      `RunSQL`, or renamed and then removed, is not seen. The order above stays
+      the instruction.
+    - The move is known by what its migration declares
+      (`moves_webform_channels = True`), under whatever name a host gave its
+      copy. A copy of the template taken before that mark existed lacks it and
+      must be copied again: it fails safe, since `migrate` refuses it as a
+      removal that is not the move.
+    - A host whose channels hold no form anywhere needs no template:
+      `makemigrations messaging` removes the empty columns and nothing refuses
+      that. `check_webform_channels` says which case a database is in: the
+      columns are gone, or no webform channel holds a form (both: nothing to
+      move), or channels hold a form and the project has no copy of the
+      template (copy it), or the copy is there (the dry run).
+    - The template makes one form per channel, named after it, with the
+      channel's slug as its address and as the slug of its `message` target, so
+      its conversation continues. The FormSpec becomes the form's first version
+      in the project's `LANGUAGE_CODE`; the email field becomes the contact
+      question; a field without a label shows its name. A published channel
+      becomes a published form whose version states every question personal, to
+      be narrowed in a new version, and is judged by the rule publishing applies
+      (`validate_publishable`); an unpublished one becomes a draft that states
+      nothing yet. It makes no response: the submissions a channel received stay
+      the messages they are.
+    - The template refuses, with every such channel named and before any column
+      goes: a schema it cannot turn into questions (an `integer`, a read-only,
+      hidden or defaulted field, a pattern), a version the web forms' rules
+      refuse (a choice whose value is not a code, a field named `submission_id`,
+      `version`, `language` or `answers`, a curly bracket in the success text),
+      a slug that cannot be an address, an address a form already has, and a
+      form without a slug. Change the channel on the previous release and apply
+      again. Without the check command a refusal first appears at `migrate`,
+      and holds the services that wait on it until the channel is changed.
+    - Not carried over, each reported in the log with its channel's public id:
+      a channel's `max_body_bytes` and `max_field_bytes` (a form's limits are
+      its definition's and the `ANGEE_WEBFORM_*` bounds), a field's `title`
+      beside its `label`, a disabled option, and form columns on a channel of
+      another backend.
+    - A link to `/public/forms/<slug>` stops working and nothing redirects it:
+      publish the new address, `/forms/<slug>`, or add a redirect at the
+      ingress. A webform channel authored as a resource row needs its resource
+      file changed, since the row no longer takes `slug`, `is_published` or
+      `form_schema`; that is the consumer's companion change.
+    - Upgrade cutoff: the template ships through the 3.x releases and is removed
+      in 4.0, and `messaging.webforms.default_webform_schema` stays while
+      retained migrations import it; a host upgrading from an earlier release
+      applies the template through a 3.x release first.
+  - Check ids: `angee.E052` is new (`check_stored_impl_keys`: stored rows whose
+    implementation key nothing registers, with the remedy an addon states in
+    `ANGEE_IMPL_KEY_REMEDIES`). `angee.E054` is new and interim (messaging's
+    `check_form_columns_leave_with_the_move`: a pending migration that removes
+    the form columns of webform channels that hold a form and is not the move).
+    Provenance's merge-history check is now
+    `angee.E053`; it shared `angee.E051` with base's `ANGEE_PUBLIC_ORIGIN`
+    check, which keeps that id. A host that silences the merge-history check
+    silences `angee.E053`.
+- Stack templates: the static ingress answers with `Cache-Control: public,
+  max-age=31536000, immutable` for an existing file the build names by its
+  content, `/assets/<name>-<hash>.<ext>`: Vite's emitted scripts, stylesheets,
+  locale and metadata files and the emission of a deployment's selected named
+  asset. A repeat visit no longer transfers them. The rule reads the hash in
+  the file name, never the directory alone. Documents are revalidated,
+  content-hashed assets are kept: the app document however it is reached, a
+  missing asset's fallback to it included, and each standalone page answer
+  `Cache-Control: no-cache`, stored but checked by ETag before each use, so no
+  visitor holds a document naming hashed files a deploy has deleted. The
+  build's `.vite/` manifests and every file kept or rewritten under a stable
+  name carry no cache header.
+  The ingress serves precompressed sidecars when a build provides them: a
+  `<file>.br`, `.zst` or `.gz` beside a file answers a client that accepts it,
+  brotli first, for the app's files and the standalone pages; without one the
+  file is compressed on the fly as before.
+- `angee.web`: an addon's web package declares **standalone pages**, static HTML
+  entries of the web build that load none of the app, in `web/package.json`:
+  `"angee": {"pages": {"<id>": {"entry": "./src/standalone/form.html", "paths":
+  ["/forms/*"], "accept": "text/html"}}}`. `WebRuntime` validates the
+  declaration beside `angee.assets` (a dotted lower-case id unique across
+  packages, an existing entry file inside the package, absolute path prefixes
+  ending in `/*` that overlap no other page's and sit under a prefix the ingress
+  sends to Django for pages, today `/forms/*`) and projects it twice: on the
+  package's entry in `runtime/web/manifest.json`, with the one `Accept` rule as
+  `pageAccept`, and as Caddy routes in `runtime/web/pages.caddy`, published with
+  the other `runtime/web` outputs and holding only its sentinel when no page is
+  declared. Page `<id>` is the build output's `<id>.html`. A page answers `GET`
+  and `HEAD` on its paths only when `text/html` is the first media type of the
+  request's `Accept` header, however the header is folded into field lines, so
+  every other request reaches Django, and carries
+  one fixed content security policy (no inline script, never framed), owned by
+  `PAGE_CSP` and published as the manifest's `pageCsp`. The stack
+  templates' static ingress declares its site root once and imports the snippet
+  by glob ahead of its Django routes: an ingress whose composer emits no snippet
+  still starts, and those paths stay Django's. The ingress reads the snippet
+  when it starts, so a recomposed one takes effect when that service restarts.
+  The paths the static ingress sends to Django are declared once
+  (`INGRESS_DJANGO_PATHS`); the stack template's `@django` matcher is pinned to
+  them, and a page claiming any other of them, or a path Django never receives,
+  is refused. The manifest publishes the list as `ingressDjangoPaths`.
+  Follow-up: the dev server's proxy still keeps its own, narrower list of these
+  paths (`packages/app/config/vite.ts`); it is to read `ingressDjangoPaths`
+  instead, which needs a check on a running dev server because it widens what
+  the dev server proxies.
 - `@angee/ui`: `FormView` (and so `Form` and every registered form) takes an
   optional `renderUnavailable(id, unavailable)`: what a saved record's form
   shows when its id reads no record, given the default "Record unavailable"
@@ -25,6 +352,100 @@ live in code docstrings.
   record form asks whenever a resource its metadata marks `mergeable` misses, so
   no form passes a hook and parties keeps only its concrete page
   (`party_record`'s `concrete_kind`).
+- `angee.parties`: one verb makes the person of a contact an integration's
+  record carried (a name, an email address, a phone number),
+  `Party.objects.claimant_as_system`. Each source creates its own people: the
+  caller hands over the record that carried the contact (`evidence`) and its
+  rule of which records are its own, as a queryset of them (`own`: the record
+  links of its integration). The email decides, and a contact without one is
+  decided by its number: the person found again is one whose standing claim on
+  a handle of that address has a row of `own` behind it, never a person
+  another source, a user or a person made, whoever holds or claims the
+  address. A trashed person is nobody's answer, a merged one is found as its
+  survivor, of several the earliest. An email that cannot be an address at
+  all is no address and a number the handle owner reads nothing in, or
+  refuses, is no number: each is left out and makes no handle, so two contacts
+  that gave the same non-address are never one person for it. What can be an
+  email address is one predicate on the handle owner,
+  `Handle.is_email_address`: exactly one `@`, a non-empty name part in any
+  script with no whitespace, control or format character, a domain that
+  passes the domain rule of Django's `EmailValidator`, and no longer than an
+  address may be or the handle's value holds. Both spellings of an
+  internationalised domain are one address: `Handle.normalize_value` reads a
+  domain's punycode labels (`xn--`) as Unicode in the comparison key, while
+  `value` keeps what was typed. The rule for a domain is one function,
+  `Handle.normalize_email_domain`, and the organization-domain suggestion
+  reads the handle's domain and `Organization.domain` (stored as typed)
+  through it on both sides, so either spelling of either suggests the
+  organization. What the person does not hold
+  is recorded as a claim for review with the record behind it
+  (`propose_claimed_handle_as_system`) and moves nothing; a person found again
+  has nothing new stated of them and carries a handle only when they hold it
+  or a record of the caller stands behind their claim on it. The rows of the
+  address and of the number are locked in one call before any claim is read,
+  and which claims are the caller's own is one read of its records by key, in
+  batches within the database's parameter budget. The verb proposes no pair: a
+  claim links its person to the address, so the pairing job proposes them.
+  Which claims still stand is one scope, `PartyStatementQuerySet.standing()`
+  (each party's strongest current stance on a handle, where it asserts a
+  value), which `people_for_emails` and the party graph's identity lens now
+  read instead of spelling the rule. The read behind the verb,
+  `standing_claims()`, adds to each standing claim the records its evidence
+  names, those of a claim a merge superseded under it included: two sources'
+  claimants of one address, once merged, are each found as the survivor, where
+  a read of current stances alone had one of the two sources make a new person
+  after every merge. `angee.provenance`: `EvidenceReference.named_record` is
+  the one comparison of which record a reference names (the model's label
+  without case and the public id, the pointer aside); the verb reads it, and a
+  consumer compares the references `standing_claims()` returns with its own
+  the same way. No resource or permission change. Upgrade: a handle stores
+  the comparison key its rule gave when it was last saved, so a change of the
+  rule leaves stored keys behind. The rule now has a version,
+  `Handle.NORMALIZATION_VERSION`, to bump whenever `Handle.normalize_value` or
+  `Handle.normalize_email_domain` returns something else (a test pins the
+  rule's outputs for a fixed sample beside the number), and each handle
+  carries the version its key was computed under in a new column,
+  `Handle.normalized_version` (a small indexed integer, default 0, not
+  editable, not shown in GraphQL), which the handle's save writes together
+  with the key. A host runs `uv run --no-sync python manage.py makemigrations
+  parties` after compose, which authors one migration adding the column to
+  the handle and to its history table, commits it, and provisions. Existing
+  rows are then at version 0, so the provision repair `renormalize_handles`
+  (`HandleManager.renormalize_handles`), which every provision runs, selects
+  them by the column's index and saves each again through the handle's own
+  save. It takes the whole backlog in that provision, because a row left with
+  a stale key is one the lookups that read keys miss, and a writer that
+  misses it makes a second row. So the first provision after the migration
+  saves every existing handle once (`updated_at` stamped, one history version
+  each); its time grows with the table: about 65 rows per second on
+  PostgreSQL 17 in a local container, measured twice with 10,000 handles
+  (155 and 149 seconds) on an 18-core development machine that other work
+  kept under heavy load (load average 75 to 87). The repair saves in batches
+  of `HandleManager.REPAIR_LIMIT` (500) rows, each in its own transaction, so
+  an interrupted provision keeps what it saved and the next one resumes. The
+  provision log prints "Saved the comparison key of N handle(s) again." A row
+  whose save raises is rolled back alone, logged with its error, counted in
+  "The comparison key of N handle(s) could not be saved; ..." and tried again
+  by the next run, while the rest are saved. `manage.py renormalize_handles
+  --limit N` saves a share instead, and only then prints "Stopped at the cap
+  of N handle(s); M more await the next provision or renormalize_handles
+  run". Once no row is behind, the repair is one indexed query per provision
+  and prints "Saved the comparison key of 0 handle(s) again." A handle stored
+  with a punycode-domain key is found by its Unicode spelling after that
+  first provision. A row newer code stamped with a later version is selected
+  too, so a rollback keys it again by the older rule. The PostgreSQL lane
+  runs the repair's two lock races
+  (`tests/test_parties_handle_keys_concurrency.py`): a row another process
+  deletes, and one it saves, after the repair selected its key and before
+  the repair holds its lock.
+  Limits: two callers that meet two spellings of
+  one new address at once each make its row, and so its person, which the
+  pairing job then proposes; a handle is unique by its value as typed, not by
+  its comparison key, so writers that key on the exact value can still make
+  two rows of one address, which every lookup by the key reads together; a
+  number that is no valid international number is read as its digits. The
+  domain codec is the standard library's, IDNA 2003: a punycode label that
+  carries `ß`, `ς` or a joiner does not read back and stays as typed.
 - `angee.parties`: a merged-away party is no longer a row. The `people`,
   `organizations` and `parties` resources read `canonical()` parties, as
   handles, addresses and relationships already did, so a party merged into
@@ -969,8 +1390,31 @@ live in code docstrings.
   is the one batch surface: the Review page's "Merge certain pairs" action, and
   the People and Organizations lists' Merge…, where one selected record opens
   the person form's "Merge into…" (`useMergeIntoAction`, shared by both), two
-  open their compare page, and three or more open the dialog as one explicit
-  set, the whole selection.
+  open their compare page, and three or more on an ungrouped list open the dialog
+  with the duplicate sets the server finds among them
+  (`selection_duplicate_sets(ids)`, at most 1,000 ids, under the reader's own
+  read): the review's own pairs between selected records
+  (`PartyManager.selection_pairs`, the one rule of what makes two selected
+  records one), joined into connected groups, the rest left out and counted;
+  three to ten with no pair are one set, as selected, and above ten with none the
+  dialog says what to do. Both lists opt in to the list's "Select all N"
+  (`selectAllMatching`): on a list grouped by one text merge field (People's
+  display, given or family name, Organizations' display name), Merge… opens the
+  dialog on every group the list's read matches, each group of two or more
+  records with a value one set grouped by that field. The dialog pages the list
+  resource's own groups read (`PeopleGroupSets`, `OrganizationGroupSets`, under
+  the reader's own read) with the list's read forwarded through
+  `groupByVariables`, fifty groups a request with each group's first eleven ids,
+  saying "Loaded N of M groups…"; it skips and counts groups of one and groups
+  without a value, previews the sets as any others and enables Confirm once every
+  page is listed and previewed, at most 1,000 sets with the rest stated. A flat
+  list, a date bucket, a relation or another field is refused with what to do,
+  and so is a grouping without "Repeated values only" (the read's `having`),
+  which would page through every group of one. The dialog lists a page only as
+  it read it itself (fetched since it opened and not being read again): a page
+  an earlier dialog left in the cache is read again first, the end-of-run
+  invalidation reaches the listing's pages, and a dialog that does not page
+  shows nothing of its disabled listing read, data or error.
 
 - Parties: `Party.objects.propose_same_person_as_system(left, right, *, evidence,
   reason)` lets an importer propose that two parties are one person, citing the
@@ -1028,27 +1472,78 @@ live in code docstrings.
   pairs after the pair `after` names, in the pair rows' key order, each with
   its `id`, so a page continues after the last pair seen and a pair merged or
   kept apart meanwhile moves no other one. Which pairs a reader may review
-  (both endpoints and every cited handle readable) is decided for every pair at
-  once in a fixed number of queries, and only the page is read in full; a pair
-  the reader cannot read never ends a page early. `certain_same_as_pairs(limit,
+  (both endpoints and every cited handle readable) is decided by a walk
+  (`PartyQuerySet.review_walk`): the endpoints' visibility and the cursor are
+  SQL, then each window of pairs reads their statements and cited handles, and
+  the walk goes on until the page or the certain batch is full or the pairs
+  end, with no cap, so every pair stays reachable; a reader who reads the cited
+  handles reads one window whatever the number of pairs, and a reader who
+  reads both endpoints of a long run of pairs but not their cited handles
+  walks that run. A pair whose party was merged away between the walk and the
+  members' read is moot and left out, never read through its missing party.
+  The totals are exact in the rows' scope up to 1,000
+  (`same_as_pair_counts { pairs certain capped }`); past that the page reads
+  "1,000+", and the certain count covers the first 1,000 pairs and reads
+  "<n>+". `certain_same_as_pairs(limit,
   after)` gives the certain pairs a batch at a time the same way, and
   `same_as_pair_counts { pairs certain }` (`PartyManager.same_as_review_counts`)
   says how many of each the reader may review. The Review page shows both totals
   and gives each of its lists its own pager (the claims list embedded in its
-  section, the pairs under their cards); "Merge certain pairs (50 of 180)" names
-  the batch and the dialog says the next batch follows; the overview counts every
+  section, the pairs under their cards); "Merge all certain pairs (180)" opens
+  the dialog on every certain pair (`allCertain`): it lists them page after
+  page, fifty a request through the `after` cursor, saying "Loaded N of M
+  sets…", previews each page as it is listed, and enables Confirm only once every
+  page has loaded (a page that fails offers a retry); then "M sets: X will merge,
+  Y need a look" comes from the loaded list. One confirm lists and runs at most
+  1,000 sets (`CONFIRM_SETS`) and says when more may wait ("run again for the
+  rest"); the dialog renders fifty sets at a time through the shared `Pager`, and
+  once every page is in only the last page stays live. The overview counts every
   pair instead of a capped read. In the dialog each set that may merge has its
   own Include toggle, off by default when the set carries a warning (a
   disagreement, a member that no longer matches its group) and off again when
   the set changes from the state the person saw or ticked it in, and the
-  mutation sends only the included sets. A disagreement is a field the records
+  mutation sends only the included sets, five a request in order
+  (`MERGE_CHUNK`), each set's outcome showing as its chunk answers; Stop ends
+  the run after the chunk in flight, a failed request ends it with what
+  answered kept, closing mid-run asks first and sends nothing more, and the
+  models are invalidated once, when the run ends: the authored reads and the
+  resource lists of the merge's resource models (`PARTY_MERGE_RESOURCES`, rows
+  and totals, through `useResourceInvalidates`), which authored invalidation
+  does not reach, so a list's heading count no longer keeps its pre-merge total
+  until a reload; the compare page's merge and keep-apart refresh the same
+  resource lists. On the server each request's
+  sets merge with their per-row changes muted and collected
+  (`mute_changes(collect=...)`), and once its last set is done every row a
+  committed set wrote is published once: its records (the survivor observed
+  with its set) and the handles their merge re-pointed, each through its own
+  read gate, so a chunk is one burst for every viewer of those pages. A set
+  that was refused, stopped or failed rolled back and publishes nothing, and a
+  hand merge publishes as before. Measured with a record holding 30 handles,
+  circle memberships and relationships, the batch broadcasts 32 changes (each
+  row once) where the hand merge broadcasts 92, one party up to 32 times; the
+  publish costs about 4 statements a handle (117, 197 and 317 at 10, 30 and 60).
+  There is no cap: every row is published. Known limits: the circle
+  memberships, relationships and every other reference the base merge
+  re-points (`Reference.move`, one queryset update) are never observed, by hand
+  or in a batch, so their lists refresh for other viewers only on their next
+  read; that owner would have to observe the rows it moves. The statements,
+  pair statements and addresses have no change feed, so no viewer's list of
+  them refreshes from any change. Each set asks the batch permission and
+  reads its members once for the whole batch, before any lock, and keeps under
+  its own lock what must be live there (the members, their statements and
+  handles through the person, the kinds, the keep-apart decisions and the field
+  values the digest covers). A disagreement is a field the records
   state at least two different values for; a field one value is stated for,
   the rest empty, is a fill (`DuplicateSetPreview.fills`, the same
   `MergeFieldValues` rows), which the merge gives the survivor and which warns
-  nobody. The group-match mark reads either list, so a member whose grouping
-  value was cleared since the selection still no longer matches its group; when
-  every member moved to the same new value nothing differs and nothing is
-  marked. Each set that may merge carries a `digest`
+  nobody; the dialog names a set's fills in one line, "The survivor also gains:
+  …", by their merge field labels. A grouped selection sends its grouping
+  field names (names only) to the preview and the merge, and the preview returns
+  a row for each that is a text merge field whatever the members hold
+  (`DuplicateSetPreview.grouping`, in the digest), so a member whose value moved
+  from the group's key no longer matches its group, a cleared value and a set
+  whose members all moved alike included; a relation or a date-bucket group has
+  no row and is not marked. Each set that may merge carries a `digest`
   (`DuplicateSetPreview.digest`, `keyed_facts_digest`, the keyed hashing
   `IdentityBasis.facts_hash` now shares) of what the dialog shows of it: each
   member's id, name, creation time and first-met note as the reader's gates

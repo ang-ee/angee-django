@@ -542,6 +542,11 @@ alias, written by the web build before JavaScript runs and independent of the
 selection. Its files are **named assets** an addon declares in its
 `web/package.json` `angee.assets`.
 
+**Standalone page** — a static HTML entry of the web build that loads none of the
+app, answering browser navigations on the path prefixes its addon declares in
+`web/package.json` `angee.pages`. The composer projects its ingress routes; every
+other request on those paths reaches Django.
+
 **Aggregator** — an addon that places other addons' apps under its own menu root
 (`include`), like the `angee.pm` suite. A **flattened** include shows the app's
 items as the aggregator's own while the app keeps its routes and words.

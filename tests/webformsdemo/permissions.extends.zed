@@ -1,0 +1,7 @@
+// The record the tests' tag target makes from a response, as a consumer declares it.
+// @rebac_package: webformsdemo
+// @rebac_schema_revision: 1
+
+definition webforms/response_record {
+    relation tag: tags/tag // rebac:field=record
+}

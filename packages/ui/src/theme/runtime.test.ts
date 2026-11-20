@@ -7,8 +7,11 @@ import {
   APPEARANCE_CACHE_KEY,
   APPEARANCE_CACHE_LIMIT,
   APPEARANCE_CACHE_SCHEMA,
+  APPEARANCE_PAYLOAD_ATTRIBUTE,
   bootstrapAppearance,
   defineTheme,
+  readAppearancePayload,
+  resolveAppearance,
   resolveThemeOptions,
   type AppearanceBootstrapPayload,
   THEME_TOKEN_NAMES,
@@ -147,6 +150,68 @@ describe("first-paint appearance", () => {
     vi.spyOn(window.localStorage, "getItem").mockImplementation(() => { throw new Error("blocked"); });
     bootstrapAppearance(bootstrapPayload, window);
     expect(document.documentElement.style.getPropertyValue("--brand")).toBe("#112233");
+  });
+});
+
+describe("the appearance a document wears", () => {
+  const host = {
+    themeId: "house.theme", colorScheme: "light" as const, fingerprint: "payload",
+    options: { version: 1, value: { brand: "#101010" } },
+    // The host's own options have already been resolved into these layers.
+    tokenLayers: { shared: { "--r-6": "9px" }, light: { "--brand": "#101010" }, dark: { "--brand": "#f0f0f0" } },
+  };
+  const payload: AppearanceBootstrapPayload = {
+    fingerprint: "payload",
+    host,
+    catalogue: {
+      schema: 1, fingerprint: "catalogue",
+      themes: [
+        { id: "house.theme", defaultTokens: { shared: {}, light: { "--brand": "#aaaaaa" }, dark: {} } },
+        { id: "other.theme", defaultTokens: { shared: { "--r-6": "2px" }, light: { "--brand": "#00aa00" }, dark: { "--brand": "#00ff00" } } },
+      ],
+    },
+  };
+
+  test("is the host's theme, its forced color scheme and its own token layers", () => {
+    // The visitor prefers dark, and a host that pins light is never asked.
+    expect(resolveAppearance(payload, { prefersDark: () => { throw new Error("not asked"); } })).toEqual({
+      themeId: "house.theme", colorScheme: "light", tokens: { "--r-6": "9px", "--brand": "#101010" },
+    });
+  });
+
+  test("follows the visitor only when the host follows the system", () => {
+    const system = { ...payload, host: { ...host, colorScheme: "system" as const } };
+    expect(resolveAppearance(system, { prefersDark: () => true }).colorScheme).toBe("dark");
+    expect(resolveAppearance(system, { prefersDark: () => true }).tokens["--brand"]).toBe("#f0f0f0");
+    expect(resolveAppearance(system, { prefersDark: () => false }).colorScheme).toBe("light");
+    expect(resolveAppearance(system).colorScheme).toBe("light");
+  });
+
+  test("wears a named installed theme with its own tokens, under the host's color scheme", () => {
+    expect(resolveAppearance(payload, { themeId: "other.theme" })).toEqual({
+      themeId: "other.theme", colorScheme: "light", tokens: { "--r-6": "2px", "--brand": "#00aa00" },
+    });
+    // Naming the host's theme wears it as the host does, options included.
+    expect(resolveAppearance(payload, { themeId: "house.theme" }).tokens["--brand"]).toBe("#101010");
+  });
+
+  test("leaves the host's theme when the one named is not installed, and wears none when told so", () => {
+    expect(resolveAppearance(payload, { themeId: "gone.theme" })).toEqual(resolveAppearance(payload));
+    expect(resolveAppearance(payload, { themeId: null })).toEqual({ themeId: null, colorScheme: "light", tokens: {} });
+  });
+
+  test("a remembered preference replaces the color scheme and the token layers", () => {
+    expect(resolveAppearance(payload, {
+      themeId: "other.theme", colorSchemePreference: "dark",
+      tokenLayers: { shared: {}, light: {}, dark: { "--brand": "#abcdef" } },
+    })).toEqual({ themeId: "other.theme", colorScheme: "dark", tokens: { "--brand": "#abcdef" } });
+  });
+
+  test("is read from the data block a document carries it in", () => {
+    document.head.innerHTML = `<script type="application/json" ${APPEARANCE_PAYLOAD_ATTRIBUTE}>${JSON.stringify(payload).replaceAll("<", "\\u003c")}</script>`;
+    expect(readAppearancePayload()).toEqual(payload);
+    document.head.innerHTML = "";
+    expect(readAppearancePayload()).toBeNull();
   });
 });
 

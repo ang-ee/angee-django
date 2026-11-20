@@ -383,7 +383,7 @@ ROW_SIZES = (2, 6)
 
 
 # SELECT count and total planner allocation rounded up to MiB, measured on PostgreSQL 17,
-# the CI server, with django-zed-rebac 0.35.2's actor grant profiles. Person's two audit
+# the CI server, with django-zed-rebac 0.37.0. Person's two audit
 # INSERTs keep its 21-statement document ceiling. PostgreSQL 18 allocates slightly less and
 # is not the gate's reference.
 #
@@ -391,19 +391,22 @@ ROW_SIZES = (2, 6)
 # about 40% from its 0.34.1 pin (person 592,189, projects 182,705, selected 1,262,880,
 # connections 711,828 and related 884,229 KiB) and reads one SELECT fewer: the witness the
 # profile replaces, net of the profile's own statement (about 512 KiB, counted since the
-# classifier reads a parenthesised compound statement by its first member). The ratchet
-# applies: lower a ceiling when its cost falls; never raise one for a regression.
+# classifier reads a parenthesised compound statement by its first member). 0.37.0 keeps
+# one planner bound per id set where the profile folds constant arms (a union of bounds is
+# one bound), so person fell from 358,922, projects from 108,209 and selected from 727,499
+# KiB; connections and related allocate the same blocks. The ratchet applies: lower a
+# ceiling when its cost falls; never raise one for a regression.
 #
 # A planner memory context grows in blocks of up to 8 MiB (ALLOCSET_DEFAULT_MAXSIZE), so the
 # same plans can allocate one block more on another runner: person read 600,381 KiB on a
 # web-only change against 592,189 KiB on main. The gate admits that one block over a ceiling.
 PLANNER_BLOCK_KIB = 8 * 1024
 PLANNER_BUDGETS = {
-    "person": (18, 351),  # 358,922 KiB
-    "projects": (9, 106),  # 108,209 KiB
+    "person": (18, 327),  # 334,346 KiB
+    "projects": (9, 106),  # 107,953 KiB
     # The member's inbox selection reads plan the merged policy's non-admin id sets, the
     # largest remaining planner cost.
-    "selected": (23, 711),  # 727,499 KiB
+    "selected": (23, 695),  # 711,115 KiB
     "connections": (14, 397),  # 405,618 KiB
     "related": (18, 493),  # 504,291 KiB
 }

@@ -448,7 +448,14 @@ Use these owners instead of maintaining another contract in an addon:
   therefore requires a **non-empty** registry: an addon whose impl set could
   otherwise be empty registers a noop/null-object default (storage's `local`;
   integrate's `none` VCS client), so a composition always has one selectable
-  impl and the enum is never empty.
+  impl and the enum is never empty. A key that leaves the registry (its addon
+  uninstalled, or the class moved to an addon the host has not installed)
+  strands the rows that store it: the database check `angee.E052`
+  ([`check_stored_impl_keys`](../../src/angee/base/checks.py)) names them by
+  model, field, key and count under `check --database` and at the start of
+  `migrate`, where a column the pending migrations have yet to add is passed
+  over, and the addon that stopped providing a key states the remedy in
+  `ANGEE_IMPL_KEY_REMEDIES`.
 - **Rowless implementation catalogues compose the same registry owner.**
   [`angee.base.implementations`](../../src/angee/base/implementations.py) owns registry checks, choice
   metadata for fields and settings-selected uses. Native enum projection belongs
@@ -1212,7 +1219,7 @@ hooks; pointing rows declare `MergePolicy` (an edge's `merge_policy`, a key's
 entry in `merge_policies` where its `on_delete` implies the wrong one) and their
 collision contract. `Changeset.revert` undoes a merge by replaying history, so
 every model a revertible merge moves (`moved_references()`) keeps history,
-which `angee.E051` checks; a derived or high-volume row is `KEEP` instead, and
+which `angee.E053` checks; a derived or high-volume row is `KEEP` instead, and
 its readers resolve the redirect through `MergeableQuerySet.survivor_id`,
 `survivor_field` and `redirect_groups`. Retained
 references include their historical versions. Redirects flatten in the same
@@ -1621,7 +1628,14 @@ retains its native routing contract.
   own the operational cautions; routine startup never retires history.
 - **Removing a field, model or donor addon whose storage holds data needs a
   declared cutover.** `makemigrations` refuses the autodetected drop through the
-  [composer's drop guard](../composer.md#project-migration-history). An
+  [composer's drop guard](../composer.md#project-migration-history). The guard
+  judges authoring, on the database `makemigrations` runs on. Until the
+  framework pins django-compose 0.1.0.dev14, whose guard also judges pending
+  removals at `migrate`, the addon that owns a column whose data a template
+  carries away refuses the wrong order itself, in a `pre_migrate` receiver and
+  a database check (messaging's
+  [`refuse_removal_ahead_of_the_move`](../../src/angee/messaging/webform_columns.py)
+  and `angee.E054`, for the form columns its channels held). An
   project authors a native migration that preserves or retires the data and
   removes the field or model; an empty column needs
   nothing, and neither does a table holding only rows its own resource files
@@ -1901,7 +1915,10 @@ open fresh evaluator scopes for authorization and change-feed reads.
   inherited sources and the core's bounded `bulk_updated` batches use the same
   seam. A verb completing a conditional or bulk write publishes after its
   related rows are ready. `change_batch_targets` may coalesce publications;
-  local observers still receive original bulk batches where needed.
+  local observers still receive original bulk batches where needed. A verb that
+  mutes a long block (`mute_changes`) publishes its own summary after it, or
+  collects what the block wrote (`collect=MutedChanges()`) and observes each
+  committed row once with `publish()`, after the outermost commit.
 - **Publisher wiring reads prebuilt server metadata.** The ready-phase
   [schema integration](../../src/angee/graphql/sdl.py) emits `schemas/publishers.json`
   from finalized resources: published model labels and readable concrete fields,
