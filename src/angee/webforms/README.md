@@ -73,16 +73,23 @@ change one:
 - `deliver()` hands it to the form's target and records the outcome
   (`delivery`: pending, delivered, failed, dismissed). The target's verb, the
   link to the record it made (`ResponseRecord`) and the delivered state are one
-  transaction; a failure leaves no record behind and is recorded in
-  `delivery_error`, where staff see it. A response that already has its link is
-  never delivered twice.
+  transaction; a failure leaves no record behind. A response that already has
+  its link is never delivered twice.
+- A failure raises `DeliveryFailed` and is kept in `delivery_error`, where staff
+  see it, by its class alone (`RuntimeError`). A failure's message and the
+  values in its frames may quote an answer, so they are neither stored, logged
+  nor raised; the log says where it was raised.
 - `dismiss()` gives up on one that could not be delivered.
 - `erase()` blanks the answers its version marks as personal and keeps the row.
 - `Response.objects.purge_expired(now=…)` removes delivered responses past
   their form's `retention_days`; a daily task calls it.
 
 Delivery runs on a worker after the submission commits
-(`webforms.deliver_response`), retried with backoff.
+(`webforms.deliver_response`). A failed delivery, or one whose task was lost, is
+queued again by `webforms.redeliver_responses` every five minutes when its next
+try has come (`retry_at`): five minutes after the first failure, doubling to six
+hours, eight attempts in all. After that the response stays failed until staff
+deliver or dismiss it.
 
 ## The public address
 
@@ -137,8 +144,11 @@ class EnquiryTarget(FormTarget):
 ```
 
 `deliver` runs as named system work inside the transaction that records its
-outcome. It returns the record it made or found, or `None`. The web forms addon
-never names another addon's model.
+outcome. It returns the record it made or found, or `None`. When the owner
+will not take the response as it is, it raises `DeliveryRefused("<code>")`: the
+code (`unknown_category`) is all that is kept of the refusal, and a refused
+response is not tried again by itself. The web forms addon never names another
+addon's model.
 
 ## Personal data
 

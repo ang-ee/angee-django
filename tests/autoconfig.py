@@ -14,4 +14,5 @@ SETTINGS = {
     "ANGEE_EXTRACTION_PROFILE_CLASSES.step_text": "tests.test_extraction_steps.TextProfile",
     "ANGEE_WEBFORM_TARGET_CLASSES.tag": "tests.test_webforms_responses.TagTarget",
     "ANGEE_WEBFORM_TARGET_CLASSES.refusing": "tests.test_webforms_responses.RefusingTarget",
+    "ANGEE_WEBFORM_TARGET_CLASSES.failing": "tests.test_webforms_responses.FailingTarget",
 }

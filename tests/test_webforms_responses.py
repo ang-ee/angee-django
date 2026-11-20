@@ -16,8 +16,20 @@ from django.utils import timezone
 from rebac import actor_context, system_context
 
 from angee.tags.testing.models import Tag
-from angee.webforms.models import Delivery, FormChanged, FormStatus, FormUnavailable
-from angee.webforms.targets import FormTarget
+from angee.webforms import models as webforms_models
+from angee.webforms import tasks
+from angee.webforms.models import (
+    FIRST_RETRY,
+    MAX_DELIVERY_ATTEMPTS,
+    REDELIVERY_LEASE,
+    Delivery,
+    DeliveryFailed,
+    FormChanged,
+    FormStatus,
+    FormUnavailable,
+    retry_delay,
+)
+from angee.webforms.targets import DeliveryRefused, FormTarget
 from angee.webforms.testing.models import Form, FormAlias, FormVersion, Response, ResponseRecord
 from tests.conftest import create_platform_admin, create_user
 
@@ -46,14 +58,23 @@ class TagTarget(FormTarget):
         return Tag.objects.create(name=response.answers["name"])
 
 
+class FailingTarget(FormTarget):
+    """A target that fails after writing, with a message that quotes an answer."""
+
+    key = "failing"
+
+    def deliver(self, response: Any) -> Any:
+        Tag.objects.create(name="left behind?")
+        raise RuntimeError(f"Could not file {response.answers['email']}.")
+
+
 class RefusingTarget(FormTarget):
-    """A target whose owner refuses."""
+    """A target whose owner refuses the response as it is."""
 
     key = "refusing"
 
     def deliver(self, response: Any) -> Any:
-        Tag.objects.create(name="left behind?")
-        raise ValidationError("The owner refused.")
+        raise DeliveryRefused("unknown_size")
 
 
 def form_with(target: str = "store", **fields: Any) -> tuple[Any, Any]:
@@ -293,21 +314,102 @@ def test_delivery_makes_the_targets_record_once_and_links_it() -> None:
 
 
 def test_a_failed_delivery_leaves_no_record_and_shows_on_the_response_until_it_is_dismissed() -> None:
-    form, _version = published("refusing")
+    form, _version = published("failing")
     row, _made = receive(form)
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(DeliveryFailed):
         stored(row).deliver()
 
     kept = stored(row)
-    assert (kept.delivery, "The owner refused." in kept.delivery_error) == (Delivery.FAILED, True)
+    assert (kept.delivery, kept.delivery_error, kept.delivery_attempts) == (Delivery.FAILED, "RuntimeError", 1)
     with system_context(reason="webforms tests read"):
         assert not Tag._base_manager.filter(name="left behind?").exists()
         assert not ResponseRecord._base_manager.filter(response=row).exists()
         assert stored(row).dismiss() is True
         assert stored(row).dismiss() is False
-    assert stored(row).delivery == Delivery.DISMISSED
+    kept = stored(row)
+    assert (kept.delivery, kept.retry_at) == (Delivery.DISMISSED, None)
     assert stored(row).deliver() is None, "a dismissed response is not delivered after all"
+
+
+def test_a_failure_is_kept_logged_and_raised_without_what_it_says(caplog: pytest.LogCaptureFixture) -> None:
+    """A failure's message may quote an answer: only its class and where it was raised leave the delivery."""
+
+    form, _version = published("failing")
+    row, _made = receive(form)
+
+    with caplog.at_level("WARNING", logger="angee.webforms.models"), pytest.raises(DeliveryFailed) as failed:
+        stored(row).deliver()
+
+    assert (failed.value.reason, failed.value.__context__, failed.value.__cause__) == ("RuntimeError", None, None)
+    assert "RuntimeError" in caplog.text and "in deliver" in caplog.text
+    assert ANSWERS["email"] not in caplog.text + stored(row).delivery_error + str(failed.value)
+    assert tasks.deliver_response(row.pk) is False, "the task reports the failure and raises nothing"
+
+
+def test_a_failure_is_tried_again_later_and_ever_later_until_it_waits_for_staff() -> None:
+    form, _version = published("failing")
+    row, _made = receive(form)
+    assert stored(row).retry_at - stored(row).created_at < FIRST_RETRY + timedelta(seconds=5)
+
+    waits = []
+    for _attempt in range(MAX_DELIVERY_ATTEMPTS):
+        before = timezone.now()
+        with pytest.raises(DeliveryFailed):
+            stored(row).deliver()
+        kept = stored(row)
+        waits.append(kept.retry_at and kept.retry_at - before)
+
+    assert [retry_delay(attempt) for attempt in (1, 2, 3, 20)] == [
+        timedelta(minutes=5), timedelta(minutes=10), timedelta(minutes=20), timedelta(hours=6),
+    ]
+    slack = timedelta(seconds=5)
+    assert all(retry_delay(n + 1) <= wait < retry_delay(n + 1) + slack for n, wait in enumerate(waits[:-1]))
+    assert (waits[-1], kept.delivery_attempts, kept.delivery) == (None, MAX_DELIVERY_ATTEMPTS, Delivery.FAILED)
+
+
+def test_a_response_its_targets_owner_refuses_is_named_by_the_code_and_not_tried_again() -> None:
+    form, _version = published("refusing")
+    row, _made = receive(form)
+
+    with pytest.raises(DeliveryFailed) as failed:
+        stored(row).deliver()
+
+    kept = stored(row)
+    assert failed.value.reason == "refused: unknown_size"
+    assert (kept.delivery, kept.delivery_error, kept.retry_at) == (Delivery.FAILED, "refused: unknown_size", None)
+    with pytest.raises(ValueError, match="short lower-case name"):
+        DeliveryRefused("The size Huge is unknown.")
+
+
+def test_the_reconciler_queues_what_is_due_once_and_leaves_the_rest(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A lost task or a failure is delivered by the next tick that finds it due."""
+
+    queued: list[tuple[str, Any]] = []
+    monkeypatch.setattr(
+        webforms_models, "enqueue_task", lambda name, *, kwargs, robust: queued.append((name, kwargs["pk"])),
+    )
+    form, _version = published("tag")
+    lost, _ = receive(form, "lost")
+    recent, _ = receive(form, "recent")
+    done, _ = receive(form, "done")
+    gone, _ = receive(form, "gone")
+    with system_context(reason="webforms tests setup"):
+        stored(done).deliver()
+        stored(gone).dismiss()
+    queued.clear()
+    now = timezone.now() + FIRST_RETRY + timedelta(minutes=1)
+    with system_context(reason="webforms tests setup"):
+        Response.objects.filter(pk=recent.pk).owner_update(retry_at=now + timedelta(hours=1))
+
+    first = Response.objects.redeliver(now=now)
+    again = Response.objects.redeliver(now=now + timedelta(minutes=1))
+
+    assert (first, again, queued) == (1, 0, [("webforms.deliver_response", lost.pk)])
+    assert stored(lost).retry_at == now + REDELIVERY_LEASE
+    assert tasks.deliver_response(lost.pk) is True
+    assert (stored(lost).delivery, stored(lost).retry_at) == (Delivery.DELIVERED, None)
+    assert Response.objects.redeliver(now=now + timedelta(days=1)) == 1, "the one left waiting, when its time comes"
 
 
 def test_a_response_the_form_keeps_as_its_record_is_delivered_with_no_link() -> None:

@@ -27,7 +27,9 @@ answer finds a person's responses (``contact_question``).
 
 from __future__ import annotations
 
-from datetime import timedelta
+import logging
+import traceback
+from datetime import datetime, timedelta
 from typing import Any, ClassVar
 
 from django.apps import apps
@@ -56,7 +58,7 @@ from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.webforms.constants import DELIVER_RESPONSE_TASK
-from angee.webforms.targets import FormTarget
+from angee.webforms.targets import DeliveryRefused, FormTarget
 from angee.webforms.validators import (
     LANGUAGE_TAG,
     OTHER_SUFFIX,
@@ -71,6 +73,22 @@ SLUG = RegexValidator(r"^[a-z0-9]+(?:-[a-z0-9]+)*$", "Use lower-case letters and
 THEME_ID = RegexValidator(r"^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$", "Enter a theme id, such as acme.paper.")
 LANGUAGE = RegexValidator(LANGUAGE_TAG, "Enter a language tag, such as en or pt-BR.")
 
+MAX_DELIVERY_ATTEMPTS = 8
+"""How often a failing delivery is tried before it waits for staff."""
+FIRST_RETRY = timedelta(minutes=5)
+LONGEST_RETRY = timedelta(hours=6)
+REDELIVERY_LEASE = timedelta(minutes=15)
+"""How long a response queued again is left alone, so a slow queue is not filled with it on every tick."""
+REDELIVERY_BATCH = 500
+
+logger = logging.getLogger(__name__)
+
+
+def retry_delay(attempts: int) -> timedelta:
+    """How long after its ``attempts``-th failure a delivery is tried again: doubling from five minutes to six hours."""
+
+    return min(FIRST_RETRY * 2 ** max(attempts - 1, 0), LONGEST_RETRY)
+
 
 def _model(name: str) -> Any:
     """Return a composed web forms model through the app registry."""
@@ -84,6 +102,19 @@ class FormUnavailable(LookupError):
 
 class FormChanged(ValueError):
     """The form's published version changed after the page that sent this submission loaded."""
+
+
+class DeliveryFailed(Exception):
+    """A response could not be handed to its target; ``reason`` is what the response keeps of it.
+
+    The reason is the failure's class, or ``refused: <code>`` when the target's
+    owner refused the response. It never carries the failure's own message,
+    which may quote an answer.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 class FormStatus(models.TextChoices):
@@ -383,6 +414,11 @@ class ResponseQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet):
 
         return self.filter(delivery__in=(Delivery.PENDING, Delivery.FAILED))
 
+    def due(self, *, now: datetime) -> ResponseQuerySet:
+        """Keep the undelivered responses whose next try has come."""
+
+        return self.undelivered().filter(retry_at__lte=now)
+
     def expired(self, *, now: Any) -> ResponseQuerySet:
         """Keep the delivered responses past their form's retention."""
 
@@ -448,6 +484,8 @@ class ResponseManager(AngeeManager.from_queryset(ResponseQuerySet)):  # type: ig
                 row = self.model(
                     form_id=form.pk, version_id=published.pk, submission_id=receipt,
                     language=tag or published.default_language, answers=checked,
+                    # Should the task queued below be lost, the reconciler finds the response then.
+                    retry_at=timezone.now() + FIRST_RETRY,
                 )
                 row._owner_insert()
                 enqueue_task(DELIVER_RESPONSE_TASK, kwargs={"pk": row.pk}, robust=True)
@@ -457,6 +495,26 @@ class ResponseManager(AngeeManager.from_queryset(ResponseQuerySet)):  # type: ig
         """Return the response a form already holds under a submission id, or ``None``."""
 
         return self.model._base_manager.filter(form_id=form_id, submission_id=receipt).first()
+
+    def redeliver(self, *, now: datetime) -> int:
+        """Queue again the undelivered responses whose next try has come; return how many.
+
+        Named system work for the scheduled task. It is what delivers a response
+        whose first task was lost or failed: each failure sets the next try
+        (:func:`retry_delay`) until :data:`MAX_DELIVERY_ATTEMPTS`, after which
+        the response waits for staff. A queued response is left alone for
+        :data:`REDELIVERY_LEASE`.
+        """
+
+        with transaction.atomic(), system_context(reason="webforms.response.redeliver"):
+            due = list(
+                self.get_queryset().due(now=now).order_by("retry_at", "pk").lock_if_supported(skip_locked=True)
+                .values_list("pk", flat=True)[:REDELIVERY_BATCH]
+            )
+            self.get_queryset().filter(pk__in=due).owner_update(retry_at=now + REDELIVERY_LEASE)
+            for pk in due:
+                enqueue_task(DELIVER_RESPONSE_TASK, kwargs={"pk": pk}, robust=True)
+        return len(due)
 
     def purge_expired(self, *, now: Any) -> int:
         """Remove the delivered responses past their form's retention; return how many."""
@@ -481,6 +539,10 @@ class Response(AppendOnlyModel, AngeeDataModel, concrete=True):
     erased_at = models.DateTimeField(null=True, blank=True)
     delivery = StateField(choices_enum=Delivery, default=Delivery.PENDING)
     delivery_error = DiagnosticTextField(blank=True, default="")
+    """Why the last delivery failed: the failure's class, or ``refused: <code>``. Never its message."""
+    delivery_attempts = models.PositiveSmallIntegerField(default=0)
+    retry_at = models.DateTimeField(null=True, blank=True)
+    """When delivery is next tried by itself; empty once settled, refused, or out of attempts."""
     delivered_at = models.DateTimeField(null=True, blank=True)
 
     objects = ResponseManager()
@@ -495,7 +557,12 @@ class Response(AppendOnlyModel, AngeeDataModel, concrete=True):
         constraints = (
             models.UniqueConstraint(fields=("form", "submission_id"), name="%(app_label)s_response_submission"),
         )
-        indexes = (models.Index(fields=("delivery", "delivered_at"), name="%(app_label)s_response_delivery"),)
+        indexes = (
+            models.Index(fields=("delivery", "delivered_at"), name="%(app_label)s_response_delivery"),
+            models.Index(
+                fields=("retry_at",), name="%(app_label)s_response_retry", condition=models.Q(retry_at__isnull=False),
+            ),
+        )
 
     def __str__(self) -> str:
         """Return the form and the receipt id."""
@@ -507,8 +574,8 @@ class Response(AppendOnlyModel, AngeeDataModel, concrete=True):
 
         return type(self).objects.filter(pk=self.pk)
 
-    def record(self) -> Any:
-        """Return the record this response became, or ``None``."""
+    def _record(self) -> Any:
+        """Return the record this response became, or ``None``; a system read for the owner's own verbs."""
 
         link = _model("ResponseRecord")._base_manager.filter(response_id=self.pk).first()
         return link.record if link is not None else None
@@ -519,16 +586,22 @@ class Response(AppendOnlyModel, AngeeDataModel, concrete=True):
         Named system work: the delivery task calls it, and staff do to try a
         failed one again. The target's verb, the link to the record it made and
         the delivered state are one transaction, so a failure leaves no record
-        behind, and a response that already has its link is only marked. A
-        failure is recorded on the response, where staff see it, and raised.
+        behind, and a response that already has its link is only marked.
+
+        A failure raises :class:`DeliveryFailed` and is recorded on the
+        response, where staff see it, by its class alone: a failure's message
+        and the values in its frames may quote an answer, so neither is stored,
+        logged or raised. What is logged is where it was raised. The response is
+        tried again later (:meth:`ResponseManager.redeliver`) unless its
+        target's owner refused it (:class:`~angee.webforms.targets.DeliveryRefused`).
         """
 
         try:
             with transaction.atomic(), system_context(reason="webforms.response.deliver"):
                 row = self._stored().undelivered().lock_if_supported().first()
                 if row is None:
-                    return self.record()
-                made = row.record()
+                    return self._record()
+                made = row._record()
                 if made is None:
                     made = row.form.target().deliver(row)
                     if made is not None:
@@ -537,21 +610,41 @@ class Response(AppendOnlyModel, AngeeDataModel, concrete=True):
                             response_id=row.pk, content_type=content_type, object_id=str(object_id),
                         )
                 row._stored().undelivered().owner_update(
-                    delivery=Delivery.DELIVERED, delivered_at=timezone.now(), delivery_error="",
+                    delivery=Delivery.DELIVERED, delivered_at=timezone.now(), delivery_error="", retry_at=None,
+                    delivery_attempts=row.delivery_attempts + 1,
                 )
                 return made
+        except DeliveryRefused as refusal:
+            reason, again = f"refused: {refusal.code}", False
         except Exception as error:
-            with system_context(reason="webforms.response.deliver"):
-                self._stored().undelivered().owner_update(
-                    delivery=Delivery.FAILED, delivery_error=f"{type(error).__name__}: {error}",
-                )
-            raise
+            reason, again = type(error).__name__, True
+            logger.warning(
+                "Delivering response %s failed with %s, raised at:\n%s",
+                self.pk, reason, "".join(traceback.format_tb(error.__traceback__)),
+            )
+        # Raised outside the handler, so the failure that may quote an answer is not carried as its context.
+        self._record_failure(reason, again=again)
+        raise DeliveryFailed(reason)
+
+    def _record_failure(self, reason: str, *, again: bool) -> None:
+        """Mark an undelivered response failed, and set when it is tried again, if it is."""
+
+        with transaction.atomic(), system_context(reason="webforms.response.deliver"):
+            row = self._stored().undelivered().lock_if_supported().first()
+            if row is None:
+                return
+            attempts = row.delivery_attempts + 1
+            retried = again and attempts < MAX_DELIVERY_ATTEMPTS
+            row._stored().undelivered().owner_update(
+                delivery=Delivery.FAILED, delivery_error=reason, delivery_attempts=attempts,
+                retry_at=timezone.now() + retry_delay(attempts) if retried else None,
+            )
 
     def dismiss(self) -> bool:
         """Give up delivering a response that could not be; return whether this call did."""
 
         self.require_access("write")
-        return bool(self._stored().undelivered().owner_update(delivery=Delivery.DISMISSED))
+        return bool(self._stored().undelivered().owner_update(delivery=Delivery.DISMISSED, retry_at=None))
 
     def erase(self) -> bool:
         """Blank the answers its version marks as personal; return whether this call did.

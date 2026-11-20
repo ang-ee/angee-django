@@ -2,3 +2,4 @@
 
 DELIVER_RESPONSE_TASK = "webforms.deliver_response"
 PURGE_RESPONSES_TASK = "webforms.purge_expired_responses"
+REDELIVER_RESPONSES_TASK = "webforms.redeliver_responses"

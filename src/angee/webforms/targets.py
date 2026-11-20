@@ -9,9 +9,29 @@ another addon's model: a target calls its owner's own verb.
 
 from __future__ import annotations
 
+import re
 from typing import Any, ClassVar
 
 from angee.base.implementations import ImplBase
+
+REFUSAL_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+
+
+class DeliveryRefused(Exception):
+    """The target's owner will not take this response as it is, however often it is offered.
+
+    ``code`` is a short name of the reason, chosen by the target
+    (``"unknown_category"``). It is all the response keeps of the refusal and
+    what staff read, so it never carries an answer. A refused response is not
+    tried again by itself; staff correct what the owner refused and deliver it,
+    or dismiss it.
+    """
+
+    def __init__(self, code: str) -> None:
+        if not REFUSAL_CODE.fullmatch(code):
+            raise ValueError("A refusal code is a short lower-case name, such as unknown_category.")
+        super().__init__(code)
+        self.code = code
 
 
 class FormTarget(ImplBase):
@@ -22,7 +42,9 @@ class FormTarget(ImplBase):
     record it made or found, or ``None`` when the response itself is the record.
     It must be safe to run again for the same response: a delivery that failed
     is retried, and a delivered response is never delivered twice (the response
-    keeps its one link to the record made).
+    keeps its one link to the record made). Raise :class:`DeliveryRefused` when
+    the owner refuses the response itself; any other exception is a failure
+    that is tried again.
     """
 
     registry_setting: ClassVar[str] = "ANGEE_WEBFORM_TARGET_CLASSES"

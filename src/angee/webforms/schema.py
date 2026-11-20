@@ -17,6 +17,7 @@ from angee.graphql.actions import ActionResult, action_guard, authorized_action_
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
+from angee.webforms.models import Delivery, DeliveryFailed
 
 Form = apps.get_model("webforms", "Form")
 FormVersion = apps.get_model("webforms", "FormVersion")
@@ -79,6 +80,8 @@ class WebformResponseType(AngeeNode):
     erased_at: auto
     delivery: auto
     delivery_error: auto
+    delivery_attempts: auto
+    retry_at: auto
     delivered_at: auto
     created_at: auto
 
@@ -183,7 +186,13 @@ class WebformMutation:
         """Hand a pending or failed response to its form's target again."""
 
         target = authorized_action_target(info, Response, response, "write")
-        target.deliver()
+        try:
+            target.deliver()
+        except DeliveryFailed as failure:
+            return ActionResult(ok=False, message=f"Delivery failed: {failure.reason}.", id=target.sqid)
+        target.refresh_from_db(fields=["delivery"])
+        if target.delivery != Delivery.DELIVERED:
+            return ActionResult(ok=False, message="A dismissed response is not delivered.", id=target.sqid)
         return ActionResult(ok=True, message="Response delivered.", id=target.sqid)
 
     @strawberry.mutation
