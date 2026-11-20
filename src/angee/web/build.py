@@ -76,6 +76,16 @@ manifest publishes the list, in this order, as its top-level ``ingressDjangoPath
 so a dev server's proxy can read it rather than keep a copy.
 """
 
+INGRESS_PRECOMPRESSED: tuple[str, ...] = ("br", "zstd", "gzip")
+"""The encodings, in the ingress's order of preference, a static file is served precompressed in.
+
+When the build wrote a sidecar beside a file (``<file>.br``, ``.zst``, ``.gz``) and
+the client accepts that encoding, the ingress sends the sidecar; with none, it
+compresses on the fly as before, so a build without sidecars is served unchanged.
+The page routes below and the stack template's own file server, which is pinned to
+this list, read files the same way.
+"""
+
 PAGE_ACCEPT = "text/html"
 """The media type a standalone page declares as ``accept``; this version admits no other."""
 
@@ -287,8 +297,9 @@ class WebRuntime:
         with the web build's ``/<id>.html`` under the importing site's ``root``;
         every other request falls through to the site's own routes. The page
         carries the manifest's ``pageCsp`` on those paths and at the built file's
-        own URL, which the site's file server also answers. Without pages only
-        the sentinel remains.
+        own URL, which the site's file server also answers, and is read as that
+        server reads its files: a precompressed sidecar first
+        (``INGRESS_PRECOMPRESSED``). Without pages only the sentinel remains.
         """
 
         pages = {
@@ -323,7 +334,9 @@ class WebRuntime:
                 "\theader +Vary Accept",
                 f"\theader {policy}",
                 f"\trewrite * /{name}.html",
-                "\tfile_server",
+                "\tfile_server {",
+                f"\t\tprecompressed {' '.join(INGRESS_PRECOMPRESSED)}",
+                "\t}",
                 "}",
                 f"header /{name}.html {policy}",
             ]

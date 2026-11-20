@@ -198,7 +198,22 @@ fallback, answers the composed standalone pages (`runtime/web/pages.caddy`)
 ahead of the declared Django paths it proxies (`INGRESS_DJANGO_PATHS` in
 [`angee.web.build`](../src/angee/web/build.py), published in the web manifest as
 `ingressDjangoPaths`), and strips `/operator` only for the
-narrow `/operator/graphql` route. It sets the operator allowed origin to the
+narrow `/operator/graphql` route. It answers with
+`Cache-Control: public, max-age=31536000, immutable` only for an existing file
+the build names by its content: Vite writes all it emits under `assets/` as
+`<name>-<hash>.<ext>` (the app's Vite config changes neither the directory nor
+the name patterns), the composed themes sheet inside the app's stylesheet and
+the emission of a deployment's selected named asset among them. The rule reads
+the hash in the file name, never the directory alone, and takes an
+eight-character tail without an upper-case letter for a word or a date: the
+rare hash without one is revalidated. The app document, a standalone page's
+`<id>.html`, the build's `.vite/` manifests and every file kept or rewritten
+under a stable name (a host's public-directory files, a named asset under its
+own name) are revalidated. When the build wrote a sidecar beside a file
+(`<file>.br`, `.zst`, `.gz`) and the client accepts that encoding, the ingress
+sends the sidecar, brotli first (`INGRESS_PRECOMPRESSED`, for the app's files
+and the standalone pages alike); a file without one is compressed on the fly as
+before. It sets the operator allowed origin to the
 stack's browser origin. The inner Caddy waits for the edge's Compose alias on
 public ingress and trusts its connected Compose network CIDRs with strict
 right-to-left client IP parsing. It forwards the verified client IP as a single

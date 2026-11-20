@@ -25,6 +25,19 @@
           encode zstd gzip
           root * /srv/project/{{ web_path }}/dist
 
+          # Only a file the build names by its content is cached for good: Vite writes all it emits under assets/ as
+          # <name>-<hash>.<ext>, the hash eight base-64 characters. The name must carry one, wherever the file sits:
+          # an eight-character tail with no upper-case letter is taken for a word or a date, never for a hash, so a
+          # hand-named file is not kept by mistake and the rare hash without one is merely revalidated. Documents,
+          # the build's manifests and every file rewritten under a stable name are revalidated, and so is the app
+          # document a missing asset falls back to: the file must exist.
+          @hashed {
+            path_regexp ^/assets/.+-[A-Za-z0-9_-]{8}(\.[A-Za-z0-9]+)+$
+            not path_regexp -[a-z0-9_-]{8}(\.[A-Za-z0-9]+)+$
+            file
+          }
+          header @hashed Cache-Control "public, max-age=31536000, immutable"
+
           # Standalone pages the composer projects from addon declarations answer before Django and the app.
           # A glob: a stack whose composer emits no snippet still starts, and those paths stay Django's.
           import /srv/project/runtime/web/pages.cadd?
@@ -50,7 +63,10 @@
 
           handle {
             try_files {path} /index.html
-            file_server
+            # A sidecar the build wrote beside a file answers a client that accepts it; with none, encode compresses.
+            file_server {
+              precompressed br zstd gzip
+            }
           }
         }
         CADDY
