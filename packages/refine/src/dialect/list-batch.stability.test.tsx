@@ -65,6 +65,7 @@ describe("native list batch structural sharing", () => {
     expect(result.current).not.toBe(settled);
     expect(result.current.get("1")?.total).toBe(13);
     expect(result.current.get("2")?.rows).toBe(siblingRows);
+    expect(result.current.get("2")).toBe(settled.get("2"));
     expect(dataProvider.getList).toHaveBeenCalledTimes(3);
   });
 

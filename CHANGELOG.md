@@ -112,18 +112,27 @@ live in code docstrings.
   its `Checkbox`. `@angee/ui/views/resource-view-context` no longer exports the
   lists' internal selection channel (`useSelectionPlaces`, `SelectionPlaces`).
 
-- `@angee/refine`: `useAuthoredQueryBatch` hands back the same Map, and the same
-  result objects, until a result or a label's request changes, and a change
-  replaces only the results it touched: native `useQueries` `combine`, which Query
-  re-runs only on such a change and shares structurally. The batch reads built on
-  it inherit that (`useAngeeGroupByBatch`, `useAngeeFacets`, a source's
-  `useCollectionQueryBatch`), `useAngeeGroupBy` and `useAngeeAggregate` decode once
-  per read, `useAngeeListBatch` keys its requests on the target's names, and a
-  resource's operations (`useGroupOperation`, `useAggregateOperation`,
-  `useDeletePreviewOperation`) keep their target across renders, so a grouped
-  list's render that changes nothing it reads (a scroll frame) rebuilds no group
-  model. Sharing compares every property of a result, so a batch also re-renders
-  when only one nobody reads changes (a read going stale, a retry's count).
+- `@angee/refine`: a batch of reads keeps its identity while nothing its callers
+  read changes. Callers of `useAuthoredQueryBatch`: its entries are now
+  `QueryBatchEntry` (exported), the native result's `data`, `dataUpdatedAt`,
+  `error`, `isFetching` and `refetch`, readonly, no longer the whole
+  `UseQueryResult`; a caller needing another property (`status`, `isStale`…) reads
+  it from its own `useQuery`. It and `useAngeeListBatch` give `useQueries` one
+  projection as `combine`, fresh each render, so Query runs it on that render's
+  results (enabling a read shows it fetching at once) and shares it structurally:
+  the Map and each entry keep their identity until one of those five or a label's
+  request changes, a change replaces only the entries it touched, and a read going
+  stale, a failed attempt Query retries or an offline pause no longer renders the
+  batch's owner. A label without a result fails, naming the hook. `useDerivedBatch`
+  (new) maps a batch, reusing each output while its entry is the same object and
+  its inputs are unchanged: `useAngeeGroupByBatch`, `useAngeeFacets`,
+  `useAngeeListBatch` and `@angee/ui`'s `useCollectionQueryBatch` derive through
+  it, so a read that settles decodes only itself. `useAngeeGroupBy` and
+  `useAngeeAggregate` decode once per read, `useAngeeListBatch` keys its requests on
+  the target's names, and a resource's operations (`useGroupOperation`,
+  `useAggregateOperation`, `useDeletePreviewOperation`) keep their target across
+  renders, so a grouped list's render that changes nothing it reads (a scroll
+  frame) rebuilds no group model; it still corrects a group page set past its last.
 
 - `angee.parties`: one owner proposes same-person pairs. A pull-only
   directory's contact that may only claim an address another live party is

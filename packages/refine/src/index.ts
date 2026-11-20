@@ -104,6 +104,10 @@ export {
   type AuthoredVariables,
 } from "./dialect/authored-hooks";
 export {
+  useDerivedBatch,
+  type QueryBatchEntry,
+} from "./dialect/query-batch";
+export {
   requestAuthoredData,
   sharedAuthoredMeta,
   useAuthoredErrorPolicy,

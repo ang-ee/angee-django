@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { useQueries, type UseQueryResult } from "@tanstack/react-query";
+import { useQueries } from "@tanstack/react-query";
 import {
   useCustomMutation,
   useDataProvider,
@@ -7,7 +7,6 @@ import {
   useKeys,
   useResourceSubscription,
   type BaseRecord,
-  type GetListResponse,
   type HttpError,
 } from "@refinedev/core";
 
@@ -51,6 +50,7 @@ import {
 } from "./authored-hooks";
 import type { TypedDocumentNode } from "../typed-document";
 import { graphqlDocumentIdentity } from "./wire";
+import { labelBatchResults, projectQueryBatch, useDerivedBatch, type QueryBatchEntry } from "./query-batch";
 import { stableKey, useStableArray } from "../stable-deps";
 
 type Row = Record<string, unknown>;
@@ -91,6 +91,7 @@ const EMPTY_GROUP_BY_RESULT: GroupByResult = {
   totalCount: 0,
   buckets: [],
 };
+const EMPTY_FACET_RESULT: ResourceFacetResult = { count: 0, totalCount: 0, options: [] };
 
 export interface UseAngeeFacetsOptions {
   enabled?: boolean;
@@ -121,14 +122,6 @@ export interface AngeeListBatchEntry {
   error: Error | null;
   /** Timestamp of the most recent successful native query read; null until the page first settles. */
   updatedAt: number | null;
-}
-
-interface GroupByRequestBatchEntry {
-  data: unknown;
-  fetching: boolean;
-  error: Error | null;
-  updatedAt: number | null;
-  refetch: () => void;
 }
 
 export interface UseAngeeFacetsResult {
@@ -263,10 +256,10 @@ export function useAngeeGroupBy(
     }
     return {
       ...result,
-      fetching: entry?.fetching ?? false,
+      fetching: entry?.isFetching ?? false,
       error: entry?.error ?? decodeError,
-      updatedAt: entry?.updatedAt ?? null,
-      refetch: () => entry?.refetch(),
+      updatedAt: entry?.dataUpdatedAt || null,
+      refetch: () => { void entry?.refetch(); },
     };
   }, [entry, root]);
 }
@@ -284,24 +277,24 @@ export function useAngeeFacets(
   );
   const batch = useGroupByRequestBatch(target, scopes, { document, enabled: canQuery });
   const root = target?.root ?? "";
+  // A facet decodes again only when its own read does: two facets may share a read.
+  const decoded = useDerivedBatch(batch, (entry, id) => {
+    const facet = activeFacets.find((spec) => spec.id === id);
+    return facet && entry.data != null ? extractFacet(entry.data, root, facet) : EMPTY_FACET_RESULT;
+  }, [activeFacets, root]);
   return useMemo(() => {
     const values = [...new Set(batch.values())];
     return {
       facets: Object.fromEntries(
-        activeFacets.map((facet) => [
-          facet.id,
-          batch.get(facet.id)?.data == null
-            ? { count: 0, totalCount: 0, options: [] }
-            : extractFacet(batch.get(facet.id)?.data, root, facet),
-        ]),
+        activeFacets.map((facet) => [facet.id, decoded.get(facet.id) ?? EMPTY_FACET_RESULT]),
       ),
-      fetching: values.some((entry) => entry.fetching),
+      fetching: values.some((entry) => entry.isFetching),
       error: values.find((entry) => entry.error)?.error ?? null,
       refetch: () => {
-        values.forEach((entry) => entry.refetch());
+        values.forEach((entry) => { void entry.refetch(); });
       },
     };
-  }, [activeFacets, batch, root]);
+  }, [activeFacets, batch, decoded]);
 }
 
 /**
@@ -315,7 +308,7 @@ function useGroupByRequestBatch(
   target: CustomGraphQLOperationTarget | null,
   scopes: readonly GroupByBatchScope[],
   options: DialectQueryOptions,
-): ReadonlyMap<string, GroupByRequestBatchEntry> {
+): ReadonlyMap<string, QueryBatchEntry<unknown>> {
   const { document, enabled = true, refetchInterval, relatedModels } = options;
   const canQuery = enabled && target !== null;
   const activeScopes = canQuery ? scopes : EMPTY_GROUP_BY_SCOPES;
@@ -334,26 +327,9 @@ function useGroupByRequestBatch(
   }, [activeScopes, document, target, scopesKey, relatedModels]);
   // The authored owner deduplicates requests and unions invalidation interests;
   // the dialect owns only group variables and the caller's result labels.
-  const batch = useAuthoredQueryBatch(requests, {
+  return useAuthoredQueryBatch(requests, {
     enabled: canQuery, dataProviderName: target?.dataProviderName, refetchInterval,
   });
-  return useMemo(() => {
-    const entries = new Map<UseQueryResult<unknown, Error>, GroupByRequestBatchEntry>();
-    return new Map([...batch].map(([key, query]) => {
-      let entry = entries.get(query);
-      if (!entry) {
-        entry = {
-          data: query.data,
-          fetching: query.isFetching,
-          error: query.error,
-          updatedAt: query.dataUpdatedAt || null,
-          refetch: () => { void query.refetch(); },
-        };
-        entries.set(query, entry);
-      }
-      return [key, entry] as const;
-    }));
-  }, [batch]);
 }
 
 /**
@@ -368,29 +344,13 @@ export function useAngeeGroupByBatch(
 ): ReadonlyMap<string, UseAngeeGroupByResult> {
   const batch = useGroupByRequestBatch(target, scopes, options);
   const root = target?.root ?? "";
-  return useMemo(
-    () =>
-      new Map(
-        [...batch.entries()].map(([key, entry]) => [
-          key,
-          {
-            ...(entry.data == null
-              ? EMPTY_GROUP_BY_RESULT
-              : extractGroupBy(entry.data, root)),
-            fetching: entry.fetching,
-            error: entry.error,
-            updatedAt: entry.updatedAt,
-            refetch: entry.refetch,
-          },
-        ]),
-      ),
-    [batch, root],
-  );
-}
-
-// Native structural sharing keeps equivalent query results stable between renders.
-function combineListQueries(queries: UseQueryResult<GetListResponse<BaseRecord>>[]) {
-  return queries.map(({ data, dataUpdatedAt, error, isFetching, refetch }) => ({ data, dataUpdatedAt, error, isFetching, refetch }));
+  return useDerivedBatch(batch, (entry) => ({
+    ...(entry.data == null ? EMPTY_GROUP_BY_RESULT : extractGroupBy(entry.data, root)),
+    fetching: entry.isFetching,
+    error: entry.error,
+    updatedAt: entry.dataUpdatedAt || null,
+    refetch: () => { void entry.refetch(); },
+  }), [root]);
 }
 
 /**
@@ -444,7 +404,7 @@ export function useAngeeListBatch(
   });
   const scopeKeys = useStableArray(requests.map(({ scope }) => scope.key));
   const queries = useQueries({
-    combine: combineListQueries,
+    combine: (current) => projectQueryBatch(current),
     queries: requests.map(({ meta, pagination }) => ({
       queryKey: keys()
         .data(schemaName)
@@ -463,27 +423,18 @@ export function useAngeeListBatch(
       enabled: canQuery,
     })),
   });
-  return useMemo(
-    () =>
-      new Map(
-        scopeKeys.map((key, index) => {
-          const query = queries[index];
-          const data = query?.data;
-          return [
-            key,
-            {
-              refetch: () => { void query?.refetch(); },
-              rows: (data?.data ?? []) as readonly Row[],
-              total: data?.total,
-              fetching: query?.isFetching ?? false,
-              error: errorFromHttp(query?.error),
-              updatedAt: query?.dataUpdatedAt || null,
-            },
-          ] as const;
-        }),
-      ),
+  const pages = useMemo(
+    () => labelBatchResults("useAngeeListBatch", scopeKeys.map((key, index) => [key, index] as const), queries),
     [scopeKeys, queries],
   );
+  return useDerivedBatch(pages, (query) => ({
+    refetch: () => { void query.refetch(); },
+    rows: (query.data?.data ?? []) as readonly Row[],
+    total: query.data?.total,
+    fetching: query.isFetching,
+    error: errorFromHttp(query.error),
+    updatedAt: query.dataUpdatedAt || null,
+  }), []);
 }
 
 export function useAngeeDeletePreview(

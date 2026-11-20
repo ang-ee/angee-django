@@ -31,6 +31,7 @@ import type {
 import { useActiveDataProviderName } from "./data-provider-context";
 import { authoredOperationData, mutationMeta } from "./wire";
 import { authoredQueryKey, authoredQueryOptions, useAuthoredErrorPolicy } from "./authored-query-options";
+import { labelBatchResults, projectQueryBatch, type QueryBatchEntry } from "./query-batch";
 export { authoredQueryKey, authoredQueryOptions } from "./authored-query-options";
 export { authoredOperationData } from "./wire";
 
@@ -117,13 +118,14 @@ export function useAuthoredQuery<TDocument extends AuthoredDocument>(
 
 /**
  * Native query results addressed by a domain label; labels never key the cache.
- * The Map, and each result in it, keeps its identity until a result or a label's
- * request changes; a change replaces only the results it touched.
+ * Each entry holds what callers read of its result ({@link QueryBatchEntry}). The
+ * Map, and each entry in it, keeps its identity until one of those or a label's
+ * request changes; a change replaces only the entries it touched.
  */
 export function useAuthoredQueryBatch<TDocument extends AuthoredDocument>(
   scopes: readonly AuthoredQueryBatchScope<TDocument>[],
   options: AuthoredOperationOptions & Pick<AuthoredQueryOptions, "enabled" | "errorNotification" | "refetchInterval"> = {},
-): ReadonlyMap<string, UseQueryResult<DocumentData<TDocument>, Error>> {
+): ReadonlyMap<string, QueryBatchEntry<DocumentData<TDocument>>> {
   const activeProvider = useActiveDataProviderName();
   const provider = options.dataProviderName ?? activeProvider ?? "default";
   const dataProvider = useDataProvider();
@@ -141,7 +143,10 @@ export function useAuthoredQueryBatch<TDocument extends AuthoredDocument>(
     enabled: options.enabled ?? true,
     refetchInterval: options.refetchInterval,
   }));
-  const results = useQueries({ queries, combine: shareQueryResults });
+  const results = useQueries({
+    queries,
+    combine: (current) => projectQueryBatch<DocumentData<TDocument>, Error>(current),
+  });
   const models = useStableArray([...new Set(scopes.flatMap((scope) => scope.models ?? []))].sort());
   useAuthoredLiveInterest(options.enabled ?? true, models);
   useAuthoredErrorPolicy(queries.map((query) => query.queryKey), { notify: options.errorNotification !== false });
@@ -149,16 +154,7 @@ export function useAuthoredQueryBatch<TDocument extends AuthoredDocument>(
   const slots = useStableValue<readonly (readonly [string, number])[]>(
     scopes.map((scope, index) => [scope.key, indexByHash.get(hashes[index]!)!]), [],
   );
-  return useMemo(() => new Map(slots.map(([key, index]) => [key, results[index]!])), [results, slots]);
-}
-
-/**
- * Query re-runs a stable `combine` only when a result or a query hash changes, and
- * structurally shares what it returns, so an unchanged result keeps its identity.
- * Sharing compares every property of a result, so each one counts as a change.
- */
-function shareQueryResults<TResults>(results: TResults): TResults {
-  return results;
+  return useMemo(() => labelBatchResults("useAuthoredQueryBatch", slots, results), [results, slots]);
 }
 
 /** Invalidate every authored read registered against any supplied model. */

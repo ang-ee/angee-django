@@ -13,6 +13,7 @@ import {
   useAuthoredQueryBatch,
   type AuthoredQueryBatchScope,
 } from "./authored-hooks";
+import { labelBatchResults } from "./query-batch";
 
 interface ProbeData extends Record<string, unknown> {
   folders: readonly { id: string; drive: string; parent: string }[];
@@ -163,6 +164,157 @@ describe("useAuthoredQueryBatch", () => {
     rerender({ parents: ["folder-a", "folder-b"] });
     expect(result.current).not.toBe(added);
     expect([...result.current.keys()]).toEqual(["folder-a", "folder-b"]);
+  });
+
+  test("the render that enables a read reports it fetching", () => {
+    batchMock.handlers.set("drive-a/folder-a", () => new Promise<ProbeData>(() => undefined));
+    const client = createQueryClient();
+    const seen: (boolean | undefined)[] = [];
+    const { rerender } = renderHook(({ enabled }) => {
+      const entry = useAuthoredQueryBatch([scope("folder-a", "drive-a", "folder-a")], { enabled }).get("folder-a");
+      seen.push(entry?.isFetching);
+    }, {
+      initialProps: { enabled: false },
+      wrapper: ({ children }) => <Providers client={client}>{children}</Providers>,
+    });
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((fetching) => fetching === false)).toBe(true);
+    const enabledAt = seen.length;
+    rerender({ enabled: true });
+    expect(seen[enabledAt]).toBe(true);
+    expect(seen.slice(enabledAt).every((fetching) => fetching === true)).toBe(true);
+  });
+
+  test("the render after a read's cache entry is removed reports the rebuilt read fetching", async () => {
+    let reads = 0;
+    batchMock.handlers.set("drive-a/folder-a", () => {
+      reads += 1;
+      return reads === 1 ? Promise.resolve(data("child-a", "drive-a", "folder-a")) : new Promise<ProbeData>(() => undefined);
+    });
+    const client = createQueryClient();
+    const seen: { data: unknown; fetching: boolean | undefined }[] = [];
+    const { rerender } = renderHook(({ tick }) => {
+      const entry = useAuthoredQueryBatch([scope("folder-a", "drive-a", "folder-a")]).get("folder-a");
+      seen.push({ data: entry?.data, fetching: entry?.isFetching });
+      return tick;
+    }, {
+      initialProps: { tick: 0 },
+      wrapper: ({ children }) => <Providers client={client}>{children}</Providers>,
+    });
+    await waitFor(() => expect(seen.at(-1)).toMatchObject({ fetching: false, data: data("child-a", "drive-a", "folder-a") }));
+    act(() => { client.removeQueries(); });
+    const removedAt = seen.length;
+    rerender({ tick: 1 });
+    expect(seen[removedAt]).toEqual({ data: undefined, fetching: true });
+  });
+
+  test("a read going stale renders its batch's owner no more", async () => {
+    vi.useFakeTimers();
+    try {
+      batchMock.handlers.set("drive-a/folder-a", async () => data("child-a", "drive-a", "folder-a"));
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 1_000 } } });
+      let renders = 0;
+      const { result } = renderHook(() => {
+        renders += 1;
+        return useAuthoredQueryBatch([scope("folder-a", "drive-a", "folder-a")]).get("folder-a");
+      }, { wrapper: ({ children }) => <Providers client={client}>{children}</Providers> });
+      await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+      expect(result.current?.data?.folders[0]?.id).toBe("child-a");
+      const query = client.getQueryCache().getAll()[0]!;
+      expect(query.isStale()).toBe(false);
+      const settled = renders;
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+      expect(query.isStale()).toBe(true);
+      expect(renders).toBe(settled);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("a failed attempt Query retries renders its batch's owner no more", async () => {
+    vi.useFakeTimers();
+    try {
+      let fail!: (error: Error) => void;
+      let attempts = 0;
+      batchMock.handlers.set("drive-a/folder-a", () => {
+        attempts += 1;
+        return attempts === 1
+          ? new Promise<ProbeData>((_resolve, reject) => { fail = reject; })
+          : Promise.resolve(data("child-a", "drive-a", "folder-a"));
+      });
+      const client = new QueryClient({ defaultOptions: { queries: { retry: 1, retryDelay: 1_000 } } });
+      let renders = 0;
+      const { result } = renderHook(() => {
+        renders += 1;
+        return useAuthoredQueryBatch([scope("folder-a", "drive-a", "folder-a")]).get("folder-a");
+      }, { wrapper: ({ children }) => <Providers client={client}>{children}</Providers> });
+      await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+      expect(result.current?.isFetching).toBe(true);
+      const fetching = renders;
+      await act(async () => { fail(new Error("try again")); await vi.advanceTimersByTimeAsync(10); });
+      expect(client.getQueryCache().getAll()[0]?.state.fetchFailureCount).toBe(1);
+      expect(renders).toBe(fetching);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+      expect(attempts).toBe(2);
+      expect(result.current?.data?.folders[0]?.id).toBe("child-a");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("a label whose request changes reads the new request's result", async () => {
+    batchMock.handlers.set("drive-a/folder-a", async () => data("child-a", "drive-a", "folder-a"));
+    batchMock.handlers.set("drive-a/folder-b", async () => data("child-b", "drive-a", "folder-b"));
+    const client = createQueryClient();
+    const { result, rerender } = renderHook(
+      ({ parent }) => useAuthoredQueryBatch([scope("label", "drive-a", parent), scope("other", "drive-a", "folder-b")]),
+      { initialProps: { parent: "folder-a" }, wrapper: ({ children }) => <Providers client={client}>{children}</Providers> },
+    );
+    await waitFor(() => {
+      expect(result.current.get("label")?.data?.folders[0]?.id).toBe("child-a");
+      expect(result.current.get("other")?.data?.folders[0]?.id).toBe("child-b");
+    });
+    rerender({ parent: "folder-b" });
+    expect(result.current.get("label")?.data?.folders[0]?.id).toBe("child-b");
+    // Two labels of one request read one entry.
+    expect(result.current.get("label")).toBe(result.current.get("other"));
+  });
+
+  test("scopes reordered keep each label's result", async () => {
+    batchMock.handlers.set("drive-a/folder-a", async () => data("child-a", "drive-a", "folder-a"));
+    batchMock.handlers.set("drive-a/folder-b", async () => data("child-b", "drive-a", "folder-b"));
+    const client = createQueryClient();
+    const { result, rerender } = renderHook(
+      ({ parents }) => useAuthoredQueryBatch(parents.map((parent) => scope(parent, "drive-a", parent))),
+      { initialProps: { parents: ["folder-a", "folder-b"] }, wrapper: ({ children }) => <Providers client={client}>{children}</Providers> },
+    );
+    await waitFor(() => expect([...result.current.values()].every((entry) => entry.data !== undefined)).toBe(true));
+    rerender({ parents: ["folder-b", "folder-a"] });
+    expect([...result.current.keys()]).toEqual(["folder-b", "folder-a"]);
+    expect(result.current.get("folder-a")?.data?.folders[0]?.id).toBe("child-a");
+    expect(result.current.get("folder-b")?.data?.folders[0]?.id).toBe("child-b");
+  });
+
+  test("a refetch answering equal data moves the entry's settle time and gives a new entry", async () => {
+    batchMock.handlers.set("drive-a/folder-a", async () => data("child-a", "drive-a", "folder-a"));
+    const client = createQueryClient();
+    const { result } = renderHook(
+      () => useAuthoredQueryBatch([scope("folder-a", "drive-a", "folder-a")]),
+      { wrapper: ({ children }) => <Providers client={client}>{children}</Providers> },
+    );
+    await waitFor(() => expect(result.current.get("folder-a")?.isFetching).toBe(false));
+    const settled = result.current.get("folder-a")!;
+    await new Promise((resolve) => { setTimeout(resolve, 5); });
+    await act(async () => { await settled.refetch(); });
+    await waitFor(() => expect(result.current.get("folder-a")?.dataUpdatedAt).toBeGreaterThan(settled.dataUpdatedAt));
+    expect(result.current.get("folder-a")).not.toBe(settled);
+    // Query shares equal data, so only its settle time moved.
+    expect(result.current.get("folder-a")?.data).toBe(settled.data);
+  });
+
+  test("a label without a result fails, naming the hook, rather than read another request's", () => {
+    expect(() => labelBatchResults("useAuthoredQueryBatch", [["folder-a", 0], ["folder-b", 1]], ["only one"]))
+      .toThrow('useAuthoredQueryBatch: "folder-b" has no result among the batch\'s 1.');
   });
 
   test("keys same-parent reads by drive and never exposes the previous key as placeholder data", async () => {
