@@ -107,6 +107,7 @@ INSTALLED_APPS = [
     "tests.hierdemo",
     "tests.recordrefdemo",
     "tests.checklistdemo",
+    "tests.webformsdemo",
     "tests",
 ]
 # Checkout-local and stable, so `--reuse-db` keeps it between runs; pytest-django

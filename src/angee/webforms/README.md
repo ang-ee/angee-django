@@ -150,6 +150,13 @@ SETTINGS = {"ANGEE_WEBFORM_TARGET_CLASSES.enquiry": "acme.enquiries.targets.Enqu
 ```
 
 ```python
+# <addon>/permissions.extends.zed: the type the target makes
+definition webforms/response_record {
+    relation enquiry: acme/enquiry // rebac:field=record
+}
+```
+
+```python
 # <addon>/targets.py
 from angee.webforms.targets import FormTarget
 
@@ -172,9 +179,11 @@ managing forms is not enough to choose one: the owner answers with its own
 access check. It is asked when a form's target or its configuration changes
 under an acting user, and every target states it. A collection edit
 (`Form.objects.filter(…).update(target_class=…)`) is refused: the owner is asked
-one form at a time. What `deliver` returns must be a record a reference can
-reach (a model with a permission type); anything else fails the delivery, since
-nothing would erase the answers when it goes.
+one form at a time. What `deliver` returns must be a record of a type the
+target's addon declared on `webforms/response_record`; anything else fails the
+delivery, since nothing would erase the answers when it goes. Only declared
+types carry the link in their metadata and pay for it when they are deleted or
+merged.
 
 `deliver` runs as named system work inside the transaction that records its
 outcome. It returns the record it made or found, or `None`. When the owner
