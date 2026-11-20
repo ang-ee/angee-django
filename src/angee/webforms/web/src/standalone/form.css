@@ -1,0 +1,140 @@
+/*
+ * The page's own stylesheet, linked from its document so that it applies whether
+ * or not the page's script loads. The build puts the design tokens and the
+ * installed themes before it; nothing here is a raw colour.
+ */
+
+/*
+ * Nothing shows while the page starts, and what the document says by itself
+ * depends on what has happened, not only on how long it took.
+ *
+ * `starting`: no script of the page has run yet. A slow connection and a script
+ * that will never come look the same from here, so the document says it is
+ * loading after a few seconds, and that it failed only after a long while.
+ *
+ * `loading`: the page's entry is running (it puts this in place of `starting`)
+ * and is fetching the rest. The document says it is loading, for as long as
+ * that takes; the entry says so itself if the rest cannot be fetched.
+ *
+ * Neither: the page has spoken, or its entry has failed. What the notice holds
+ * is shown: a sentence of the page's, or the document's own failure wording.
+ */
+body:is(.starting, .loading) {
+  visibility: hidden;
+}
+
+#notice .loading {
+  display: none;
+}
+
+body:is(.starting, .loading) #notice {
+  display: grid;
+}
+
+body:is(.starting, .loading) #notice > * {
+  display: block;
+  grid-area: 1 / 1;
+  visibility: hidden;
+}
+
+body.starting #notice .loading {
+  animation: page-says 0s linear 3s forwards, page-unsays 0s linear 30s forwards;
+}
+
+body.starting #notice .failed {
+  animation: page-says 0s linear 30s forwards;
+}
+
+body.loading #notice .loading {
+  animation: page-says 0s linear 1.5s forwards;
+}
+
+@keyframes page-says {
+  to {
+    visibility: visible;
+  }
+}
+
+@keyframes page-unsays {
+  to {
+    visibility: hidden;
+  }
+}
+
+/*
+ * The page wears a theme once its script has named the colour scheme. Until
+ * then, and if that never happens, it keeps the browser's own colours, which
+ * follow the visitor's scheme: a token would paint the light theme's.
+ */
+html[data-color-scheme] {
+  background: var(--surface-canvas);
+  color: var(--text-primary);
+}
+
+/*
+ * The document's viewport covers the whole screen, so the page's colour reaches
+ * its edges. Its content keeps inside the safe area: nothing sits under a
+ * notch, a rounded corner or the home bar.
+ */
+body {
+  box-sizing: border-box;
+  margin: 0;
+  min-height: 100dvh;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  font-family: var(--font-family-sans);
+}
+
+/* The language picker has a row of its own above the form, so it never covers the form's title. */
+header {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.5rem 0.75rem;
+}
+
+/* A control for a thumb: as high as a field, and in 16px text, below which a phone zooms in on focus. */
+#language {
+  box-sizing: border-box;
+  min-height: 44px;
+  max-width: 100%;
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-6);
+  padding: 0 0.75rem;
+  background: var(--surface-sheet);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 1rem;
+}
+
+@media (pointer: coarse) {
+  #language {
+    min-height: 48px;
+  }
+}
+
+/* Shown however the picker was reached, by a touch as by the keyboard. */
+#language:focus {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+#notice {
+  margin: 0;
+  padding: 2rem;
+  text-align: center;
+}
+
+html[data-color-scheme] #notice {
+  color: var(--text-secondary);
+}
+
+/* A visitor who asks for less motion gets none of the form's transitions. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

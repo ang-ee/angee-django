@@ -13,6 +13,7 @@ the contract tests pin whatever the templates compute, never a value re-derived 
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import json
 import os
 import re
@@ -965,6 +966,151 @@ def test_local_stack_renders_single_caddy_frontend_ingress() -> None:
     assert "runtime/schemas" not in frontend_command
 
 
+def test_static_ingress_imports_the_composed_standalone_pages_ahead_of_django() -> None:
+    """Every static ingress answers the composer's page routes first, from the one site root the app shares."""
+
+    from angee.web.build import WebRuntime
+
+    # The file the composer publishes, under the project's composed output in the ingress mount.
+    snippet = next(path for path in WebRuntime((), dependencies={}).render_sources() if path.suffix == ".caddy")
+    runtime = _render_project_settings()["COMPOSE_OUTPUT_DIR"].replace("{BASE_DIR}", "/srv/project")
+    # A glob import only warns when nothing matches, so an ingress ahead of its composer still starts.
+    imported = "/srv/project/runtime/web/pages.cadd?"
+    assert fnmatch.fnmatchcase(f"{runtime}/{snippet.as_posix()}", imported)
+    for stack in (
+        _render_local_stack(),
+        _render_staging_stack(),
+        _render_dev_stack(_runtime_mode="docker", serve_mode="production"),
+    ):
+        frontend = stack["services"]["frontend" if "frontend" in stack["services"] else "caddy"]
+        assert frontend["mounts"] == ["source://app:/srv/project"]
+        site = _rendered_caddyfile(frontend).partition(":80 {")[2]
+        root, pages, django, app = (
+            site.index(directive)
+            for directive in (
+                "root * /srv/project/web/dist", f"import {imported}\n", "handle @django", "handle {",
+            )
+        )
+        # The imported routes carry no root of their own: the site declares it once, ahead of every handler.
+        assert root < pages < django < app
+        assert site.count("root *") == 1
+
+
+def test_static_ingress_caches_for_good_only_what_the_build_names_by_content() -> None:
+    """The long-lived cache header reaches only an existing file under ``assets/`` whose name carries a hash."""
+
+    for stack in (
+        _render_local_stack(),
+        _render_staging_stack(),
+        _render_dev_stack(_runtime_mode="docker", serve_mode="production"),
+    ):
+        frontend = stack["services"]["frontend" if "frontend" in stack["services"] else "caddy"]
+        lines = [line.strip() for line in _rendered_caddyfile(frontend).splitlines()]
+        start = lines.index("@hashed {")
+        # ``file``: a missing asset falls back to the app document, which must never be kept for a year.
+        conditions = lines[start + 1 : lines.index("}", start)]
+        assert conditions == [
+            r"path_regexp ^/assets/.+-[A-Za-z0-9_-]{8}(\.[A-Za-z0-9]+)+$",
+            r"not path_regexp -[a-z0-9_-]{8}(\.[A-Za-z0-9]+)+$",
+            "not path *.html",
+            "file",
+        ]
+        assert 'header @hashed Cache-Control "public, max-age=31536000, immutable"' in lines
+        named, word = (re.compile(condition.rpartition("path_regexp ")[2]) for condition in conditions[:2])
+
+        def kept(path: str) -> bool:
+            return bool(named.search(path)) and not word.search(path) and not path.endswith(".html")
+
+        # Vite writes all it emits under assets/ as <name>-<hash>.<ext>, the emission of a selected named asset too.
+        # A precompressed sidecar is its source's name with one more extension, hashed exactly when its source is.
+        for path in (
+            "/assets/open-C37wqrGN.js", "/assets/index-BX1a2b3c.css", "/assets/inter-latin-400-normal-C38fXH4l.woff2",
+            "/assets/en-D4_x-9Qa.json", "/assets/icon & mark-Zy98_-Ab.svg", "/assets/app-AbCd1234.js.map",
+            "/assets/open-C37wqrGN.js.br", "/assets/open-C37wqrGN.js.gz",
+        ):
+            assert kept(path), path
+        for path in (
+            # Documents and the build's own manifests.
+            "/", "/index.html", "/site.page.html", "/.vite/angee-pages.json", "/.vite/manifest.json",
+            # A file rewritten in place under a stable name, at the root or under assets/: a sheet, a named asset.
+            "/themes.css", "/assets/themes.css", "/runtime/web/themes.css", "/assets/icon.svg", "/favicon.svg",
+            # A hand-named file whose tail is a word or a date, and a hash-shaped name outside assets/.
+            "/assets/logo-inverted.svg", "/assets/chunk-settings.js", "/assets/report-20240115.pdf",
+            "/assets/app-AbCd123.js", "/static/app-AbCd1234.js", "/pages/assets/app-AbCd1234.js",
+            "/index.html.br", "/site.page.html.gz",
+            # A real hash without an upper-case letter: not kept, the price of never keeping a word.
+            "/assets/low-abcd1234.js",
+            # A document is revalidated, whatever its name.
+            "/assets/page-AbCd1234.html",
+        ):
+            assert not kept(path), path
+
+
+def test_static_ingress_revalidates_documents_and_keeps_only_hashed_assets() -> None:
+    """Documents answer the declared ``Cache-Control``; no response can carry it and the long-lived one."""
+
+    from angee.web.build import INGRESS_DOCUMENT_CACHE_CONTROL
+
+    assert INGRESS_DOCUMENT_CACHE_CONTROL == "no-cache"
+    for stack in (
+        _render_local_stack(),
+        _render_staging_stack(),
+        _render_dev_stack(_runtime_mode="docker", serve_mode="production"),
+    ):
+        frontend = stack["services"]["frontend" if "frontend" in stack["services"] else "caddy"]
+        lines = [line.strip() for line in _rendered_caddyfile(frontend).splitlines()]
+        start = lines.index("@document {")
+        # A document: the root or an HTML file, or any path with no file, which falls back to the app document.
+        assert lines[start + 1 : start + 6] == ["not {", "not path / *.html", "file", "}", "}"]
+        assert lines[start + 6] == f"header @document Cache-Control {INGRESS_DOCUMENT_CACHE_CONTROL}"
+        # Inside the app's own handler, ahead of its fallback: at the site level it would mark what Django answers.
+        assert lines.index("handle {") < start < lines.index("try_files {path} /index.html")
+        # The kept files exclude both arms of that rule (``not path *.html`` and ``file``), so the two never meet.
+        hashed = lines[lines.index("@hashed {") + 1 : lines.index("}", lines.index("@hashed {"))]
+        assert {"not path *.html", "file"} <= set(hashed)
+        assert sorted(line for line in lines if "Cache-Control" in line) == sorted([
+            'header @hashed Cache-Control "public, max-age=31536000, immutable"',
+            f"header @document Cache-Control {INGRESS_DOCUMENT_CACHE_CONTROL}",
+        ])
+
+
+def test_static_ingress_serves_precompressed_sidecars_in_the_declared_order() -> None:
+    """The template's own file server and the composed page routes read sidecars alike, brotli first."""
+
+    from angee.web.build import INGRESS_PRECOMPRESSED
+
+    assert INGRESS_PRECOMPRESSED == ("br", "zstd", "gzip")
+    for stack in (
+        _render_local_stack(),
+        _render_staging_stack(),
+        _render_dev_stack(_runtime_mode="docker", serve_mode="production"),
+    ):
+        frontend = stack["services"]["frontend" if "frontend" in stack["services"] else "caddy"]
+        lines = [line.strip() for line in _rendered_caddyfile(frontend).splitlines()]
+        # Its one file server: the app's, which also answers every built file by its own name.
+        assert [line for line in lines if line.startswith("file_server")] == ["file_server {"]
+        assert lines[lines.index("file_server {") + 1] == f"precompressed {' '.join(INGRESS_PRECOMPRESSED)}"
+        # On-the-fly compression stays for a file without a sidecar.
+        assert "encode zstd gzip" in lines
+
+
+def test_static_ingress_sends_django_exactly_the_declared_paths() -> None:
+    """The template cannot read Python, so its ``@django`` matcher is pinned to the list the page rule reads."""
+
+    from angee.web.build import INGRESS_DJANGO_PATHS
+
+    for stack in (
+        _render_local_stack(),
+        _render_staging_stack(),
+        _render_dev_stack(_runtime_mode="docker", serve_mode="production"),
+    ):
+        frontend = stack["services"]["frontend" if "frontend" in stack["services"] else "caddy"]
+        matchers = [
+            line.strip() for line in _rendered_caddyfile(frontend).splitlines() if line.strip().startswith("@django ")
+        ]
+        assert matchers == [f"@django path {' '.join(INGRESS_DJANGO_PATHS)}"]
+
+
 def test_local_stack_uses_operator_backed_addon_installer() -> None:
     """Containerized local stacks edit project files through the host operator."""
 
@@ -1097,6 +1243,8 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
     assert "angee.knowledge_integrate_notion" not in base["INSTALLED_APPS"]
     assert "angee.proposals_work" not in base["INSTALLED_APPS"]
     assert "angee.workflows_messaging" not in base["INSTALLED_APPS"]
+    assert "angee.webforms" not in base["INSTALLED_APPS"]
+    assert "angee.webforms_messaging" not in base["INSTALLED_APPS"]
     assert "ANGEE_ADDON_DIRS" not in base
     assert base["ANGEE_DATA_DIR"] == "{BASE_DIR}/data"
 
@@ -1113,6 +1261,8 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
         "angee.workflows_messaging",
         "angee.work",
         "angee.intake",
+        "angee.webforms",
+        "angee.webforms_messaging",
         "angee.money",
         "angee.proposals",
         "angee.proposals_work",

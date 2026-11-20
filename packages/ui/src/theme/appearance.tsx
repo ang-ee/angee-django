@@ -145,10 +145,12 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST, themeLocked:
   const system = useSystemColorScheme();
   const hostThemeId = host.themeId ?? null;
   const hostTheme = hostThemeId ? catalogue.get(hostThemeId) ?? null : null;
-  const savedAppearance = resolveAppearance(preferences, saved.notice, catalogue, host, system, lockRequested);
+  const savedAppearance = resolvePreferredAppearance(preferences, saved.notice, catalogue, host, system, lockRequested);
   const { themeLocked } = savedAppearance;
+  // The boot cache holds the person's own choice in every app: a lock never replaces it there.
+  const ownAppearance = themeLocked ? resolvePreferredAppearance(preferences, saved.notice, catalogue, host, system, false) : savedAppearance;
   const { effectiveThemeId, effectiveTheme, colorSchemePreference, colorScheme, effectiveTokens, effectiveOptions, notice } =
-    draft ? resolveAppearance(draft, null, catalogue, host, system, lockRequested) : savedAppearance;
+    draft ? resolvePreferredAppearance(draft, null, catalogue, host, system, lockRequested) : savedAppearance;
   let hostOptions: ThemeOptionsEnvelope | undefined;
   if (hostTheme?.definition.options) {
     try {
@@ -167,17 +169,16 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST, themeLocked:
   }, [colorScheme, effectiveThemeId, effectiveTokens, resolvingIdentity]);
 
   useEffect(() => {
-    // A locked app's theme is not the person's; the device's next first paint follows their own choice.
-    if (resolvingIdentity || themeLocked) return;
+    if (resolvingIdentity) return;
     writeAppearanceCache({
       schema: APPEARANCE_CACHE_SCHEMA,
       fingerprint: host.fingerprint ?? "",
       actorId: auth.user?.id ?? "anonymous",
-      themeId: savedAppearance.effectiveThemeId,
-      colorSchemePreference: savedAppearance.colorSchemePreference,
-      tokenLayers: savedAppearance.tokenLayers,
+      themeId: ownAppearance.effectiveThemeId,
+      colorSchemePreference: ownAppearance.colorSchemePreference,
+      tokenLayers: ownAppearance.tokenLayers,
     });
-  }, [auth.user?.id, savedAppearance, host.fingerprint, resolvingIdentity, themeLocked]);
+  }, [auth.user?.id, ownAppearance, host.fingerprint, resolvingIdentity]);
 
   const update = useCallback(async (
     apply: (current: AppearancePreferences) => AppearancePreferences | undefined,
@@ -313,7 +314,7 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST, themeLocked:
 }
 
 /** Resolve both live appearance and the saved-only boot cache through one path. */
-function resolveAppearance(preferences: AppearancePreferences, notice: AppearanceState["notice"], catalogue: ReadonlyMap<string, ThemeContribution>, host: HostAppearanceDefaults, system: ColorScheme, lockRequested: boolean) {
+function resolvePreferredAppearance(preferences: AppearancePreferences, notice: AppearanceState["notice"], catalogue: ReadonlyMap<string, ThemeContribution>, host: HostAppearanceDefaults, system: ColorScheme, lockRequested: boolean) {
   const hostTheme = host.themeId ? catalogue.get(host.themeId) : undefined;
   // A locked app theme replaces the person's theme and its options, never their scheme;
   // the person's options are not in play, so their invalidity is no notice here.

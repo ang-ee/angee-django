@@ -1,14 +1,15 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
+import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { Window } from "happy-dom";
 import { afterEach, beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import { build, createServer, preview, resolveConfig, type UserConfig, type ViteDevServer } from "vite";
 import * as codegen from "@angee/app/web-codegen";
-import { defineAngeeWebViteConfig } from "../config/vite";
+import { defineAngeeWebViteConfig, runInPool } from "../config/vite";
 
 let root: string;
 let runtime: string;
@@ -49,12 +50,16 @@ async function config() {
     appearance: { themeId: "demo.theme", colorScheme: "light", options: { version: 1, value: {} } },
   });
 }
+/** How long a dev server may take to react to an edit: its file watcher runs late on a busy machine. */
+const WATCHER_ALLOWANCE = 10_000;
+/** Wait for what an edit causes, for as long as the watcher itself is allowed. */
+const settled = <T>(assertion: () => T | Promise<T>): Promise<T> => vi.waitFor(assertion, { timeout: WATCHER_ALLOWANCE });
 async function editSource(server: ViteDevServer, file: string, edit: () => void): Promise<void> {
   let acknowledge!: () => void;
   let timer: ReturnType<typeof setTimeout>;
   const observed = new Promise<void>((resolve, reject) => {
     acknowledge = resolve;
-    timer = setTimeout(() => reject(new Error(`No watcher event for ${file}`)), 10_000);
+    timer = setTimeout(() => reject(new Error(`No watcher event for ${file}`)), WATCHER_ALLOWANCE);
   });
   const onEvent = (event: string, changed: string) => {
     if (["add", "change", "unlink"].includes(event) && changed === file) acknowledge();
@@ -178,23 +183,23 @@ test("dev refreshes direct and transitive themes, CSS/assets, first paint and vi
   await editSource(server, join(addon, "src", "palette.mjs"), () => {
     write(join(addon, "src", "palette.mjs"), 'export const brand = "#abcdef";');
   });
-  await vi.waitFor(() => expect(catalogue().themes[0]?.defaultTokens.light["--brand"]).toBe("#abcdef"));
-  await vi.waitFor(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
+  await settled(() => expect(catalogue().themes[0]?.defaultTokens.light["--brand"]).toBe("#abcdef"));
+  await settled(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
   expect(await firstPaintBrand(server)).toBe("#abcdef");
   expect((await server.transformRequest("virtual:angee-appearance"))?.code).not.toBe(initialModule?.code);
   expect(catalogue().fingerprint).not.toBe(initial);
   await editSource(server, join(addon, "src", "themes.mjs"), () => theme(2));
-  await vi.waitFor(() => expect(catalogue().themes[0]?.revision).toBe(2));
+  await settled(() => expect(catalogue().themes[0]?.revision).toBe(2));
   const beforeCss = catalogue().fingerprint;
   await editSource(server, join(addon, "src", "theme.css"), () => {
     write(join(addon, "src", "theme.css"), '.demo { color: red; background-image: url("./mark.svg"); }');
   });
-  await vi.waitFor(() => expect(catalogue().fingerprint).not.toBe(beforeCss));
+  await settled(() => expect(catalogue().fingerprint).not.toBe(beforeCss));
   const beforeAsset = catalogue().fingerprint;
   await editSource(server, join(addon, "src", "mark.svg"), () => {
     write(join(addon, "src", "mark.svg"), '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0"/></svg>');
   });
-  await vi.waitFor(() => expect(catalogue().fingerprint).not.toBe(beforeAsset));
+  await settled(() => expect(catalogue().fingerprint).not.toBe(beforeAsset));
 }, 30_000);
 
 test("dev watches manifest-owned documents and newly arriving preferred external SDL", async () => {
@@ -206,16 +211,16 @@ test("dev watches manifest-owned documents and newly arriving preferred external
   const document = join(addon, "src", "headless", "documents.demo.ts");
   const generated = join(runtime, "gql", "demo", "graphql.ts");
   await editSource(server, document, () => write(document, "export const Ping = /* GraphQL */ `query Ping { ping }`;"));
-  await vi.waitFor(() => expect(readFileSync(generated, "utf8")).toContain("PingDocument"));
+  await settled(() => expect(readFileSync(generated, "utf8")).toContain("PingDocument"));
   await editSource(server, document, () => write(document, "export const Again = /* GraphQL */ `query Again { ping }`;"));
-  await vi.waitFor(() => expect(readFileSync(generated, "utf8")).toContain("AgainDocument"));
+  await settled(() => expect(readFileSync(generated, "utf8")).toContain("AgainDocument"));
   await editSource(server, document, () => rmSync(document));
-  await vi.waitFor(() => expect(readFileSync(generated, "utf8")).not.toContain("AgainDocument"));
+  await settled(() => expect(readFileSync(generated, "utf8")).not.toContain("AgainDocument"));
   await editSource(server, document, () => {
     write(join(runtime, "schemas", "external", "demo.graphql"), "type Query { ping: String! pong: String! }");
     write(document, "export const Pong = /* GraphQL */ `query Pong { pong }`;");
   });
-  await vi.waitFor(() => expect(readFileSync(generated, "utf8")).toContain("PongDocument"));
+  await settled(() => expect(readFileSync(generated, "utf8")).toContain("PongDocument"));
   expect(sent).toHaveBeenCalledWith(expect.objectContaining({ type: "full-reload" }));
 }, 30_000);
 
@@ -230,15 +235,15 @@ test("dev discovers direct Django SDL and metadata after startup and tracks thei
     write(metadata, "{}\n");
     write(schema, "type Query { ping: String! }");
   });
-  await vi.waitFor(() => expect(readFileSync(generated, "utf8")).toContain("PingDocument"));
+  await settled(() => expect(readFileSync(generated, "utf8")).toContain("PingDocument"));
   await editSource(server, schema, () => write(schema, "type Query { ping: Int! }"));
-  await vi.waitFor(() => expect(readFileSync(generated, "utf8")).toMatch(/type PingQuery = \{\s*ping: number/));
-  await vi.waitFor(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
+  await settled(() => expect(readFileSync(generated, "utf8")).toMatch(/type PingQuery = \{\s*ping: number/));
+  await settled(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
   sent.mockClear();
   await editSource(server, metadata, () => write(metadata, "{ }\n"));
-  await vi.waitFor(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
+  await settled(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
   await editSource(server, schema, () => rmSync(schema));
-  await vi.waitFor(() => expect(readFileSync(join(runtime, "web", "app.ts"), "utf8")).not.toContain('"console":'));
+  await settled(() => expect(readFileSync(join(runtime, "web", "app.ts"), "utf8")).not.toContain('"console":'));
 }, 30_000);
 
 test("generation failures show an overlay and a repaired newly declared theme input retries", async () => {
@@ -248,12 +253,12 @@ test("generation failures show an overlay and a repaired newly declared theme in
   await editSource(server, manifestPath, () => {
     write(manifestPath, JSON.stringify({ name: "@demo/theme", exports: { "./themes": "./src/repaired.mjs" } }));
   });
-  await vi.waitFor(() => expect(sent).toHaveBeenCalledWith(expect.objectContaining({ type: "error" })));
+  await settled(() => expect(sent).toHaveBeenCalledWith(expect.objectContaining({ type: "error" })));
   sent.mockClear();
   await editSource(server, join(addon, "src", "repaired.mjs"), () => {
     write(join(addon, "src", "repaired.mjs"), readFileSync(join(addon, "src", "themes.mjs"), "utf8"));
   });
-  await vi.waitFor(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
+  await settled(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
   expect(await firstPaintBrand(server)).toBe("#123456");
 }, 30_000);
 
@@ -276,7 +281,7 @@ test("bursts coalesce, concurrent changes get one serial follow-up, outputs stay
   const palette = join(addon, "src", "palette.mjs");
   hold = new Promise<void>((resolve) => { release = resolve; });
   for (let index = 0; index < 8; index += 1) server.watcher.emit("all", "change", palette);
-  await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(initialCalls + 1));
+  await settled(() => expect(generate).toHaveBeenCalledTimes(initialCalls + 1));
   for (let index = 0; index < 8; index += 1) server.watcher.emit("all", "change", palette);
   // Every generated tree and jj churn stays outside the declared source allowlist.
   for (const output of [join(runtime, "gql", "demo", "documents.demo.ts"), join(runtime, "web", "themes.catalog.json"), join(addon, ".jj", "store")]) {
@@ -284,8 +289,8 @@ test("bursts coalesce, concurrent changes get one serial follow-up, outputs stay
   }
   release!();
   hold = undefined;
-  await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(initialCalls + 2));
-  await vi.waitFor(() => expect(active).toBe(0));
+  await settled(() => expect(generate).toHaveBeenCalledTimes(initialCalls + 2));
+  await settled(() => expect(active).toBe(0));
   expect(maxActive).toBe(1);
   const beforeClose = generate.mock.calls.length;
   server.watcher.emit("all", "change", palette);
@@ -345,7 +350,7 @@ async function listen(server: ViteDevServer) {
   await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
   const address = http.address();
   if (!address || typeof address === "string") throw new Error("Missing dev server address");
-  return (url: string) => fetch(`http://127.0.0.1:${address.port}${url}`);
+  return (url: string, init?: RequestInit) => fetch(`http://127.0.0.1:${address.port}${url}`, init);
 }
 /** A dev server without a watcher, transforming a page whose host head holds `tags`. */
 async function headServer() {
@@ -408,16 +413,16 @@ test("dev asset edits reload, missing newly selected files retry, and only this 
   const image = join(addon, siteAssets["demo.image"]);
   expect((await get(encodeURI(`/@fs${image}`))).status).toBe(200);
   await editSource(server, image, () => write(image, "changed bytes"));
-  await vi.waitFor(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
+  await settled(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
   sent.mockClear();
   await editSource(server, join(runtime, "web/manifest.json"), () => {
     declareSite("demo.repaired", { ...siteAssets, "demo.repaired": "./new-art/repaired.png" });
   });
-  await vi.waitFor(() => expect(sent).toHaveBeenCalledWith(expect.objectContaining({ type: "error" })));
+  await settled(() => expect(sent).toHaveBeenCalledWith(expect.objectContaining({ type: "error" })));
   sent.mockClear();
   const repaired = join(addon, "new-art/repaired.png");
   await editSource(server, repaired, () => write(repaired, tinyPng));
-  await vi.waitFor(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
+  await settled(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
   const html = head(await server.transformIndexHtml("/", "<html><head></head></html>"));
   expect(html.querySelectorAll("title")).toHaveLength(1);
   const repairedUrl = html.querySelector('meta[property="og:image"]')?.getAttribute("content");
@@ -438,7 +443,7 @@ test("dev keeps a selected file the host's own list allows when regeneration dro
   await editSource(server, join(runtime, "web/manifest.json"), () => {
     declareSite("demo.other", { ...siteAssets, "demo.other": "./art/other.png" });
   });
-  await vi.waitFor(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
+  await settled(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
   expect((await get(encodeURI(`/@fs${other}`))).status).toBe(200);
   expect((await get(encodeURI(`/@fs${image}`))).status).toBe(200);
 }, 30_000);
@@ -643,3 +648,265 @@ test("preview serves the built site and assets after sources and runtime disappe
   const imageUrl = head(built.html).querySelector('meta[property="og:image"]')!.getAttribute("content")!;
   expect(Buffer.from(await (await fetch(new URL(imageUrl, origin))).arrayBuffer())).toEqual(tinyPng);
 }, 30_000);
+
+const pageDeclaration = { entry: "./pages/demo.html", paths: ["/forms/w/*"], accept: "text/html" };
+// What this fixture's manifest publishes. The composer owns both values and its own tests pin them;
+// the build applies whatever the manifest carries, which the tests below read back from it.
+const pageAccept = { "text/html": "^[\\t\\x20]*[Tt][Ee][Xx][Tt]/[Hh][Tt][Mm][Ll][\\t\\x20]*(?:;[^,]*)?(?:,|$)" };
+const pageCsp = "default-src 'self'; script-src 'self'; frame-ancestors 'none'; style-src 'self' 'unsafe-inline'";
+const browserAccept = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+const demoDocument = '<html><head><title>Demo</title><link rel="stylesheet" href="./demo.css" /></head><body><script type="module" src="./demo.ts"></script></body></html>';
+
+/** Declare one standalone page on the linked addon; `files` also writes its entry and the files beside it. */
+function declarePage({ files = true, document = demoDocument, ...published }: { files?: boolean; document?: string; pageAccept?: object; pageCsp?: string } = {}) {
+  if (files) {
+    write(join(addon, "pages", "demo.html"), document);
+    write(join(addon, "pages", "demo.ts"), 'document.title = "standalone page module"; import("./rest").then((rest) => rest.open());');
+    write(join(addon, "pages", "rest.ts"), 'export function open() { document.body.dataset.rest = "standalone page rest"; }');
+    write(join(addon, "pages", "demo.css"), ".demo-page { color: var(--text-primary); }");
+  }
+  manifest({ pageAccept, pageCsp, ...published, addonPackages: [{
+    package: "@demo/theme", root: "../../linked-addon", sourceRoot: "src/headless", pages: { "demo.page": pageDeclaration },
+  }] });
+}
+
+/** A dev server over the fixture, without a watcher, and a way to ask it. */
+async function devServer() {
+  const server = await createServer({
+    ...await config(), configFile: false, logLevel: "silent",
+    optimizeDeps: { noDiscovery: true, entries: [] },
+    // The addon sits beside the web root, as a linked package sits inside a workspace Vite allows.
+    // Nothing here admits the token sheet or the runtime's themes: the build does, for the pages it serves.
+    server: { middlewareMode: true, ws: false, watch: null, fs: { allow: [web, addon] } },
+  });
+  servers.push(server);
+  return listen(server);
+}
+
+test("a declared page whose entry is missing fails the build, naming its package and the page", async () => {
+  declarePage({ files: false });
+  await expect(resolveConfig({ ...await config(), configFile: false, logLevel: "silent" }, "build"))
+    .rejects.toThrow('@demo/theme page "demo.page" must name an existing file inside its package');
+});
+
+test("a declared page with no published policy fails, naming the manifest's key", async () => {
+  declarePage({ pageCsp: undefined });
+  await expect(resolveConfig({ ...await config(), configFile: false, logLevel: "silent" }, "build"))
+    .rejects.toThrow("The web manifest declares standalone pages but publishes no pageCsp");
+});
+
+test("build emits a declared page as <id>.html beside index.html, with its own files, the tokens and the themes, and no policy of its own", async () => {
+  declarePage({ pageCsp });
+  const { outputs, html } = await builtSite();
+  const page = outputs.find((entry) => entry.type === "asset" && entry.fileName === "demo.page.html");
+  if (!page || page.type !== "asset") throw new Error("Missing built demo.page.html");
+  const source = Buffer.from(page.source).toString();
+  const chunk = outputs.find((entry) => entry.type === "chunk" && entry.code.includes("standalone page module"));
+  expect(source).toContain(`src="/${chunk?.fileName}"`);
+  // What the page's entry imports dynamically downloads beside the entry: the document preloads it.
+  const rest = outputs.find((entry) => entry.type === "chunk" && entry.code.includes("standalone page rest"));
+  expect(rest?.fileName).not.toBe(chunk?.fileName);
+  expect(source).toContain(`<link rel="modulepreload" crossorigin href="/${rest?.fileName}">`);
+  expect(html).not.toContain(rest?.fileName);
+  // The app's document keeps its first-paint script. A page applies its own theme: the content
+  // security policy the ingress sends it runs no inline script, so it is given the appearance as data.
+  expect(html).toContain("data-angee-appearance-bootstrap");
+  const inline = [...source.matchAll(/<script(?![^>]*\ssrc=)([^>]*)>([\s\S]*?)<\/script>/g)];
+  expect(inline.map((script) => script[1]!.trim())).toEqual(['type="application/json" data-angee-appearance=""']);
+  expect(JSON.parse(inline[0]![2]!)).toMatchObject({ host: { themeId: "demo.theme", colorScheme: "light" }, catalogue: { themes: [{ id: "demo.theme" }] } });
+  // The ingress sends the policy as a header: the built document repeats none of it.
+  expect(source).not.toContain("Content-Security-Policy");
+  // The page is given the design tokens and the installed themes, and never the host's own stylesheet.
+  const sheets = [...source.matchAll(/<link rel="stylesheet"[^>]*href="\/([^"]+)"/g)].map((match) =>
+    outputs.find((entry) => entry.type === "asset" && entry.fileName === match[1]));
+  const css = sheets.map((sheet) => sheet?.type === "asset" ? Buffer.from(sheet.source).toString() : "").join("\n");
+  // In that order: a theme overrides the tokens, and the page's own sheet follows both.
+  const order = ["--surface-canvas:", "demo\\.theme]", ".demo-page"].map((mark) => css.indexOf(mark));
+  expect(order.every((at) => at >= 0), css.slice(0, 80)).toBe(true);
+  expect(order).toEqual([...order].sort((left, right) => left - right));
+  // What `vite preview` serves the pages by, inside the distribution.
+  const described = outputs.find((entry) => entry.type === "asset" && entry.fileName === ".vite/angee-pages.json");
+  expect(JSON.parse(Buffer.from(described?.type === "asset" ? described.source : "").toString())).toEqual({
+    pages: [{ id: "demo.page", paths: pageDeclaration.paths, acceptPattern: pageAccept["text/html"] }],
+    policy: pageCsp,
+  });
+}, 30_000);
+
+test.each([
+  ["a file outside its entry's directory", '<html><head></head><body><img src="../mark.svg" /></body></html>',
+    '@demo/theme page "demo.page" references "../mark.svg": a page names its own files with "./", beside or below its entry.'],
+  ["srcset", '<html><head></head><body><img srcset="./mark.svg 2x" /></body></html>',
+    '@demo/theme page "demo.page" uses srcset, which a page\'s document cannot name files with: use src.'],
+  ["no head", "<html><body></body></html>",
+    '@demo/theme page "demo.page" needs a <head> element for the stylesheets every page is given.'],
+])("build refuses a page whose document has %s", async (_label, document, message) => {
+  declarePage({ document });
+  await expect(builtSite()).rejects.toThrow(message);
+}, 30_000);
+
+test("dev serves a declared page at its paths to a document request, and nothing else there", async () => {
+  declarePage();
+  const get = await devServer();
+  const page = await get("/forms/w/demo?lang=es", { headers: { accept: browserAccept } });
+  expect(page.status).toBe(200);
+  expect(page.headers.get("content-type")).toContain("text/html");
+  // Beside whatever the server already varies by (its CORS policy varies by Origin).
+  expect(page.headers.get("vary")?.split(", ")).toContain("Accept");
+  const html = await page.text();
+  expect(html).not.toContain("data-angee-appearance-bootstrap");
+  expect(html).toContain('<script type="application/json" data-angee-appearance="">');
+  const module = encodeURI(`/@fs${join(addon, "pages", "demo.ts")}`);
+  expect(html).toContain(`<script type="module" src="${module}">`);
+  expect(await (await get(module)).text()).toContain("standalone page module");
+  // The design tokens, then the installed themes, then the page's own sheet.
+  const sheets = [...html.matchAll(/<link rel="stylesheet" href="([^"]+)"/g)].map((match) => match[1]!);
+  expect(sheets).toEqual([
+    encodeURI(`/@fs${fileURLToPath(import.meta.resolve("@angee/ui/tokens.css"))}`),
+    encodeURI(`/@fs${join(runtime, "web", "themes.css")}`),
+    encodeURI(`/@fs${join(addon, "pages", "demo.css")}`),
+  ]);
+  expect(await (await get(sheets[0]!, { headers: { accept: "text/css" } })).text()).toContain("--surface-canvas");
+  expect(await (await get(sheets[1]!, { headers: { accept: "text/css" } })).text()).toContain('[data-theme-id="demo.theme"]');
+  const head = await get("/forms/w/demo", { method: "HEAD", headers: { accept: browserAccept } });
+  expect([head.status, await head.text()]).toEqual([200, ""]);
+  // This server has no proxy: a request the page does not answer finds no document of the page's.
+  const other = async (path: string, init: RequestInit) => (await (await get(path, init)).text()).includes("demo.ts");
+  expect(await other("/forms/w/demo", { headers: { accept: "Text/HTML; charset=utf-8" } })).toBe(true);
+  for (const accept of ["application/json", "*/*", "application/json, text/html", ""]) {
+    expect(await other("/forms/w/demo", { headers: { accept } }), accept).toBe(false);
+  }
+  expect(await other("/forms/w/demo", { method: "POST", headers: { accept: browserAccept } })).toBe(false);
+  expect(await other("/forms/w", { headers: { accept: browserAccept } })).toBe(false);
+  expect(await other("/forms/demo", { headers: { accept: browserAccept } })).toBe(false);
+}, 30_000);
+
+test("dev asks a request for a page by the manifest's pattern and no rule of its own", async () => {
+  declarePage({ pageAccept: { "text/html": "^application/x-demo$" } });
+  const get = await devServer();
+  const served = async (accept: string) => (await (await get("/forms/w/demo", { headers: { accept } })).text()).includes("demo.ts");
+  expect(await served("application/x-demo")).toBe(true);
+  expect(await served(browserAccept)).toBe(false);
+}, 30_000);
+
+test("dev writes the manifest's page policy into the document, after Vite's own head scripts", async () => {
+  declarePage({ pageCsp });
+  const get = await devServer();
+  const html = await (await get("/forms/w/demo", { headers: { accept: browserAccept } })).text();
+  // A document cannot set `frame-ancestors` for itself; the rest is the manifest's policy.
+  expect(head(html).querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute("content"))
+    .toBe("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'");
+  const headEnd = html.indexOf("</head>");
+  const policyAt = html.indexOf("Content-Security-Policy");
+  const lastHeadScript = html.lastIndexOf("<script", headEnd);
+  expect(lastHeadScript).toBeGreaterThan(-1);
+  expect(policyAt).toBeGreaterThan(lastHeadScript);
+  expect(policyAt).toBeLessThan(headEnd);
+  // The app's own document is not a page: it carries no page policy.
+  const app = await (await get("/", { headers: { accept: browserAccept } })).text();
+  expect(app).not.toContain("Content-Security-Policy");
+}, 30_000);
+
+test("preview serves a built page at its paths as the ingress does, under the manifest's policy", async () => {
+  declarePage({ pageCsp });
+  const value = await config();
+  await build({ ...value, configFile: false, logLevel: "silent" });
+  // Preview reads the distribution alone: no manifest, no sources.
+  rmSync(runtime, { recursive: true, force: true });
+  rmSync(addon, { recursive: true, force: true });
+  const server = await preview({ ...value, configFile: false, logLevel: "silent", preview: { host: "127.0.0.1", port: 0, strictPort: false } });
+  onTestFinished(() => new Promise<void>((resolve, reject) => server.httpServer.close((error) => error ? reject(error) : resolve())));
+  const address = server.httpServer.address();
+  if (!address || typeof address === "string") throw new Error("Missing preview address");
+  const get = (path: string, init?: RequestInit) => fetch(`http://127.0.0.1:${address.port}${path}`, init);
+  const page = await get("/forms/w/demo?lang=es", { headers: { accept: browserAccept } });
+  expect(page.status).toBe(200);
+  expect(page.headers.get("vary")?.split(", ")).toContain("Accept");
+  expect(page.headers.get("content-security-policy")).toBe(pageCsp);
+  expect(await page.text()).toContain("<title>Demo</title>");
+  const json = await get("/forms/w/demo", { headers: { accept: "application/json" } });
+  expect(json.headers.get("content-security-policy")).toBeNull();
+  expect(await json.text()).not.toContain("<title>Demo</title>");
+}, 30_000);
+
+test("build writes a brotli and a gzip sidecar beside each text file it emits, and none for a small file or a font", async () => {
+  declarePage();
+  // A script worth compressing, and a font the page's sheet brings: a font is compressed already.
+  write(join(addon, "pages", "demo.ts"), `document.title = "standalone page module"; console.log(${JSON.stringify("a line of the page's script. ".repeat(200))});`);
+  write(join(addon, "pages", "face.woff2"), Buffer.from(Array.from({ length: 6000 }, (_value, index) => (index * 31) % 251)));
+  write(join(addon, "pages", "demo.css"), '@font-face { font-family: Demo; src: url("./face.woff2"); } .demo-page { color: var(--text-primary); }');
+  await build({ ...await config(), configFile: false, logLevel: "silent", build: { assetsInlineLimit: 0 } });
+  const dist = join(web, "dist");
+  const emitted = (directory: string): string[] => readdirSync(join(dist, directory), { withFileTypes: true }).flatMap((entry) =>
+    entry.isDirectory() ? emitted(join(directory, entry.name)) : [join(directory, entry.name)]);
+  const files = emitted("");
+  const page = readFileSync(join(dist, "demo.page.html"), "utf8");
+  const script = page.match(/<script type="module"[^>]*src="\/([^"]+)"/)![1]!;
+  const sheet = page.match(/<link rel="stylesheet"[^>]*href="\/([^"]+)"/)![1]!;
+  for (const file of [script, sheet]) {
+    const source = readFileSync(join(dist, file));
+    expect(source.length, file).toBeGreaterThanOrEqual(1024);
+    const brotli = readFileSync(join(dist, `${file}.br`));
+    const gzipped = readFileSync(join(dist, `${file}.gz`));
+    expect(brotliDecompressSync(brotli).equals(source), `${file}.br`).toBe(true);
+    expect(gunzipSync(gzipped).equals(source), `${file}.gz`).toBe(true);
+    expect(brotli.length).toBeLessThan(source.length);
+    expect(gzipped.length).toBeLessThan(source.length);
+    // A gzip header's four bytes of time are zero: the same input gives the same file.
+    expect([...gzipped.subarray(4, 8)]).toEqual([0, 0, 0, 0]);
+  }
+  const sidecar = (file: string) => existsSync(join(dist, `${file}.br`)) || existsSync(join(dist, `${file}.gz`));
+  const font = files.find((file) => file.endsWith(".woff2"))!;
+  expect(readFileSync(join(dist, font)).length).toBeGreaterThan(1024);
+  expect(sidecar(font)).toBe(false);
+  const small = files.filter((file) => /\.(js|css|html|json)$/.test(file) && readFileSync(join(dist, file)).length < 1024);
+  expect(small.length).toBeGreaterThan(0);
+  expect(small.filter(sidecar)).toEqual([]);
+  // Nothing is compressed twice.
+  expect(files.filter((file) => /\.(br|gz)\.(br|gz)$/.test(file))).toEqual([]);
+}, 60_000);
+
+test("the pool that compresses a build's files never runs more of them at once than its size", async () => {
+  const items = Array.from({ length: 20 }, (_value, index) => index);
+  for (const size of [1, 3, 8]) {
+    const done: number[] = [];
+    let running = 0;
+    let peak = 0;
+    // A compressor that takes a while: what overlaps is what the pool lets through.
+    await runInPool(items, size, async (item) => {
+      peak = Math.max(peak, ++running);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      running -= 1;
+      done.push(item);
+    });
+    expect(peak, `a pool of ${size}`).toBe(size);
+    expect([...done].sort((left, right) => left - right)).toEqual(items);
+  }
+  // A pool wider than its work starts no more workers than there is work, and a failure is the pool's.
+  let started = 0;
+  await runInPool([1, 2], 8, async () => { started += 1; });
+  expect(started).toBe(2);
+  await expect(runInPool(items, 2, async (item) => { if (item === 5) throw new Error("no"); })).rejects.toThrow("no");
+});
+
+test("a build's sidecars are the same bytes whatever the size of the pool that wrote them", async () => {
+  declarePage();
+  write(join(addon, "pages", "demo.ts"), `document.title = "standalone page module"; console.log(${JSON.stringify("a line of the page's script. ".repeat(200))});`);
+  const dist = join(web, "dist");
+  const sidecars = async (precompressConcurrency: number) => {
+    await build({
+      ...await defineAngeeWebViteConfig({
+        webRoot: web, gqlRuntimeDir: join(runtime, "gql"), prebundleAngeePackages: false, precompressConcurrency,
+        appearance: { themeId: "demo.theme", colorScheme: "light", options: { version: 1, value: {} } },
+      }),
+      configFile: false, logLevel: "silent",
+    });
+    const walk = (directory: string): string[] => readdirSync(join(dist, directory), { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory() ? walk(join(directory, entry.name)) : [join(directory, entry.name)]);
+    return Object.fromEntries(walk("").filter((file) => /\.(br|gz)$/.test(file)).sort()
+      .map((file) => [file, readFileSync(join(dist, file)).toString("base64")]));
+  };
+  const one = await sidecars(1);
+  const four = await sidecars(4);
+  expect(Object.keys(one).length).toBeGreaterThan(2);
+  expect(four).toEqual(one);
+}, 60_000);

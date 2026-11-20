@@ -311,7 +311,7 @@ class MergeableMixin(AngeeModel):
         """Return the references a fold of this model re-points at the survivor.
 
         The one list the fold moves and the history contract checks
-        (``angee.E051``): every ``MOVE`` reference, unless the model keeps
+        (``angee.E053``): every ``MOVE`` reference, unless the model keeps
         references on the retired record (:attr:`merge_moves_references`).
         """
 
