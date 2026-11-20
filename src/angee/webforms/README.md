@@ -43,6 +43,13 @@ accepts.
   spelling; nothing is rewritten. Curly brackets are refused in markup: the
   page's library fills `{name}` with an answer, which markup would then read as
   markup. Every other text is plain and is shown as written.
+- A `text` question may carry `autocomplete`, the browser's autofill hint
+  (`name`, `given-name`, `family-name`, `email`, `tel`, `organization`, the
+  address hints, `off`); payment and credential hints are not offered. A form
+  with pages may show its progress (`showProgressBar`, `progressBarLocation`,
+  `progressBarType`). `showTitle: false` keeps a form's `title`, in each
+  language, as the page's document title without rendering it as a heading,
+  for a form whose first block carries its own.
 - A choice is `{"value": <code>, "text": <text>}`. Answers store the code, never
   the label, so they do not depend on language. "Other" is the code `other`,
   with its text in `<name>-Comment`.
@@ -165,6 +172,13 @@ SETTINGS = {"ANGEE_WEBFORM_TARGET_CLASSES.enquiry": "acme.enquiries.targets.Enqu
 ```
 
 ```python
+# <addon>/permissions.extends.zed: the type the target makes
+definition webforms/response_record {
+    relation enquiry: acme/enquiry // rebac:field=record
+}
+```
+
+```python
 # <addon>/targets.py
 from angee.webforms.targets import FormTarget
 
@@ -187,9 +201,11 @@ managing forms is not enough to choose one: the owner answers with its own
 access check. It is asked when a form's target or its configuration changes
 under an acting user, and every target states it. A collection edit
 (`Form.objects.filter(…).update(target_class=…)`) is refused: the owner is asked
-one form at a time. What `deliver` returns must be a record a reference can
-reach (a model with a permission type); anything else fails the delivery, since
-nothing would erase the answers when it goes.
+one form at a time. What `deliver` returns must be a record of a type the
+target's addon declared on `webforms/response_record`; anything else fails the
+delivery, since nothing would erase the answers when it goes. Only declared
+types carry the link in their metadata and pay for it when they are deleted or
+merged.
 
 `deliver` runs as named system work inside the transaction that records its
 outcome. It returns the record it made or found, or `None`. When the owner
@@ -206,8 +222,9 @@ addon's model.
   may name the one whose answer finds a person's responses
   (`contact_question`).
 - A response carries no history, and a failed delivery keeps only the
-  failure's class, so an erased answer stays nowhere in this addon. The record
-  a response became is its owner's to erase.
+  failure's class, so an erased answer stays nowhere inside web forms. What a
+  target made from a response is a copy this addon does not reach: the record a
+  response became, or the message a form posted, is its owner's to erase.
 - A response keeps its contact answer beside the answers (`contact`: trimmed,
   in one letter case), and the contact question is always one the version
   states personal. `Response.objects.answered_by("<contact>")` finds a person's

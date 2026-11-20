@@ -32,6 +32,28 @@
     },
     "elements": {
       "$ref": "#/$defs/Elements"
+    },
+    "showProgressBar": {
+      "type": "boolean"
+    },
+    "progressBarLocation": {
+      "enum": [
+        "auto",
+        "aboveHeader",
+        "belowHeader",
+        "bottom"
+      ]
+    },
+    "progressBarType": {
+      "enum": [
+        "pages",
+        "questions",
+        "requiredQuestions"
+      ]
+    },
+    "showTitle": {
+      "description": "False keeps the title for the page's document title without rendering it as a heading.",
+      "type": "boolean"
     }
   },
   "oneOf": [
@@ -182,6 +204,32 @@
         },
         "placeholder": {
           "$ref": "#/$defs/Text"
+        },
+        "autocomplete": {
+          "description": "The browser's autofill hint for the input. Payment and credential hints are not offered.",
+          "enum": [
+            "off",
+            "name",
+            "given-name",
+            "additional-name",
+            "family-name",
+            "nickname",
+            "email",
+            "tel",
+            "organization",
+            "organization-title",
+            "street-address",
+            "address-line1",
+            "address-line2",
+            "address-level1",
+            "address-level2",
+            "postal-code",
+            "country",
+            "country-name",
+            "url",
+            "bday",
+            "language"
+          ]
         }
       },
       "unevaluatedProperties": false

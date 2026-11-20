@@ -18,8 +18,9 @@ it (:meth:`Response.deliver`), to blank a person's answers
 (:meth:`ResponseManager.purge_expired`). A response carries no history, a
 failed delivery keeps only the failure's class, and deleting the record a
 response became erases the response's personal answers too, so an erased answer
-stays nowhere in this addon. The record made from a response is its owner's to
-erase.
+stays nowhere inside web forms. What a target made from a response is a copy
+this addon does not reach: the record, or the message a form posted, is its
+owner's to erase.
 
 **Personal data.** A response holds the answers, the language and the client's
 submission id; no address of the sender and no browser detail. Each version
@@ -44,7 +45,6 @@ from django.db import models, transaction
 from django.utils import timezone
 from rebac import PermissionDenied, system_context
 from rebac.actors import is_sudo
-from rebac.field_backing import canonical_model
 
 from angee.base.fields import DiagnosticTextField, ImplClassField, StateField
 from angee.base.managers import AngeeManager
@@ -484,6 +484,8 @@ class FormAlias(AngeeDataModel, concrete=True):
         abstract = True
         ordering = ("slug",)
         rebac_resource_type = "webforms/form_alias"
+        verbose_name = "form alias"
+        verbose_name_plural = "form aliases"
 
     def __str__(self) -> str:
         """Return the public slug."""
@@ -762,10 +764,11 @@ class Response(AppendOnlyModel, AngeeDataModel, concrete=True):
                 if made is None:
                     made = row.form.target().deliver(row)
                     if made is not None:
-                        if canonical_model(type(made)) is None:
-                            # No record reference reaches it, so nothing would erase the answers when it goes.
+                        if not _model("ResponseRecord").declares_target(type(made)):
+                            # Nothing would erase the answers when an undeclared record goes.
                             raise ImproperlyConfigured(
-                                f"{type(made)._meta.label} is not a record a response can become.",
+                                f"{type(made)._meta.label} is not a record a response can become: the addon of "
+                                "the form's target declares no relation for it on webforms/response_record.",
                             )
                         content_type, object_id = generic_pointer_target(made)
                         _model("ResponseRecord").objects.create(
@@ -855,10 +858,16 @@ class ResponseRecord(RecordRefMixin, AngeeDataModel, concrete=True):
     goes when the record or the response does and never blocks either. When the
     record is deleted, the response it came from loses its personal answers
     first (:meth:`teardown_for_target`).
+
+    Which record types a response can become is declared, not open: the addon
+    that contributes a target names the type its target makes as a relation on
+    ``webforms/response_record`` in its ``permissions.extends.zed``
+    (``relation enquiry: acme/enquiry // rebac:field=record``). So only those
+    types carry this edge in their metadata, and only their deletions and
+    merges read it.
     """
 
     merge_policy = MergePolicy.KEEP
-    accepts_any_record_target = True
     sqid_prefix = "wbl_"
 
     response = models.OneToOneField("webforms.Response", on_delete=models.CASCADE, related_name="record_link")

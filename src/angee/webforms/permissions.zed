@@ -58,6 +58,10 @@ definition webforms/response {
 
 // The link from a response to the record it became is written by delivery
 // alone, and read with its response.
+// The record a response became. Which types that can be is declared by the
+// addon that contributes a target: one relation per type, backed by the link's
+// pointer (`relation enquiry: acme/enquiry // rebac:field=record`), from its
+// permissions.extends.zed. A type no relation names is never linked.
 definition webforms/response_record {
     relation response: webforms/response // rebac:field=response
 
