@@ -296,6 +296,45 @@ which a directory's claim rule, its adoption when on, and the holding rule read;
 the connections import shares its holding rule. Only a `HELD` answer holds the
 address.
 
+A source that is no directory and was only given a contact (a name, an email
+address, a phone number typed into a form or at a checkout) makes its person
+through one verb, [PartyManager.claimant_as_system](managers.py), under the same
+rule: each source creates its own people. The caller hands over the record that
+carried the contact (`evidence`) and its own records as a queryset (`own`: the
+links of one integration, every row of one model), which must hold that record.
+The email decides. The person found again is one whose standing claim on a
+handle of that address has a row of `own` behind it, never one a column names:
+a person a record of the source merely points at (one it adopted from someone
+else) is not its own. Another spelling is the same address, a trashed person is
+nobody's answer, a merged one is found as its survivor, and of several the
+earliest. Nobody else's person is taken, whoever holds or claims the address, an
+account's own person included; the verb makes a new person instead, named as
+given and created by the owner the caller names. Nothing is stated in full: each
+handle the person does not hold is recorded as a claim for review
+(`propose_claimed_handle_as_system`) with the record behind it, which decides
+nothing and moves nothing. A claim gains one evidence reference per record that
+carried the address, deduplicated, and that is how the next record finds the
+person. A person found again has nothing new stated of them and carries a phone
+only when they hold it or a record of the source stands behind their claim on
+it; a new person's number is known or made, and one the handle owner reads
+nothing in, or refuses, is left out. A contact without an email finds nobody
+again. The rows of the address and of the number, their parties and their
+statements are locked in one `lock_identity_rows` call before any claim is read.
+The verb proposes no pair, and no caller needs to: a claim links its person to
+the address, so identity matching (below) proposes the claimant and whoever else
+is linked to it.
+
+Which claims still stand is one read,
+[PartyStatementQuerySet.standing_claims](managers.py), over handle statements
+the caller narrows by handle or by party: each party's claim on a handle whose
+strongest current stance asserts a value, with the records its evidence names. A
+stance its source withdrew or a merge superseded makes nothing stand, and a
+person's dismissal outranks every claim. When two parties merge, the claims one
+source made for each collapse into one and the superseded one's records stay
+behind it, so two sources' claimants of one address, once merged, are each found
+as the survivor. A caller's own rule about which of its records may name a
+claimed address composes this read.
+
 [PartyManager.ingest_organization](managers.py) lands a `ParsedOrganization`
 from a directory stream the same way: it binds the link, mints an Organization
 for an unbound link and, until matching an existing one is ruled, refuses an

@@ -73,6 +73,7 @@ from angee.base.models.trash import ArchiveQuerySet
 from angee.base.pagination import clamp_page_size
 from angee.base.permissions import actor_user_id, reader_queryset
 from angee.base.querysets import MergeableQuerySet, by_key, query_batch_size
+from angee.base.refs import generic_pointer_model
 from angee.base.serialization import canonical_json
 from angee.integrate.errors import IntegrationError
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager
@@ -883,6 +884,50 @@ class PartyStatementQuerySet[StatementT: PartyStatementMixin](StatementQuerySet[
                 | Q(source_kind__in=(SourceKind.DIRECTORY, SourceKind.PERSON)),
             )
         )
+
+    def standing_claims(self) -> dict[tuple[Any, Any], frozenset[EvidenceReference]]:
+        """Return the handle claims among these statements that still stand, each with the records behind it.
+
+        Keyed by ``(party id, handle id)``. A party's claim on a handle stands
+        while its strongest current stance there (:meth:`members`) asserts a
+        value, whatever its confidence: a stance its source withdrew or a merge
+        superseded makes nothing stand, and a person's dismissal outranks every
+        claim. The records behind a standing claim are the evidence of each
+        current stance that asserts the handle for the party, whichever source
+        states it, and of the stances a merge folded under one of them: two
+        parties' claims by one source collapse into one when the parties merge,
+        and the records that carried the address for either still stand behind
+        it. Evidence is parsed here, reference by reference, for the caller to
+        compare in Python: a party and a handle share a handful of stances, and
+        asking a database whether a JSON list contains an entry is not portable.
+        Narrow the statements first, by handle or by party.
+        """
+
+        stance = self.model
+        asserting = Q(status=stance.StatementStatus.ASSERTED, snak=stance.StatementSnak.VALUE)
+        stated = self.handles().filter(asserting).order_by()
+        claims: dict[tuple[Any, Any], set[EvidenceReference]] = {
+            pair: set() for pair in stated.members().values_list("subject_id", "handle_id")
+        }
+        if not claims:
+            return {}
+        folded = stance._base_manager.filter(
+            asserting,
+            Exists(
+                stated.filter(
+                    subject_id=OuterRef("subject_id"),
+                    handle_id=OuterRef("handle_id"),
+                    asserted_by=OuterRef("asserted_by"),
+                )
+            ),
+            aspect="handle",
+            superseded__isnull=False,
+        )
+        for stances in (stated, folded):
+            for party_id, handle_id, evidence in stances.values_list("subject_id", "handle_id", "evidence"):
+                if (party_id, handle_id) in claims:
+                    claims[party_id, handle_id].update(EvidenceReference.model_validate(ref) for ref in evidence)
+        return {pair: frozenset(records) for pair, records in claims.items()}
 
 class EmailBasis(StrEnum):
     """How :meth:`PartyManager.people_for_emails` found a person for an email address."""
@@ -1793,6 +1838,166 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 confidence=confidence,
                 evidence=refs,
             )
+
+    def claimant_as_system(
+        self,
+        *,
+        email: str = "",
+        phone: str = "",
+        display_name: str = "",
+        given_name: str = "",
+        family_name: str = "",
+        evidence: Any,
+        own: models.QuerySet[Any],
+        owner_id: Any = None,
+        reason: str,
+    ) -> tuple[Any, Any | None, Any | None]:
+        """Return the person a source makes of a contact it was given, with the email and phone handles they carry.
+
+        Each source creates its own people. ``evidence`` is the caller's record
+        that carried the contact and ``own`` the caller's records, as a queryset
+        (the links of one integration, every row of one model) that holds
+        ``evidence``. The email decides. The person found again is one whose
+        standing claim on a handle of that address has a row of ``own`` behind it
+        (:meth:`PartyStatementQuerySet.standing_claims`), never one a column
+        names: another spelling of the address is the same address, a trashed
+        person is nobody's answer, a merged one is found as its survivor
+        (``Party.canonical_ids``), and of several the earliest. Nobody else's
+        person is taken, whoever holds or claims the address, an account's own
+        person included; otherwise a new ``Person`` is made, named as given
+        (``Party.PLACEHOLDER_NAME`` without a name) and created by ``owner_id``.
+        A contact without an email finds nobody again.
+
+        Nothing is stated in full. Each returned handle the person does not hold
+        is recorded as a claim for review with ``evidence`` behind it
+        (:meth:`propose_claimed_handle_as_system`): it decides nothing and moves
+        nothing away from whoever holds the address. A claim gains one evidence
+        reference per record that carried the address, deduplicated, which is how
+        the next record finds the person. A person found again has nothing new
+        stated of them: they carry a phone only when they hold it or a row of
+        ``own`` stands behind their claim on it, since a number given beside a
+        known address may be someone else's. A new person's number is known or
+        made; one the handle owner reads nothing in, or refuses, is left out.
+
+        The rows of the address and of the number, the parties they name and
+        their statements are locked in one :meth:`lock_identity_rows` call before
+        any claim is read, so two callers that meet a new address decide one
+        after the other and no claim read here changes before it is written. The
+        whole verb is named system work under ``reason``, in one transaction: the
+        caller's own gate admitted its record, so no actor is checked.
+
+        It proposes no same-person pair, and no caller needs to: a claim links
+        its person to the address (:attr:`LINKING_RULES`), so the scheduled
+        pairing pass (:meth:`reconcile_same_as` over :meth:`same_person_links`)
+        proposes the claimant and whoever else is linked to it for a person's
+        review.
+
+        Returns ``(person, email handle, phone handle)``; a handle is ``None``
+        where the contact has none or the person may not carry it.
+        """
+
+        if not reason.strip():
+            raise ValueError("A system claimant requires a named reason.")
+        handle_model = apps.get_model("parties", "Handle")
+        person_model = apps.get_model("parties", "Person")
+        platforms = handle_model.Platform
+        name = " ".join(display_name.split()) or " ".join(f"{given_name} {family_name}".split())
+        address = email.strip()
+        number = phone.strip() if handle_model.normalize_value(platforms.PHONE, phone) else ""
+        with system_context(reason=reason), transaction.atomic():
+            if not (isinstance(evidence, own.model) and own.filter(pk=evidence.pk).exists()):
+                raise ValueError("A claimant's evidence is one of the caller's own records.")
+            emails = self._address_handles(platforms.EMAIL, address)
+            if address and not emails:
+                emails = [
+                    handle_model.objects.upsert(
+                        platform=platforms.EMAIL, value=address, display_name=name, created_by_id=owner_id
+                    )
+                ]
+            numbers = self._address_handles(platforms.PHONE, number)
+            locked, _parties = self.lock_identity_rows(
+                party_ids=(), handle_ids=[row.pk for row in (*emails, *numbers)]
+            )
+            emails, numbers = [locked[row.pk] for row in emails], [locked[row.pk] for row in numbers]
+            stated = self.handle_statements().filter(handle__in=[*emails, *numbers]).standing_claims()
+            survivors = apps.get_model("parties", "Party").canonical_ids({party_id for party_id, _handle in stated})
+            claims: defaultdict[tuple[Any, Any], frozenset[EvidenceReference]] = defaultdict(frozenset)
+            for (party_id, handle_id), records in stated.items():
+                if party_id in survivors:
+                    claims[survivors[party_id], handle_id] |= records
+
+            def held(person_id: Any, rows: Sequence[Any]) -> Any | None:
+                return next((row for row in rows if row.party_id == person_id), None)
+
+            def vouched(person_id: Any, rows: Sequence[Any]) -> Any | None:
+                # One read per standing claim of this person, and only of the rows its evidence names.
+                return next(
+                    (row for row in rows if self._evidence_names(claims.get((person_id, row.pk), ()), own)), None
+                )
+
+            person = email_handle = None
+            address_ids = {row.pk for row in emails}
+            claimants = {party_id for party_id, handle_id in claims if handle_id in address_ids}
+            for candidate in person_model._base_manager.filter(pk__in=claimants, is_trashed=False).order_by("pk"):
+                if (claimed := vouched(candidate.pk, emails)) is not None:
+                    person, email_handle = candidate, held(candidate.pk, emails) or claimed
+                    break
+            if person is not None:
+                phone_handle = held(person.pk, numbers) or vouched(person.pk, numbers)
+            else:
+                person = person_model.objects.create(
+                    display_name=name or person_model.PLACEHOLDER_NAME,
+                    given_name=given_name.strip(),
+                    family_name=family_name.strip(),
+                    created_by_id=owner_id,
+                )
+                email_handle = emails[0] if emails else None
+                phone_handle = numbers[0] if numbers else None
+                if phone_handle is None and number:
+                    try:
+                        phone_handle = handle_model.objects.upsert(
+                            platform=platforms.PHONE, value=number, created_by_id=owner_id
+                        )
+                    except ValidationError:
+                        phone_handle = None
+            for handle in (email_handle, phone_handle):
+                if handle is not None and handle.party_id != person.pk:
+                    # The record that carried the address stands behind the claim: the first one, and each after it.
+                    self.propose_claimed_handle_as_system(person, handle, evidence=evidence, reason=reason)
+            return person, email_handle, phone_handle
+
+    @staticmethod
+    def _address_handles(platform: str, value: str) -> list[Any]:
+        """Return the handle rows of ``value`` on ``platform``, every spelling of it, oldest first.
+
+        A row merged away is left out: its survivor is the address's row, and a
+        claim stated on a redirect would link nobody.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        if not value:
+            return []
+        return list(
+            handle_model._base_manager.filter(
+                platform=platform,
+                normalized_value=handle_model.normalize_value(platform, value),
+                merged_into__isnull=True,
+            ).order_by("pk")
+        )
+
+    @staticmethod
+    def _evidence_names(references: Collection[EvidenceReference], records: models.QuerySet[Any]) -> bool:
+        """Whether one of ``references`` names a row of ``records``, read by key alone.
+
+        A reference names a record by the model its generic pointers resolve to
+        and its public id (``EvidenceReference.of``); labels compare without
+        case, as provenance compares them. Only the rows the references name are
+        looked up, never ``records`` as a whole.
+        """
+
+        model = generic_pointer_model(records.model)
+        named = [reference.id for reference in references if reference.model.lower() == model._meta.label_lower]
+        return bool(named) and bool(instances_from_public_ids(model, named, queryset=records.only("pk")))
 
     def suggest_for(self, handle: Any) -> Any:
         """Propose a party for a freshly-seen, unresolved ``handle`` (the EMAIL_MATCH producer).
