@@ -1,7 +1,14 @@
 import { formatDate, optionToken, type ResourceViewFilter } from "@angee/ui";
 import type { UiTranslate } from "@angee/ui/i18n";
 
-/** What became of a response its form's target has not taken: the pair the server counts as undelivered. */
+/**
+ * What became of a response its form's target has not taken. This mirrors the
+ * server's rule and is not a second one: `Form.undelivered_count` and
+ * `undelivered_expires_at` count the responses whose `delivery` is pending or
+ * failed (`FormQuerySet.undelivered_expressions` in the backend). The filter
+ * and the record's verbs here read the same pair so the list a form links to
+ * holds exactly the responses that form counted.
+ */
 export const UNDELIVERED: readonly string[] = ["pending", "failed"];
 
 /** Whether a response still waits for its form's target: it can be delivered again or given up on. */

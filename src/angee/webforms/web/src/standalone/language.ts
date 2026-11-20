@@ -1,3 +1,5 @@
+import { surveyLocalization } from "survey-core";
+
 /** What decides the language a form opens in, most specific first. */
 export interface LanguageChoice {
   /** `?lang=` of the address, when the visitor or a link asked for one. */
@@ -12,27 +14,51 @@ export interface LanguageChoice {
 }
 
 const primary = (tag: string) => tag.toLowerCase().split("-", 1)[0]!;
+const same = (left: string, right: string) => left.toLowerCase() === right.toLowerCase();
 
 /**
  * The language a form opens in: the one asked for when the form is written in
  * it, else the address's own, else the first of the visitor's languages the form
  * is written in (the whole tag, then its primary language), else the default.
+ * Tags compare without regard to case, and the answer is the form's own spelling.
  */
 export function chooseLanguage({ requested, served, preferred, languages, defaultLanguage }: LanguageChoice): string {
-  if (requested && languages.includes(requested)) return requested;
+  const asked = requested ? languages.find((tag) => same(tag, requested)) : undefined;
+  if (asked) return asked;
   if (served) return served;
   for (const wanted of preferred) {
-    const match = languages.find((tag) => tag.toLowerCase() === wanted.toLowerCase())
-      ?? languages.find((tag) => primary(tag) === primary(wanted));
+    const match = languages.find((tag) => same(tag, wanted)) ?? languages.find((tag) => primary(tag) === primary(wanted));
     if (match) return match;
   }
   return defaultLanguage;
 }
 
+/** Tags that name a language another tag already serves here. */
+const SAME_LANGUAGE: Readonly<Record<string, string>> = {
+  no: "nb",
+  tl: "fil",
+  "zh-hk": "zh-hant",
+  "zh-mo": "zh-hant",
+  "zh-tw": "zh-hant",
+};
+
+/**
+ * The key of a table of languages that serves a tag: the tag itself, else the
+ * tag without its last subtags, one at a time (`pt-BR`, then `pt`). Keys are
+ * language tags in lower case.
+ */
+export function languageKey(table: object, tag: string): string | undefined {
+  for (let key = tag.toLowerCase(); key; key = key.slice(0, Math.max(key.lastIndexOf("-"), 0))) {
+    const served = SAME_LANGUAGE[key] ?? key;
+    if (Object.hasOwn(table, served)) return served;
+  }
+  return undefined;
+}
+
 /**
  * SurveyJS's own interface strings (button labels, validation messages): one
- * file per language, which registers itself under the locale code it is keyed by
- * here. English is built in, and a language without a file reads English.
+ * file per language, keyed here by the language tag it serves. English is built
+ * in, and a language without a file reads English.
  */
 const INTERFACE_STRINGS: Readonly<Record<string, () => Promise<unknown>>> = {
   ar: () => import("survey-core/i18n/arabic"),
@@ -65,10 +91,10 @@ const INTERFACE_STRINGS: Readonly<Record<string, () => Promise<unknown>>> = {
   lt: () => import("survey-core/i18n/lithuanian"),
   lv: () => import("survey-core/i18n/latvian"),
   mk: () => import("survey-core/i18n/macedonian"),
-  mm: () => import("survey-core/i18n/burmese"),
   ms: () => import("survey-core/i18n/malay"),
+  my: () => import("survey-core/i18n/burmese"),
+  nb: () => import("survey-core/i18n/norwegian"),
   nl: () => import("survey-core/i18n/dutch"),
-  no: () => import("survey-core/i18n/norwegian"),
   pl: () => import("survey-core/i18n/polish"),
   pt: () => import("survey-core/i18n/portuguese"),
   "pt-br": () => import("survey-core/i18n/portuguese-br"),
@@ -79,25 +105,49 @@ const INTERFACE_STRINGS: Readonly<Record<string, () => Promise<unknown>>> = {
   sr: () => import("survey-core/i18n/serbian"),
   sv: () => import("survey-core/i18n/swedish"),
   sw: () => import("survey-core/i18n/swahili"),
-  tel: () => import("survey-core/i18n/telugu"),
+  te: () => import("survey-core/i18n/telugu"),
   tg: () => import("survey-core/i18n/tajik"),
   th: () => import("survey-core/i18n/thai"),
   tr: () => import("survey-core/i18n/turkish"),
   uk: () => import("survey-core/i18n/ukrainian"),
   ur: () => import("survey-core/i18n/urdu"),
   vi: () => import("survey-core/i18n/vietnamese"),
-  "zh-cn": () => import("survey-core/i18n/simplified-chinese"),
-  "zh-tw": () => import("survey-core/i18n/traditional-chinese"),
+  zh: () => import("survey-core/i18n/simplified-chinese"),
+  "zh-hant": () => import("survey-core/i18n/traditional-chinese"),
 };
 
-/** The SurveyJS locale code whose interface strings serve `tag`: its own, else its primary language's. */
+/** The locale code a file registers its strings under in SurveyJS, where that is not the language's tag. */
+const SURVEYJS_CODES: Readonly<Record<string, string>> = {
+  my: "mm",
+  nb: "no",
+  te: "tel",
+  zh: "zh-cn",
+  "zh-hant": "zh-tw",
+};
+
+/** The SurveyJS locale code whose interface strings serve `tag`, if it ships any. */
 export function interfaceLocale(tag: string): string | undefined {
-  return [tag.toLowerCase(), primary(tag)].find((code) => Object.hasOwn(INTERFACE_STRINGS, code));
+  const key = languageKey(INTERFACE_STRINGS, tag);
+  return key && (SURVEYJS_CODES[key] ?? key);
 }
+
+/**
+ * Strings the pinned SurveyJS ships with another string's text. Its Spanish says
+ * the answers are being saved where it means that they could not be.
+ */
+const CORRECTIONS: Readonly<Record<string, { key: string; shippedAs: string; text: string }>> = {
+  es: { key: "savingDataError", shippedAs: "savingData", text: "Se produjo un error y no se pudieron guardar los resultados." },
+};
 
 /** Load SurveyJS's interface strings for `tag`; resolves to the locale code they registered under, if any. */
 export async function loadInterfaceStrings(tag: string): Promise<string | undefined> {
-  const code = interfaceLocale(tag);
-  if (code) await INTERFACE_STRINGS[code]!();
+  const key = languageKey(INTERFACE_STRINGS, tag);
+  if (!key) return undefined;
+  await INTERFACE_STRINGS[key]!();
+  const code = SURVEYJS_CODES[key] ?? key;
+  const strings = surveyLocalization.locales[code] as Record<string, string> | undefined;
+  const correction = CORRECTIONS[code];
+  // Only while the string is still the wrong one: a release that corrects it is left alone.
+  if (strings && correction && strings[correction.key] === strings[correction.shippedAs]) strings[correction.key] = correction.text;
   return code;
 }

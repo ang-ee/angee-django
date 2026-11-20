@@ -18,12 +18,23 @@ import { isUndelivered, undeliveredFilter } from "../undelivered";
  * The list filters by what became of a response, with one choice for those still
  * waiting (pending and failed together), and a response its form's retention will
  * remove shows the day it is removed.
+ *
+ * A person's request to be erased is served here: the list is searched by the
+ * contact answer, which finds that person's responses across every form, and each
+ * is then erased from its record.
  */
 export function ResponsesPage(): React.ReactElement {
   const t = useWebformsT();
   const filterOptions = React.useMemo<NonNullable<ResourceListProps["filterOptions"]>>(() => [
     { id: "undelivered", label: t("response.undelivered"), filter: undeliveredFilter() },
   ], [t]);
+  // Beside the search box: the contact a person is found by, and the responses still waiting.
+  const search = React.useMemo<NonNullable<ResourceListProps["search"]>>(() => ({
+    shortcuts: [
+      { kind: "text", field: "contact", label: t("response.contactSearch") },
+      { kind: "toggle", id: "undelivered" },
+    ],
+  }), [t]);
   // Delivering or dismissing a response changes how many its form still counts as undelivered.
   // A delivery that fails answers with the reason and still records the attempt on the response.
   const [deliver] = useRecordActionMutation<ActionFieldName>("deliver_webform_response", {
@@ -36,11 +47,12 @@ export function ResponsesPage(): React.ReactElement {
     idArgument: "response", invalidateModels: [RESPONSE_MODEL],
   });
   return (
-    <ResourceList resource={RESPONSE_MODEL} hideCreate placement="inline" routed filterOptions={filterOptions}>
+    <ResourceList resource={RESPONSE_MODEL} hideCreate placement="inline" routed filterOptions={filterOptions} search={search}>
       <List resource={RESPONSE_MODEL} order={{ created_at: "DESC" }} emptyContent={t("response.empty")}>
         <Column field="form" />
         <Column field="version" />
         <Column field="language" />
+        <Column field="contact" />
         <Column field="delivery" widget="statusBadge" />
         <Column field="delivery_error" />
         <Column field="created_at" />
@@ -52,6 +64,7 @@ export function ResponsesPage(): React.ReactElement {
           <Field name="form" />
           <Field name="version" />
           <Field name="language" />
+          <Field name="contact" showWhen={(row) => Boolean(row.contact)} />
           <Field name="created_at" />
           <Field name="delivered_at" showWhen={(row) => Boolean(row.delivered_at)} />
           <Field name="delivery_attempts" />

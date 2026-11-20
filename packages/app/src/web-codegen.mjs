@@ -105,7 +105,12 @@ export async function generateWebRuntime({
   }
   emitThemeArtifacts(runtimeDir, installedThemes, inputs);
   emitAppModule(runtimeDir, manifest, djangoSchemas, addonSources, installedThemes);
-  return { inputs: inputs.snapshot(), themes: installedThemes.definitions, pages, ...(head ? { head } : {}) };
+  return {
+    inputs: inputs.snapshot(), themes: installedThemes.definitions, pages,
+    // The composer owns the policy a page is served under and publishes it once, for the ingress and for this build.
+    ...(typeof manifest.pageCsp === "string" ? { pageCsp: manifest.pageCsp } : {}),
+    ...(head ? { head } : {}),
+  };
 }
 
 /**
@@ -116,10 +121,12 @@ export async function generateWebRuntime({
  */
 function resolvePages(manifest, addonSources, inputs) {
   const pages = [];
-  for (const pkg of manifest.addonPackages ?? []) {
+  for (const pkg of Array.isArray(manifest.addonPackages) ? manifest.addonPackages : []) {
     for (const [id, page] of Object.entries(pkg.pages ?? {})) {
       const where = `${pkg.package} page ${JSON.stringify(id)}`;
-      const root = addonSources.get(pkg.package).root;
+      const source = addonSources.get(pkg.package);
+      if (!source) throw new Error(`${where} is declared by a package this build has no source for.`);
+      const { root } = source;
       const entry = path.resolve(root, page.entry);
       inputs.file(entry);
       const file = packageFile(root, entry);

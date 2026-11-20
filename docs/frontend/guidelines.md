@@ -130,16 +130,27 @@ public vault id. See the [knowledge addon](../../src/angee/knowledge/README.md).
   `web/package.json` `angee.pages` (an HTML entry, the URL paths it answers and
   the media type a request asks for it with); the composed web manifest carries
   the declaration and [`angee:pages`](../../packages/app/config/vite.ts) builds
-  it as `<id>.html` beside `index.html` and serves it in development at those
-  paths. Only a `GET` or `HEAD` whose `Accept` header matches the manifest's
-  `pageAccept` pattern gets the page (the media type must come first), so the
-  same address still answers as the server's API; the composer owns that
-  pattern and the ingress applies the same one. The page imports
-  nothing of `@angee/app`: it names its own files with `./`, links the host
-  stylesheet for tokens and installed themes, and applies its theme through the
-  React-free [`applyAppearanceRoot`](../../packages/ui/src/theme/runtime.mjs).
-  It gets no inline first-paint script: the ingress sends every page a content
-  security policy that runs no inline script, so the built document has none.
+  it as `<id>.html` beside `index.html`, serves it in development at those
+  paths and, in `vite preview`, serves the built file there. Only a `GET` or
+  `HEAD` whose `Accept` header matches the manifest's `pageAccept` pattern gets
+  the page (the media type must come first), so the same address still answers
+  as the server's API; the composer owns that pattern and the ingress applies
+  the same one. The page imports nothing of `@angee/app` and never links the
+  host's stylesheet: it names its own files with `./` (beside or below its
+  entry, with `src` and `href`), the build gives its document the token sheet
+  (`@angee/ui/tokens.css`) and the composed themes (`runtime/web/themes.css`),
+  and it applies its theme through the React-free owners of
+  [`@angee/ui/theme-runtime`](../../packages/ui/src/theme/runtime.mjs):
+  `resolveAppearance`, the same resolution the first-paint bootstrap uses (the
+  host's theme, forced color scheme and token layers, or a theme the page
+  names), then `applyAppearanceRoot`. It gets no inline first-paint script: the
+  ingress sends every page a content security policy that runs no inline
+  script, so the build writes the appearance payload into the document as a
+  JSON data block (`readAppearancePayload`) and the document carries no policy
+  of its own. The composer owns that policy and publishes it
+  as the manifest's `pageCsp`; development, which cannot send it as a header
+  without refusing Vite's own scripts, writes it into the document after them,
+  and preview sends it as the ingress does.
 - Operator daemon types are generated, never authored: the
   [operator manifest](../../src/angee/operator/pyproject.toml) contributes the
   committed daemon SDL and document glob to the shared codegen pass, and daemon

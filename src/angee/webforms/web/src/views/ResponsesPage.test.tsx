@@ -48,8 +48,25 @@ describe("ResponsesPage", () => {
     render(<ResponsesPage />);
     const columns = parsePageColumns(declared<ListProps>("list")?.children);
     expect(columns.map((column) => column.field))
-      .toEqual(["form", "version", "language", "delivery", "delivery_error", "created_at", "expires_at"]);
+      .toEqual(["form", "version", "language", "contact", "delivery", "delivery_error", "created_at", "expires_at"]);
     expect(columns.at(-1)?.header).toBe("Expires");
+  });
+
+  test("a person's responses are found by their contact, across forms, beside the choice for those still waiting", () => {
+    render(<ResponsesPage />);
+    expect(capture.props?.search).toEqual({
+      shortcuts: [
+        { kind: "text", field: "contact", label: "Contact (trimmed, lower case)" },
+        { kind: "toggle", id: "undelivered" },
+      ],
+    });
+    // Erasing is offered on each record found, until it is done.
+    const erase = parsePageActions(declared<FormProps>("form")?.children).find((action) => action.id === "erase");
+    expect(erase?.visibleWhen?.({ contact: "ada@example.org", erased_at: null })).toBe(true);
+    expect(erase?.visibleWhen?.({ contact: "", erased_at: "2031-03-09T12:00:00+00:00" })).toBe(false);
+    const contact = parsePageFields(declared<FormProps>("form")?.children).find((candidate) => candidate.name === "contact");
+    expect(contact?.showWhen?.({ contact: "ada@example.org" })).toBe(true);
+    expect(contact?.showWhen?.({ contact: "" })).toBe(false);
   });
 
   test("the record shows the expiry only when the response has one", () => {

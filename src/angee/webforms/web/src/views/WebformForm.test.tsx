@@ -2,7 +2,7 @@
 
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import type { FormProps, RecordToolbarContext } from "@angee/ui";
+import { parsePageFields, type FormProps, type RecordToolbarContext } from "@angee/ui";
 
 import { webformForm } from "./WebformForm";
 
@@ -10,6 +10,7 @@ const capture = vi.hoisted(() => ({ props: null as FormProps | null }));
 
 // The record's own owner is replaced by one that keeps what the form declared; the
 // form's verbs, its target choices and the route to the responses list answer plainly.
+// One target, `enquiry`, declares its configuration; one theme is installed.
 vi.mock("@angee/ui", async (importOriginal) => ({
   ...await importOriginal<typeof import("@angee/ui")>(),
   Form: (props: FormProps) => {
@@ -19,7 +20,18 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   useEnumOptions: () => [],
   useRecordActionMutation: () => [async () => undefined],
   useResourceRoute: () => "/webforms/responses?filtered",
+  useImplConfigFields: (_resource: string, field: string, _supplied: unknown, configField: string) => ({
+    fields: [{
+      name: `${configField}.queue`, label: "Queue",
+      showWhen: (values: Record<string, unknown>) => values[field] === "enquiry",
+    }],
+    hasSchema: (value: unknown) => value === "enquiry",
+  }),
+  useAppRuntime: () => ({ themes: [{ definition: { id: "house.paper", labelKey: "house.paper.label" } }] }),
+  useT: () => (key: string) => `themes:${key}`,
 }));
+
+const fields = () => parsePageFields(capture.props?.children);
 
 /** What the form's heading shows beside the title for one record. */
 function heading(record: RecordToolbarContext["record"]): HTMLElement {
@@ -30,6 +42,38 @@ function heading(record: RecordToolbarContext["record"]): HTMLElement {
 afterEach(cleanup);
 
 describe("WebformForm", () => {
+  test("asks in the order a person decides: name, target and its configuration, then theme and retention", () => {
+    render(<webformForm.Component resource="webforms.Form" />);
+    expect(fields().map((field) => field.name)).toEqual([
+      "name", "status", "target_class", "target_config", "target_config.queue", "theme_id", "retention_days",
+    ]);
+  });
+
+  test("a target that declares its configuration is edited by its own fields, another by the raw value", () => {
+    render(<webformForm.Component resource="webforms.Form" />);
+    const shown = (target: string) => fields().filter((field) => field.name.startsWith("target_config"))
+      .filter((field) => field.showWhen?.({ target_class: target }) !== false).map((field) => field.name);
+    expect(shown("enquiry")).toEqual(["target_config.queue"]);
+    expect(shown("store")).toEqual(["target_config"]);
+  });
+
+  test("the theme is a choice among the installed themes, or the deployment's default", () => {
+    render(<webformForm.Component resource="webforms.Form" />);
+    const theme = fields().find((field) => field.name === "theme_id");
+    expect(theme?.widget).toBe("select");
+    expect(theme?.options).toEqual([
+      { value: "", label: "The deployment's default" },
+      { value: "house.paper", label: "themes:house.paper.label" },
+    ]);
+  });
+
+  test("keeps its Addresses tab beside the tabs its caller adds", () => {
+    render(<webformForm.Component resource="webforms.Form" recordTabs={[{ id: "extra", label: "Extra", render: () => null }]} />);
+    expect(capture.props?.recordTabs?.map((tab) => tab.id)).toEqual(["addresses", "extra"]);
+    render(<webformForm.Component resource="webforms.Form" />);
+    expect(capture.props?.recordTabs?.map((tab) => tab.id)).toEqual(["addresses"]);
+  });
+
   test("reads how many responses wait and when the first is removed, beside what its caller reads", () => {
     render(<webformForm.Component resource="webforms.Form" returning={["name"]} />);
     expect(capture.props?.returning).toEqual(["name", "undelivered_count", "undelivered_expires_at"]);

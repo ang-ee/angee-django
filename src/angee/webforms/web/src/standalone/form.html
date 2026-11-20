@@ -4,30 +4,28 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <!--
-      In production the ingress sends this policy as a response header, with
-      `frame-ancestors` beside it (a meta tag cannot set that one). It is repeated
-      here for the Vite dev server, which serves this file itself. Keep the two the
-      same. A form's `html` elements and its completed page are markup written by
-      staff: under this policy that markup cannot run script, so this file carries
-      no inline script and no inline event handler. Everything is in form.ts.
+      This document carries no inline script and no inline event handler. The
+      ingress serves it under a content security policy that runs neither, so the
+      markup staff write into a form's `html` elements and its completed page
+      cannot run script; everything the page does is in form.ts. The build gives
+      the document the design tokens and the installed themes as stylesheets, and
+      in development writes that policy into it.
     -->
-    <meta
-      http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; connect-src 'self'; img-src 'self' data:; font-src 'self'; style-src 'self' 'unsafe-inline'; form-action 'none'"
-    />
     <!-- The blank page before the theme applies follows the visitor's colour scheme. -->
     <meta name="color-scheme" content="light dark" />
-    <title>Form</title>
-    <!-- The host stylesheet: the design tokens and every installed theme. -->
-    <link rel="stylesheet" href="/src/index.css" />
+    <!-- The page names itself after the form, in the language it is shown in. -->
+    <title></title>
+    <link rel="stylesheet" href="./form.css" />
   </head>
-  <!-- Shown by form.ts once the form's theme is applied. -->
-  <body hidden class="min-h-dvh bg-canvas font-sans text-fg">
-    <header class="flex justify-end p-3">
-      <select id="language" hidden aria-label="Language" autocomplete="off" class="rounded-6 border bg-sheet px-2 py-1 text-sm text-fg"></select>
+  <!-- Nothing shows until the page's script has applied the form's theme (form.css). -->
+  <body class="starting">
+    <header>
+      <!-- Named by the page's script, in the language of the form. -->
+      <select id="language" hidden autocomplete="off"></select>
     </header>
     <main id="form"></main>
-    <p id="notice" hidden role="status" class="p-8 text-center text-fg-2"></p>
+    <!-- What the page says in place of a form. Until its script speaks, this is all the document says. -->
+    <p id="notice" role="status" dir="auto">This form could not be loaded. Reload the page to try again.</p>
     <!-- Named by the server, never shown: a person leaves it empty. -->
     <input id="honeypot" hidden tabindex="-1" autocomplete="off" aria-hidden="true" />
     <script type="module" src="./form.ts"></script>

@@ -1,0 +1,63 @@
+/*
+ * The page's own stylesheet, linked from its document so that it applies whether
+ * or not the page's script loads. The build puts the design tokens and the
+ * installed themes before it; nothing here is a raw colour.
+ */
+
+/*
+ * Nothing shows while the page starts. If its script never takes over (it did
+ * not load, the browser could not run it, or scripting is off), the plain
+ * message the document carries appears by itself after a while.
+ */
+body.starting {
+  visibility: hidden;
+  animation: page-fallback 0s linear 10s forwards;
+}
+
+@keyframes page-fallback {
+  to {
+    visibility: visible;
+  }
+}
+
+/*
+ * The page wears a theme once its script has named the colour scheme. Until
+ * then, and if that never happens, it keeps the browser's own colours, which
+ * follow the visitor's scheme: a token would paint the light theme's.
+ */
+html[data-color-scheme] {
+  background: var(--surface-canvas);
+  color: var(--text-primary);
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  font-family: var(--font-family-sans);
+}
+
+header {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.75rem;
+}
+
+#language {
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-6);
+  padding: 0.25rem 0.5rem;
+  background: var(--surface-sheet);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-14);
+}
+
+#notice {
+  margin: 0;
+  padding: 2rem;
+  text-align: center;
+}
+
+html[data-color-scheme] #notice {
+  color: var(--text-secondary);
+}
