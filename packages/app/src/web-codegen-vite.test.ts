@@ -8,7 +8,7 @@ import { Window } from "happy-dom";
 import { afterEach, beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import { build, createServer, preview, resolveConfig, type UserConfig, type ViteDevServer } from "vite";
 import * as codegen from "@angee/app/web-codegen";
-import { defineAngeeWebViteConfig } from "../config/vite";
+import { defineAngeeWebViteConfig, standalonePageFor } from "../config/vite";
 
 let root: string;
 let runtime: string;
@@ -345,7 +345,7 @@ async function listen(server: ViteDevServer) {
   await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
   const address = http.address();
   if (!address || typeof address === "string") throw new Error("Missing dev server address");
-  return (url: string) => fetch(`http://127.0.0.1:${address.port}${url}`);
+  return (url: string, init?: RequestInit) => fetch(`http://127.0.0.1:${address.port}${url}`, init);
 }
 /** A dev server without a watcher, transforming a page whose host head holds `tags`. */
 async function headServer() {
@@ -642,4 +642,83 @@ test("preview serves the built site and assets after sources and runtime disappe
   expect(await (await fetch(origin)).text()).toBe(built.html);
   const imageUrl = head(built.html).querySelector('meta[property="og:image"]')!.getAttribute("content")!;
   expect(Buffer.from(await (await fetch(new URL(imageUrl, origin))).arrayBuffer())).toEqual(tinyPng);
+}, 30_000);
+
+const pageDeclaration = { entry: "./pages/demo.html", paths: ["/forms/w/*"], accept: "text/html" };
+// The pattern the composer publishes as the manifest's `pageAccept` (`PAGE_ACCEPT_PATTERN` in
+// src/angee/web/build.py): text/html first, in any case, with any parameters.
+const pageAccept = { "text/html": "^[\\t\\x20]*[Tt][Ee][Xx][Tt]/[Hh][Tt][Mm][Ll][\\t\\x20]*(?:;[^,]*)?(?:,|$)" };
+const browserAccept = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+
+/** Declare one standalone page on the linked addon; `files` also writes its entry and the module beside it. */
+function declarePage(files = true) {
+  if (files) {
+    write(join(addon, "pages", "demo.html"), '<html><head><title>Demo</title></head><body><script type="module" src="./demo.ts"></script></body></html>');
+    write(join(addon, "pages", "demo.ts"), 'document.title = "standalone page module";');
+  }
+  manifest({ pageAccept, addonPackages: [{
+    package: "@demo/theme", root: "../../linked-addon", sourceRoot: "src/headless", pages: { "demo.page": pageDeclaration },
+  }] });
+}
+
+test("a standalone page answers only a GET or HEAD under its paths whose Accept matches the manifest's pattern", () => {
+  const page = { id: "demo.page", package: "@demo/theme", file: "/addon/pages/demo.html", paths: pageDeclaration.paths, acceptPattern: pageAccept["text/html"] };
+  const ask = (accept: string | undefined, url = "/forms/w/demo?lang=es", method = "GET") =>
+    standalonePageFor([page], { method, url, accept });
+  expect(ask(browserAccept)).toBe(page);
+  expect(ask("Text/HTML; charset=utf-8")).toBe(page);
+  expect(ask(browserAccept, "/forms/w/demo", "HEAD")).toBe(page);
+  for (const accept of ["application/json", "*/*", "application/json, text/html", "", undefined]) {
+    expect(ask(accept), String(accept)).toBeUndefined();
+  }
+  expect(ask(browserAccept, "/forms/w/demo", "POST")).toBeUndefined();
+  expect(ask(browserAccept, "/forms/w")).toBeUndefined();
+  expect(ask(browserAccept, "/forms/demo")).toBeUndefined();
+});
+
+test("a declared page whose entry is missing fails the build, naming its package and the page", async () => {
+  declarePage(false);
+  await expect(resolveConfig({ ...await config(), configFile: false, logLevel: "silent" }, "build"))
+    .rejects.toThrow('@demo/theme page "demo.page" must name an existing file inside its package');
+});
+
+test("build emits a declared page as <id>.html beside index.html, loading the module beside its entry", async () => {
+  declarePage();
+  const { outputs, html } = await builtSite();
+  const page = outputs.find((entry) => entry.type === "asset" && entry.fileName === "demo.page.html");
+  if (!page || page.type !== "asset") throw new Error("Missing built demo.page.html");
+  const source = Buffer.from(page.source).toString();
+  const chunk = outputs.find((entry) => entry.type === "chunk" && entry.code.includes("standalone page module"));
+  expect(source).toContain(`src="/${chunk?.fileName}"`);
+  // The app's document keeps its first-paint script; a page applies its own theme, and the
+  // content security policy the ingress sends it runs no inline script.
+  expect(html).toContain("data-angee-appearance-bootstrap");
+  expect(source).not.toMatch(/<script(?![^>]*\ssrc=)/);
+}, 30_000);
+
+test("dev serves a declared page at its paths to a document request, and nothing else there", async () => {
+  declarePage();
+  const server = await createServer({
+    ...await config(), configFile: false, logLevel: "silent",
+    optimizeDeps: { noDiscovery: true, entries: [] },
+    // The addon sits beside the web root, as a linked package sits inside a workspace Vite allows.
+    server: { middlewareMode: true, ws: false, watch: null, fs: { allow: [root] } },
+  });
+  servers.push(server);
+  const get = await listen(server);
+  const page = await get("/forms/w/demo?lang=es", { headers: { accept: browserAccept } });
+  expect(page.status).toBe(200);
+  expect(page.headers.get("content-type")).toContain("text/html");
+  // Beside whatever the server already varies by (its CORS policy varies by Origin).
+  expect(page.headers.get("vary")?.split(", ")).toContain("Accept");
+  const html = await page.text();
+  expect(html).not.toContain("data-angee-appearance-bootstrap");
+  const module = encodeURI(`/@fs${join(addon, "pages", "demo.ts")}`);
+  expect(html).toContain(`<script type="module" src="${module}">`);
+  expect(await (await get(module)).text()).toContain("standalone page module");
+  const head = await get("/forms/w/demo", { method: "HEAD", headers: { accept: browserAccept } });
+  expect([head.status, await head.text()]).toEqual([200, ""]);
+  // This server has no proxy: a request the page does not answer finds no document of the page's.
+  expect((await get("/forms/w/demo", { headers: { accept: "application/json" } })).status).toBe(404);
+  expect(await (await get("/forms/w/demo", { headers: { accept: "*/*" } })).text()).not.toContain("demo.ts");
 }, 30_000);

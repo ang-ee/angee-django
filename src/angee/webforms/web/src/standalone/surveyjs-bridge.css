@@ -1,0 +1,69 @@
+/* Theme SurveyJS through the Angee token set. SurveyJS reads its look from
+ * `--sjs2-*` design tokens declared on its root element, and offers the class
+ * `sjs-theme-overrides` on that same root for a host to set them, as its own
+ * adapters do (`survey-core/themes/adapters/tailwind4.css`). This sheet sets the
+ * tokens the rest derive from, each from a semantic token, so the form wears the
+ * installed theme that is selected and follows its light and dark values.
+ * Variables only: SurveyJS keeps its own markup, spacing and type scale. Nothing
+ * here is a raw color. Review it when SurveyJS changes major version: its
+ * breaking changes cluster on these names. */
+.sjs-theme-overrides {
+  /* Brand: primary actions, checked controls, links. */
+  --sjs2-color-project-brand-600: var(--brand);
+  --sjs2-color-project-brand-700: var(--brand-hover);
+  --sjs2-color-project-brand-800: var(--brand-active);
+  --sjs2-color-fg-brand-on-primary: var(--text-on-brand);
+  --sjs2-color-bg-brand-primary-disabled: var(--surface-inset);
+
+  /* Surfaces: the page behind the form, the sheets questions sit on, the fields
+   * on a sheet and their hover and inset fills. */
+  --sjs2-color-utility-body: var(--surface-canvas);
+  --sjs2-color-utility-surface-survey: var(--surface-canvas);
+  --sjs2-color-utility-sheet: var(--surface-sheet);
+  --sjs2-color-bg-basic-primary: var(--surface-sheet);
+  --sjs2-color-bg-basic-primary-dim: var(--surface-sheet-2);
+  --sjs2-color-bg-basic-primary-disabled: var(--surface-inset);
+  --sjs2-color-bg-basic-secondary: var(--surface-sheet);
+  --sjs2-color-bg-basic-secondary-dim: var(--surface-sheet-2);
+  --sjs2-color-bg-basic-tertiary: var(--surface-inset);
+  --sjs2-color-bg-neutral-primary: var(--neutral);
+  --sjs2-color-fg-neutral-on-primary: var(--text-inverse);
+  --sjs2-color-bg-neutral-secondary: var(--surface-inset);
+  --sjs2-color-bg-neutral-secondary-dim: var(--surface-inset);
+
+  /* Text. SurveyJS derives its dimmed and disabled text from the primary. */
+  --sjs2-color-fg-basic-primary: var(--text-primary);
+  --sjs2-color-fg-basic-secondary: var(--text-muted);
+  --sjs2-color-fg-basic-tertiary: var(--text-subtle);
+
+  /* Borders: fields, checkboxes and radios read the secondary border. */
+  --sjs2-color-border-basic-primary: var(--text-primary);
+  --sjs2-color-border-basic-secondary: var(--border-default);
+  --sjs2-color-border-basic-secondary-disabled: var(--border-subtle);
+  --sjs2-color-component-formbox-hovered-border: var(--border-strong);
+
+  /* Focus: the focused field's border and the ring around a focused control. */
+  --sjs2-color-border-brand-primary: var(--border-focus);
+  --sjs2-border-effect-a11y: var(--ring);
+
+  /* Danger: a refused answer, its message and the field it is on. */
+  --sjs2-palette-red-600: var(--danger);
+  --sjs2-palette-red-700: var(--danger-text);
+  --sjs2-color-fg-alert-on-primary: var(--on-danger);
+
+  /* Radii: fields and buttons, the small controls inside them, panels, lists. */
+  --sjs2-radius-form: var(--r-6);
+  --sjs2-radius-form-item: var(--r-4);
+  --sjs2-radius-component-panel: var(--r-8);
+  --sjs2-radius-component-page: var(--r-8);
+  --sjs2-radius-component-drop: var(--r-8);
+  --sjs2-radius-component-drop-item: var(--r-6);
+  --sjs2-radius-component-notifier: var(--r-8);
+
+  /* Type: the body face everywhere, the display face on titles. */
+  --sjs2-typography-font-family-text: var(--font-family-sans);
+  --sjs2-typography-font-family-component-survey-header-title: var(--font-family-display);
+  --sjs2-typography-font-family-component-page-title: var(--font-family-display);
+  --sjs2-typography-font-family-component-panel-title: var(--font-family-display);
+  --sjs2-typography-font-family-component-question-title: var(--font-family-display);
+}

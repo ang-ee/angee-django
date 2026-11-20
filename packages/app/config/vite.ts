@@ -4,8 +4,8 @@ import { basename, dirname, join, matchesGlob, posix, relative, resolve } from "
 import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { build, defineConfig, mergeConfig, normalizePath, type HtmlTagDescriptor, type Plugin, type UserConfig, type ViteDevServer } from "vite";
-import { generateWebRuntime, type WebCodegenInputs, type WebCodegenResult } from "@angee/app/web-codegen";
+import { build, defineConfig, mergeConfig, normalizePath, send, type HtmlTagDescriptor, type Plugin, type UserConfig, type ViteDevServer } from "vite";
+import { generateWebRuntime, type StandalonePage, type WebCodegenInputs, type WebCodegenResult } from "@angee/app/web-codegen";
 import {
   resolveThemeOptions,
   type AppearanceBootstrapPayload,
@@ -287,15 +287,17 @@ export async function defineAngeeWebViteConfig({
   appearance,
   ...overrides
 }: AngeeWebViteConfig): Promise<UserConfig> {
-  const appearancePlugin = angeeAppearancePlugin();
+  const pagesPlugin = angeePagesPlugin();
+  const appearancePlugin = angeeAppearancePlugin(pagesPlugin.owns);
   const sitePlugin = angeeSitePlugin();
   const base = defineConfig({
     root: webRoot,
     plugins: [
-      angeeWebCodegenPlugin({ webRoot, gqlRuntimeDir, appearance, appearancePlugin, sitePlugin, prebundleAngeePackages }),
+      angeeWebCodegenPlugin({ webRoot, gqlRuntimeDir, appearance, appearancePlugin, sitePlugin, pagesPlugin, prebundleAngeePackages }),
       appearancePlugin,
       sitePlugin,
-      preloadSchemaMetadata(),
+      pagesPlugin,
+      preloadSchemaMetadata(pagesPlugin.owns),
       react(),
       tailwindcss(),
     ],
@@ -333,7 +335,8 @@ export async function defineAngeeWebViteConfig({
         "/auth/csrf/": { target: django, changeOrigin: false },
         // Curated public-form description + submission endpoint. The React page
         // itself lives at /public/forms/:slug, keeping this exact API prefix
-        // unambiguous on hard reloads.
+        // unambiguous on hard reloads. A standalone page declared under this
+        // prefix answers its document requests before the proxy (`angee:pages`).
         "/forms/": { target: django, changeOrigin: false },
         // The storage proxy upload/download endpoints are Django REST routes;
         // scope to the exact paths so the SPA's /storage page routes still
@@ -375,11 +378,13 @@ function angeeWebCodegenPlugin({
   appearance,
   appearancePlugin,
   sitePlugin,
+  pagesPlugin,
   prebundleAngeePackages,
 }: Pick<AngeeWebViteConfig, "webRoot" | "gqlRuntimeDir" | "appearance" | "prebundleAngeePackages"> & {
   webRoot: string;
   appearancePlugin: ReturnType<typeof angeeAppearancePlugin>;
   sitePlugin: ReturnType<typeof angeeSitePlugin>;
+  pagesPlugin: ReturnType<typeof angeePagesPlugin>;
 }): Plugin {
   const runtimeDir = dirname(gqlRuntimeDir);
   let inputs: WebCodegenInputs = { files: [], globs: [], directories: [], excluded: [] };
@@ -415,6 +420,7 @@ function angeeWebCodegenPlugin({
     discovering = inputs;
     appearancePlugin.update(payload);
     sitePlugin.update(generated.head);
+    pagesPlugin.update(generated.pages);
     const module = server?.environments.client.moduleGraph.getModuleById(RESOLVED_VIRTUAL_APPEARANCE);
     if (module) server!.environments.client.moduleGraph.invalidateModule(module);
   };
@@ -485,6 +491,104 @@ function angeeWebCodegenPlugin({
       clearTimeout(timer);
       server?.watcher.off("all", changed);
       await running;
+    },
+  };
+}
+
+/**
+ * The declared page a request asks for: a GET or HEAD under one of its paths
+ * whose `Accept` header matches the page's pattern. The pattern is the
+ * manifest's `pageAccept`, which the composer owns and the ingress applies too;
+ * no second rule lives here. Every other request on those paths is not for the
+ * page, so the same address also answers as the server's API.
+ */
+export function standalonePageFor(
+  pages: readonly StandalonePage[],
+  request: { method?: string; url?: string; accept?: string },
+): StandalonePage | undefined {
+  if ((request.method !== "GET" && request.method !== "HEAD") || !request.url) return undefined;
+  const pathname = request.url.split(/[?#]/, 1)[0]!;
+  // A declared path ends in `/*` and answers everything under that prefix, as the ingress's path matcher reads it.
+  return pages.find((page) => page.paths.some((path) => pathname.startsWith(path.slice(0, -1)))
+    && new RegExp(page.acceptPattern).test(request.accept ?? ""));
+}
+
+/**
+ * Serve and build the standalone pages addon packages declare. Vite names a
+ * built document by its path under the root, so a page builds from the virtual
+ * `<root>/<id>.html` and lands beside the app's `index.html`; in development
+ * its entry is served at the page's own paths. Either way the document is the
+ * entry's markup, and a `./` reference in it names a file beside the entry.
+ */
+function angeePagesPlugin(): Plugin & {
+  update(pages: readonly StandalonePage[]): void;
+  owns(filename: string): boolean;
+} {
+  let pages: readonly StandalonePage[] = [];
+  let root = "";
+  let building = false;
+  const documentId = (page: StandalonePage) => normalizePath(join(root, `${page.id}.html`));
+  const markup = (page: StandalonePage) => {
+    const directory = normalizePath(dirname(page.file));
+    // A file path resolves in a build; the browser needs Vite's file route.
+    const beside = building ? directory : encodeURI(posix.join("/@fs", directory));
+    return readFileSync(page.file, "utf8")
+      .replace(/(\s(?:src|href)=["'])\.\//g, (_reference, attribute: string) => `${attribute}${beside}/`);
+  };
+  return {
+    name: "angee:pages",
+    enforce: "pre",
+    // A page is a browser document: no server build has one.
+    applyToEnvironment: (environment) => environment.config.consumer === "client",
+    update(next) {
+      pages = next;
+    },
+    // Vite names the document by its entry in development and by its built id.
+    owns: (filename) => pages.some((page) => filename === normalizePath(page.file) || filename === documentId(page)),
+    configResolved(config) {
+      root = config.root;
+      building = config.command === "build";
+    },
+    options(options) {
+      if (!building || pages.length === 0) return;
+      // Vite has already settled the app's own input, `index.html` unless the host names another.
+      const input = typeof options.input === "string" ? [options.input] : options.input ?? [];
+      return {
+        ...options,
+        input: Array.isArray(input)
+          ? [...input, ...pages.map(documentId)]
+          : { ...input, ...Object.fromEntries(pages.map((page) => [page.id, documentId(page)])) },
+      };
+    },
+    resolveId(source) {
+      return pages.some((page) => documentId(page) === source) ? source : undefined;
+    },
+    load(id) {
+      const page = pages.find((candidate) => documentId(candidate) === id);
+      if (!page) return;
+      this.addWatchFile(page.file);
+      return markup(page);
+    },
+    writeBundle(_options, bundle) {
+      // The ingress rewrites a page's paths to `<id>.html`: a page the build left out would answer 404.
+      for (const page of pages) {
+        if (!bundle[`${page.id}.html`]) this.error(`${page.package} page ${JSON.stringify(page.id)} was not built as ${page.id}.html.`);
+      }
+    },
+    configureServer(server) {
+      // Registered ahead of Vite's own middlewares, so a page answers before the proxy does and
+      // everything else on its paths still reaches Django. This mirrors the ingress: the same
+      // methods, the same `Accept` pattern, the same `Vary`. The ingress also sends each page a
+      // content security policy as a response header. Development does not send it: that header
+      // would refuse the development scripts Vite's pipeline adds to a document (the React
+      // plugin's inline refresh preamble among them). A page's own `<meta>` policy still applies.
+      server.middlewares.use((request, response, next) => {
+        const page = standalonePageFor(pages, { method: request.method, url: request.url, accept: request.headers.accept });
+        if (!page) return next();
+        response.appendHeader("Vary", "Accept");
+        server.transformIndexHtml(encodeURI(posix.join("/@fs", normalizePath(page.file))), markup(page), request.originalUrl)
+          .then((html) => send(request, response, html, "html", { headers: server.config.server.headers }), next);
+      });
     },
   };
 }
@@ -616,8 +720,9 @@ function angeeSitePlugin(): Plugin & { update(head: WebCodegenResult["head"]): v
 }
 
 // Generated metadata is fetched as data, so start its download with the entry
-// script. Match the source path, not Vite's configurable output asset name.
-function preloadSchemaMetadata(): Plugin {
+// script. Match the source path, not Vite's configurable output asset name. A
+// standalone page loads none of the app, so it preloads none of its metadata.
+function preloadSchemaMetadata(standalone: (filename: string) => boolean): Plugin {
   let base = "/";
   return {
     name: "angee:schema-metadata-preload",
@@ -628,6 +733,7 @@ function preloadSchemaMetadata(): Plugin {
     transformIndexHtml: {
       order: "post",
       handler(_html, context) {
+        if (standalone(context.filename)) return;
         return Object.values(context.bundle ?? {})
           .filter((asset) => asset.type === "asset" && asset.originalFileNames?.some((source) =>
             /(^|\/)runtime\/schemas\/[^/]+\.metadata\.json$/.test(source.replaceAll("\\", "/"))))
@@ -725,7 +831,9 @@ function appearanceBuildPayload(
   };
 }
 
-function angeeAppearancePlugin(): Plugin & { update(payload: AppearanceBootstrapPayload): void } {
+function angeeAppearancePlugin(
+  standalone: (filename: string) => boolean,
+): Plugin & { update(payload: AppearanceBootstrapPayload): void } {
   let payload: AppearanceBootstrapPayload | undefined;
   let bootstrap: Promise<string> | undefined;
   return {
@@ -744,8 +852,10 @@ function angeeAppearancePlugin(): Plugin & { update(payload: AppearanceBootstrap
     },
     transformIndexHtml: {
       order: "pre",
-      async handler() {
-        if (!payload) return;
+      async handler(_html, context) {
+        // The bootstrap restores the signed-in person's own appearance, as an inline
+        // script. A standalone page has no session and applies its theme itself.
+        if (!payload || standalone(context.filename)) return;
         bootstrap ??= appearanceBootstrapScript(payload);
         return [{
           tag: "script",
