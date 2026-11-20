@@ -280,7 +280,10 @@ export interface AngeeWebViteConfig extends UserConfig {
   /**
    * How many emitted files a build compresses at once when it writes their
    * brotli and gzip sidecars. Defaults to the machine's parallelism, between 1
-   * and 8; a small builder may lower it. The sidecars are the same bytes at
+   * and 4. Each file in flight costs its own size and a brotli encoder (some
+   * tens of megabytes for a file larger than the encoder's block), so a builder
+   * short of memory may lower it; raising it past 4 gains nothing unless
+   * `UV_THREADPOOL_SIZE` is raised with it. The sidecars are the same bytes at
    * any value.
    */
   precompressConcurrency?: number;
@@ -702,8 +705,12 @@ const PRECOMPRESSED_TEXT = new Set([".js", ".mjs", ".css", ".html", ".svg", ".js
 /** Below this a response fits one packet either way, and a sidecar is one more file to keep. */
 const PRECOMPRESSED_MINIMUM = 1024;
 
-/** The most files compressed at once, however many processors the builder has. */
-const PRECOMPRESSED_POOL_LIMIT = 8;
+/**
+ * The most files compressed at once, however many processors the builder has.
+ * Node runs zlib's work on libuv's pool of four threads, so a wider pool
+ * compresses no faster: it only holds more files in memory, waiting.
+ */
+const PRECOMPRESSED_POOL_LIMIT = 4;
 
 /**
  * Run `work` over `items` with at most `size` of them in flight at once, in
@@ -727,9 +734,20 @@ export async function runInPool<TItem>(items: readonly TItem[], size: number, wo
  * once. A sidecar that is not smaller than its source is not written, and the
  * output is the same for the same input: neither format carries a time here.
  *
- * Brotli at that quality holds a large window for each file it works on, so
- * the files go through a small pool: a build with hundreds of assets uses no
- * more memory or processors at once than one with a handful.
+ * Brotli at that quality holds a 4 MiB window and the tree it searches it
+ * with for each file it works on (Node's default window; the size hint does
+ * not shrink it), so the files go through a small pool: a build with hundreds
+ * of assets uses no more memory or processors at once than one with a handful.
+ *
+ * Why the build does this, and does it itself. The ingress compresses on the
+ * way out (`encode zstd gzip`), but stock Caddy has no brotli encoder and
+ * Safari accepts no zstd, so a phone gets gzip unless a sidecar is there to
+ * serve. The work is two calls into `node:zlib` and a rule for which files, so
+ * it stays here without a dependency, with the properties the ingress relies
+ * on pinned by this module's tests: the same bytes for the same input, a
+ * bounded pool, the 1 kB floor, and never a sidecar larger than its source.
+ * `vite-plugin-compression2` is the maintained plugin for the same job and the
+ * one to swap in if zstd sidecars, per-file patterns or archives are wanted.
  */
 function angeePrecompressedPlugin(concurrency?: number): Plugin {
   // The processors this process may use, where Node can say; else the machine's count.
