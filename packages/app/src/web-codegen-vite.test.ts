@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
+import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { Window } from "happy-dom";
 import { afterEach, beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import { build, createServer, preview, resolveConfig, type UserConfig, type ViteDevServer } from "vite";
@@ -822,3 +823,40 @@ test("preview serves a built page at its paths as the ingress does, under the ma
   expect(json.headers.get("content-security-policy")).toBeNull();
   expect(await json.text()).not.toContain("<title>Demo</title>");
 }, 30_000);
+
+test("build writes a brotli and a gzip sidecar beside each text file it emits, and none for a small file or a font", async () => {
+  declarePage();
+  // A script worth compressing, and a font the page's sheet brings: a font is compressed already.
+  write(join(addon, "pages", "demo.ts"), `document.title = "standalone page module"; console.log(${JSON.stringify("a line of the page's script. ".repeat(200))});`);
+  write(join(addon, "pages", "face.woff2"), Buffer.from(Array.from({ length: 6000 }, (_value, index) => (index * 31) % 251)));
+  write(join(addon, "pages", "demo.css"), '@font-face { font-family: Demo; src: url("./face.woff2"); } .demo-page { color: var(--text-primary); }');
+  await build({ ...await config(), configFile: false, logLevel: "silent", build: { assetsInlineLimit: 0 } });
+  const dist = join(web, "dist");
+  const emitted = (directory: string): string[] => readdirSync(join(dist, directory), { withFileTypes: true }).flatMap((entry) =>
+    entry.isDirectory() ? emitted(join(directory, entry.name)) : [join(directory, entry.name)]);
+  const files = emitted("");
+  const page = readFileSync(join(dist, "demo.page.html"), "utf8");
+  const script = page.match(/<script type="module"[^>]*src="\/([^"]+)"/)![1]!;
+  const sheet = page.match(/<link rel="stylesheet"[^>]*href="\/([^"]+)"/)![1]!;
+  for (const file of [script, sheet]) {
+    const source = readFileSync(join(dist, file));
+    expect(source.length, file).toBeGreaterThanOrEqual(1024);
+    const brotli = readFileSync(join(dist, `${file}.br`));
+    const gzipped = readFileSync(join(dist, `${file}.gz`));
+    expect(brotliDecompressSync(brotli).equals(source), `${file}.br`).toBe(true);
+    expect(gunzipSync(gzipped).equals(source), `${file}.gz`).toBe(true);
+    expect(brotli.length).toBeLessThan(source.length);
+    expect(gzipped.length).toBeLessThan(source.length);
+    // A gzip header's four bytes of time are zero: the same input gives the same file.
+    expect([...gzipped.subarray(4, 8)]).toEqual([0, 0, 0, 0]);
+  }
+  const sidecar = (file: string) => existsSync(join(dist, `${file}.br`)) || existsSync(join(dist, `${file}.gz`));
+  const font = files.find((file) => file.endsWith(".woff2"))!;
+  expect(readFileSync(join(dist, font)).length).toBeGreaterThan(1024);
+  expect(sidecar(font)).toBe(false);
+  const small = files.filter((file) => /\.(js|css|html|json)$/.test(file) && readFileSync(join(dist, file)).length < 1024);
+  expect(small.length).toBeGreaterThan(0);
+  expect(small.filter(sidecar)).toEqual([]);
+  // Nothing is compressed twice.
+  expect(files.filter((file) => /\.(br|gz)\.(br|gz)$/.test(file))).toEqual([]);
+}, 60_000);
