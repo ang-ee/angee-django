@@ -385,15 +385,17 @@ live in code docstrings.
   passes `selectAllMatching` (`ListView`/`List`) offers "Select all N" where its
   pager counts what a verb acts on (a flat list's records, or the groups of a list
   grouped by one server level), and once the person chooses it a page's
-  `bulkActions` receives `collection.allMatching`, a readonly copy of the pager's
-  unit and exact total and the list's own read:
-  `{ unit: "records", total, read: { where } }`, or
-  `{ unit: "groups", total, read: { where, dimensions, having } }` (refine's
-  `GroupByRequestOptions`, which a page turns into variables with
-  `groupByVariables`). Opting in asserts that every page verb honours it or
-  refuses it. The selected ids stay the only ids; the generic Archive,
-  Trash/Restore and Delete, and the Share utility, refuse with their reason while
-  it is on, on every list sharing the selection, where a list reading otherwise
+  `bulkActions` receives `collection.allMatching` (`AllMatching`, exported with
+  its arms beside `SelectedGroup`), a readonly copy of the pager's unit and exact
+  total and the list's own read:
+  `{ unit: "records", total, read: { where } }` (`AllMatchingRecords`), or
+  `{ unit: "groups", total, read: { where, dimensions, having, orderBy } }`
+  (`AllMatchingGroups`; refine's `GroupByRequestOptions`, which a page turns into
+  the variables, the groups' order included, with `groupByVariables`). Opting in
+  asserts that every page verb honours it or refuses it. The selected ids stay the
+  only ids; the generic Archive, Trash/Restore and Delete, and the Share utility,
+  refuse with their reason while it is on, on every list sharing the selection,
+  and the list utilities receive no `selectedIds` then; a list reading otherwise
   renders no page verbs and only the list that chose the mode moves its total and
   ends it by leaving. Unselecting a row or an expanded group leaves it for what
   shows selected, the loaded rows less those unselected; a collapsed group shows
@@ -402,11 +404,44 @@ live in code docstrings.
   `bulkActions` docstring's. A native leaf page (`AngeeListBatchEntry`) states
   when it last settled (`updatedAt`, required), which a grouped selection's split
   reads instead of the page's total.
+  `Checkbox` takes a `disabledReason`, as `Button` does: the box's tooltip and
+  accessible description, `aria-disabled` and still in the tab order, with one
+  element tree as the reason comes and goes.
   `@angee/ui/views/resource-view-list-body`: `ListSelectionBar` takes an optional
   `matching` (`ListSelectionMatching`: "Select all N" and "All N selected") and
-  `deleteDisabledReason`, and `SelectionToggle` a `disabledReason`, its tooltip and
-  accessible description. `@angee/ui/views/resource-view-context` no longer exports
-  the lists' internal selection channel (`useSelectionPlaces`, `SelectionPlaces`).
+  `deleteDisabledReason`, and `SelectionToggle` a `disabledReason`, which it gives
+  its `Checkbox`. `@angee/ui/views/resource-view-context` no longer exports the
+  lists' internal selection channel (`useSelectionPlaces`, `SelectionPlaces`).
+
+- `@angee/refine`: a batch of reads keeps its identity while nothing its callers
+  read changes. Callers of `useAuthoredQueryBatch`: its entries are now
+  `QueryBatchEntry` (exported), the native result's `data`, `dataUpdatedAt`,
+  `error`, `isFetching` and `refetch`, readonly, no longer the whole
+  `UseQueryResult`; a caller needing another property (`status`, `isStale`…) reads
+  it from its own `useQuery`. It and `useAngeeListBatch` give `useQueries` one
+  projection as `combine`, fresh each render, so Query runs it on that render's
+  results (enabling a read shows it fetching at once), keyed by each request's
+  query hash, which Query's structural sharing matches by key: the Map and each
+  entry keep their identity until one of those five or a label's request changes,
+  and a change replaces only the entries it touched, wherever a request is
+  inserted, removed or moved in the batch. A read going stale or a failed attempt
+  Query retries no longer renders the batch's owner. A label without a result
+  fails, naming the hook. `useDerivedBatch` (new) maps a batch, reusing each output
+  while its entry is the same object and its inputs are unchanged:
+  `useAngeeGroupByBatch`, `useAngeeFacets`, `useAngeeListBatch`, `@angee/ui`'s
+  `useCollectionQueryBatch` and the grouped surface's source results derive
+  through it, so a read that settles decodes only itself and opening a group
+  decodes no other. A group payload the decoder refuses is that read's `error`, in
+  a batch and in the facets as in `useAngeeGroupBy`, never a render that throws,
+  and is reported as a failed read is (refine's auth check and error
+  notification), once per settle of the read across its consumers.
+  `useAngeeGroupBy` and `useAngeeAggregate` decode once per read,
+  `useAngeeListBatch` keys its requests on the target's and scopes' contents and
+  shares one request among the labels on it, and a
+  resource's operations (`useGroupOperation`, `useAggregateOperation`,
+  `useDeletePreviewOperation`) keep their target across renders, so a grouped
+  list's render that changes nothing it reads (a scroll frame) rebuilds no group
+  model; it still corrects a group page set past its last.
 
 - `angee.parties`: one owner proposes same-person pairs. A pull-only
   directory's contact that may only claim an address another live party is

@@ -716,7 +716,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   through `SelectionBarAction` `disabledReason`; both compose `Button`
   `disabledReason`, the reason's tooltip and accessible description, which keeps
   the button's element (and focus) as the reason comes and goes and drops the
-  `href` of a link it renders. An empty reason is no reason, in pane rows too. Owner stories:
+  `href` of a link it renders. A checkbox that cannot change follows the same rule
+  through `Checkbox` `disabledReason` (a list's collapsed group). An empty reason is
+  no reason, in pane rows too. Owner stories:
   [record action bar](../../packages/storybook/src/stories/RecordActionBar.stories.tsx) (story id `views-recordactionbar--default`) and
   [tooltip](../../packages/storybook/src/stories/Tooltip.stories.tsx) (story id `primitives-tooltip--default`).
 - **The pane row's verb is a control beside the row**, not text inside its button
@@ -822,7 +824,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   it rests on shows again without it; it is a hint the server never trusts
   (states and surfaces:
   [`ListViewProps.bulkActions`](../../packages/ui/src/views/resource/resource-view-types.ts)).
-  Its `allMatching` is the selection owner's "Select all N" mode, defined by
+  Its `allMatching` is the selection owner's "Select all N" mode, a copy of the
+  list's own read (a flat list's `where`; a one-level grouping's `where`,
+  `dimensions`, `having` and `orderBy`), defined by
   [`selectAllMatching` and `bulkActions` →
   `allMatching`](../../packages/ui/src/views/resource/resource-view-types.ts).
   Outside embedded presentation, selection defaults on only for a lifecycle

@@ -36,6 +36,9 @@ export {
   type ColumnAlign,
   type SelectedGroup,
   type SelectedGroupLevel,
+  type AllMatching,
+  type AllMatchingRecords,
+  type AllMatchingGroups,
 } from "./resource/ListView";
 export {
   useListRecordNavigation,

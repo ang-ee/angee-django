@@ -6,6 +6,7 @@ import {
 } from "@angee/metadata";
 import {
   useAuthoredQueryBatch,
+  useDerivedBatch,
   type AuthoredDocument,
   type AuthoredVariables,
   type DocumentData,
@@ -134,31 +135,28 @@ export function useCollectionQueryBatch<TRequest, TResult>(
     dataProviderName: source?.dataProviderName,
     enabled: source?.enabled,
   });
-  return React.useMemo(() => {
-    const normalized = new Map<string, CollectionQueryResult<TResult>>(
-      [...results].map(([key, result]) => [
-        key,
-        {
-          data:
-            result.data === undefined ? undefined : source?.select(result.data),
-          fetching: result.isFetching,
-          error: result.error,
-          updatedAt: result.dataUpdatedAt || null,
-          refetch: () => {
-            void result.refetch();
-          },
-        },
-      ]),
-    );
-    prepared.errors.forEach((error, key) =>
-      normalized.set(key, {
-        data: undefined,
-        fetching: false,
-        error,
-        updatedAt: null,
-        refetch: () => {},
-      }),
-    );
-    return normalized;
-  }, [results, source, prepared.errors]);
+  // A result selects again only when its own read changes.
+  const selected = useDerivedBatch(results, (result): CollectionQueryResult<TResult> => ({
+    data: result.data === undefined ? undefined : source?.select(result.data),
+    fetching: result.isFetching,
+    error: result.error,
+    updatedAt: result.dataUpdatedAt || null,
+    refetch: () => {
+      void result.refetch();
+    },
+  }), [source]);
+  const failed = React.useMemo(
+    () => new Map<string, CollectionQueryResult<TResult>>([...prepared.errors].map(([key, error]) => [key, {
+      data: undefined,
+      fetching: false,
+      error,
+      updatedAt: null,
+      refetch: () => {},
+    }])),
+    [prepared.errors],
+  );
+  return React.useMemo(
+    () => failed.size === 0 ? selected : new Map([...selected, ...failed]),
+    [selected, failed],
+  );
 }

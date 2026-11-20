@@ -204,6 +204,22 @@ test("native grouped root and leaf pagination clamp oversized page sizes", async
   expect(f.surface.groupedItems.find((item) => item.kind === "record")?.nav.pageSize).toBe(100);
 });
 
+test("a group page set past its last page is corrected though it asks the server for nothing new", async () => {
+  const f = fixture();
+  await waitFor(() => expect(f.header(1)).toBeDefined());
+  const leaf = f.header(1)!;
+  if (leaf.kind !== "groupHeader") throw new Error("missing leaf header");
+  act(() => f.surface.toggleGroup(leaf.bucketKey));
+  await waitFor(() => expect(f.header(1)?.pager).toBeTruthy());
+  act(() => f.surface.setScopePageSize(leaf.bucketKey, 50));
+  act(() => f.surface.setScopePage(leaf.bucketKey, 3));
+  await waitFor(() => expect(f.surface.groupedItems.some((item) =>
+    item.kind === "record" && item.nav.page === 3 && !item.nav.fetching)).toBe(true));
+  // The last of its three pages shows already, so a later one reads that page again.
+  act(() => f.surface.setScopePage(leaf.bucketKey, 9));
+  await waitFor(() => expect(f.view.paginationByScope[leaf.bucketKey]).toEqual({ pageIndex: 2, pageSize: 50 }));
+});
+
 test("a native grouped header sort updates the leaf query and preserves the parent filter", async () => {
   const f = fixture();
   act(() => f.view.setFilter({ title: { iContains: "kept" } }));
@@ -733,7 +749,7 @@ test("selectedGroups keeps its identity across re-renders while the selection is
 /** The variables of the list's own root groups read, as the server last received them. */
 function rootGroupsRead(custom: ReturnType<typeof taskServer>["custom"], field: string) {
   return custom.mock.calls.map(([request]) => request.meta?.gqlVariables as {
-    group_by?: { field: string }[]; where?: Record<string, unknown>; having?: Record<string, unknown>;
+    group_by?: { field: string }[]; where?: Record<string, unknown>; having?: Record<string, unknown>; order_by?: unknown;
   }).filter((variables) => variables.group_by?.[0]?.field === field).at(-1)!;
 }
 
@@ -828,10 +844,101 @@ test("an opted-in repeated grouping offers its every group, handing on its own g
   if (allMatching?.unit !== "groups") throw new Error("expected every group selected");
   expect(allMatching.total).toBe(2);
   expect(allMatching.read.dimensions).toHaveLength(1);
-  // A page turns it into its own read's variables: those the list's request sent.
+  // A page turns it into its own read's variables: those the list's request sent, the
+  // order the list shows the groups in included.
+  expect(sent.order_by).toBeDefined();
   const variables = groupByVariables(allMatching.read);
-  expect([variables.group_by, variables.where, variables.having]).toEqual([sent.group_by, sent.where, sent.having]);
+  expect([variables.group_by, variables.where, variables.having, variables.order_by])
+    .toEqual([sent.group_by, sent.where, sent.having, sent.order_by]);
   expect(f.collection?.selectedGroups).toEqual([status("active", "active", ["t1", "t2"])]);
+});
+
+test("in the mode a render that changes nothing, as a scroll frame does, copies no read and hands on the same member", async () => {
+  for (const enter of [allOfAda, allRepeated]) {
+    const f = await enter();
+    const member = f.collection?.allMatching;
+    const handed = f.collections.length;
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    try {
+      f.rerender();
+      expect(f.collections.length).toBeGreaterThan(handed);
+      expect(clone).not.toHaveBeenCalled();
+      expect(f.collection?.allMatching).toBe(member);
+    } finally {
+      clone.mockRestore();
+    }
+    cleanup();
+  }
+});
+
+test("a render that changes nothing the grouped list reads, as a parent's state change, rebuilds no group model", async () => {
+  const f = selectedGroupsFixture({ groupStack: [{ field: "status" }] });
+  await f.select("Task 3");
+  await waitFor(() => expect(f.selectedGroups).toEqual([status("closed", "closed", ["t3"])]));
+  await waitFor(() => expect(f.fetching).toBe(false));
+  const rows = () => f.first().getAllByRole("row").map((row) => row.textContent);
+  const shown = rows();
+  const handed = f.collections.length;
+  // A build walks each level of groups once, asking the resource query for its read.
+  const build = vi.spyOn(ResourceQuery.prototype, "toGroupRead");
+  try {
+    f.rerender();
+    expect(f.collections.length).toBeGreaterThan(handed);
+    expect(build).not.toHaveBeenCalled();
+    expect(rows()).toEqual(shown);
+  } finally {
+    build.mockRestore();
+  }
+});
+
+const TASK_COLUMNS = [{ field: "title", header: "Title" }];
+
+/** The grouped Task surface alone, for what its model holds. */
+function taskSurfaceFixture(initialState: Record<string, unknown>, rows: readonly Row[]) {
+  const { custom, getList, documents } = taskServer(rows);
+  const metadata = schemaFieldMetadataFromDataResources([taskResource]);
+  let surface!: GroupedResourceViewSurface<Row>;
+  function Surface() {
+    surface = useGroupedResourceViewSurface({ resource: taskResource.modelLabel, modelMetadata: metadata.labels[taskResource.modelLabel]!,
+      columns: TASK_COLUMNS, resourceView: useResourceView() });
+    return null;
+  }
+  render(
+    <Provider metadata={metadata} apiUrl="test://task-surface" dataProvider={{ custom, getList }}
+      queryClientConfig={{ defaultOptions: { queries: { retry: false } } }}>
+      <OperationDocumentsProvider documents={documents}>
+        <ResourceViewProvider resource={taskResource.modelLabel} scope="local" initialState={initialState}><Surface /></ResourceViewProvider>
+      </OperationDocumentsProvider>
+    </Provider>,
+  );
+  return { get surface() { return surface; } };
+}
+
+test("opening an earlier group decodes no later open group's read again", async () => {
+  // Every status opens by default, each reading its owners.
+  const f = taskSurfaceFixture({ groupStack: [{ field: "status" }, { field: "owner" }] }, threeRepeated);
+  /** Each status's owner groups, as their buckets: decoded again, a group's bucket is a new object. */
+  const owners = () => {
+    const byStatus = new Map<string, unknown[]>();
+    let status = "";
+    for (const item of f.surface.groupedItems) {
+      if (item.kind !== "groupHeader") continue;
+      if (item.depth === 0) byStatus.set(status = item.label, []);
+      else byStatus.get(status)!.push(item.bucket);
+    }
+    return byStatus;
+  };
+  await waitFor(() => expect(["active", "closed", "open"].map((status) => owners().get(status)?.length)).toEqual([2, 2, 1]));
+  const before = owners();
+  const active = f.surface.groupedItems.find((item) => item.kind === "groupHeader" && item.label === "active")!;
+  act(() => f.surface.toggleGroup(active.kind === "groupHeader" ? active.bucketKey : ""));
+  await waitFor(() => expect(owners().get("active")).toEqual([]));
+  act(() => f.surface.toggleGroup(active.kind === "groupHeader" ? active.bucketKey : ""));
+  await waitFor(() => expect(owners().get("active")).toHaveLength(2));
+  for (const status of ["closed", "open"]) {
+    expect(owners().get(status)).toHaveLength(before.get(status)!.length);
+    owners().get(status)!.forEach((bucket, index) => expect(bucket).toBe(before.get(status)![index]));
+  }
 });
 
 test("a grouping that has not opted in, or whose page holds every record, offers no select-all", async () => {
@@ -985,7 +1092,13 @@ test("in the mode a collapsed group shows selected and cannot change, while a ro
   expect(closed.getAttribute("aria-checked")).toBe("true");
   expect(closed.hasAttribute("data-disabled")).toBe(true);
   expect(description(closed)).toBe("Expand the group to change its selection");
-  // Neither the box nor a near miss beside it changes the selection or leaves the mode.
+  // Tab reaches it, so a keyboard user hears the reason.
+  expect(closed.tabIndex).toBe(0);
+  closed.focus();
+  expect(document.activeElement).toBe(closed);
+  // Neither Space, the box nor a near miss beside it changes the selection or leaves the mode.
+  fireEvent.keyDown(closed, { key: " " });
+  fireEvent.keyUp(closed, { key: " " });
   fireEvent.click(closed);
   fireEvent.click(closed.parentElement!);
   expect(screen.getByText("All 3 groups selected")).toBeTruthy();
@@ -1167,16 +1280,28 @@ test("the mode never comes back by itself: a view reading otherwise leaves it, a
   expect(f.collection).not.toHaveProperty("allMatching");
 });
 
-test("a list utility receives the mode's reason, so a Share of the selected rows can refuse it", async () => {
+test("a list utility receives the mode's reason and no selected ids, so one ignoring the reason acts on nothing", async () => {
   function Reason() {
-    const { disabledReason } = useResourceViewUtilityContext();
-    return <output aria-label="Utility reason">{disabledReason === null ? "none" : disabledReason}</output>;
+    const { disabledReason, selectedIds } = useResourceViewUtilityContext();
+    return <>
+      <output aria-label="Utility reason">{disabledReason === null ? "none" : disabledReason}</output>
+      <output aria-label="Utility ids">{[...selectedIds ?? []].join(",")}</output>
+    </>;
   }
-  await allOfAda({ utility: <Reason /> });
-  expect(screen.getByRole("status", { name: "Utility reason" }).textContent)
-    .toBe("This acts on the rows you select, not on all 4 records");
-  fireEvent.click(screen.getByRole("button", { name: "Clear" }));
-  await waitFor(() => expect(screen.getByRole("status", { name: "Utility reason" }).textContent).toBe("none"));
+  const utility = (name: string) => screen.getByRole("status", { name }).textContent;
+  const f = selectedGroupsFixture(ADA, { selectAllMatching: true, utility: <Reason /> });
+  await f.select("Task 1");
+  await f.select("Task 3");
+  await waitFor(() => expect(utility("Utility ids")).toBe("t1,t3"));
+  fireEvent.click(await f.first().findByRole("button", { name: "Select all 4 records" }));
+  await waitFor(() => expect(utility("Utility reason")).toBe("This acts on the rows you select, not on all 4 records"));
+  expect(utility("Utility ids")).toBe("");
+  // The selection keeps its ids; only the utilities are handed none.
+  expect(f.view.state.rowSelection).toEqual({ t1: true, t3: true });
+  // Leaving the mode by a row hands them what shows selected again.
+  await f.select("Task 1");
+  await waitFor(() => expect(utility("Utility reason")).toBe("none"));
+  expect(utility("Utility ids")).toBe("t3");
 });
 
 test("a repeated grouping lists no footer total, which a flat aggregate cannot narrow to its groups", async () => {

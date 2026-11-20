@@ -12,15 +12,19 @@ export interface ResourceViewUtilityContext {
   filter?: ResourceViewFilter;
   fields: readonly string[];
   refresh: () => void;
-  /** Public ids selected by the collection owner. */
+  /**
+   * Public ids selected by the collection owner; none while the selection is every
+   * record the list matches ("Select all N"), so a utility that ignores
+   * `disabledReason` acts on nothing.
+   */
   selectedIds?: ReadonlySet<string>;
   /** Whether this collection exposes selection to contributed utilities. */
   selectable: boolean;
   /**
-   * Why a utility acting on `selectedIds` must not run: the selection is every
-   * record the list matches ("Select all N"), not those ids. A utility passes it as
-   * its control's `disabledReason`. Null on a list that offers the mode but is not in
-   * it; absent on one that never offers it.
+   * Why a utility acting on the selection must not run: it is every record the list
+   * matches ("Select all N"), and `selectedIds` is empty. A utility passes it as its
+   * control's `disabledReason`. Null on a list that offers the mode but is not in it;
+   * absent on one that never offers it.
    */
   disabledReason?: string | null;
   /** Saved record enclosing this collection, for actions that explicitly target the parent. */

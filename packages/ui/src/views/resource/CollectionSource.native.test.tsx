@@ -5,6 +5,7 @@ import {
   cleanup,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
 } from "@testing-library/react";
@@ -23,6 +24,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { createUiTestProviders } from "../../testing";
 import {
   collectionQuery,
+  useCollectionQueryBatch,
   type CollectionGroupRequest,
   type CollectionPage,
   type CollectionPageRequest,
@@ -428,4 +430,32 @@ test("a revealed orphan remains reachable after its parent page resolves and an 
   await waitFor(() => expect(row.hasAttribute("aria-expanded")).toBe(false));
   expect(screen.getByText("Deep-linked folder")).toBeTruthy();
   expect(revealed.parent).toBe("unloaded-parent");
+});
+
+test("a source's batch selects again only the request whose read changed", async () => {
+  const answers = new Map<number, (value: { data: { page: CollectionPage<ActivityRow> } }) => void>();
+  const custom = vi.fn(({ meta }: { meta?: Record<string, unknown> }) => {
+    const { request } = meta?.gqlVariables as { request: CollectionPageRequest };
+    return new Promise<{ data: { page: CollectionPage<ActivityRow> } }>((resolve) => { answers.set(request.page, resolve); });
+  });
+  const select = vi.fn((data: { page: CollectionPage<ActivityRow> }) => data.page);
+  const rows = collectionQuery({
+    document: PageDocument,
+    variables: (request: CollectionPageRequest) => ({ request }),
+    select,
+  });
+  const requests = [1, 2].map((page) => ({ key: `page-${page}`, filter: undefined, order: undefined, page, pageSize: 3 }));
+  const answer = (page: number) => answers.get(page)!({ data: { page: { total: 6, rows: [{ id: `row-${page}`, title: `Row ${page}` }] } } });
+  const { result } = renderHook(() => useCollectionQueryBatch(rows, requests), {
+    wrapper: ({ children }) => <Provider providerNames={[]} dataProvider={{ custom }}>{children}</Provider>,
+  });
+  await waitFor(() => expect(answers.size).toBe(2));
+  await act(async () => { answer(1); });
+  await waitFor(() => expect(result.current.get("page-1")?.data?.total).toBe(6));
+  const first = result.current.get("page-1");
+  const selected = select.mock.calls.length;
+  await act(async () => { answer(2); });
+  await waitFor(() => expect(result.current.get("page-2")?.data?.total).toBe(6));
+  expect(result.current.get("page-1")).toBe(first);
+  expect(select).toHaveBeenCalledTimes(selected + 1);
 });

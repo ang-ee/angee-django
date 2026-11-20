@@ -10,8 +10,7 @@ import { type ResourceListOrder, type ResourceViewFilter, type ResourceViewGroup
 import { type GroupedListItem, type GroupMeasure, type RowGroup, type VisibleFieldOption } from "../resource-view-list-body";
 import type { ColumnDescriptor } from "../../page";
 import { type ResolvedBoardLaneSource } from "../resource-view-board-lanes";
-import type { BoardCardPlacement, BoardOrder } from "../resource-view-types";
-import type { AllMatchingRead } from "../bulk-action";
+import type { AllMatchingGroups, AllMatchingRecords, BoardCardPlacement, BoardOrder } from "../resource-view-types";
 import type { CollectionSource } from "../collection-source";
 import type { GroupedRenderShown } from "../resource-view-grouped-model";
 export type RowRecord = BaseRecord & Row;
@@ -157,8 +156,12 @@ interface ResourceViewSurfaceBase<TRow extends Row = Row> {
 }
 
 export interface SurfaceMatching {
-  /** The pager's unit and the read whose matches it counts, as this surface's own request holds it. */
-  selects: AllMatchingRead;
+  /**
+   * The pager's unit and the read whose matches it counts, as this surface's own request
+   * holds it: the public member less its total, held from the request value it is taken
+   * from, so it changes only when that request does.
+   */
+  selects: Omit<AllMatchingRecords, "total"> | Omit<AllMatchingGroups, "total">;
   /** The read's settled total (`list.total`); undefined while its page loads or after it failed. */
   total: number | undefined;
   /** The loaded records' ids. */
