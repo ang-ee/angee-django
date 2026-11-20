@@ -1,0 +1,18 @@
+/*
+ * The page's own stylesheet, linked from its document so that it applies whether
+ * or not the page's script loads.
+ *
+ * Nothing shows while the page starts. If its script never takes over (it did
+ * not load, the browser could not run it, or scripting is off), the plain
+ * message the document carries appears by itself after a while.
+ */
+body.starting {
+  visibility: hidden;
+  animation: page-fallback 0s linear 10s forwards;
+}
+
+@keyframes page-fallback {
+  to {
+    visibility: visible;
+  }
+}

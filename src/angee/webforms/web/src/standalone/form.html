@@ -17,17 +17,21 @@
     />
     <!-- The blank page before the theme applies follows the visitor's colour scheme. -->
     <meta name="color-scheme" content="light dark" />
-    <title>Form</title>
+    <!-- The page names itself after the form, in the language it is shown in. -->
+    <title></title>
     <!-- The host stylesheet: the design tokens and every installed theme. -->
     <link rel="stylesheet" href="/src/index.css" />
+    <link rel="stylesheet" href="./form.css" />
   </head>
-  <!-- Shown by form.ts once the form's theme is applied. -->
-  <body hidden class="min-h-dvh bg-canvas font-sans text-fg">
+  <!-- Nothing shows until the page's script has applied the form's theme (form.css). -->
+  <body class="starting min-h-dvh bg-canvas font-sans text-fg">
     <header class="flex justify-end p-3">
-      <select id="language" hidden aria-label="Language" autocomplete="off" class="rounded-6 border bg-sheet px-2 py-1 text-sm text-fg"></select>
+      <!-- Named by the page's script, in the language of the form. -->
+      <select id="language" hidden autocomplete="off" class="rounded-6 border bg-sheet px-2 py-1 text-sm text-fg"></select>
     </header>
     <main id="form"></main>
-    <p id="notice" hidden role="status" class="p-8 text-center text-fg-2"></p>
+    <!-- What the page says in place of a form. Until its script speaks, this is all the document says. -->
+    <p id="notice" role="status" dir="auto" class="p-8 text-center text-fg-2">This form could not be loaded. Reload the page to try again.</p>
     <!-- Named by the server, never shown: a person leaves it empty. -->
     <input id="honeypot" hidden tabindex="-1" autocomplete="off" aria-hidden="true" />
     <script type="module" src="./form.ts"></script>
