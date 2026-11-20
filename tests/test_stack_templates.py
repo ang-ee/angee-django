@@ -995,6 +995,38 @@ def test_static_ingress_imports_the_composed_standalone_pages_ahead_of_django() 
         assert site.count("root *") == 1
 
 
+def test_static_ingress_caches_for_good_only_what_the_build_names_by_content() -> None:
+    """The long-lived cache header reaches only an existing file under ``assets/`` whose name carries a hash."""
+
+    for stack in (
+        _render_local_stack(),
+        _render_staging_stack(),
+        _render_dev_stack(_runtime_mode="docker", serve_mode="production"),
+    ):
+        frontend = stack["services"]["frontend" if "frontend" in stack["services"] else "caddy"]
+        lines = [line.strip() for line in _rendered_caddyfile(frontend).splitlines()]
+        start = lines.index("@hashed {")
+        # ``file``: a missing asset falls back to the app document, which must never be kept for a year.
+        conditions = lines[start + 1 : lines.index("}", start)]
+        assert conditions == [r"path_regexp ^/assets/.+-[A-Za-z0-9_-]{8}(\.[A-Za-z0-9]+)+$", "file"]
+        assert [line for line in lines if "Cache-Control" in line] == [
+            'header @hashed Cache-Control "public, max-age=31536000, immutable"'
+        ]
+        hashed = re.compile(conditions[0].removeprefix("path_regexp "))
+        # Vite writes all it emits under assets/ as <name>-<hash>.<ext>, a selected named asset among them.
+        for path in (
+            "/assets/open-C37wqrGN.js", "/assets/index-BX1a2b3c.css", "/assets/inter-latin-400-normal-C38fXH4l.woff2",
+            "/assets/en-D4_x-9Qa.json", "/assets/icon-Zy98_-Ab.svg", "/assets/app-AbCd1234.js.map",
+        ):
+            assert hashed.search(path), path
+        # Documents, the build's page list and public-directory files keep their names and are revalidated.
+        for path in (
+            "/index.html", "/webforms.form.html", "/.angee/pages.json", "/favicon.svg", "/assets/logo.svg",
+            "/assets/app-AbCd123.js", "/forms/assets/app-AbCd1234.js", "/static/app-AbCd1234.js",
+        ):
+            assert not hashed.search(path), path
+
+
 def test_static_ingress_sends_django_exactly_the_declared_paths() -> None:
     """The template cannot read Python, so its ``@django`` matcher is pinned to the list the page rule reads."""
 

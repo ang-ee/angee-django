@@ -198,7 +198,13 @@ fallback, answers the composed standalone pages (`runtime/web/pages.caddy`)
 ahead of the declared Django paths it proxies (`INGRESS_DJANGO_PATHS` in
 [`angee.web.build`](../src/angee/web/build.py), published in the web manifest as
 `ingressDjangoPaths`), and strips `/operator` only for the
-narrow `/operator/graphql` route. It sets the operator allowed origin to the
+narrow `/operator/graphql` route. It answers with
+`Cache-Control: public, max-age=31536000, immutable` only for an existing file
+the build names by its content: Vite writes all it emits under `assets/` as
+`<name>-<hash>.<ext>`, a deployment's selected named asset among them. The app
+document, a standalone page's `<id>.html`, `.angee/pages.json` and a host's
+public-directory files keep their names and are revalidated, so a host keeps its
+public files out of `assets/`. It sets the operator allowed origin to the
 stack's browser origin. The inner Caddy waits for the edge's Compose alias on
 public ingress and trusts its connected Compose network CIDRs with strict
 right-to-left client IP parsing. It forwards the verified client IP as a single

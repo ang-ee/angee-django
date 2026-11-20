@@ -10,6 +10,13 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Stack templates: the static ingress answers with `Cache-Control: public,
+  max-age=31536000, immutable` for an existing file the build names by its
+  content, `/assets/<name>-<hash>.<ext>`: Vite's emitted scripts, stylesheets,
+  locale and metadata files and a deployment's selected named asset. A repeat
+  visit no longer transfers them. Documents (`index.html`, a standalone page's
+  `<id>.html`), `.angee/pages.json` and public-directory files keep their names
+  and are revalidated, as is the app document a missing asset falls back to.
 - `angee.web`: an addon's web package declares **standalone pages**, static HTML
   entries of the web build that load none of the app, in `web/package.json`:
   `"angee": {"pages": {"<id>": {"entry": "./src/standalone/form.html", "paths":
