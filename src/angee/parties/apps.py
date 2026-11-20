@@ -23,17 +23,22 @@ class PartiesConfig(AppConfig):
     name = "angee.parties"
 
     def compose_provision(self, context: ProvisionContext) -> None:
-        """Repair handle holders and directory owners' contact read on every provision, after the resources load.
+        """Repair handle keys, handle holders and directory owners' contact read on every provision.
 
+        They run after the resources load. ``renormalize_handles`` saves again
+        each comparison key the handle's normalization rule no longer gives, so
+        a change of the rule reaches the rows stored before it, at most
+        ``HandleManager.REPAIR_LIMIT`` keys a run (the log says how many remain).
         ``resolve_stale_owners`` states each holder written onto its row, leaves a
         trashed, confirmed or contested one as it is and re-resolves stale ones,
         at most ``HandleManager.REPAIR_LIMIT`` holders a run (past that, the
         provision log says how many remain and the next provision continues);
         ``grant_directory_owner_contact_reads`` grants each directory's owner the
-        read of its contacts where missing (connecting grants it). Both are
+        read of its contacts where missing (connecting grants it). All are
         idempotent, so a deployment never depends on someone running them.
         """
 
+        context.call("renormalize_handles")
         context.call("resolve_stale_owners")
         context.call("grant_directory_owner_contact_reads")
 

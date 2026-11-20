@@ -72,17 +72,24 @@ live in code docstrings.
   without case and the public id, the pointer aside); the verb reads it, and a
   consumer compares the references `standing_claims()` returns with its own
   the same way. No migration, resource or permission change. Upgrade: a
-  handle saved before this change whose domain was typed in punycode keeps the
-  comparison key it was saved with until it is next saved (an upsert of the
-  same spelling re-reads it); until then the Unicode spelling of its domain
-  does not find it. No repair is built here. Limits: two callers that meet two
-  spellings of one new address at once each make its row, and so its person,
-  which the pairing job then proposes; a handle is unique by its value as
-  typed, not by its comparison key, so writers that key on the exact value
-  can still make two rows of one address, which every lookup by the key reads
-  together; a punycode label the standard library's IDNA 2003 codec cannot
-  read (one that carries `ß`, `ς` or a joiner) stays as typed; a number that
-  is no valid international number is read as its digits.
+  handle stores the comparison key its rule gave when it was last saved, so a
+  change of the rule leaves stored keys behind. Every provision now runs
+  `renormalize_handles` (`HandleManager.renormalize_handles`), which compares
+  every handle, of every platform, against the rule as it is now and saves
+  again the key of each that differs, at most `HandleManager.REPAIR_LIMIT`
+  (500) a run: the provision log says "Saved the comparison key of N handle(s)
+  again." and, past the cap, "Stopped at the cap of N handle(s); M more await
+  the next provision or renormalize_handles run". A handle stored with a
+  punycode-domain key is found by its Unicode spelling after the run that
+  reaches it. The repair reads the whole table once a provision, in key
+  batches, and is idempotent. Limits: two callers that meet two spellings of
+  one new address at once each make its row, and so its person, which the
+  pairing job then proposes; a handle is unique by its value as typed, not by
+  its comparison key, so writers that key on the exact value can still make
+  two rows of one address, which every lookup by the key reads together; a
+  number that is no valid international number is read as its digits. The
+  domain codec is the standard library's, IDNA 2003: a punycode label that
+  carries `ß`, `ς` or a joiner does not read back and stays as typed.
 - `angee.parties`: a merged-away party is no longer a row. The `people`,
   `organizations` and `parties` resources read `canonical()` parties, as
   handles, addresses and relationships already did, so a party merged into

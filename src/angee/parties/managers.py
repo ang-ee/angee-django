@@ -362,7 +362,10 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
     """Factory + upsert for handles (the contact-point write path)."""
 
     REPAIR_LIMIT: ClassVar[int] = 500
-    """The most holders one holder repair writes by default (``resolve_stale_owners``); the next run continues."""
+    """The most rows a handle repair writes by default (``resolve_stale_owners``, ``renormalize_handles``).
+
+    The next run continues.
+    """
 
     def for_user(self, user: Any) -> Any:
         """Return the account's self-claimed handle for internal attribution."""
@@ -805,6 +808,43 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         if budget is not None and resolved >= budget:
             remaining += stale.count()
         return repair._replace(resolved=resolved, remaining=remaining)
+
+    def renormalize_handles(self, *, limit: int | None = None) -> tuple[int, int]:
+        """Save again each comparison key the normalization rule no longer gives; return ``(rekeyed, remaining)``.
+
+        ``normalized_value`` is what ``Handle.normalize_value`` gave when a row
+        was last saved, so a change of the rule leaves stored keys behind and
+        the lookups that read them miss those rows. This repair compares every
+        row, of every platform, against the rule as it is now and saves the key
+        of each that differs through the handle's own save, which derives it.
+        That save names ``normalized_value`` alone: ``value`` is never written,
+        ``updated_at`` is stamped as every save of an audited row stamps it, and
+        the row's history records the change as any save does. Rows are read in
+        key batches within the database's parameter budget, never the table at
+        once; each stale row is read again under its lock before it is saved. A
+        run saves at most ``limit`` keys and counts the ones it did not reach as
+        ``remaining``, which the next run takes. Named system work. Idempotent: a
+        second complete run saves nothing.
+        """
+
+        rows = self.model._base_manager.order_by("pk").values_list("pk", "platform", "value", "normalized_value")
+        size = query_batch_size(rows)
+        rekeyed = remaining = 0
+        last: Any = None
+        with system_context(reason="parties.handle.renormalize"):
+            while batch := list((rows if last is None else rows.filter(pk__gt=last))[:size]):
+                last = batch[-1][0]
+                stale = [pk for pk, platform, value, key in batch if self.model.normalize_value(platform, value) != key]
+                reach = len(stale) if limit is None else max(0, min(len(stale), limit - rekeyed))
+                remaining += len(stale) - reach
+                if not reach:
+                    continue
+                with transaction.atomic():
+                    for handle in self.filter(pk__in=stale[:reach]).order_by("pk").lock_if_supported():
+                        if handle.normalized_value != self.model.normalize_value(handle.platform, handle.value):
+                            handle.save(update_fields=["normalized_value"])
+                            rekeyed += 1
+        return rekeyed, remaining
 
     def fill_avatar(self, report: AvatarReport) -> bool:
         """Set the avatar a source reports on its handle; return whether it changed.
