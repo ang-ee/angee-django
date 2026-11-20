@@ -446,6 +446,20 @@ describe("React architecture guardrails", () => {
       .toEqual([]);
   });
 
+  test("a list surface calls a page's bulkActions only through renderBulkActions, which states the split and the all-matching mode", () => {
+    const files = sourceFiles(join(PACKAGES_ROOT, "ui/src/views")).filter((file) => !isTestFile(file) && !isStoryFile(file));
+    expect(files.flatMap((file) => bulkActionsCallViolations(file, readFileSync(file, "utf8")))).toEqual([]);
+  });
+
+  test("the bulkActions guard reports a call outside the owner's renderBulkActions", () => {
+    const owner = join(PACKAGES_ROOT, BULK_ACTIONS_OWNER);
+    expect(bulkActionsCallViolations("seed.tsx", "bulkActions?.(ids, clear, { filter, selectedRows });")).toHaveLength(1);
+    expect(bulkActionsCallViolations("seed.tsx", "const node = props.bulkActions(ids, clear, collection);")).toHaveLength(1);
+    expect(bulkActionsCallViolations("seed.tsx", "function renderBulkActions() { return bulkActions?.(ids, clear, placed); }")).toHaveLength(1);
+    expect(bulkActionsCallViolations(owner, "function renderBulkActions() { return bulkActions?.(ids, clear, placed); }")).toEqual([]);
+    expect(bulkActionsCallViolations(owner, "function other() { return bulkActions?.(ids, clear, placed); }")).toHaveLength(1);
+  });
+
   test("framework-owned dynamic i18n families contain only UI vocabulary", () => {
     expect([...new Set(UI_DYNAMIC_I18N_KEY_FAMILIES.map((family) => family.namespace))])
       .toEqual(["ui"]);
@@ -1660,6 +1674,33 @@ function refineTelemetryViolations(file: string, text: string): string[] {
       if (!off) {
         violations.push(`${workspaceRelative(file)}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}`);
       }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return violations;
+}
+
+/** The module whose `renderBulkActions` is the one call of a page's `bulkActions`. */
+const BULK_ACTIONS_OWNER = "ui/src/views/resource/bulk-action.ts";
+
+/**
+ * Calls of a page's `bulkActions` outside the owner's `renderBulkActions`, as `file:line`.
+ * That one call states the selection's split and withholds a selected-ids-only collection
+ * while "all matching" is on; the internal holder types say the same, and this catches a
+ * holder typed with the public callback.
+ */
+function bulkActionsCallViolations(file: string, text: string): string[] {
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  const owner = file === join(PACKAGES_ROOT, BULK_ACTIONS_OWNER);
+  const violations: string[] = [];
+  const visit = (node: ts.Node): void => {
+    const callee = ts.isCallExpression(node)
+      ? ts.isPropertyAccessExpression(node.expression) ? node.expression.name : node.expression
+      : undefined;
+    if (callee && ts.isIdentifier(callee) && callee.text === "bulkActions"
+      && !(owner && ts.findAncestor(node, ts.isFunctionDeclaration)?.name?.text === "renderBulkActions")) {
+      violations.push(`${workspaceRelative(file)}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}`);
     }
     ts.forEachChild(node, visit);
   };

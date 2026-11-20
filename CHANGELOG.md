@@ -938,7 +938,13 @@ live in code docstrings.
   saying "Loaded N of M groups…"; it skips and counts groups of one and groups
   without a value, previews the sets as any others and enables Confirm once every
   page is listed and previewed, at most 1,000 sets with the rest stated. A flat
-  list, a date bucket, a relation or another field is refused with what to do.
+  list, a date bucket, a relation or another field is refused with what to do,
+  and so is a grouping without "Repeated values only" (the read's `having`),
+  which would page through every group of one. The dialog lists a page only as
+  it read it itself (fetched since it opened and not being read again): a page
+  an earlier dialog left in the cache is read again first, the end-of-run
+  invalidation reaches the listing's pages, and a dialog that does not page
+  shows nothing of its disabled listing read, data or error.
 
 - Parties: `Party.objects.propose_same_person_as_system(left, right, *, evidence,
   reason)` lets an importer propose that two parties are one person, citing the

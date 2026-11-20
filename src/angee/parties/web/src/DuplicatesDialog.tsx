@@ -236,11 +236,23 @@ export function DuplicatesDialog({
   const request = JSON.stringify(pageVariables);
   const listingDocument: AuthoredDocument = allGroups?.document ?? CertainSameAsPairs;
   // The one cast at the schema boundary: a resource's groups read takes its own `group_by` enum, as the list sends it.
+  // The end-of-run invalidation reaches the listing's pages too, so a later dialog reads them again.
   const pageRead = useAuthoredQuery(listingDocument, pageVariables as never, {
-    enabled: paged && !pagesDone, errorNotification: false,
+    enabled: paged && !pagesDone, errorNotification: false, models: PARTY_MERGE_INVALIDATES,
   });
-  // Only a paged dialog lists pages: a disabled read may still answer from the cache.
-  const pageData = paged ? pageRead.data as ListedData | undefined : undefined;
+  // A page is listed only as this dialog read it: fetched since it mounted and not being read again. A page an
+  // earlier dialog left in the cache (fresh for the app's stale time, so not refetched on its own) is read again
+  // first; a disabled read, which may still answer from the cache, lists nothing and shows no error.
+  const pageFresh = paged && pageRead.isFetchedAfterMount && !pageRead.isFetching;
+  const pageData = pageFresh ? pageRead.data as ListedData | undefined : undefined;
+  const pageError = paged ? pageRead.error : null;
+  // Typed apart: any authored document types the read's data `undefined`, so checking it destructured beside
+  // `refetch` would narrow `refetch` to `never`.
+  const cachedPage = pageRead.data as ListedData | undefined;
+  const { isFetchedAfterMount: pageReadHere, isFetching: pageReading, refetch: readPage } = pageRead;
+  React.useEffect(() => {
+    if (paged && !pagesDone && cachedPage !== undefined && !pageReadHere && !pageReading) void readPage();
+  }, [cachedPage, pageReadHere, pageReading, paged, pagesDone, readPage]);
   const groupField = allGroups?.field;
   React.useEffect(() => {
     if (!pageData || pagesDone) return;
@@ -271,7 +283,7 @@ export function DuplicatesDialog({
       ? [t("duplicates.firstOfAll", { count: formatNumber(CONFIRM_SETS), total: allCertain.total })]
       : []),
     ...(allGroups && pagesDone && pagedSets.length >= CONFIRM_SETS && itemsRead < allGroups.total
-      ? [t("duplicates.firstOfGroups", { count: formatNumber(CONFIRM_SETS), total: formatNumber(allGroups.total) })]
+      ? [t("duplicates.firstOfGroups", { count: formatNumber(itemsRead), total: formatNumber(allGroups.total) })]
       : []),
   ];
   // The fields each set was grouped by, names only, when the list grouped any: the preview returns their rows.
@@ -420,12 +432,12 @@ export function DuplicatesDialog({
             <Alert tone="info">{t("duplicates.valueRule")} {t("duplicates.undo")}</Alert>
             {notes.map((note) => <Alert key={note} tone="info">{note}</Alert>)}
             {derived.error ? <ErrorBanner description={derived.error.message || t("duplicates.error")} /> : null}
-            {preview.error || pageRead.error ? (
+            {preview.error || pageError ? (
               <ErrorBanner
                 description={t(live.length > 0 ? "duplicates.pageError" : "duplicates.error")}
                 actions={
                   <Button type="button" size="sm" variant="secondary"
-                    onClick={() => void (pageRead.error ? pageRead.refetch() : preview.refetch())}>
+                    onClick={() => void (pageError ? pageRead.refetch() : preview.refetch())}>
                     {t("duplicates.retry")}
                   </Button>
                 }

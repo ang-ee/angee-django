@@ -293,7 +293,9 @@ describe("Merge in a parties list's selection bar", () => {
 
     test("a date bucket, or a field the dialog cannot show and mark, says to group by a name", async () => {
       renderMountedSelection(["ada"], "peopleScope=UNASSIGNED", [], {
-        ...byName, read: { where: {}, dimensions: [{ input: "CREATED_AT", key: "created_at_month", granularity: "MONTH" }] },
+        ...byName, read: {
+          ...byName.read, dimensions: [{ input: "CREATED_AT", key: "created_at_month", granularity: "MONTH" }],
+        },
       });
       const verb = await screen.findByRole("button", { name: MERGE });
       expect(verb.getAttribute("aria-disabled")).toBe("true");
@@ -301,10 +303,20 @@ describe("Merge in a parties list's selection bar", () => {
       cleanup();
 
       renderMountedSelection(["acme"], "peopleScope=UNASSIGNED", [], {
-        ...byName, read: { where: {}, dimensions: [{ input: "LEGAL_NAME", key: "legal_name" }] },
+        ...byName, read: { ...byName.read, dimensions: [{ input: "LEGAL_NAME", key: "legal_name" }] },
       }, ORGANIZATION_MERGE_GROUPS);
       const organizations = await screen.findByRole("button", { name: MERGE });
       expect(description(organizations)).toBe(enPartiesMessages["merge.selection.allGrouping"]);
+    });
+
+    test("a grouping without repeated values only says to turn it on", async () => {
+      renderMountedSelection(["ada"], "peopleScope=UNASSIGNED", [], {
+        ...byName, read: { where: {}, dimensions: byName.read.dimensions },
+      });
+
+      const verb = await screen.findByRole("button", { name: MERGE });
+      expect(verb.getAttribute("aria-disabled")).toBe("true");
+      expect(description(verb)).toBe(enPartiesMessages["merge.selection.allRepeated"]);
     });
   });
 });

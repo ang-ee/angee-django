@@ -15,7 +15,11 @@ vi.mock("@angee/refine", async (importOriginal) => ({
   useAuthoredQuery: (document: unknown, variables: Record<string, unknown> | undefined, options?: { enabled?: boolean }) => {
     reads.calls.push({ document, variables, enabled: options?.enabled ?? true });
     reads.options.push({ document, enabled: options?.enabled ?? true });
-    return { data: reads.data.get(document)?.(variables ?? {}), isFetching: false, error: null };
+    // Each read answers as freshly fetched for this mount.
+    return {
+      data: reads.data.get(document)?.(variables ?? {}), isFetching: false, isFetchedAfterMount: true, error: null,
+      refetch: () => undefined,
+    };
   },
 }));
 

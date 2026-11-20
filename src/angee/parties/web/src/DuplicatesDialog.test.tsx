@@ -8,10 +8,14 @@ import { AppRuntimeProvider, InAppLinkProvider, createRouteHref, routerNavigator
 import { createUiTestProviders } from "@angee/ui/testing";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-type Read = { data: unknown; isFetching: boolean; error: Error | null; refetch?: () => unknown };
+type Read = {
+  data: unknown; isFetching: boolean; error: Error | null; isFetchedAfterMount?: boolean; refetch?: () => unknown;
+};
 const mocks = vi.hoisted(() => ({
   merge: vi.fn(), invalidate: vi.fn(), invalidateResource: vi.fn(), previews: [] as readonly unknown[],
   variables: [] as unknown[], selection: undefined as unknown,
+  /** Re-renders the dialog's host, as a query's settled read would. */
+  rerender: undefined as (() => void) | undefined,
   // Reads answered per document when a test sets them: the certain pairs' pages, and each page of previews.
   documents: { certain: undefined as unknown, previews: undefined as unknown, groups: undefined as unknown },
   certainRead: undefined as ((variables: { after: string | null }) => Read) | undefined,
@@ -137,6 +141,8 @@ function renderDialog(
   allGroups?: DuplicatesDialogProps["allGroups"],
 ) {
   function Host(): React.ReactElement {
+    const [, rerender] = React.useReducer((count: number) => count + 1, 0);
+    mocks.rerender = rerender;
     const router = useRouter();
     const navigate = React.useMemo(() => routerNavigator(router), [router]);
     return (
@@ -185,8 +191,8 @@ const answering = () => {
 };
 
 /** A paged run lists and previews page after page (forty pages at the thousand-set bound) and may send its chunks:
- * about 2 s alone, up to 11 s measured on a heavily loaded runner, over Vitest's 5 s default. */
-const PAGED_RUN_TIMEOUT_MS = 15_000;
+ * about 2 s alone, up to 15.2 s measured on a runner at a load average of 60, over Vitest's 5 s default. */
+const PAGED_RUN_TIMEOUT_MS = 30_000;
 
 describe("the batch merge dialog", () => {
   test("lists each set's records with their addresses, which survives, the disagreements and the refusals", async () => {
@@ -213,6 +219,15 @@ describe("the batch merge dialog", () => {
 
     expect(await screen.findByText("Lovelace")).toBeTruthy();
     expect(screen.getByRole("button", { name: message("duplicates.confirm", { count: "1" }) })).toBeTruthy();
+  });
+
+  test("an error cached on the disabled listing read does not show in a dialog opened with its sets", async () => {
+    mocks.certainRead = () => ({ data: undefined, isFetching: false, isFetchedAfterMount: false, error: new Error("old") });
+    renderDialog();
+
+    expect(await screen.findByText("Lovelace")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: message("duplicates.retry") })).toBeNull();
+    expect(screen.queryByText(message("duplicates.error"))).toBeNull();
   });
 
   test("one confirm merges only the included sets, then shows each outcome and the sets left out", async () => {
@@ -547,7 +562,7 @@ describe("the batch merge dialog", () => {
           const count = Math.max(0, Math.min(50, total - from + 1));
           cache.set(variables.after, {
             data: { certain_same_as_pairs: Array.from({ length: count }, (_value, index) => pair(from + index)) },
-            isFetching: false, error: null,
+            isFetching: false, isFetchedAfterMount: true, error: null,
           });
         }
         return cache.get(variables.after)!;
@@ -610,6 +625,49 @@ describe("the batch merge dialog", () => {
       expect(refetch).toHaveBeenCalledTimes(1);
     });
 
+    test("a dialog opened again within the cache window lists from fresh reads only", async () => {
+      // An earlier dialog left the first page in the cache: pairs merged since, still fresh for the app's stale time.
+      const listed = pages(3);
+      let reread = false;
+      mocks.certainRead = (variables) => (variables.after === null && !reread
+        ? {
+          data: { certain_same_as_pairs: [pair(901), pair(902)] }, isFetching: false, isFetchedAfterMount: false,
+          error: null, refetch: () => { reread = true; mocks.rerender?.(); },
+        }
+        : listed(variables));
+      mocks.previewRead = answering();
+      renderDialog(vi.fn(), [], false, undefined, { total: "3" });
+
+      expect(await screen.findByText(message("duplicates.totals", { count: "3", merge: "3", look: "0" }))).toBeTruthy();
+      expect(reread).toBe(true);
+      expect(screen.queryByText(message("review.sameAs.certainHeading", {
+        left: "Person 901", right: "Person 901", address: "p901@example.test",
+      }))).toBeNull();
+    });
+
+    test("a cached page arriving before the fresh one is ignored", async () => {
+      const listed = pages(60);
+      let settled = false;
+      mocks.certainRead = (variables) => {
+        if (variables.after !== "pair-50" || settled) return listed(variables);
+        // The page's old answer shows while its fresh read is in flight.
+        setTimeout(() => { settled = true; mocks.rerender?.(); }, 20);
+        return { data: { certain_same_as_pairs: [pair(950)] }, isFetching: true, isFetchedAfterMount: false, error: null };
+      };
+      mocks.previewRead = answering();
+      renderDialog(vi.fn(), [], false, undefined, { total: "60" });
+
+      // One wait per read: page one's previews, page two's cached answer, then what its fresh read lists.
+      await waitFor(() => expect(mocks.variables.some((variables) =>
+        (variables as { sets?: string[][] }).sets?.[0]?.[0] === "p1")).toBe(true));
+      await waitFor(() => expect(pairReads()).toContainEqual({ limit: 50, after: "pair-50" }));
+      await waitFor(() => expect(settled).toBe(true));
+      expect(await screen.findByText(message("duplicates.totals", { count: "60", merge: "54", look: "6" }))).toBeTruthy();
+      expect(screen.queryByText(message("review.sameAs.certainHeading", {
+        left: "Person 950", right: "Person 950", address: "p950@example.test",
+      }))).toBeNull();
+    }, PAGED_RUN_TIMEOUT_MS);
+
     test("lists at most a thousand and says how to reach the rest", async () => {
       mocks.certainRead = pages(Infinity);
       mocks.previewRead = answering();
@@ -651,7 +709,7 @@ describe("the batch merge dialog", () => {
           const count = Math.max(0, Math.min(variables.limit, total - variables.offset));
           cache.set(variables.offset, {
             data: { groups: Array.from({ length: count }, (_value, index) => shape(variables.offset + index + 1)) },
-            isFetching: false, error: null,
+            isFetching: false, isFetchedAfterMount: true, error: null,
           });
         }
         return cache.get(variables.offset)!;
