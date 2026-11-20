@@ -10,6 +10,15 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.base`, `angee.resources`, `angee.workflows`: a merge refusal's reason
+  names the record by its public id ("This record (tag_…) is loaded from
+  angee.tags resources, which would recreate it; keep it instead.", "Workflow
+  runs still working on this record (…) must finish or be canceled first.", and
+  the merge's own refusals of a shared, still-referred-to or vanished record),
+  never by its display name, which is personal data in any log or response that
+  carries the reason. The merge module's docstring states the rule for every
+  `ANGEE_MERGE_GUARDS` guard, and a test triggers each registered guard on a
+  named record and fails for a guard it does not yet trigger.
 - `angee.base`: `mute_changes(collect=MutedChanges())` is a collecting mode of
   the mute. The block also keeps the `(concrete model label, pk)` key of every
   row it suppressed, deduplicated and never the row itself, joining as the
