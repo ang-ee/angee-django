@@ -329,25 +329,25 @@ for whoever compares a domain: the organization-domain suggestion
 (`PartyManager.suggest_for`) reads the handle's domain and
 `Organization.domain`, which is stored as typed, through it on both sides, so
 either spelling of either suggests the organization. A handle stores the key
-its rule gave when it was last saved, so a change of the rule leaves stored
-keys behind. Changing what `Handle.normalize_value` or
-`Handle.normalize_email_domain` returns therefore means bumping
+its rule gave when it was last saved (`normalized_value`) and, beside it, the
+version the rule had then (`normalized_version`; 0 for a row stored before the
+rule had one). The handle's save is the one writer of the key and writes the
+two together. Changing what `Handle.normalize_value` or
+`Handle.normalize_email_domain` returns means bumping
 `Handle.NORMALIZATION_VERSION`; a test pins the rule's outputs for a fixed
 sample beside the number, so an output that changes under one number fails.
-The `renormalize_handles` repair (`HandleManager.renormalize_handles`)
-compares every handle of every platform against the rule as it is now and
-saves again the key of each that differs, through the handle's own save. One
-run saves at most `HandleManager.REPAIR_LIMIT` (500) keys; past the cap the
-command, and so the provision log, ends with "Stopped at the cap of N
-handle(s); M more await the next provision or renormalize_handles run", and
-the next run continues (`--limit` sets another cap). A run that leaves nothing
-awaiting records the version as fully applied, as a keyed changeset claim
-(`HandleManager.normalization_applied`, scope `parties.handle.normalization`).
-Every provision calls the repair (`PartiesConfig.compose_provision`), which
-reads the handles only while the rule's version is not the one last recorded:
-after the rule changed, or after a capped run. Otherwise it reads that one
-record and no handle. The command run by an operator always reads every
-handle. Nothing is stated in full:
+The `renormalize_handles` repair (`HandleManager.renormalize_handles`), which
+every provision runs (`PartiesConfig.compose_provision`), selects the handles
+of every platform whose version is not the rule's, by that column's index, and
+saves each again through the handle's own save, under its row lock: an earlier
+version, 0, or a later one that newer code wrote before a rollback. A row
+whose key is already what the rule gives has it written again unchanged beside
+its version, and leaves the selection. With no row behind, the repair is that
+one indexed query. One run saves at most `HandleManager.REPAIR_LIMIT` (500)
+rows; past the cap the command, and so the provision log, ends with "Stopped
+at the cap of N handle(s); M more await the next provision or
+renormalize_handles run", and the next run continues (`--limit` sets another
+cap). Nothing is stated in full:
 each handle the person does not hold is recorded as a claim for review
 (`propose_claimed_handle_as_system`)
 with the record behind it, which decides nothing and moves nothing. A claim

@@ -26,12 +26,11 @@ class PartiesConfig(AppConfig):
         """Repair handle keys, handle holders and directory owners' contact read on every provision.
 
         They run after the resources load. ``renormalize_handles`` saves again
-        each comparison key the handle's normalization rule no longer gives, so
-        a change of the rule reaches the rows stored before it, at most
-        ``HandleManager.REPAIR_LIMIT`` keys a run (the log says how many remain).
-        It reads the handles only while the rule's version
-        (``Handle.NORMALIZATION_VERSION``) is not the one last fully applied:
-        after the rule changed, or after a capped run.
+        each comparison key computed under another version of the handle's
+        normalization rule (``Handle.NORMALIZATION_VERSION``), so a change of the
+        rule reaches the rows stored before it, at most
+        ``HandleManager.REPAIR_LIMIT`` rows a run (the log says how many remain).
+        With no row behind, it costs one indexed query.
         ``resolve_stale_owners`` states each holder written onto its row, leaves a
         trashed, confirmed or contested one as it is and re-resolves stale ones,
         at most ``HandleManager.REPAIR_LIMIT`` holders a run (past that, the
@@ -41,7 +40,7 @@ class PartiesConfig(AppConfig):
         idempotent, so a deployment never depends on someone running them.
         """
 
-        context.call("renormalize_handles", unless_applied=True)
+        context.call("renormalize_handles")
         context.call("resolve_stale_owners")
         context.call("grant_directory_owner_contact_reads")
 

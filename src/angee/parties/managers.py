@@ -82,7 +82,7 @@ from angee.integrate.models import IntegrationLifecycle, IntegrationManager
 from angee.integrate.states import LinkStatus, StreamDirection
 from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedOrganization, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
-from angee.provenance.context import changeset, changeset_model
+from angee.provenance.context import changeset
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.provenance.evidence import EvidenceReference
@@ -425,8 +425,8 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             raise TypeError("Handle control must be written through claim_control().")
         if {"party", "party_id", "party_link_confirmed"}.intersection(fields):
             raise TypeError("Handle.party is resolved from statements: state it with Party.objects.assert_handle().")
-        if "normalized_value" in fields:
-            raise TypeError("Handle.normalized_value is maintained by Handle.save().")
+        if {"normalized_value", "normalized_version"}.intersection(fields):
+            raise TypeError("Handle.normalized_value and its version are maintained by Handle.save().")
         normalized_value = self.model.normalize_value(platform, value)
         external_id = str(fields.get("external_id") or "")
         for name, identifier in {
@@ -810,67 +810,50 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         return repair._replace(resolved=resolved, remaining=remaining)
 
     def renormalize_handles(self, *, limit: int | None = None) -> tuple[int, int]:
-        """Save again each comparison key the normalization rule no longer gives; return ``(rekeyed, remaining)``.
+        """Save again each comparison key computed under another version of its rule; return ``(saved, remaining)``.
 
         ``normalized_value`` is what ``Handle.normalize_value`` gave when a row
-        was last saved, so a change of the rule leaves stored keys behind and
-        the lookups that read them miss those rows. This repair compares every
-        row, of every platform, against the rule as it is now and saves the key
-        of each that differs through the handle's own save, which derives it.
-        That save names ``normalized_value`` alone: ``value`` is never written,
+        was last saved, and ``normalized_version`` the version the rule had then.
+        A change of the rule (``Handle.NORMALIZATION_VERSION``) leaves stored keys
+        behind and the lookups that read them miss those rows. This repair
+        selects the rows whose version is not the rule's, of every platform: an
+        earlier one, 0 for a row stored before the rule had a version, or a
+        later one that newer code wrote before a rollback. Each is read again
+        under its lock and saved through the handle's own save, which derives
+        the key and writes both key columns together, so a row whose key is
+        already what the rule gives has it written again unchanged beside its
+        version and leaves the selection. ``value`` is never written,
         ``updated_at`` is stamped as every save of an audited row stamps it, and
-        the row's history records the change as any save does. Rows are read in
-        key batches within the database's parameter budget, never the table at
-        once; each stale row is read again under its lock before it is saved. A
-        run saves at most ``limit`` keys and counts the ones it did not reach as
-        ``remaining``, which the next run takes. Named system work. Idempotent: a
-        second complete run saves nothing.
-
-        It always reads the whole table. A run that leaves nothing awaiting
-        records the rule's version as fully applied
-        (:meth:`normalization_applied`), which is what lets provisioning skip
-        the read until ``Handle.NORMALIZATION_VERSION`` moves.
+        the row's history records the save as any other. Rows are selected by
+        the version's index in key batches of at most :attr:`REPAIR_LIMIT`, each
+        saved in its own transaction; with nothing behind, that one query is all
+        the repair reads. A run saves at most ``limit`` rows and counts the rest
+        as ``remaining``, which the next run takes. Named system work.
+        Idempotent.
         """
 
-        rows = self.model._base_manager.order_by("pk").values_list("pk", "platform", "value", "normalized_value")
-        size = query_batch_size(rows)
-        rekeyed = remaining = 0
+        version = self.model.NORMALIZATION_VERSION
+        # A range on either side of the version uses its index; a plain inequality would not.
+        behind = self.model._base_manager.filter(
+            Q(normalized_version__lt=version) | Q(normalized_version__gt=version)
+        ).order_by("pk")
+        size = min(query_batch_size(behind), self.REPAIR_LIMIT)
+        saved = 0
         last: Any = None
         with system_context(reason="parties.handle.renormalize"):
-            while batch := list((rows if last is None else rows.filter(pk__gt=last))[:size]):
-                last = batch[-1][0]
-                stale = [pk for pk, platform, value, key in batch if self.model.normalize_value(platform, value) != key]
-                reach = len(stale) if limit is None else max(0, min(len(stale), limit - rekeyed))
-                remaining += len(stale) - reach
-                if not reach:
-                    continue
+            while limit is None or saved < limit:
+                reach = size if limit is None else min(size, limit - saved)
+                batch = behind if last is None else behind.filter(pk__gt=last)
+                keys = list(batch.values_list("pk", flat=True)[:reach])
+                if not keys:
+                    return saved, 0
+                last = keys[-1]
                 with transaction.atomic():
-                    for handle in self.filter(pk__in=stale[:reach]).order_by("pk").lock_if_supported():
-                        if handle.normalized_value != self.model.normalize_value(handle.platform, handle.value):
-                            handle.save(update_fields=["normalized_value"])
-                            rekeyed += 1
-            if not remaining and not self.normalization_applied():
-                scope, version = self.NORMALIZATION_SCOPE, str(self.model.NORMALIZATION_VERSION)
-                with transaction.atomic(), changeset(fresh=True, activity="system", change_reason=scope):
-                    changeset_model().objects.claim(scope, version, fingerprint=version)
-        return rekeyed, remaining
-
-    NORMALIZATION_SCOPE: ClassVar[str] = "parties.handle.normalization"
-    """The changeset claim scope that records each normalization version fully applied to the stored keys."""
-
-    def normalization_applied(self) -> bool:
-        """Whether the stored keys were last fully saved under the normalization rule's current version.
-
-        A complete :meth:`renormalize_handles` run records the version it
-        applied as a keyed changeset claim, provenance's ledger of keyed
-        operations, under :attr:`NORMALIZATION_SCOPE` with the version as its key.
-        The latest claim names the version the stored keys follow, so a
-        version that was applied, left and returned to is not taken for
-        current. Read by key alone; no handle is read.
-        """
-
-        claims = changeset_model()._base_manager.filter(scope=self.NORMALIZATION_SCOPE).order_by("-pk")
-        return bool(claims.values_list("key", flat=True).first() == str(self.model.NORMALIZATION_VERSION))
+                    for handle in self.filter(pk__in=keys).order_by("pk").lock_if_supported():
+                        if handle.normalized_version != version:
+                            handle.save(update_fields=["normalized_value", "normalized_version"])
+                            saved += 1
+            return saved, behind.count()
 
     def fill_avatar(self, report: AvatarReport) -> bool:
         """Set the avatar a source reports on its handle; return whether it changed.

@@ -71,28 +71,33 @@ live in code docstrings.
   the one comparison of which record a reference names (the model's label
   without case and the public id, the pointer aside); the verb reads it, and a
   consumer compares the references `standing_claims()` returns with its own
-  the same way. No migration, resource or permission change. Upgrade: a
-  handle stores the comparison key its rule gave when it was last saved, so a
-  change of the rule leaves stored keys behind. The rule now has a version,
+  the same way. No resource or permission change. Upgrade: a handle stores
+  the comparison key its rule gave when it was last saved, so a change of the
+  rule leaves stored keys behind. The rule now has a version,
   `Handle.NORMALIZATION_VERSION`, to bump whenever `Handle.normalize_value` or
-  `Handle.normalize_email_domain` returns something else; a test pins the
-  rule's outputs for a fixed sample beside the number. The repair
-  `renormalize_handles` (`HandleManager.renormalize_handles`) compares every
-  handle, of every platform, against the rule as it is now and saves again
-  the key of each that differs, at most `HandleManager.REPAIR_LIMIT` (500) a
-  run: the log says "Saved the comparison key of N handle(s) again." and,
-  past the cap, "Stopped at the cap of N handle(s); M more await the next
-  provision or renormalize_handles run". A run that leaves nothing awaiting
-  records the version as fully applied, as a keyed changeset claim under the
-  scope `parties.handle.normalization`. Every provision calls the repair, and
-  it reads the handles only while the version is not the one last recorded
-  (the first provision after this change, after a later change of the rule,
-  and after a capped run); otherwise the log says "Handle keys follow
-  normalization rule version N; nothing read." The command run by hand always
-  reads every handle. A handle stored with a punycode-domain key is found by
-  its Unicode spelling after the run that reaches it. A version that was
-  applied, left and returned to is read on every provision until the version
-  moves on. Limits: two callers that meet two spellings of
+  `Handle.normalize_email_domain` returns something else (a test pins the
+  rule's outputs for a fixed sample beside the number), and each handle
+  carries the version its key was computed under in a new column,
+  `Handle.normalized_version` (a small indexed integer, default 0, not
+  editable, not shown in GraphQL), which the handle's save writes together
+  with the key. A host runs `uv run --no-sync python manage.py makemigrations
+  parties` after compose, which authors one migration adding the column to
+  the handle and to its history table, commits it, and provisions. Existing
+  rows are then at version 0, so the provision repair `renormalize_handles`
+  (`HandleManager.renormalize_handles`), which every provision runs, selects
+  them by the column's index and saves each again through the handle's own
+  save, at most `HandleManager.REPAIR_LIMIT` (500) a run: the provision log
+  prints "Saved the comparison key of N handle(s) again." and, while rows
+  remain, "Stopped at the cap of N handle(s); M more await the next provision
+  or renormalize_handles run". Each later provision continues, and
+  `manage.py renormalize_handles --limit N` takes a larger share at once. Each
+  saved row gets `updated_at` stamped and one history version, as any save
+  of a handle does. Once no row is behind, the repair is one indexed query
+  per provision and prints "Saved the comparison key of 0 handle(s) again."
+  A handle stored with a punycode-domain key is found by its Unicode spelling
+  after the run that reaches it. A row newer code stamped with a later
+  version is selected too, so a rollback keys it again by the older rule.
+  Limits: two callers that meet two spellings of
   one new address at once each make its row, and so its person, which the
   pairing job then proposes; a handle is unique by its value as typed, not by
   its comparison key, so writers that key on the exact value can still make

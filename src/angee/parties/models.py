@@ -876,6 +876,11 @@ class Handle(
     platform = StateField(choices_enum=Platform, default=Platform.EMAIL)
     value = models.CharField(max_length=512)
     normalized_value = models.CharField(max_length=512, db_index=True, editable=False)
+    normalized_version = models.PositiveSmallIntegerField(default=0, db_index=True, editable=False)
+    """The :attr:`NORMALIZATION_VERSION` the rule had when ``normalized_value`` was computed; 0 before the rule had one.
+
+    Written beside the key by every write of it (:meth:`save`), never alone.
+    """
     external_id = models.CharField(max_length=512, blank=True, default="")
     display_name = models.CharField(max_length=4096, blank=True, default="")
     label = models.CharField(max_length=64, blank=True, default="")
@@ -965,10 +970,12 @@ class Handle(
     """The version of the normalization rule; bump it whenever the rule returns something else.
 
     The rule is :meth:`normalize_value` and :meth:`normalize_email_domain`.
-    ``normalized_value`` is stored, so a changed rule leaves stored keys behind:
-    provisioning saves them again only when this number is not the one last
-    fully applied (``HandleManager.renormalize_handles``). A test pins the rule's
-    outputs beside the number, so changing an output without a bump fails.
+    ``normalized_value`` is stored, so a changed rule leaves stored keys behind.
+    Each row carries the version its key was computed under
+    (:attr:`normalized_version`), and provisioning saves again the rows whose
+    version is not this one (``HandleManager.renormalize_handles``). A test pins
+    the rule's outputs beside the number, so changing an output without a bump
+    fails.
     """
 
     @classmethod
@@ -1100,14 +1107,22 @@ class Handle(
         return " ".join((value or "").split()).casefold()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist the handle while keeping ``normalized_value`` in lockstep."""
+        """Persist the handle while keeping ``normalized_value`` in lockstep, with the version of its rule beside it.
+
+        The key is computed on an insert, on a full save, and whenever a partial
+        save names ``platform``, ``value`` or either key column; the two key
+        columns are then written together, so ``normalized_version`` always says
+        which rule ``normalized_value`` came from.
+        """
 
         update_fields = kwargs.get("update_fields")
-        normalization_fields = {"platform", "value", "normalized_value"}
-        if self._state.adding or update_fields is None or normalization_fields.intersection(update_fields):
+        key_fields = ("normalized_value", "normalized_version")
+        keyed = update_fields is None or {"platform", "value", *key_fields}.intersection(update_fields)
+        if self._state.adding or keyed:
             self.normalized_value = self.normalize_value(self.platform, self.value)
-            if update_fields is not None and "normalized_value" not in update_fields:
-                kwargs["update_fields"] = [*update_fields, "normalized_value"]
+            self.normalized_version = self.NORMALIZATION_VERSION
+            if update_fields is not None:
+                kwargs["update_fields"] = [*update_fields, *(name for name in key_fields if name not in update_fields)]
         super().save(*args, **kwargs)
 
     def validate_merge(self, merged: Sequence[Any]) -> None:

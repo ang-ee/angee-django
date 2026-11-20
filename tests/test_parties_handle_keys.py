@@ -1,7 +1,9 @@
-"""A handle's comparison key follows its normalization rule: the repair saves again the keys a rule change left."""
+"""A handle's comparison key carries the version of the rule that gave it: the repair saves again what is behind."""
 
 from __future__ import annotations
 
+import importlib
+import re
 from io import StringIO
 from typing import Any
 
@@ -15,7 +17,6 @@ from django_compose.provision import ProvisionContext
 from rebac import system_context
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
-from angee.base.querysets import query_batch_size
 from angee.messaging.testing.models import Handle, Party, Person
 from angee.parties.managers import EmailBasis
 from tests.conftest import create_user
@@ -29,33 +30,66 @@ def owner(db: None) -> Any:
     return create_user("handle-keys-owner")
 
 
-def _stored_with(owner: Any, value: str, key: str, *, platform: str = "email") -> Any:
-    """A handle saved while the rule still gave ``key``: the key it stores is behind the rule as it is now."""
+def _stored_with(owner: Any, value: str, key: str, *, platform: str = "email", version: int = 0) -> Any:
+    """A handle as another version of the rule left it: ``key`` stored under ``version``, 0 before the rule had one."""
 
     with system_context(reason="tests.parties.handle_keys"):
         handle = Handle.objects.upsert(platform=platform, value=value, created_by_id=owner.pk)
-        Handle._base_manager.filter(pk=handle.pk).update(normalized_value=key)
+        Handle._base_manager.filter(pk=handle.pk).update(normalized_value=key, normalized_version=version)
     return Handle._base_manager.get(pk=handle.pk)
 
 
-def _row(handle: Any) -> tuple[str, str, Any, int]:
-    """A row as the repair may change it: its key, its value, when it was last saved, and how many versions it has."""
+def _row(handle: Any) -> tuple[str, int, str, int]:
+    """A row as the repair may change it: its key and the version beside it, its value, and how many versions it has."""
 
     stored = Handle._base_manager.get(pk=handle.pk)
     history: Any = Handle.history
     versions = history.model._base_manager.filter(id=handle.pk).count()
-    return stored.normalized_value, stored.value, stored.updated_at, versions
+    return stored.normalized_value, stored.normalized_version, stored.value, versions
+
+
+def _keyed(handle: Any) -> tuple[str, int]:
+    return _row(handle)[:2]
+
+
+def test_every_write_of_the_key_writes_the_rules_version_beside_it(owner: Any) -> None:
+    """The handle's save is the one writer of the key: an insert, a changed value, an upsert that reads it again."""
+
+    current = Handle.NORMALIZATION_VERSION
+    with system_context(reason="tests.parties.handle_keys"):
+        made = Handle._base_manager.create(platform="email", value="Ada@Example.test", created_by=owner)
+    assert _keyed(made) == ("ada@example.test", current)
+
+    renamed = _stored_with(owner, "bo@example.test", "behind")
+    refreshed = _stored_with(owner, "cy@example.test", "behind")
+    rewritten = _stored_with(owner, "di@example.test", "behind")
+    labelled = _stored_with(owner, "ed@example.test", "behind")
+    with system_context(reason="tests.parties.handle_keys"):
+        renamed.value = "Bo@Example.test"
+        renamed.save(update_fields=["value"])
+        Handle.objects.upsert(platform="email", value="cy@example.test")
+        Handle.objects.reidentify(rewritten, expected_value="di@example.test", value="Di@Example.test")
+        labelled.label = "work"
+        labelled.save(update_fields=["label"])
+
+    assert _keyed(renamed) == ("bo@example.test", current)
+    assert _keyed(refreshed) == ("cy@example.test", current)
+    assert _keyed(rewritten) == ("di@example.test", current)
+    # A save that names neither the address nor its key leaves both key columns for the repair.
+    assert _keyed(labelled) == ("behind", 0)
+    with pytest.raises(TypeError, match="maintained by Handle.save"):
+        Handle.objects.upsert(platform="email", value="fay@example.test", normalized_version=current)
 
 
 def test_a_handle_stored_with_a_punycode_domain_key_is_found_by_its_unicode_spelling_after_one_run(owner: Any) -> None:
-    """The handle's own save writes the key: the value stays as typed, and the row gains one version, once."""
+    """A row stored before the rule had a version is selected: its key is saved again, its value stays as typed."""
 
     with system_context(reason="tests.parties.handle_keys"):
         ada = Person.objects.create(display_name="Ada Example", created_by=owner)
         held = Handle.objects.upsert(platform="email", value="ada@xn--bcher-kva.example", created_by_id=owner.pk)
         Party.objects.assert_handle(ada, held, asserted_by=owner)
     stale = _stored_with(owner, "ada@xn--bcher-kva.example", "ada@xn--bcher-kva.example")
-    _key, value, _saved, versions = _row(stale)
+    _key, _version, value, versions = _row(stale)
 
     def found() -> list[tuple[Any, EmailBasis]]:
         with system_context(reason="tests.parties.handle_keys"):
@@ -67,10 +101,9 @@ def test_a_handle_stored_with_a_punycode_domain_key_is_found_by_its_unicode_spel
     assert Handle.objects.renormalize_handles() == (1, 0)
 
     assert found() == [(ada.pk, EmailBasis.HELD)]
-    repaired = _row(stale)
-    assert (repaired[0], repaired[1], repaired[3]) == ("ada@bücher.example", value, versions + 1)
+    assert _row(stale) == ("ada@bücher.example", Handle.NORMALIZATION_VERSION, value, versions + 1)
     assert Handle.objects.renormalize_handles() == (0, 0)
-    assert _row(stale) == repaired
+    assert _row(stale) == ("ada@bücher.example", Handle.NORMALIZATION_VERSION, value, versions + 1)
 
 
 def test_the_repair_stops_at_its_cap_and_the_next_run_takes_the_rest(owner: Any) -> None:
@@ -80,10 +113,12 @@ def test_the_repair_stops_at_its_cap_and_the_next_run_takes_the_rest(owner: Any)
     second = Handle.objects.renormalize_handles(limit=2)
 
     assert (first, second) == ((2, 1), (1, 0))
-    assert [_row(handle)[0] for handle in stale] == [f"ada-{index}@bücher.example" for index in range(3)]
+    assert [_keyed(handle) for handle in stale] == [
+        (f"ada-{index}@bücher.example", Handle.NORMALIZATION_VERSION) for index in range(3)
+    ]
 
 
-def test_a_key_the_rule_still_gives_is_left_as_it_is_on_every_platform(owner: Any) -> None:
+def test_a_row_keyed_under_the_rules_version_is_left_as_it_is_on_every_platform(owner: Any) -> None:
     with system_context(reason="tests.parties.handle_keys"):
         current = [
             Handle.objects.upsert(platform=platform, value=value, created_by_id=owner.pk)
@@ -102,7 +137,35 @@ def test_a_key_the_rule_still_gives_is_left_as_it_is_on_every_platform(owner: An
     assert not [query["sql"] for query in queries if query["sql"].startswith("UPDATE")]
 
 
-def test_the_repair_compares_every_platform_against_its_rule_as_it_is_now(owner: Any) -> None:
+def test_with_no_row_behind_the_repair_reads_one_indexed_query_and_loads_no_row(owner: Any) -> None:
+    """What a provision costs once the rows follow the rule: the selection by the version's index, nothing else."""
+
+    with system_context(reason="tests.parties.handle_keys"):
+        for index in range(3):
+            Handle.objects.upsert(platform="email", value=f"ada-{index}@example.test", created_by_id=owner.pk)
+    table = connection.ops.quote_name(Handle._meta.db_table)
+
+    with CaptureQueriesContext(connection) as queries:
+        assert Handle.objects.renormalize_handles() == (0, 0)
+
+    (selection,) = [query["sql"] for query in queries if table in query["sql"]]
+    assert re.match(rf'SELECT {re.escape(table)}\."id"( AS "pk")? FROM {re.escape(table)} WHERE ', selection)
+    assert '"normalized_version" <' in selection and '"normalized_version" >' in selection
+
+
+def test_a_row_whose_key_the_rule_still_gives_has_its_version_written_and_leaves_the_selection(owner: Any) -> None:
+    """Both key columns are written together: the key again, unchanged, beside the version it now carries."""
+
+    unchanged = _stored_with(owner, "ada@example.test", "ada@example.test")
+    assert _keyed(unchanged) == ("ada@example.test", 0)
+
+    assert Handle.objects.renormalize_handles() == (1, 0)
+
+    assert _keyed(unchanged) == ("ada@example.test", Handle.NORMALIZATION_VERSION)
+    assert Handle.objects.renormalize_handles() == (0, 0)
+
+
+def test_the_repair_keys_every_platform_by_its_rule_as_it_is_now(owner: Any) -> None:
     """Whatever the rule change was: a number stored by its digits, a name stored with its capitals."""
 
     number = _stored_with(owner, "+1 787 555 0100", "17875550100", platform="phone")
@@ -110,23 +173,51 @@ def test_the_repair_compares_every_platform_against_its_rule_as_it_is_now(owner:
 
     assert Handle.objects.renormalize_handles() == (2, 0)
 
-    assert (_row(number)[0], _row(name)[0]) == ("+17875550100", "ada example")
+    assert (_keyed(number), _keyed(name)) == (
+        ("+17875550100", Handle.NORMALIZATION_VERSION), ("ada example", Handle.NORMALIZATION_VERSION),
+    )
 
 
-def test_rows_past_one_read_of_the_table_are_reached(owner: Any) -> None:
-    """The table is read in key batches, never at once: a stale key after the first batch is still saved."""
+def test_a_row_stamped_by_a_later_version_is_selected_and_keyed_by_the_rule_as_it_is(owner: Any) -> None:
+    """A rollback: what newer code wrote carries its version, so the older code's rule keys it again."""
 
-    size = query_batch_size(Handle._base_manager.all())
-    with system_context(reason="tests.parties.handle_keys"):
-        Handle._base_manager.bulk_create(
-            Handle(platform="other", value=f"name-{index}", normalized_value=f"name-{index}", created_by=owner)
-            for index in range(size)
-        )
-    last = _stored_with(owner, "ada@xn--bcher-kva.example", "behind")
+    later = _stored_with(
+        owner, "ada@xn--bcher-kva.example", "a key of the later rule", version=Handle.NORMALIZATION_VERSION + 1,
+    )
 
     assert Handle.objects.renormalize_handles() == (1, 0)
 
-    assert _row(last)[0] == "ada@bücher.example"
+    assert _keyed(later) == ("ada@bücher.example", Handle.NORMALIZATION_VERSION)
+
+
+def test_a_bumped_version_selects_every_row_keyed_before_it(owner: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    with system_context(reason="tests.parties.handle_keys"):
+        rows = [
+            Handle.objects.upsert(platform="email", value=f"ada-{index}@example.test", created_by_id=owner.pk)
+            for index in range(2)
+        ]
+    assert Handle.objects.renormalize_handles() == (0, 0)
+    bumped = Handle.NORMALIZATION_VERSION + 1
+    monkeypatch.setattr(Handle, "NORMALIZATION_VERSION", bumped)
+
+    assert Handle.objects.renormalize_handles() == (2, 0)
+
+    assert [_keyed(handle) for handle in rows] == [(f"ada-{index}@example.test", bumped) for index in range(2)]
+
+
+def test_rows_past_one_batch_are_reached_in_one_run(owner: Any) -> None:
+    """The selection is saved in key batches: a run without a cap goes on, batch after batch, until none is behind."""
+
+    count = Handle.objects.REPAIR_LIMIT + 1
+    with system_context(reason="tests.parties.handle_keys"):
+        Handle._base_manager.bulk_create(
+            Handle(platform="other", value=f"name-{index}", normalized_value=f"name-{index}", created_by=owner)
+            for index in range(count)
+        )
+
+    assert Handle.objects.renormalize_handles() == (count, 0)
+
+    assert not Handle._base_manager.exclude(normalized_version=Handle.NORMALIZATION_VERSION).exists()
 
 
 def test_an_operator_sees_how_many_keys_were_saved_and_where_a_capped_repair_stopped(owner: Any) -> None:
@@ -142,116 +233,30 @@ def test_an_operator_sees_how_many_keys_were_saved_and_where_a_capped_repair_sto
     ]
 
 
-def _provision() -> str:
-    """Provision parties as a deployment does; return what the log shows."""
+def test_every_provision_runs_the_key_repair(owner: Any) -> None:
+    """A deployment never depends on someone running the command, and a provision with nothing behind says so."""
 
-    output = StringIO()
+    stale = _stored_with(owner, "ada@xn--bcher-kva.example", "behind")
     parties: Any = apps.get_app_config("parties")
-    parties.compose_provision(ProvisionContext("default", OutputWrapper(output), OutputWrapper(StringIO())))
-    return output.getvalue()
+
+    def provision() -> str:
+        output = StringIO()
+        parties.compose_provision(ProvisionContext("default", OutputWrapper(output), OutputWrapper(StringIO())))
+        return output.getvalue()
+
+    assert "Saved the comparison key of 1 handle(s) again." in provision()
+    assert _keyed(stale) == ("ada@bücher.example", Handle.NORMALIZATION_VERSION)
+    assert "Saved the comparison key of 0 handle(s) again." in provision()
 
 
-def _provisioned_repair(limit: int | None = None) -> str:
-    """The key repair as provisioning calls it, with a cap a test can reach."""
+def test_the_keys_version_is_no_field_of_the_handle_a_reader_sees() -> None:
+    """Bookkeeping of the key: the handle's GraphQL type names its fields one by one, and does not name this one."""
 
-    output = StringIO()
-    call_command("renormalize_handles", unless_applied=True, limit=limit, stdout=output)
-    return output.getvalue()
+    # Imported here, after the concrete test models are registered: the source schema resolves them on import.
+    schema = importlib.import_module("angee.parties.schema")
+    shown = {field.python_name for field in schema.HandleType.__strawberry_definition__.fields}
 
-
-def test_provisioning_runs_the_key_repair(owner: Any) -> None:
-    """A deployment never depends on someone running the command: a provision saves the keys a rule left behind."""
-
-    stale = _stored_with(owner, "ada@xn--bcher-kva.example", "behind")
-
-    assert "Saved the comparison key of 1 handle(s) again." in _provision()
-
-    assert _row(stale)[0] == "ada@bücher.example"
-
-
-def test_provisioning_reads_no_handle_while_the_rules_version_is_the_one_last_applied(owner: Any) -> None:
-    """The rule changes almost never: once a version is fully applied, a provision asks its record and reads no row."""
-
-    assert "Saved the comparison key of 0 handle(s) again." in _provision()
-    assert Handle.objects.normalization_applied()
-    untouched = _stored_with(owner, "ada@xn--bcher-kva.example", "behind")
-    table = connection.ops.quote_name(Handle._meta.db_table)
-
-    with CaptureQueriesContext(connection) as queries:
-        log = _provisioned_repair()
-
-    assert not [query["sql"] for query in queries if table in query["sql"]]
-    assert log.strip() == f"Handle keys follow normalization rule version {Handle.NORMALIZATION_VERSION}; nothing read."
-    assert "nothing read." in _provision()
-    assert _row(untouched)[0] == "behind"
-
-
-def test_a_bumped_version_is_read_saved_and_recorded_by_the_next_provision(
-    owner: Any, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _provision()
-    stale = _stored_with(owner, "ada@xn--bcher-kva.example", "behind")
-    monkeypatch.setattr(Handle, "NORMALIZATION_VERSION", Handle.NORMALIZATION_VERSION + 1)
-    assert not Handle.objects.normalization_applied()
-
-    assert "Saved the comparison key of 1 handle(s) again." in _provision()
-
-    assert (_row(stale)[0], Handle.objects.normalization_applied()) == ("ada@bücher.example", True)
-    assert "nothing read." in _provision()
-
-
-def test_a_capped_run_records_nothing_and_the_next_provision_resumes_and_then_records(owner: Any) -> None:
-    stale = [_stored_with(owner, f"ada-{index}@xn--bcher-kva.example", "behind") for index in range(2)]
-
-    first = _provisioned_repair(limit=1)
-    applied_after_first = Handle.objects.normalization_applied()
-    second = _provisioned_repair(limit=1)
-
-    assert "1 more await the next provision" in first and not applied_after_first
-    assert second.splitlines() == ["Saved the comparison key of 1 handle(s) again."]
-    assert Handle.objects.normalization_applied()
-    assert [_row(handle)[0] for handle in stale] == [f"ada-{index}@bücher.example" for index in range(2)]
-    assert "nothing read." in _provisioned_repair(limit=1)
-
-
-def test_the_command_reads_every_handle_whatever_is_recorded(owner: Any) -> None:
-    """An operator's explicit run always scans, and records the version when it leaves nothing awaiting."""
-
-    assert Handle.objects.renormalize_handles() == (0, 0)
-    assert Handle.objects.normalization_applied()
-    stale = _stored_with(owner, "ada@xn--bcher-kva.example", "behind")
-    output = StringIO()
-
-    call_command("renormalize_handles", stdout=output)
-
-    assert output.getvalue().splitlines() == ["Saved the comparison key of 1 handle(s) again."]
-    assert (_row(stale)[0], Handle.objects.normalization_applied()) == ("ada@bücher.example", True)
-
-
-def test_a_database_without_handles_records_the_version_on_its_first_provision(db: None) -> None:
-    del db
-    assert not Handle._base_manager.exists() and not Handle.objects.normalization_applied()
-
-    _provision()
-
-    assert Handle.objects.normalization_applied()
-
-
-def test_a_version_applied_before_then_left_and_returned_to_is_read_again(
-    owner: Any, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The latest record says which version the stored keys follow: an earlier one of the same number does not."""
-
-    earlier = Handle.NORMALIZATION_VERSION
-    _provision()
-    monkeypatch.setattr(Handle, "NORMALIZATION_VERSION", earlier + 1)
-    _provision()
-    monkeypatch.setattr(Handle, "NORMALIZATION_VERSION", earlier)
-    stale = _stored_with(owner, "ada@xn--bcher-kva.example", "behind")
-
-    assert not Handle.objects.normalization_applied()
-    assert "Saved the comparison key of 1 handle(s) again." in _provision()
-    assert _row(stale)[0] == "ada@bücher.example"
+    assert "normalized_value" in shown and "normalized_version" not in shown
 
 
 NORMALIZATION_SAMPLE: dict[int, tuple[dict[tuple[str, str], str], dict[str, str]]] = {
