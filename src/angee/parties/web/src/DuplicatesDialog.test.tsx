@@ -253,6 +253,18 @@ describe("the batch merge dialog", () => {
     expect(reread).toBe(true);
   });
 
+  test("an enabled preview read's error shows the banner, and Retry reads the previews again", async () => {
+    const refetch = vi.fn();
+    mocks.previewRead = () => ({
+      data: undefined, isFetching: false, isFetchedAfterMount: true, error: new Error("lost"), refetch,
+    });
+    renderDialog();
+
+    expect(await screen.findByText(message("duplicates.error"))).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: message("duplicates.retry") }));
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
   test("one confirm merges only the included sets, then shows each outcome and the sets left out", async () => {
     mocks.merge.mockResolvedValue({ merge_duplicates: [merged("joan", "Joan Clarke")] });
     const { onClose } = renderDialog();
@@ -867,6 +879,31 @@ describe("the batch merge dialog", () => {
 
       expect(await screen.findByText(message("duplicates.loadedOf", { loaded: "0", total: "120" }))).toBeTruthy();
       expect(screen.getByText(message("duplicates.loading"))).toBeTruthy();
+    });
+
+    test("a disabled preview read whose cache holds an error shows no banner and no Retry", async () => {
+      // No page is listed yet, so the preview read is disabled; the mock answers it anyway, with an error another
+      // reader of the same query met, as a cached query would.
+      mocks.groupsRead = () => ({ data: undefined, isFetching: true, error: null });
+      mocks.previewRead = () => ({
+        data: undefined, isFetching: false, isFetchedAfterMount: true, error: new Error("old"), refetch: vi.fn(),
+      });
+      renderDialog(vi.fn(), [], false, undefined, undefined, groupsOf(120));
+
+      expect(await screen.findByText(message("duplicates.loadedGroupsOf", { loaded: "0", total: "120" }))).toBeTruthy();
+      expect(screen.getByText(message("duplicates.loading"))).toBeTruthy();
+      expect(screen.queryByText(message("duplicates.error"))).toBeNull();
+      expect(screen.queryByRole("button", { name: message("duplicates.retry") })).toBeNull();
+    });
+
+    test("an error on the listing read shows the banner, and Retry reads that page again", async () => {
+      const refetch = vi.fn();
+      mocks.groupsRead = () => ({ data: undefined, isFetching: false, isFetchedAfterMount: true, error: new Error("lost"), refetch });
+      renderDialog(vi.fn(), [], false, undefined, undefined, groupsOf(120));
+
+      expect(await screen.findByText(message("duplicates.error"))).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: message("duplicates.retry") }));
+      expect(refetch).toHaveBeenCalledTimes(1);
     });
 
     test("Confirm stays disabled until the last page of groups is listed", async () => {

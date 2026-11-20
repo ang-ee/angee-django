@@ -351,6 +351,11 @@ export function DuplicatesDialog({
   // A disabled read is none this dialog made, though it may still answer from the cache, as the listing's.
   const previewFresh = previewEnabled && preview.isFetchedAfterMount && !preview.isFetching;
   const previewPage = previewFresh ? preview.data?.duplicate_set_previews : undefined;
+  // Its error counts only while the read is enabled, as its answers do and as the listing's error does: a disabled
+  // read may still hold the error another reader of the same query met. Read on every render, so the query reports
+  // its changes; a run disables the read, so a preview error met before the run is not shown during it.
+  const previewReadError = preview.error;
+  const previewError = previewEnabled ? previewReadError : null;
   const cachedPreview = preview.data;
   const previewReadHere = preview.isFetchedAfterMount;
   const previewReading = preview.isFetching;
@@ -474,7 +479,7 @@ export function DuplicatesDialog({
             <Alert tone="info">{t("duplicates.valueRule")} {t("duplicates.undo")}</Alert>
             {notes.map((note) => <Alert key={note} tone="info">{note}</Alert>)}
             {derived.error ? <ErrorBanner description={derived.error.message || t("duplicates.error")} /> : null}
-            {preview.error || pageError ? (
+            {previewError || pageError ? (
               <ErrorBanner
                 description={t(live.length > 0 ? "duplicates.pageError" : "duplicates.error")}
                 actions={
@@ -497,7 +502,7 @@ export function DuplicatesDialog({
                       total: allCertain && !pagesDone ? allCertain.total : formatNumber(sets.length),
                     })}
                 </Alert>
-                {preview.error || pageError ? null : <LoadingPanel density="inline" loadingLabel={t("duplicates.loading")} />}
+                {previewError || pageError ? null : <LoadingPanel density="inline" loadingLabel={t("duplicates.loading")} />}
               </>
             ) : !run && !loaded && live.length > 0 ? (
               <Alert tone="info">
