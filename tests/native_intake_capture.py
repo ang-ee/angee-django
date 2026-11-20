@@ -12,7 +12,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import connection, connections, models, transaction
+from django.db import IntegrityError, connection, connections, models, transaction
 from django.test import TransactionTestCase
 from django.test.utils import CaptureQueriesContext
 from graphql import GraphQLInputObjectType, concat_ast, get_named_type, validate
@@ -196,6 +196,20 @@ class FormCaptureTests(TransactionTestCase):
         )
         return response.deliver()
 
+    def test_the_composed_form_takes_one_form_per_channel_and_slug(self):
+        """The bridge's rule is folded into the host's form: a second form on the conversation is refused."""
+
+        channel = self.webform()
+        second = apps.get_model("webforms", "Form")(
+            name="Second form", target_class="message",
+            target_config={"channel": channel.sqid, "slug": "request-form"},
+        )
+        with self.assertRaises(ValidationError) as refused:
+            second.full_clean()
+        self.assertEqual(list(refused.exception.message_dict), ["target_config"])
+        with system_context(reason="test form setup"), self.assertRaises(IntegrityError), transaction.atomic():
+            second.save()
+
     def test_webform_captures_claims_and_mapped_fields_on_an_ownerless_task(self):
         channel = self.webform()
         message = self.submit(channel)
@@ -258,16 +272,19 @@ class FormCaptureTests(TransactionTestCase):
         self.assertFalse(get_user_model()._base_manager.filter(email="alex@example.com").exists())
 
     def test_programming_error_rolls_back_the_message_and_its_request(self):
+        # Imported here: this module also runs on a host that composes no web forms.
+        from angee.webforms.models import DeliveryFailed
+
         channel = self.webform()
         with patch.object(self.Message, "webform_submission", side_effect=TypeError("Invalid contract")):
-            # The response's own verb raises what its owner makes of a failed delivery.
-            with self.assertRaises(Exception):
+            with self.assertRaises(DeliveryFailed) as failed:
                 self.submit(channel)
+        self.assertEqual(failed.exception.reason, "TypeError")
         self.assertEqual(self.Message._base_manager.count(), 0)
         self.assertEqual(self.Need._base_manager.count(), 0)
         response = apps.get_model("webforms", "Response")._base_manager.get()
-        self.assertEqual(response.delivery, "failed")
-        self.assertIn("TypeError", response.delivery_error)
+        self.assertEqual((response.delivery, response.delivery_error), ("failed", "TypeError"))
+        self.assertIsNotNone(response.retry_at)
 
 
 class IntakeAccessCase(TransactionTestCase):
