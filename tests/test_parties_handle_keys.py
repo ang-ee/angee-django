@@ -64,7 +64,7 @@ def _behind() -> int:
 def _unsaveable(handle: Any) -> Iterator[None]:
     """While it lasts, a save of ``handle`` raises; a second attempt at it fails the test instead of spinning."""
 
-    attempts = []
+    attempts: list[Any] = []
 
     def refuse(sender: Any, instance: Any, **kwargs: Any) -> None:
         del sender, kwargs
