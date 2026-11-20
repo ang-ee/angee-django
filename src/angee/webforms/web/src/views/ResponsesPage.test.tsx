@@ -56,7 +56,7 @@ describe("ResponsesPage", () => {
     render(<ResponsesPage />);
     expect(capture.props?.search).toEqual({
       shortcuts: [
-        { kind: "text", field: "contact", label: "Contact (trimmed, lower case)" },
+        { kind: "text", field: "contact", label: "Search by contact" },
         { kind: "toggle", id: "undelivered" },
       ],
     });
@@ -65,6 +65,7 @@ describe("ResponsesPage", () => {
     expect(erase?.visibleWhen?.({ contact: "ada@example.org", erased_at: null })).toBe(true);
     expect(erase?.visibleWhen?.({ contact: "", erased_at: "2031-03-09T12:00:00+00:00" })).toBe(false);
     const contact = parsePageFields(declared<FormProps>("form")?.children).find((candidate) => candidate.name === "contact");
+    expect(contact?.description).toBe("An email address or phone number, as the person wrote it.");
     expect(contact?.showWhen?.({ contact: "ada@example.org" })).toBe(true);
     expect(contact?.showWhen?.({ contact: "" })).toBe(false);
   });
