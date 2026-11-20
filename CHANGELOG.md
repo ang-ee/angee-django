@@ -26,11 +26,9 @@ live in code docstrings.
   every other request reaches Django, and carries
   one fixed content security policy (no inline script, never framed). The stack
   templates' static ingress declares its site root once and imports the snippet
-  ahead of its Django routes. **Upgrade:** re-render a stack together with the
-  framework it runs: the ingress imports `runtime/web/pages.caddy`, which an
-  earlier composer does not emit, and Caddy refuses to start on a missing import.
-  A stack re-rendered from the new template must run a framework that emits
-  `runtime/web/pages.caddy`, or its ingress will not start.
+  by glob ahead of its Django routes: an ingress whose composer emits no snippet
+  still starts, and those paths stay Django's. The ingress reads the snippet
+  when it starts, so a recomposed one takes effect when that service restarts.
 - `@angee/ui`: `FormView` (and so `Form` and every registered form) takes an
   optional `renderUnavailable(id, unavailable)`: what a saved record's form
   shows when its id reads no record, given the default "Record unavailable"

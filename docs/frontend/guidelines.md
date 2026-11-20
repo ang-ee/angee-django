@@ -102,8 +102,12 @@ public vault id. See the [knowledge addon](../../src/angee/knowledge/README.md).
   every page with one fixed content security policy (`PAGE_CSP`): a page renders
   staff-written markup on the application's origin, so it loads only from that
   origin, runs no inline script, submits no form natively and is never framed;
-  inline styles are the one loosened directive. Never route a page in a
-  stack template or a Vite config by hand.
+  inline styles are the one loosened directive. The ingress reads the snippet
+  when it starts: a recomposed snippet takes effect only when the static ingress
+  service (`frontend`; `caddy` in an instance stack) restarts, which the
+  whole-application chained restart does and a lone compose does not
+  ([Restart the running stack](../howto/getstarted.md#restart-the-running-stack)).
+  Never route a page in a stack template or a Vite config by hand.
 - Installed `@angee/*` packages are prebundled by source signature. Vite's
   optimizer hash covers only the lockfile and manifests, so
   `defineAngeeWebViteConfig` (`@angee/app/vite`) hashes each package's on-disk
