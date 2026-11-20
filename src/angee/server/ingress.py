@@ -1,4 +1,4 @@
-"""Pre-elevation checks for anonymous messaging webform submissions.
+"""Pre-elevation checks for an anonymous JSON submission to a curated endpoint.
 
 Anonymous writes are deliberately outside the normal authenticated GraphQL
 surface.  Every such endpoint must pass this utility before entering

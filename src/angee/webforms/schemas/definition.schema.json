@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WebFormDefinition",
+  "description": "The subset of a SurveyJS survey definition a web form may store. A definition outside it is refused when a version is saved, so the server never publishes a form whose answers it cannot check. Every text is one string, or a map with the form's default language under `default` and each other language under its tag.",
+  "type": "object",
+  "properties": {
+    "title": { "$ref": "#/$defs/Text" },
+    "description": { "$ref": "#/$defs/Text" },
+    "completedHtml": { "$ref": "#/$defs/Text" },
+    "completeText": { "$ref": "#/$defs/Text" },
+    "pagePrevText": { "$ref": "#/$defs/Text" },
+    "pageNextText": { "$ref": "#/$defs/Text" },
+    "pages": { "type": "array", "minItems": 1, "maxItems": 50, "items": { "$ref": "#/$defs/Page" } },
+    "elements": { "$ref": "#/$defs/Elements" }
+  },
+  "oneOf": [{ "required": ["pages"] }, { "required": ["elements"] }],
+  "additionalProperties": false,
+  "$defs": {
+    "Name": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$" },
+    "Code": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+      "not": { "enum": ["other", "none"] }
+    },
+    "Text": {
+      "oneOf": [
+        { "type": "string", "maxLength": 20000 },
+        {
+          "type": "object",
+          "required": ["default"],
+          "propertyNames": { "pattern": "^(default|[a-z]{2,3}(-[A-Za-z0-9]{2,8})*)$" },
+          "additionalProperties": { "type": "string", "maxLength": 20000 }
+        }
+      ]
+    },
+    "Choice": {
+      "type": "object",
+      "required": ["value"],
+      "properties": { "value": { "$ref": "#/$defs/Code" }, "text": { "$ref": "#/$defs/Text" } },
+      "additionalProperties": false
+    },
+    "Choices": { "type": "array", "minItems": 1, "maxItems": 200, "items": { "$ref": "#/$defs/Choice" } },
+    "Page": {
+      "type": "object",
+      "required": ["name", "elements"],
+      "properties": {
+        "name": { "$ref": "#/$defs/Name" },
+        "title": { "$ref": "#/$defs/Text" },
+        "description": { "$ref": "#/$defs/Text" },
+        "elements": { "$ref": "#/$defs/Elements" }
+      },
+      "additionalProperties": false
+    },
+    "Elements": { "type": "array", "minItems": 1, "maxItems": 200, "items": { "$ref": "#/$defs/Element" } },
+    "Element": {
+      "type": "object",
+      "required": ["type", "name"],
+      "properties": {
+        "type": {
+          "enum": ["text", "comment", "radiogroup", "dropdown", "checkbox", "boolean", "rating", "html", "panel"]
+        },
+        "name": { "$ref": "#/$defs/Name" }
+      },
+      "allOf": [
+        { "if": { "properties": { "type": { "const": "text" } } }, "then": { "$ref": "#/$defs/TextQuestion" } },
+        { "if": { "properties": { "type": { "const": "comment" } } }, "then": { "$ref": "#/$defs/CommentQuestion" } },
+        { "if": { "properties": { "type": { "const": "radiogroup" } } }, "then": { "$ref": "#/$defs/ChoiceQuestion" } },
+        { "if": { "properties": { "type": { "const": "dropdown" } } }, "then": { "$ref": "#/$defs/ChoiceQuestion" } },
+        { "if": { "properties": { "type": { "const": "checkbox" } } }, "then": { "$ref": "#/$defs/CheckboxQuestion" } },
+        { "if": { "properties": { "type": { "const": "boolean" } } }, "then": { "$ref": "#/$defs/BooleanQuestion" } },
+        { "if": { "properties": { "type": { "const": "rating" } } }, "then": { "$ref": "#/$defs/RatingQuestion" } },
+        { "if": { "properties": { "type": { "const": "html" } } }, "then": { "$ref": "#/$defs/Html" } },
+        { "if": { "properties": { "type": { "const": "panel" } } }, "then": { "$ref": "#/$defs/Panel" } }
+      ]
+    },
+    "Question": {
+      "properties": {
+        "type": true,
+        "name": true,
+        "title": { "$ref": "#/$defs/Text" },
+        "description": { "$ref": "#/$defs/Text" },
+        "isRequired": { "type": "boolean" },
+        "requiredErrorText": { "$ref": "#/$defs/Text" }
+      }
+    },
+    "TextQuestion": {
+      "allOf": [{ "$ref": "#/$defs/Question" }],
+      "properties": {
+        "inputType": { "enum": ["text", "email", "tel", "url", "number", "date"] },
+        "maxLength": { "type": "integer", "minimum": 1, "maximum": 2000 },
+        "min": { "type": ["number", "string"] },
+        "max": { "type": ["number", "string"] },
+        "placeholder": { "$ref": "#/$defs/Text" }
+      },
+      "unevaluatedProperties": false
+    },
+    "CommentQuestion": {
+      "allOf": [{ "$ref": "#/$defs/Question" }],
+      "properties": {
+        "maxLength": { "type": "integer", "minimum": 1, "maximum": 20000 },
+        "rows": { "type": "integer", "minimum": 1, "maximum": 40 },
+        "placeholder": { "$ref": "#/$defs/Text" }
+      },
+      "unevaluatedProperties": false
+    },
+    "ChoiceQuestion": {
+      "allOf": [{ "$ref": "#/$defs/Question" }],
+      "required": ["choices"],
+      "properties": {
+        "choices": { "$ref": "#/$defs/Choices" },
+        "showOtherItem": { "type": "boolean" },
+        "otherText": { "$ref": "#/$defs/Text" },
+        "otherPlaceholder": { "$ref": "#/$defs/Text" },
+        "placeholder": { "$ref": "#/$defs/Text" },
+        "colCount": { "type": "integer", "minimum": 0, "maximum": 5 }
+      },
+      "unevaluatedProperties": false
+    },
+    "CheckboxQuestion": {
+      "allOf": [{ "$ref": "#/$defs/Question" }],
+      "required": ["choices"],
+      "properties": {
+        "choices": { "$ref": "#/$defs/Choices" },
+        "showOtherItem": { "type": "boolean" },
+        "otherText": { "$ref": "#/$defs/Text" },
+        "otherPlaceholder": { "$ref": "#/$defs/Text" },
+        "colCount": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "minSelectedChoices": { "type": "integer", "minimum": 0, "maximum": 200 },
+        "maxSelectedChoices": { "type": "integer", "minimum": 1, "maximum": 200 }
+      },
+      "unevaluatedProperties": false
+    },
+    "BooleanQuestion": {
+      "allOf": [{ "$ref": "#/$defs/Question" }],
+      "properties": { "labelTrue": { "$ref": "#/$defs/Text" }, "labelFalse": { "$ref": "#/$defs/Text" } },
+      "unevaluatedProperties": false
+    },
+    "RatingQuestion": {
+      "allOf": [{ "$ref": "#/$defs/Question" }],
+      "properties": {
+        "rateMin": { "type": "integer", "minimum": 0, "maximum": 10 },
+        "rateMax": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "minRateDescription": { "$ref": "#/$defs/Text" },
+        "maxRateDescription": { "$ref": "#/$defs/Text" }
+      },
+      "unevaluatedProperties": false
+    },
+    "Html": {
+      "required": ["html"],
+      "properties": { "type": true, "name": true, "html": { "$ref": "#/$defs/Text" } },
+      "additionalProperties": false
+    },
+    "Panel": {
+      "required": ["elements"],
+      "properties": {
+        "type": true,
+        "name": true,
+        "title": { "$ref": "#/$defs/Text" },
+        "description": { "$ref": "#/$defs/Text" },
+        "elements": { "$ref": "#/$defs/Elements" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

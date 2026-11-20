@@ -133,7 +133,7 @@ class SelfLinkedNode(models.Model):
 class TagSlot(HistoryMixin, models.Model):
     """A row unique on an expression over its tag key, which no field set describes.
 
-    A tag merge moves it, so it keeps history (``angee.E051``).
+    A tag merge moves it, so it keeps history (``angee.E053``).
     """
 
     tag = models.ForeignKey("tags.Tag", on_delete=models.CASCADE, related_name="+")

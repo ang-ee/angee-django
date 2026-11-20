@@ -4,7 +4,7 @@ import pytest
 from django.core.cache import cache
 from django.test import RequestFactory
 
-from angee.messaging import ingress
+from angee.server import ingress
 
 
 def test_ingress_limits_each_ip_and_preserves_retry_after() -> None:

@@ -6,12 +6,19 @@ import pytest
 from django.apps import apps
 from django.core import checks
 from django.core.checks.registry import registry
-from django.db import models
+from django.db import connection, models
 from django.test import override_settings
 from django.test.utils import isolate_apps
+from rebac import system_context
 
 from angee.base.apps import BaseConfig
-from angee.base.checks import check_database_routers, check_ownership, check_public_origin, check_sealed_permissions
+from angee.base.checks import (
+    check_database_routers,
+    check_ownership,
+    check_public_origin,
+    check_sealed_permissions,
+    check_stored_impl_keys,
+)
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.hooks import check_hook, check_hooks
@@ -23,6 +30,7 @@ from angee.base.models.base import AngeeModel
 from angee.base.models.hierarchy import HierarchyMixin, HierarchyQuerySet
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.trash import TrashMixin, TrashQuerySet
+from angee.webforms.testing.models import Form
 from tests.proposals_models import Round
 from tests.test_impl import _BaseImpl
 
@@ -442,3 +450,30 @@ def test_a_seal_names_an_installed_owner_and_its_declared_permissions() -> None:
     assert "auth/user#impersonate" in undeclared.msg
     assert "auth/user#view_as" not in undeclared.msg
     assert check_sealed_permissions("iam", {"auth/user": ("view_as",)}, "tests.E001") == []
+
+
+@pytest.mark.django_db
+def test_a_stored_implementation_key_nothing_registers_is_named_with_its_rows_and_its_remedy() -> None:
+    """Rows stranded by a key that left its registry are found by the database check, never a plain one."""
+
+    with system_context(reason="base checks tests setup"):
+        Form.objects.create(name="Kept")
+        stranded = [Form.objects.create(name=name).pk for name in ("First", "Second")]
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"UPDATE {Form._meta.db_table} SET target_class = %s WHERE id IN (%s, %s)", ["gone", *stranded],
+        )
+
+    def found() -> list[checks.CheckMessage]:
+        return [error for error in check_stored_impl_keys(databases=["default"]) if error.obj is Form]
+
+    assert check_stored_impl_keys() == [], "a plain check reads no database"
+    (error,) = found()
+    assert error.id == "angee.E052"
+    assert all(part in error.msg for part in ("webforms.Form.target_class", "2 row(s)", "'gone'"))
+    assert "ANGEE_WEBFORM_TARGET_CLASSES" in error.msg
+    with override_settings(ANGEE_IMPL_KEY_REMEDIES={"ANGEE_WEBFORM_TARGET_CLASSES": {"gone": "Install it."}}):
+        assert found()[0].hint == "Install it."
+    assert check_stored_impl_keys in registry.get_checks()
+    assert check_stored_impl_keys.tags == (checks.Tags.database,)
+
