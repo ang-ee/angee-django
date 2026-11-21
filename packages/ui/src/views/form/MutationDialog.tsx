@@ -10,8 +10,8 @@ import { useToast } from "../../feedback";
 import { useUiT } from "../../i18n";
 import { dateFromUnknown, formatDateTimeStorage } from "../../widgets/date-format";
 import { emptyValueForField, isStructuredPresenceField, structuredFieldErrorPaths } from "./field-values";
-import { isFieldControlVisible } from "./form-view-model";
-import { DescriptorFieldList, resolveDescriptorFields, type DescriptorField } from "./DescriptorFieldList";
+import { isFieldControlVisible, visibleFields } from "./form-view-model";
+import { DescriptorFieldList, type DescriptorField } from "./DescriptorFieldList";
 import {
   SURFACE_RENDERS_FAILURE, applyFormErrors, formSubmitError, invalidFormSubmit, savedFormSubmitResult,
   type FormSubmitResult, type ValidationErrors,
@@ -278,12 +278,13 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
     }
   }, [fields, form, initialValues, open]);
   const values = useWatch({ control: form.control });
-  const visibleFields = resolveDescriptorFields(fields, values);
-  const renderedFieldNames = visibleFields.filter((field) => !field.hidden).map((field) => field.name);
+  // Resolving lays `resolve`'s descriptor over each declared one, so its DescriptorField members stay.
+  const shownFields = visibleFields(fields, values) as DescriptorField[];
+  const renderedFieldNames = shownFields.filter((field) => !field.hidden).map((field) => field.name);
   const submitting = form.formState.isSubmitting;
   const error = form.formState.errors.root?.server?.message ?? null;
   const fieldsReady = form.formState.isValid || (!form.formState.isDirty
-    && visibleFields
+    && shownFields
       .filter((field) => !field.readOnly && !field.readOnlyWhen?.(values))
       .every((field) => !field.required && !field.presenceRequired));
   const ready = fieldsReady && (canSubmit?.(values) ?? true);
@@ -316,7 +317,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   const errorOptions = { fieldNames: renderedFieldNames, fallback: errorFallback ?? t("error.generic") };
   const allowRootErrorRetry = async (): Promise<void> => {
     if (!renderedFieldNames.some((name) => form.getFieldState(name).invalid)) {
-      await form.trigger(visibleFields.map((field) => field.name));
+      await form.trigger(shownFields.map((field) => field.name));
     }
   };
 
@@ -378,7 +379,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
       trigger={trigger}
     >
       <ActionFormProvider {...{ ...form, registerFieldValidation }}>
-        <DescriptorFieldList resolvedFields={visibleFields} />
+        <DescriptorFieldList resolvedFields={shownFields} />
       </ActionFormProvider>
       <ErrorBanner description={error} />
     </DialogForm>
@@ -396,7 +397,8 @@ export function requiredDialogErrors(
   message: string,
   validateConstraints = true,
 ): FieldErrors<Record<string, unknown>> {
-  const resolved = resolveDescriptorFields(typeof fields === "function" ? fields(values) : fields, values);
+  // Resolving lays `resolve`'s descriptor over each declared one, so its DescriptorField members stay.
+  const resolved = visibleFields(typeof fields === "function" ? fields(values) : fields, values) as DescriptorField[];
   const editable = resolved.filter((field) => isFieldControlVisible(field, values) && !field.readOnly && !field.readOnlyWhen?.(values));
   const missing = editable.flatMap((field) => {
     if (isStructuredPresenceField(field)) {

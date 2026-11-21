@@ -1,7 +1,6 @@
 import * as React from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { FormProvider, useForm } from "react-hook-form";
-import { Button, DescriptorFieldList, type DescriptorField } from "@angee/ui";
+import { ActionFormProvider, Button, DescriptorFieldList, useActionForm, type DescriptorField } from "@angee/ui";
 
 const fields: readonly DescriptorField[] = [
   { name: "title", label: "Title", description: "This value belongs to the surrounding form." },
@@ -17,10 +16,14 @@ const meta = {
 export default meta;
 
 function DescriptorFieldListDemo(): React.ReactElement {
-  const form = useForm<Record<string, unknown>>({ defaultValues: { title: "Example", details: true, note: "" } });
   const [submitted, setSubmitted] = React.useState<Record<string, unknown>>();
-  return <FormProvider {...form}>
-    <form className="grid w-96 gap-4" onSubmit={form.handleSubmit(setSubmitted)}>
+  // The list lives in an action form: its provider carries editor validation and the preset memory.
+  const { form, run } = useActionForm<Record<string, unknown>>({
+    defaultValues: { title: "Example", details: true, note: "" },
+    submit: (values) => { setSubmitted(values); return { status: "ok", data: null }; },
+  });
+  return <ActionFormProvider {...form}>
+    <form className="grid w-96 gap-4" onSubmit={(event) => { event.preventDefault(); void run(); }}>
       <DescriptorFieldList fields={fields} />
       <div className="flex gap-2">
         <Button type="submit">Save</Button>
@@ -28,7 +31,7 @@ function DescriptorFieldListDemo(): React.ReactElement {
       </div>
       {submitted ? <pre className="rounded-6 bg-inset p-3 text-12">{JSON.stringify(submitted, null, 2)}</pre> : null}
     </form>
-  </FormProvider>;
+  </ActionFormProvider>;
 }
 
 export const Fields: StoryObj = { render: () => <DescriptorFieldListDemo /> };

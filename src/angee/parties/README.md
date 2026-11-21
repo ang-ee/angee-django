@@ -63,6 +63,25 @@ record of the page: it leaves the source's key walk, so the absence sweep
 tombstones its link. A two-way stream compares the person's own projection and
 keeps a vanished contact's statements.
 
+A party's `created_at` is the earliest time its provenance states. A contact
+carries the time its source says the record was created (`ParsedContact.created_at`,
+kept in the payload beside the compared projection, so it is never a change to
+apply); a person the contact makes takes it, and a contact landing on a person that
+exists moves the person's earlier when it is earlier, never later, as a merge moves
+its survivor's to the earliest of what it folds in (`Party.backdate_creation`, through
+the one rule `PartyManager.backdate_creation`). A contact re-read unchanged, which
+integrate settles without applying it, moves its person too
+(`DirectoryBackend.on_revalidated`, from the payload just stored; a merged record's
+link names its survivor). So on an instance whose contacts were read before they
+carried their time, people move as the directory reads them again: the daily sweep
+re-reads every contact, and a Resync or a change at the source reads one sooner.
+Every provision runs `backdate_parties_from_sources`
+(`PartyManager.backdate_from_sources`), the catch-up for payloads already holding a
+time: each party takes the earliest of its own and its directory records' stored
+times, and a record whose payload states none is counted and left for its next read
+from the source. Its line gives those counts and, when it moved any, the earliest
+and latest new time: no name or id.
+
 A consumer addon fills its own person columns from a pull-only directory's
 source fields in code, with a [directory mapping](backends.py)
 (`DirectoryMapping`): its donor of `parties.Person` declares the columns and the
@@ -606,7 +625,8 @@ exactly the two are linked to an address the pair cites, and both bear a real
 name, none of the pair's cited addresses (a record named after its e-mail has no
 name of its own), equal to the other's but for case, accents and hyphens. In each
 set the oldest record survives and the others fold into it in key order, under one
-lock pass. A batch records no value as the person's choice: each record's
+lock pass: the oldest is the earliest `created_at`, which a source's creation time
+sets (below), so the record its sources have known longest survives. A batch records no value as the person's choice: each record's
 statements move to the survivor as their sources' own and the provenance ranking
 decides what shows; a field the survivor leaves empty takes a merged record's
 value as a plain value no one states (`Party.merge_values`). The dialog shows, for

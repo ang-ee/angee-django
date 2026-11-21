@@ -88,6 +88,7 @@ export function BoundDescriptorField({
   ) as DescriptorField;
   const scopedValues = useWatch({ control: surface.form.control, name: (scope || undefined) as string });
   const siblingValues = isFormValues(scopedValues) ? scopedValues : {};
+  // Resolving lays `resolve`'s descriptor over the declared one, so its DescriptorField members stay.
   const resolved = resolveField(declared, siblingValues) as DescriptorField;
   const name = scope ? `${scope}.${resolved.name}` : resolved.name;
   if (!isFieldVisible(resolved, siblingValues)) return <></>;

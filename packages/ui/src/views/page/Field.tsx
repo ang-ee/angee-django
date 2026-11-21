@@ -61,7 +61,7 @@ export interface FieldDescriptor extends FieldPresentation {
   showWhen?: (values: Row) => boolean;
   /** Keep this field in form values and mutation data without rendering a control. */
   hidden?: boolean;
-  /** Resolve implementation-dependent presentation from current form values. */
+  /** Resolve implementation-dependent presentation from current form values; the field keeps its declared `name`. */
   resolve?: (values: Row) => FieldDescriptor;
   /**
    * The preset this field loads onto sibling fields when it changes, from its value, the form's

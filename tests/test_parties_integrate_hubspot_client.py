@@ -828,3 +828,37 @@ def test_a_records_modified_time_reads_in_utc_and_an_unreadable_one_is_unset(
 
     assert record.modified_at("contacts") == expected
     assert HubSpotObject(id="101").modified_at("contacts") is None
+
+
+@pytest.mark.parametrize(
+    ("stated", "expected"),
+    [
+        pytest.param(
+            "2024-03-01T08:30:00.250Z", datetime(2024, 3, 1, 8, 30, 0, 250000, tzinfo=UTC), id="iso-utc"
+        ),
+        pytest.param("2024-03-01T09:30:00+01:00", datetime(2024, 3, 1, 8, 30, tzinfo=UTC), id="offset-to-utc"),
+        pytest.param("soon", None, id="words"),
+        pytest.param(None, None, id="null"),
+        pytest.param(1709281800000, None, id="not-a-string"),
+    ],
+)
+def test_a_records_creation_time_is_hubspots_created_at_and_an_unreadable_one_is_unset_not_unreadable(
+    stated: Any, expected: datetime | None
+) -> None:
+    record = HubSpotObject.model_validate({"id": "101", "properties": {}, "createdAt": stated})
+
+    assert (record.created_at, record.unreadable) == (expected, False)
+    assert HubSpotObject.model_validate({"id": "101", "properties": {}}).created_at is None
+
+
+def test_every_read_states_a_records_creation_time_without_asking_for_a_property(
+    hubspot_server: HubSpotServer, client: HubSpotClient
+) -> None:
+    created = datetime(2024, 3, 1, 8, 30, tzinfo=UTC)
+    record_id = hubspot_server.add("contacts", {"email": "ada@example.com"}, modified=MODIFIED, created=created)
+
+    (listed,) = client.list_page("contacts", after="", limit=10, properties=()).results
+    (searched,) = client.search_modified("contacts", since=EPOCH, limit=10, properties=()).results
+    (read,) = client.batch_read("contacts", [record_id], ()).found
+
+    assert [record.created_at for record in (listed, searched, read)] == [created] * 3
