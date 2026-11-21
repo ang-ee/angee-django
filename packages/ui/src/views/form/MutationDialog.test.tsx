@@ -692,3 +692,43 @@ test("a submission settles its promise whatever its call does, a synchronous thr
   await expect(submitMutationDialog({ onSubmit }, {}, "Could not save.")).rejects.toBe(refusal);
   expect(mutation).toHaveBeenCalledExactlyOnceWith({}, { errorNotification: false });
 });
+
+const conditionalFields = [
+  { name: "mode", label: "Mode" },
+  { name: "detail", label: "Detail", showWhen: (values: Readonly<Record<string, unknown>>) => values.mode === "on" },
+];
+
+test("a field hidden when the dialog opens is not submitted, and shows its initial value once it shows", async () => {
+  const submit = vi.fn().mockResolvedValue(ok);
+  render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+    <MutationDialog open onOpenChange={vi.fn()} title="Conditional" fields={conditionalFields}
+      initialValues={{ mode: "off", detail: "seeded" }} submitLabel="Save" parseValues={parseRawValues} onSubmit={submit} />
+  </AppRuntimeProvider>);
+  expect(screen.queryByRole("textbox", { name: "Detail" })).toBeNull();
+  // The hidden field keeps its default without a value, so the form reads dirty and is ready once it has validated.
+  const save = screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
+  await waitFor(() => expect(save.disabled).toBe(false));
+  fireEvent.click(save);
+  await waitFor(() => expect(submit).toHaveBeenCalledWith({ mode: "off" }, { errorNotification: false }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Mode" }), { target: { value: "on" } });
+  expect((screen.getByRole("textbox", { name: "Detail" }) as HTMLInputElement).value).toBe("seeded");
+});
+
+test("a field that shows again has its value before its control renders: the form is not updated during a render", async () => {
+  const errors: string[] = [];
+  const consoleError = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => { errors.push(String(args[0])); });
+  try {
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Conditional" fields={conditionalFields}
+        initialValues={{ mode: "on", detail: "initial" }} submitLabel="Save" parseValues={parseRawValues} onSubmit={vi.fn().mockResolvedValue(ok)} />
+    </AppRuntimeProvider>);
+    const mode = screen.getByRole("textbox", { name: "Mode" });
+    fireEvent.change(mode, { target: { value: "off" } });
+    expect(screen.queryByRole("textbox", { name: "Detail" })).toBeNull();
+    fireEvent.change(mode, { target: { value: "on" } });
+    expect((screen.getByRole("textbox", { name: "Detail" }) as HTMLInputElement).value).toBe("initial");
+    expect(errors.filter((message) => message.includes("Cannot update a component"))).toEqual([]);
+  } finally {
+    consoleError.mockRestore();
+  }
+});

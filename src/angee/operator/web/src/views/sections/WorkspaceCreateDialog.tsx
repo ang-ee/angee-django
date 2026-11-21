@@ -61,7 +61,7 @@ export function WorkspaceCreateDialog({
       })),
       placeholder: t("workspaces.create.templatePlaceholder"),
       required: true,
-      prefill: (value) => templateInputPrefill(templates, inputNames, value),
+      prefill: (value) => templateInputPrefill(templates, value),
     },
     {
       name: "name",
@@ -165,21 +165,15 @@ function templateInputFor(
   return editableTemplateInputs(template?.inputs ?? []).find((input) => input.name === name) ?? null;
 }
 
+/** The chosen template's inputs at their initial values; another template's inputs leave the dialog's values as they hide. */
 function templateInputPrefill(
   templates: readonly TemplateDescriptor[],
-  inputNames: readonly string[],
   templateRef: unknown,
 ): Record<string, unknown> {
-  const cleared = Object.fromEntries(inputNames.map((name) => [name, undefined]));
-  if (typeof templateRef !== "string") return cleared;
   const template = templates.find((candidate) => candidate.ref === templateRef);
-  return {
-    ...cleared,
-    ...Object.fromEntries(
-      editableTemplateInputs(template?.inputs ?? [])
-        .map((input) => [input.name, initialTemplateInput(input)]),
-    ),
-  };
+  return Object.fromEntries(
+    editableTemplateInputs(template?.inputs ?? []).map((input) => [input.name, initialTemplateInput(input)]),
+  );
 }
 
 function initialTemplateInput(input: TemplateInputDescriptor): unknown {

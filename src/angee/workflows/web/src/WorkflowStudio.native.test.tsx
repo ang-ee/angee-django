@@ -385,3 +385,31 @@ test("config issues are reapplied after history resets the form", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Redo" }));
   expect(screen.getByText("Threshold is too small.")).toBeTruthy();
 });
+
+// Undo and redo replay whole frames in one step: a subscriber never sees a step half built. A replay
+// that wrote the form one registered name at a time would hand the graph an entry with no `step`.
+test("undo removes an added step and redo brings it back", async () => {
+  const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  render(<StudioStory />);
+  await screen.findByTestId("rf__node-entry");
+  fireEvent.click(screen.getByRole("button", { name: "Add step" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Echo" }));
+  await screen.findByRole("button", { name: "Select Echo (echo)" });
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Select Echo (echo)" })).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "Redo" }));
+  expect(await screen.findByRole("button", { name: "Select Echo (echo)" })).toBeTruthy();
+  expect(errors.mock.calls.map(([first]) => String(first)).filter((message) => message.includes("TypeError"))).toEqual([]);
+  errors.mockRestore();
+});
+
+test("undo brings back a deleted step and redo removes it again", async () => {
+  render(<StudioStory linked />);
+  fireEvent.click(await screen.findByRole("button", { name: "Select Second (second)" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Delete Second (second)" }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Select Second (second)" })).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  expect(await screen.findByRole("button", { name: "Select Second (second)" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Redo" }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Select Second (second)" })).toBeNull());
+});

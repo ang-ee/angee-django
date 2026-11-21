@@ -248,6 +248,7 @@ describe("WorkspaceCreateDialog", () => {
     expect((screen.getByLabelText("topic") as HTMLInputElement).value).toBe("");
     expect((screen.getByLabelText("count") as HTMLInputElement).value).toBe("");
     expect(screen.queryByRole("switch", { name: "draft" })).toBeNull();
+    fireEvent.change(screen.getByLabelText("count"), { target: { value: "5" } });
 
     await chooseTemplate("review");
     const submit = screen.getByRole("button", { name: "Create workspace" }) as HTMLButtonElement;
@@ -265,6 +266,20 @@ describe("WorkspaceCreateDialog", () => {
       }, { errorNotification: false }),
     );
     expect(mocks.create).not.toHaveBeenCalled();
+
+    // The chosen template's preset seeds its inputs afresh and only its inputs are submitted: this holds
+    // with and without the dialog unregistering what it hides, and pins the dialog across that change.
+    await chooseTemplate("dev");
+    expect((screen.getByLabelText("count") as HTMLInputElement).value).toBe("");
+    expect(screen.queryByRole("switch", { name: "draft" })).toBeNull();
+    fireEvent.change(screen.getByLabelText("topic"), { target: { value: "dev topic" } });
+    await waitFor(() => expect(submit.disabled).toBe(false));
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(mocks.preflight).toHaveBeenLastCalledWith({
+        input: { template: "workspaces/dev", inputs: [{ key: "topic", value: "dev topic" }] },
+      }, { errorNotification: false }),
+    );
   });
 });
 

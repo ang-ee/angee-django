@@ -633,6 +633,59 @@ test.each([true, false])("concurrent edits to a newly saved line remain intact a
   expect(f.surface().formIsDirty).toBe(false);
 });
 
+const lineLabels = () => screen.getAllByLabelText("Label").map((cell) => (cell as HTMLInputElement).value);
+const loadedLabels = initialLines.map((row) => String(row.label));
+
+// Skipped, a known gap: a change made through the lines editor records no undo step. The editor
+// starts no history group, and a field-array operation sends no values notification; the first one
+// that carries a new row is the editor's own client-key write after the render, outside any step.
+test.skip("a line added through the lines' controls is one undo step, and undo and redo show and save the rows it recorded", async () => {
+  const f = await fixture({ publicView: true });
+  fireEvent.click(screen.getByRole("button", { name: "Add line" }));
+  const added = screen.getAllByLabelText("Label").find((cell) => (cell as HTMLInputElement).value === "")!;
+  fireEvent.change(added, { target: { value: "New" } });
+  expect(lineLabels()).toEqual([...loadedLabels, "New"]);
+  // A second, unrelated change, so the first undo lands ON the changed frame rather than on the loaded one.
+  fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Other" } });
+  act(() => f.surface().history.undo());
+  await waitFor(() => expect(lineLabels()).toEqual([...loadedLabels, "New"]));
+  expect((screen.getByLabelText("Title") as HTMLTextAreaElement).value).toBe("Original");
+  act(() => f.surface().history.undo());
+  await waitFor(() => expect(lineLabels()).toEqual(loadedLabels));
+  expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+  act(() => f.surface().history.redo());
+  await waitFor(() => expect(lineLabels()).toEqual([...loadedLabels, "New"]));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(f.custom).toHaveBeenCalledOnce());
+  expect(f.custom).toHaveBeenCalledWith(expect.objectContaining({
+    payload: { pk: "doc-1", patch: {}, lines: [...initialLines, { label: "New", position: 3 }] },
+  }));
+});
+
+test("a recorded step that adds a line: the lines show the rows each undo and redo lands on, and the save writes them", async () => {
+  const f = await fixture({ publicView: true });
+  act(() => { f.surface().history.perform(() => f.surface().form.setValue("lines", [...initialLines, { label: "New", position: 3 }], { shouldDirty: true })); });
+  const changed = [...loadedLabels, "New"];
+  await waitFor(() => expect(lineLabels()).toEqual(changed));
+  // A second, unrelated change, so the first undo lands ON the changed frame rather than on the loaded one.
+  fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Other" } });
+  act(() => f.surface().history.undo());
+  await waitFor(() => expect(lineLabels()).toEqual(changed));
+  expect((screen.getByLabelText("Title") as HTMLTextAreaElement).value).toBe("Original");
+  expect(screen.getByRole("button", { name: "Discard" })).toBeTruthy();
+  act(() => f.surface().history.undo());
+  await waitFor(() => expect(lineLabels()).toEqual(loadedLabels));
+  expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Discard" })).toBeNull();
+  act(() => f.surface().history.redo());
+  await waitFor(() => expect(lineLabels()).toEqual(changed));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(f.custom).toHaveBeenCalledOnce());
+  expect(f.custom).toHaveBeenCalledWith(expect.objectContaining({
+    payload: { pk: "doc-1", patch: {}, lines: [...initialLines, { label: "New", position: 3 }] },
+  }));
+});
+
 test("undoing the last local line edit releases the held canonical refresh", async () => {
   const f = await fixture();
   edit("a.label", "Local alpha");

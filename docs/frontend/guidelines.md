@@ -1275,8 +1275,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   does not hold the menu open with `closeOnClick={false}`.
 - Toolbar dialogs compose [MutationDialog](../../packages/ui/src/views/form/MutationDialog.tsx).
   Declare `DescriptorField`s; the shared [DescriptorFieldList](../../packages/ui/src/views/form/DescriptorFieldList.tsx)
-  owns controls and requires a native RHF `FormProvider`. Decode raw controls with
-  `parseValues` and `mutationDialogValueCodecs`; required/verbatim codecs express
+  owns controls and requires an `ActionFormProvider` over the form (a host with its
+  own form gets the form and that provider's props from `useActionForm`). Decode raw
+  controls with `parseValues` and `mutationDialogValueCodecs`; required/verbatim codecs express
   authored field contracts. An authored mutation, or an owner's call returning its
   data (an action's outcome, a store binding's result), is the dialog's `mutation`
   (with `mutationResult` to read its data), never an `onSubmit` wrapping it. The
