@@ -439,7 +439,7 @@ export function useFormViewSave({
       }
     } else {
       const arrays = dirtyArrayValues(form.getValues(), (path) => form.getFieldState(path).isDirty);
-      reset(next, { keepDirtyValues: true, keepDirty: true, keepFieldsRef: true });
+      reset(next, { keepDirtyValues: true, keepDirty: true });
       for (const [path, value] of arrays) setValue(path, value, { shouldDirty: true });
     }
     resetDefaultValues(baseline, { keepIsValid: true });
