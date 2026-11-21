@@ -28,6 +28,14 @@ on:
         required: false
         type: boolean
         default: false
+      pr-checks-enabled:
+        description: >-
+          Run the lanes a pull request's own run already ran on the tree a merge commit gives main
+          (the SQLite shards, the packages and the composed stack). A caller passes false on a push
+          to main, where only the PostgreSQL selection is new work.
+        required: false
+        type: boolean
+        default: true
       addons-profile:
         description: Addon composition profile; full is the only lane that checks out bridges.
         required: false
@@ -126,7 +134,7 @@ jobs:
   # (scripts/changed_path_selection.py); every other event runs the whole suite.
   uv-shard:
     name: uv ${{ matrix.group }}/6
-    if: ${{ inputs.uv-enabled }}
+    if: ${{ inputs.uv-enabled && inputs.pr-checks-enabled }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -205,7 +213,9 @@ jobs:
       - name: Verify PostgreSQL contracts execute without skips
         # Every PostgreSQL-only contract (row and advisory locks, MVCC reads,
         # two-writer campaigns, vendor branches by node id) with the workflow,
-        # decision and agent-session selection, in six duration-balanced groups.
+        # decision and agent-session selection, and the authorization contracts
+        # the PostgreSQL lane's rule in docs/checks.md admits, in six
+        # duration-balanced groups.
         # These source tests register bare concrete Django models, so PostgreSQL
         # must create their tables in one sync-app pass.
         # A pull request runs the examples profile alone: its member planner-memory
@@ -251,13 +261,27 @@ jobs:
             tests/test_decisions_lifecycle.py tests/test_decisions_concurrency.py \
             tests/test_checklists.py tests/test_calendar_concurrency.py \
             tests/test_calendar_ics.py::test_two_purges_racing_on_a_shared_credential_retire_it_exactly_once \
+            tests/test_calendar_google.py::test_two_racing_connects_of_one_account_make_one_source \
+            tests/test_calendar_google_publish.py::test_two_racing_publishes_of_one_calendar_bind_it_once \
+            tests/test_calendar_google_publish.py::test_two_sources_racing_to_publish_to_one_remote_calendar_bind_it_once \
+            tests/test_calendar_google_publish.py::test_a_publish_holding_its_vendor_lets_another_source_of_that_vendor_connect \
+            tests/test_calendar_google_publish.py::test_moving_a_series_waits_on_an_override_a_push_is_binding_then_releases_its_link \
+            tests/test_calendar_google_publish.py::test_an_edit_the_push_waits_on_to_bind_its_event_is_the_next_push \
             tests/test_parties_addressbook_upgrade.py::test_the_address_book_template_upgrades_in_one_postgresql_migration \
+            tests/test_parties_directory_backend.py::test_a_page_holds_every_handle_its_linked_people_carry_before_any_record_applies \
+            tests/test_parties_directory_backend.py::test_mail_landing_on_a_pages_address_waits_for_the_page \
+            tests/test_parties_directory_backend.py::test_a_merge_of_a_pages_person_waits_for_the_page \
+            tests/test_parties_directory_backend.py::test_a_confirmation_of_a_pages_address_waits_for_the_page \
+            tests/test_parties_directory_backend.py::test_an_account_adopting_a_pages_candidate_waits_for_the_page \
+            tests/test_parties_same_as_concurrency.py \
+            tests/test_parties_handle_keys_concurrency.py \
             tests/test_agent_sessions.py tests/test_agent_sessions_concurrency.py \
             tests/test_integrate_discovery_concurrency.py \
             tests/test_integrate_jwt_bearer.py::test_concurrent_mints_serialize_across_processes_on_postgresql \
             tests/test_integrate_oauth_accounts.py::test_concurrent_attaches_bind_one_account_on_postgresql \
             tests/test_integrate_oauth_accounts.py::test_racing_first_connects_keep_the_refresh_token_on_postgresql \
             tests/test_integrate_oauth_accounts.py::test_legacy_adoption_racing_an_attach_binds_without_deadlock_on_postgresql \
+            tests/test_integrate_oauth_accounts.py::test_an_account_disconnect_waits_for_the_account_before_locking_its_credential_on_postgresql \
             tests/test_framework_integration.py \
             tests/test_base_row_lock.py \
             tests/test_connections.py::test_ensure_fresh_serializes_two_processes_on_postgresql \
@@ -295,7 +319,10 @@ jobs:
             tests/test_task_locks.py \
             tests/test_transitions.py::test_a_guarded_transition_holds_its_row_lock_until_commit \
             tests/test_task_rank_allocation.py tests/test_projects_record_tasks.py \
-            tests/test_projects_access_projections.py tests/test_timeline_concurrency.py \
+            tests/test_webforms_concurrency.py tests/test_webforms_messaging_concurrency.py \
+            tests/test_webforms_messaging_upgrade.py \
+            tests/test_projects_access_projections.py tests/test_parties_roles.py \
+            tests/test_timeline_concurrency.py \
             tests/test_work_intake_lock_campaign.py tests/test_work_stage_lock_campaign.py \
             tests/test_workflows_integrate_cycle.py tests/test_workflows_integrate_steps.py
           fi
@@ -315,11 +342,12 @@ jobs:
       - run: |
           echo "quality=${{ needs.python-quality.result }} shards=${{ needs.uv-shard.result }} postgres=${{ needs.uv-postgres.result }}"
           test "${{ needs.python-quality.result }}" = success
-          test "${{ needs.uv-shard.result }}" = success
+          # The shards are skipped where a caller turned the pull-request lanes off.
+          test "${{ needs.uv-shard.result }}" = success || { test "${{ inputs.pr-checks-enabled }}" = false && test "${{ needs.uv-shard.result }}" = skipped; }
           test "${{ needs.uv-postgres.result }}" = success
 
   pnpm:
-    if: ${{ inputs.pnpm-enabled }}
+    if: ${{ inputs.pnpm-enabled && inputs.pr-checks-enabled }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -351,7 +379,7 @@ jobs:
   # Python collection, each on its own PostgreSQL host. The stack job keeps one verdict.
   stack-shard:
     name: stack ${{ matrix.group }}/${{ strategy.job-total }}
-    if: ${{ inputs.stack-enabled }}
+    if: ${{ inputs.stack-enabled && inputs.pr-checks-enabled }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -694,4 +722,4 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - run: test "${{ needs.stack-shard.result }}" = success
+      - run: test "${{ needs.stack-shard.result }}" = success || { test "${{ inputs.pr-checks-enabled }}" = false && test "${{ needs.stack-shard.result }}" = skipped; }

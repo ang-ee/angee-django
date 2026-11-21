@@ -73,7 +73,7 @@ from angee.base.models.trash import TrashQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.base.permissions import actor_user_id, purpose_read_holds, reader_queryset, require_rebac_queryset
 from angee.base.prefetch import InstancePrefetch, ReaderMemo, prefetched_objects
-from angee.base.querysets import AngeeQuerySet, MergeableQuerySet, row_lock_paths
+from angee.base.querysets import AngeeQuerySet, MergeableQuerySet, row_lock_queryset
 from angee.base.refs import generic_pointer_model, generic_pointer_target
 from angee.base.search import SEARCH_CONFIG, stamp_search_vector
 from angee.base.serialization import STRINGIFIED_JSON, strip_null_bytes
@@ -251,11 +251,6 @@ class ChannelQuerySet[ChannelT: Channel](IntegrationQuerySet[ChannelT]):
         """Constrain this channel selection to one declared backend."""
 
         return self.filter(backend_class=backend_class)
-
-    def published_webforms(self, slug: str) -> Self:
-        """Published webform channels at ``slug``, the anonymous description and submission scope."""
-
-        return self.for_backend("webform").filter(slug=slug, is_published=True)
 
     def outbound_email(self, *, backend_class: str | None = None) -> Self:
         """Connected channels whose declared backend currently offers configured outbound email.
@@ -472,16 +467,12 @@ class ChannelManager[ChannelT: Channel](_ChannelManagerBase[ChannelT]):
         the teardown back. Purging first means the channel delete's collector never has to
         ``SET_NULL`` the rows it just removed. A ``ProtectedError``/``RestrictedError`` from
         a consumer addon that ``PROTECT``\\s a reverse FK to ``integrate.Integration``
-        propagates (the transaction rolls back); the authored preview mutation catches it
-        and surfaces a blocked preview rather than a raw 500. The deleted instance keeps its
-        pk so the Hasura delete shape can return it.
+        propagates (the transaction rolls back); ``_ChannelWriteBackend.delete_preview``
+        catches it and surfaces a blocked preview rather than a raw 500. The deleted
+        instance keeps its pk so the Hasura delete shape can return it.
         """
 
-        # Defense-in-depth: the channel's read/write/delete scopes are today all the same
-        # owner+admin arm, so a caller that resolved the channel to write it already passes
-        # `delete`; this preflight denies at resolve regardless. A divergent-zed preflight
-        # test (delete narrower than write) is only meaningful once the deferred thread/
-        # message `delete` arm (see teardown FOLLOW-UP) splits the scopes.
+        # The manager rechecks delete authority, including callers outside GraphQL.
         if channel.declared_concrete_model() is not self.model:
             raise ValueError("A channel child must be deleted through its own capability.")
         if not channel.has_access("delete"):
@@ -1356,7 +1347,7 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
             return
         thread_model = self.model.thread.field.related_model
         with system_context(reason="messaging.record_thread.teardown"), transaction.atomic():
-            target_model._base_manager.select_for_update(of=row_lock_paths(target_model)).filter(pk=object_id).exists()
+            row_lock_queryset(target_model).filter(pk=object_id).exists()
             edges = self.model._base_manager
             attachments = list(
                 edges.all()
@@ -3407,16 +3398,13 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         if actor is None:
             raise PermissionDenied("Authentication required.")
         with transaction.atomic():
-            row = self.with_actor(actor).with_action("send_held").lock_if_supported().get(pk=message.pk)
+            row = (
+                self.with_actor(actor).with_action(self.model.delivery_action_permission).lock_if_supported()
+                .get(pk=message.pk)
+            )
             row.require_revision(expected_revision)
-            if (row.status == "uncertain" and row.scheduled_at is None
-                    and row.delivery_lease_until is not None and row.delivery_lease_until > timezone.now()):
-                raise DeliveryReconciliationBusy()
-            allowed = ("uncertain", "failed") if retry else ("uncertain",)
-            if row.status not in allowed or row.delivery_blocked:
-                raise ValidationError(
-                    "Retry requires a retained failed or uncertain delivery; acknowledgement requires uncertainty."
-                )
+            if (error := row.delivery_resolution_error(retry=retry)) is not None:
+                raise error
             with system_context(reason="messaging.delivery.acknowledge"):
                 row.acknowledged_by_id = actor_user_id(to_subject_ref(actor))
                 if retry:
@@ -3461,7 +3449,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             # send_held is precisely channel write, including for discard. The
             # identity owner decodes once and performs one scoped pk__in query.
             scoped = (
-                self.with_actor(actor).inbox().with_action("send_held").lock_if_supported().order_by("pk")
+                self.with_actor(actor).inbox().with_action(self.model.delivery_action_permission)
+                .lock_if_supported().order_by("pk")
             )
             rows = instances_from_public_ids(self.model, [str(item.id) for item in selection], queryset=scoped)
             threads = []

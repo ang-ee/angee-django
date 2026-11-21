@@ -15,8 +15,9 @@ import {
   useResourceViewMaybe,
   type ResourceViewContextValue,
 } from "./resource-view-context";
-import { DEFAULT_TEXT_FILTER_FIELD, type ResourceViewGroup, type ResourceViewKind } from "./resource-view-model";
+import { DEFAULT_TEXT_FILTER_FIELD, resourceViewKindCapabilities, type ResourceViewGroup, type ResourceViewKind } from "./resource-view-model";
 import { EMPTY_SELECTED_IDS } from "./resource-view-codecs";
+import { selectedGroupsOf } from "./resource-view-grouped-model";
 import { validateResourceViewState } from "./model/state";
 import { filterForTextSearch, queryForColumns } from "./resource-query";
 import { ResourceQueryError } from "./ResourceQueryError";
@@ -44,7 +45,9 @@ import {
 import { useResourceSearch } from "./search/use-resource-search";
 import { useSearchCatalog } from "./search/catalog";
 import type { ResourceToolbarProps } from "../../toolbars";
-import { declaredGroupDefaults, validateDeclaredGroupDefaults } from "./search/group-defaults";
+import { declaredGroupDefaults, useAppliedRepeated, validateDeclaredGroupDefaults, withoutRepeated } from "./search/group-defaults";
+import { renderBulkActions, type WithPlacedBulkActions } from "./bulk-action";
+import { useSelectionPlaces } from "./selection-channel";
 import {
   useRowActionsSurface,
   type RowActionDeclaration,
@@ -102,6 +105,7 @@ export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
 
 /** The kinds an in-memory list with a gallery offers. */
 const ROWS_GALLERY_KINDS: readonly ResourceViewKind[] = ["list", "gallery"];
+const NO_GROUPS: readonly ResourceViewGroup[] = [];
 
 /** Card presentation for {@link RowsListViewProps.gallery}; mirrors GalleryView. */
 export interface RowsGalleryConfig<TRow extends StringIdRow = StringIdRow> {
@@ -131,13 +135,13 @@ export function RowsListView<TRow extends StringIdRow = StringIdRow>(
     presentation: props.presentation,
     initialState,
     children: (scopedResourceView) => (
-      <ValidatedRowsListView {...props} resourceView={scopedResourceView} />
+      <ValidatedRowsListView<TRow> {...props} resourceView={scopedResourceView} />
     ),
   });
 }
 
 function ValidatedRowsListView<TRow extends StringIdRow>(
-  props: RowsListViewProps<TRow> & { resourceView: ResourceViewContextValue },
+  props: WithPlacedBulkActions<RowsListViewProps<TRow>, TRow> & { resourceView: ResourceViewContextValue },
 ): React.ReactElement {
   const t = useUiT();
   const defaults = React.useMemo(() => declaredGroupDefaults(props.defaultGroup), [props.defaultGroup]);
@@ -145,9 +149,13 @@ function ValidatedRowsListView<TRow extends StringIdRow>(
     () => props.query ?? queryForColumns(props.columns, null, defaults.groups),
     [props.query, props.columns, defaults],
   );
-  let state = props.resourceView.state;
+  // Local rows group in the browser, which cannot apply `GroupSpec.repeated`; the
+  // gallery never groups, so it leaves a stored flag alone, as ListView's gallery does.
+  const { grouping } = resourceViewKindCapabilities(props.resourceView.state.view);
+  const resourceView = useAppliedRepeated(props.resourceView, !grouping);
+  let state = resourceView.state;
   try {
-    validateDeclaredGroupDefaults("RowsListView", props.defaultGroup, undefined, props.resourceView.defaultState, t);
+    validateDeclaredGroupDefaults("RowsListView", props.defaultGroup, undefined, resourceView.defaultState, t);
   } catch (error) {
     return <ErrorBanner description={error instanceof Error ? error.message : String(error)} />;
   }
@@ -156,13 +164,14 @@ function ValidatedRowsListView<TRow extends StringIdRow>(
     state = validateResourceViewState({
       ...state,
       filter: filterForTextSearch(query, state.filter, "title", props.columns.map(({ field }) => field)),
-    }, query);
+      groupStack: grouping ? state.groupStack : withoutRepeated(state.groupStack),
+    }, query, { appliesRepeated: false });
   } catch (error) {
     state = { ...state, queryError: error instanceof Error ? error : new Error("Invalid query.") };
   }
   return state.queryError
-    ? <ResourceQueryError error={state.queryError} onReset={props.resourceView.resetQuery} />
-    : <RowsListViewBody {...props} />;
+    ? <ResourceQueryError error={state.queryError} onReset={resourceView.resetQuery} />
+    : <RowsListViewBody {...props} resourceView={resourceView} />;
 }
 
 function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
@@ -195,7 +204,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   bulkActions,
   draggableRow,
   resourceView,
-}: RowsListViewProps<TRow> & {
+}: WithPlacedBulkActions<RowsListViewProps<TRow>, TRow> & {
   resourceView: ResourceViewContextValue;
 }): React.ReactElement {
   const t = useUiT();
@@ -203,7 +212,9 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   // `subline` into its cell column, as the list frame does for a resource.
   const columns = React.useMemo(() => columnsWithMetadataDefaults(declaredColumns, null), [declaredColumns]);
   const rowActionSurface = useRowActionsSurface(rowActions);
-  const effectiveGroupStack = resourceView.state.groupStack;
+  // The gallery never groups (its kind's capability), as in `ListView`.
+  const effectiveGroupStack = resourceViewKindCapabilities(resourceView.state.view).grouping
+    ? resourceView.state.groupStack : NO_GROUPS;
 
   const surface = useRowsResourceViewSurface({
     rows,
@@ -229,6 +240,8 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
     textFilterField: DEFAULT_TEXT_FILTER_FIELD,
   });
   const selectedIds = selectable ? surface.selectedIds : EMPTY_SELECTED_IDS;
+  // Rows held in the browser never offer "Select all N", so under another list's they hand the page nothing.
+  const { allMatching } = useSelectionPlaces();
   const galleryRows = useGalleryRows(surface.rowModels);
   const interactive = Boolean(onRowClick || rowHref);
   const filtered = Object.keys(resourceView.state.filter).length > 0;
@@ -264,13 +277,13 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
           ? {
               count: selectedIds.size,
               onClear: resourceView.clearSelectedIds,
-              actions: selectedIds.size > 0
-                ? bulkActions?.(selectedIds, resourceView.clearSelectedIds, {
-                  filter: surface.mergedFilter,
-                  // Scope snapshots are shared Rows; narrow to the declared row type (see bulkActions).
-                  selectedRows: resourceView.selectedRows as readonly TRow[],
-                })
-                : undefined,
+              actions: renderBulkActions(bulkActions, selectedIds, {
+                selectedRows: resourceView.selectedRows, clearSelectedIds: resourceView.clearSelectedIds, allMatching,
+              }, {
+                filter: surface.mergedFilter,
+                // Rows grouped in the browser are never placed: a grouped list reports null.
+                selectedGroups: selectedGroupsOf(selectedIds, effectiveGroupStack, null),
+              }),
             }
           : undefined
       }

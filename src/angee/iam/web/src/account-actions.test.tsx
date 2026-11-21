@@ -4,14 +4,17 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import {
   offersAccountAction,
+  useChangePasswordAction,
   useIssuePasswordAction,
   useRenameAction,
   useResetPasswordAction,
   useSetActiveActions,
+  useSetPasswordAction,
 } from "./account-actions";
 
 const mocks = vi.hoisted(() => ({
   authored: vi.fn(), prompt: vi.fn(), reveal: vi.fn(), options: vi.fn(), setActive: vi.fn(), rename: vi.fn(),
+  setPassword: vi.fn(), changePassword: vi.fn(), actionOptions: vi.fn(),
 }));
 vi.mock("@angee/refine", async (original) => ({
   ...await original<object>(),
@@ -23,13 +26,79 @@ vi.mock("@angee/ui", async (original) => ({
   ...await original<object>(),
   useSecretReveal: () => mocks.reveal,
   useActionResultMutation: () => [mocks.setActive, {}],
-  useActionOutcomeMutation: () => [mocks.rename, {}],
+  useActionOutcomeMutation: (field: string, options: unknown) => {
+    mocks.actionOptions(field, options);
+    return [field === "change_password" ? mocks.changePassword : field === "set_user_password" ? mocks.setPassword : mocks.rename, {}];
+  },
 }));
 beforeEach(() => vi.clearAllMocks());
 
 const record = { id: "user-1", revision: 4, is_active: true, account_actions: ["SET_ACTIVE", "RENAME", "RESET_PASSWORD"] };
 const context = (row: Record<string, unknown> = record) => ({
   record: row, values: {}, refresh: vi.fn(), update: vi.fn(), prompt: mocks.prompt,
+});
+
+describe("chosen passwords are write-only action inputs", () => {
+  test("self-service masks all inputs and refuses a mismatched confirmation locally", async () => {
+    const { result } = renderHook(useChangePasswordAction);
+    const args = result.current.args;
+    expect(Array.isArray(args) ? args.map(({ name, widget, autoComplete }) => [name, widget, autoComplete]) : []).toEqual([
+      ["current_password", "password", "current-password"], ["new_password", "password", "new-password"],
+      ["confirmation", "password", "new-password"],
+    ]);
+    expect(await result.current.submit?.({ current_password: "current", new_password: "new", confirmation: "other" },
+      { record: null, selectedIds: [] })).toEqual({
+      status: "invalid", issues: { fieldErrors: { confirmation: ["The passwords do not match."] }, formErrors: [] },
+    });
+    expect(mocks.changePassword).not.toHaveBeenCalled();
+  });
+
+  test("self-service sends only the two passwords through the transient public mutation", async () => {
+    mocks.changePassword.mockResolvedValue({ ok: true, message: "Password changed." });
+    const { result } = renderHook(useChangePasswordAction);
+    expect(mocks.actionOptions).toHaveBeenCalledWith("change_password", {
+      dataProviderName: "public", idArgument: null, transient: true, errorNotification: false,
+    });
+    expect(await result.current.submit?.({ current_password: "current", new_password: "new", confirmation: "new", id: "ignored" },
+      { record: null, selectedIds: [] })).toEqual({ ok: true, message: "Password changed." });
+    expect(mocks.changePassword).toHaveBeenCalledExactlyOnceWith("", { current_password: "current", new_password: "new" });
+  });
+
+  test("self-service preserves server field errors in the shared action form", async () => {
+    mocks.changePassword.mockResolvedValue({
+      ok: false, message: "Incorrect current password.", validationErrors: { current_password: ["Try again."] },
+    });
+    const { result } = renderHook(useChangePasswordAction);
+    expect(await result.current.submit?.({ current_password: "wrong", new_password: "new", confirmation: "new" },
+      { record: null, selectedIds: [] })).toMatchObject({ ok: false, validationErrors: { current_password: ["Try again."] } });
+  });
+
+  test("set-password confirms matching inputs and calls the projected verb with the observed revision", async () => {
+    mocks.setPassword.mockResolvedValue({ ok: true, message: "Password set." });
+    const { result } = renderHook(useSetPasswordAction);
+    expect(result.current.visibleWhen?.(record)).toBe(false);
+    expect(result.current.visibleWhen?.({ ...record, account_actions: ["SET_PASSWORD"] })).toBe(true);
+    expect(result.current.visibleWhen?.({ id: "protected", account_actions: [] })).toBe(false);
+    expect(result.current.danger).toBe(true);
+    const args = result.current.args;
+    expect(Array.isArray(args) ? args.map(({ name, widget, autoComplete }) => [name, widget, autoComplete]) : []).toEqual([
+      ["password", "password", "new-password"], ["confirmation", "password", "new-password"],
+    ]);
+    expect(mocks.actionOptions).toHaveBeenCalledWith("set_user_password", {
+      transient: true, errorNotification: false, invalidateModels: ["iam.User"],
+    });
+    expect(await result.current.submit?.({ password: "chosen-password", confirmation: "different" },
+      { record, selectedIds: [record.id] })).toMatchObject({
+      status: "invalid", issues: { fieldErrors: { confirmation: ["The passwords do not match."] } },
+    });
+    expect(mocks.setPassword).not.toHaveBeenCalled();
+    expect(await result.current.submit?.({ password: "chosen-password", confirmation: "chosen-password", username: "ignored" },
+      { record, selectedIds: [record.id] })).toMatchObject({ ok: true });
+    expect(mocks.setPassword).toHaveBeenCalledExactlyOnceWith("user-1", { password: "chosen-password", expected_revision: 4 });
+    mocks.setPassword.mockResolvedValue({ ok: false, validationErrors: { password: ["Too short."] } });
+    expect(await result.current.submit?.({ password: "weak", confirmation: "weak" },
+      { record, selectedIds: [record.id] })).toMatchObject({ ok: false, validationErrors: { password: ["Too short."] } });
+  });
 });
 
 describe("account verbs follow the row's server projection", () => {
@@ -64,11 +133,13 @@ describe("account verbs follow the row's server projection", () => {
     const outcome = await result.current.submit?.(
       { first_name: "Ada", last_name: "Lovelace", username: "ignored" },
       { record, selectedIds: ["user-1"] },
+      { errorNotification: false },
     );
     expect(outcome).toEqual({ ok: true, message: "Account renamed." });
+    // The action form's quiet call options reach the verb, so a transport failure shows once.
     expect(mocks.rename).toHaveBeenCalledExactlyOnceWith("user-1", {
       first_name: "Ada", last_name: "Lovelace", confirmed: true, expected_revision: 4,
-    });
+    }, { errorNotification: false });
   });
 });
 

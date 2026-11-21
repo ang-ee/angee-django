@@ -1,6 +1,7 @@
 import * as React from "react";
 import {
   ResourceQuery,
+  resourceLifecycle,
   isClientRowModel,
   modelMetadataForLabel,
   useModelMetadata,
@@ -13,7 +14,9 @@ import { modelChain, useAppRuntime, useContainer, useResourceRecordMatchFields, 
 import { useContainerAdmission } from "../../form/container-admission";
 import type { CardFrame } from "../../../ui/card";
 import { withResourceViewScope, useResourceViewMaybe, type ResourceViewContextValue } from "../resource-view-context";
-import { DEFAULT_TEXT_FILTER_FIELD, Filter, isBuiltInResourceViewKind } from "../resource-view-model";
+import { ResourceViewArchiveScopeContext, useArchiveScopeFilter } from "../surface/archive-scope";
+import { useRecordChromeContextMaybe } from "../record-chrome-context";
+import { DEFAULT_TEXT_FILTER_FIELD, Filter, isBuiltInResourceViewKind, resourceViewKindCapabilities } from "../resource-view-model";
 import { ResourceViewKindsProvider, useOfferedResourceViewKinds, useResourceViewKindContent } from "../resource-view-kinds";
 import { ContributedViewSurface } from "./contributed-view-surface";
 import { GanttCollectionSurface } from "../../gantt/gantt-collection-surface";
@@ -22,11 +25,12 @@ import { CalendarCollectionSurface } from "../../calendar/calendar-collection-su
 import { type GroupedResourceViewSurface, type ResourceViewSurface, type UseResourceViewSurfaceProps } from "../resource-view-surface";
 import type { ResolvedBoardLaneSource } from "../resource-view-board-lanes";
 import type { CardRenderer, ListViewProps } from "../resource-view-types";
+import type { WithPlacedBulkActions } from "../bulk-action";
 import { resolveResourceViewGroup } from "../resource-view-utils";
 import { columnsWithMetadataDefaults, relationFieldInfo } from "../model-metadata-defaults";
 import { useRelationFacets } from "../../relation/relation-facet";
 import { useScalarFacets } from "../../relation/scalar-facet";
-import { declaredGroupDefaults, validateDeclaredGroupDefaults } from "../search/group-defaults";
+import { declaredGroupDefaults, useAppliedRepeated, validateDeclaredGroupDefaults } from "../search/group-defaults";
 import { initialResourceSorting } from "../resource-view-codecs";
 import { useRowActionsSurface } from "../RowActions";
 import { isBoardFoldField, isBoardRankField, ListViewContent } from "./content";
@@ -44,13 +48,19 @@ export function ListView<TRow extends Row = Row>(
   if (props.boardCard && (!props.boardCard.title || (props.boardCard.fields?.length ?? 0) > 4)) {
     throw new Error("ListView boardCard needs a title and at most four detail fields.");
   }
-  return <ListViewFrame {...props} />;
+  // Below the public surface a page's bulk actions are held narrowed: no call can leave the split out.
+  return <ListViewFrame<TRow> {...props} />;
 }
 
+/** `ListView`'s props as everything under it holds them. */
+type ListViewSurfaceProps<TRow extends Row> = WithPlacedBulkActions<ListViewProps<TRow>, TRow>;
+
 function ListViewFrame<TRow extends Row = Row>(
-  props: ListViewProps<TRow>,
+  props: ListViewSurfaceProps<TRow>,
 ): React.ReactElement {
   const resourceView = useResourceViewMaybe();
+  const recordChrome = useRecordChromeContextMaybe();
+  const archiveScope = props.presentation !== "embedded" || recordChrome === null;
   const metadata = useModelMetadata(props.source ? "" : props.resource);
   const modelMetadata = props.source ? null : metadata;
   const initial = React.useMemo(() => {
@@ -82,25 +92,37 @@ function ListViewFrame<TRow extends Row = Row>(
     presentation: props.presentation,
     initialState: initial.state,
     children: (scopedResourceView) => (
-      <ValidatedListViewBody {...props} resourceView={scopedResourceView} />
+      <ResourceViewArchiveScopeContext.Provider value={archiveScope}>
+        <ValidatedListViewBody<TRow> {...props} resourceView={scopedResourceView} />
+      </ResourceViewArchiveScopeContext.Provider>
     ),
   });
 }
 
 function ValidatedListViewBody<TRow extends Row>(
-  props: ListViewProps<TRow> & { resourceView: ResourceViewContextValue },
+  props: ListViewSurfaceProps<TRow> & { resourceView: ResourceViewContextValue },
 ): React.ReactElement {
   const t = useUiT();
   const metadata = useModelMetadata(props.source ? "" : props.resource);
   const query =
     props.source?.query ?? (metadata ? ResourceQuery.from(metadata) : null);
+  // How this list groups its stored stack, decided once: lanes from a declared
+  // relation, or the server group read (an authored source's groups document
+  // included), whose native form is the one read that applies `GroupSpec.repeated`.
+  const { view } = props.resourceView.state;
+  const group = (view === "board" || view === "gantt") && props.laneSource ? { field: props.laneSource.field } : null;
+  const serverGroups = !isClientRowModel(metadata?.resource) && (view === "list" || (view === "board" && !props.laneSource));
+  const appliesRepeated = serverGroups && !props.source;
+  // Lanes and a kind that never groups leave the stored stack unrendered.
+  const acceptsRepeated = Boolean(group) || !resourceViewKindCapabilities(view).grouping || appliesRepeated;
+  const resourceView = useAppliedRepeated(props.resourceView, acceptsRepeated);
   try {
-    validateDeclaredGroupDefaults("ListView", props.defaultGroup, props.defaultGroups, props.resourceView.defaultState, t);
+    validateDeclaredGroupDefaults("ListView", props.defaultGroup, props.defaultGroups, resourceView.defaultState, t);
   } catch (error) {
     return <ErrorBanner description={error instanceof Error ? error.message : String(error)} />;
   }
-  let error = props.resourceView.state.queryError;
-  if (!error && props.renderPaneRow && props.resourceView.state.view !== "list") {
+  let error = resourceView.state.queryError;
+  if (!error && props.renderPaneRow && view !== "list") {
     error = new Error(`Pane lists support only the list view.`);
   }
   if (!error && query) {
@@ -108,17 +130,11 @@ function ValidatedListViewBody<TRow extends Row>(
       const defaults = declaredGroupDefaults(props.defaultGroup, props.defaultGroups);
       query.groupsFrom(defaults.groupStack);
       for (const stack of Object.values(defaults.groupStacks)) query.groupsFrom(stack);
-      error = validateResourceViewState(
-        props.resourceView.state,
-        query,
-      ).queryError;
-      query.toWhere(props.resourceView.baseFilter, props.resourceView.state.filter);
-      const group =
-        (props.resourceView.state.view === "board" || props.resourceView.state.view === "gantt") && props.laneSource
-          ? { field: props.laneSource.field }
-          : null;
+      // A flag left by a view switch or a URL is dropped above; only an authored default asking for it is refused.
+      error = validateResourceViewState(resourceView.state, query, { appliesRepeated: acceptsRepeated }).queryError;
+      query.toWhere(resourceView.baseFilter, resourceView.state.filter);
       if (group) query.group(group);
-      const groups = query.groupsFrom(props.resourceView.state.groupStack);
+      const groups = query.groupsFrom(resourceView.state.groupStack);
       if (
         props.maxGroupDepth !== undefined &&
         groups.length > props.maxGroupDepth
@@ -127,16 +143,9 @@ function ValidatedListViewBody<TRow extends Row>(
           `This collection supports at most ${props.maxGroupDepth} grouping levels.`,
         );
       }
-      const effectiveGroups =
-        (props.resourceView.state.view === "board" || props.resourceView.state.view === "gantt") && props.laneSource && group
-          ? [group]
-          : groups;
+      const effectiveGroups = group ? [group] : groups;
       if (effectiveGroups.length > 0) {
-        if (
-          !isClientRowModel(metadata?.resource) &&
-          (props.resourceView.state.view === "list" ||
-            (props.resourceView.state.view === "board" && !props.laneSource))
-        ) {
+        if (serverGroups) {
           query.toGroupBy(effectiveGroups);
         } else {
           query.selection(effectiveGroups);
@@ -151,11 +160,11 @@ function ValidatedListViewBody<TRow extends Row>(
     <ResourceViewKinds resource={props.source ? "" : props.resource}>
       {error ? (
         <ResourceQueryError error={error} onReset={() => {
-          if (props.renderPaneRow) props.resourceView.setView("list");
-          props.resourceView.resetQuery();
+          if (props.renderPaneRow) resourceView.setView("list");
+          resourceView.resetQuery();
         }} />
       ) : (
-        <ListViewBody {...props} />
+        <ListViewBody<TRow> {...props} resourceView={resourceView} serverGroups={serverGroups} appliesRepeated={appliesRepeated} />
       )}
     </ResourceViewKinds>
   );
@@ -228,6 +237,7 @@ function ListViewBody<TRow extends Row = Row>({
   tableLayout,
   headerVisibility,
   selectable: declaredSelectable,
+  selectAllMatching = false,
   renderGroupLabel,
   renderPaneRow,
   pane,
@@ -267,8 +277,14 @@ function ListViewBody<TRow extends Row = Row>({
   presentation = "page",
   chrome,
   resourceView,
-}: ListViewProps<TRow> & {
+  serverGroups,
+  appliesRepeated,
+}: ListViewSurfaceProps<TRow> & {
   resourceView: ResourceViewContextValue;
+  /** The view groups its stored stack through the server group read (`ValidatedListViewBody`). */
+  serverGroups: boolean;
+  /** That read is the native one, which applies `GroupSpec.repeated`. */
+  appliesRepeated: boolean;
 }): React.ReactElement {
   const t = useUiT();
   const rowActionSurface = useRowActionsSurface(rowActions);
@@ -383,17 +399,22 @@ function ListViewBody<TRow extends Row = Row>({
     () => Filter.combineOptional(resourceView.baseFilter, resourceView.state.filter),
     [resourceView.state.filter, resourceView.baseFilter],
   );
-  const selectable = declaredSelectable ?? presentation !== "embedded";
+  const facetFilter = useArchiveScopeFilter(modelMetadata?.resource, mergedFilter);
+  const lifecycle = resourceLifecycle(modelMetadata?.resource, modelMetadata);
+  const hasSelectionAction = Boolean(bulkActions) || (!source && Boolean(
+    lifecycle.archiveFlag || lifecycle.trashFlag || lifecycle.canDelete || modelMetadata?.resource.grantable?.length,
+  ));
+  const selectable = declaredSelectable ?? (presentation !== "embedded" && hasSelectionAction);
   const declaredFacets = useRelationFacets(
     source ? "" : resource,
     facets,
-    mergedFilter,
+    facetFilter,
   );
   const scalarFacets = useScalarFacets(
     resource,
     resolvedColumns,
     modelMetadata,
-    mergedFilter,
+    facetFilter,
   );
   const laneSourceGroup = React.useMemo(
     () =>
@@ -414,11 +435,8 @@ function ListViewBody<TRow extends Row = Row>({
   // TanStack row models — never the server _groups/GroupedListBody path (the
   // aggregate it would query does not exist).
   const clientRowModel = isClientRowModel(modelMetadata?.resource);
-  const serverGroupedMode =
-    (resourceView.state.view === "list" ||
-      (resourceView.state.view === "board" && !resolvedLaneSource)) &&
-    effectiveGroupStack.length > 0 &&
-    !clientRowModel;
+  const serverGroupedMode = serverGroups && effectiveGroupStack.length > 0;
+  const surfaceSelectable = renderPaneRow ? false : selectable;
   const surfaceProps: UseResourceViewSurfaceProps<TRow> = {
     resource,
     relatedModels,
@@ -434,6 +452,8 @@ function ListViewBody<TRow extends Row = Row>({
     laneSource: resolvedLaneSource,
     enabled: !serverGroupedMode,
     onListStateChange,
+    // The selection bar offers it over page verbs; lanes place no rows the pager counts.
+    selectAllMatching: selectAllMatching && surfaceSelectable && Boolean(bulkActions) && !boardGroupingPinned,
   };
   const content = (
     surface: ResourceViewSurface<TRow> | GroupedResourceViewSurface<TRow>,
@@ -447,7 +467,7 @@ function ListViewBody<TRow extends Row = Row>({
       toolbarWrap={toolbarWrap}
       tableLayout={tableLayout}
       headerVisibility={headerVisibility}
-      selectable={renderPaneRow ? false : selectable}
+      selectable={surfaceSelectable}
       renderGroupLabel={renderGroupLabel}
       renderPaneRow={renderPaneRow}
       pane={pane}
@@ -460,6 +480,7 @@ function ListViewBody<TRow extends Row = Row>({
       boardGroupingPinned={boardGroupingPinned}
       clientRowModel={clientRowModel}
       serverGroupedMode={serverGroupedMode}
+      appliesRepeated={appliesRepeated}
       declaredFacets={declaredFacets}
       scalarFacets={scalarFacets}
       explicitGroupOptions={explicitGroupOptions}

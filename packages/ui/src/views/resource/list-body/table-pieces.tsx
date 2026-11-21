@@ -1,5 +1,12 @@
 import * as React from "react";
-import { flexRender, type Header as TableHeaderModel, type Table as TableModel, type Row as TableRowModel } from "@tanstack/react-table";
+import {
+  flexRender,
+  type Header as TableHeaderModel,
+  type HeaderGroup,
+  type SortingState,
+  type Table as TableModel,
+  type Row as TableRowModel,
+} from "@tanstack/react-table";
 import type { Virtualizer } from "@tanstack/react-virtual";
 import type { AggregateBucket } from "@angee/refine";
 import type { Row } from "@angee/metadata";
@@ -19,10 +26,22 @@ import type { ColumnDescriptor } from "../../page";
 import { alignOf, ariaSortForColumn, formatMeasure, groupMeasuresFromColumns, measureValue } from "./cell-utils";
 import { ListEmpty, ListSkeletonRows } from "./loading";
 import { LeadingSelectionCell, renderListRow } from "./rows";
-import { ALIGN_CLASS, GROUP_ROW_HEIGHT, RECORD_ROW_HEIGHT } from "./types";
+import { ALIGN_CLASS } from "./types";
 import type { GroupMeasure, VisibleFieldOption } from "./types";
 import { useVirtualWindow, VirtualPaddingRow } from "./virtualization";
 import { useRuntimeViewAs } from "../../../runtime";
+import { EMPTY_ARRAY, type ResourceListResult } from "../surface/types";
+/** "Select all N" in the list's bar (`ListViewProps.selectAllMatching`). */
+export interface ListSelectionMatching {
+  /** The records or groups the list's read matches, as its pager counts them. */
+  total: number;
+  unit: ResourceListResult["pageUnit"];
+  /** The selection is all of them: the bar reads "All N selected". */
+  selected: boolean;
+  /** Offers "Select all N"; absent when it is not offered. */
+  onSelectAll?: () => void;
+}
+
 /** The list's bulk-selection band over the shared `SelectionBar`, flush with the table top.
  * @owner SelectionBar
  */
@@ -31,46 +50,68 @@ export function ListSelectionBar({
   onClear,
   onDelete,
   deletePending = false,
+  deleteDisabledReason,
+  pending = false,
   actions: extraActions,
+  matching,
 }: {
   count: number;
   onClear: () => void;
   onDelete?: () => void;
   deletePending?: boolean;
+  /** Why Delete must not run (`Button.disabledReason`); null is none yet, keeping its tree for one to come. */
+  deleteDisabledReason?: React.ReactNode;
+  pending?: boolean;
   /** Caller-supplied bulk actions rendered before the built-in Delete/Clear. */
   actions?: React.ReactNode;
+  matching?: ListSelectionMatching;
 }): React.ReactElement {
   const t = useUiT();
   const preview = useRuntimeViewAs();
   const previewBlocked = Boolean(preview.viewAs || preview.pending);
+  const groups = matching?.unit === "groups";
+  // Choosing "Select all N" unmounts it: focus stays in the bar, on Clear.
+  const clear = React.useRef<HTMLElement>(null);
   const actions = (
     <>
+      {matching?.onSelectAll ? (
+        <SelectionBarPrimitive.Action surface="brand" disabled={pending}
+          onClick={() => { matching.onSelectAll?.(); clear.current?.focus(); }}>
+          {t(groups ? "list.selectAllMatchingGroups" : "list.selectAllMatchingRecords", { count: matching.total })}
+        </SelectionBarPrimitive.Action>
+      ) : null}
       {extraActions}
       {onDelete ? (
         <SelectionBarPrimitive.Action
           surface="brand"
+          tone="danger"
           pending={deletePending}
-          disabled={previewBlocked}
+          disabled={previewBlocked || pending}
+          {...(deleteDisabledReason === undefined ? {} : { disabledReason: deleteDisabledReason })}
           onClick={() => { if (!previewBlocked) onDelete(); }}
         >
           <Glyph name="trash" />
           {t("selection.delete")}
         </SelectionBarPrimitive.Action>
       ) : null}
-      <SelectionBarPrimitive.Action surface="brand" onClick={onClear}>
+      <SelectionBarPrimitive.Action ref={clear} surface="brand" disabled={pending} onClick={onClear}>
         {t("selection.clear")}
       </SelectionBarPrimitive.Action>
     </>
   );
   return (
     <SelectionBarPrimitive
-      className="h-11 w-full rounded-none border-b border-border-subtle shadow-none"
+      className="min-h-11 w-full rounded-none border-b border-border-subtle shadow-none"
       count={count}
-      countLabel={t("selection.countSelected", { count })}
+      countLabel={matching?.selected
+        ? t(groups ? "list.allMatchingGroupsSelected" : "list.allMatchingRecordsSelected", { count: matching.total })
+        : t("selection.countSelected", { count })}
       actions={actions}
     />
   );
 }
+
+const NO_ROW_ACTIONS = (): null => null;
 
 export interface FlatListBodyProps<TRow extends Row> {
   tableLayout?: ResourceTableLayout;
@@ -117,7 +158,7 @@ export function FlatListBody<TRow extends Row>({
   allPageSelected,
   somePageSelected,
   onPageSelectionChange,
-  visibleFields = [],
+  visibleFields = EMPTY_ARRAY,
   onVisibleFieldToggle,
   resourceView,
   groupStack,
@@ -139,11 +180,27 @@ export function FlatListBody<TRow extends Row>({
   const hasRowActions = renderRowActions !== undefined;
   // The visible-fields menu sits in its own trailing header cell (shared with the row
   // actions when they exist), so every data column's header aligns with its values.
-  const fieldsMenu = visibleFields.length > 0
-    ? <VisibleFieldsMenu fields={visibleFields} onToggle={onVisibleFieldToggle} /> : null;
-  const trailingColumn = hasRowActions || fieldsMenu !== null;
+  const trailingColumn = hasRowActions || visibleFields.length > 0;
+  // An empty trailing cell keeps rows aligned under the fields-menu header.
+  const rowActions = renderRowActions ?? (trailingColumn ? NO_ROW_ACTIONS : undefined);
   const reorderType = `angee.list-row.${React.useId()}`;
-  const reorderRows = onReorder ? rowModels.filter((row) => !row.getIsGrouped()) : [];
+  // Each record row's reorder, built once per row set, so a render that keeps the rows
+  // (a scroll frame) hands every row the same one and its memo holds.
+  const reorderById = React.useMemo(() => {
+    if (!onReorder) return null;
+    const rows = rowModels.filter((row) => !row.getIsGrouped());
+    const move = (fromId: string, toId: string) => {
+      const from = table.getCoreRowModel().rowsById[fromId];
+      if (from && (canReorderRow?.(from.original) ?? true)) onReorder(fromId, toId);
+    };
+    return new Map(rows.map((row, index) => [row.id, {
+      type: reorderType,
+      onReorder: move,
+      previousId: rows[index - 1]?.id,
+      nextId: rows[index + 1]?.id,
+      locked: canReorderRow ? !canReorderRow(row.original) : false,
+    }]));
+  }, [onReorder, rowModels, table, canReorderRow, reorderType]);
   const colSpan = Math.max(
     1,
     visibleColumnCount + (selectable ? 1 : 0) + (trailingColumn ? 1 : 0) + (onReorder ? 1 : 0),
@@ -152,12 +209,7 @@ export function FlatListBody<TRow extends Row>({
     () => groupMeasuresFromColumns(columns),
     [columns],
   );
-  const { paddingTop, paddingBottom, visibleIndexes } = useVirtualWindow(
-    rowVirtualizer,
-    rowModels.length,
-    (index) =>
-      rowModels[index]?.getIsGrouped() ? GROUP_ROW_HEIGHT : RECORD_ROW_HEIGHT,
-  );
+  const { paddingTop, paddingBottom, visibleIndexes } = useVirtualWindow(rowVirtualizer);
   const extraFooterRow = footerRow == null ? null : (
     <TableRow><TableCell colSpan={colSpan}>{footerRow}</TableCell></TableRow>
   );
@@ -167,32 +219,20 @@ export function FlatListBody<TRow extends Row>({
       className="resource-table-scroll min-h-0 min-w-0 overflow-auto overscroll-contain"
     >
       <Table className={tableLayout === "fixed" ? "table-fixed" : undefined}>
-        <TableHeader className={headerVisibility === "visually-hidden" ? "sr-only" : undefined}>
-          {table.getHeaderGroups().map((group) => (
-            <TableRow key={group.id}>
-              {onReorder ? <TableHead sticky className="w-8">
-                <span className="sr-only">{t("list.reorderRow")}</span>
-              </TableHead> : null}
-              {selectable ? (
-                <LeadingSelectionCell
-                  head
-                  label={t("list.selectAllOnPage")}
-                  checked={allPageSelected}
-                  indeterminate={!allPageSelected && somePageSelected}
-                  onCheckedChange={onPageSelectionChange}
-                />
-              ) : null}
-              {group.headers.map((header) => (
-                <ListHeaderCell
-                  key={header.id}
-                  header={header}
-                  resourceView={resourceView}
-                />
-              ))}
-              {trailingColumn ? <RowActionsHeader>{fieldsMenu}</RowActionsHeader> : null}
-            </TableRow>
-          ))}
-        </TableHeader>
+        <FlatListHeader
+          headerVisibility={headerVisibility}
+          headerGroups={table.getHeaderGroups()}
+          sorting={table.getState().sorting}
+          reorderable={Boolean(onReorder)}
+          selectable={selectable}
+          allPageSelected={allPageSelected}
+          somePageSelected={somePageSelected}
+          onPageSelectionChange={onPageSelectionChange}
+          resourceView={resourceView}
+          trailingColumn={trailingColumn}
+          visibleFields={visibleFields}
+          onVisibleFieldToggle={onVisibleFieldToggle}
+        />
         <TableBody>
           {fetching && rowModels.length === 0 ? (
             <ListSkeletonRows
@@ -221,7 +261,6 @@ export function FlatListBody<TRow extends Row>({
               ) : null}
               {visibleIndexes.map((index) => {
                 const row = rowModels[index];
-                const reorderIndex = row ? reorderRows.indexOf(row) : -1;
                 return row
                   ? renderListRow({
                       row,
@@ -234,18 +273,8 @@ export function FlatListBody<TRow extends Row>({
                       onRowClick,
                       activeRowId,
                       draggableRow,
-                      // An empty trailing cell keeps rows aligned under the fields-menu header.
-                      renderRowActions: renderRowActions ?? (trailingColumn ? () => null : undefined),
-                      reorder: onReorder ? {
-                        type: reorderType,
-                        onReorder: (fromId, toId) => {
-                          const from = table.getCoreRowModel().rowsById[fromId];
-                          if (from && (canReorderRow?.(from.original) ?? true)) onReorder(fromId, toId);
-                        },
-                        previousId: reorderRows[reorderIndex - 1]?.id,
-                        nextId: reorderRows[reorderIndex + 1]?.id,
-                        locked: canReorderRow ? !canReorderRow(row.original) : false,
-                      } : undefined,
+                      renderRowActions: rowActions,
+                      reorder: reorderById?.get(row.id),
                     })
                   : null;
               })}
@@ -272,6 +301,73 @@ export function FlatListBody<TRow extends Row>({
     </div>
   );
 }
+
+interface FlatListHeaderProps<TRow extends Row> {
+  headerVisibility: ResourceTableHeaderVisibility;
+  /** `table.getHeaderGroups()`, which the table keeps until a column is shown, hidden, moved or pinned. */
+  headerGroups: readonly HeaderGroup<TRow>[];
+  /** The table's sorting, which each header's sort button and `aria-sort` show through its column. */
+  sorting: SortingState;
+  reorderable: boolean;
+  selectable: boolean;
+  allPageSelected: boolean;
+  somePageSelected: boolean;
+  onPageSelectionChange: (checked: boolean) => void;
+  resourceView: ResourceViewContextValue;
+  trailingColumn: boolean;
+  visibleFields: readonly VisibleFieldOption[];
+  onVisibleFieldToggle?: (id: string, visible: boolean) => void;
+}
+
+function FlatListHeaderInner<TRow extends Row>({
+  headerVisibility,
+  headerGroups,
+  reorderable,
+  selectable,
+  allPageSelected,
+  somePageSelected,
+  onPageSelectionChange,
+  resourceView,
+  trailingColumn,
+  visibleFields,
+  onVisibleFieldToggle,
+}: FlatListHeaderProps<TRow>): React.ReactElement {
+  const t = useUiT();
+  return (
+    <TableHeader className={headerVisibility === "visually-hidden" ? "sr-only" : undefined}>
+      {headerGroups.map((group) => (
+        <TableRow key={group.id}>
+          {reorderable ? <TableHead sticky className="w-8">
+            <span className="sr-only">{t("list.reorderRow")}</span>
+          </TableHead> : null}
+          {selectable ? (
+            <LeadingSelectionCell
+              head
+              label={t("list.selectAllOnPage")}
+              checked={allPageSelected}
+              indeterminate={!allPageSelected && somePageSelected}
+              onCheckedChange={onPageSelectionChange}
+            />
+          ) : null}
+          {group.headers.map((header) => (
+            <ListHeaderCell
+              key={header.id}
+              header={header}
+              resourceView={resourceView}
+            />
+          ))}
+          {trailingColumn ? <RowActionsHeader>
+            {visibleFields.length > 0 ? <VisibleFieldsMenu fields={visibleFields} onToggle={onVisibleFieldToggle} /> : null}
+          </RowActionsHeader> : null}
+        </TableRow>
+      ))}
+    </TableHeader>
+  );
+}
+
+// Memoised, as the rows are: the table keeps its header groups and sorting, and the
+// surface its selection callbacks and visible fields, so a range change leaves it alone.
+const FlatListHeader = React.memo(FlatListHeaderInner) as typeof FlatListHeaderInner;
 
 export function MeasureFooter<TRow extends Row>({
   table,

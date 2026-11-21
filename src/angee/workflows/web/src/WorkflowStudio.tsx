@@ -109,7 +109,7 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, init
   const action = useActionForm<StudioValues, Acknowledgement>({
     defaultValues: initialValues,
     fieldNames: [], genericErrorMessage: t("studio.saveFailed"),
-    submit: async (values) => {
+    submit: async (values, options) => {
       setIssues(EMPTY_ISSUES);
       const snapshot = studioSnapshot({ ...values, layout: displayLayout.current ?? values.layout });
       if (snapshot.status !== "ok") {
@@ -118,7 +118,7 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, init
       }
       try {
         const response = await save({ id: recordId, draft: snapshot.data.draft, layout: snapshot.data.layout,
-          nodeKeys: snapshot.data.nodeKeys, revision: revision.current });
+          nodeKeys: snapshot.data.nodeKeys, revision: revision.current }, options);
         savedKeys.current = new Map(snapshot.data.clientIdByKey);
         const result = savedFormSubmitResult(response?.save_workflow_draft, t("studio.saveFailed"));
         if (result.status === "invalid") capture(result.issues, snapshot.data.clientIdByKey, "save");

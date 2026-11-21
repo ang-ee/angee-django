@@ -4,7 +4,6 @@ import { useMutation } from "@tanstack/react-query";
 
 import { Button } from "../../ui/button";
 import { DropdownMenu } from "../../ui/dropdown-menu";
-import { Tooltip } from "../../ui/tooltip";
 import { Glyph } from "../../chrome/Glyph";
 import { errorMessage, useConfirm, usePrompt, useToast } from "../../feedback";
 import { ActionFormDialog } from "./ActionFormDialog";
@@ -47,24 +46,33 @@ interface ActionMutationVariables {
 export function RecordActionBar({
   record,
   actions,
+  genericActions = [],
   applyPatch = unavailablePatch,
   reload = noop,
   deleteAction,
   contributedActions,
+  contributedVerbs,
   blocked: blockedByForm = false,
-  menuPlacement = "trailing",
+  menuTrigger = "label",
+  fillBand = false,
 }: {
   record: Row | null;
   actions: readonly RecordActionDescriptor[];
+  /** Metadata-owned menu verbs, after declared and contributed verbs and before Delete. */
+  genericActions?: readonly RecordActionDescriptor[];
   applyPatch?: (patch: Record<string, unknown>) => Promise<Row | null>;
   reload?: () => void | Promise<Row | null>;
   deleteAction?: RecordDeleteAction;
   /** Addon-contributed verbs rendered inside this same Actions menu. */
   contributedActions?: React.ReactNode;
+  /** Addon-contributed band buttons: rendered after this bar's own buttons and before its Actions menu, so the menu is always the band's last verb control. */
+  contributedVerbs?: React.ReactNode;
   /** A dirty or pending form must be saved before acting on its persisted record. */
   blocked?: boolean;
-  /** Where the Actions menu sits: an icon-only `⋮` before the verbs (the command band), or a labeled menu after them. */
-  menuPlacement?: "leading" | "trailing";
+  /** How the Actions menu trigger looks: an accessible icon-only `⋮` or a labeled menu (default). Both follow the verb buttons. */
+  menuTrigger?: "icon" | "label";
+  /** On a saved record, fill the band to two buttons with its own visible, unplaced, non-danger verbs in declaration order, counting verbs already on the toolbar. Filled buttons stay secondary. Off by default; ignored inside an Actions menu. */
+  fillBand?: boolean;
 }): React.ReactElement | null {
   const preview = useRuntimeViewAs();
   const t = useUiT();
@@ -122,52 +130,52 @@ export function RecordActionBar({
 
   const recordId = rowPublicId(record);
 
-  const runAction = React.useCallback(
-    async (action: RecordActionDescriptor): Promise<void> => {
-      if (blockedRef.current || action.disabled || disabledReason(action) || (action.permission && !holdsPermission(record, action.permission))) return;
-      const confirmation = actionConfirmation(action, record, t("action.confirmDanger"));
-      if (confirmation === null) return;
-      if (confirmation) {
-        const confirmed = await confirm({
-          title: confirmation.title,
-          ...(confirmation.body !== undefined
-            ? { body: confirmation.body }
-            : {}),
-          danger: confirmation.danger ?? Boolean(action.danger),
-          confirm: action.label,
-        });
-        if (!confirmed || blockedRef.current) return;
-      }
-      // A `submit` verb runs through its action form, as on a list row: the dialog
-      // collects any args (none when undeclared), merges the record/selection
-      // context and fires `submit` — never a record patch or the string-only prompt.
-      if (action.submit) {
-        setFormAction({ action, fromMenu: menu !== null || action.placement !== "toolbar" });
-        return;
-      }
-      let values: Record<string, string> = {};
-      if (action.prompt) {
-        const result = await prompt(action.prompt);
-        if (result === null) return;
-        values = result;
-      }
-
-      await actionMutation
-        .mutateAsync({ action, values })
-        .catch(() => undefined);
-    },
-    [actionMutation, blockedRef, confirm, prompt, record, menu, t],
-  );
-
-  // An action with a `visibleWhen` predicate shows only when the open record
-  // matches (e.g. "Disable" only while enabled); a record must be loaded first.
-  const visibleActions = actions.filter(
+  // Count only admitted verbs: a predicate needs a loaded record to match.
+  const visibleActions = [...actions, ...genericActions].filter(
     (action) =>
       (!action.permission || holdsPermission(record, action.permission))
       && (!action.visibleWhen || (record != null && action.visibleWhen(record))),
   );
-  const toolbarActions = visibleActions.filter((action) => action.placement === "toolbar");
-  const menuActions = visibleActions.filter((action) => action.placement !== "toolbar");
+  const placements = effectiveActionPlacements(visibleActions, recordId, fillBand, menu !== null);
+  const toolbarActions = visibleActions.filter((action) => placements.get(action) === "toolbar");
+  const menuActions = visibleActions.filter((action) => placements.get(action) === "menu" && !genericActions.includes(action));
+  const genericMenuActions = visibleActions.filter((action) => placements.get(action) === "menu" && genericActions.includes(action));
+  const primaryAction = toolbarActions.find((action) => action.primary);
+
+  const runAction = async (action: RecordActionDescriptor): Promise<void> => {
+    if (blockedRef.current || action.disabled || disabledReason(action) || (action.permission && !holdsPermission(record, action.permission))) return;
+    const confirmation = actionConfirmation(action, record, t("action.confirmDanger"));
+    if (confirmation === null) return;
+    if (confirmation) {
+      const confirmed = await confirm({
+        title: confirmation.title,
+        ...(confirmation.body !== undefined
+          ? { body: confirmation.body }
+          : {}),
+        danger: confirmation.danger ?? Boolean(action.danger),
+        confirm: action.label,
+      });
+      if (!confirmed || blockedRef.current) return;
+    }
+    // A `submit` verb runs through its action form, as on a list row: the dialog
+    // collects any args (none when undeclared), merges the record/selection
+    // context and fires `submit` — never a record patch or the string-only prompt.
+    if (action.submit) {
+      setFormAction({ action, fromMenu: placements.get(action) === "menu" });
+      return;
+    }
+    let values: Record<string, string> = {};
+    if (action.prompt) {
+      const result = await prompt(action.prompt);
+      if (result === null) return;
+      values = result;
+    }
+
+    await actionMutation
+      .mutateAsync({ action, values })
+      .catch(() => undefined);
+  };
+
   const visibleDeleteAction = deleteAction?.canDelete ? deleteAction : undefined;
   const disabled = (action: ActionDescriptor) =>
     blocked || Boolean(action.disabled) || Boolean(disabledReason(action)) || pendingId !== null ||
@@ -176,6 +184,7 @@ export function RecordActionBar({
     visibleActions.length === 0 &&
     visibleDeleteAction === undefined &&
     contributedActions == null &&
+    contributedVerbs == null &&
     formAction === null
   ) return null;
 
@@ -216,45 +225,78 @@ export function RecordActionBar({
     </React.Fragment>;
   };
 
-  const actionMenu = menuActions.length > 0 || visibleDeleteAction !== undefined || contributedActions != null || formAction?.fromMenu ? (
+  const menuContents = <>
+    {menuActions.map(renderAction)}
+    {contributedActions}
+    {(menuActions.length > 0 || contributedActions != null) && (genericMenuActions.length > 0 || deleteTrigger) ? (
+      <DropdownMenu.Separator className="first:hidden" />
+    ) : null}
+    {genericMenuActions.map(renderAction)}
+    {deleteTrigger}
+  </>;
+  const actionMenu = menuActions.length > 0 || genericMenuActions.length > 0 || visibleDeleteAction !== undefined || contributedActions != null || formAction?.fromMenu ? (
     <ActionMenu blocked={blocked} loading={pendingId !== null}
-      {...(menuPlacement === "leading" ? { label: null, "aria-label": t("list.actions"), size: "iconSm" as const } : {})}>
-      {deleteTrigger}
-      {visibleDeleteAction !== undefined && menuActions.length > 0 ? (
-        <DropdownMenu.Separator />
-      ) : null}
-      {menuActions.map(renderAction)}
-      {contributedActions}
+      {...(menuTrigger === "icon" ? { label: null, "aria-label": t("list.actions"), size: "iconSm" as const } : {})}>
+      {menuContents}
       {formAction?.fromMenu ? formDialog : null}
     </ActionMenu>
   ) : null;
   return (
     <>
       {menu ? <>
-        {deleteTrigger}
-        {visibleActions.map(renderAction)}
-        {contributedActions}
+        {menuContents}
+        {contributedVerbs}
         {formDialog}
       </> : <>
-        {menuPlacement === "leading" ? actionMenu : null}
-        {toolbarActions.map((action, index) => { const reason = disabledReason(action); return (
-          // A band verb's disabled reason is its tooltip: the verb stays focusable while
-          // disabled so keyboard users reach the reason too.
-          <Tooltip key={action.id} label={reason} side="bottom">
-            <Button type="button" size="sm"
-              variant={action.danger ? "danger" : action.primary && toolbarActions.findIndex((entry) => entry.primary) === index ? "primary" : "secondary"}
-              disabled={disabled(action)} focusableWhenDisabled={Boolean(reason)}
-              loading={pendingId === action.id} onClick={() => void runAction(action)}>
-              {action.icon ? <Glyph name={action.icon} /> : null}
-              {action.label}
-            </Button>
-          </Tooltip>
-        ); })}
-        {menuPlacement === "trailing" ? actionMenu : null}
+        {toolbarActions.map((action) => (
+          // A band verb's disabled reason is its tooltip and description (`Button`); a
+          // pending verb stays focusable, so the keyboard user who ran it keeps their place.
+          <Button key={action.id} type="button" size="sm"
+            variant={action.danger ? "danger" : action === primaryAction ? "primary" : "secondary"}
+            disabled={disabled(action)} disabledReason={disabledReason(action)}
+            loading={pendingId === action.id} focusableWhenDisabled={pendingId === action.id}
+            onClick={() => void runAction(action)}>
+            {action.icon ? <Glyph name={action.icon} /> : null}
+            {action.label}
+          </Button>
+        ))}
+        {contributedVerbs}
+        {actionMenu}
         {formAction && !formAction.fromMenu ? formDialog : null}
       </>}
     </>
   );
+}
+
+/** The form's band shows up to this many of its own verbs as buttons; the rest overflow into the menu. */
+const BAND_VERB_LIMIT = 2;
+
+/**
+ * Resolve placement once, after permission and visibility filtering. An explicit
+ * placement wins and `primary` implies the toolbar. On a saved record the form's
+ * band then fills up to {@link BAND_VERB_LIMIT} buttons from its own unplaced,
+ * non-danger verbs in declaration order. A parent menu keeps every verb.
+ */
+function effectiveActionPlacements(
+  actions: readonly RecordActionDescriptor[],
+  recordId: string | null,
+  fillBand: boolean,
+  inMenu: boolean,
+): Map<RecordActionDescriptor, "toolbar" | "menu"> {
+  const placements = new Map(actions.map((action) => [
+    action,
+    inMenu ? "menu" : action.placement ?? (action.primary ? "toolbar" : "menu"),
+  ] as const));
+  if (recordId !== null && fillBand && !inMenu) {
+    let shown = [...placements.values()].filter((placement) => placement === "toolbar").length;
+    for (const action of actions) {
+      if (shown >= BAND_VERB_LIMIT) break;
+      if (action.placement !== undefined || action.primary || action.danger) continue;
+      placements.set(action, "toolbar");
+      shown += 1;
+    }
+  }
+  return placements;
 }
 
 /**

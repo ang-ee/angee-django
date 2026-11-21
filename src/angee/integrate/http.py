@@ -24,10 +24,15 @@ front metadata services), multicast, and unspecified. Redirects are not followed
 unless requested through native ``follow_redirects`` or the bounded,
 method-preserving ``same_origin_redirects`` policy; each hop re-enters the pinned
 backend.
+
+A vendor's typed JSON request is :meth:`HttpClient.request_model`. Whatever
+brings it no usable answer is one :class:`HttpRefusal`, classified once, which
+the vendor turns into its own ``IntegrationError`` (:meth:`HttpRefusal.as_error`).
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import ssl
 import time
@@ -37,14 +42,20 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 from functools import cached_property
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, overload
 
 import httpcore2
 import httpx2
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
-from .errors import RequestNotSentError
+from .errors import (
+    IntegrationError,
+    RequestNotBuiltError,
+    RequestNotSentError,
+    is_transient_failure,
+    is_transient_status,
+)
 from .net import (
     AddressNotAllowedError,
     canonical_address,
@@ -53,8 +64,14 @@ from .net import (
     resolved_addresses,
 )
 
+if TYPE_CHECKING:
+    from pydantic import BaseModel
+
 HTTP_TIMEOUT_SECONDS = 10
 """Default timeout (seconds) for one outbound request."""
+
+JSON_MAX_BYTES = 8 * 1024 * 1024
+"""The largest JSON answer :meth:`HttpClient.request_model` reads unless its caller sets another cap."""
 
 _DOWNLOAD_CHUNK_BYTES = 64 * 1024
 """Maximum chunk read while enforcing a capped streamed download."""
@@ -85,15 +102,18 @@ CA bundle is parsed once rather than on every outbound request."""
 RETRY_AFTER_LIMIT = timedelta(days=1)
 """The longest ``Retry-After`` delay honoured; a longer hint is treated as absent."""
 
+_CREDENTIAL_HEADERS = frozenset({"authorization", "proxy-authorization", "cookie", "set-cookie"})
+"""The headers HTTP defines to carry a credential or a cookie (RFC 9110 §11.6.2, §11.7.2; RFC 6265): a refusal
+never keeps them."""
 
-def retry_after(response: httpx2.Response, *, now: datetime | None = None) -> timedelta | None:
+
+def retry_after(response: httpx2.Response | DownloadResult, *, now: datetime | None = None) -> timedelta | None:
     """Return the ``Retry-After`` of ``response`` as a positive delay, or ``None`` (RFC 9110 §10.2.3).
 
     The header is delay-seconds or an HTTP-date, which is measured from ``now`` (the
     current time when omitted). An absent, malformed, past or zero value, or one
     past :data:`RETRY_AFTER_LIMIT`, is ``None``, so the caller keeps its own
-    backoff; a backend raises ``IntegrationError(transient=True, retry_after=...)``
-    with what this returns.
+    backoff. :meth:`HttpRefusal.of` reads it for every refused answer.
     """
 
     value = response.headers.get("Retry-After", "").strip()
@@ -143,15 +163,129 @@ class OutboundBudget:
 class DownloadResult:
     """A bounded download's final validated response facts: a success, or a status the caller listed.
 
-    headers are the final response's (validators, ``Retry-After``); a listed
-    non-success status carries an empty ``content``.
+    headers are the final response's, read case-insensitively (validators,
+    ``Retry-After``); a listed non-success status carries an empty ``content``.
     """
 
     content: bytes
     final_url: str
     content_type: str
     status_code: int
-    headers: Mapping[str, str] = field(default_factory=dict)
+    headers: httpx2.Headers = field(default_factory=httpx2.Headers)
+
+
+@dataclass(frozen=True, slots=True)
+class HttpRefusal:
+    """Why one request brought no usable answer: the facts a caller composes its error from, never their text.
+
+    A refused answer has its non-success ``status``, its ``Retry-After``, its
+    parsed JSON ``body`` and its ``headers`` (:meth:`of`); the status decides,
+    so a body over the cap or one httpx2 cannot decode is simply absent. Any
+    other refusal keeps the ``failure`` that stopped the request, which the
+    caller's factory sees before the owner chains it.
+
+    ``headers`` are a copy of the answer's, httpx2's case-insensitive type, for
+    a vendor's own signal (a rate limit's remaining requests and reset): read
+    them, never show them. They exclude the credential and cookie headers
+    (:data:`_CREDENTIAL_HEADERS`), and neither the refusal's ``repr`` nor any
+    message the owner composes includes a header value.
+    """
+
+    status: int | None = None
+    retry_after: timedelta | None = None
+    body: Any = None
+    failure: Exception | None = None
+    headers: Mapping[str, str] = field(default_factory=httpx2.Headers, repr=False)
+
+    def __post_init__(self) -> None:
+        if (self.status is None) == (self.failure is None):
+            raise ValueError("A refusal has a status or a failure, never both or neither.")
+
+    @classmethod
+    def of(cls, answer: httpx2.Response | DownloadResult, body: bytes | None = None) -> HttpRefusal:
+        """Return the refusal a non-success ``answer`` states; ``body`` is its content when read apart (a stream)."""
+
+        content = answer.content if body is None else body
+        try:
+            parsed = json.loads(content) if content else None
+        except ValueError:
+            parsed = None
+        headers = httpx2.Headers(
+            [(name, value) for name, value in answer.headers.multi_items() if name.lower() not in _CREDENTIAL_HEADERS]
+        )
+        return cls(status=answer.status_code, retry_after=retry_after(answer), body=parsed, headers=headers)
+
+    @property
+    def cause(self) -> Literal["status", "not_sent", "unreachable", "oversized", "unreadable"]:
+        """What stopped the request: a ``"status"``, or a failure. ``"not_sent"`` left no request bytes, so
+        even a write may be sent again: a connection that could not be made (:class:`RequestNotSentError`, or
+        httpx2's own connect failure from a transport other than the pinned one), or a request the HTTP library
+        would not build (:class:`RequestNotBuiltError`); ``"unreachable"``, any other transport failure (a read
+        timeout, a dropped connection), brought no answer and may have taken effect; ``"oversized"`` is a success
+        answer over the byte cap; ``"unreadable"`` is a success answer whose body httpx2 cannot decode or does not
+        validate.
+        """
+
+        if self.status is not None:
+            return "status"
+        if isinstance(self.failure, (RequestNotSentError, httpx2.ConnectError, httpx2.ConnectTimeout)):
+            return "not_sent"
+        if isinstance(self.failure, ResponseTooLargeError):
+            return "oversized"
+        if isinstance(self.failure, (ValueError, httpx2.DecodingError)):
+            return "unreadable"
+        return "unreachable"
+
+    @property
+    def transient(self) -> bool:
+        """Whether a later attempt can outlive this refusal: ``is_transient_status``, else ``is_transient_failure``.
+
+        A transport failure can be outlived. An oversized or unreadable answer
+        cannot: the same request brings the same answer. Nor can a request not
+        built: the same request fails the same way.
+        """
+
+        if self.status is not None:
+            return is_transient_status(self.status)
+        return self.failure is not None and is_transient_failure(self.failure)
+
+    def public_message(self, service: str) -> str:
+        """Return an operator message naming ``service`` that states only this refusal's facts."""
+
+        if isinstance(self.failure, RequestNotBuiltError):
+            return f"The request to {service} could not be sent as configured."
+        cause = self.cause
+        if cause == "not_sent":
+            return f"{service} could not be reached."
+        if cause == "unreachable":
+            return f"{service} did not answer."
+        if cause == "oversized":
+            return f"{service} returned an oversized response."
+        if cause == "unreadable":
+            return f"{service} returned an unreadable response."
+        if self.status == 429:
+            return f"{service} is rate limiting requests (HTTP 429)."
+        if self.transient:
+            return f"{service} is temporarily unavailable (HTTP {self.status})."
+        return f"{service} refused the request (HTTP {self.status})."
+
+    def as_error[E: IntegrationError](
+        self, error: type[E], service: str, *, public_message: str | None = None, transient: bool | None = None,
+        retry_after: timedelta | None = None,
+    ) -> E:
+        """Return ``error`` for ``service`` built from these facts, or from the vendor's statement of its own case.
+
+        Each keyword is used when given, the refusal's fact otherwise: ``public_message`` words the case;
+        ``transient`` says whether a later attempt can outlive it (a rate limit the vendor answers with a refusing
+        status); ``retry_after`` is the vendor's own wait (one its body or headers name), which implies transience
+        unless ``transient`` says otherwise, as on ``IntegrationError``. The refusal keeps stating only the answer.
+        """
+
+        return error(
+            public_message or self.public_message(service),
+            transient=(self.transient if retry_after is None else None) if transient is None else transient,
+            retry_after=self.retry_after if retry_after is None else retry_after,
+        )
 
 
 @dataclass(slots=True)
@@ -243,12 +377,20 @@ class PinnedTransport(httpx2.HTTPTransport):
         pool._network_backend = _PinnedBackend(allow_private=allow_private)
 
     def handle_request(self, request: httpx2.Request) -> httpx2.Response:
-        """Classify only native connect/handshake failures as provably not sent."""
+        """Classify native connect/handshake failures, and a request h11 will not build, as provably not sent.
+
+        h11 refuses a header value before writing anything; that refusal is
+        :class:`RequestNotBuiltError`, raised apart from h11's error, whose text
+        quotes the value. A connect failure keeps its cause.
+        """
 
         try:
             return super().handle_request(request)
         except (httpx2.ConnectError, httpx2.ConnectTimeout) as error:
             raise RequestNotSentError() from error
+        except httpx2.LocalProtocolError:
+            pass
+        raise RequestNotBuiltError()
 
 
 class HttpClient:
@@ -284,19 +426,6 @@ class HttpClient:
         return self.request(
             "GET", url, headers=headers, allow_private=allow_private, follow_redirects=follow_redirects, timeout=timeout
         )
-
-    def get_json(
-        self, url: str, *, headers: dict[str, str] | None = None, allow_private: bool = False,
-        timeout: int = HTTP_TIMEOUT_SECONDS,
-    ) -> Any:
-        """GET JSON through the shared request policy; preserve HTTP and decoding errors."""
-
-        response = self.request(
-            "GET", url, headers={"Accept": "application/json", **(headers or {})},
-            allow_private=allow_private, timeout=timeout,
-        )
-        response.raise_for_status()
-        return response.json()
 
     def download_capped(
         self,
@@ -395,7 +524,7 @@ class HttpClient:
                                 final_url=str(response.url),
                                 content_type=response.headers.get("content-type", ""),
                                 status_code=response.status_code,
-                                headers=dict(response.headers),
+                                headers=response.headers,
                             )
                         remaining_bytes = budget.bytes - state.bytes
                         if remaining_bytes <= 0:
@@ -409,7 +538,7 @@ class HttpClient:
                             final_url=str(response.url),
                             content_type=response.headers.get("content-type", ""),
                             status_code=response.status_code,
-                            headers=dict(response.headers),
+                            headers=response.headers,
                         )
                     finally:
                         response.close()
@@ -473,16 +602,19 @@ class HttpClient:
         method: str,
         url: str,
         *,
-        headers: dict[str, str] | None = None,
+        headers: Mapping[str, str] | None = None,
         body: bytes | None = None,
+        json: Any = None,
         allow_private: bool = False,
         follow_redirects: bool = False,
         same_origin_redirects: int = 0,
         max_bytes: int | None = None,
         timeout: int = HTTP_TIMEOUT_SECONDS,
+        error: Callable[[HttpRefusal], Exception] | None = None,
     ) -> httpx2.Response:
         """Send one pinned request to ``url`` and return the response.
 
+        ``body`` is sent as is, ``json`` through httpx2's own JSON encoding.
         Raises ``ValidationError`` when the URL is rejected by the gate, the
         permanent ``AddressNotAllowedError`` (a ``ValidationError``) when a resolved
         address is refused by the SSRF policy, and the transient
@@ -492,11 +624,28 @@ class HttpClient:
         retaining the method, body and headers. A changed origin raises
         ``RedirectOriginError`` before sending credentials. It is exclusive with native ``follow_redirects``;
         a missing location or exhausted hop bound returns the redirect response.
-        ``max_bytes`` caps each decoded response body, including redirect hops,
-        raising ``ResponseTooLargeError`` on overflow. Capped reads request
-        ``Accept-Encoding: identity``. If a server still encodes its response,
-        httpx2 may decode a whole network chunk before the cap is checked: the
-        cap bounds accepted decoded content, not peak decoder memory.
+        ``max_bytes`` caps each decoded response body, redirect hops included:
+        reading stops at the cap, and a success over it raises
+        ``ResponseTooLargeError``. A capped request asks for
+        an unencoded answer (``Accept-Encoding: identity``). If a server still
+        encodes its response, httpx2 may decode a whole network chunk before the
+        cap is checked: the cap bounds accepted decoded content, not peak decoder
+        memory.
+        A non-success status is the answer even when its body is over the cap
+        or httpx2 cannot decode it: the response, or a redirect hop that is
+        still followed, keeps its status with an empty body.
+        A header value the HTTP library cannot encode or will not send raises
+        the permanent :class:`RequestNotBuiltError`.
+        With ``error``, a transport failure and a success over the cap or
+        whose body httpx2 cannot decode raise what ``error`` returns for their
+        :class:`HttpRefusal` instead, chained to the failure the refusal keeps,
+        or that failure itself, unchanged, when ``error`` returns it (a request
+        not sent that its caller passes on); the response is returned whatever
+        its status. A request not built
+        chains nothing: the library's text for it quotes the header value, which
+        can be a credential, so its refusal keeps only the owner's own failure.
+        ``HttpRefusal.cause`` tells a request not sent from one that may already
+        have taken effect.
         """
 
         if same_origin_redirects < 0 or (same_origin_redirects and follow_redirects):
@@ -507,47 +656,110 @@ class HttpClient:
         response_seen = False
 
         def read_response(response: httpx2.Response) -> None:
-            """Enforce the cap before httpx2 buffers a response or follows its redirect."""
+            """Read each answer within the cap before httpx2 buffers it or follows its redirect.
+
+            Only a success is oversized or undecodable: any other status outranks such a body, which is read no
+            further and left empty.
+            """
 
             nonlocal response_seen
             response_seen = True
-            if max_bytes is not None:
-                content = _read_capped(response, max_bytes=max_bytes)
+            try:
+                content = response.read() if max_bytes is None else _read_capped(response, max_bytes=max_bytes)
                 if content is None:
                     raise ResponseTooLargeError("HTTP response exceeds the byte limit.")
-                # httpx2's read() has no cap or public body-cache setter. Store
-                # the decoded cache it owns, preserving the native response.
-                response._content = content
-
-        with httpx2.Client(
-            transport=self.transport_factory(allow_private=allow_private),
-            timeout=timeout,
-            event_hooks={"response": [read_response]},
-        ) as client:
-            for hop in range(same_origin_redirects + 1):
-                parse_http_url(url)  # scheme/host gate; the pinned backend judges the address
-                try:
-                    response = client.request(
-                        method, url,
-                        headers=_request_headers(headers, capped=max_bytes is not None),
-                        content=body, follow_redirects=follow_redirects,
-                    )
-                except RequestNotSentError as error:
-                    if response_seen:
-                        raise httpx2.TransportError("HTTP request failed after an earlier request was sent.") from error
+            except (httpx2.DecodingError, ResponseTooLargeError):
+                if response.is_success:
                     raise
-                if (
-                    hop == same_origin_redirects
-                    or response.status_code not in {301, 302, 307, 308}
-                    or not response.headers.get("location")  # httpx2 also creates next_request for an empty Location.
-                    or response.next_request is None
-                ):
-                    break
-                destination = response.next_request.url
-                if not same_origin(destination, response.url):
-                    raise RedirectOriginError("Redirects must retain the request origin.")
-                url = str(destination)
+                response.close()
+                content = b""
+            # httpx2's read() has no cap or public body-cache setter. Store
+            # the decoded cache it owns, preserving the native response.
+            response._content = content
+
+        try:
+            with httpx2.Client(
+                transport=self.transport_factory(allow_private=allow_private),
+                timeout=timeout,
+                event_hooks={"response": [read_response]},
+            ) as client:
+                for hop in range(same_origin_redirects + 1):
+                    parse_http_url(url)  # scheme/host gate; the pinned backend judges the address
+                    try:
+                        response = client.request(
+                            method, url,
+                            headers=_request_headers(headers, capped=max_bytes is not None),
+                            content=body, json=json, follow_redirects=follow_redirects,
+                        )
+                    except RequestNotSentError as not_sent:
+                        if response_seen:
+                            raise httpx2.TransportError(
+                                "HTTP request failed after an earlier request was sent."
+                            ) from not_sent
+                        raise
+                    if (
+                        hop == same_origin_redirects
+                        or response.status_code not in {301, 302, 307, 308}
+                        or not response.headers.get("location")  # httpx2 builds next_request for an empty one too.
+                        or response.next_request is None
+                    ):
+                        break
+                    destination = response.next_request.url
+                    if not same_origin(destination, response.url):
+                        raise RedirectOriginError("Redirects must retain the request origin.")
+                    url = str(destination)
+        except (httpx2.TransportError, httpx2.DecodingError, RequestNotSentError, ResponseTooLargeError) as failure:
+            if error is None or (refused := error(HttpRefusal(failure=failure))) is failure:
+                raise
+            raise refused from None if isinstance(failure, RequestNotBuiltError) else failure
         return response
+
+    @overload
+    def request_model[T: BaseModel](
+        self, method: str, url: str, *, error: Callable[[HttpRefusal], Exception], model: type[T],
+        json: Any = None, headers: Mapping[str, str] | None = None, allow_private: bool = False,
+        max_bytes: int = JSON_MAX_BYTES, timeout: int = HTTP_TIMEOUT_SECONDS,
+    ) -> T: ...
+
+    @overload
+    def request_model(
+        self, method: str, url: str, *, error: Callable[[HttpRefusal], Exception], model: None = None,
+        json: Any = None, headers: Mapping[str, str] | None = None, allow_private: bool = False,
+        max_bytes: int = JSON_MAX_BYTES, timeout: int = HTTP_TIMEOUT_SECONDS,
+    ) -> Any: ...
+
+    def request_model[T: BaseModel](
+        self, method: str, url: str, *, error: Callable[[HttpRefusal], Exception], model: type[T] | None = None,
+        json: Any = None, headers: Mapping[str, str] | None = None, allow_private: bool = False,
+        max_bytes: int = JSON_MAX_BYTES, timeout: int = HTTP_TIMEOUT_SECONDS,
+    ) -> T | Any:
+        """Send one JSON request and return its answer validated into ``model``, or its parsed JSON without one.
+
+        ``json`` is the body; ``Accept: application/json`` is sent unless
+        ``headers`` names another. Every :class:`HttpRefusal` (a transport failure,
+        a non-success status whatever its body, a success over ``max_bytes``, one
+        that cannot be decoded or does not validate, a 204 or any success with no
+        JSON body included: send a request that may answer without one through
+        :meth:`request`) raises what ``error`` returns for it: the caller's
+        ``IntegrationError`` (:meth:`HttpRefusal.as_error`), or a domain signal it
+        owns (a ``FileNotFoundError`` for a 404). The URL gate's and address
+        policy's ``ValidationError`` propagate.
+        """
+
+        # Merged unencoded: ``request`` encodes the values, so one that cannot be is that request's refusal.
+        sent = dict(headers or {})
+        if not any(name.lower() == "accept" for name in sent):
+            sent["Accept"] = "application/json"
+        response = self.request(
+            method, url, headers=sent, json=json, allow_private=allow_private, max_bytes=max_bytes, timeout=timeout,
+            error=error,
+        )
+        if not response.is_success:
+            raise error(HttpRefusal.of(response))
+        try:
+            return response.json() if model is None else model.model_validate_json(response.content)
+        except ValueError as failure:  # a JSON decode error, or pydantic's ValidationError
+            raise error(HttpRefusal(failure=failure)) from failure
 
 
 def _read_capped(
@@ -599,11 +811,20 @@ class HttpClientMixin:
         return HttpClient()
 
 
-def _request_headers(headers: dict[str, str] | None, *, capped: bool) -> httpx2.Headers:
-    """Keep the URL's Host and request identity encoding for capped response reads."""
+def _request_headers(headers: Mapping[str, str] | None, *, capped: bool) -> httpx2.Headers:
+    """Encode the caller's headers, keep the URL's Host and request identity encoding for capped response reads.
 
-    result = httpx2.Headers(headers)
-    result.pop("Host", None)
-    if capped:
-        result["Accept-Encoding"] = "identity"
-    return result
+    The one place a header value is encoded: one that cannot be is :class:`RequestNotBuiltError`, raised apart
+    from the encoder's error, which holds the value.
+    """
+
+    try:
+        result = httpx2.Headers(headers)
+    except UnicodeEncodeError:
+        pass
+    else:
+        result.pop("Host", None)
+        if capped:
+            result["Accept-Encoding"] = "identity"
+        return result
+    raise RequestNotBuiltError()

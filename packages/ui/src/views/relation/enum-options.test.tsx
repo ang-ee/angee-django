@@ -79,6 +79,17 @@ vi.mock("@angee/refine", async (importOriginal) => {
 });
 
 describe("useImplConfigFields", () => {
+  test("names the fields under the model's own configuration field when it is not `config`", () => {
+    const { result } = renderHook(
+      () => useImplConfigFields("webforms.Form", "target_class", undefined, "target_config"),
+      { wrapper: RuntimeOwner },
+    );
+    expect(result.current.fields.slice(0, 2).map(({ name }) => name)).toEqual(["target_config.local_root", "target_config.local_name"]);
+    expect(result.current.fields[0]?.showWhen?.({ target_class: "local" })).toBe(true);
+    expect(result.current.fields[0]?.showWhen?.({ target_class: "legacy" })).toBe(false);
+    expect(result.current.fields[0]?.resolve?.({ target_class: "local" })).toMatchObject({ name: "target_config.local_root" });
+  });
+
   test("projects declared config through FormSpec and leaves undeclared choices raw", () => {
     const { result } = renderHook(
       () => useImplConfigFields("integrate_vcs.VcsBridge", "backend_class"),

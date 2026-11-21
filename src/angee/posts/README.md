@@ -132,30 +132,37 @@ reads continue using `consume_quota()`.
 Feed HTTP calls compose
 `request_json(method, url, *, is_transient, refusal, retry_delay=None, **kwargs)`.
 It accepts GET/POST and forwards native `HttpClient.request` keyword arguments.
-The result must be a JSON object. Transport errors, oversized responses, 5xx, a
-success whose body is not a JSON object, and provider transient markers raise
-`DeliveryUncertain` for POST and transient `IntegrationError` for GET. A 4xx whose
-body is not a JSON object answered the request: both predicates run with empty
-data, and it is never uncertain. `RequestNotSentError` (connect, DNS or TLS
-failure before sending) propagates unchanged. The pinned transport's pre-connect
-SSRF refusal (`AddressNotAllowedError`) becomes a permanent `IntegrationError`. A redirect
-failure after an earlier request was sent retains integrate's uncertain transport
-classification.
+The result must be a JSON object. Integrate classifies every refusal
+([`HttpRefusal`](../integrate/README.md)): whether a later attempt can outlive
+it, and its `Retry-After`. The feed adds only what a write needs and the
+adapter's own cases. A POST that may have taken effect raises `DeliveryUncertain`:
+a transport failure after sending, an oversized or unreadable success, a 3xx or
+5xx, or a provider transient marker. For GET, a transport failure is transient,
+and an oversized or unreadable success is permanent, because the same read
+brings the same answer. `RequestNotSentError` (nothing was written: a connect,
+DNS or TLS failure, or a request the HTTP library would not build) propagates
+unchanged with its own transience. The pinned transport's pre-connect SSRF
+refusal (`AddressNotAllowedError`) becomes a permanent `IntegrationError`. A
+redirect failure after an earlier request was sent retains integrate's uncertain
+transport classification.
 
 `is_transient(response, data) -> bool` detects provider markers for ambiguous
-temporary failure; it runs before refusal handling. Then
-`refusal(response, data) -> Exception | None` supplies provider-specific rate,
-quota, authorization, cursor or record-local refusal. Definite temporary refusals
-use `IntegrationError(transient=True, retry_after=...)`; permanent refusals use
+temporary failure; it runs first, and a GET it marks is transient. A server error
+(5xx) is never an adapter's refusal. Then `refusal(response, data) -> Exception |
+None` supplies provider-specific rate, quota, authorization, cursor or
+record-local refusal. Definite temporary refusals use
+`IntegrationError(transient=True, retry_after=...)`; permanent refusals use
 `IntegrationError`, cursor failures use `CursorInvalid`, and record-local reads
-may use `SemanticError`. Predicate exceptions propagate. An otherwise unhandled
-HTTP 4xx is a permanent refusal. All exception messages/codes must be safe and
-bounded. GET uncertainty uses `retry_delay(response)`, defaulting to
-`self.retry_after(response)`; supply a callback or override `retry_after` to
-combine provider usage headers with the shared Retry-After parser. Transport
-failures have no response hint. The helper never spends quota: stream callers
-debit before it, while provider delivery hooks rely on the base's declared-cost
-debit.
+may use `SemanticError`. Predicate exceptions propagate. Any other refused answer,
+a 3xx included, is integrate's refusal, transient or permanent by its status
+rule (a 429 waits). A refused answer whose body is not a JSON object runs both predicates
+with empty data. All exception messages/codes must be safe and bounded. A
+transient answer waits `retry_delay(response)`, defaulting to
+`self.retry_after(response)` (the answer's `Retry-After`, else one minute);
+supply a callback or override `retry_after` to combine provider usage headers
+with the shared Retry-After parser. Transport failures have no response hint.
+The helper never spends quota: stream callers debit before it, while provider
+delivery hooks rely on the base's declared-cost debit.
 
 The read tools are `read_comment_thread(sqid)` and `read_message_text(sqid)`, both
 registered through the existing MCP GraphQL seam over actor-scoped

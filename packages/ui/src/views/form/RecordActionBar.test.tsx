@@ -33,6 +33,177 @@ const { Provider, clearClients } = createUiTestProviders({
 });
 
 describe("RecordActionBar", () => {
+  test.each([2, 0])("the icon-only Actions trigger follows %i band verbs in DOM and tab order", (count) => {
+    const verbs = [
+      { id: "add-email", label: "Add email", run: vi.fn() },
+      { id: "add-phone", label: "Add phone", run: vi.fn() },
+    ].slice(0, count);
+    renderActionBar(<RecordActionBar record={record} menuTrigger="icon" fillBand actions={[
+      ...verbs,
+      { id: "copy", label: "Copy link", placement: "menu", run: vi.fn() },
+    ]} />);
+
+    const trigger = screen.getByRole("button", { name: "Actions" });
+    const buttons = screen.getAllByRole("button");
+    expect(buttons).toEqual([
+      ...verbs.map(({ label }) => screen.getByRole("button", { name: label })),
+      trigger,
+    ]);
+    expect(trigger.textContent).toBe("");
+    expect(trigger.getAttribute("aria-label")).toBe("Actions");
+    for (const button of buttons) expect(button.tabIndex).toBe(0);
+  });
+
+  test("contributed band buttons render before the Actions trigger, which marks itself as the overflow", () => {
+    renderActionBar(<RecordActionBar record={record} menuTrigger="icon" fillBand
+      contributedVerbs={<button type="button">Pause</button>}
+      actions={[
+        { id: "sync", label: "Sync now", run: vi.fn() },
+        { id: "copy", label: "Copy link", placement: "menu", run: vi.fn() },
+      ]} />);
+
+    const trigger = screen.getByRole("button", { name: "Actions" });
+    expect(screen.getAllByRole("button")).toEqual([
+      screen.getByRole("button", { name: "Sync now" }),
+      screen.getByRole("button", { name: "Pause" }),
+      trigger,
+    ]);
+    expect(trigger.hasAttribute("data-overflow-trigger")).toBe(true);
+    expect(trigger.classList.contains("order-last")).toBe(true);
+  });
+
+  test("the labeled Actions menu is an overflow menu too", () => {
+    renderActionBar(<RecordActionBar record={record} actions={[
+      { id: "copy", label: "Copy link", placement: "menu", run: vi.fn() },
+    ]} />);
+    const trigger = screen.getByRole("button", { name: "Actions" });
+    expect(trigger.hasAttribute("data-overflow-trigger")).toBe(true);
+    expect(trigger.classList.contains("order-last")).toBe(true);
+  });
+
+  test("primary alone puts a verb on the toolbar with primary emphasis", () => {
+    renderActionBar(<RecordActionBar record={record} actions={[
+      { id: "review", label: "Review", primary: true, run: vi.fn() },
+    ]} />);
+    expect(screen.getByRole("button", { name: "Review" }).classList.contains("bg-brand")).toBe(true);
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+  });
+
+  test("explicit menu placement beats primary and band filling", async () => {
+    renderActionBar(<RecordActionBar record={record} fillBand actions={[
+      { id: "review", label: "Review", placement: "menu", primary: true, run: vi.fn() },
+    ]} />);
+    expect(screen.queryByRole("button", { name: "Review" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Review" })).toBeTruthy();
+  });
+
+  test.each([null, { title: "Draft" }])("a record without a public id does not promote a bare run verb (%j)", async (draft) => {
+    renderActionBar(<RecordActionBar record={draft} fillBand actions={[
+      { id: "refresh", label: "Refresh skills", run: vi.fn() },
+    ]} />);
+    expect(screen.queryByRole("button", { name: "Refresh skills" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Refresh skills" })).toBeTruthy();
+  });
+
+  test.each<ActionDescriptor>([
+    { id: "primary", label: "Review", primary: true, run: vi.fn() },
+    { id: "toolbar", label: "Review", placement: "toolbar", run: vi.fn() },
+  ])("create mode preserves $id toolbar placement", (action) => {
+    renderActionBar(<RecordActionBar record={null} fillBand actions={[action]} />);
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Review" }).disabled).toBe(false);
+  });
+
+  test.each<{
+    name: string;
+    promote: boolean;
+    actions: ActionDescriptor[];
+    toolbar: string[];
+    menu: string[];
+  }>([
+    { name: "a lone unmarked verb stays in the menu by default", promote: false,
+      actions: [{ id: "review", label: "Review" }], toolbar: [], menu: ["Review"] },
+    { name: "an opted-in lone verb is a secondary button", promote: true,
+      actions: [{ id: "review", label: "Review" }], toolbar: ["Review"], menu: [] },
+    { name: "a lone danger verb stays in the menu", promote: true,
+      actions: [{ id: "drop", label: "Drop", danger: true }], toolbar: [], menu: ["Drop"] },
+    { name: "two unmarked non-danger verbs fill the band", promote: true,
+      actions: [{ id: "review", label: "Review" }, { id: "inspect", label: "Inspect" }],
+      toolbar: ["Review", "Inspect"], menu: [] },
+    { name: "only the first two unmarked non-danger verbs fill the band", promote: true,
+      actions: [{ id: "review", label: "Review" }, { id: "inspect", label: "Inspect" }, { id: "export", label: "Export" }],
+      toolbar: ["Review", "Inspect"], menu: ["Export"] },
+    { name: "a non-danger verb beside a danger verb is promoted", promote: true,
+      actions: [{ id: "review", label: "Review" }, { id: "drop", label: "Drop", danger: true }],
+      toolbar: ["Review"], menu: ["Drop"] },
+    { name: "an explicit toolbar verb counts toward the two-button band", promote: true,
+      actions: [{ id: "review", label: "Review" }, { id: "inspect", label: "Inspect", placement: "toolbar" }],
+      toolbar: ["Review", "Inspect"], menu: [] },
+    { name: "two explicit toolbar verbs leave unmarked verbs in the menu", promote: true,
+      actions: [{ id: "review", label: "Review" }, { id: "inspect", label: "Inspect", placement: "toolbar" },
+        { id: "export", label: "Export", placement: "toolbar" }],
+      toolbar: ["Inspect", "Export"], menu: ["Review"] },
+    { name: "an explicitly placed menu verb does not count toward promotion", promote: true,
+      actions: [{ id: "review", label: "Review" }, { id: "inspect", label: "Inspect", placement: "menu" }],
+      toolbar: ["Review"], menu: ["Inspect"] },
+  ])("$name", async ({ promote, actions, toolbar, menu }) => {
+    renderActionBar(<RecordActionBar record={record} fillBand={promote} actions={actions} />);
+    for (const name of toolbar) {
+      const button = screen.getByRole("button", { name });
+      expect(button.classList.contains("bg-inset")).toBe(true);
+      expect(button.classList.contains("bg-brand")).toBe(false);
+    }
+    for (const name of menu) expect(screen.queryByRole("button", { name })).toBeNull();
+    if (menu.length) {
+      fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+      for (const name of menu) expect(await screen.findByRole("menuitem", { name })).toBeTruthy();
+      for (const name of toolbar) expect(screen.queryByRole("menuitem", { name })).toBeNull();
+    } else {
+      expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+    }
+  });
+
+  test("a primary verb leaves one secondary place in the band", () => {
+    renderActionBar(<RecordActionBar record={record} fillBand actions={[
+      { id: "review", label: "Review", primary: true },
+      { id: "inspect", label: "Inspect" },
+    ]} />);
+    expect(screen.getByRole("button", { name: "Review" }).classList.contains("bg-brand")).toBe(true);
+    expect(screen.getByRole("button", { name: "Inspect" }).classList.contains("bg-inset")).toBe(true);
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+  });
+
+  test.each(["visibleWhen", "permission"] as const)("%s filters verbs before promotion and toolbar detection", (gate) => {
+    const hidden = gate === "visibleWhen" ? { visibleWhen: () => false } : { permission: "write" };
+    renderActionBar(<RecordActionBar record={{ ...record, permissions: ["read"] }} fillBand actions={[
+      { id: "review", label: "Review", permission: "read" },
+      { id: "hidden", label: "Hidden", ...hidden },
+      { id: "hidden-primary", label: "Hidden primary", primary: true, ...hidden },
+      { id: "hidden-toolbar", label: "Hidden toolbar", placement: "toolbar", ...hidden },
+    ]} />);
+    expect(screen.getByRole("button", { name: "Review" }).classList.contains("bg-inset")).toBe(true);
+    expect(screen.queryByRole("button", { name: /Hidden/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+  });
+
+  test.each<ActionDescriptor>([
+    { id: "primary", label: "Review", primary: true },
+    { id: "toolbar", label: "Review", placement: "toolbar" },
+    { id: "lone", label: "Review" },
+  ])("a parent Actions menu keeps the $id verb beside the generic group", async (action) => {
+    renderActionBar(<ActionMenu><RecordActionBar record={record} fillBand actions={[action]}
+      genericActions={[{ id: "archive", label: "Archive", placement: "menu", set: { archived: true } }]} />
+    </ActionMenu>);
+    expect(screen.queryByRole("button", { name: "Review" })).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Actions" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Review" })).toBeTruthy();
+    const menu = within(screen.getByRole("menu"));
+    expect(menu.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Review", "Archive"]);
+    expect(menu.getAllByRole("separator")).toHaveLength(1);
+  });
+
   test("trash opens its native reason prompt without a second confirmation", async () => {
     const resource = testDataResource("test.Note", { resourceType: "test/note", fields: [{
       name: "is_trashed", kind: "scalar", scalar: "Boolean", readable: true, aggregatable: false,
@@ -56,10 +227,11 @@ describe("RecordActionBar", () => {
     const onDelete = vi.fn();
     const bar = <RecordActionBar record={record} blocked={!inParent}
       actions={[{ id: "inspect", label: "Inspect", run }]}
+      genericActions={[{ id: "archive", label: "Archive", placement: "menu", set: { is_archived: true } }]}
       deleteAction={{ canDelete: true, isPending: false, onDelete }} />;
     renderActionBar(inParent ? <ActionMenu blocked>{bar}</ActionMenu> : bar);
     fireEvent.click(screen.getByRole("button", { name: "Actions" }));
-    for (const name of ["Inspect", "Delete"]) {
+    for (const name of ["Inspect", "Archive", "Delete"]) {
       const item = await screen.findByRole("menuitem", { name });
       expect(item.tagName).toBe("BUTTON");
       expect(item.getAttribute("aria-disabled")).toBe("true");
@@ -67,6 +239,25 @@ describe("RecordActionBar", () => {
     }
     expect(run).not.toHaveBeenCalled();
     expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  test.each([false, true])("generic actions follow page and container verbs, with Delete last (parent menu: %s)", async (inParent) => {
+    const bar = <RecordActionBar record={record}
+      actions={[{ id: "inspect", label: "Inspect", placement: "menu", run: vi.fn() }]}
+      contributedActions={<ActionTrigger>Export</ActionTrigger>}
+      genericActions={[
+        { id: "archive", label: "Archive", placement: "menu", set: { is_archived: true } },
+        { id: "trash", label: "Move to trash", placement: "menu", run: vi.fn() },
+      ]}
+      deleteAction={{ canDelete: true, isPending: false, onDelete: vi.fn() }} />;
+    renderActionBar(inParent ? <ActionMenu>{bar}</ActionMenu> : bar);
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    await screen.findByRole("menuitem", { name: "Archive" });
+    const menu = within(screen.getByRole("menu"));
+    expect(menu.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Inspect", "Export", "Archive", "Move to trash", "Delete",
+    ]);
+    expect(menu.getAllByRole("separator")).toHaveLength(1);
   });
 
   test("Escape from a menu-originated args dialog restores focus to Actions", async () => {
@@ -103,7 +294,7 @@ describe("RecordActionBar", () => {
   });
   test("a contributed verb that renders nothing leaves no Actions menu", () => {
     // As a record with no startable workflow: the contribution decides at render time and offers nothing.
-    renderActionBar(<RecordActionBar record={record} actions={[]} menuPlacement="leading" contributedActions={
+    renderActionBar(<RecordActionBar record={record} actions={[]} menuTrigger="icon" contributedActions={
       <RecordActionBar record={record} actions={[{ id: "hidden", label: "Hidden", run: vi.fn(), visibleWhen: () => false }]} />
     } />);
     expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
@@ -214,7 +405,7 @@ describe("RecordActionBar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Accept" }));
     const dialog = await screen.findByRole("dialog", { name: "Accept" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Accept" }));
-    await waitFor(() => expect(submit).toHaveBeenCalledWith({}, expect.objectContaining({ record, selectedIds: [record.id] })));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({}, expect.objectContaining({ record, selectedIds: [record.id] }), { errorNotification: false }));
     expect(applyPatch).not.toHaveBeenCalled();
   });
   test("preview keeps allowed verbs and delete visible but blocks click and keyboard activation", async () => {
@@ -246,17 +437,24 @@ describe("RecordActionBar", () => {
     clearClients();
   });
 
-  test("promotes declared primary actions while retaining other verbs in overflow", async () => {
+  test("only the first visible effective toolbar primary gets primary emphasis", async () => {
     const run = vi.fn();
     renderActionBar(<RecordActionBar record={record} applyPatch={vi.fn()} reload={vi.fn()}
       actions={[
-        { id: "review", label: "Review", placement: "toolbar", primary: true, run },
+        { id: "menu-primary", label: "Menu primary", placement: "menu", primary: true, run },
+        { id: "hidden", label: "Hidden", primary: true, run, visibleWhen: () => false },
+        { id: "inspect", label: "Inspect", placement: "toolbar", run },
+        { id: "review", label: "Review", primary: true, run },
+        { id: "approve", label: "Approve", primary: true, run },
         { id: "archive", label: "Archive", run },
-        { id: "hidden", label: "Hidden", placement: "toolbar", primary: true, run, visibleWhen: () => false },
       ]} />);
-    expect(screen.getByRole("button", { name: "Review" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Review" }).classList.contains("bg-brand")).toBe(true);
+    for (const name of ["Inspect", "Approve"]) {
+      expect(screen.getByRole("button", { name }).classList.contains("bg-inset")).toBe(true);
+    }
     expect(screen.queryByRole("button", { name: "Hidden" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Menu primary" })).toBeTruthy();
     expect(await screen.findByRole("menuitem", { name: "Archive" })).toBeTruthy();
     expect(screen.queryByRole("menuitem", { name: "Review" })).toBeNull();
   });
@@ -274,7 +472,14 @@ describe("RecordActionBar", () => {
     fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel task" }));
     await waitFor(() => expect(run).toHaveBeenCalledOnce());
     await waitFor(() => expect(screen.getByRole("button", { name: "Cancel task" }).getAttribute("aria-busy")).toBe("true"));
-    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Cancel task" }).disabled).toBe(true);
+    // The pending verb stays focusable (not natively disabled) and cannot run twice.
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    const pending = screen.getByRole<HTMLButtonElement>("button", { name: "Cancel task" });
+    expect(pending.disabled).toBe(false);
+    expect(pending.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(pending);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(run).toHaveBeenCalledOnce();
     await act(async () => { finish("Pending task closed."); });
     expect(await screen.findByText("Pending task closed.")).toBeTruthy();
     expect(screen.getByRole<HTMLButtonElement>("button", { name: "Cancel task" }).disabled).toBe(false);
@@ -292,17 +497,21 @@ describe("RecordActionBar", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  test("a primary action opens the existing typed-args form directly", async () => {
+  test.each(["primary", "lone"] as const)("a %s action's typed-args dialog returns focus to its toolbar button", async (kind) => {
     const submit = vi.fn(async () => ({ ok: true, message: "Review recorded." }));
-    renderActionBar(<RecordActionBar record={record} applyPatch={vi.fn()} reload={vi.fn()}
-      actions={[{ id: "review", label: "Review", placement: "toolbar", primary: true, args: [], submit }]} />);
-    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    renderActionBar(<RecordActionBar record={record} applyPatch={vi.fn()} reload={vi.fn()} fillBand={kind === "lone"}
+      genericActions={[{ id: "archive", label: "Archive", placement: "menu", set: { is_archived: true } }]}
+      actions={[{ id: "review", label: "Review", primary: kind === "primary", args: [], submit }]} />);
+    const trigger = screen.getByRole("button", { name: "Review" });
+    act(() => trigger.focus());
+    fireEvent.click(trigger);
     const dialog = await screen.findByRole("dialog", { name: "Review" });
-    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
     fireEvent.click(within(dialog).getByRole("button", { name: "Review" }));
-    await waitFor(() => expect(submit).toHaveBeenCalledWith({}, expect.objectContaining({ record, selectedIds: [record.id] })));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({}, expect.objectContaining({ record, selectedIds: [record.id] }), { errorNotification: false }));
     expect(await screen.findByText("Review recorded.")).toBeTruthy();
-    expect(screen.queryByRole("dialog", { name: "Review" })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Review" })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
   test("keeps a schema draft across refresh and submits with the latest record revision", async () => {

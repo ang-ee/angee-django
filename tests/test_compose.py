@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 import sys
 from importlib import import_module
@@ -22,11 +21,15 @@ from django_compose.declarations import model_declaration
 from django_compose.model_composition import ModelComposition
 from django_compose.models import Composable
 from django_compose.rendering import render_models
-from graphql import parse, validate
+from django_compose.serving import GENERATED_SENTINEL
+from graphql import concat_ast, specified_rules, validate
 
 from angee.base.build import PermissionIntegration, composed_grants
 from angee.base.models.base import AngeeModel
 from angee.base.models.roles import role_anchor
+from angee.base.testing.packages import write_addon_distribution
+from angee.graphql.schema import GraphQLSchemas
+from angee.graphql.testing.documents import authored_documents
 from angee.web.build import WebRuntime
 from tests.conftest import addon_schema, make_addon
 
@@ -218,11 +221,53 @@ def test_nexus_aggregation_dependencies_reach_web_runtime() -> None:
     assert {"angee.messaging", "angee.parties", "angee.spaces", "angee.posts"} <= set(nexus["dependsOn"])
 
 
-def _public_operations(addon_root: Path) -> list[str]:
-    """Return the operations an addon's ``documents.public.ts`` declares, as public codegen scans them."""
+def _codegen_document_files(schema_name: str) -> tuple[str, ...]:
+    """Return the files host codegen reads ``schema_name``'s documents from (``documentFiles``, web-codegen.mjs)."""
 
-    source = (addon_root / "web" / "src" / "documents.public.ts").read_text()
-    return re.findall(r"graphql\(`(.*?)`\)", source, flags=re.S)
+    return ("documents.public.ts",) if schema_name == "public" else ("documents.ts", f"documents.{schema_name}.ts")
+
+
+_CODEGEN_RULES = tuple(
+    rule
+    for rule in specified_rules
+    if not rule.__name__.startswith(("NoUnusedFragments", "NoUnusedVariables", "KnownDirectives"))
+)
+"""graphql-codegen's document rules: all specified rules but three, so a fragment another package spreads validates."""
+
+
+def _web_addons() -> list[str]:
+    """Return every installed addon that ships a web package."""
+
+    return sorted(entry["app"] for entry in _web_runtime(apps.get_app_configs()).manifest["addonPackages"])
+
+
+@pytest.mark.parametrize("root", _web_addons())
+def test_authored_documents_validate_against_the_root_closure(root: str) -> None:
+    """A host enabling ``root`` alone validates every authored document against its own schemas.
+
+    Host codegen (``generateWebRuntime``) validates the documents of every enabled
+    web package, found anywhere under its source root, as one document per schema,
+    and a validation error fails the frontend build. A document naming a type only
+    a dependent addon brings into the schema fails every host without that addon,
+    as integrate's ``ConnectWithAccountFields`` would on a host composing no
+    implementer of the interface, were integrate's ``types`` bucket not to register it.
+    """
+
+    closure = enabled_apps((root,), group="angee.addons")
+    configs = {config.name: config for config in closure.app_configs}
+    sources = [
+        Path(configs[entry["app"]].path) / "web" / entry["sourceRoot"]
+        for entry in _web_runtime(closure.app_configs).manifest["addonPackages"]
+    ]
+    schemas = GraphQLSchemas(closure.app_configs)
+    for name in schemas.names():
+        paths = sorted(
+            path for source in sources for file in _codegen_document_files(name) for path in source.rglob(file)
+        )
+        if not paths:
+            continue
+        errors = validate(schemas.graphql_schema(name), concat_ast(authored_documents(*paths)), _CODEGEN_RULES)
+        assert [str(error) for error in errors] == [], name
 
 
 def test_oidc_web_documents_follow_the_enabled_backend_addon() -> None:
@@ -244,11 +289,11 @@ def test_oidc_web_documents_follow_the_enabled_backend_addon() -> None:
     iam_config = next(config for config in iam_configs if config.name == "angee.iam")
     oidc_config = next(config for config in oidc_configs if config.name == "angee.iam_integrate_oidc")
     iam_public = addon_schema(import_module("angee.iam.schema").schemas, "public")._schema
-    iam_operations = _public_operations(Path(iam_config.path))
-    oidc_operations = _public_operations(Path(oidc_config.path))
+    iam_operations = authored_documents(Path(iam_config.path) / "web" / "src" / "documents.public.ts")
+    oidc_operations = authored_documents(Path(oidc_config.path) / "web" / "src" / "documents.public.ts")
     assert iam_operations and oidc_operations
-    assert [validate(iam_public, parse(operation)) for operation in iam_operations] == [[]] * len(iam_operations)
-    assert all(validate(iam_public, parse(operation)) for operation in oidc_operations)
+    assert [validate(iam_public, operation) for operation in iam_operations] == [[]] * len(iam_operations)
+    assert all(validate(iam_public, operation) for operation in oidc_operations)
 
 
 def test_web_runtime_carries_the_deployment_ui_layer() -> None:
@@ -364,6 +409,59 @@ def test_if_stale_recomposes_when_only_the_deployment_ui_layer_changes(tmp_path:
     deploy({"new.example.test": "payables"})
     assert "Composition generated." in host.compose("--if-stale")
     assert deployed_hosts() == {"new.example.test": "payables"}
+    assert "Composition is current." in host.compose("--check")
+
+
+def test_if_stale_tracks_asset_declarations_but_not_image_bytes(tmp_path: Path) -> None:
+    host = _TemplateHost(tmp_path / "host", "site_probe")
+    addon = host.root / "site_probe"
+    addon.mkdir()
+    (addon / "__init__.py").touch()
+    write_addon_distribution(addon, "site_probe", depends_on=("angee.web",))
+    web = addon / "web"
+    web.mkdir()
+    package = {"name": "@example/site", "angee": {"assets": {"site.image": "./preview.png"}}}
+    (web / "package.json").write_text(json.dumps(package))
+    (web / "preview.png").write_bytes(b"first image")
+    host.write_settings()
+    assert "Composition generated." in host.compose()
+    assert "Composition is current." in host.compose("--if-stale")
+    (web / "preview.png").write_bytes(b"changed image")
+    assert "Composition is current." in host.compose("--if-stale")
+    package["angee"]["assets"]["site.image"] = "./replacement.png"
+    (web / "package.json").write_text(json.dumps(package))
+    assert "Composition generated." in host.compose("--if-stale")
+    manifest = json.loads((host.root / "runtime/web/manifest.json").read_text())
+    entry = next(entry for entry in manifest["addonPackages"] if entry["app"] == "site_probe")
+    assert entry["assets"] == {"site.image": "./replacement.png"}
+    assert "Composition is current." in host.compose("--check")
+
+
+def test_compose_publishes_the_page_ingress_snippet_and_follows_page_declarations(tmp_path: Path) -> None:
+    """``runtime/web/pages.caddy`` is a published artifact: importable without pages, recomposed with one."""
+
+    host = _TemplateHost(tmp_path / "host", "site_probe")
+    addon = host.root / "site_probe"
+    addon.mkdir()
+    (addon / "__init__.py").touch()
+    write_addon_distribution(addon, "site_probe", depends_on=("angee.web",))
+    (addon / "web/src").mkdir(parents=True)
+    (addon / "web/src/form.html").write_text("<!doctype html>")
+    package: dict[str, Any] = {"name": "@example/site"}
+    (addon / "web/package.json").write_text(json.dumps(package))
+    host.write_settings()
+    assert "Composition generated." in host.compose()
+    snippet = host.root / "runtime/web/pages.caddy"
+    assert snippet.read_text() == f"{GENERATED_SENTINEL}\n"
+    package["angee"] = {
+        "pages": {"site.form": {"entry": "./src/form.html", "paths": ["/forms/w/*"], "accept": "text/html"}},
+    }
+    (addon / "web/package.json").write_text(json.dumps(package))
+    assert "Composition generated." in host.compose("--if-stale")
+    assert "rewrite * /site.form.html" in snippet.read_text()
+    manifest = json.loads((host.root / "runtime/web/manifest.json").read_text())
+    entry = next(entry for entry in manifest["addonPackages"] if entry["app"] == "site_probe")
+    assert entry["pages"] == package["angee"]["pages"]
     assert "Composition is current." in host.compose("--check")
 
 

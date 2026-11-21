@@ -25,7 +25,7 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { useState, type ReactElement } from "react";
-import { useFormContext } from "react-hook-form";
+import { useFormContext, useFormState } from "react-hook-form";
 import { EditorView } from "@codemirror/view";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -372,7 +372,78 @@ describe("ActionFormDialog", () => {
     expect(JSON.parse(nextEditor.state.doc.toString())).toEqual({ text: "Retained" });
     expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Consumer note" }).value).toBe("Consumer draft");
     fireEvent.click(screen.getByRole("button", { name: "Collect" }));
-    await waitFor(() => expect(submit).toHaveBeenCalledWith({ mode: "second", note: "Consumer draft", payload: { text: "Retained" } }, context));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ mode: "second", note: "Consumer draft", payload: { text: "Retained" } }, context, { errorNotification: false }));
+  });
+
+  const branchedSchema = {
+    type: "object", discriminator: { propertyName: "mode" }, required: ["mode"],
+    properties: { mode: { type: "string", enum: ["first", "second"], widget: "text", label: "Mode" }, note: { type: "string", hidden: true } },
+    oneOf: [
+      { properties: { mode: { const: "first" },
+        shared: { type: "string", label: "Shared", default: "First shared" },
+        title: { type: "string", label: "Title", default: "First title" } } },
+      { properties: { mode: { const: "second" },
+        shared: { type: "string", label: "Shared", default: "Second shared" },
+        reason: { type: "string", label: "Reason" } }, required: ["reason"] },
+    ],
+  };
+  function BranchConsumer(): ReactElement {
+    const form = useFormContext();
+    const { dirtyFields, touchedFields } = useFormState();
+    return <>
+      <input aria-label="Consumer note" {...form.register("note")} />
+      <input aria-label="Consumer extra" {...form.register("extra")} />
+      <output aria-label="Dirty">{Object.keys(dirtyFields).sort().join(",")}</output>
+      <output aria-label="Touched">{Object.keys(touchedFields).sort().join(",")}</output>
+    </>;
+  }
+  const settle = () => act(() => new Promise<void>((resolve) => { setTimeout(resolve, 0); }));
+  const textbox = (name: string) => screen.getByRole<HTMLInputElement>("textbox", { name });
+
+  test("a schema branch change seeds the new branch, resets a field both branches name and keeps consumer values", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Accepted." });
+    renderDialog({ id: "collect", label: "Collect", submit, args: {
+      ...jsonSchemaActionArgs(branchedSchema, defaultWidgets), content: <BranchConsumer />,
+    } });
+    fireEvent.change(await screen.findByRole("textbox", { name: "Consumer note" }), { target: { value: "Consumer draft" } });
+    fireEvent.change(textbox("Consumer extra"), { target: { value: "Consumer extra" } });
+    fireEvent.change(textbox("Shared"), { target: { value: "Typed shared" } });
+
+    fireEvent.change(textbox("Mode"), { target: { value: "second" } });
+    await settle();
+    expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
+    expect(textbox("Shared").value).toBe("Second shared");
+    expect(textbox("Reason").value).toBe("");
+    // The new branch's untouched required field shows no message before the person submits.
+    expect(screen.queryByText("This field is required.")).toBeNull();
+    expect(textbox("Reason").getAttribute("aria-invalid")).toBeNull();
+    expect(screen.getByLabelText("Dirty").textContent).toBe("extra,mode,note");
+    expect(screen.getByLabelText("Touched").textContent).toBe("");
+    expect(textbox("Consumer note").value).toBe("Consumer draft");
+    expect(textbox("Consumer extra").value).toBe("Consumer extra");
+
+    fireEvent.change(textbox("Mode"), { target: { value: "first" } });
+    await settle();
+    expect(textbox("Title").value).toBe("First title");
+    expect(textbox("Shared").value).toBe("First shared");
+    fireEvent.click(screen.getByRole("button", { name: "Collect" }));
+    // The schema's resolver submits the declared fields of the selected branch.
+    await waitFor(() => expect(submit).toHaveBeenCalledWith(
+      { mode: "first", note: "Consumer draft", shared: "First shared", title: "First title" }, context, { errorNotification: false }));
+  });
+
+  test("after a refused submit, a schema branch change shows no message on the new branch's untouched fields", async () => {
+    renderDialog({ id: "collect", label: "Collect", submit: vi.fn(), args: jsonSchemaActionArgs(branchedSchema, defaultWidgets) });
+    fireEvent.change(await screen.findByRole("textbox", { name: "Mode" }), { target: { value: "second" } });
+    fireEvent.submit(screen.getByRole("button", { name: "Collect" }).closest("form")!);
+    expect(await screen.findByText("This field is required.")).toBeTruthy();
+
+    fireEvent.change(textbox("Mode"), { target: { value: "first" } });
+    fireEvent.change(textbox("Mode"), { target: { value: "second" } });
+    await settle();
+    expect(textbox("Reason").value).toBe("");
+    expect(screen.queryByText("This field is required.")).toBeNull();
+    expect(textbox("Reason").getAttribute("aria-invalid")).toBeNull();
   });
 
   test("collects record-specific schema args and keeps a conflict draft locked", async () => {
@@ -427,7 +498,7 @@ describe("ActionFormDialog", () => {
       editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: '{"note":"Updated"}' } });
       fireEvent.click(screen.getByRole("button", { name: "Collect" }));
     });
-    await waitFor(() => expect(submit).toHaveBeenCalledWith({ payload: { note: "Updated" } }, context));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ payload: { note: "Updated" } }, context, { errorNotification: false }));
   });
 
   test("passes normalized relation-list values to a custom submit", async () => {
@@ -445,7 +516,7 @@ describe("ActionFormDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Collect" }));
 
     await waitFor(() => expect(submit).toHaveBeenCalledWith(
-      { documentIds: ["doc-2", "doc-1"] }, context,
+      { documentIds: ["doc-2", "doc-1"] }, context, { errorNotification: false }
     ));
   });
 
@@ -461,7 +532,7 @@ describe("ActionFormDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Collect" }));
 
-    await waitFor(() => expect(submit).toHaveBeenCalledWith({ builderIds: [] }, context));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ builderIds: [] }, context, { errorNotification: false }));
   });
 
   test("does not submit its parent record form through the dialog portal", async () => {
@@ -493,7 +564,7 @@ describe("ActionFormDialog", () => {
       }],
     });
     fireEvent.click(screen.getByRole("button", { name: "Collect" }));
-    await waitFor(() => expect(submit).toHaveBeenCalledWith({ collection: "col-secondary" }, context));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ collection: "col-secondary" }, context, { errorNotification: false }));
   });
 
   test("prefills scalar args from the invoking record and submits user edits", async () => {
@@ -514,7 +585,7 @@ describe("ActionFormDialog", () => {
     fireEvent.change(screen.getByLabelText("Amount"), { target: { value: "500.00" } });
     fireEvent.click(screen.getByRole("button", { name: "Collect" }));
     await waitFor(() => expect(submit).toHaveBeenCalledWith(
-      { amount: "500.00", zero: 0, fallback: "Default" }, context,
+      { amount: "500.00", zero: 0, fallback: "Default" }, context, { errorNotification: false }
     ));
     expect(onSucceeded).toHaveBeenCalledWith(outcome);
   });
@@ -642,7 +713,7 @@ describe("ActionFormDialog", () => {
     }));
     fireEvent.keyDown(screen.getByPlaceholderText("Search…"), { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "Save choice" }));
-    await waitFor(() => expect(submit).toHaveBeenCalledWith({ scope: "cash", collection: null }, context));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ scope: "cash", collection: null }, context, { errorNotification: false }));
   });
 
   test("descriptor many-to-many actions preserve selected records and submit the edited id list", async () => {
@@ -657,7 +728,7 @@ describe("ActionFormDialog", () => {
     fireEvent.input(screen.getByRole("combobox", { name: "Documents" }), { target: { value: "DOC-2" }, inputType: "insertText" });
     fireEvent.click(await screen.findByRole("option", { name: "DOC-2" }));
     fireEvent.click(screen.getByRole("button", { name: "Select documents" }));
-    await waitFor(() => expect(submit).toHaveBeenCalledWith({ documentIds: ["doc-1", "doc-2"] }, context));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ documentIds: ["doc-1", "doc-2"] }, context, { errorNotification: false }));
   });
 
   test("offers the picker's inline create only for relation args that declare it", async () => {
@@ -754,7 +825,7 @@ describe("ActionFormDialog", () => {
       await waitFor(() => expect(submit).toHaveBeenCalledWith({
         // A list of collections never inherits the invoking documents' ids.
         target: argKind === "relation" ? "created-1" : ["created-1"],
-      }, context));
+      }, context, { errorNotification: false }));
     },
   );
 

@@ -1,11 +1,12 @@
 import { useMemo } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { FormProvider, useForm } from "react-hook-form";
 import {
+  ActionFormProvider,
   DescriptorFieldList,
   RecordChromeProvider,
   RecordFieldMarksProvider,
   createRouteHref,
+  useActionForm,
   useRecordFieldMarks,
   type DescriptorField,
 } from "@angee/ui";
@@ -47,7 +48,11 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 function PartyFieldProvenance() {
-  const form = useForm({ defaultValues: { display_name: "Ada Lovelace", language: "English" } });
+  // A read-only record's fields: the action form only hosts them, nothing is submitted.
+  const { form } = useActionForm({
+    defaultValues: { display_name: "Ada Lovelace", language: "English" },
+    submit: () => ({ status: "ok", data: null }),
+  });
   const publications = useMemo(() => [{
     model: "parties.Party",
     id: PARTY_ID,
@@ -67,14 +72,14 @@ function PartyFieldProvenance() {
     recordId: PARTY_ID,
     record: { id: PARTY_ID, display_name: "Ada Lovelace", language: "English" },
     formReadOnly: true,
-  }}><FormProvider {...form}>
+  }}><ActionFormProvider {...form}>
     <div className="w-96 rounded-12 border border-border bg-sheet p-5">
       <DescriptorFieldList fields={fields} />
       <p className="mt-4 text-12 text-fg-muted">
         Hover the Correction badge for its origin; follow it to the applied statement.
       </p>
     </div>
-  </FormProvider></RecordChromeProvider>;
+  </ActionFormProvider></RecordChromeProvider>;
 }
 
 export const PartyStatement: Story = {

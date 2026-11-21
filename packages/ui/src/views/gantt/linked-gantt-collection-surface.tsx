@@ -9,6 +9,7 @@ import { useStatusTone } from "../../widgets/use-status-tone";
 import { relationValueId } from "../../widgets/types";
 import { errorFromUnknown } from "../../data/errors";
 import { ResourceListFrame } from "../resource/ResourceListFrame";
+import { useArchiveScopeFilter } from "../resource/surface/archive-scope";
 import { useResourceSearch } from "../resource/search/use-resource-search";
 import { useSearchCatalog, type UseSearchCatalogInput } from "../resource/search/catalog";
 import type { ResourceToolbarProps } from "../../toolbars";
@@ -71,17 +72,19 @@ export function LinkedGanttCollectionSurface<TRow extends Row>({
       if (barQuery.relation(linked.lane)?.model !== laneResource?.modelLabel) {
         throw new Error(`Gantt linked field "${linked.lane}" must reference "${laneResource?.modelLabel}".`);
       }
+      const filter = ganttLaneFilter(barQuery, linked.lane, laneIds, linked.filter);
       return {
         fields: [barQuery.contract.identity.field, gantt.start, gantt.end, barLabel, ...(gantt.tone ? [gantt.tone] : []), ...barQuery.selection([{ field: linked.lane }])],
-        filter: laneIds.length ? ganttLaneFilter(barQuery, linked.lane, laneIds, linked.filter) : undefined,
+        filter,
         error: null,
       };
     } catch (cause) {
       return { fields: [], filter: undefined, error: errorFromUnknown(cause) };
     }
-  }, [barQuery, laneQuery, linked, gantt.start, gantt.end, gantt.tone, barLabel, laneIds, laneResource?.modelLabel]);
+  }, [barQuery, barResource, laneQuery, linked, gantt.start, gantt.end, gantt.tone, barLabel, laneIds, laneResource?.modelLabel]);
+  const barFilter = useArchiveScopeFilter(barResource, barSource.filter);
   const barFields = useValueStable(barSource.fields);
-  const bars = useGanttRecords({ resource: barResource, fields: barFields, filter: barSource.filter,
+  const bars = useGanttRecords({ resource: barResource, fields: barFields, filter: barFilter,
     enabled: Boolean(barResource && laneIds.length && !barSource.error) });
   const fetching = lanePage.query.isFetching || bars.fetching;
   const error = barSource.error ?? lanePage.query.error ?? bars.error;

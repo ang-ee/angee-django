@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvider } from "@tanstack/react-router";
 import { Filter, ResourceQuery } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, expect, expectTypeOf, test, vi } from "vitest";
 
 import { baseIcons } from "../../chrome/icon-registry";
 import { ModalsHost, ToastProvider } from "../../feedback";
@@ -13,9 +13,18 @@ import { Column } from "../page";
 import { List } from "./List";
 import { ResourceList } from "./ResourceList";
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "./resource-view-context";
-import { RowsListView } from "./RowsListView";
+import { RowsListView, type RowsListViewProps } from "./RowsListView";
 import { ganttResources, ganttLane, ganttLanes, ganttRecord, scheduledRecord } from "../../../tests/gantt-fixtures";
 import type { GanttViewProps } from "../gantt/GanttView";
+import type { groupByVariables } from "@angee/refine";
+import type { ListViewProps } from "./resource-view-types";
+import type { AllMatching, AllMatchingGroups, AllMatchingRecords } from "./ListView";
+import type {
+  AllMatching as PublicAllMatching,
+  AllMatchingGroups as PublicAllMatchingGroups,
+  AllMatchingRecords as PublicAllMatchingRecords,
+} from "../index";
+import type { PlacedBulkActions, PlacedBulkCollection, WithPlacedBulkActions } from "./bulk-action";
 
 const drawing = vi.hoisted(() => ({ props: null as GanttViewProps | null }));
 vi.mock("../gantt/GanttView", () => ({ GanttView: (props: GanttViewProps) => {
@@ -44,6 +53,37 @@ function SelectionControls() {
     <button onClick={() => view.setFilter({})}>All notes</button>
   </>;
 }
+
+test("a page's bulkActions takes a collection built by hand without the split or allMatching; a list surface states the split", () => {
+  type Collection = Parameters<NonNullable<ListViewProps<{ id: string }>["bulkActions"]>>[2];
+  type HandBuilt = { filter: Record<string, never>; selectedRows: { id: string }[] };
+  // What a consumer's test does: call a page's bulkActions with its own collection.
+  expectTypeOf<HandBuilt>().toExtend<Collection>();
+  // A list surface holds a page's callback, and its call cannot leave the split out.
+  expectTypeOf<NonNullable<ListViewProps<{ id: string }>["bulkActions"]>>().toExtend<PlacedBulkActions<{ id: string }>>();
+  expectTypeOf<HandBuilt>().not.toExtend<PlacedBulkCollection<{ id: string }>>();
+  expectTypeOf<HandBuilt & { selectedGroups: null }>().toExtend<PlacedBulkCollection<{ id: string }>>();
+  // Every component under `ListView` and `RowsListView` holds the page's callback narrowed:
+  // the public props are assignable, and a call there cannot leave the split out either.
+  type Held<TProps extends { bulkActions?: unknown }> = NonNullable<WithPlacedBulkActions<TProps, { id: string }>["bulkActions"]>;
+  expectTypeOf<ListViewProps<{ id: string }>>().toExtend<WithPlacedBulkActions<ListViewProps<{ id: string }>, { id: string }>>();
+  expectTypeOf<RowsListViewProps<{ id: string }>>().toExtend<WithPlacedBulkActions<RowsListViewProps<{ id: string }>, { id: string }>>();
+  expectTypeOf<HandBuilt>().not.toExtend<Parameters<Held<ListViewProps<{ id: string }>>>[2]>();
+  expectTypeOf<HandBuilt>().not.toExtend<Parameters<Held<RowsListViewProps<{ id: string }>>>[2]>();
+});
+
+test("the collection's allMatching is the public AllMatching, a union of its two named arms", () => {
+  type Collection = Parameters<NonNullable<ListViewProps<{ id: string }>["bulkActions"]>>[2];
+  expectTypeOf<Collection["allMatching"]>().toEqualTypeOf<AllMatching | undefined>();
+  expectTypeOf<AllMatching>().toEqualTypeOf<AllMatchingRecords | AllMatchingGroups>();
+  // The package's entry exports the same names as the list's own modules.
+  expectTypeOf<PublicAllMatching>().toEqualTypeOf<AllMatching>();
+  expectTypeOf<PublicAllMatchingRecords>().toEqualTypeOf<AllMatchingRecords>();
+  expectTypeOf<PublicAllMatchingGroups>().toEqualTypeOf<AllMatchingGroups>();
+  // A groups read carries the level's order, which refine's producer turns into `order_by`.
+  expectTypeOf<AllMatchingGroups["read"]>().toHaveProperty("orderBy");
+  expectTypeOf<AllMatchingGroups["read"]>().toExtend<Parameters<typeof groupByVariables>[0]>();
+});
 
 test("List resolves selection and bulk actions against the current view", async () => {
   const observeBulkCollection = vi.fn();
@@ -107,7 +147,7 @@ test.each([
   </ResourceViewProvider></Provider></RouterContextProvider>);
   await screen.findByLabelText("Schedule chart");
   await waitFor(() => expect(drawing.props?.resources).toHaveLength(2));
-  if (props.selectable ?? props.presentation !== "embedded") {
+  if (props.selectable === true) {
     expect(screen.getByText("1 selected")).toBeDefined();
     expect(drawing.props?.selectedRows).toEqual(["lane-a"]);
     expect(drawing.props?.onSelectedRowsChange).toBeTypeOf("function");

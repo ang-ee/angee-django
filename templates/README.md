@@ -109,7 +109,10 @@ angee --root /srv/shop secret reveal admin-password
 - **`settings_file`** names a settings file in one of the repositories, relative to
   the stack root. Every Python service and job loads it as `YAMLCONF_CONFFILE`,
   the final layer after the host's `settings.yaml`, so a product keeps the
-  settings it overrides (brand, wording, currency) in its own repository. Keep
+  settings it overrides (runtime brand, static site head, wording, currency) in
+  its own repository. `ANGEE_UI.shell.site` selects the title, description and
+  named public assets the product's addons ship; see the
+  [shell contract](../docs/frontend/guidelines.md#rules). Keep
   `INSTALLED_APPS` out of it; the host's roster and `roots` own that.
 - **Deploy keys.** Every repository given by SSH URL declares a required secret
   `deploy-key-<name>` and `sources.<name>.auth.ssh_key_secret`. The operator
@@ -123,11 +126,16 @@ angee --root /srv/shop secret reveal admin-password
   only there, so the host's data is disposable: an update whose model change
   needs a reviewed data step, or drops a populated table, stops the chain. A
   deployment that keeps its data carries reviewed history in a project
-  repository and uses `stacks/dev` or `stacks/local`.
+  repository and uses `stacks/dev` or `stacks/local`. On an empty database the
+  first `provision` takes several minutes (about 8.5 for the Omelas composition,
+  most of it in a few large initial migrations); it is working, not hung.
 - **Public settings.** With a public `ingress_domain` the Python services run with
   `DEBUG` off and `ALLOWED_HOSTS` limited to the domain, its aliases and the
   compose-internal names. `stacks/dev` rendered for production on a public
-  domain gets the same.
+  domain gets the same. The Python services and the frontend that writes the
+  static head receive the ingress origin, `https://<ingress_domain>`, as
+  `ANGEE_PUBLIC_ORIGIN`, so link previews use it on every alias; the web build
+  reads only that variable, never an origin authored in a settings file.
 
 Update a running host with `angee ws sync-base src`, then
 `angee job run deps --chained-restart`. The template needs angee 0.28.0 or later:

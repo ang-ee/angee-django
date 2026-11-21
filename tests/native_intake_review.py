@@ -17,7 +17,7 @@ from angee.graphql.schema import GraphQLSchemas
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 from angee.messaging.tasks import deliver_message
 from angee.work.events import task_woken
-from tests.native_intake_capture import ChannelIntakeCaptureTests, IntakeAccessCase
+from tests.native_intake_capture import ChannelIntakeCaptureTests, FormCaptureTests, IntakeAccessCase
 
 REQUESTER = "requester@example.test"
 CLARIFY = """
@@ -179,11 +179,11 @@ class RequesterReplyTests(TransactionTestCase):
 class RequesterDomainTests(TransactionTestCase):
     """``["*"]`` gives every claimed webform address an account, and only alone."""
 
-    webform = ChannelIntakeCaptureTests.webform
-    submit = ChannelIntakeCaptureTests.submit
+    webform = FormCaptureTests.webform
+    submit = FormCaptureTests.submit
 
     def setUp(self):
-        ChannelIntakeCaptureTests.setUp(self)
+        FormCaptureTests.setUp(self)
 
     def test_every_domain_gets_one_passwordless_unadmitted_account(self):
         channel = self.webform(domains=("*",))

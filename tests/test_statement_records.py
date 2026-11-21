@@ -26,7 +26,7 @@ from rebac import (
 
 from angee.base.models.base import AngeeModel
 from angee.provenance.context import changeset
-from angee.provenance.evidence import FactAuthority
+from angee.provenance.evidence import EvidenceReference, FactAuthority
 from angee.provenance.schema import RecordHistory
 from angee.provenance.statements import (
     Aspect,
@@ -73,6 +73,18 @@ def test_a_statement_owns_its_shared_fact_authority(source_kind: SourceKind, aut
     statement = Claimed.statements.model(source_kind=source_kind)
 
     assert statement.fact_authority is authority
+
+
+def test_two_references_name_the_same_record_whatever_the_labels_case_or_a_pointer() -> None:
+    """``named_record`` is the one comparison of which record a reference names; whole references differ."""
+
+    stored = EvidenceReference(model="integrate.RecordLink", id="rlk_one")
+    cited = EvidenceReference(model="integrate.recordlink", id="rlk_one", pointer="/display_name")
+    another = EvidenceReference(model="integrate.RecordLink", id="rlk_two")
+
+    assert stored != cited
+    assert stored.named_record == cited.named_record == ("integrate.recordlink", "rlk_one")
+    assert stored.named_record != another.named_record
 
 
 def test_a_donor_aspect_asserts_and_resolves_through_the_subject(db: None) -> None:
@@ -198,6 +210,43 @@ def test_statement_copy_dispatches_to_the_field_owner() -> None:
     assert field.null and field.blank
     assert not field.has_default()
     assert isinstance(ProjectedSubject._meta.get_field("label"), ProjectedField)
+
+
+@isolate_apps("tests")
+def test_a_mapped_member_keeps_the_reverse_name_it_declares() -> None:
+    """Only a member mapped to a new foreign key that names its reverse gains an accessor."""
+
+    class Target(models.Model):
+        class Meta:
+            app_label = "tests"
+
+    class ClaimSubject(StatementsMixin, AngeeModel):
+        label = models.CharField(max_length=40)
+        target = models.ForeignKey(Target, null=True, on_delete=models.CASCADE, related_name="subjects")
+        statements = StatementRecords(
+            aspects={
+                "identity": Aspect(fields=("label", "target")),
+                "named": Aspect(
+                    member={
+                        "named": models.ForeignKey(Target, on_delete=models.PROTECT, related_name="%(class)s_claims")
+                    }
+                ),
+                "unnamed": Aspect(member={"unnamed": models.ForeignKey(Target, on_delete=models.PROTECT)}),
+            }
+        )
+
+        class Meta:
+            app_label = "tests"
+
+    statement = ClaimSubject.statements.model
+    reverse = Target._meta.get_field("claimsubjectstatement_claims")
+    assert (reverse.related_model, reverse.field.name) == (statement, "named")
+    assert {relation.name for relation in Target._meta.related_objects} == {"subjects", "claimsubjectstatement_claims"}
+    # A copied subject field keeps none, so it never takes the accessor its subject's field holds.
+    for name in ("unnamed", "target"):
+        assert statement._meta.get_field(name).remote_field.hidden, name
+    # The statement table's own history copies its columns as simple-history does.
+    assert statement.history.model._meta.get_field("named").remote_field.hidden
 
 
 # Survivorship over the ``tax`` aspect, whose precedence is PERSON, then SYSTEM_OF_RECORD, then every other kind.

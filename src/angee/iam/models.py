@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import re
 import secrets
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping
 from copy import copy
 from datetime import timedelta
 from email.utils import parseaddr
@@ -29,6 +29,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX
+from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.validators import UnicodeUsernameValidator
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
@@ -91,7 +92,7 @@ IAMKind = role_anchor("iam/kind", name="IAMKind")
 IAMProtected = role_anchor("iam/protected", name="IAMProtected")
 
 PROTECTED_ACCOUNT_MESSAGE = "This account is protected: it is your own, staff, a superuser, or holds an elevated role."
-"""Refusal shared by every account verb and by generic updates of protected accounts."""
+"""Refusal for account operations that retain full protected-account restrictions."""
 
 SIGN_IN_LINK_PATH = "/sign-in-link"
 """The public web route a sign-in link opens; IAM's web fragment declares the same path."""
@@ -206,13 +207,14 @@ class UserKind(models.TextChoices):
 
 
 class UserAccountAction(models.TextChoices):
-    """Account verbs run on another person's account, each named by its Zed permission."""
+    """Account verbs, each named by its Zed permission and sharing protected-account blockers."""
 
     SET_ACTIVE = "set_active", "Set active"
     RENAME = "rename", "Rename"
     RESET_PASSWORD = "reset_password", "Reset password"
     ISSUE_PASSWORD = "issue_password", "Issue password"
     ISSUE_SIGN_IN_LINK = "issue_sign_in_link", "Issue sign-in link"
+    SET_PASSWORD = "set_password", "Set password"
 
 
 class AccountExists(DomainError):
@@ -304,8 +306,9 @@ class UserQuerySet[UserT: User](AngeeQuerySet[UserT]):
         Staff, superusers and effective members of IAM's ``iam/protected`` Zed
         set — platform admins plus every elevated role a consumer unions into
         its ``member`` permission — are protected from every actor; an actor's
-        own account is protected from that actor. Account verbs, generic
-        updates by non-administrators and view-as share this one rule. Staff is
+        own account is protected from that actor. Generic updates and Set password
+        admit administrators (Set password still refuses self); the other account
+        verbs and view-as refuse every protected account. Staff is
         a restricted field (``read__is_staff``): within the reach of preview,
         updates and the account verbs, IAM's Zed tells ``actor`` which accounts are
         not staff (``nonstaff_account``), and every other account counts as
@@ -324,6 +327,12 @@ class UserQuerySet[UserT: User](AngeeQuerySet[UserT]):
             condition |= Q(pk__isnull=False)
         elif holders:
             condition |= Q(pk__in=sorted(holders))
+        own = self.own_account_condition(actor)
+        return condition | own if own is not None else condition
+
+    def own_account_condition(self, actor: Any = None) -> Q | None:
+        """Match a concrete user's account; ``None`` means the subject is not a user."""
+
         subject = to_subject_ref(actor) if actor is not None else None
         if (
             subject is not None
@@ -331,8 +340,8 @@ class UserQuerySet[UserT: User](AngeeQuerySet[UserT]):
             and not subject.optional_relation
             and subject.subject_id not in {"", "*"}
         ):
-            condition |= Q(pk=subject.subject_id)
-        return condition
+            return Q(pk=subject.subject_id)
+        return None
 
     def unprotected(self, actor: Any = None) -> Self:
         """Exclude the accounts :meth:`protection_condition` protects from ``actor``."""
@@ -404,12 +413,15 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
 
         return (email or "").strip().lower()
 
-    def _person_email_matches(self, email: str | None) -> UserQuerySet[UserT]:
-        key = self.normalize_email(email)
+    def _person_email_matches(self, *emails: str | None, domains: Iterable[str] = ()) -> UserQuerySet[UserT]:
+        keys = sorted({key for email in emails if (key := self.normalize_email(email))})
         people = self.system_context(reason="iam.person.email_lookup").people()
-        if not key:
+        if not keys:
             return people.none()
-        return people.filter(email=key)
+        matches = Q(email__in=keys)
+        for domain in sorted(set(domains)):
+            matches |= Q(email__endswith=f"@{domain}")
+        return people.filter(matches)
 
     def person_for_email(self, email: str) -> UserT | None:
         """Look up one person by email, including inactive and staff accounts.
@@ -423,6 +435,28 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
         if len(matches) > 1:
             raise AmbiguousAccountEmail
         return matches[0] if matches else None
+
+    def sign_in_addresses(self, emails: Iterable[str], *, key: Callable[[str], str] | None = None) -> set[str]:
+        """Return the given addresses a person account signs in with, each as given; decide nothing.
+
+        An address compares by :meth:`normalize_email`, the key
+        :meth:`person_for_email` reads, so inactive and staff accounts count
+        whether or not the account has a Person yet; a service account or an
+        empty address signs in as nobody. ``key`` is a caller's own comparison
+        of addresses, which may also collapse spellings that one keeps apart (a
+        provider's local-part rules): an account whose address shares a given
+        address's ``key`` signs in with it too, read among the person accounts
+        at the given addresses' domains. A system identity lookup in one query:
+        the caller gates what it reveals.
+        """
+
+        given = {email: self.normalize_email(email) for email in emails}
+        if not any(given.values()):
+            return set()
+        domains = {address.rpartition("@")[2] for address in given.values() if "@" in address} if key else set()
+        found = set(self._person_email_matches(*given, domains=domains).values_list("email", flat=True))
+        keyed = {key(address) for address in found} if key else set()
+        return {email for email, address in given.items() if address in found or (key and key(email) in keyed)}
 
     def get_by_natural_key(self, username: str | None) -> UserT:
         """Return a user for credential checks without row-scope filtering."""
@@ -533,7 +567,10 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
                 is_superuser=False,
                 is_active=True,
             )
-            user.set_password(password)
+            if actor is not None and password is not None:
+                user._set_validated_password(password)
+            else:
+                user.set_password(password)
             try:
                 with transaction.atomic():
                     with system_context(reason="iam.person.validate"):
@@ -837,20 +874,32 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         super().save(*args, **kwargs)
 
     @staticmethod
-    def account_action_blockers(action: str, protection: Q, inactive: Q) -> tuple[tuple[Q, str], ...]:
+    def account_action_blockers(
+        action: str, protection: Q, inactive: Q, own: Q | None, *, system: bool,
+    ) -> tuple[tuple[Q, str], ...]:
         """Return the target conditions refusing ``action``, each with its refusal.
 
-        ``protection`` and ``inactive`` are the acting subject's
-        ``protection_condition`` and ``inactive_condition``. The locked verbs and
+        The conditions come from the acting subject's ``protection_condition``,
+        ``inactive_condition`` and ``own_account_condition``. The locked verbs and
         the batched ``account_actions`` projection share these conditions, so a
-        control is offered exactly when its verb admits it.
+        control is offered exactly when its verb admits it. Only ``actor is None``
+        denotes system work, which retains the full protected-account refusal.
+        Other subjects without a concrete user cannot set passwords.
         """
 
         usable_password = ~Q(password__startswith=UNUSABLE_PASSWORD_PREFIX)
         blockers = [
             (~Q(kind=UserKind.PERSON), "Only person accounts can be managed."),
-            (protection, PROTECTED_ACCOUNT_MESSAGE),
         ]
+        if action == UserAccountAction.SET_PASSWORD and not system:
+            # Its sealed permission caps the audience at platform admins, with both write gates.
+            if own is None:
+                blockers.append((Q(pk__isnull=False), "Only a concrete user can set another person's password."))
+            else:
+                blockers.append((own, "Use Change password for your own account; it requires your current password "
+                                 "and keeps this session signed in."))
+        else:
+            blockers.append((protection, PROTECTED_ACCOUNT_MESSAGE))
         if action in {UserAccountAction.RESET_PASSWORD, UserAccountAction.ISSUE_PASSWORD}:
             blockers.append((inactive, "Only active accounts can receive a password."))
         if action == UserAccountAction.RESET_PASSWORD:
@@ -874,10 +923,11 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
             return {action: models.Value(False) for action in UserAccountAction.values}
         protection = cls.objects.protection_condition(actor)
         inactive = cls.objects.inactive_condition(actor)
+        own = cls.objects.own_account_condition(actor)
         annotations: dict[str, models.expressions.BaseExpression] = {}
         for action in UserAccountAction.values:
             rows = cls.objects.with_actor(actor).with_action(action).scoped_for_aggregate()
-            for condition, _error in cls.account_action_blockers(action, protection, inactive):
+            for condition, _error in cls.account_action_blockers(action, protection, inactive, own, system=False):
                 rows = rows.exclude(condition)
             annotations[action] = models.Exists(rows.filter(pk=models.OuterRef("pk")))
         return annotations
@@ -899,7 +949,7 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         return [action for action in UserAccountAction.values if allowed.get(f"_iam_{action}")]
 
     def protected_against(self, actor: Any) -> bool:
-        """Whether account verbs refuse this account for ``actor``; see ``protection_condition``."""
+        """Whether this account needs protected-account admission; see ``protection_condition``."""
 
         users = type(self).objects
         return bool(
@@ -918,6 +968,8 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
             action,
             users.protection_condition(actor),
             users.inactive_condition(actor),
+            users.own_account_condition(actor),
+            system=actor is None,
         )
         for condition, error in blockers:
             if rows.filter(condition).exists():
@@ -1044,11 +1096,79 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
             self.first_name, self.last_name = user.first_name, user.last_name
             self.account_revision = user.account_revision
 
+    @sensitive_variables("current_password", "new_password")
+    def change_password(self, request: Any, *, current_password: str, new_password: str) -> None:
+        """Change the actor's password after the request's one throttled authentication attempt.
+
+        Authentication precedes the row lock. The locked hash must still match
+        the authenticated one, so concurrent password changes cannot be overwritten.
+        The session caller refreshes its auth hash after this succeeds.
+        """
+
+        # Django's backend module resolves AUTH_USER_MODEL at import time.
+        from angee.iam.auth import authenticate_once
+
+        actor, _bypass = self.effective_actor(strict=True)
+        if actor is None or to_subject_ref(actor) != to_subject_ref(self):
+            raise PermissionDenied("You can change only your own password.")
+        if not self.has_usable_password():
+            raise ValidationError({"current_password": "This account has no password; use its sign-in method."})
+        with system_context(reason="iam.password.authenticate"):
+            authenticated = authenticate_once(request, username=self.username, password=current_password)
+        if authenticated is None or to_subject_ref(authenticated) != actor:
+            raise ValidationError({"current_password": "The current password could not be verified."})
+        with transaction.atomic(), system_context(reason="iam.password.change"):
+            user = type(self).objects.lock_if_supported().get(pk=self.pk)
+            if not constant_time_compare(user.password, authenticated.password):
+                raise ValidationError({"current_password": "The password changed; try again."})
+            if current_password == new_password:
+                raise ValidationError({"new_password": "Choose a password different from the current password."})
+            user._set_validated_password(new_password, field="new_password")
+            user.save(update_fields=["password", "updated_at"])
+            self.password, self.account_revision = user.password, user.account_revision
+
+    @sensitive_variables("password")
+    def _set_validated_password(self, password: str, *, field: str = "password") -> None:
+        """Validate and hash an actor-typed password after its caller's admission; do not save."""
+
+        try:
+            if not password:
+                raise ValidationError("A password is required.")
+            # This source class composes into django-stubs' configured runtime user.
+            validate_password(password, cast(Any, self))
+        except ValidationError as error:
+            raise ValidationError({field: error.messages}) from None
+        self.set_password(password)
+
+    @sensitive_variables("password")
+    def set_account_password(self, password: str, *, expected_revision: int) -> None:
+        """Set another person's password through the revision-checked administration and write gates."""
+
+        with transaction.atomic():
+            user = self._lock_for_account_action(
+                str(UserAccountAction.SET_PASSWORD), expected_revision=expected_revision,
+            )
+            actor, _bypass = user.effective_actor(strict=True)
+            user._set_validated_password(password)
+            user.sudo(reason="iam.password.set").save(
+                update_fields=["password", "updated_at"], expected_revision=expected_revision,
+            )
+            self.password, self.account_revision = user.password, user.account_revision
+            transaction.on_commit(partial(
+                logger.info,
+                "Account password set.",
+                extra={
+                    "verb": str(UserAccountAction.SET_PASSWORD),
+                    "actor_public_id": type(self).public_id_from_pk(actor.subject_id) if actor is not None else None,
+                    "target_public_id": user.public_id,
+                },
+            ))
+
+    @transaction.atomic
     def update_account(
         self,
         changes: Mapping[str, Any],
         *,
-        password: str | None = None,
         expected_revision: int | None = None,
     ) -> None:
         """Apply an administrative patch through the instance actor's ``write`` and field gates.
@@ -1056,10 +1176,12 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         Only changed fields are saved, so each ``write__<field>`` gate guards a
         real change. A protected account accepts the patch only from an actor
         holding ``administer`` on it: a consumer's ``write`` grant never edits
-        an elevated account, the actor's own included.
+        an elevated account, the actor's own included. Passwords change only
+        through ``set_account_password`` or self-service ``change_password``.
         """
 
         actor, _bypass = self.effective_actor(strict=True)
+        self.require_access("write")
         if expected_revision is not None:
             self.require_revision(expected_revision)
         if actor is not None and self.protected_against(actor) and not self.has_access("administer"):
@@ -1067,9 +1189,6 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         update_fields = {field for field, value in changes.items() if getattr(self, field) != value}
         for field in update_fields:
             setattr(self, field, changes[field])
-        if password:
-            self.set_password(password)
-            update_fields.add("password")
         self.full_clean()
         if update_fields:
             self.save(update_fields=[*sorted(update_fields), "updated_at"], expected_revision=expected_revision)

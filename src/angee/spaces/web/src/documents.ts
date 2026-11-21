@@ -5,6 +5,18 @@ export const SPACE_MEMBERSHIP_INVALIDATES = [
   "spaces.Group",
 ] as const;
 
+export const ConfirmSpaceMembership = graphql(`
+  mutation ConfirmSpaceMembership($id: ID!) {
+    confirm_membership(id: $id) { id is_confirmed is_dismissed }
+  }
+`);
+
+export const DismissSpaceMembership = graphql(`
+  mutation DismissSpaceMembership($id: ID!) {
+    dismiss_membership(id: $id) { id is_confirmed is_dismissed }
+  }
+`);
+
 export const AddSpaceMembership = graphql(`
   mutation AddSpaceMembership($group: ID!, $party: ID!, $role: MembershipRole!) {
     add_space_membership(group_id: $group, party_id: $party, role: $role) {

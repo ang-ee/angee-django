@@ -100,6 +100,7 @@ export function InboxMessageReader({
         title={statusUpdate ? t("inbox.updateBy", { sender: senderDisplayName(message?.sender) }) : message?.title || t("inbox.details")}
         status={message && !message.thread ? { label: t("inbox.standalone") } : undefined}
         actions={message ? <>
+          {chrome ? <RecordChrome value={chrome} /> : null}
           <ActionMenu label={null} aria-label={t("inbox.messageActions")} glyph="more-vertical" size="iconSm">
             <ActionTrigger glyph="link" onClick={() => void copyLink()}>{t(copied ? "inbox.copied" : "inbox.copyLink")}</ActionTrigger>
             <ActionTrigger glyph="users" onClick={() => navigation.connect(`participants:${message.id}`, message.id)}>{t("inbox.participants")}</ActionTrigger>
@@ -113,7 +114,6 @@ export function InboxMessageReader({
               )}>{t("inbox.exploreSender")}</ActionTrigger>
             ) : null}
           </ActionMenu>
-          {chrome ? <RecordChrome value={chrome} /> : null}
         </> : undefined}
       />
       {query.isPending ? (

@@ -5,15 +5,10 @@ import { DashboardView, ErrorBanner, Metric, ContainerOutlet, useContainer } fro
 import { PartiesOverview } from "./documents";
 import { usePartiesT } from "./i18n";
 
-const SAME_AS_COUNT_LIMIT = 100;
-const SAME_AS_QUERY_LIMIT = SAME_AS_COUNT_LIMIT + 1;
-
 /** Relationship-management overview owned by Parties and extended through its slot. */
 export function OverviewPage(): React.ReactElement {
   const t = usePartiesT();
-  const overview = useAuthoredQuery(PartiesOverview, {
-    sameAsLimit: SAME_AS_QUERY_LIMIT,
-  }, {
+  const overview = useAuthoredQuery(PartiesOverview, undefined, {
     models: [
       "parties.Party",
       "parties.Person",
@@ -25,7 +20,6 @@ export function OverviewPage(): React.ReactElement {
   });
   const contributions = useContainer("parties.overview#items");
   const data = overview.data;
-  const sameAsCount = data?.same_as_pairs.length;
 
   return (
     <DashboardView>
@@ -62,13 +56,13 @@ export function OverviewPage(): React.ReactElement {
       />
       <Metric
         label={t("overview.metric.sameAs")}
-        value={sameAsCount}
+        // A capped count reads as "<count>+": one over the count with the count as the bound.
+        value={data && (data.same_as_pair_counts.pairs + (data.same_as_pair_counts.capped ? 1 : 0))}
+        max={data?.same_as_pair_counts.capped ? data.same_as_pair_counts.pairs : undefined}
         format="count"
         loading={overview.isFetching}
-        max={SAME_AS_COUNT_LIMIT}
         icon="users"
         tone="warning"
-        detail={sameAsCount !== undefined && sameAsCount > SAME_AS_COUNT_LIMIT ? t("overview.metric.sameAsCapped") : undefined}
       />
 
       {overview.error ? <ErrorBanner description={t("overview.error")} /> : null}

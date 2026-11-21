@@ -85,7 +85,7 @@ from angee.base.models.refs import RecordRefMixin
 from angee.base.models.roles import role_anchor
 from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet, TrashMixin, TrashQuerySet
 from angee.base.permissions import DirectRecordAccess, actor_user_id, user_subject_ref
-from angee.base.querysets import row_lock_paths
+from angee.base.querysets import row_lock_queryset
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
@@ -1431,10 +1431,9 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         if actor is None:
             raise PermissionDenied("File visibility requires an acting user.")
         with transaction.atomic():
-            locked = type(self).system_queryset(lock=("self",)).select_related("drive").get(pk=self.pk)
-            resource = locked.drive if visibility == FileVisibility.INHERITED else locked
-            permission = "share" if visibility == FileVisibility.INHERITED else "write"
-            if not resource.with_actor(actor).has_access(permission):
+            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+            permission = "inherit_visibility" if visibility == FileVisibility.INHERITED else "write"
+            if not locked.with_actor(actor).has_access(permission):
                 raise PermissionDenied("You cannot change file visibility.")
             if locked.visibility != visibility:
                 locked.visibility = visibility
@@ -2014,7 +2013,7 @@ class FileAttachmentManager[AttachmentT: FileAttachment](_FileAttachmentManagerB
         target_model = target.content_type.model_class()
         if target_model is None:
             raise ValueError("File attachment target model is unavailable.")
-        target_model._base_manager.select_for_update(of=row_lock_paths(target_model)).get(pk=target.object_id)
+        row_lock_queryset(target_model).get(pk=target.object_id)
 
     def _attach(self, file: Any, target: GenericTarget, *, label: str = "") -> AttachmentT:
         """Get or insert one edge under the ambient actor, after its verb locked the target.

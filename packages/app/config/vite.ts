@@ -1,12 +1,17 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, matchesGlob, resolve } from "node:path";
+import { readFile, writeFile } from "node:fs/promises";
+import { availableParallelism, cpus } from "node:os";
+import { basename, dirname, extname, join, matchesGlob, posix, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { brotliCompress, constants as zlib, gzip } from "node:zlib";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { build, defineConfig, mergeConfig, type Plugin, type UserConfig, type ViteDevServer } from "vite";
-import { generateWebRuntime, type WebCodegenInputs } from "@angee/app/web-codegen";
+import { build, defineConfig, mergeConfig, normalizePath, send, type Connect, type HtmlTagDescriptor, type Plugin, type UserConfig, type ViteDevServer } from "vite";
+import { generateWebRuntime, type StandalonePage, type WebCodegenInputs, type WebCodegenResult } from "@angee/app/web-codegen";
 import {
+  APPEARANCE_PAYLOAD_ATTRIBUTE,
   resolveThemeOptions,
   type AppearanceBootstrapPayload,
   type ThemeDefinition,
@@ -19,7 +24,7 @@ import {
 // does not resolve extensionless relative imports.
 const ANGEE_WATCH_IGNORED: readonly string[] = ["**/.jj/**"];
 
-// The framework owner of the web Vite defaults: the plugin pair, the dev-server
+// The framework owner of the web Vite defaults: the plugins, the dev-server
 // host/port/proxy wiring, the generated-schema alias, and the project-derived
 // `optimizeDeps` set. A project's `web/vite.config.ts` imports
 // `@angee/app/vite`, calls `defineAngeeWebViteConfig`, and supplies only the two
@@ -272,6 +277,16 @@ export interface AngeeWebViteConfig extends UserConfig {
    * direct `vite` usage, but `angee dev` may launch Vite from the repo root.
    */
   webRoot?: string;
+  /**
+   * How many emitted files a build compresses at once when it writes their
+   * brotli and gzip sidecars. Defaults to the machine's parallelism, between 1
+   * and 4. Each file in flight costs its own size and a brotli encoder (some
+   * tens of megabytes for a file larger than the encoder's block), so a builder
+   * short of memory may lower it; raising it past 4 gains nothing unless
+   * `UV_THREADPOOL_SIZE` is raised with it. The sidecars are the same bytes at
+   * any value.
+   */
+  precompressConcurrency?: number;
   /** Build-owned appearance defaults injected into first paint and the app. */
   appearance?: {
     themeId?: string | null;
@@ -285,17 +300,23 @@ export async function defineAngeeWebViteConfig({
   gqlRuntimeDir,
   webRoot = process.cwd(),
   appearance,
+  precompressConcurrency,
   ...overrides
 }: AngeeWebViteConfig): Promise<UserConfig> {
-  const appearancePlugin = angeeAppearancePlugin();
+  const pagesPlugin = angeePagesPlugin(join(dirname(gqlRuntimeDir), "web", "themes.css"));
+  const appearancePlugin = angeeAppearancePlugin(pagesPlugin.owns);
+  const sitePlugin = angeeSitePlugin();
   const base = defineConfig({
     root: webRoot,
     plugins: [
-      angeeWebCodegenPlugin({ webRoot, gqlRuntimeDir, appearance, appearancePlugin, prebundleAngeePackages }),
+      angeeWebCodegenPlugin({ webRoot, gqlRuntimeDir, appearance, appearancePlugin, sitePlugin, pagesPlugin, prebundleAngeePackages }),
       appearancePlugin,
-      preloadSchemaMetadata(),
+      sitePlugin,
+      pagesPlugin,
+      preloadSchemaMetadata(pagesPlugin.owns),
       react(),
       tailwindcss(),
+      angeePrecompressedPlugin(precompressConcurrency),
     ],
     // The alias for this project's generated typed operations, pointing at the
     // project's OWN `runtime/gql/<name>/` tree (the web package generates it via
@@ -329,9 +350,9 @@ export async function defineAngeeWebViteConfig({
         "/graphql/": { target: django, changeOrigin: false, ws: true },
         "/acp/agents/": { target: django, changeOrigin: false, ws: true },
         "/auth/csrf/": { target: django, changeOrigin: false },
-        // Curated public-form description + submission endpoint. The React page
-        // itself lives at /public/forms/:slug, keeping this exact API prefix
-        // unambiguous on hard reloads.
+        // The public forms' description and submission endpoints. A standalone page
+        // declared under this prefix (an addon's `angee.pages`) answers its document
+        // requests before the proxy (`angee:pages`); every other request here is Django's.
         "/forms/": { target: django, changeOrigin: false },
         // The storage proxy upload/download endpoints are Django REST routes;
         // scope to the exact paths so the SPA's /storage page routes still
@@ -372,10 +393,14 @@ function angeeWebCodegenPlugin({
   gqlRuntimeDir,
   appearance,
   appearancePlugin,
+  sitePlugin,
+  pagesPlugin,
   prebundleAngeePackages,
 }: Pick<AngeeWebViteConfig, "webRoot" | "gqlRuntimeDir" | "appearance" | "prebundleAngeePackages"> & {
   webRoot: string;
   appearancePlugin: ReturnType<typeof angeeAppearancePlugin>;
+  sitePlugin: ReturnType<typeof angeeSitePlugin>;
+  pagesPlugin: ReturnType<typeof angeePagesPlugin>;
 }): Plugin {
   const runtimeDir = dirname(gqlRuntimeDir);
   let inputs: WebCodegenInputs = { files: [], globs: [], directories: [], excluded: [] };
@@ -410,6 +435,8 @@ function angeeWebCodegenPlugin({
     inputs = generated.inputs;
     discovering = inputs;
     appearancePlugin.update(payload);
+    sitePlugin.update(generated.head);
+    pagesPlugin.update(generated.pages, generated.pageCsp);
     const module = server?.environments.client.moduleGraph.getModuleById(RESOLVED_VIRTUAL_APPEARANCE);
     if (module) server!.environments.client.moduleGraph.invalidateModule(module);
   };
@@ -484,9 +511,407 @@ function angeeWebCodegenPlugin({
   };
 }
 
+/** What a request must match to be for a declared page. */
+type PageRoute = Pick<StandalonePage, "id" | "paths" | "acceptPattern">;
+
+/**
+ * Where a build describes its pages for `vite preview`: beside Vite's own build
+ * manifest, in the directory of the distribution that is the build tool's and
+ * no page of the site. It holds what a response already shows (each page's
+ * paths, the `Accept` pattern and the policy header), and nothing else.
+ */
+const BUILT_PAGES = ".vite/angee-pages.json";
+
+/**
+ * Compile declared pages into the question the ingress asks of a request: which
+ * page, if any, is it for? A GET or HEAD under one of a page's paths whose
+ * `Accept` header matches the page's pattern. The pattern is the manifest's
+ * `pageAccept`, which the composer owns and the ingress applies too; no second
+ * rule lives here. Every other request on those paths is not for the page, so
+ * the same address also answers as the server's API.
+ */
+function pageMatcher<TPage extends PageRoute>(pages: readonly TPage[]) {
+  const routes = pages.map((page) => ({
+    page,
+    accept: new RegExp(page.acceptPattern),
+    // A declared path ends in `/*` and answers everything under that prefix, as the ingress's path matcher reads it.
+    prefixes: page.paths.map((path) => path.slice(0, -1)),
+  }));
+  return (request: Connect.IncomingMessage): TPage | undefined => {
+    if ((request.method !== "GET" && request.method !== "HEAD") || !request.url) return undefined;
+    const pathname = request.url.split(/[?#]/, 1)[0]!;
+    return routes.find((route) => route.prefixes.some((prefix) => pathname.startsWith(prefix))
+      && route.accept.test(request.headers.accept ?? ""))?.page;
+  };
+}
+
+/** A policy as a `<meta>` carries it: without the directives a document cannot set for itself. */
+function metaPolicy(policy: string): string {
+  return policy.split(";").map((directive) => directive.trim())
+    .filter((directive) => directive && !/^(?:frame-ancestors|report-uri|sandbox)(?:\s|$)/i.test(directive))
+    .join("; ");
+}
+
+/**
+ * Serve and build the standalone pages addon packages declare. Vite names a
+ * built document by its path under the root, so a page builds from the virtual
+ * `<root>/<id>.html` and lands beside the app's `index.html`; in development
+ * its entry is served at the page's own paths, and `vite preview` serves the
+ * built file there. Either way the document is the entry's markup: a `./`
+ * reference in it names a file beside the entry, and it is given the design
+ * tokens and the installed themes as stylesheets, never the host's own.
+ */
+function angeePagesPlugin(themesSheet: string): Plugin & {
+  update(pages: readonly StandalonePage[], policy?: string): void;
+  owns(filename: string): boolean;
+} {
+  let pages: readonly StandalonePage[] = [];
+  let pageFor = pageMatcher(pages);
+  /** The content security policy the ingress sends a page: the manifest's `pageCsp`, published whenever a page is declared. */
+  let policy: string | undefined;
+  let root = "";
+  let base = "/";
+  let building = false;
+  const documentId = (page: StandalonePage) => normalizePath(join(root, `${page.id}.html`));
+  // A file path resolves in a build; the browser needs Vite's file route.
+  const address = (file: string) => building ? normalizePath(file) : encodeURI(posix.join("/@fs", normalizePath(file)));
+  // What every page is given: the token sheet first, then the installed themes that override it.
+  // The page's own sheets follow both.
+  const sheets = () => [fileURLToPath(import.meta.resolve("@angee/ui/tokens.css")), ...(existsSync(themesSheet) ? [themesSheet] : [])];
+  const markup = (page: StandalonePage) => {
+    const where = `${page.package} page ${JSON.stringify(page.id)}`;
+    const html = readFileSync(page.file, "utf8");
+    // Only `./` in `src` and `href` is rewritten. Anything else would reach the browser unresolved.
+    const outside = /\s(?:src|href)=["'](\.\.\/[^"']*)/.exec(html);
+    if (outside) throw new Error(`${where} references ${JSON.stringify(outside[1])}: a page names its own files with "./", beside or below its entry.`);
+    if (/\ssrcset=/i.test(html)) throw new Error(`${where} uses srcset, which a page's document cannot name files with: use src.`);
+    if (!/<head(?=[\s>])[^>]*>/i.test(html)) throw new Error(`${where} needs a <head> element for the stylesheets every page is given.`);
+    const links = sheets().map((file) => `<link rel="stylesheet" href="${address(file)}" />`).join("");
+    return html
+      .replace(/(\s(?:src|href)=["'])\.\//g, (_reference, attribute: string) => `${attribute}${address(dirname(page.file))}/`)
+      .replace(/<head(?=[\s>])[^>]*>/i, (head) => `${head}${links}`);
+  };
+  return {
+    name: "angee:pages",
+    enforce: "pre",
+    // A page is a browser document: no server build has one.
+    applyToEnvironment: (environment) => environment.config.consumer === "client",
+    update(next, nextPolicy) {
+      pages = next;
+      pageFor = pageMatcher(next);
+      policy = nextPolicy;
+    },
+    // Vite names the document by its entry in development and by its built id.
+    owns: (filename) => pages.some((page) => filename === normalizePath(page.file) || filename === documentId(page)),
+    configResolved(config) {
+      root = config.root;
+      base = config.base;
+      building = config.command === "build";
+    },
+    options(options) {
+      if (!building || pages.length === 0) return;
+      // Vite has already settled the app's own input, `index.html` unless the host names another.
+      const input = typeof options.input === "string" ? [options.input] : options.input ?? [];
+      return {
+        ...options,
+        input: Array.isArray(input)
+          ? [...input, ...pages.map(documentId)]
+          : { ...input, ...Object.fromEntries(pages.map((page) => [page.id, documentId(page)])) },
+      };
+    },
+    resolveId(source) {
+      return pages.some((page) => documentId(page) === source) ? source : undefined;
+    },
+    load(id) {
+      const page = pages.find((candidate) => documentId(candidate) === id);
+      if (!page) return;
+      this.addWatchFile(page.file);
+      return markup(page);
+    },
+    transformIndexHtml: {
+      order: "post",
+      handler(_html, context) {
+        if (building) {
+          // A page's entry may ask for its own data first and import the rest of the page
+          // dynamically, so that the two arrive side by side. Vite preloads only what an entry
+          // imports statically; the document preloads what a page's entry imports dynamically too,
+          // or that download would wait for the entry to run.
+          if (!pages.some((page) => context.filename === documentId(page))) return;
+          return (context.chunk?.dynamicImports ?? []).map((file) => ({
+            tag: "link", attrs: { rel: "modulepreload", crossorigin: true, href: `${base}${encodeURI(file)}` }, injectTo: "head" as const,
+          }));
+        }
+        // The ingress sends a page its content security policy as a response header, and the
+        // built document carries none of its own. Development cannot send that header: it would
+        // refuse the development scripts Vite's pipeline puts in a document's head (the React
+        // plugin's inline refresh preamble among them). So the same policy is written into the
+        // document here, after those scripts: everything the page itself brings runs under it.
+        if (!policy || !pages.some((page) => context.filename === normalizePath(page.file))) return;
+        return [{ tag: "meta", attrs: { "http-equiv": "Content-Security-Policy", content: metaPolicy(policy) }, injectTo: "head" }];
+      },
+    },
+    generateBundle: {
+      order: "post",
+      handler(_options, bundle) {
+        if (pages.length === 0) return;
+        // The ingress rewrites a page's paths to `<id>.html`: a page the build left out would answer 404.
+        for (const page of pages) {
+          if (!bundle[`${page.id}.html`]) this.error(`${page.package} page ${JSON.stringify(page.id)} was not built as ${page.id}.html.`);
+        }
+        // `vite preview` reads no manifest: the distribution says which pages it holds.
+        const routes = pages.map(({ id, paths, acceptPattern }): PageRoute => ({ id, paths, acceptPattern }));
+        this.emitFile({ type: "asset", fileName: BUILT_PAGES, source: `${JSON.stringify({ pages: routes, ...(policy ? { policy } : {}) })}\n` });
+      },
+    },
+    configureServer(server) {
+      // Registered ahead of Vite's own middlewares, so a page answers before the proxy does and
+      // everything else on its paths still reaches Django. This mirrors the ingress: the same
+      // methods, the same `Accept` pattern, the same `Vary`. The policy the ingress sends as a
+      // header is written into the document instead (`transformIndexHtml` above).
+      // The browser asks for the sheets a page is given by file: admit those two files, wherever
+      // the host keeps its runtime and its packages, and nothing beside them.
+      const allow = server.config.server.fs.allow;
+      allow.push(...[fileURLToPath(import.meta.resolve("@angee/ui/tokens.css")), themesSheet].map(normalizePath).filter((file) => !allow.includes(file)));
+      server.middlewares.use((request, response, next) => {
+        const page = pageFor(request);
+        if (!page) return next();
+        response.appendHeader("Vary", "Accept");
+        server.transformIndexHtml(encodeURI(posix.join("/@fs", normalizePath(page.file))), markup(page), request.originalUrl)
+          .then((html) => send(request, response, html, "html", { headers: server.config.server.headers }), next);
+      });
+    },
+    configurePreviewServer(server) {
+      // The built pages as the ingress serves them: the same requests, rewritten to `<id>.html`,
+      // with the same `Vary` and, here, the policy as a header: a built page has no development script.
+      const described = resolve(server.config.root, server.config.build.outDir, BUILT_PAGES);
+      if (!existsSync(described)) return;
+      const built = JSON.parse(readFileSync(described, "utf8")) as { pages: PageRoute[]; policy?: string };
+      const builtPageFor = pageMatcher(built.pages);
+      server.middlewares.use((request, response, next) => {
+        const page = builtPageFor(request);
+        if (page) {
+          response.appendHeader("Vary", "Accept");
+          if (built.policy) response.setHeader("Content-Security-Policy", built.policy);
+          request.url = `${server.config.base}${page.id}.html`;
+        }
+        next();
+      });
+    },
+  };
+}
+
+/** The text a build emits that an ingress compresses on the way out; images and fonts are compressed already. */
+const PRECOMPRESSED_TEXT = new Set([".js", ".mjs", ".css", ".html", ".svg", ".json"]);
+/** Below this a response fits one packet either way, and a sidecar is one more file to keep. */
+const PRECOMPRESSED_MINIMUM = 1024;
+
+/**
+ * The most files compressed at once, however many processors the builder has.
+ * Node runs zlib's work on libuv's pool of four threads, so a wider pool
+ * compresses no faster: it only holds more files in memory, waiting.
+ */
+const PRECOMPRESSED_POOL_LIMIT = 4;
+
+/**
+ * Run `work` over `items` with at most `size` of them in flight at once, in
+ * their order. Resolves when every item is done and rejects with the first
+ * failure. What `work` produces does not depend on `size`: only how much runs
+ * together does.
+ */
+export async function runInPool<TItem>(items: readonly TItem[], size: number, work: (item: TItem) => Promise<void>): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) await work(items[next++]!);
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(Math.floor(size), items.length)) }, worker));
+}
+
+/**
+ * Write a brotli and a gzip sidecar beside every text file the build emits
+ * (`<file>.br`, `<file>.gz`), for an ingress that serves a precompressed file
+ * when a browser accepts it. Brotli at its highest quality is a quarter smaller
+ * than gzip on a script and too slow to do per request, so the build does it
+ * once. A sidecar that is not smaller than its source is not written, and the
+ * output is the same for the same input: neither format carries a time here.
+ *
+ * Brotli at that quality holds a 4 MiB window and the tree it searches it
+ * with for each file it works on (Node's default window; the size hint does
+ * not shrink it), so the files go through a small pool: a build with hundreds
+ * of assets uses no more memory or processors at once than one with a handful.
+ *
+ * Why the build does this, and does it itself. The ingress compresses on the
+ * way out (`encode zstd gzip`), but stock Caddy has no brotli encoder and
+ * Safari accepts no zstd, so a phone gets gzip unless a sidecar is there to
+ * serve. The work is two calls into `node:zlib` and a rule for which files, so
+ * it stays here without a dependency, with the properties the ingress relies
+ * on pinned by this module's tests: the same bytes for the same input, a
+ * bounded pool, the 1 kB floor, and never a sidecar larger than its source.
+ * `vite-plugin-compression2` is the maintained plugin for the same job and the
+ * one to swap in if zstd sidecars, per-file patterns or archives are wanted.
+ */
+function angeePrecompressedPlugin(concurrency?: number): Plugin {
+  // The processors this process may use, where Node can say; else the machine's count.
+  const processors = typeof availableParallelism === "function" ? availableParallelism() : cpus().length;
+  const pool = concurrency ?? Math.max(1, Math.min(PRECOMPRESSED_POOL_LIMIT, processors));
+  const compressors = {
+    br: (source: Buffer) => promisify(brotliCompress)(source, {
+      params: { [zlib.BROTLI_PARAM_QUALITY]: zlib.BROTLI_MAX_QUALITY, [zlib.BROTLI_PARAM_SIZE_HINT]: source.length },
+    }),
+    gz: (source: Buffer) => promisify(gzip)(source, { level: zlib.Z_BEST_COMPRESSION }),
+  };
+  return {
+    name: "angee:precompressed",
+    apply: "build",
+    // A browser fetches the client's files; no other build's output is served.
+    applyToEnvironment: (environment) => environment.config.consumer === "client",
+    async writeBundle(options, bundle) {
+      const directory = options.dir;
+      if (!directory) return;
+      const files = Object.keys(bundle).filter((file) => PRECOMPRESSED_TEXT.has(extname(file))).sort();
+      await runInPool(files, pool, async (file) => {
+        // What was written, byte for byte, is what a sidecar must decompress to.
+        const source = await readFile(join(directory, file));
+        if (source.length < PRECOMPRESSED_MINIMUM) return;
+        // One format after the other: a file in the pool is one compression at a time.
+        for (const [suffix, compress] of Object.entries(compressors)) {
+          const compressed = await compress(source);
+          if (compressed.length < source.length) await writeFile(join(directory, `${file}.${suffix}`), compressed);
+        }
+      });
+    },
+  };
+}
+
+/** Write the deployment's static head through Vite's native HTML and asset hooks. */
+function angeeSitePlugin(): Plugin & { update(head: WebCodegenResult["head"]): void } {
+  let head: WebCodegenResult["head"];
+  let root = "";
+  let base = "/";
+  let origin: string | undefined;
+  let building = false;
+  let server: ViteDevServer | undefined;
+  let allowed: string[] = [];
+  const files = () => [...new Set([head?.site?.icon, head?.site?.touchIcon, head?.site?.image]
+    .filter((file): file is string => !!file))].sort();
+  // Vite's own convention for emitted assets, so no build-machine path reaches its manifest.
+  const originalFileName = (file: string) => normalizePath(relative(root, file));
+  const allowFiles = () => {
+    if (!server) return;
+    // Vite resolved the host's list, else its default. Admit the selected files,
+    // never their package directories, and retract only what this plugin added.
+    const allow = server.config.server.fs.allow;
+    for (const file of allowed) if (allow.includes(file)) allow.splice(allow.indexOf(file), 1);
+    allowed = files().map(normalizePath).filter((file) => !allow.includes(file));
+    allow.push(...allowed);
+  };
+  return {
+    name: "angee:site",
+    update(next) {
+      head = next;
+      allowFiles();
+    },
+    config(_config, env) {
+      if (env.isPreview) return;
+      const value = process.env.ANGEE_PUBLIC_ORIGIN;
+      if (!value) return;
+      // Django's public_origin and its check angee.E051 keep the rest of the rule (https outside DEBUG, wildcards).
+      // Errors never echo the value, which can carry credentials.
+      if (!URL.canParse(value)) throw new Error("ANGEE_PUBLIC_ORIGIN is not a URL; it must be a bare http(s) origin such as https://example.com.");
+      const parsed = new URL(value);
+      const web = ["http:", "https:"].includes(parsed.protocol);
+      if (!web || parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash) {
+        throw new Error(`ANGEE_PUBLIC_ORIGIN must be a bare http(s) origin such as ${web ? parsed.origin : "https://example.com"}, with no user info, path, query or fragment.`);
+      }
+      // The platform's normalized form: lower-case scheme and host, punycode, no default port.
+      origin = parsed.origin;
+    },
+    configResolved(config) {
+      root = config.root;
+      base = config.base;
+      building = config.command === "build";
+    },
+    configureServer(value) {
+      server = value;
+      allowFiles();
+    },
+    buildStart() {
+      if (!building) return;
+      for (const file of files()) {
+        this.addWatchFile(file);
+        this.emitFile({ type: "asset", name: basename(file), originalFileName: originalFileName(file), source: readFileSync(file) });
+      }
+    },
+    transformIndexHtml: {
+      order: "post",
+      handler(html, context) {
+        if (!head) return;
+        // Post hooks receive the final bundle; URLs follow schema-metadata-preload.
+        // Native emission supplies names and hashing and never inlines the files.
+        const assetUrl = (file: string) => {
+          if (!building) return `${base}${encodeURI(posix.join("@fs", normalizePath(file)))}`;
+          const asset = Object.values(context.bundle ?? {}).find((entry) =>
+            entry.type === "asset" && entry.originalFileNames.includes(originalFileName(file)));
+          if (!asset) throw new Error(`Missing emitted site asset: ${originalFileName(file)}`);
+          return `${base}${encodeURI(asset.fileName)}`;
+        };
+        const tags: HtmlTagDescriptor[] = [{
+          tag: "title", children: head.title.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
+        }];
+        // Every other fact this head writes, keyed as a host tag declares it.
+        const written = new Set<string>();
+        const { site } = head;
+        if (site) {
+          // A relative base cannot be made absolute, and a full-URL base already is.
+          const absolute = origin !== undefined && base.startsWith("/");
+          const image = site.image ? assetUrl(site.image) : undefined;
+          const meta = (attribute: "name" | "property", name: string, content: string | undefined) => {
+            if (content === undefined) return;
+            tags.push({ tag: "meta", attrs: { [attribute]: name, content } });
+            written.add(`${attribute}=${name}`);
+          };
+          const link = (rel: string, file: string | undefined) => {
+            if (file === undefined) return;
+            tags.push({ tag: "link", attrs: { rel, href: assetUrl(file) } });
+            written.add(`rel=${rel}`);
+          };
+          meta("name", "description", site.description);
+          meta("property", "og:type", "website");
+          meta("property", "og:site_name", site.siteName);
+          meta("property", "og:title", head.title);
+          meta("property", "og:description", site.description);
+          meta("property", "og:url", absolute ? new URL(base, origin).href : undefined);
+          meta("property", "og:image", image && absolute ? new URL(image, origin).href : image);
+          meta("name", "twitter:card", image ? "summary_large_image" : "summary");
+          link("icon", site.icon);
+          link("apple-touch-icon", site.touchIcon);
+        }
+        // Edit only the document's own head: an SVG or script string elsewhere keeps its <title>.
+        const span = /<head(?=[\s>])[^>]*>[\s\S]*?<\/head\s*>/i.exec(html);
+        if (!span) throw new Error(`${context.filename} needs a <head> element for the static head ANGEE_UI.shell declares.`);
+        // Only <title> is the host template's to replace. A host tag for a fact this head
+        // writes, or any Open Graph tag beside it, is a second owner crawlers read first.
+        for (const [tag, attributes = ""] of span[0].matchAll(/<(?:meta|link)(\s[^>]*)?>/gi)) {
+          const value = (key: string) => (new RegExp(`\\s${key}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i")
+            .exec(attributes) ?? []).slice(1).join("").toLowerCase();
+          const keys = [`name=${value("name")}`, `property=${value("property")}`, ...value("rel").split(/\s+/).map((rel) => `rel=${rel}`)];
+          if (keys.some((key) => written.has(key) || (site && key.startsWith("property=og:")))) {
+            throw new Error(`${context.filename} declares ${tag} in its head; ANGEE_UI.shell.site owns that tag.`);
+          }
+        }
+        return {
+          html: html.slice(0, span.index) + span[0].replace(/<title(?=[\s>])[^>]*>[\s\S]*?<\/title\s*>/gi, "")
+            + html.slice(span.index + span[0].length),
+          tags: tags.map((tag) => ({ ...tag, injectTo: "head" as const })),
+        };
+      },
+    },
+  };
+}
+
 // Generated metadata is fetched as data, so start its download with the entry
-// script. Match the source path, not Vite's configurable output asset name.
-function preloadSchemaMetadata(): Plugin {
+// script. Match the source path, not Vite's configurable output asset name. A
+// standalone page loads none of the app, so it preloads none of its metadata.
+function preloadSchemaMetadata(standalone: (filename: string) => boolean): Plugin {
   let base = "/";
   return {
     name: "angee:schema-metadata-preload",
@@ -497,6 +922,7 @@ function preloadSchemaMetadata(): Plugin {
     transformIndexHtml: {
       order: "post",
       handler(_html, context) {
+        if (standalone(context.filename)) return;
         return Object.values(context.bundle ?? {})
           .filter((asset) => asset.type === "asset" && asset.originalFileNames?.some((source) =>
             /(^|\/)runtime\/schemas\/[^/]+\.metadata\.json$/.test(source.replaceAll("\\", "/"))))
@@ -507,7 +933,8 @@ function preloadSchemaMetadata(): Plugin {
               rel: "preload",
               as: "fetch",
               crossorigin: "anonymous",
-              href: `${base}${asset.fileName}`,
+              // Emitted names keep spaces and non-ASCII; Vite encodes its own HTML asset URLs.
+              href: `${base}${encodeURI(asset.fileName)}`,
             },
             injectTo: "head" as const,
           }));
@@ -593,7 +1020,9 @@ function appearanceBuildPayload(
   };
 }
 
-function angeeAppearancePlugin(): Plugin & { update(payload: AppearanceBootstrapPayload): void } {
+function angeeAppearancePlugin(
+  standalone: (filename: string) => boolean,
+): Plugin & { update(payload: AppearanceBootstrapPayload): void } {
   let payload: AppearanceBootstrapPayload | undefined;
   let bootstrap: Promise<string> | undefined;
   return {
@@ -612,8 +1041,20 @@ function angeeAppearancePlugin(): Plugin & { update(payload: AppearanceBootstrap
     },
     transformIndexHtml: {
       order: "pre",
-      async handler() {
+      async handler(_html, context) {
         if (!payload) return;
+        if (standalone(context.filename)) {
+          // A standalone page has no session, and the policy it is served under runs no inline
+          // script. It is given the same payload as data, and applies it itself.
+          return [{
+            tag: "script",
+            attrs: { type: "application/json", [APPEARANCE_PAYLOAD_ATTRIBUTE]: "" },
+            // Keep HTML's parser from reading markup inside the data.
+            children: JSON.stringify(payload).replaceAll("<", "\\u003c"),
+            injectTo: "head",
+          }];
+        }
+        // The bootstrap restores the signed-in person's own appearance, as an inline script.
         bootstrap ??= appearanceBootstrapScript(payload);
         return [{
           tag: "script",

@@ -78,6 +78,21 @@ test("a collection shares its selected records in a stable order", async () => {
   expect(requests.some(({ fields }) => fields.includes("record_readers"))).toBe(false);
 });
 
+test("a collection whose selection is every record it matches refuses to share its selected rows, and says why", async () => {
+  const containers = containersFromChildren(RESOURCE_CONTAINERS, {
+    "notes.Note#utilities": { "iam.share": { content: <ShareListChrome /> } },
+  });
+  renderShare(<ResourceViewUtilities value={{ resource: "notes.Note", fields: [], refresh: () => undefined,
+    selectedIds: new Set(["note-1"]), selectable: true, disabledReason: "This acts on the rows you select, not on all 40 records" }} />,
+  { containers });
+  const share = await screen.findByRole("button", { name: "Share" });
+  expect(share.getAttribute("aria-disabled")).toBe("true");
+  const reason = (share.getAttribute("aria-describedby") ?? "").split(" ").map((id) => document.getElementById(id)?.textContent).join("");
+  expect(reason).toBe("This acts on the rows you select, not on all 40 records");
+  fireEvent.click(share);
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
 test("a collection without selection offers no Share", async () => {
   const containers = containersFromChildren(RESOURCE_CONTAINERS, {
     "notes.Note#utilities": { "iam.share": { content: <ShareListChrome /> } },

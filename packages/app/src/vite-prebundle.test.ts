@@ -235,12 +235,12 @@ test("preloads generated metadata by source path with a custom asset name and ba
     const transform = (typeof htmlHook === "function" ? htmlHook : htmlHook?.handler) as
       ((html: string, context: { bundle: Record<string, unknown> }) => unknown) | undefined;
     const tags = transform?.("", { bundle: {
-      metadata: { type: "asset", fileName: "data/custom-name.bin", originalFileNames: ["/project/runtime/schemas/public.metadata.json"] },
+      metadata: { type: "asset", fileName: "data/custom name.bin", originalFileNames: ["/project/runtime/schemas/public.metadata.json"] },
       decoy: { type: "asset", fileName: "data/console.metadata-abc.json", originalFileNames: ["/project/other.json"] },
     } });
     expect(tags).toEqual([{
       tag: "link",
-      attrs: { rel: "preload", as: "fetch", crossorigin: "anonymous", href: "/preview/data/custom-name.bin" },
+      attrs: { rel: "preload", as: "fetch", crossorigin: "anonymous", href: "/preview/data/custom%20name.bin" },
       injectTo: "head",
     }]);
   } finally {

@@ -1,7 +1,7 @@
 // Authorization schema for the calendar addon.
 // @rebac_package: calendar
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 4
+// @rebac_schema_revision: 5
 
 // A calendar belongs to one party and is the access root of its events.
 //
@@ -14,10 +14,11 @@
 //     a `free_busy` grantee sees the calendar's busy time and reads nothing else.
 //   - `party->write` admits a new calendar: whoever may edit a party may give it a
 //     calendar (a person's own user owns their person).
-//   - A calendar source whose retained calendars-stream link names this calendar
-//     states its identity (angee statements). Statement admission reads
+//   - A source that pulls this calendar in (a pull stream's retained link names
+//     it) states its identity (angee statements). Statement admission reads
 //     `write_statements` alone: a source is in no `read` or `write`, so no event
-//     inheriting them reaches it.
+//     inheriting them reaches it. A source that publishes the calendar out states
+//     nothing about it: a published calendar stays its person's own.
 //
 // Consumers widen `read_granted`, `write`, `share`, `delete` and `transfer` from
 // their own `permissions.extends.zed`, as a company scope does.
@@ -29,7 +30,7 @@ definition calendar/calendar {
     relation editor: auth/user | auth/group#member
     relation free_busy: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin
-    relation directory: integrate/integration // rebac:field=record_links__stream__integration
+    relation directory: integrate/integration // rebac:field={"path":"record_links__stream__integration","filters":{"record_links__stream__direction":"pull"}}
     permission statement_source = directory
 
     permission create = party->write + admin->member

@@ -16,7 +16,7 @@ from angee.integrate.impl import BridgeImpl, LiveBridgeImpl
 from angee.integrate.models import Bridge
 from angee.integrate.oauth.providers import OAuthProviderType
 from angee.integrate.states import StreamDefinition, StreamKind
-from angee.integrate.streams import StreamPage
+from angee.integrate.streams import ApplyResult, RecordChange, StreamPage
 from angee.integrate.testing.integration import Integration
 
 CONNECTION_CLASSES = settings.ANGEE_TEST_CONNECTION_CLASSES
@@ -46,19 +46,30 @@ class ConnectionAdapter(BridgeImpl):
             raise RuntimeError("private provider diagnostic")
         derived = None
         if self.bridge.config.get("derived"):
-            derived = DerivedCredential(
-                kind="static_token", name=f"Resource {self.bridge.pk}", material={"api_key": "fake"},
-            )
-        return ConnectionDiscovery(data={"display_name": "Discovered resource"}, credential=derived)
+            # ``derived_name`` lets two integrations derive a credential of one name.
+            name = self.bridge.config.get("derived_name") or f"Resource {self.bridge.pk}"
+            derived = DerivedCredential(kind="static_token", name=name, material={"api_key": "fake"})
+        data = {"display_name": "Discovered resource"}
+        # A scripted provider: ``accounts`` names the remote account each secret reads.
+        if account := self.bridge.config.get("accounts", {}).get(credential.secret_value()):
+            data["account"] = account
+        return ConnectionDiscovery(data=data, credential=derived)
 
     def apply_discovery(self, discovery: ConnectionDiscovery) -> None:
         assert connection.in_atomic_block
+        account, stored = discovery.data.get("account"), self.bridge.subscription_state.get("account")
+        if account and stored and account != stored:
+            raise IntegrationError(f"This key reads {account}, not {stored}.")
         self.bridge.display_name = discovery.data.get("display_name", "")
         self.bridge.save(update_fields=["display_name"])
+        if account:
+            self.bridge.merge_subscription_state(account=account)
 
     def streams(self, *, deadline: float | None = None) -> tuple[StreamDefinition, ...]:
+        # ``pages`` scripts "first" as a replica read in pages of keys.
+        first = StreamKind.RECORD_REPLICA if self.bridge.config.get("pages") else StreamKind.EVENT_FEED
         return (
-            StreamDefinition("first", kind=StreamKind.EVENT_FEED),
+            StreamDefinition("first", kind=first),
             StreamDefinition("second", kind=StreamKind.EVENT_FEED),
         )
 
@@ -69,7 +80,15 @@ class ConnectionAdapter(BridgeImpl):
         if self.bridge.config.get("sync_quota"):
             hours = 1 if stream.key == "first" else 2
             raise IntegrationError("Provider quota reached.", retry_after=timedelta(hours=hours))
+        if (pages := self.bridge.config.get("pages")) and stream.key == "first":
+            page = stream.cursor.get("page", 0)
+            records = tuple(RecordChange(key, {"key": key}, key, mapped_payload={"key": key}) for key in pages[page])
+            return StreamPage(records=records, cursor={"page": page + 1}, exhausted=page + 1 == len(pages))
         return StreamPage(records=(), cursor={}, exhausted=True)
+
+    def apply_record(self, stream: Any, record: Any) -> ApplyResult:
+        assert connection.in_atomic_block
+        return ApplyResult(mapped_payload=record.mapped_payload)
 
 
 class LiveConnectionAdapter(ConnectionAdapter, LiveBridgeImpl):

@@ -1,14 +1,13 @@
-// Bespoke console operation for connecting a CardDAV directory — a single action
-// that creates the Basic-auth credential + the Directory (two models), the
-// sanctioned multi-model-create shape. The directories list/detail are model-driven
-// (ResourceList reads the SDL) and sync is the single-id `sync_integration` action, so
-// neither needs a document here.
+// The parties console's authored operations. A directory's connect mutation belongs
+// to its vendor addon, which hands it to `ConnectDirectoryAction`; the directories
+// list/detail are model-driven (ResourceList reads the SDL) and sync is the single-id
+// `sync_integration` action, so neither needs a document here.
 
 import { graphql, type DocumentType } from "@angee/gql/console";
 
 export const PartyRecordRedirectDocument = graphql(`
   query PartyRecordRedirect($id: String!) {
-    parties_by_pk(id: $id) { id concrete_kind }
+    party_record(id: $id) { id concrete_kind }
   }
 `);
 
@@ -34,19 +33,29 @@ export const PARTY_STATEMENT_DECISION_INVALIDATES = [
   "parties.Organization",
 ] as const;
 
-export const PARTY_MERGE_INVALIDATES = [
+/**
+ * The models a party merge moves that are exposed as resources: their resource
+ * lists (rows and totals) refresh through the metadata owner's resource
+ * invalidations (`useResourceInvalidates`), which authored invalidation does not reach.
+ */
+export const PARTY_MERGE_RESOURCES = [
   "parties.Party",
   "parties.Person",
   "parties.Organization",
   "parties.Handle",
   "parties.PartyStatement",
-  "parties.PersonStatement",
-  "parties.OrganizationStatement",
   "parties.Address",
-  "parties.AddressStatement",
-  "parties.RelationshipStatement",
   "parties.CircleMember",
   "parties.Relationship",
+] as const;
+
+/** Every model a party merge moves: the resources, and the statement models only authored reads read. */
+export const PARTY_MERGE_INVALIDATES = [
+  ...PARTY_MERGE_RESOURCES,
+  "parties.PersonStatement",
+  "parties.OrganizationStatement",
+  "parties.AddressStatement",
+  "parties.RelationshipStatement",
   "parties.PartySameAsPairStatement",
 ] as const;
 
@@ -95,7 +104,7 @@ export const RemoveCircleMember = graphql(`
 `);
 
 export const PartiesOverview = graphql(`
-  query PartiesOverview($sameAsLimit: Int = 100) {
+  query PartiesOverview {
     contacts: people_aggregate {
       aggregate {
         count
@@ -120,13 +129,9 @@ export const PartiesOverview = graphql(`
         count
       }
     }
-    same_as_pairs(limit: $sameAsLimit) {
-      left {
-        id
-      }
-      right {
-        id
-      }
+    same_as_pair_counts {
+      pairs
+      capped
     }
   }
 `);
@@ -201,6 +206,7 @@ export const PartyMergeComparison = graphql(`
       name_suffix
       nickname
       birthday
+      anniversary
     }
     right_person: people_by_pk(id: $right) {
       id
@@ -212,13 +218,15 @@ export const PartyMergeComparison = graphql(`
       name_suffix
       nickname
       birthday
+      anniversary
     }
   }
 `);
 
 export const SameAsPairs = graphql(`
-  query SameAsPairs($limit: Int = 50) {
-    same_as_pairs(limit: $limit) {
+  query SameAsPairs($limit: Int = 50, $after: ID) {
+    same_as_pairs(limit: $limit, after: $after) {
+      id
       normalized_value
       left {
         id
@@ -234,6 +242,100 @@ export const SameAsPairs = graphql(`
   }
 `);
 
+export const CertainSameAsPairs = graphql(`
+  query CertainSameAsPairs($limit: Int = 50, $after: ID) {
+    certain_same_as_pairs(limit: $limit, after: $after) {
+      id
+      normalized_value
+      left { id display_name }
+      right { id display_name }
+      survivor { id }
+    }
+  }
+`);
+
+/**
+ * Every group of the People list's own groups read (`people_groups`, under the
+ * reader's read), a page at a time, each with its record count and first rows:
+ * the sets "Select all" merges. The variables are the list's read as
+ * `groupByVariables` turns it into wire variables, plus `rows_limit`. The key
+ * selects the text merge fields a set may be grouped by
+ * (`PEOPLE_MERGE_GROUPS.fields`).
+ */
+export const PeopleGroupSets = graphql(`
+  query PeopleGroupSets(
+    $group_by: [peopleGroupBySpec!]!, $where: people_bool_exp, $having: peopleHaving,
+    $order_by: [peopleGroupOrder!], $limit: Int, $offset: Int, $rows_limit: Int!
+  ) {
+    groups: people_groups(
+      group_by: $group_by, where: $where, having: $having, order_by: $order_by, limit: $limit, offset: $offset
+    ) {
+      key { display_name given_name family_name }
+      aggregate { count }
+      rows(limit: $rows_limit) { id }
+    }
+  }
+`);
+
+/** The Organizations list's own groups read, as `PeopleGroupSets` (`ORGANIZATION_MERGE_GROUPS.fields`). */
+export const OrganizationGroupSets = graphql(`
+  query OrganizationGroupSets(
+    $group_by: [organizationsGroupBySpec!]!, $where: organizations_bool_exp, $having: organizationsHaving,
+    $order_by: [organizationsGroupOrder!], $limit: Int, $offset: Int, $rows_limit: Int!
+  ) {
+    groups: organizations_groups(
+      group_by: $group_by, where: $where, having: $having, order_by: $order_by, limit: $limit, offset: $offset
+    ) {
+      key { display_name }
+      aggregate { count }
+      rows(limit: $rows_limit) { id }
+    }
+  }
+`);
+
+export const DuplicateSetPreviews = graphql(`
+  query DuplicateSetPreviews($sets: [[ID!]!]!, $certain: Boolean = false, $groupings: [[String!]!]) {
+    duplicate_set_previews(sets: $sets, certain: $certain, groupings: $groupings) {
+      outcome
+      reason
+      digest
+      survivor { id }
+      members {
+        id
+        display_name
+        concrete_kind
+        created_at
+        first_met_note
+        statements { id source_kind handle { id platform value } }
+      }
+      disagreements { field values shown }
+      fills { field values shown }
+      grouping { field values shown }
+    }
+  }
+`);
+
+export const SelectionDuplicateSets = graphql(`
+  query SelectionDuplicateSets($ids: [ID!]!) {
+    selection_duplicate_sets(ids: $ids) {
+      sets
+      left_out
+      explicit
+    }
+  }
+`);
+
+export const MergeDuplicates = graphql(`
+  mutation MergeDuplicates($sets: [[ID!]!]!, $digests: [String!]!, $certain: Boolean = false, $groupings: [[String!]!]) {
+    merge_duplicates(sets: $sets, digests: $digests, certain: $certain, groupings: $groupings) {
+      members
+      outcome
+      reason
+      survivor { id display_name concrete_kind }
+    }
+  }
+`);
+
 export const PartyReviewCounts = graphql(`
   query PartyReviewCounts {
     party_statements_aggregate(
@@ -244,6 +346,11 @@ export const PartyReviewCounts = graphql(`
       aggregate {
         count
       }
+    }
+    same_as_pair_counts {
+      pairs
+      certain
+      capped
     }
   }
 `);
@@ -297,3 +404,11 @@ export type MergePartyRecord = NonNullable<
 export type MergePersonRecord = NonNullable<
   DocumentType<typeof PartyMergeComparison>["left_person"]
 >;
+
+export type CertainSameAsPair = DocumentType<typeof CertainSameAsPairs>["certain_same_as_pairs"][number];
+/** A parties list's authored groups read, the one its "Select all" merges by. */
+export type GroupSetsDocument = typeof PeopleGroupSets | typeof OrganizationGroupSets;
+export type GroupSetsBucket = DocumentType<GroupSetsDocument>["groups"][number];
+export type DuplicateSetPreview = DocumentType<typeof DuplicateSetPreviews>["duplicate_set_previews"][number];
+export type DuplicateSetMember = DuplicateSetPreview["members"][number];
+export type DuplicateSetOutcome = DocumentType<typeof MergeDuplicates>["merge_duplicates"][number];

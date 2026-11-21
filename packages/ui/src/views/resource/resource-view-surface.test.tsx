@@ -96,8 +96,9 @@ vi.mock("@tanstack/react-query", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tanstack/react-query")>();
   return {
     ...actual,
-    useQueries: ({ queries }: { queries: readonly unknown[] }) =>
-      queries.map(() => ({
+    // Native contract: with a `combine`, the hook hands back what it returns.
+    useQueries: ({ queries, combine }: { queries: readonly unknown[]; combine?: (results: unknown[]) => unknown }) => {
+      const results = queries.map(() => ({
         data: {
           notes_groups: [
             {
@@ -111,7 +112,9 @@ vi.mock("@tanstack/react-query", async (importOriginal) => {
         error: null,
         isFetching: false,
         refetch: vi.fn(),
-      })),
+      }));
+      return combine ? combine(results) : results;
+    },
   };
 });
 
@@ -304,17 +307,21 @@ function ClientSurfaceProbe(): React.ReactElement {
 }
 
 describe("useResourceViewSurface", () => {
+  // The authored batch is replaced, but its read-failure report still runs, as refine's
+  // auth check does, under the query client.
   test("row query filters follow cleared resource-view facets after mount", async () => {
     render(
-      <ToastProvider>
-        <ResourceViewProvider
-          resource="notes.Note"
-          scope="local"
-          initialState={{ filter: { status: "active" } }}
-        >
-          <SurfaceProbe />
-        </ResourceViewProvider>
-      </ToastProvider>,
+      <QueryClientProvider client={new QueryClient()}>
+        <ToastProvider>
+          <ResourceViewProvider
+            resource="notes.Note"
+            scope="local"
+            initialState={{ filter: { status: "active" } }}
+          >
+            <SurfaceProbe />
+          </ResourceViewProvider>
+        </ToastProvider>
+      </QueryClientProvider>,
     );
 
     expect(tableMocks.activeFilters.at(-1)).toEqual({
@@ -331,11 +338,13 @@ describe("useResourceViewSurface", () => {
   test("server pagination clamps oversized native state before query and navigation", async () => {
     const onListStateChange = vi.fn();
     render(
-      <ToastProvider>
-        <ResourceViewProvider scope="local" initialState={{ pageSize: 200 }}>
-          <SurfaceProbe onListStateChange={onListStateChange} />
-        </ResourceViewProvider>
-      </ToastProvider>,
+      <QueryClientProvider client={new QueryClient()}>
+        <ToastProvider>
+          <ResourceViewProvider scope="local" initialState={{ pageSize: 200 }}>
+            <SurfaceProbe onListStateChange={onListStateChange} />
+          </ResourceViewProvider>
+        </ToastProvider>
+      </QueryClientProvider>,
     );
 
     await waitFor(() =>
@@ -378,16 +387,20 @@ function SurfaceProbe({ onListStateChange }: {
 describe("useGroupedResourceViewSurface", () => {
   test("fetches the last valid nested page after a live count shrinks", async () => {
     tableMocks.subgroupTotal = 5;
+    // The list batch names each request by the client's query hash.
+    const client = new QueryClient();
     const probe = () => (
-      <ToastProvider>
-        <OperationDocumentsProvider
-          documents={{ console: { groups: { "notes.Note": "query NoteGroups { notes_groups { key { status title } aggregate { count } } }" } } }}
-        >
-          <ResourceViewProvider scope="local" initialState={{ pageSize: 2 }}>
-            <NestedPageProbe />
-          </ResourceViewProvider>
-        </OperationDocumentsProvider>
-      </ToastProvider>
+      <QueryClientProvider client={client}>
+        <ToastProvider>
+          <OperationDocumentsProvider
+            documents={{ console: { groups: { "notes.Note": "query NoteGroups { notes_groups { key { status title } aggregate { count } } }" } } }}
+          >
+            <ResourceViewProvider scope="local" initialState={{ pageSize: 2 }}>
+              <NestedPageProbe />
+            </ResourceViewProvider>
+          </OperationDocumentsProvider>
+        </ToastProvider>
+      </QueryClientProvider>
     );
     const { rerender } = render(probe());
     fireEvent.click(await screen.findByRole("button", { name: "open root" }));

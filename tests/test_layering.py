@@ -140,6 +140,26 @@ def test_inference_backends_catalogue_without_their_vendor_sdks() -> None:
     } == set()
 
 
+def test_settings_merge_leaves_django_settings_unconfigured() -> None:
+    """Importing a settings module that merges addon settings never configures Django's settings.
+
+    ``enabled_apps`` resolves every addon's ``apps`` module, whose classes Django inspects, and
+    ``apply_app_settings`` imports every ``autoconfig``. A module-scope ``django.conf.settings``
+    in either configures Django from the half-imported module, before any addon setting merged.
+    """
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import django.conf, tests.settings; print(django.conf.settings.configured)"],
+        cwd=PROJECT_ROOT,
+        env={**os.environ, "DJANGO_SETTINGS_MODULE": "tests.settings"},
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout.splitlines()[-1] == "False"
+
+
 def test_generated_host_startup_and_provision_dispatch_never_load_the_compiler(tmp_path: Path) -> None:
     """A verified native host retains late deployment values without model compilation."""
 

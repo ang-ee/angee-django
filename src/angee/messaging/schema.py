@@ -37,7 +37,7 @@ from angee.graphql.actions import (
     authorized_permission_target,
     resolve_action_target,
 )
-from angee.graphql.capabilities import held_permissions, permissions_field
+from angee.graphql.capabilities import PermissionsExtension, held_permissions, permissions_field
 from angee.graphql.data.hasura import (
     AngeeHasuraWriteBackend,
     SortAlias,
@@ -45,7 +45,7 @@ from angee.graphql.data.hasura import (
     hasura_model_resource,
     public_pk_decoder,
 )
-from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
+from angee.graphql.deletion import DeletePreview
 from angee.graphql.ids import PublicID, instance_for_id, require_instance_for_id
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.related_counts import RelatedCount
@@ -138,37 +138,6 @@ class ChannelType(BridgeTypeMixin, AngeeNode):
             return None
 
 
-def _channel_webform_extension() -> type[Any] | None:
-    """Project the messaging-owned donor only when this graph composes it."""
-
-    required_fields = {
-        "slug",
-        "is_published",
-        "form_schema_version",
-        "form_schema",
-        "max_body_bytes",
-        "max_field_bytes",
-    }
-    if not required_fields.issubset(field.name for field in Channel._meta.get_fields()):
-        return None
-
-    @strawberry_django.type(Channel, name="ChannelType", extend=True)
-    class ChannelWebformExtension:
-        """Contribute public-form configuration onto messaging's channel node."""
-
-        slug: auto
-        is_published: auto
-        form_schema_version: auto
-        form_schema: strawberry.scalars.JSON
-        max_body_bytes: auto
-        max_field_bytes: auto
-
-    return ChannelWebformExtension
-
-
-_CHANNEL_WEBFORM_EXTENSION = _channel_webform_extension()
-
-
 def _pairing_result(operation: Any, *args: Any, **kwargs: Any) -> Any:
     """Expose only pairing-owner failures whose text is deliberately public."""
 
@@ -249,52 +218,6 @@ class MessagingPairingMutation:
         ) as channel:
             _pairing_result(channel.disconnect_pairing)
         return ActionResult(ok=True, message="Disconnected channel.")
-
-
-@strawberry.type
-class MessagingChannelMutation:
-    """Owner/admin console mutation for deleting a connected channel."""
-
-    @strawberry.mutation(name="delete_channel")
-    def delete_channel(self, id: PublicID, confirm: bool = False) -> DeletePreview:
-        """Preview, then optionally purge, one channel and everything it ingested.
-
-        Deleting a channel is a purge: its threads and messages FK the shared
-        ``integrate.Integration`` parent with ``SET_NULL``, so removing the channel row
-        alone would orphan them. The preview forecasts the channel + its Integration row
-        + the channel's thread/message totals **and their CASCADE children** as
-        **deleted** — the single inventory :meth:`ChannelManager.inventory` counts with
-        ``.count()``, never materialized, so it stays fast on a 90k-message channel — and
-        ``confirm`` runs that same scope through :meth:`ChannelManager.purge`
-        (:meth:`ThreadManager.teardown_for_channel` first, then the channel + Integration
-        row). Gated by the channel's own ``delete`` permission (its integration owner or a
-        platform admin): a caller who cannot write the channel never resolves it, and
-        :meth:`ChannelManager.purge` re-checks ``delete`` before any destructive work. A
-        ``PROTECT``/``RESTRICT`` blocker on the confirm delete is surfaced as a blocked
-        preview rather than a raw error.
-        """
-
-        with transaction.atomic():
-            channel = require_instance_for_id(Channel, str(id), queryset=Channel.objects.for_write().of_concrete_type())
-            preview = DeletePreview.from_counts(
-                channel, Channel.objects.inventory(channel), blockers=channel.purge_blockers(),
-            )
-            if confirm and not preview.has_blockers:
-                try:
-                    Channel.objects.purge(channel)
-                except (ProtectedError, RestrictedError) as error:
-                    preview = DeletePreview.blocked_from_error(channel, error)
-                else:
-                    preview.deleted_instance = channel
-        return preview
-
-
-attach_delete_preview_metadata(
-    MessagingChannelMutation,
-    model=Channel,
-    node=ChannelType,
-    field="delete_channel",
-)
 
 
 @strawberry_django.type(Fragment)
@@ -407,6 +330,20 @@ class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
 
         return cast(Any, self).is_held
 
+    @strawberry_django.field(
+        only=[
+            "status", "scheduled_at", "delivery_lease_until", "is_trashed", "delivery_possibly_accepted",
+            "direction", "channel", "external_id",
+        ],
+        annotate={"_delivery_conflict": models.F("metadata__local__delivery_conflict")},
+        extensions=[PermissionsExtension((Message.delivery_action_permission,))],
+    )
+    def delivery_actions(self) -> list[str]:
+        """Operator verbs admitted by the same retained-state check as their locked mutation."""
+
+        row = cast(Any, self)
+        return row.delivery_actions(held_permissions(row, (Message.delivery_action_permission,)))
+
     platform: auto
     direction: auto
     status: auto
@@ -418,7 +355,7 @@ class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
     scheduled_at: auto
     revision: auto
     is_trashed: auto
-    permissions = permissions_field(("write", "delete", "send_held"))
+    permissions = permissions_field(("write", "delete", Message.delivery_action_permission))
     sender: HandleType | None = actor_scoped_to_one("sender")
 
     @strawberry_django.field(
@@ -1392,7 +1329,7 @@ class MessagingMutation:
     def acknowledge_message_delivery(self, info: strawberry.Info, id: PublicID, expected_revision: int) -> ActionResult:
         """Operator confirmation without another provider effect."""
 
-        row = authorized_permission_target(info, Message, id, "send_held")
+        row = authorized_permission_target(info, Message, id, Message.delivery_action_permission)
         row.acknowledge_delivery(actor=_request_user(info), expected_revision=expected_revision)
         return ActionResult(ok=True, message="Delivery acknowledged as sent.")
 
@@ -1401,7 +1338,7 @@ class MessagingMutation:
     def retry_message_delivery(self, info: strawberry.Info, id: PublicID, expected_revision: int) -> ActionResult:
         """Explicit retry of FAILED, or acceptance of repeat-effect risk for UNCERTAIN."""
 
-        row = authorized_permission_target(info, Message, id, "send_held")
+        row = authorized_permission_target(info, Message, id, Message.delivery_action_permission)
         row.retry_delivery(actor=_request_user(info), expected_revision=expected_revision)
         return ActionResult(ok=True, message="Delivery retry queued.")
 
@@ -1759,26 +1696,36 @@ class _InboxWriteBackend(AngeeHasuraWriteBackend):
 
 
 class _ChannelWriteBackend(AngeeHasuraWriteBackend):
-    """Make the generic ``delete_channels_by_pk`` a purge, not an orphan.
+    """Share channel purge semantics across both generated delete roots."""
 
-    ``delete=True`` on the channel resource is what lights the console's delete button
-    (the generic views gate on the presence of the delete root). Its default backend
-    would ``SET_NULL`` the channel's threads/messages — the shared-Integration-parent
-    orphan this whole feature exists to prevent — so the auto path routes through the
-    same :meth:`ChannelManager.purge` as the authored ``delete_channel`` preview mutation
-    the console actually drives; both are thin dispatchers to that one owner.
-    """
+    def delete_preview(self, info: strawberry.Info, pk: str, *, confirm: bool) -> DeletePreview:
+        """Preview, then optionally purge, the channel and everything it ingested.
 
-    def delete(self, info: strawberry.Info, pk: str) -> Any:
-        """Purge, then delete, one public-id-addressed channel; return the deleted row."""
+        Threads and messages reference the Integration parent with SET_NULL.
+        ChannelManager.inventory counts the purge's full cascade without
+        materializing it; ChannelManager.purge owns teardown and rechecks delete
+        permission. A protected or restricted confirm returns a blocked preview.
+        """
 
         del info
         queryset = self.write_target_queryset()
         if not isinstance(queryset, ChannelQuerySet):
             raise ImproperlyConfigured("The channel write backend requires a channel queryset.")
-        channel = require_instance_for_id(Channel, str(pk), queryset=queryset.of_concrete_type())
-        Channel.objects.purge(channel)
-        return channel
+        with transaction.atomic():
+            channel = require_instance_for_id(Channel, str(pk), queryset=queryset.of_concrete_type())
+            if not channel.has_access("delete"):
+                raise PermissionDenied("You are not allowed to delete this record.")
+            preview = DeletePreview.from_counts(
+                channel, Channel.objects.inventory(channel), blockers=channel.purge_blockers(),
+            )
+            if confirm and not preview.has_blockers:
+                try:
+                    Channel.objects.purge(channel)
+                except (ProtectedError, RestrictedError) as error:
+                    preview = DeletePreview.blocked_from_error(channel, error)
+                else:
+                    preview.deleted_instance = channel
+        return preview
 
 
 _CHANNEL_RESOURCE = hasura_model_resource(
@@ -1819,8 +1766,7 @@ _CHANNEL_RESOURCE = hasura_model_resource(
     # the row is runtime truth a session writes. Blank falls back to the
     # vendor-derived `Integration.display_label`, so clearing it is a real intent.
     updatable=["display_name", *_CHANNEL_EXTENSION_UPDATE_FIELDS],
-    # Deleting a channel purges everything it ingested (see `delete_channel` /
-    # `_ChannelWriteBackend`); `delete=True` lights the console's delete button.
+    # Both generated delete roots use the channel backend's purge preview.
     delete=True,
     write_backend=_ChannelWriteBackend(
         Channel,
@@ -2031,7 +1977,6 @@ _MESSAGING_SCHEMA_BUCKET = {
     ],
     "mutation": [
         MessagingPairingMutation,
-        MessagingChannelMutation,
         MessagingMutation,
         _CHANNEL_RESOURCE.mutation,
         _MESSAGE_RESOURCE.mutation,
@@ -2074,7 +2019,6 @@ _MESSAGING_SCHEMA_BUCKET = {
         RecordFollowPayload,
         *_RESOURCE_TYPES,
     ],
-    "type_extensions": ([] if _CHANNEL_WEBFORM_EXTENSION is None else [_CHANNEL_WEBFORM_EXTENSION]),
 }
 
 

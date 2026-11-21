@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from angee.base.models.identity import public_id_of
 from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRecordReference, DecisionRequest
+from angee.integrate.errors import IntegrationError
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.models import Bridge
 from angee.integrate.net import AddressResolutionError
@@ -260,11 +261,42 @@ def bridge_io(ctx: StepContext, bridge: Bridge) -> Iterator[BridgeImpl | Wait]:
     A host that does not resolve is retried too: a resolver that is briefly offline
     answers "no such host" on some platforms (macOS), and a host that truly has no
     address still fails once the step's attempts run out.
+
+    Readiness is checked before any IO or lock (discovery takes the bridge lock to
+    run): a bridge awaiting connection discovery, as a re-entered secret leaves it,
+    waits the same way, until discovery's next attempt is due, and notes the
+    discovery message once per discovery attempt. While that attempt is already
+    due (its worker has it) the step checks back after a wait that doubles from
+    one second. One whose discovery failed fails with that message. Once the
+    lock is held, readiness is asked again on the bridge as stored now; a refusal
+    there waits like contention, and the next attempt's check decides.
     """
+    try:
+        bridge.require_discovery_ready()
+    except IntegrationError as refusal:
+        if not bridge.discovery_pending:
+            raise
+        assert bridge.discovery_retry_at is not None  # discovery_pending reads the persisted deadline.
+        attempt = [bridge.discovery_generation, bridge.discovery_attempts]
+        waited = ctx.state.get("discovery_wait")
+        waits = waited["waits"] + 1 if waited is not None and waited["attempt"] == attempt else 0
+        if not waits:
+            ctx.note(refusal.public_message, tone="warning")
+        # Doubling from one second, at most about seventeen minutes.
+        until = max(ctx.now + timedelta(seconds=2 ** min(waits, 10)), bridge.discovery_retry_at)
+        yield ctx.wait(until=until, state={**ctx.state, "discovery_wait": {"attempt": attempt, "waits": waits}})
+        return
     try:
         with closing(bridge.capability_impl) as adapter:
             lock = bridge.sync_lock() if adapter.sync_parallelism == 1 else nullcontext(True)
             with lock as acquired:
+                if acquired:
+                    try:
+                        # Asked again under the lock on the bridge as stored now: a secret re-entered while
+                        # the step waited for the lock holds its IO back, and the next attempt's check decides.
+                        bridge.require_stored_discovery_ready()
+                    except IntegrationError:
+                        acquired = False
                 if not acquired:
                     yield ctx.wait(until=ctx.now + timedelta(seconds=1), state=ctx.state)
                     return

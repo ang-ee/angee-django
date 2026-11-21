@@ -13,6 +13,7 @@ the contract tests pin whatever the templates compute, never a value re-derived 
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import json
 import os
 import re
@@ -25,6 +26,8 @@ from typing import Any
 
 import pytest
 import yaml
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 from uvicorn._types import ASGIReceiveCallable, ASGISendCallable, ASGISendEvent, HTTPRequestEvent, HTTPScope, Scope
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -128,7 +131,8 @@ def _render_stack_manifest(
     strip comments, bind ``{% set %}`` variables, expand the item loops and the celery
     ``{% for %}`` loop, evaluate nested/inline conditionals, evaluate the queue worker's
     ``{{ var|split:…|length * n }}`` product, then substitute the remaining
-    ``{{ var }}`` interpolations.
+    ``{{ var }}`` interpolations. Every render refuses a blank line in a frontend
+    ``env:`` block, which parsing would hide.
     """
 
     text = _inline_includes(manifest_path)
@@ -144,9 +148,32 @@ def _render_stack_manifest(
         text = text.replace(f"{{{{ {key} }}}}", value)
     assert "{{" not in text, text
     assert "{%" not in text, text
+    blank_env_lines = _frontend_env_blank_lines(text)
+    assert not blank_env_lines, blank_env_lines
     rendered = yaml.safe_load(text)
     assert isinstance(rendered, dict)
     return rendered
+
+
+def _frontend_env_blank_lines(text: str) -> list[str]:
+    """Return ``name:line`` for each blank line in or after a frontend service's or job's ``env:``.
+
+    A conditional guard at the start of a line leaves one behind when it renders nothing.
+    A block mapping's end mark is the next key's line, so trailing blank lines count.
+    """
+
+    lines = text.splitlines()
+    return [
+        f"{name.value}:{line + 1}"
+        for section, components in yaml.compose(text).value
+        if section.value in ("services", "jobs")
+        for name, component in components.value
+        if name.value.startswith("frontend")
+        for key, env in component.value
+        if key.value == "env"
+        for line in range(key.start_mark.line + 1, env.end_mark.line)
+        if not lines[line].strip()
+    ]
 
 
 _LENGTH_PRODUCT = re.compile(r'{{\s*(\w+)\|split:"([^"]*)"\|length\s*\*\s*(\d+)\s*}}')
@@ -441,7 +468,7 @@ def _render_local_stack(
     celery_queues: str = "",
     enable_celery: bool = True,
     serve_mode: str = "development",
-    serve_workers: int = 0,
+    serve_workers: int = 2,
     db_pool_max_size: int = 2,
     db_pool_timeout: int = 5,
     sentry_dsn: str = "",
@@ -454,6 +481,7 @@ def _render_local_stack(
         "_src_path": "https://github.com/ang-ee/angee-django/tree/main/templates/stacks/local",
         "caddy_image": "caddy:2.9-alpine",
         "celery_queues": celery_queues,
+        "celery_concurrency": "2",
         "enable_celery": "true" if enable_celery else "",
         "django_image": "ghcr.io/ang-ee/django-angee-base:latest",
         "django_port": "8000",
@@ -511,7 +539,7 @@ def _render_dev_stack(
     sentry_dsn: str = "",
     sentry_web_dsn: str = "",
     serve_mode: str = "development",
-    serve_workers: int = 0,
+    serve_workers: int = 2,
     db_pool_max_size: int = 2,
     db_pool_timeout: int = 5,
     operator_home: str = "",
@@ -531,6 +559,7 @@ def _render_dev_stack(
         "include_arp": "true" if include_arp else "",
         "arp_repo": arp_repo,
         "celery_queues": celery_queues,
+        "celery_concurrency": "2",
         "enable_celery": "true" if enable_celery else "",
         "caddy_image": "caddy:2.9-alpine",
         "django_image": "ghcr.io/ang-ee/django-angee-base:latest",
@@ -622,6 +651,8 @@ def _render_staging_stack(
     celery_queues: str = "",
     enable_celery: bool = True,
     operator_home: str = "",
+    sentry_web_dsn: str = "",
+    serve_workers: int = 2,
 ) -> dict[str, Any]:
     """Render the staging stack with the inputs its copier.yml declares, and no others."""
 
@@ -630,6 +661,7 @@ def _render_staging_stack(
         "admin_username": "admin",
         "caddy_image": "caddy:2.9-alpine",
         "celery_queues": celery_queues,
+        "celery_concurrency": "2",
         "db_pool_max_size": "2",
         "db_pool_timeout": "5",
         "deploy_keys": "true" if deploy_keys else "",
@@ -648,8 +680,8 @@ def _render_staging_stack(
         "project_name": "app",
         "repositories": json.dumps(list(repositories)),
         "sentry_dsn": "",
-        "sentry_web_dsn": "",
-        "serve_workers": "0",
+        "sentry_web_dsn": sentry_web_dsn,
+        "serve_workers": str(serve_workers),
         "settings_file": settings_file,
         "ui_port": "5173",
         "web_path": "web",
@@ -934,6 +966,151 @@ def test_local_stack_renders_single_caddy_frontend_ingress() -> None:
     assert "runtime/schemas" not in frontend_command
 
 
+def test_static_ingress_imports_the_composed_standalone_pages_ahead_of_django() -> None:
+    """Every static ingress answers the composer's page routes first, from the one site root the app shares."""
+
+    from angee.web.build import WebRuntime
+
+    # The file the composer publishes, under the project's composed output in the ingress mount.
+    snippet = next(path for path in WebRuntime((), dependencies={}).render_sources() if path.suffix == ".caddy")
+    runtime = _render_project_settings()["COMPOSE_OUTPUT_DIR"].replace("{BASE_DIR}", "/srv/project")
+    # A glob import only warns when nothing matches, so an ingress ahead of its composer still starts.
+    imported = "/srv/project/runtime/web/pages.cadd?"
+    assert fnmatch.fnmatchcase(f"{runtime}/{snippet.as_posix()}", imported)
+    for stack in (
+        _render_local_stack(),
+        _render_staging_stack(),
+        _render_dev_stack(_runtime_mode="docker", serve_mode="production"),
+    ):
+        frontend = stack["services"]["frontend" if "frontend" in stack["services"] else "caddy"]
+        assert frontend["mounts"] == ["source://app:/srv/project"]
+        site = _rendered_caddyfile(frontend).partition(":80 {")[2]
+        root, pages, django, app = (
+            site.index(directive)
+            for directive in (
+                "root * /srv/project/web/dist", f"import {imported}\n", "handle @django", "handle {",
+            )
+        )
+        # The imported routes carry no root of their own: the site declares it once, ahead of every handler.
+        assert root < pages < django < app
+        assert site.count("root *") == 1
+
+
+def test_static_ingress_caches_for_good_only_what_the_build_names_by_content() -> None:
+    """The long-lived cache header reaches only an existing file under ``assets/`` whose name carries a hash."""
+
+    for stack in (
+        _render_local_stack(),
+        _render_staging_stack(),
+        _render_dev_stack(_runtime_mode="docker", serve_mode="production"),
+    ):
+        frontend = stack["services"]["frontend" if "frontend" in stack["services"] else "caddy"]
+        lines = [line.strip() for line in _rendered_caddyfile(frontend).splitlines()]
+        start = lines.index("@hashed {")
+        # ``file``: a missing asset falls back to the app document, which must never be kept for a year.
+        conditions = lines[start + 1 : lines.index("}", start)]
+        assert conditions == [
+            r"path_regexp ^/assets/.+-[A-Za-z0-9_-]{8}(\.[A-Za-z0-9]+)+$",
+            r"not path_regexp -[a-z0-9_-]{8}(\.[A-Za-z0-9]+)+$",
+            "not path *.html",
+            "file",
+        ]
+        assert 'header @hashed Cache-Control "public, max-age=31536000, immutable"' in lines
+        named, word = (re.compile(condition.rpartition("path_regexp ")[2]) for condition in conditions[:2])
+
+        def kept(path: str) -> bool:
+            return bool(named.search(path)) and not word.search(path) and not path.endswith(".html")
+
+        # Vite writes all it emits under assets/ as <name>-<hash>.<ext>, the emission of a selected named asset too.
+        # A precompressed sidecar is its source's name with one more extension, hashed exactly when its source is.
+        for path in (
+            "/assets/open-C37wqrGN.js", "/assets/index-BX1a2b3c.css", "/assets/inter-latin-400-normal-C38fXH4l.woff2",
+            "/assets/en-D4_x-9Qa.json", "/assets/icon & mark-Zy98_-Ab.svg", "/assets/app-AbCd1234.js.map",
+            "/assets/open-C37wqrGN.js.br", "/assets/open-C37wqrGN.js.gz",
+        ):
+            assert kept(path), path
+        for path in (
+            # Documents and the build's own manifests.
+            "/", "/index.html", "/site.page.html", "/.vite/angee-pages.json", "/.vite/manifest.json",
+            # A file rewritten in place under a stable name, at the root or under assets/: a sheet, a named asset.
+            "/themes.css", "/assets/themes.css", "/runtime/web/themes.css", "/assets/icon.svg", "/favicon.svg",
+            # A hand-named file whose tail is a word or a date, and a hash-shaped name outside assets/.
+            "/assets/logo-inverted.svg", "/assets/chunk-settings.js", "/assets/report-20240115.pdf",
+            "/assets/app-AbCd123.js", "/static/app-AbCd1234.js", "/pages/assets/app-AbCd1234.js",
+            "/index.html.br", "/site.page.html.gz",
+            # A real hash without an upper-case letter: not kept, the price of never keeping a word.
+            "/assets/low-abcd1234.js",
+            # A document is revalidated, whatever its name.
+            "/assets/page-AbCd1234.html",
+        ):
+            assert not kept(path), path
+
+
+def test_static_ingress_revalidates_documents_and_keeps_only_hashed_assets() -> None:
+    """Documents answer the declared ``Cache-Control``; no response can carry it and the long-lived one."""
+
+    from angee.web.build import INGRESS_DOCUMENT_CACHE_CONTROL
+
+    assert INGRESS_DOCUMENT_CACHE_CONTROL == "no-cache"
+    for stack in (
+        _render_local_stack(),
+        _render_staging_stack(),
+        _render_dev_stack(_runtime_mode="docker", serve_mode="production"),
+    ):
+        frontend = stack["services"]["frontend" if "frontend" in stack["services"] else "caddy"]
+        lines = [line.strip() for line in _rendered_caddyfile(frontend).splitlines()]
+        start = lines.index("@document {")
+        # A document: the root or an HTML file, or any path with no file, which falls back to the app document.
+        assert lines[start + 1 : start + 6] == ["not {", "not path / *.html", "file", "}", "}"]
+        assert lines[start + 6] == f"header @document Cache-Control {INGRESS_DOCUMENT_CACHE_CONTROL}"
+        # Inside the app's own handler, ahead of its fallback: at the site level it would mark what Django answers.
+        assert lines.index("handle {") < start < lines.index("try_files {path} /index.html")
+        # The kept files exclude both arms of that rule (``not path *.html`` and ``file``), so the two never meet.
+        hashed = lines[lines.index("@hashed {") + 1 : lines.index("}", lines.index("@hashed {"))]
+        assert {"not path *.html", "file"} <= set(hashed)
+        assert sorted(line for line in lines if "Cache-Control" in line) == sorted([
+            'header @hashed Cache-Control "public, max-age=31536000, immutable"',
+            f"header @document Cache-Control {INGRESS_DOCUMENT_CACHE_CONTROL}",
+        ])
+
+
+def test_static_ingress_serves_precompressed_sidecars_in_the_declared_order() -> None:
+    """The template's own file server and the composed page routes read sidecars alike, brotli first."""
+
+    from angee.web.build import INGRESS_PRECOMPRESSED
+
+    assert INGRESS_PRECOMPRESSED == ("br", "zstd", "gzip")
+    for stack in (
+        _render_local_stack(),
+        _render_staging_stack(),
+        _render_dev_stack(_runtime_mode="docker", serve_mode="production"),
+    ):
+        frontend = stack["services"]["frontend" if "frontend" in stack["services"] else "caddy"]
+        lines = [line.strip() for line in _rendered_caddyfile(frontend).splitlines()]
+        # Its one file server: the app's, which also answers every built file by its own name.
+        assert [line for line in lines if line.startswith("file_server")] == ["file_server {"]
+        assert lines[lines.index("file_server {") + 1] == f"precompressed {' '.join(INGRESS_PRECOMPRESSED)}"
+        # On-the-fly compression stays for a file without a sidecar.
+        assert "encode zstd gzip" in lines
+
+
+def test_static_ingress_sends_django_exactly_the_declared_paths() -> None:
+    """The template cannot read Python, so its ``@django`` matcher is pinned to the list the page rule reads."""
+
+    from angee.web.build import INGRESS_DJANGO_PATHS
+
+    for stack in (
+        _render_local_stack(),
+        _render_staging_stack(),
+        _render_dev_stack(_runtime_mode="docker", serve_mode="production"),
+    ):
+        frontend = stack["services"]["frontend" if "frontend" in stack["services"] else "caddy"]
+        matchers = [
+            line.strip() for line in _rendered_caddyfile(frontend).splitlines() if line.strip().startswith("@django ")
+        ]
+        assert matchers == [f"@django path {' '.join(INGRESS_DJANGO_PATHS)}"]
+
+
 def test_local_stack_uses_operator_backed_addon_installer() -> None:
     """Containerized local stacks edit project files through the host operator."""
 
@@ -1066,6 +1243,8 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
     assert "angee.knowledge_integrate_notion" not in base["INSTALLED_APPS"]
     assert "angee.proposals_work" not in base["INSTALLED_APPS"]
     assert "angee.workflows_messaging" not in base["INSTALLED_APPS"]
+    assert "angee.webforms" not in base["INSTALLED_APPS"]
+    assert "angee.webforms_messaging" not in base["INSTALLED_APPS"]
     assert "ANGEE_ADDON_DIRS" not in base
     assert base["ANGEE_DATA_DIR"] == "{BASE_DIR}/data"
 
@@ -1082,12 +1261,13 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
         "angee.workflows_messaging",
         "angee.work",
         "angee.intake",
+        "angee.webforms",
+        "angee.webforms_messaging",
         "angee.money",
         "angee.proposals",
         "angee.proposals_work",
         "angee.portfolio",
-        # A top-level web fragment: CI typechecks it against the full profile's documents.
-        "angee.calendar_integrate_ics",
+        # Top-level bridge web fragments: CI typechecks them against the full profile's documents.
         "angee.messaging_integrate_whatsapp",
         "angee.messaging_integrate_telegram",
         "angee.messaging_integrate_discord",
@@ -1100,6 +1280,54 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
     arp = _render_project_settings(framework_workspace=True, include_arp=True)
     assert "ANGEE_ADDON_DIRS" not in arp
     assert not any(app.startswith("arp.") for app in arp["INSTALLED_APPS"])
+
+
+FRAMEWORK_WEB_FRAGMENTS_OUTSIDE_FULL = {
+    "angee.pm": "a deployment's choice: it rearranges the rail into one suite app, and authors no GraphQL documents",
+}
+"""Framework addons with a web fragment the ``full`` profile leaves out, each with why."""
+
+
+def test_full_profile_composes_every_framework_web_fragment() -> None:
+    """CI composes the ``full`` profile and typechecks every framework web fragment against its documents.
+
+    Codegen emits a fragment's typed ``graphql()`` documents only when the composed
+    host includes its addon, listed or required by a listed one; a fragment left out
+    typechecks against ``graphql()``'s ``unknown`` fallback and fails CI. So every
+    ``src/angee/<addon>/web`` is composed by the profile CI renders (the dev stack's
+    chained answers), or exempt with a reason.
+    """
+
+    addons = ROOT / "src" / "angee"
+    projects = {
+        path.parent.name: tomllib.loads(path.read_text())["project"] for path in addons.glob("*/pyproject.toml")
+    }
+    app_of = {canonicalize_name(project["name"]): f"angee.{directory}" for directory, project in projects.items()}
+    requires = {
+        f"angee.{directory}": {
+            app_of[name]
+            for requirement in project.get("dependencies", ())
+            if (name := canonicalize_name(Requirement(requirement).name)) in app_of
+        }
+        for directory, project in projects.items()
+    }
+    full = _render_project_settings(
+        addons_profile="full",
+        framework_workspace=True,
+        include_operator_installer=True,
+        addon_installer_backend="operator",
+    )
+    composed = set(full["INSTALLED_APPS"])
+    pending = list(composed)
+    while pending:
+        for required in requires.get(pending.pop(), set()) - composed:
+            composed.add(required)
+            pending.append(required)
+    fragments = {f"angee.{path.parent.parent.name}" for path in addons.glob("*/web/package.json")}
+
+    assert sorted(fragments - composed - FRAMEWORK_WEB_FRAGMENTS_OUTSIDE_FULL.keys()) == []
+    # An exemption names a fragment that exists and the profile still leaves out.
+    assert sorted(FRAMEWORK_WEB_FRAGMENTS_OUTSIDE_FULL.keys() - (fragments - composed)) == []
 
 
 STALE_MANAGE_PY = textwrap.dedent("""\
@@ -2014,8 +2242,6 @@ def test_serve_modes_cover_both_flavors_and_runtimes() -> None:
     for copier in (dev_copier, local_copier):
         assert copier["serve_mode"]["default"] == "development"
         assert copier["serve_mode"]["choices"] == ["development", "production"]
-        assert copier["serve_workers"]["default"] == 0
-        assert "serve_workers < 2" in copier["serve_workers"]["validator"]
         assert copier["db_pool_max_size"]["default"] == 2
         assert copier["db_pool_timeout"]["default"] == 5
     assert dev_copier["runtime_mode"]["choices"] == ["process", "docker"]
@@ -2045,12 +2271,12 @@ def test_serve_modes_cover_both_flavors_and_runtimes() -> None:
         assert "ANGEE_SERVE_MODE" not in django["env"]
         sync_command = stack["jobs"]["py-sync"]["command"][-1]
         assert "exec uv sync --locked" in sync_command
-        assert ("--no-editable" in sync_command) == (serve_mode == "production")
+        # Only an instance installs non-editable: a framework stack's web build reads fragments from its slots.
+        assert ("--no-editable" in sync_command) == (serve_mode == "production" and flavor == "instance")
         assert stack["jobs"]["compose"]["command"][-2:] == ["compose", "--if-stale"]
         if serve_mode == "production":
             assert "manage.py serve" in command
-            assert "--workers 0" in command
-            assert "--production" in command
+            assert "--workers 2 --production" in command
             assert "runserver" not in command
             assert django["env"]["ANGEE_DB_POOL"] == "true"
             assert django["env"]["ANGEE_DB_POOL_MAX_SIZE"] == "2"
@@ -2070,7 +2296,7 @@ def test_serve_modes_cover_both_flavors_and_runtimes() -> None:
             assert "/operator/*" not in caddyfile
             assert frontend["after"][0] == "frontend-build"
             assert django["after"] == ["provision", "frontend" if flavor == "framework" else "caddy"]
-            assert "--allowed-origin" in " ".join(stack["services"]["operator"]["command"])
+            assert "--allowed-origin http://localhost:5173" in " ".join(stack["services"]["operator"]["command"])
             assert '--forwarded-allow-ips "$$TRUSTED_PROXY_CIDR"' in command
             if flavor == "framework":
                 assert stack["jobs"]["frontend-build"]["depends_on"] == ["deps", "compose", "operator-schema"]
@@ -2451,6 +2677,56 @@ def test_empty_sentry_dsns_render_no_error_reporting(stack: Any) -> None:
     assert "SENTRY" not in rendered
 
 
+_PUBLIC_INGRESS = "site.example.test"
+
+
+@pytest.mark.parametrize("sentry", ["", _WEB_DSN])
+@pytest.mark.parametrize(
+    ("render", "section", "service", "origin"),
+    [
+        pytest.param(lambda **inputs: _render_dev_stack(**inputs), "services", "frontend", None, id="dev-process"),
+        pytest.param(
+            lambda **inputs: _render_dev_stack(ingress_domain=_PUBLIC_INGRESS, **inputs),
+            "services", "frontend", f"https://{_PUBLIC_INGRESS}", id="dev-process-public",
+        ),
+        pytest.param(
+            lambda **inputs: _render_dev_stack(_runtime_mode="docker", **inputs),
+            "services", "frontend", None, id="dev-docker",
+        ),
+        pytest.param(
+            lambda **inputs: _render_dev_stack(_runtime_mode="docker", ingress_domain=_PUBLIC_INGRESS, **inputs),
+            "services", "frontend", f"https://{_PUBLIC_INGRESS}", id="dev-docker-public",
+        ),
+        pytest.param(
+            lambda **inputs: _render_dev_stack(_runtime_mode="docker", serve_mode="production", **inputs),
+            "jobs", "frontend-build", None, id="framework-build",
+        ),
+        pytest.param(
+            lambda **inputs: _render_staging_stack(ingress_domain=_PUBLIC_INGRESS, **inputs),
+            "jobs", "frontend-build", f"https://{_PUBLIC_INGRESS}", id="framework-build-staging",
+        ),
+        # No shipped instance wrapper renders a public ingress: local pins localhost.
+        pytest.param(
+            lambda **inputs: _render_local_stack(serve_mode="production", **inputs),
+            "jobs", "frontend-build", None, id="instance-build-local",
+        ),
+    ],
+)
+def test_public_origin_reaches_python_and_one_frontend_independently_of_sentry(
+    render: Any, section: str, service: str, origin: str | None, sentry: str,
+) -> None:
+    # The renderer also refuses a blank line in each frontend env block for every origin/Sentry pair.
+    stack = render(sentry_web_dsn=sentry)
+    assert ("VITE_SENTRY_DSN" in (stack[section][service].get("env") or {})) == bool(sentry)
+    carriers = _env_nodes(stack, "ANGEE_PUBLIC_ORIGIN")
+    if origin is None:
+        assert not carriers
+    else:
+        # Python and the frontend that writes the static head; never the operator, storybook or static frontend.
+        assert set(carriers) == {*_env_nodes(stack, "DATABASE_URL"), service}
+        assert {environment["ANGEE_PUBLIC_ORIGIN"] for environment in carriers.values()} == {origin}
+
+
 @pytest.mark.parametrize(
     ("render", "environment"),
     [
@@ -2656,7 +2932,7 @@ def test_staging_stack_is_the_containerized_dev_shape_with_production_serving() 
     assert set(services) == {"operator", "postgres", "redis", "django", "celery-worker", "frontend"}
     assert all(service["runtime"] == "container" for service in services.values())
     assert "manage.py serve" in services["django"]["command"][-1]
-    assert services["django"]["command"][-1].endswith("--workers 0 --production")
+    assert services["django"]["command"][-1].endswith("--workers 2 --production")
     assert services["django"]["after"] == ["provision", "frontend"]
     assert services["frontend"]["image"] == "caddy:2.9-alpine"
     assert services["frontend"]["route"] == {"port": 80, "path": "/", "auth": "none"}
@@ -2669,7 +2945,8 @@ def test_staging_stack_is_the_containerized_dev_shape_with_production_serving() 
     assert set(jobs) == {
         "deps", "py-sync", "compose", "makemigrations", "provision", "operator-schema", "frontend-build",
     }
-    assert "--no-editable" in jobs["py-sync"]["command"][-1]
+    # Editable: the frontend build reads each fragment, its tsconfig chain and its pnpm dependencies from the slot.
+    assert "--no-editable" not in jobs["py-sync"]["command"][-1]
     assert jobs["frontend-build"]["depends_on"] == ["deps", "compose", "operator-schema"]
     assert stack["ports"]["ui"] == {"value": 5173, "export_env": "ANGEE_UI_PORT"}
 
@@ -2854,3 +3131,49 @@ def test_a_product_settings_file_is_the_final_settings_layer_of_every_python_nod
     manifest = yaml.safe_load(STAGING_COPIER.read_text(encoding="utf-8"))
     assert manifest["settings_file"]["default"] == ""
     assert "relative to the stack root" in manifest["settings_file"]["validator"]
+
+
+@pytest.mark.parametrize(
+    "render", [_render_dev_stack, _render_dev_docker_stack, _render_local_stack, _render_staging_stack],
+)
+def test_the_shared_celery_worker_runs_a_bounded_prefork_pool(render) -> None:
+    """Celery's own default is one child per CPU, each loading the whole app; the shared worker takes two."""
+
+    stack = render(celery_queues="reports")
+    worker = " ".join(stack["services"]["celery-worker"]["command"])
+    assert "--beat --concurrency 2" in worker
+    queues = " ".join(stack["services"]["celery-queues"]["command"])
+    assert "--pool threads --concurrency 8" in queues
+    for path in (DEV_COPIER, LOCAL_COPIER, STAGING_COPIER):
+        question = yaml.safe_load(path.read_text(encoding="utf-8"))["celery_concurrency"]
+        assert (question["type"], question["default"]) == ("int", 2)
+
+
+def test_production_django_serves_two_workers_unless_cpu_count_is_chosen() -> None:
+    """Each serve worker loads the whole app with nothing shared, so one per CPU is the explicit 0."""
+
+    for path in (DEV_COPIER, LOCAL_COPIER, STAGING_COPIER):
+        question = yaml.safe_load(path.read_text(encoding="utf-8"))["serve_workers"]
+        assert (question["type"], question["default"]) == ("int", 2)
+        assert "serve_workers != 0 and serve_workers < 2" in question["validator"]
+    for stack in (
+        _render_dev_stack(_runtime_mode="docker", serve_mode="production", serve_workers=0),
+        _render_local_stack(serve_mode="production", serve_workers=0),
+        _render_staging_stack(serve_workers=0),
+    ):
+        assert " ".join(stack["services"]["django"]["command"]).endswith("--workers 0 --production")
+
+
+def test_caddy_script_opens_without_a_blank_line_whatever_the_ingress() -> None:
+    """The operator re-saves the manifest; a block scalar opening with a blank line comes back unparsable."""
+
+    for stack in (
+        _render_staging_stack(ingress_domain="localhost"),
+        _render_staging_stack(),
+        _render_dev_stack(_runtime_mode="docker", serve_mode="production"),
+        _render_local_stack(),
+    ):
+        frontend = stack["services"]["frontend" if "frontend" in stack["services"] else "caddy"]
+        script = frontend["command"][-1]
+        assert script == script.lstrip("\n"), script[:80]
+        assert "cat >/etc/caddy/Caddyfile" in script

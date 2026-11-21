@@ -3,6 +3,7 @@ import { type Row as TableRowModel } from "@tanstack/react-table";
 import type { AggregateBucket, AggregateMeasure } from "@angee/refine";
 import type { Row } from "@angee/metadata";
 import type { ResourceListOrder, ResourceViewFilter } from "../resource-view-model";
+import type { SelectionPlace } from "../resource-view-types";
 import type { ColumnDescriptor, PageColumnAlign } from "../../page";
 export type ColumnAlign = PageColumnAlign;
 export type ListColumn<TRow extends Row = Row> = ColumnDescriptor<TRow>;
@@ -98,7 +99,14 @@ export type GroupedListItem<TRow extends Row> =
       bucket: AggregateBucket;
       pager?: GroupedListPager;
     }
-  | { kind: "record"; itemKey: string; row: TableRowModel<TRow>; nav: GroupedRecordNav }
+  | {
+      kind: "record";
+      itemKey: string;
+      row: TableRowModel<TRow>;
+      nav: GroupedRecordNav;
+      /** Where the record shows (its groups, outermost first, and its row page): what its selection captures. */
+      place: SelectionPlace;
+    }
   | { kind: "skeleton"; itemKey: string; depth: number; rowCount: number }
   | {
       kind: "status";

@@ -1,6 +1,7 @@
 import { createNamespaceT } from "@angee/ui/i18n";
 
 export const enPortfolioMessages: Record<string, string> = {
+  "project.promote": "Promote to product",
   "common.health": "Health",
   "common.name": "Name",
   "common.description": "Description",

@@ -64,7 +64,7 @@ Custom integrations consume `django_compose.components` and
 | Native migration safeguards and retained history | `django_compose.migrations` and native Django migration commands |
 | REBAC projection and additive schema fragments | [`PermissionIntegration`](../src/angee/base/build.py) |
 | Source-local catalogue facts and resource retirement exemptions | [`CatalogueIntegration`](../src/angee/resources/build.py) |
-| Web manifest and Tailwind projection | [`WebIntegration`](../src/angee/web/build.py) |
+| Web manifest, Tailwind sources and standalone-page ingress routes | [`WebIntegration`](../src/angee/web/build.py) |
 | Database readiness and optional app preparation hooks | `django_compose.provision` |
 | URL and ASGI composition, command contexts, HTTP defaults, Uvicorn commands and connection policy | [`angee.server`](../src/angee/server/) |
 | GraphQL schema, SDL and WebSocket policy | [`schema.py`](../src/angee/graphql/schema.py) resolves and validates schema declarations; [`asgi.py`](../src/angee/graphql/asgi.py) validates WebSocket contributions; ready-phase [`SchemaIntegration`](../src/angee/graphql/sdl.py) emits SDL/metadata during compose |
@@ -261,7 +261,8 @@ An addon ships its own `pyproject.toml` as package data. Common metadata stays i
 - `[tool.angee.graphql]` owns schema/domain declaration overrides.
 - `AppConfig.rebac_schema` owns the permission schema path.
 - Conventional Python modules own executable contributions.
-- `web/package.json` owns web identity and external `angee.codegen` entries.
+- `web/package.json` owns web identity, external `angee.codegen` entries,
+  named `angee.assets` files and standalone `angee.pages`.
 
 Resources are resolved relative to the addon's `resources/` directory. The
 resource owner preserves canonical ledger paths and adoption keys. Removing a

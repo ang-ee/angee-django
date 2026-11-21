@@ -737,6 +737,52 @@ importers:
         specifier: ^4.1.9
         version: 4.1.12(@types/node@26.6.6)(happy-dom@20.14.6)(vite@8.3.6(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
 
+  src/angee/calendar_integrate_google/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/calendar':
+        specifier: workspace:*
+        version: link:../../calendar/web
+      '@angee/integrate':
+        specifier: workspace:*
+        version: link:../../integrate/web
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.3(@testing-library/dom@10.4.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.3.0(@types/react@19.3.0)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.14.6
+      react:
+        specifier: ^19.2.7
+        version: 19.3.1
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.3.1(react@19.3.1)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.12(@types/node@26.6.6)(happy-dom@20.14.6)(vite@8.3.6(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
+
   src/angee/calendar_integrate_ics/web:
     dependencies:
       '@angee/app':
@@ -1523,6 +1569,9 @@ importers:
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../packages/ui
+      graphql:
+        specifier: ^16.14.0
+        version: 16.15.0
       graphql-ws:
         specifier: ^5.16.2
         version: 5.16.2(graphql@16.15.0)
@@ -1557,9 +1606,6 @@ importers:
       '@types/react-dom':
         specifier: ^19.2.3
         version: 19.3.0(@types/react@19.3.0)
-      graphql:
-        specifier: ^16.14.0
-        version: 16.15.0
       happy-dom:
         specifier: ^20.10.6
         version: 20.14.6
@@ -1584,19 +1630,22 @@ importers:
       '@angee/integrate':
         specifier: workspace:*
         version: link:../../integrate/web
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
       '@angee/refine':
         specifier: workspace:*
         version: link:../../../../packages/refine
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../packages/ui
+      '@refinedev/core':
+        specifier: ^5.0.12
+        version: 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       lucide-react:
         specifier: ^1.21.0
         version: 1.70.0(@types/react@19.3.0)(react@19.3.1)
     devDependencies:
-      '@angee/metadata':
-        specifier: workspace:*
-        version: link:../../../../packages/metadata
       '@tanstack/react-router':
         specifier: ^1.170.41
         version: 1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -1630,6 +1679,9 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../packages/app
+      '@angee/parties':
+        specifier: workspace:*
+        version: link:../../parties/web
       '@angee/refine':
         specifier: workspace:*
         version: link:../../../../packages/refine
@@ -1658,6 +1710,55 @@ importers:
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
+
+  src/angee/parties_integrate_hubspot/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/parties':
+        specifier: workspace:*
+        version: link:../../parties/web
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@refinedev/core':
+        specifier: ^5.0.12
+        version: 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.3(@testing-library/dom@10.4.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.3.0(@types/react@19.3.0)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.14.6
+      react:
+        specifier: ^19.2.7
+        version: 19.3.1
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.3.1(react@19.3.1)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.12(@types/node@26.6.6)(happy-dom@20.14.6)(vite@8.3.6(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
 
   src/angee/platform/web:
     dependencies:
@@ -2702,6 +2803,49 @@ importers:
         specifier: ^4.1.9
         version: 4.1.12(@types/node@26.6.6)(happy-dom@20.14.6)(vite@8.3.6(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
 
+  src/angee/webforms/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      survey-core:
+        specifier: 3.2.7
+        version: 3.2.7
+      survey-js-ui:
+        specifier: 3.2.7
+        version: 3.2.7(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(survey-core@3.2.7)
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.3(@testing-library/dom@10.4.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.3.0(@types/react@19.3.0)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.14.6
+      react:
+        specifier: ^19.2.7
+        version: 19.3.1
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.3.1(react@19.3.1)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.12(@types/node@26.6.6)(happy-dom@20.14.6)(vite@8.3.6(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
+
   src/angee/work/web:
     dependencies:
       '@angee/app':
@@ -2777,6 +2921,9 @@ importers:
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../packages/ui
+      '@refinedev/core':
+        specifier: ^5.0.12
+        version: 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       lucide-react:
         specifier: ^1.21.0
         version: 1.70.0(@types/react@19.3.0)(react@19.3.1)
@@ -2787,9 +2934,6 @@ importers:
       '@angee/storybook':
         specifier: workspace:*
         version: link:../../../../packages/storybook
-      '@refinedev/core':
-        specifier: ^5.0.12
-        version: 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@tanstack/react-router':
         specifier: ^1.170.41
         version: 1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -7392,6 +7536,16 @@ packages:
   supports-preserve-symlinks-flag@1.0.0:
     resolution: {integrity: sha512-ot0WnXS9fgdkgIcePe6RHNk1WA8+muPa6cSjeR3V8K27q9BB1rTE3R1p7Hv0z1ZyAc8s6Vvv8DIyWf681MAt0w==}
     engines: {node: '>= 0.4'}
+
+  survey-core@3.2.7:
+    resolution: {integrity: sha512-ruZmm+I50yUmMLxoG2QwuSC+39zSKPfj/SFgozgzB6cIehnw9gsBOeMEs6XonPuNcxM8ZTqZyCQWRDI7mDoexg==}
+
+  survey-js-ui@3.2.7:
+    resolution: {integrity: sha512-AoeaL8rAnM76ZvOXDYNFWifmPdIypA1PrfteepCSFwYonS8YPIWkbWXytesqjCfgd8cbqbdTLwdRXqHPYErmfg==}
+    peerDependencies:
+      '@types/react': '*'
+      '@types/react-dom': '*'
+      survey-core: 3.2.7
 
   swap-case@3.0.3:
     resolution: {integrity: sha512-6p4op8wE9CQv7uDFzulI6YXUw4lD9n4oQierdbFThEKVWVQcbQcUjdP27W8XE7V4QnWmnq9jueSHceyyQnqQVA==}
@@ -12711,6 +12865,14 @@ snapshots:
       inline-style-parser: 0.2.9
 
   supports-preserve-symlinks-flag@1.0.0: {}
+
+  survey-core@3.2.7: {}
+
+  survey-js-ui@3.2.7(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(survey-core@3.2.7):
+    dependencies:
+      '@types/react': 19.3.0
+      '@types/react-dom': 19.3.0(@types/react@19.3.0)
+      survey-core: 3.2.7
 
   swap-case@3.0.3: {}
 

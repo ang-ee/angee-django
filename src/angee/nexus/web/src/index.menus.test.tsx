@@ -135,6 +135,15 @@ describe("Nexus menu aggregation", () => {
       expect(tree.navigableItems().map(({ item }) => item.id)).toEqual(expect.arrayContaining([
         "nexus.ties", "parties.overview", "parties.relationships", "parties.handles",
       ]));
+      // The command palette lists each destination under its root's label (`useNavCommands`'
+      // group), over this same chrome menu tree: the Settings category's two pages group under
+      // "Contact directories", so the directories list reads "Contact directories › Directories".
+      expect(tree.navigableItems()
+        .filter(({ item }) => item.id.startsWith("parties.directories") || item.id === "parties.folders")
+        .map(({ item, root }) => [root.displayLabel, item.displayLabel])).toEqual([
+        ["Contact directories", "Directories"],
+        ["Contact directories", "Folders"],
+      ]);
     } finally {
       captured.cleanup();
     }

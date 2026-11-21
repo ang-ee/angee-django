@@ -10,9 +10,10 @@ related row.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from enum import StrEnum
-from functools import partial
-from typing import Any, Self, cast
+from functools import partial, wraps
+from typing import Any, ParamSpec, Self, cast
 
 import strawberry
 import strawberry_django
@@ -24,6 +25,7 @@ from django.db import transaction
 from django.db.models import Count, Prefetch
 from django.utils.text import capfirst
 from django.utils.translation import gettext as _
+from django.views.decorators.debug import sensitive_variables
 from rebac import PermissionDenied, check_new, generic_target, system_context, to_subject_ref
 from rebac.resources import model_resource_type
 from strawberry import auto
@@ -40,6 +42,7 @@ from angee.graphql.actions import (
     action_guard,
     action_target,
     authorized_action_target,
+    authorized_permission_target,
     resolve_action_target,
 )
 from angee.graphql.actions import session_user as _session_user
@@ -75,6 +78,37 @@ from angee.integrate.oauth.registrations import OAuthRegistrationExtension, oper
 from angee.integrate.states import ConflictKeep, StreamState, SyncFailure, SyncFailureKind, SyncFailureStatus
 
 logger = logging.getLogger(__name__)
+
+_P = ParamSpec("_P")
+
+
+def integration_action_guard(summary: str) -> Callable[[Callable[_P, ActionResult]], Callable[_P, ActionResult]]:
+    """Guard one of integrate's console actions: ``action_guard``, with an integration's refusal expected.
+
+    An ``IntegrationError`` the action meets (discovery still pending, an account
+    the integration refuses) is answered in band with its operator-safe
+    ``public_message``, and an ``OAuthFlowError`` keeps its code. A permanent one
+    is logged at warning level, since only an operator clears it. Every other
+    error is ``action_guard``'s, so other addons' guarded actions are unchanged.
+    """
+
+    def decorate(resolver: Callable[_P, ActionResult]) -> Callable[_P, ActionResult]:
+        @wraps(resolver)
+        def refused_in_band(*args: _P.args, **kwargs: _P.kwargs) -> ActionResult:
+            try:
+                return resolver(*args, **kwargs)
+            except IntegrationError as refusal:
+                if not refusal.transient:
+                    logger.warning("GraphQL action %s refused: %s", resolver.__name__, refusal.public_message)
+                return ActionResult(
+                    ok=False,
+                    message=refusal.public_message,
+                    code=refusal.code if isinstance(refusal, OAuthFlowError) else None,
+                )
+
+        return action_guard(summary)(refused_in_band)
+
+    return decorate
 
 Vendor = apps.get_model("integrate", "Vendor")
 Integration = apps.get_model("integrate", "Integration")
@@ -246,6 +280,19 @@ class CredentialType(AngeeNode):
     created_at: auto
     updated_at: auto
 
+    @strawberry_django.field(only=["kind"])
+    def editable_fields(self) -> list[str]:
+        """Project the credential owner's manually editable metadata."""
+
+        return cast(list[str], cast(Any, self).editable_fields)
+
+    @strawberry_django.field(only=["kind"], extensions=[PermissionsExtension(("replace_secret",))])
+    def replacement_fields(self) -> list[str]:
+        """Project replacement inputs only to an admitted actor, without reading material."""
+
+        allowed = held_permissions(cast(Any, self), ("replace_secret",))
+        return cast(list[str], cast(Any, self).replacement_fields) if "replace_secret" in allowed else []
+
     @strawberry_django.field(only=["oauth_client"])
     def oauth_client(self) -> CredentialOAuthClientType | None:
         """Return a public-safe projection of the OAuth client (``None`` for local kinds)."""
@@ -299,6 +346,61 @@ class ConnectedCredentialType(AngeeNode):
         """Return the public-safe connected credential label."""
 
         return str(cast(Any, self).connected_display_name)
+
+
+@strawberry.type
+class ConnectWithAccountChoice:
+    """One of the session user's accounts a capability reads with, as its connect picker offers it."""
+
+    id: PublicID
+    display_name: str
+    blocked_reason: str | None
+    """Why the capability refuses this account (``Integration.credential_blocker``); none when it can be chosen."""
+
+
+@strawberry.interface
+class ConnectWithAccount:
+    """What connecting a capability with one of the session user's accounts asks for.
+
+    A capability's connect-facts type implements it and is built with :meth:`of`
+    from an unsaved row of the capability (``IntegrationManager.build``).
+    ``@angee/integrate``'s connect-with-account action reads it through its
+    ``ConnectWithAccountFields`` fragment, so integrate's console ``types``
+    bucket registers it: Strawberry omits a type nothing references, and a
+    host composing no implementer still validates the fragment.
+    """
+
+    oauth_client: strawberry.ID | None
+    """The enabled OAuth client another account connects through; none while the capability has none ready."""
+    oauth_scopes: list[str]
+    """The scopes an account must grant for the capability to read with it; connecting another requests them."""
+    accounts: list[ConnectWithAccountChoice]
+    """The session user's accounts the capability reads with (``Integration.connectable_credentials``).
+
+    Each says why the capability would refuse it, by the rule that refuses its
+    attachment (``Integration.credential_blocker``), so the picker lists a refused
+    account as refused instead of refusing it once picked.
+    """
+
+    @classmethod
+    def of(cls, integration: Any, user: Any, **fields: Any) -> Self:
+        """Project ``integration``'s connect facts for ``user``, beside the implementing type's own ``fields``."""
+
+        registration = integration.ready_oauth_client()
+        accounts = integration.connectable_credentials(user).select_related("external_account").order_by("pk")
+        return cls(
+            oauth_client=strawberry.ID(registration.public_id) if registration is not None else None,
+            oauth_scopes=list(integration.connection_oauth_scopes),
+            accounts=[
+                ConnectWithAccountChoice(
+                    id=PublicID(public_id_of(account)),
+                    display_name=account.connected_display_name,
+                    blocked_reason=integration.credential_blocker(account),
+                )
+                for account in accounts
+            ],
+            **fields,
+        )
 
 
 @strawberry_django.type(OAuthClient)
@@ -385,18 +487,9 @@ class ExternalAccountInput:
 
 
 @strawberry.input
-class CredentialInput:
-    """Admin-write fields for a provider-less credential (OAuth ones arrive via connect).
+class CredentialMaterialInput:
+    """Write-only material; the credential kind's handler selects and validates its inputs."""
 
-    ``kind`` discriminates the material: ``static_token`` reads ``api_key``,
-    ``ssh_key`` reads ``private_key``, ``basic_auth`` reads ``username`` +
-    ``password``, ``app_keys`` reads ``app_id`` + ``app_secret``, ``jwt_bearer``
-    reads the provider's JSON ``key_file``. ``user`` defaults to the calling admin.
-    """
-
-    name: str
-    kind: str
-    user: PublicID | None = None
     api_key: str = ""
     private_key: str = ""
     username: str = ""
@@ -404,6 +497,15 @@ class CredentialInput:
     app_id: str = ""
     app_secret: str = ""
     key_file: str = ""
+
+
+@strawberry.input
+class CredentialInput(CredentialMaterialInput):
+    """Create a local credential; ``user`` defaults to the calling administrator."""
+
+    name: str
+    kind: str
+    user: PublicID | None = None
 
 
 @strawberry.type
@@ -669,6 +771,18 @@ _EXTERNAL_ACCOUNT_RESOURCE = hasura_model_resource(
     field_id_decode={"oauth_client": public_pk_decoder(OAuthClient)},
     get_queryset=_console_external_accounts,
 )
+
+
+class CredentialWriteBackend(AngeeHasuraWriteBackend):
+    """Keep exchange-owned metadata out of manual updates; native writes retain their gates."""
+
+    def _update_row(self, info: strawberry.Info, instance: Any, data: dict[str, Any]) -> Any:
+        """Validate the credential's metadata ownership before the inherited field-gated save."""
+
+        instance.validate_details(data)
+        return super()._update_row(info, instance, data)
+
+
 _CREDENTIAL_RESOURCE = hasura_model_resource(
     CredentialType,
     model=Credential,
@@ -688,7 +802,8 @@ _CREDENTIAL_RESOURCE = hasura_model_resource(
     groupable=["kind", "status", "last_refresh_status"],
     insert=False,
     delete=False,
-    updatable=["status"],
+    updatable=["status", "name"],
+    write_backend=CredentialWriteBackend(Credential),
     field_id_decode={
         "oauth_client": public_pk_decoder(OAuthClient),
         "external_account": public_pk_decoder(ExternalAccount),
@@ -716,11 +831,11 @@ def _enabled_oauth_client_from_id(oauth_client_id: PublicID) -> Any:
     return oauth_client
 
 
-def _credential_material(data: CredentialInput) -> dict[str, str]:
+def _credential_material(data: CredentialMaterialInput, *, kind: str) -> dict[str, str]:
     """Read the secret(s) the kind's handler names out of the discriminated input."""
 
     try:
-        handler = CredentialKind(data.kind).handler
+        handler = CredentialKind(kind).handler
     except ValueError as error:
         raise ValidationError({"kind": "Select a supported credential kind."}) from error
     material: dict[str, str] = {}
@@ -939,15 +1054,15 @@ class IntegrateExternalAccountMutation:
         )
         return cast(ExternalAccountType, account)
 
-    @strawberry.mutation(name="delete_external_account", permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def delete_external_account(self, id: PublicID, confirm: bool = False) -> DeletePreview:
+    @strawberry.mutation(name="external_accounts_delete", permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def external_accounts_delete(self, id: PublicID, confirm: bool | None = False) -> DeletePreview:
         """Delete the account; its ownership is a column and leaves with the row."""
 
         return delete_by_public_id(
             ExternalAccount,
             str(id),
             reason="integrate.graphql.external_account.delete",
-            confirm=confirm,
+            confirm=confirm is True,
             queryset=ExternalAccount.objects.for_write(),
         )
 
@@ -955,6 +1070,18 @@ class IntegrateExternalAccountMutation:
 @strawberry.type
 class IntegrateCredentialMutation:
     """Admin CRUD for credentials; create mints provider-less kinds (OAuth arrives via connect)."""
+
+    @strawberry.mutation
+    @action_guard("Replacing the credential secret failed.", camel_case_keys=False)
+    @sensitive_variables("data")
+    def replace_credential_secret(
+        self, info: strawberry.Info, id: PublicID, data: CredentialMaterialInput, confirmed: bool,
+    ) -> ActionResult:
+        """Replace a non-OAuth credential's material without disclosing it or changing its bindings."""
+
+        credential = authorized_permission_target(info, Credential, id, "replace_secret")
+        credential.replace_secret(_credential_material(data, kind=credential.kind), confirmed=confirmed)
+        return ActionResult(ok=True, message="Credential secret replaced.")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def reveal_oauth_client_secret(self, id: PublicID) -> RevealedCredentialSecret:
@@ -1006,12 +1133,12 @@ class IntegrateCredentialMutation:
 
         user = _session_user(info) if data.user is None else _user_from_public_id(data.user)
         credential = Credential.objects.create_local_credential(
-            user, kind=data.kind, name=data.name, material=_credential_material(data)
+            user, kind=data.kind, name=data.name, material=_credential_material(data, kind=data.kind)
         )
         return cast(CredentialType, credential)
 
-    @strawberry.mutation(name="delete_credential", permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def delete_credential(self, id: PublicID, confirm: bool = False) -> DeletePreview:
+    @strawberry.mutation(name="credentials_delete", permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def credentials_delete(self, id: PublicID, confirm: bool | None = False) -> DeletePreview:
         """Delete the credential, then best-effort revoke remotely after commit."""
 
         with transaction.atomic():
@@ -1019,7 +1146,7 @@ class IntegrateCredentialMutation:
                 Credential,
                 str(id),
                 reason="integrate.graphql.credential.delete",
-                confirm=confirm,
+                confirm=confirm is True,
                 # The preview flow deletes the row itself; it runs the retire verb's preparation first.
                 before_delete=Credential.objects.prepare_disconnect,
                 queryset=Credential.objects.for_write(),
@@ -1030,13 +1157,13 @@ attach_delete_preview_metadata(
     IntegrateExternalAccountMutation,
     model=ExternalAccount,
     node=ExternalAccountType,
-    field="delete_external_account",
+    field="external_accounts_delete",
 )
 attach_delete_preview_metadata(
     IntegrateCredentialMutation,
     model=Credential,
     node=CredentialType,
-    field="delete_credential",
+    field="credentials_delete",
 )
 
 
@@ -1615,7 +1742,7 @@ class SyncRecordActionMutation:
     """Admin-gated operational transitions on the bridge-owned record protocol."""
 
     @strawberry.mutation(name="resolveSyncFailure", permission_classes=_ADMIN_PERMISSION_CLASSES)
-    @action_guard("Could not resolve the failure.")
+    @integration_action_guard("Could not resolve the failure.")
     def resolve_sync_failure(
         self,
         info: strawberry.Info,
@@ -1634,7 +1761,7 @@ class SyncRecordActionMutation:
         return ActionResult(ok=True, message=_("Failure resolved."))
 
     @strawberry.mutation(name="retrySyncFailure", permission_classes=_ADMIN_PERMISSION_CLASSES)
-    @action_guard("Could not retry the failure.")
+    @integration_action_guard("Could not retry the failure.")
     def retry_sync_failure(
         self,
         info: strawberry.Info,
@@ -1648,21 +1775,21 @@ class SyncRecordActionMutation:
         return ActionResult(ok=True, message=_("Failure retry requested."))
 
     @strawberry.mutation(name="pinRecordLink", permission_classes=_ADMIN_PERMISSION_CLASSES)
-    @action_guard("Could not pin the record link.")
+    @integration_action_guard("Could not pin the record link.")
     def pin_record_link(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """Withhold automatic sync through the authorized link owner."""
         authorized_action_target(info, RecordLink, id, "write").pin()
         return ActionResult(ok=True, message=_("Record link pinned."))
 
     @strawberry.mutation(name="unpinRecordLink", permission_classes=_ADMIN_PERMISSION_CLASSES)
-    @action_guard("Could not unpin the record link.")
+    @integration_action_guard("Could not unpin the record link.")
     def unpin_record_link(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """Resume automatic sync through the authorized link owner."""
         authorized_action_target(info, RecordLink, id, "write").unpin()
         return ActionResult(ok=True, message=_("Record link unpinned."))
 
     @strawberry.mutation(name="resyncSyncStream", permission_classes=_ADMIN_PERMISSION_CLASSES)
-    @action_guard("Could not request a stream resync.")
+    @integration_action_guard("Could not request a stream resync.")
     def resync_sync_stream(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """Request the driver-owned baseline transition without running a cycle."""
 
@@ -1752,6 +1879,8 @@ _INTEGRATION_RESOURCE = hasura_model_resource(
     # The account binding follows the credential (``Integration.attach_connection``).
     updatable=["vendor", "credential"],
     insert=False,
+    # The inventory must not bypass a concrete kind's deletion policy.
+    delete=False,
     field_id_decode={
         "vendor": public_pk_decoder(Vendor),
         "credential": public_pk_decoder(Credential),
@@ -1838,7 +1967,7 @@ class IntegrationActionMutation:
     """Operational actions on an integration (sync, connection test)."""
 
     @strawberry.mutation
-    @action_guard("Could not retry connection discovery.")
+    @integration_action_guard("Could not retry connection discovery.")
     def retry_discovery(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """Retry discovery through the integration's bounded handshake owner."""
 
@@ -1847,7 +1976,7 @@ class IntegrationActionMutation:
         return ActionResult(ok=True, message="Connection discovery requested.")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    @action_guard("Could not resume integration.")
+    @integration_action_guard("Could not resume integration.")
     def mark_integration_connected(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """Move an integration to CONNECTED through its guarded transition."""
 
@@ -1952,6 +2081,7 @@ _CONSOLE_TYPES: list[object] = [
     CredentialType,
     ConnectedExternalAccountType,
     ConnectedCredentialType,
+    ConnectWithAccount,
     ConnectableAccount,
     OAuthStartPayload,
     ConnectAccountResult,

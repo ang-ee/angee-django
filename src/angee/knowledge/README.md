@@ -37,7 +37,10 @@ definition knowledge/record_binding {
 }
 ```
 
-An undeclared type cannot be bound under an actor and its bindings stay
+A record owner knowledge itself depends on cannot name knowledge, so knowledge
+declares its arm in its own `permissions.extends.zed`: a party (a person or an
+organization) is bindable, read through the party's `read` and written through
+its `write`. An undeclared type cannot be bound under an actor and its bindings stay
 unreadable; the binding grants no access by itself. The Pages group shows only on
 record views of declared types (their resource metadata lists
 `knowledge.RecordBinding` in `recordEdges`), and `record_knowledge_can_bind`
@@ -123,3 +126,67 @@ Comments pane reads through the page policy. Vault removal uses trash: its pages
 are withheld while preserving their own removal flags, so restoring a vault does
 not restore separately removed pages. RecordBinding retargets retain history for
 merge reversal.
+
+## The people vault
+
+Knowledge's install tier provisions one vault for people, `Vault.PEOPLE`
+(`knowledge.vault_people`, resolved by `Vault.objects.for_resource`). It is
+unowned: platform admins administer it (read, write, delete, share and
+transfer), and knowledge's own vault roles reach it as they reach every vault: a
+`vault_viewer` reads it, a `vault_editor` writes it, a `vault_admin` or
+`knowledge_admin` also deletes it; a platform admin may transfer it to a person,
+who then owns it. Parties' roles reach it by grant rows its install tier writes
+beside it (`install/020_knowledge.vault_grants.yaml`), each on the vault relation
+named for the parties role it holds: a contact reader reads it
+(`contact_reader`), a contact manager writes it (`contact_manager`), a contact
+admin also removes its pages (`contact_admin`,
+through `knowledge/vault#page_delete`, which also keeps a trashed page readable
+to restore it, and lends nothing while the vault itself is trashed) but never
+the vault, whose removal would refuse every importer its `for_resource`
+(`delete` in place of `page_delete` in the extension, one line a deployment's
+architect may flip, lets a contact admin remove the vault); share and
+transfer stay with its owner and platform admins. A deployment may grant more
+with a vault's ordinary grants: an operator shares it as viewers with a user
+or a group's members through the vault's share surface (`viewer` is the vault's
+grantable relation, managed by whoever may `share` it), and grants `editor`
+administratively, through the Permissions Hub or a consumer addon's
+`kind = "grants"` install resource (`{resource: knowledge.vault_people,
+relation: editor, subject: <a user's xref, or auth/group:<id>#member>}`).
+
+A person's pages sit in a folder page bound to their party under the `folder`
+role (`RecordBindingManager.party_folder`); people add pages below it with the
+page tree's own create-under. **Whoever can read the people vault reads every
+person's pages, including the pages of people they cannot read in parties**, and
+whoever can write it writes them; finer control between readers is a later
+version, by ruling. By default those readers are platform admins and the
+holders of parties' roles. A binding places a page on the person's record, in its Pages
+group under the page's own title, and grants nothing. The verb locks the party
+first, so two requests make one folder. A person makes it by the vault's
+permissions and the binding's (write on the page and on the party); an import,
+in a system context, makes it as system work (`PageManager.create_in` without an
+actor). After a merge the survivor holds both folders: the oldest is its folder,
+no third is made, and nothing is lost.
+
+An importer writes a source's text about a person with
+`RecordBindingManager.write_sourced_page(party, vault=, role=, folder_title=,
+title=, body=, written=)`. The note is the person's page bound under `role`,
+the consumer's name for that text (`remember`, say): a slug, stripped, and
+never knowledge's own `related` or `folder`. It is found by that binding, the
+oldest live one, so a person may rename or move it and it stays the source's;
+after a merge the survivor's oldest is it and none is made. Only a new note
+takes `title`, under the person's folder: a title is unique in its vault and a
+taken one refuses the note, saying so, so a consumer names it with the person's
+name, the text's subject and, to stay unique among namesakes, the person's
+public id (`Ada Example: remember (pty_…)`); staff may rename it afterwards. The
+importer passes the text it last wrote there (a directory mapping reads it from
+its link with `DirectoryMapping.applied`). The same text writes nothing. A
+changed text replaces a note that still holds what the source last wrote,
+compare-and-set on its body hash. A note a person has edited since is never
+written over: the newer text is appended below their text, quoted under the
+line "Newer text from the source, not written over this page's edits:", for them
+to take or leave, and the source's record history keeps it too. A note stays
+when the mapping or the link goes; unbinding it from the person in the Pages
+group detaches it, and the next changed text makes a new note. Integrate's
+record conflicts are not used for this: on a pull-only stream a conflict
+resolves only by keeping the source's side, whose re-application would find the
+edit again, and it would mark the person's whole contact failed.

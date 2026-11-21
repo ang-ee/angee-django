@@ -34,6 +34,11 @@ export {
   type ListViewNavigationScope,
   type ResourceListSnapshot,
   type ColumnAlign,
+  type SelectedGroup,
+  type SelectedGroupLevel,
+  type AllMatching,
+  type AllMatchingRecords,
+  type AllMatchingGroups,
 } from "./resource/ListView";
 export {
   useListRecordNavigation,
@@ -365,10 +370,8 @@ export {
   TRASH_PERMISSION,
   TRASH_REASON_MAX_LENGTH,
   TRASH_STAMP_FIELDS,
-  useTrashActions,
   useTrashPrompt,
   useTrashRecord,
-  useTrashRowActions,
   type RemovedDisclosureProps,
   type RemovedItemProps,
   type RemovedListProps,
@@ -408,6 +411,7 @@ export {
 export {
   useRelationOptions,
   useRelationPickerOptions,
+  useRelationPickerSearch,
   useRelationSelectedOption,
   relationSelectedOption,
   type RelationOptionsConfig,
@@ -415,7 +419,17 @@ export {
   type RelationOptionsResult,
 } from "./relation/relation-options";
 export * from "./resource/resource-view-model";
-export * from "./resource/resource-view-context";
+export {
+  ResourceViewProvider,
+  useResourceView,
+  useResourceViewMaybe,
+  withResourceViewScope,
+  type ResourceViewContextValue,
+  type ResourceViewGroupExpansion,
+  type ResourceViewProviderProps,
+  type ResourceViewProviderScope,
+  type ResourceViewScopeMountOptions,
+} from "./resource/resource-view-context";
 export {
   ResourceViewUtilities,
   useResourceViewUtilities,

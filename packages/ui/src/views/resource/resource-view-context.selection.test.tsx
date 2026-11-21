@@ -92,6 +92,23 @@ test.each(["local", "route"] as const)("%s a query change discards selection wri
   expect(f.view.state.rowSelection).toEqual({ "after-render": true });
 });
 
+test.each(["local", "route"] as const)("%s a field shown or hidden keeps the view's filter, grouping and sorting", async (scope) => {
+  const f = fixture(scope, { initialState: {
+    filter: { status: { exact: "open" } }, sorting: [{ id: "title", desc: true }], groupStack: [{ field: "status" }],
+  } });
+  await waitFor(() => expect(f.view).toBeDefined());
+  const before = f.view.state;
+  act(() => f.view.setColumnVisibility({ title: false }));
+  await waitFor(() => expect(f.view.state.columnVisibility).toEqual({ title: false }));
+  expect(f.view.state.filter).toBe(before.filter);
+  expect(f.view.state.groupStack).toBe(before.groupStack);
+  expect(f.view.state.sorting).toBe(before.sorting);
+  // A changed fact still reaches the view.
+  act(() => f.view.setFilter({ status: { exact: "closed" } }));
+  await waitFor(() => expect(f.view.state.filter).toEqual({ status: { exact: "closed" } }));
+  expect(f.view.state.groupStack).toBe(before.groupStack);
+});
+
 test("a local query change clears a selection write in the same React batch", () => {
   const f = fixture("local");
   const start = f.renders.length;

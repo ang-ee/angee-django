@@ -54,11 +54,13 @@ INSTALLED_APPS:
 {% if addons_profile == "full" %}
   - angee.storage_integrate
   - angee.storage_integrate_iphone
+  - angee.storage_integrate_google_drive
 {% endif %}
   - angee.integrate
   - angee.parties
 {% if addons_profile == "full" %}
   - angee.parties_integrate_carddav
+  - angee.parties_integrate_hubspot
 {% endif %}
   - angee.messaging
 {% if addons_profile == "full" %}
@@ -67,11 +69,16 @@ INSTALLED_APPS:
   - angee.calendar
   - angee.projects_calendar
   - angee.calendar_integrate_ics
+  - angee.calendar_integrate_google
   - angee.dashboards
   # Product-management suite. Keep each web-bearing top-level addon explicit so
   # full-profile codegen sees every authored GraphQL document root.
   - angee.work
   - angee.intake
+  # Public forms at forms/<alias>, and the bridge that posts a response on a
+  # webform channel, where intake captures it.
+  - angee.webforms
+  - angee.webforms_messaging
   - angee.money
   - angee.proposals
   - angee.proposals_work

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
@@ -35,6 +36,7 @@ from tests.conftest import (
     make_integration,
 )
 from tests.integrate_fixtures import ConnectionAdapter, ConnectionBridge
+from tests.lock_waits import submit, wait_for_lock
 
 pytestmark = pytest.mark.django_db
 
@@ -149,6 +151,31 @@ def test_a_credential_stored_without_an_account_is_adopted_by_the_first_account(
     assert bridge.account_id == adopted.account.pk
 
 
+def test_adopting_a_credential_stored_without_an_account_sends_its_integrations_to_discover_again() -> None:
+    bridge, client = _bridge("legacy-rediscovery")
+    user = bridge.owner
+    with system_context(reason="test legacy credential in use"):
+        legacy = Credential.objects.upsert_for_user(user, client, CredentialKind.OAUTH, {"access_token": "legacy"})
+        bridge.attach_credential(legacy)
+        bridge.refresh_from_db()
+        assert bridge.finish_discovery(credential_pk=legacy.pk, generation=bridge.discovery_generation)
+        generation = bridge.discovery_generation
+
+    adopted = _connect(client, user, "account-one")
+
+    # The account and its tokens are new to the integrations attached to the row: their cursor and links are not.
+    bridge.refresh_from_db()
+    assert adopted.credential.pk == legacy.pk and bridge.account_id == adopted.account.pk
+    assert bridge.discovery_generation == generation + 1 and bridge.discovery_pending
+    with system_context(reason="test rediscovery after adoption"):
+        assert bridge.finish_discovery(credential_pk=legacy.pk, generation=bridge.discovery_generation)
+        generation = bridge.discovery_generation
+    # Reconnecting the account the row is now bound to keeps discovery.
+    _connect(client, user, "account-one")
+    bridge.refresh_from_db()
+    assert bridge.discovery_generation == generation and bridge.discovery_ready
+
+
 def test_connecting_another_account_into_a_bound_integration_is_refused() -> None:
     bridge, client = _bridge("account-switch")
     user = bridge.owner
@@ -200,14 +227,20 @@ def test_the_binding_survives_detach_and_follows_the_identity_across_clients_of_
     assert refused.value.code == ACCOUNT_SWITCH_REFUSED
 
 
-def test_ownership_transfer_hands_the_recipient_an_unbound_integration() -> None:
-    bridge, client = _bridge("binding-transfer")
+@pytest.mark.parametrize("transferor", ["admin", "owner", "owner-on-the-parent-row"])
+def test_ownership_transfer_hands_the_recipient_an_unbound_integration(transferor: str) -> None:
+    bridge, client = _bridge(f"binding-transfer-{transferor}")
     first = _connect(client, bridge.owner, "account-one")
     bridge.attach_credential(first.credential)
-    admin = create_platform_admin("binding-transfer-admin")
-    recipient = create_user("binding-transfer-recipient")
+    # An owner loses write the moment the row is the recipient's; releasing their connection must not need it.
+    actor = create_platform_admin("binding-transfer-admin") if transferor == "admin" else bridge.owner
+    recipient = create_user(f"binding-transfer-{transferor}-recipient")
+    row: Integration = bridge
+    if transferor == "owner-on-the-parent-row":
+        with system_context(reason="test parent-addressed transfer"):
+            row = Integration.objects.get(pk=bridge.pk)
 
-    bridge.with_actor(admin).transfer_ownership(recipient)
+    row.with_actor(actor).transfer_ownership(recipient)
 
     bridge.refresh_from_db()
     # The integration no longer runs on the previous owner's grant, nor is bound to their account.
@@ -513,3 +546,28 @@ def test_legacy_adoption_racing_an_attach_binds_without_deadlock_on_postgresql(m
     assert bridge.account_id == adopted.external_account_id
     # An attach that read the credential before adoption committed stays unbound until its next connect.
     assert other.credential_id == legacy.pk and other.account_id in (None, adopted.external_account_id)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_an_account_disconnect_waits_for_the_account_before_locking_its_credential_on_postgresql(monkeypatch) -> None:
+    if connection.vendor != "postgresql":
+        pytest.skip("PostgreSQL row locks")
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: None)
+    bridge, client = _bridge("disconnect-order")
+    connected = _connect(client, bridge.owner, "account-one")
+
+    def disconnect() -> bool:
+        with system_context(reason="test independent account disconnect"):
+            return Credential.objects.disconnect_account(bridge.owner, str(connected.account.sqid))
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with system_context(reason="test a connect holds the account"), transaction.atomic():
+            # An OAuth connect locks the account first (``ExternalAccountManager.link``).
+            ExternalAccount.objects.select_for_update().get(pk=connected.account.pk)
+            contender, pid = submit(pool, disconnect)
+            wait_for_lock(pid, contender)
+            # The connect then takes the credential: the disconnect holds none of it yet.
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL lock_timeout = '3s'")
+            Credential.objects.lock_with_served_integrations(connected.credential.pk)
+        assert contender.result(timeout=10) is True

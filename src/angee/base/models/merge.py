@@ -15,7 +15,11 @@ much as Django's ``on_delete`` decides what a delete does to such rows:
 
 A row that names a record in a form no reference reads (a resource ledger's
 public id), or work that retiring the record would cancel (an unfinished workflow
-run), is its addon's to refuse, through ``ANGEE_MERGE_GUARDS``.
+run), is its addon's to refuse, through ``ANGEE_MERGE_GUARDS``: each guard is
+called with every merged record and returns its refusal's reason, or ``None``. A
+merge refusal's reason reaches the person and any log or response that carries
+it, so it names the record by its public id or as "this record", never by its
+name or another field of personal data.
 
 A move re-keys the pointing column. Where the survivor already holds an equal
 row under the reference's identity (the pointing model's ``merge_identity``, an
@@ -55,7 +59,7 @@ from rebac.actors import is_sudo
 from angee.base.hooks import resolve_hooks
 from angee.base.managers import MergeableUnscopedManager
 from angee.base.models.base import AngeeModel
-from angee.base.models.identity import instances_from_public_ids
+from angee.base.models.identity import instances_from_public_ids, public_id_of
 from angee.base.models.merge_references import MergePolicy, Reference, named_in_relationships, references
 from angee.base.models.trash import TrashMixin
 from angee.base.permissions import instance_actor
@@ -294,7 +298,8 @@ class MergeableMixin(AngeeModel):
                         pointing = reference.rows(record)
                         if isinstance(survivor, reference.model) and pointing.filter(pk=survivor.pk).exists():
                             raise ValidationError(
-                                f"{survivor} refers to {record} through {reference.label}; change that first."
+                                f"The record that is kept refers to {public_id_of(record)} through {reference.label}; "
+                                "change that first."
                             )
                         if pointing.exists():
                             reference.move(pointing, survivor=survivor)
@@ -306,7 +311,7 @@ class MergeableMixin(AngeeModel):
         """Return the references a fold of this model re-points at the survivor.
 
         The one list the fold moves and the history contract checks
-        (``angee.E051``): every ``MOVE`` reference, unless the model keeps
+        (``angee.E053``): every ``MOVE`` reference, unless the model keeps
         references on the retired record (:attr:`merge_moves_references`).
         """
 
@@ -342,7 +347,9 @@ class MergeableMixin(AngeeModel):
             guards = resolve_hooks("ANGEE_MERGE_GUARDS")
             for record in merged:
                 if not retained and named_in_relationships(record):
-                    raise ValidationError(f"{record} is shared or named in access rules; remove that first.")
+                    raise ValidationError(
+                        f"This record ({public_id_of(record)}) is shared or named in access rules; remove that first."
+                    )
                 for guard in guards:
                     if refusal := guard(record):
                         raise ValidationError(refusal)
@@ -366,11 +373,13 @@ class MergeableMixin(AngeeModel):
         rows = type(merged)._base_manager.all()
         locked = merged.lock_for_delete(queryset=rows)
         if locked is None:
-            raise ValidationError(f"{merged} no longer exists.")
+            raise ValidationError(f"This record ({public_id_of(merged)}) no longer exists.")
         try:
             locked.with_actor(instance_actor(merged)).delete()
         except (ProtectedError, RestrictedError) as error:
-            raise ValidationError(f"{merged} is still referred to and cannot be removed.") from error
+            raise ValidationError(
+                f"This record ({public_id_of(merged)}) is still referred to and cannot be removed."
+            ) from error
 
 
 def reference_blockers(model: type[models.Model]) -> tuple[tuple[Q, str], ...]:

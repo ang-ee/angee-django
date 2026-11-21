@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     "angee.storage_integrate_google_drive",
     "angee.storage_integrate_iphone",
     "angee.parties",
+    "angee.parties_integrate_hubspot",
     "angee.money",
     "angee.scheduling",
     "angee.sequence",
@@ -73,6 +74,8 @@ INSTALLED_APPS = [
     "angee.spaces",
     "angee.work",
     "angee.intake",
+    "angee.webforms",
+    "angee.webforms_messaging",
     "angee.nexus",
     "angee.posts",
     "angee.platform",
@@ -89,6 +92,7 @@ INSTALLED_APPS = [
     "angee.messaging_integrate_imap",
     "angee.operator",
     "angee.parties_integrate_carddav",
+    "angee.calendar_integrate_google",
     "angee.calendar_integrate_ics",
     "angee.platform_integrate_operator",
     "angee.resources.testing",
@@ -104,6 +108,7 @@ INSTALLED_APPS = [
     "tests.hierdemo",
     "tests.recordrefdemo",
     "tests.checklistdemo",
+    "tests.webformsdemo",
     "tests",
 ]
 # Checkout-local and stable, so `--reuse-db` keeps it between runs; pytest-django

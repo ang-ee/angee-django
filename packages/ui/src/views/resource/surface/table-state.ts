@@ -5,6 +5,7 @@ import { functionalUpdate, type ColumnDef, type OnChangeFn, type PaginationState
 import { filterForResourceTextSearch, queryForColumns } from "../resource-query";
 import { errorFromUnknown } from "../../../data/errors";
 import type { ResourceViewContextValue } from "../resource-view-context";
+import { useArchiveScopeFilter } from "./archive-scope";
 import { Filter, type ResourceListOrder, type ResourceViewGroup } from "../resource-view-model";
 import { buildColumns, withQueryOnlyColumnsHidden } from "../resource-view-list-body";
 import type { ColumnDescriptor } from "../../page";
@@ -156,13 +157,14 @@ export function useResourceViewQueryFacts<TRow extends Row>({
     () => requestedFieldPaths(columns, fields, modelMetadata, laneSource, groupStack),
     [columns, fields, laneSource, modelMetadata, groupStack],
   );
-  const mergedFilter = React.useMemo(
+  const unscopedFilter = React.useMemo(
     () => filterForResourceTextSearch(
       modelMetadata,
       Filter.combineOptional(filter, Filter.combineOptional(resourceView.baseFilter, resourceView.state.filter)),
     ),
     [filter, resourceView.state.filter, resourceView.baseFilter, modelMetadata],
   );
+  const mergedFilter = useArchiveScopeFilter(modelMetadata?.resource, unscopedFilter);
   const sortOrder = React.useMemo(
     () => {
       const sorting = resourceView.state.sorting;

@@ -153,10 +153,12 @@ class AngeeSchema(strawberry.Schema):
                 classify_error(error.original_error).expected
                 or (error.extensions or {}).get("code") in _EXPECTED_ERROR_CODES
             )
-            if error.path is None and isinstance(error.original_error, GraphQLError):
-                # graphql-core's request coercion errors echo submitted values.
+            if error.path is None and (error.original_error is None or isinstance(error.original_error, GraphQLError)):
+                # graphql-core's document validation and request coercion errors
+                # can echo submitted values, including inline literals.
                 # Preserve them for the client without passing them to logging.
-                error.extensions = {"code": (error.extensions or {}).get("code", "BAD_USER_INPUT")}
+                if isinstance(error.original_error, GraphQLError):
+                    error.extensions = {"code": (error.extensions or {}).get("code", "BAD_USER_INPUT")}
                 continue
             self._apply_rebac_code(error)
             self._apply_validation_error(error)

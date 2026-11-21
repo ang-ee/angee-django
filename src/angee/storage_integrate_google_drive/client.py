@@ -2,24 +2,22 @@
 
 The one owner of the Drive wire protocol for this addon: the Mount backend walks
 and reads through it, and the reference storage backend serves bytes through it.
-Requests go through ``angee.integrate.http.HttpClient`` (SSRF-pinned) with the
-credential's bearer token, freshened by ``Credential.ensure_fresh`` before each
-request. No Google client library is involved.
+Requests go through the one Google REST transport
+(``angee.integrate_google.api.GoogleApi``: integrate's SSRF-pinned HTTP owner, the
+credential's authorization, one renew of a rejected token, Google's error
+envelope). No Google client library is involved.
 
 Refusals keep their reach. One file's refusal (not found, not downloadable, a
 broken download) is an ``OSError`` (:class:`DriveFileError`,
 ``FileNotFoundError``), which a sync counts against that file and moves past.
-An account-wide refusal is a :class:`GoogleDriveError`: a rate limit or an
-outage is transient (with Google's ``Retry-After`` when sent); a token Google no
-longer accepts is renewed once through ``Credential.refresh_now`` and otherwise
-asks for a reconnect, as does a token without Drive access.
+An account-wide refusal is a :class:`GoogleDriveError`, as the transport names it
+(``GoogleApi.account_error``).
 """
 
 from __future__ import annotations
 
 import contextlib
 import io
-import json
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -28,8 +26,8 @@ from urllib.parse import quote, urlencode
 
 import httpx2
 
-from angee.integrate.errors import IntegrationError
-from angee.integrate.http import HttpClient, ResponseTooLargeError, retry_after
+from angee.integrate.http import HttpRefusal
+from angee.integrate_google.api import GoogleApi, GoogleApiError, bounded_body, error_reason
 
 DRIVE_API = "https://www.googleapis.com/drive/v3"
 FOLDER_MIME = "application/vnd.google-apps.folder"
@@ -43,18 +41,18 @@ _FILE_FIELDS = (
 )
 _LIST_FIELDS = f"nextPageToken,files({_FILE_FIELDS})"
 _PAGE_SIZE = 1000
-_JSON_MAX_BYTES = 8 * 1024 * 1024
 _MEDIA_CHUNK_BYTES = 256 * 1024
-_ERROR_BODY_MAX_BYTES = 16 * 1024
-_RATE_LIMIT_REASONS = frozenset({"rateLimitExceeded", "userRateLimitExceeded"})
-_SCOPE_REFUSALS = frozenset({"insufficientPermissions"})
-_FILE_REFUSALS = frozenset(
-    {"cannotDownloadFile", "cannotDownloadAbusiveFile", "downloadQuotaExceeded", "insufficientFilePermissions"}
-)
+_FILE_REASONS = {
+    "cannotDownloadFile": "Google Drive does not allow downloading this file.",
+    "cannotDownloadAbusiveFile": "Google Drive flagged this file as abusive and does not allow downloading it.",
+    "downloadQuotaExceeded": "Google Drive has exhausted this file's download quota.",
+    "insufficientFilePermissions": "This Google account may not read this file.",
+}
+"""The reasons that refuse one file, each in this addon's words; any other file refusal names only its status."""
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
-class GoogleDriveError(IntegrationError):
+class GoogleDriveError(GoogleApiError):
     """An account-wide Google Drive refusal whose message is safe to show an operator."""
 
 
@@ -114,15 +112,13 @@ class GoogleDriveClient:
     """One Google account's Drive, read with its OAuth credential.
 
     Which credential may read whose source is the Mount owner's admission
-    (``MountManager.connectable_credentials``); the client only reads with it.
+    (``Mount.reads_with``, ``Integration.connectable_credentials``); the client only reads with it.
     """
 
     def __init__(self, credential: Any) -> None:
-        """Bind the credential every request authenticates with."""
+        """Bind the credential every request authenticates with, through the Google transport."""
 
-        self.credential = credential
-        self.http = HttpClient()
-        self._refreshed = False
+        self.api = GoogleApi(credential, service="Google Drive", grant="Drive", error=GoogleDriveError)
 
     def get(self, file_id: str) -> DriveItem:
         """Return one file or folder, in My Drive or a shared drive; ``FileNotFoundError`` when absent."""
@@ -188,12 +184,9 @@ class GoogleDriveClient:
         """Open ``files.get?alt=media`` inside ``stack`` and return its byte chunks."""
 
         url = f"{DRIVE_API}/files/{quote(file_id, safe='')}?{urlencode({'alt': 'media', 'supportsAllDrives': 'true'})}"
-        response = stack.enter_context(self.http.stream("GET", url, headers=self._headers()))
-        if response.status_code == 401 and self._renew():
-            stack.close()
-            response = stack.enter_context(self.http.stream("GET", url, headers=self._headers()))
+        response = self.api.stream(url, stack)
         if not response.is_success:
-            self._raise_for_status(response, _bounded_body(response), per_file=True)
+            self._raise_for_status(response, bounded_body(response), per_file=True)
         return response.iter_bytes(chunk_size=_MEDIA_CHUNK_BYTES)
 
     def _pages(self, path: str, params: Mapping[str, str], items_key: str) -> Iterator[Mapping[str, Any]]:
@@ -208,82 +201,30 @@ class GoogleDriveClient:
                 return
 
     def _get_json(self, path: str, params: Mapping[str, str]) -> dict[str, Any]:
-        """GET one Drive JSON resource, renewing a rejected token once."""
+        """GET one Drive JSON resource through the Google transport."""
 
-        url = f"{DRIVE_API}/{path}?{urlencode(params)}"
-        response = self._request_json(url)
-        if response.status_code == 401 and self._renew():
-            response = self._request_json(url)
+        response = self.api.send("GET", f"{DRIVE_API}/{path}?{urlencode(params)}")
         self._raise_for_status(response, response.content, per_file=path.startswith("files/"))
-        try:
-            data = response.json()
-        except ValueError as error:
-            raise GoogleDriveError("Google Drive returned an unreadable response.", transient=True) from error
-        if not isinstance(data, dict):
-            raise GoogleDriveError("Google Drive returned an unreadable response.", transient=True)
-        return data
+        return self.api.json(response)
 
-    def _request_json(self, url: str) -> httpx2.Response:
-        """Send one JSON GET; a transport failure or an oversized answer is a transient Drive refusal."""
-
-        try:
-            return self.http.request("GET", url, headers=self._headers(), max_bytes=_JSON_MAX_BYTES)
-        except httpx2.TransportError as error:
-            raise GoogleDriveError("Google Drive could not be reached.", transient=True) from error
-        except ResponseTooLargeError as error:
-            raise GoogleDriveError("Google Drive returned an oversized response.", transient=True) from error
-
-    def _headers(self) -> dict[str, str]:
-        """Return a fresh bearer header for the next request."""
-
-        self.credential.ensure_fresh()
-        return {**self.credential.auth_headers(), "Accept": "application/json"}
-
-    def _renew(self) -> bool:
-        """Renew a token Google rejected, once, through the credential owner; whether a retry may help."""
-
-        if self._refreshed or not self.credential.refreshable:
-            return False
-        self._refreshed = True
-        try:
-            self.credential.refresh_now()
-        except ValueError:
-            return False
-        except IntegrationError as error:
-            if error.transient:
-                raise
-            return False
-        return True
-
-    @staticmethod
-    def _raise_for_status(response: httpx2.Response, body: bytes, *, per_file: bool) -> None:
+    def _raise_for_status(self, response: httpx2.Response, body: bytes, *, per_file: bool) -> None:
         """Map a Drive refusal onto the error of its reach.
 
         ``per_file`` marks a request about one file, whose refusals other than
-        the account-wide ones are that file's.
+        the account-wide ones (``GoogleApi.account_error``) are that file's.
         """
 
-        status = response.status_code
-        if response.is_success:
-            return
-        if status == 404:
-            raise FileNotFoundError("Google Drive item not found.")
-        reason = _error_reason(body)
-        if status == 429 or (status == 403 and reason in _RATE_LIMIT_REASONS):
-            raise GoogleDriveError(
-                "Google Drive is rate limiting this account; try the sync again later.",
-                transient=True,
-                retry_after=retry_after(response),
-            )
-        if status == 401:
-            raise GoogleDriveError("Google Drive no longer accepts this account; reconnect the Google account.")
-        if status == 403 and reason in _SCOPE_REFUSALS:
-            raise GoogleDriveError("This Google account has not granted Drive access; reconnect it with Drive access.")
-        if status >= 500:
-            raise GoogleDriveError("Google Drive is temporarily unavailable.", transient=True)
-        if status == 416 or reason in _FILE_REFUSALS or per_file:
-            raise DriveFileError(f"Google Drive refused this file ({reason or status}).")
-        raise GoogleDriveError("Google Drive refused the request.")
+        def own(refusal: HttpRefusal) -> Exception | None:
+            if refusal.status == 404:
+                return FileNotFoundError("Google Drive item not found.")
+            reason = error_reason(refusal.body)
+            if refusal.status == 416 or reason in _FILE_REASONS or per_file:
+                return DriveFileError(
+                    _FILE_REASONS.get(reason, f"Google Drive refused this file (HTTP {refusal.status}).")
+                )
+            return None
+
+        self.api.raise_for_status(response, body, own=own)
 
 
 class _MediaStream(io.RawIOBase):
@@ -359,26 +300,3 @@ def _query_literal(value: str) -> str:
     """Escape a value for a single-quoted Drive query string."""
 
     return value.replace("\\", "\\\\").replace("'", "\\'")
-
-
-def _error_reason(body: bytes) -> str:
-    """Return Drive's error reason (``rateLimitExceeded``, ...) from a refusal body, or ``""``."""
-
-    try:
-        error = json.loads(body).get("error") or {}
-        errors = error.get("errors") or ()
-        return str(errors[0].get("reason") or "") if errors else str(error.get("status") or "")
-    except (ValueError, AttributeError, IndexError, TypeError):
-        return ""
-
-
-def _bounded_body(response: httpx2.Response) -> bytes:
-    """Read at most :data:`_ERROR_BODY_MAX_BYTES` of a streamed refusal, enough for its reason."""
-
-    body = b""
-    for chunk in response.iter_bytes(chunk_size=_ERROR_BODY_MAX_BYTES):
-        body += chunk
-        if len(body) >= _ERROR_BODY_MAX_BYTES:
-            break
-    return body[:_ERROR_BODY_MAX_BYTES]
-

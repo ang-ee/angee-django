@@ -3,6 +3,10 @@
 import { renderHook } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 
+const mutations = vi.hoisted(() => ({
+  snooze: vi.fn(async () => ({ ok: true, message: "Snoozed." })),
+}));
+
 vi.mock("@angee/projects", () => ({
   TASK_MODEL: "projects.Task",
 }));
@@ -16,7 +20,7 @@ vi.mock("@angee/ui", () => ({
   ) => options.find((option) => option.value === value)?.value,
   defineRowAction: (declaration: unknown) => declaration,
   relationValueId: () => null,
-  useActionOutcomeMutation: () => [vi.fn()],
+  useActionOutcomeMutation: (field: string) => [field === "snooze_task" ? mutations.snooze : vi.fn()],
   useAuthoredResourceMutation: () => [vi.fn()],
   useRecordChromeContext: () => ({ record: null, recordId: "" }),
   useRecordChromeActionMutation: () => [vi.fn(), { fetching: false }],
@@ -59,6 +63,24 @@ describe("triage action relation scopes", () => {
         { field: "status", operator: "ne", value: "DROPPED" },
       ],
     });
+  });
+});
+
+describe("triage action submissions", () => {
+  test("snooze hands the action form's quiet options to its mutation, so a transport failure is reported once", async () => {
+    const { result } = renderHook(() => useTriageActions("que_eng"));
+    const snooze = result.current.find((action) => action.id === "work-snooze-task");
+
+    const outcome = await snooze?.submit?.(
+      { until: "2026-11-20T09:00:00+00:00" },
+      { record: { id: "tsk_1" }, selectedIds: ["tsk_1"] },
+      { errorNotification: false },
+    );
+
+    expect(mutations.snooze).toHaveBeenCalledExactlyOnceWith(
+      "tsk_1", { until: "2026-11-20T09:00:00+00:00" }, { errorNotification: false },
+    );
+    expect(outcome).toEqual({ ok: true, message: "Snoozed." });
   });
 });
 

@@ -27,7 +27,7 @@ const resources = forms.map(({ resource }) => testDataResource(resource, {
   fields: [
     "id", "display_name", "legal_name", "domain", "notes", "external_reference",
     "given_name", "family_name", "additional_name", "nickname", "name_prefix",
-    "name_suffix", "birthday", "anniversary",
+    "name_suffix", "birthday", "anniversary", "occupation", "languages",
   ].map((name) => ({
     name, kind: "scalar" as const, scalar: "String", readable: true,
     filterable: false, sortable: false, aggregatable: false, groupable: false,
@@ -72,14 +72,15 @@ describe("organization form extensions", () => {
   test.each(forms)("offers contact actions for saved $resource records", async ({ resource, Component }) => {
     await renderPartyForm(<Component resource={resource} id="party-1" />);
     await screen.findByDisplayValue("Saved party");
-    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
-    expect(await screen.findByRole("menuitem", { name: "Add email" })).toBeTruthy();
-    expect(screen.getByRole("menuitem", { name: "Add phone" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add email" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add phone" })).toBeTruthy();
   });
 
   test.each(forms)("hides contact actions while creating $resource records", async ({ resource, Component }) => {
     await renderPartyForm(<Component resource={resource} id={null} />);
     expect(screen.getByRole("button", { name: "Create" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add email" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add phone" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
   });
 
@@ -88,8 +89,11 @@ describe("organization form extensions", () => {
     expect(await screen.findByRole("heading", { name: "Saved party" })).toBeTruthy();
     expect(screen.queryByRole("textbox")).toBeNull();
     // FormView's read-only contract locks fields and generated CRUD; declared actions remain.
-    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
-    expect(await screen.findByRole("menuitem", { name: "Add email" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add email" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add phone" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Save|Delete/ })).toBeNull();
+    const actions = screen.queryByRole("button", { name: "Actions" });
+    if (actions) fireEvent.click(actions);
     expect(screen.queryByRole("menuitem", { name: /delete/i })).toBeNull();
   });
 

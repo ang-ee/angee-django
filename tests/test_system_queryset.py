@@ -17,8 +17,9 @@ from rebac.managers import TrackedQuerySet
 from angee.base.managers import AngeeManager, AngeeUnscopedManager
 from angee.base.models.base import AngeeModel
 from angee.base.permissions import reader_queryset, relation_read_queryset, require_rebac_queryset
-from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet
+from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet, row_lock_paths, row_lock_queryset
 from tests.conftest import Drive, File, Integration
+from tests.mtidemo.models import MtiChild
 from tests.tables import model_tables
 
 POSTGRESQL_ONLY = pytest.mark.skipif(
@@ -204,6 +205,25 @@ def test_unscoped_locks_keep_native_base_manager_visibility(system_query_tables:
 
     assert isinstance(GuardedSystemQueryThing._base_manager.all(), TrackedQuerySet)
     assert list(GuardedSystemQueryThing.system_queryset()) == [selected]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_row_lock_finds_a_row_the_default_manager_hides_and_locks_its_parent_tables(
+    system_query_tables: None,
+) -> None:
+    """``row_lock_queryset`` is the one base-manager row lock: the row and its MTI tables, in either mode."""
+
+    excluded = GuardedSystemQueryThing._base_manager.create(name="excluded", selected=False)
+    with transaction.atomic():
+        assert row_lock_queryset(GuardedSystemQueryThing).get(pk=excluded.pk) == excluded
+        assert not row_lock_queryset(GuardedSystemQueryThing).filter(pk=excluded.pk + 1).exists()
+
+    for no_key in (False, True):
+        query = row_lock_queryset(MtiChild, no_key=no_key).query
+        assert (query.select_for_update, query.select_for_no_key_update, query.select_for_update_of) == (
+            True, no_key, row_lock_paths(MtiChild)
+        )
+    assert len(row_lock_paths(MtiChild)) == 2
 
 
 @pytest.mark.django_db(transaction=True)

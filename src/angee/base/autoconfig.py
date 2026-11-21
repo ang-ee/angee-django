@@ -23,6 +23,7 @@ _Settings = TypedDict(
         "MEDIA_URL": str,
         "ANGEE_REBAC_FORCE_OVERWRITE": bool,
         "ANGEE_MERGE_GUARDS": list[str],
+        "ANGEE_IMPL_KEY_REMEDIES": dict[str, dict[str, str]],
         "REBAC_LOCAL_BACKEND_STORAGE": str,
         "REBAC_STRICT_MODE": bool,
         "REBAC_LINT_BARE_PREFETCH": bool,
@@ -44,8 +45,14 @@ SETTINGS: _Settings = {
     "STATIC_URL": "/static/",
     "MEDIA_URL": "/media/",
     "ANGEE_REBAC_FORCE_OVERWRITE": False,
-    # Additive guards refuse removal before one record is folded into another.
+    # Additive guards refuse removal before one record is folded into another; a guard's
+    # reason names the record by public id, never by name (``angee.base.models.merge``).
     "ANGEE_MERGE_GUARDS": [],
+    # What an operator does about stored rows whose implementation key nothing
+    # registers (`angee.E052`), by registry setting and key. The addon that
+    # stopped providing a key adds its line with a yamlconf dotted key, e.g.
+    # ``"ANGEE_IMPL_KEY_REMEDIES.<REGISTRY_SETTING>.<key>"``.
+    "ANGEE_IMPL_KEY_REMEDIES": {},
     "REBAC_LOCAL_BACKEND_STORAGE": "registry",
     "REBAC_STRICT_MODE": True,
     "REBAC_LINT_BARE_PREFETCH": False,

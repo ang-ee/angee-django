@@ -41,6 +41,14 @@ export interface FieldDescriptor extends FieldPresentation {
   nullable?: boolean;
   /** Treat required as JSON property presence; emitted only by structured FormSpec. */
   presenceRequired?: boolean;
+  /**
+   * The value may be left "Not set": the member is then absent from the saved object. Emitted only
+   * by structured FormSpec. A field of its own holds "Not set" as `undefined`, which React Hook Form
+   * replaces by the form's default whenever the field registers again (an undo or redo replay, a
+   * pane that unmounts). Before such a member is shown as its own field in a pane that unmounts, or
+   * undo is bound in a record form, it must bind through its parent object's single registration,
+   * as the structured editor does (see `useFormHistory` and its expected-failure tests).
+   */
   omittable?: boolean;
   hasDefault?: boolean;
   minimum?: number;
@@ -57,21 +65,29 @@ export interface FieldDescriptor extends FieldPresentation {
   editOnly?: boolean;
   /** Create-form seed for this field, submitted even when `readOnly`/`createOnly` (see `FieldProps.defaultValue`). */
   defaultValue?: unknown;
-  /** Render and submit this field only when the predicate matches form values (see `FieldProps`). */
+  /** Render and submit this field only when the predicate matches form values, save what a changed preset writes for it (see `prefill`). */
   showWhen?: (values: Row) => boolean;
   /** Keep this field in form values and mutation data without rendering a control. */
   hidden?: boolean;
-  /** Resolve implementation-dependent presentation from current form values. */
+  /** Resolve implementation-dependent presentation from current form values; the field keeps its declared `name`. */
   resolve?: (values: Row) => FieldDescriptor;
   /**
-   * Load the chosen preset onto sibling fields when this field changes (see `FieldProps.prefill`).
-   * It reads the new value and the form's current values (this field's scope in a nested form),
-   * for a preset derived from siblings (whole days from the bounds an all-day toggle finds).
+   * The preset this field loads onto sibling fields when it changes, from its value, the form's
+   * current values and the values the form was loaded with (this field's scope in a nested form),
+   * so a preset may derive from siblings or give a sibling its loaded value back; in a record form
+   * the targets it hides are dropped from the draft.
+   * On save, each preset field whose value changed writes its preset's value for every target that
+   * is hidden now and was loaded with a different value, in declaration order (the later wins).
+   * `prefill` therefore also runs at save and must be pure.
    */
-  prefill?: (value: unknown, values: Row) => Record<string, unknown> | null | undefined;
+  prefill?: (value: unknown, values: Row, loaded?: Row) => Record<string, unknown> | null | undefined;
   /** Keep dirty sibling values when applying a preset, except for names explicitly replaced below. */
   prefillPreserveDirty?: boolean;
-  /** Fields a preset must replace even when they are dirty (for example private implementation config). */
+  /**
+   * The preset fields `prefillPreserveDirty` still replaces when dirty (private implementation
+   * configuration, say), and the only ones it writes on save for a hidden target; without
+   * `prefillPreserveDirty` a preset replaces every field it names.
+   */
   prefillReplace?: readonly string[];
   /** Source field a `widget="slug"` field derives from on create (see `FieldProps.slugFrom`). */
   slugFrom?: string;

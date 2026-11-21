@@ -29,6 +29,13 @@ membership, run native lock authoring in its declared image/workspace environmen
 with that same flag, then retain the project lock. Verification must not silently
 change manifests or lockfiles.
 
+A change that adds or edits a web fragment's or a package's `package.json` carries
+this repository's own `pnpm-lock.yaml` change with it. A stack's lock is a
+different file and does not prove it: author the repository's lock in a clean
+clone of the repository, never in a stack slot, and confirm
+`pnpm install --frozen-lockfile --lockfile-only` accepts it there before
+handing the change over.
+
 Commands below using `python -m` invoke the selected environment's modules; this
 is a portable convention, not a claim that ordinary tool entrypoints are broken.
 The pnpm examples disable automatic dependency installation during scripts.
@@ -101,13 +108,15 @@ also covers [review waiters](../tests/test_workflows_review.py), their
 [locking races](../tests/test_agent_sessions_concurrency.py), plus
 [connection discovery races](../tests/test_integrate_discovery_concurrency.py),
 [cross-addon reply and inbound joins](../tests/test_framework_integration.py),
-[delivery contracts with their sweep, claim-fence and held-action races and webform submission
+[delivery contracts with their sweep, claim-fence and held-action
 races](../tests/test_composed_messaging.py), and the
 [comment reply workflow and scheduling races](../tests/test_composed_workflows.py). The selection
 also runs every remaining PostgreSQL-only contract: row locks, hierarchy, IAM,
 [OIDC disconnect admission under the user lock](../tests/test_oidc.py),
 knowledge, [pgvector test-database readiness](../tests/test_postgresql_extensions.py),
 messaging with its [channel owner](../tests/test_messaging_channel_concurrency.py) races,
+parties' [same-person pair](../tests/test_parties_same_as_concurrency.py) locks and
+[handle-key repair](../tests/test_parties_handle_keys_concurrency.py) races,
 [portfolio report](../tests/test_portfolio_concurrency.py) locks, proposals,
 sequences, spaces, storage with its
 [window-aligned download URLs and expiry](../tests/test_storage_access_campaign.py),
@@ -121,16 +130,24 @@ messaging inbox's [explorer](../tests/test_inbox_explorer.py),
 [part reads](../tests/test_inbox_part_reads.py), the composed member
 [person/projects planner budgets](../tests/test_composed_examples.py), and the composed
 [intake access decision](../tests/test_composed_intake.py). It also runs
-[task ordering](../tests/test_task_rank_allocation.py),
-[record tasks](../tests/test_projects_record_tasks.py), and
-[project access and projections](../tests/test_projects_access_projections.py).
+[task ordering](../tests/test_task_rank_allocation.py), whose rank allocation reads
+its tail through the saving connection. Authorization that rebac compiles per
+backend is proven on the backend that decides it in production, so the lane also
+runs, whole, the authorization contracts that hold on every backend; the files it
+covers are those the `uv-postgres` job's selection lists in
+[reusable checks](../.github/workflows/reusable-checks.yml).
 `test_connections.py`, `test_system_queryset.py`, `test_integrate_scheduler.py` and
 `test_transitions.py` contribute only their PostgreSQL test nodes because each also has
-SQLite-only tests;
+SQLite-only tests, and `test_parties_directory_backend.py` its lock nodes because its strict
+expected failure would read as a skip;
 the PostgreSQL branches in `test_extraction_models.py` and
 `test_knowledge_access_campaign.py`, the [resource ledger's](../tests/test_resource_ledger.py)
-concurrent upsert, and the composed profiles that carry PostgreSQL contracts also run by
-node. Every other listed file runs whole, which keeps the SQLite
+concurrent upsert, a form's submission, delivery and publication
+[races](../tests/test_webforms_concurrency.py), and the composed profiles that carry PostgreSQL contracts also run by
+node. The selection also runs the
+[move of webform channels to forms](../tests/test_webforms_messaging_upgrade.py), whose one migration writes rows
+and then alters the channel table, and the [race of two forms](../tests/test_webforms_messaging_concurrency.py)
+saved on one channel and slug. Every other listed file runs whole, which keeps the SQLite
 floor tests out of the PostgreSQL zero-skip gate. The six groups are assigned
 by pytest-split's `least_duration` algorithm over the
 [PostgreSQL timing map](../.test_durations_postgres); each runs with four xdist
@@ -230,6 +247,15 @@ Hosts installing provenance also register
 after the base plugin: it adds test attribution and loads every installed addon's
 install-tier statement principals (`provenance.Rule` and `Seed` rows and their
 grants) into the session baseline.
+
+A test that runs under both REBAC relationship storages switches with
+[`relationship_storage(mode)`](../src/angee/base/testing/fixtures.py), never by
+setting `REBAC_LOCAL_BACKEND_STORAGE` alone. The setting only names the table REBAC
+reads, and the session baseline's relationships (every install tier's grants, such
+as a rule source's write on the parties it states) stay in the storage the host
+configured, so a bare switch reads a table without them and refuses what the
+baseline grants. The helper copies them with `rebac migrate-storage`, selects the
+storage, and on exit restores the setting and removes what it added to that table.
 
 Declare a test-local model under Django's `isolate_apps` when the code under test
 accepts a registry. When its owner reads the installed registry (content types, the
@@ -425,6 +451,14 @@ when a separate suite exercises real provider integration; compose the existing
 of copying provider setup. These names share the same Vitest discovery and
 focused-file selection convention.
 
+Use `.zones.test.ts` (or `.tsx`) for a suite whose days or instants depend on the
+browser's zone. The [shared Vitest defaults](../packages/app/config/vitest.ts)
+run it in the runner's zone and again under `TZ=Asia/Tokyo` and
+`TZ=America/Los_Angeles`. Each pinned zone runs in forked processes, because a
+worker thread keeps its parent's zone. The package's ordinary `test` script
+runs all three, in CI as well; a focused file filter selects the suite in each.
+A suite that reads only explicit zones needs no pinning.
+
 Waiting queries (`findBy*`, `waitFor`) share one limit, set in the published
 [Vitest setup](../packages/app/config/vitest-setup.ts) to cover a runner's cold
 first render. Do not pass a per-test timeout for a slow render: split a wait that
@@ -443,6 +477,8 @@ measurements.
 | Design-system catalog and token-name drift | Stack root | `pnpm --config.verify-deps-before-run=false --filter @angee/storybook --fail-if-no-match run catalog:check` |
 | All composed fragment types | Stack root, after SDL/codegen | `pnpm --config.verify-deps-before-run=false --dir web run typecheck` |
 | All composed fragment tests, one package at a time since each Vitest run sizes its workers to the machine | Stack root, after SDL/codegen | `pnpm --config.verify-deps-before-run=false --fail-if-no-match -r --workspace-concurrency=1 --filter '!./workspaces/src/angee/packages/**' run test` |
+
+CI's stack job also runs each composed fragment's own `typecheck` script, which covers its test files; `pnpm -r` skips a package without the script, so the architecture guardrail requires every addon web fragment to declare one.
 
 After changing export annotations, story owners or token CSS, regenerate with
 `pnpm --config.verify-deps-before-run=false --filter @angee/storybook --fail-if-no-match run catalog:generate`
@@ -600,6 +636,14 @@ Both maps came from local macOS arm64 runs of these commands (SQLite with
 `-n 6`) on a loaded host, the PostgreSQL one against `pgvector/pgvector:pg17`
 (PostgreSQL 17.10) with `max_locks_per_transaction = 256`. Use them for relative
 balance and check actual CI wall times against the 60-minute limit.
+
+The [staging smoke](../.github/workflows/staging-smoke.yml) deploys a staging host on
+the runner's Docker the way a host does: `angee init -t staging` and `angee up` with
+the latest released CLI, with this commit's templates and framework slot and the
+messaging bridges as a public repository. It then waits for Django behind the SPA
+and signs the administrator in. It runs on pull requests that change the stack,
+project or workspace templates, the Django base image (which it then builds instead
+of pulling) or the root JS manifests, and on demand.
 
 Separate workflows enforce private-path exclusion and other repository policies.
 The [release workflow](../.github/workflows/release.yml) runs on pushes to `main`: it

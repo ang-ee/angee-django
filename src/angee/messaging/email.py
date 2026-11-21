@@ -28,7 +28,7 @@ from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import ConnectTimeout
 from urllib3.exceptions import MaxRetryError, NewConnectionError
 
-from angee.integrate.errors import IntegrationError
+from angee.integrate.errors import IntegrationError, is_transient_status
 from angee.messaging.backends import ChannelBackend, DeliveryOutcome, DeliveryUncertain, OutboundEmailNotConfigured
 
 logger = logging.getLogger(__name__)
@@ -148,7 +148,7 @@ class AnymailEmailChannelBackend(ChannelBackend):
                 raise IntegrationError("The email connection failed before sending.", transient=True) from error
             if error.status_code is not None and 400 <= error.status_code < 500:
                 raise IntegrationError(
-                    "The email provider refused delivery.", transient=error.status_code == 429,
+                    "The email provider refused delivery.", transient=is_transient_status(error.status_code),
                 ) from error
             # HTTP 5xx, timeouts and lost acknowledgements may follow acceptance.
             raise DeliveryUncertain("The email provider did not confirm delivery.") from error

@@ -19,6 +19,7 @@ dependencies = [
     "angee-appearance-integrate==3.0.0",
     "angee-base==3.0.0",
     "angee-calendar==3.0.0",
+    "angee-calendar-integrate-google==3.0.0",
     "angee-calendar-integrate-ics==3.0.0",
     "angee-checklists==3.0.0",
     "angee-dashboards==3.0.0",
@@ -46,6 +47,7 @@ dependencies = [
     "angee-operator==3.0.0",
     "angee-parties==3.0.0",
     "angee-parties-integrate-carddav==3.0.0",
+    "angee-parties-integrate-hubspot==3.0.0",
     "angee-platform==3.0.0",
     "angee-platform-integrate-operator==3.0.0",
     "angee-platform-integrate-vcs==3.0.0",
@@ -78,6 +80,8 @@ dependencies = [
     "angee-timeline==3.0.0",
     "angee-uom==3.0.0",
     "angee-web==3.0.0",
+    "angee-webforms==3.0.0",
+    "angee-webforms-messaging==3.0.0",
     "angee-work==3.0.0",
     "angee-workflows==3.0.0",
     "angee-workflows-agents==3.0.0",
@@ -95,7 +99,7 @@ postgres = ["psycopg[binary,pool]>=3.2"]
 dev = [
     "angee-base[testing]==3.0.0",
     "daphne>=4.0",
-    "django-zed-rebac[caveats]>=0.34.1,<0.35",
+    "django-zed-rebac[caveats]>=0.37.0,<0.38",
     "faker>=30.0",
     "hypothesis>=6.100",
     "import-linter>=2.1",
@@ -138,6 +142,7 @@ angee-appearance = {workspace = true}
 angee-appearance-integrate = {workspace = true}
 angee-base = {workspace = true}
 angee-calendar = {workspace = true}
+angee-calendar-integrate-google = {workspace = true}
 angee-calendar-integrate-ics = {workspace = true}
 angee-checklists = {workspace = true}
 angee-dashboards = {workspace = true}
@@ -165,6 +170,7 @@ angee-nexus = {workspace = true}
 angee-operator = {workspace = true}
 angee-parties = {workspace = true}
 angee-parties-integrate-carddav = {workspace = true}
+angee-parties-integrate-hubspot = {workspace = true}
 angee-platform = {workspace = true}
 angee-platform-integrate-operator = {workspace = true}
 angee-platform-integrate-vcs = {workspace = true}
@@ -197,6 +203,8 @@ angee-theme-warm-red = {workspace = true}
 angee-timeline = {workspace = true}
 angee-uom = {workspace = true}
 angee-web = {workspace = true}
+angee-webforms = {workspace = true}
+angee-webforms-messaging = {workspace = true}
 angee-work = {workspace = true}
 angee-workflows = {workspace = true}
 angee-workflows-agents = {workspace = true}
@@ -301,6 +309,23 @@ source_modules = ["angee.checklists"]
 forbidden_modules = [
   "angee.workflows", "angee.workflows_agents", "angee.workflows_extraction", "angee.workflows_integrate",
   "angee.workflows_messaging", "angee.workflows_parties", "angee.workflows_posts",
+]
+
+[[tool.importlinter.contracts]]
+name = "Web forms and messaging meet only in their bridge"
+type = "forbidden"
+source_modules = ["angee.messaging", "angee.intake"]
+forbidden_modules = ["angee.webforms", "angee.webforms_messaging"]
+
+[[tool.importlinter.contracts]]
+name = "Web forms do not import messaging, intake or the bridge"
+type = "forbidden"
+source_modules = ["angee.webforms"]
+forbidden_modules = ["angee.messaging", "angee.intake", "angee.webforms_messaging"]
+ignore_imports = [
+  # The bare test host has one concrete model per app label, so a donor that extends webforms.Form can be
+  # folded only into that module's Form; this one edge is the fold, and nothing wider is excused.
+  "angee.webforms.testing.models -> angee.webforms_messaging.models",
 ]
 
 [[tool.importlinter.contracts]]

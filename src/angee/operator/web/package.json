@@ -19,6 +19,7 @@
     "@angee/metadata": "workspace:*",
     "@angee/refine": "workspace:*",
     "@angee/ui": "workspace:*",
+    "graphql": "^16.14.0",
     "graphql-ws": "^5.16.2",
     "lucide-react": "^1.21.0"
   },
@@ -37,7 +38,6 @@
     "@testing-library/react": "^16.1.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "graphql": "^16.14.0",
     "happy-dom": "^20.10.6",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",

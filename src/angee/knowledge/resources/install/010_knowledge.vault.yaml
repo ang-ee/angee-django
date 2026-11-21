@@ -1,0 +1,8 @@
+_meta:
+  model: knowledge.Vault
+rows:
+  - xref: vault_people
+    fields:
+      name: People
+      description: A folder page per person, with the pages about them. Whoever reads this vault reads every person's pages.
+      icon: users

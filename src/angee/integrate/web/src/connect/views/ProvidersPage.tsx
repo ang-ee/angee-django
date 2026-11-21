@@ -130,12 +130,14 @@ export function ProvidersPage(): React.ReactElement {
         </Group>
         <Action
           id="discover"
+          placement="menu"
           label={t("providers.action.discover")}
           run={discover}
           visibleWhen={(record) => fieldString(record.discovery_url) !== ""}
         />
         <Action
           id="connect"
+          primary
           label={t("providers.action.connect")}
           run={connect}
           visibleWhen={canConnectAccount}

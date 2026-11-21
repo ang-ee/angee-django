@@ -94,12 +94,13 @@ test("composer posts one atomic note command, then refetches", async () => {
   });
   expect(source.createComposer).toMatchObject({ bodyArg: "body", prompt: "Add note" });
   expect(source.createAction).toBeDefined();
-  await source.createAction?.submit({ body: "New first line\nMore detail" }, { record: null, selectedIds: [] });
+  await source.createAction?.submit({ body: "New first line\nMore detail" }, { record: null, selectedIds: [] },
+    { errorNotification: false });
   source.onCreated?.();
   expect(sdk.createNote).toHaveBeenCalledExactlyOnceWith({
     model_label: target.modelLabel, record_id: target.recordId, vault: "vlt_1", role: "notes",
     body: "New first line\nMore detail", idempotency_key: expect.any(String),
-  });
+  }, { errorNotification: false });
   expect(sdk.refetch).toHaveBeenCalledOnce();
 });
 

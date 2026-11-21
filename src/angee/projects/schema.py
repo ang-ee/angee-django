@@ -61,8 +61,8 @@ Folder = apps.get_model("storage", "Folder")
 Party = apps.get_model("parties", "Party")
 User = get_user_model()
 
-_PROJECT_PERMISSIONS = ("write", "share", "delete")
-_TASK_PERMISSIONS = (*_PROJECT_PERMISSIONS, "narrow", "widen", "comment")
+_PROJECT_PERMISSIONS = ("write", "share", "delete", "transfer")
+_TASK_PERMISSIONS = ("write", "share", "delete", "narrow", "widen", "comment")
 strawberry.enum(ProjectSetupState)
 
 _PROJECT_EXTENSION_FILTER_FIELDS = declared_hasura_resource_fields(

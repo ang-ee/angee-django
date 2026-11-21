@@ -50,10 +50,11 @@ PARTY_PRIVATE: dict[str, Any] = {
 }
 PERSON_PRIVATE: dict[str, Any] = {
     **PARTY_PRIVATE,
-    "nickname": "Private nickname",
     "birthday": date(1990, 2, 3),
     "anniversary": date(2020, 4, 5),
 }
+NICKNAME = "Addie"
+"""A person's nickname is identity: whoever reads the person reads it, as the name parts."""
 PARTY_SELECTION = "id display_name notes first_met_note handle_count"
 PERSON_SELECTION = f"{PARTY_SELECTION} nickname birthday anniversary"
 
@@ -141,6 +142,7 @@ def followers(follower_schema: None) -> SimpleNamespace:
             user=account,
             created_by=owner,
             updated_by=owner,
+            nickname=NICKNAME,
             **PERSON_PRIVATE,
         )
         accountless = Person.objects.create(display_name="Accountless follower", created_by=owner, **PERSON_PRIVATE)
@@ -245,7 +247,11 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
                     counts.append(len(captured))
                     # 0.31 compiles the scope inline (Tie 4, read 26, read_private 3 -> 2): the revision
                     # witness and the one row SELECT; memberships and arrow sources are its predicates.
-                    assert len(captured) == 2, captured.captured_queries
+                    # 0.35 (2 -> 3): the evaluator scope opened around this read reads the reader's
+                    # grant profile once. It returns the stored relation kinds that name the reader,
+                    # never resource ids, and its size does not grow with the page.
+                    assert len(captured) == 3, captured.captured_queries
+                    assert sum("rebac_profile" in query["sql"] for query in captured.captured_queries) == 1
                     assert (
                         sum(
                             statement_startswith(query["sql"], f'SELECT "{model._meta.db_table}".')
@@ -294,7 +300,7 @@ def test_parties_and_people_roots_redact_private_fields_but_preserve_owner_value
         data = result_data(execute_schema(identity_graphql, query, {"id": f.person.sqid}, user=actor))
         for root, fields in (
             ("parties", ("notes", "first_met_note", "handle_count")),
-            ("people", ("notes", "first_met_note", "handle_count", "nickname", "birthday", "anniversary")),
+            ("people", ("notes", "first_met_note", "handle_count", "birthday", "anniversary")),
         ):
             assert len(data[root]) == 1
             row = data[root][0]
@@ -307,6 +313,7 @@ def test_parties_and_people_roots_redact_private_fields_but_preserve_owner_value
                 for name in fields
             }
             assert {name: row[name] for name in fields} == (dict.fromkeys(fields) if actor == f.reader else expected)
+        assert data["people"][0]["nickname"] == NICKNAME
         assert data["parties"][0]["created_by"] is not None
         assert data["parties"][0]["updated_by"] is not None
         assert data["parties"][0]["created_by_label"] == f.owner.username
@@ -429,7 +436,7 @@ def test_graphql_refuses_private_filter_sort_and_group_operations(identity_graph
 
     for root, fields in (
         ("parties", ("notes", "first_met_note", "handle_count")),
-        ("people", ("notes", "first_met_note", "handle_count", "nickname", "birthday", "anniversary")),
+        ("people", ("notes", "first_met_note", "handle_count", "birthday", "anniversary")),
     ):
         assert not validate(identity_graphql._schema, parse(f"{{ {root} {{ id display_name }} }}"))
         for field in fields:
@@ -612,7 +619,7 @@ def test_public_group_thread_exposes_follower_identity_only_to_signed_in_strange
             for row in data["people"]:
                 assert all(
                     row[name] is None
-                    for name in ("notes", "first_met_note", "handle_count", "nickname", "birthday", "anniversary")
+                    for name in ("notes", "first_met_note", "handle_count", "birthday", "anniversary")
                 )
         else:
             assert data["people"] == []

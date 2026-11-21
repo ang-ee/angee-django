@@ -2,11 +2,12 @@
 
 import { cleanup, renderHook } from "@testing-library/react";
 import type { DataResourceMetadata } from "@angee/metadata";
-import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
+import { testDataResource, testQueryAxis, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
 import type { AggregateBucket } from "@angee/refine";
 
 import { useDashboardWidgetData } from "./data";
+import { ResourceViewArchiveScopeContext } from "../views/resource/surface/archive-scope";
 import type { WidgetSpec } from "./headless";
 
 const state = vi.hoisted(() => ({
@@ -124,4 +125,61 @@ test("dashboard refresh declarations reach native query adapters through unrelat
   for (const adapter of [state.list, state.aggregateOptions, state.groupOptions]) {
     expect(adapter).toHaveBeenLastCalledWith(expect.objectContaining({ refetchInterval: false }));
   }
+});
+
+const archiveResource = testDataResource("example.Record", {
+  fields: [{ name: "is_archived", kind: "scalar", scalar: "Boolean", archivable: true,
+    readable: true, aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false }],
+  query: testResourceQuery({ fields: {
+    id: testQueryField("id"), name: testQueryField("name"),
+    is_archived: testQueryField("is_archived", { scalar: "Boolean",
+      filter: { field: "is_archived", scalar: "Boolean", operators: ["exact"], values: [] } }),
+  }, axes: { name: testQueryAxis("name", { server: { input: "NAME", key: "name" } }) } }),
+});
+
+test.each(["rows", "value", "series"] as const)("dashboard %s use the default archive scope", (shape) => {
+  state.resource = archiveResource;
+  const widget: WidgetSpec = { ...spec, data: { shape, source: {
+    resource: archiveResource.modelLabel, groups: shape === "series" ? [{ field: "name" }] : [],
+  } } };
+  const { result } = renderHook(() => useDashboardWidgetData(widget));
+  expect(result.current.error).toBeNull();
+  for (const adapter of [state.aggregateOptions, state.groupOptions]) {
+    expect(adapter).toHaveBeenLastCalledWith(expect.objectContaining({ where: { is_archived: { _eq: false } } }));
+  }
+  if (shape === "rows") expect(state.list).toHaveBeenLastCalledWith(expect.objectContaining({
+    scope: expect.objectContaining({ filter: { is_archived: { exact: false } } }),
+  }));
+});
+
+test.each(["source", "page"] as const)("a dashboard %s filter can request archived rows", (owner) => {
+  state.resource = archiveResource;
+  const filter = { NOT: { is_archived: { exact: false } } };
+  const widget: WidgetSpec = { ...spec, data: { shape: "rows", source: {
+    resource: archiveResource.modelLabel, filter: owner === "source" ? filter : undefined,
+  } } };
+  const { result } = renderHook(() => useDashboardWidgetData(widget, owner === "page"
+    ? { resource: archiveResource.modelLabel, filter } : undefined));
+  expect(result.current.error).toBeNull();
+  expect(state.list).toHaveBeenLastCalledWith(expect.objectContaining({ scope: expect.objectContaining({ filter }) }));
+  expect(state.aggregateOptions).toHaveBeenLastCalledWith(expect.objectContaining({
+    where: { _not: { is_archived: { _eq: false } } },
+  }));
+});
+
+test.each(["rows", "value", "series"] as const)("dashboard %s retains the saved-record collection exemption", (shape) => {
+  state.resource = archiveResource;
+  const widget: WidgetSpec = { ...spec, data: { shape, source: {
+    resource: archiveResource.modelLabel, groups: shape === "series" ? [{ field: "name" }] : [],
+  } } };
+  const { result } = renderHook(() => useDashboardWidgetData(widget), {
+    wrapper: ({ children }) => <ResourceViewArchiveScopeContext.Provider value={false}>{children}</ResourceViewArchiveScopeContext.Provider>,
+  });
+  expect(result.current.error).toBeNull();
+  for (const adapter of [state.aggregateOptions, state.groupOptions]) {
+    expect(adapter).toHaveBeenLastCalledWith(expect.objectContaining({ where: {} }));
+  }
+  if (shape === "rows") expect(state.list).toHaveBeenLastCalledWith(expect.objectContaining({
+    scope: expect.objectContaining({ filter: {} }),
+  }));
 });

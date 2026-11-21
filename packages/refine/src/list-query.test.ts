@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import { print } from "graphql";
 import { createAngeeHasuraDataProvider } from "./provider";
 import { groupRowsDocument, listQueryMeta } from "./list-query";
-import { extractGroupBy, groupByVariables } from "./operations";
+import { extractGroupBy, groupByVariables, type GroupByVariables } from "./operations";
 import { refineFieldsFromPaths } from "./selections";
 
 test("selects nested paths without losing relation identity or display leaves", () => {
@@ -89,3 +89,43 @@ test("a groups document carries each group's first page of the list's fields", (
   expect(result.buckets[0]?.rows).toEqual([{ id: "n1" }, { id: "n2" }]);
 });
 
+test("a groups read's variables reach a generated document by narrowing group_by alone", () => {
+  // A generated groups document's variables in miniature: the resource's own field enum on
+  // `group_by`, its own filter and having inputs, and the nullable, one-or-many members codegen emits.
+  type NoteGroupBySpec = { field: "STATUS" | "OWNER"; granularity?: "DAY" | "MONTH" | null };
+  type NoteGroupsVariables = {
+    group_by: NoteGroupBySpec[] | NoteGroupBySpec;
+    where?: { status?: { _eq?: string | null } | null; _and?: unknown[] | null } | null;
+    having?: { count_gt?: number | null } | null;
+    order_by?: { field: string; direction?: "ASC" | "DESC"; nulls?: "FIRST" | "LAST" | null }[] | null;
+    limit?: number | null;
+    offset?: number | null;
+    rows_limit: number;
+  };
+  const wire: GroupByVariables = groupByVariables({
+    dimensions: [{ input: "STATUS" }, { input: "CREATED_AT", granularity: "DAY" }],
+    where: { status: { _eq: "open" } },
+    having: { count_gt: 1 },
+    orderBy: [{ field: "status", direction: "ASC", nulls: "LAST" }],
+    page: 2,
+    pageSize: 10,
+  });
+  const variables: NoteGroupsVariables = { ...wire, group_by: wire.group_by as NoteGroupBySpec[], rows_limit: 3 };
+  // @ts-expect-error a groupable field is a string until the caller narrows it to the resource's enum
+  const unnarrowed: NoteGroupsVariables = { ...wire, rows_limit: 3 };
+  // @ts-expect-error the shape is closed: a misspelt member is not read as unknown
+  void wire.grup_by;
+  expect(unnarrowed.group_by).toBe(wire.group_by);
+  expect(variables).toEqual({
+    group_by: [{ field: "STATUS" }, { field: "CREATED_AT", granularity: "DAY" }],
+    where: { status: { _eq: "open" } },
+    having: { count_gt: 1 },
+    order_by: [{ field: "status", direction: "ASC", nulls: "LAST" }],
+    limit: 10,
+    offset: 10,
+    rows_limit: 3,
+  });
+  // The built object passes where variables are a plain record, as the request builder hands it on.
+  const plain: Record<string, unknown> = wire;
+  expect(plain).toBe(wire);
+});

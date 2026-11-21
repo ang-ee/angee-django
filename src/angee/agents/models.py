@@ -1554,9 +1554,10 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
             .filter(session__agent_id=models.OuterRef("pk"))
         )
 
-    def delete_blocker(self) -> str | None:
-        """Require teardown and stopped turns before deleting the agent and its sessions."""
+    def delete_blocker(self, *, cascaded: bool = False) -> str | None:
+        """Require teardown and stopped turns before deleting the agent and its sessions, wherever deletes start."""
 
+        del cascaded
         if self.deprovision_blocker() is None:
             return "Deprovision this agent before deleting it."
         active = self.__dict__.get("_has_active_turns", None)
@@ -2697,9 +2698,10 @@ class AgentTurn(AuditMixin, AngeeDataModel, concrete=True):
         model = type(self).session.field.related_model
         return (RecordRef.from_model(model, self.session_id),)
 
-    def delete_blocker(self) -> str | None:
-        """Refuse deletion of claimed work, including work parked on approval."""
+    def delete_blocker(self, *, cascaded: bool = False) -> str | None:
+        """Refuse deletion of claimed work, including work parked on approval, wherever the delete started."""
 
+        del cascaded
         return ACTIVE_TURN_DELETE_MESSAGE if self.status in ACTIVE_TURN_STATUSES else None
 
     @transition(

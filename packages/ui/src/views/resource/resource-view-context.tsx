@@ -17,7 +17,15 @@ import { validateResourceViewState } from "./model/state";
 import { normaliseGroupStack, normaliseSourceKeys } from "./model/search";
 import { normalisePageSize } from "./page-size";
 import { idsFromRowSelectionState } from "./resource-view-codecs";
-import type { ResourceCollectionPresentation } from "./resource-view-types";
+import type { ResourceCollectionPresentation, SelectionPlace } from "./resource-view-types";
+import {
+  EMPTY_SELECTION,
+  SelectionOwnerContext,
+  SelectionScopeContext,
+  useScopedSelection,
+  type SelectionOwner,
+  type SelectionRead,
+} from "./selection-channel";
 
 import {
   createResourceViewState,
@@ -67,41 +75,19 @@ function groupsForQuery(current: ResourceViewGroups, query: string, order: strin
   };
 }
 
-interface SelectionState {
+interface SelectionState extends SelectionRead {
   collection: string;
   scope: string;
-  rowSelection: RowSelectionState;
-  rows: Readonly<Record<string, Row>>;
 }
 
-type SelectionRead = Pick<SelectionState, "rowSelection" | "rows">;
-interface SelectionOwner {
-  read: (scope: string) => SelectionRead;
-  update: (scope: string, updater: Updater<RowSelectionState>, observed?: (id: string) => Row | undefined) => void;
-  enter: (scope: string) => void;
-}
-const EMPTY_SELECTION: SelectionRead = { rowSelection: {}, rows: {} };
-const SelectionOwnerContext = createContext<SelectionOwner | null>(null);
-/** The selection scope of the nearest inherited view; the owner's own collection is "". */
-const SelectionScopeContext = createContext("");
-
-/** One public selection projection for the owning collection and inherited scopes. */
+/** One public selection projection for the owning collection and inherited scopes; it narrows the writes' types. */
 function useSelectionValue(scope: string, owner: SelectionOwner) {
-  const { rowSelection, rows } = owner.read(scope);
+  const { rowSelection, rows, setRowSelection, toggleSelectedId } = useScopedSelection(scope, owner);
   const selectedRows = useMemo(() => [...idsFromRowSelectionState(rowSelection)]
     .flatMap((id) => {
       const row = rows[id];
       return row === undefined ? [] : [row];
     }), [rowSelection, rows]);
-  const setRowSelection = useCallback<ResourceViewContextValue["setRowSelection"]>(
-    (updater, observed) => owner.update(scope, updater, observed), [owner.update, scope],
-  );
-  const toggleSelectedId = useCallback<ResourceViewContextValue["toggleSelectedId"]>(
-    (id, selected, row) => setRowSelection((current) => ({
-      ...current, [id]: selected ?? !current[id],
-    }), row === undefined ? undefined : (selectedId) => selectedId === id ? row : undefined),
-    [setRowSelection],
-  );
   const clearSelectedIds = useCallback(() => setRowSelection({}), [setRowSelection]);
   const value = useMemo(() => ({ selectedRows, setRowSelection, toggleSelectedId, clearSelectedIds }),
     [selectedRows, setRowSelection, toggleSelectedId, clearSelectedIds]);
@@ -308,19 +294,16 @@ function ScopedResourceView({ ambient, baseFilter, children }: {
   const scopedBaseFilter = useMemo(() => Filter.combineOptional(ambient.baseFilter, baseFilter),
     [ambient.baseFilter, baseFilter]);
   const scopeKey = stableSerialize(scopedBaseFilter);
-  const { rowSelection, value: { selectedRows, setRowSelection, toggleSelectedId, clearSelectedIds } } = useSelectionValue(scopeKey, owner);
+  const { rowSelection, value: selection } = useSelectionValue(scopeKey, owner);
   useLayoutEffect(() => owner.enter(scopeKey), [owner.enter, scopeKey]);
   const state = ambient.state;
   const viewState = useMemo(() => ({ ...state, rowSelection }), [state, rowSelection]);
   const scoped = useMemo<ResourceViewContextValue>(() => ({
     ...ambient,
-    selectedRows,
-    setRowSelection,
-    toggleSelectedId,
-    clearSelectedIds,
+    ...selection,
     baseFilter: scopedBaseFilter,
     state: viewState,
-  }), [ambient, selectedRows, setRowSelection, toggleSelectedId, clearSelectedIds, scopedBaseFilter, viewState]);
+  }), [ambient, selection, scopedBaseFilter, viewState]);
   return (
     <SelectionScopeContext.Provider value={scopeKey}>
       <ResourceViewContext.Provider value={scoped}>{children(scoped)}</ResourceViewContext.Provider>
@@ -530,7 +513,7 @@ function useResourceViewContextValue({
     () => Filter.combineOptional(baseFilter, preset?.fixedFilter),
     [baseFilter, preset?.fixedFilter],
   );
-  const state = useMemo(() => {
+  const validated = useMemo(() => {
     try {
       resourceViewPreset(resourceViews, sourceState.preset, metadata?.resource.modelLabel ?? resource, presetIds);
       if (!metadata) return sourceState;
@@ -541,6 +524,13 @@ function useResourceViewContextValue({
       return { ...sourceState, queryError: error instanceof Error ? error : new Error("Invalid resource view.") };
     }
   }, [metadata, resource, sourceState, resourceViews, effectiveBaseFilter, presetIds]);
+  // Validation, and a route's decode of its search, build the query facts anew on every
+  // change to the view: a field shown or hidden, or a page, keeps those that did not
+  // change, which every surface's reads and group model are keyed on.
+  const filter = useValueStable(validated.filter);
+  const groupStack = useValueStable(validated.groupStack);
+  const sorting = useValueStable(validated.sorting);
+  const state = useMemo(() => ({ ...validated, filter, groupStack, sorting }), [validated, filter, groupStack, sorting]);
   const queryDirty = state.preset !== defaultState.preset
     || stableSerialize(state.filter) !== stableSerialize(defaultState.filter)
     || stableSerialize(state.sorting ?? []) !== stableSerialize(defaultState.sorting ?? [])
@@ -571,7 +561,7 @@ function useResourceViewContextValue({
 
   const collection = stableSerialize([groupQuery, groupOrder]);
   const [selection, setSelection] = useState<SelectionState>(() => ({
-    collection, scope: "", rowSelection: createResourceViewState(initialState).rowSelection, rows: {},
+    collection, scope: "", rowSelection: createResourceViewState(initialState).rowSelection, rows: {}, places: {}, allMatching: null,
   }));
   const activeSelection = selection.collection === collection ? selection : {
     collection, scope: "", ...EMPTY_SELECTION,
@@ -580,31 +570,58 @@ function useResourceViewContextValue({
   if (activeSelection !== selection) setSelection(activeSelection);
   const read = useCallback<SelectionOwner["read"]>((scope) =>
     activeSelection.scope === scope ? activeSelection : EMPTY_SELECTION, [activeSelection]);
-  const update = useCallback<SelectionOwner["update"]>((scope, updater, observed) => {
+  const update = useCallback<SelectionOwner["update"]>((scope, updater, observed, placed, shown) => {
     setSelection((current) => {
       const base = current.scope === scope ? current : EMPTY_SELECTION;
-      const rowSelection = functionalUpdate(updater, base.rowSelection);
+      // Under "Select all N" a write from a surface showing it starts from what that
+      // surface shows selected, its loaded rows: what the person sees selected is selected.
+      const from = shown && base.allMatching?.readKey === shown.readKey ? shown : undefined;
+      const rowSelection = functionalUpdate(updater, from
+        ? Object.fromEntries(from.ids.map((id) => [id, true])) : base.rowSelection);
       // Object key order is part of the selectedRows contract.
       const ids = Object.keys(rowSelection);
       const previousIds = Object.keys(base.rowSelection);
+      // A write that changes no id still leaves "Select all N".
       if (ids.length === previousIds.length && ids.every((id, index) =>
-        id === previousIds[index] && rowSelection[id] === base.rowSelection[id])) return current;
+        id === previousIds[index] && rowSelection[id] === base.rowSelection[id])) {
+        return base === current && current.allMatching ? { ...current, allMatching: null } : current;
+      }
       const selectedIds = idsFromRowSelectionState(rowSelection);
       // Empty writes neither change an empty selection nor displace another scope.
       if (selectedIds.size === 0 && (current.scope !== scope
         || !previousIds.some((id) => base.rowSelection[id]))) return current;
       const rows: Record<string, Row> = {};
+      const places: Record<string, SelectionPlace> = {};
       for (const id of selectedIds) {
-        const row = base.rowSelection[id] ? base.rows[id] : observed?.(id);
+        const kept = Boolean(base.rowSelection[id]);
+        const row = kept ? base.rows[id] : observed?.(id) ?? from?.observed(id);
         if (row !== undefined) rows[id] = row;
+        // A write that places a row recaptures it, already selected or not (a ticked group
+        // header), as does one starting from where the surface shows its rows.
+        const place = placed?.(id) ?? from?.placed?.(id) ?? (kept ? base.places[id] : undefined);
+        if (place !== undefined) places[id] = place;
       }
-      return { ...current, scope, rowSelection, rows };
+      // Selecting, unselecting or clearing returns to the selected ids.
+      return { ...current, scope, rowSelection, rows, places, allMatching: null };
     });
   }, []);
   const enter = useCallback<SelectionOwner["enter"]>((scope) => {
     setSelection((current) => current.scope === scope ? current : { ...current, scope, ...EMPTY_SELECTION });
   }, []);
-  const selectionOwner = useMemo(() => ({ read, update, enter }), [read, update, enter]);
+  const selectAllMatching = useCallback<SelectionOwner["selectAllMatching"]>((scope, mode) => {
+    setSelection((current) => current.scope !== scope || idsFromRowSelectionState(current.rowSelection).size === 0
+      || stableSerialize(current.allMatching) === stableSerialize(mode) ? current : { ...current, allMatching: mode });
+  }, []);
+  const updateAllMatching = useCallback<SelectionOwner["updateAllMatching"]>((scope, readKey, total) => {
+    setSelection((current) => current.scope !== scope || current.allMatching?.readKey !== readKey
+      || current.allMatching.total === total ? current : { ...current, allMatching: { ...current.allMatching, total } });
+  }, []);
+  const leaveAllMatching = useCallback<SelectionOwner["leaveAllMatching"]>((scope, surface) => {
+    setSelection((current) => current.scope !== scope || current.allMatching?.surface !== surface
+      ? current : { ...current, allMatching: null });
+  }, []);
+  const selectionOwner = useMemo(() => ({ read, update, enter, selectAllMatching, updateAllMatching, leaveAllMatching }),
+    [read, update, enter, selectAllMatching, updateAllMatching, leaveAllMatching]);
   const { rowSelection, value: { selectedRows, setRowSelection, toggleSelectedId, clearSelectedIds } } = useSelectionValue("", selectionOwner);
   const viewState = useMemo(() => ({ ...state, rowSelection }), [state, rowSelection]);
   const setPaginationByScope = useCallback<OnChangeFn<GroupPagination>>(

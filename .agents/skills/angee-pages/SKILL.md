@@ -35,7 +35,7 @@ design-system shape that declares intent and composes owners.
 ## Reuse first
 
 - Copy shapes from `src/angee/tags/web` (resource page with own containers) and `examples/src/example/notes/web` (consumer page, e2e target); start a fragment from `templates/addons/web` ([pitfall](../angee-framework/references/web-pitfalls.md)).
-- `ResourceList` + `List`/`Form` own the resource page; `ListView` owns grouping, boards, search, `rowActions`, trash; `RowsListView` owns bounded in-memory rows ([rules](../../../docs/frontend/guidelines.md#rules)).
+- `ResourceList` + `List`/`Form` own the resource page; `ListView` owns grouping, boards, search and `rowActions`; `RowsListView` owns bounded in-memory rows ([rules](../../../docs/frontend/guidelines.md#rules)). The record form and the selection bar supply Archive, Move to trash and Delete from resource metadata; an archivable resource's list hides archived rows by default when its query can filter on the flag and offers an "Archived" filter. The page declares nothing for any of these; an embedded related list keeps all its rows.
 - Record surfaces are `FormView` via `ResourceList`'s `Form` child or `form`; `RecordHeader`, `MetaGrid`, `Statusline`, `EmptyState`, `ErrorBanner`, `LoadingPanel` are the fragments ([ontology](../../../docs/frontend/guidelines.md#component-ontology)).
 - A tab, verb, header control, drawer or Links group is a child of a [framework container](../../../docs/frontend/guidelines.md#framework-containers); search `packages/ui/src/catalog.ts` before any new element.
 - Links: `useRouteHref` (`packages/ui/src/runtime/runtime.ts`), `useResourceRecordHref`, `useRouteParam` (`packages/ui/src/views/resource/resource-routing.ts`).
@@ -90,7 +90,7 @@ design-system shape that declares intent and composes owners.
      const scopeColumnEntries = useContainer("tags.tags#columns");
      return (
        <ResourceList resource={TAG_MODEL} form={tagForm} placement="inline" routed>
-         <List resource={TAG_MODEL} defaultGroup={{ field: "is_archived" }}>
+         <List resource={TAG_MODEL}>
            {containerContents(scopeFacetEntries)}
            <Column field="name" header={t("col.name")} />
            <Column field="color" header={t("col.color")} />
@@ -144,7 +144,7 @@ design-system shape that declares intent and composes owners.
 ## Do not
 
 - Hand-roll a list, grid, board, form or detail when `ResourceList`/`ListView`/`RowsListView`/`FormView` own that shape; extend the owner in `@angee/ui` instead ([shared primitives](../../../docs/frontend/guidelines.md#rules), [constitution](../../../AGENTS.md#constitution)).
-- Render raw `<button>`/`<table>`/`<form>`, a lucide icon, `toLocale*`, a local `tv()` recipe or tone map in an addon: `@angee/ui` owns each and the ontology guard fails (`packages/app/src/ux-ontology-guard.ts`, [guards](../../../docs/frontend/guidelines.md#ownership-boundaries)).
+- Render raw `<button>`/`<table>`/`<form>`, a lucide icon, `toLocale*`, a local `tv()` recipe or tone map in an addon: `@angee/ui` owns each and the ontology guard fails (`packages/app/src/ux-ontology-guard.test-support.ts`, [guards](../../../docs/frontend/guidelines.md#ownership-boundaries)).
 - Decide permissions, business state or persistence in React; `visibleWhen` reads projected admission ([client-side gates](../../../docs/frontend/guidelines.md#rules), [red flags](../../../docs/guidelines.md#boundary-leaks-and-detail-driven-policy)).
 - Spell a URL, `navigate({ search: … as never })` or `useParams(...) as {…}`; use `useRouteHref`, `updateRouteSearch`, `useRouteParam` ([rules](../../../docs/frontend/guidelines.md#rules)).
 - Import `@angee/gql` in a framework package, or eager-import a page into the manifest ([schema boundary](../../../docs/frontend/guidelines.md#rules), [code-split pages](../../../docs/frontend/guidelines.md#rules)).
@@ -183,7 +183,7 @@ Done means: `expectValidBaseAddon` passes with the new routes; the fragment's ow
 
 <!--
 Docs: AGENTS.md (Area Rules: Packages); docs/guidelines.md; docs/frontend/guidelines.md #stack, #package-layering, #ownership-boundaries, #one-way-rules, #native-state-owners, #reserved-translation-namespace, #component-ontology, #rules, #containers, #addresses-kinds-and-inheritance, #authoring, #narrowing-and-when, #variants-and-impl, #framework-containers, #context-aside, #resource-views, #rendering-and-testing, #developer-mode, #form-save-contracts; docs/glossary.md #frontend; docs/checks.md #choose-the-working-directory, #composition-and-schema, #frontend-packages-and-addon-fragments, #browser-verification, #what-ci-actually-runs; docs/frontend/e2e.md headings; packages/app/README.md #app-vocabulary-and-shipped-views, #containers.
-Code: packages/app/src/{define-addon.ts,define-base-addon.ts,containers.ts,testing.tsx,ux-ontology-guard.ts,architecture-guardrails.test.ts}; packages/ui/src/{runtime/containers.ts,runtime/contracts.ts,runtime/runtime.ts,views/resource/list-view/frame.tsx,views/resource/RowsListView.tsx,views/resource/resource-list/public.tsx,views/resource/List.tsx,views/resource/RowActions.tsx,views/resource/resource-routing.ts,views/form/registered-form.ts,lib/container-outlet.tsx,i18n/index.ts}; packages/refine/src/{index.ts,dialect/authored-hooks.tsx,dialect/hooks.tsx}; packages/metadata/src/index.ts; packages/storybook/{.storybook/main.mjs,src/stories/runtime-fixtures.tsx}.
+Code: packages/app/src/{define-addon.ts,define-base-addon.ts,containers.ts,testing.tsx,ux-ontology-guard.test-support.ts,architecture-guardrails.test.ts}; packages/ui/src/{runtime/containers.ts,runtime/contracts.ts,runtime/runtime.ts,views/resource/list-view/frame.tsx,views/resource/RowsListView.tsx,views/resource/resource-list/public.tsx,views/resource/List.tsx,views/resource/RowActions.tsx,views/resource/resource-routing.ts,views/form/registered-form.ts,lib/container-outlet.tsx,i18n/index.ts}; packages/refine/src/{index.ts,dialect/authored-hooks.tsx,dialect/hooks.tsx}; packages/metadata/src/index.ts; packages/storybook/{.storybook/main.mjs,src/stories/runtime-fixtures.tsx}.
 Addons: src/angee/tags/web/**; examples/src/example/notes/web/**; src/angee/decisions/web/src/{InboxPage.stories.tsx,InboxPage.tsx,documents.console.ts}; src/angee/workflows/web/src/WorkflowsPage.stories.tsx; src/angee/work/web/src/index.tsx; src/angee/iam/web/src/{views/GrantsPage.tsx,role-grants.tsx}; src/angee/{timeline,projects}/web/src/index.tsx; templates/addons/web/**.
 Doc gaps: no story-authoring guide; no page-test guide.
 Mismatches: (1) examples/src/example/notes/web/src/NotePage.tsx reads the record id with useParams({strict:false}) and index.tsx declares the route pair by hand, while docs/frontend/guidelines.md#rules prescribes resourcePageRoutes ("Rendered resource pages use `resourcePageRoutes`") and names useRouteParam (**No `useParams(...) as {...}` casts**; packages/ui/src/views/resource/resource-routing.ts). (2) ContainerKinds.regions (`chrome.app-menu`, packages/ui/src/runtime/containers.ts) is absent from the table at docs/frontend/guidelines.md#framework-containers.

@@ -345,6 +345,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "APPEARANCE_PAYLOAD_ATTRIBUTE",
+    "source": "packages/ui/src/theme/runtime.d.ts",
+    "kind": null,
+    "reason": "Shared name of the data block a script-free document carries its appearance payload in.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "APPEARANCE_PREFERENCE_KEY",
     "source": "packages/ui/src/theme/appearance.tsx",
     "kind": null,
@@ -5568,6 +5577,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "calendarDay",
+    "source": "packages/ui/src/widgets/date-format.ts",
+    "kind": null,
+    "reason": "Format utility: converts data to display or storage text.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "calendarVariants",
     "source": "packages/ui/src/ui/calendar.tsx",
     "kind": "token",
@@ -5905,6 +5923,15 @@
     "source": "packages/ui/src/dashboard/layout.ts",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "dateFromUnknown",
+    "source": "packages/ui/src/widgets/date-format.ts",
+    "kind": null,
+    "reason": "Format utility: converts data to display or storage text.",
     "status": "stable",
     "storyId": null
   },
@@ -6520,6 +6547,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "isStorageDate",
+    "source": "packages/ui/src/widgets/date-format.ts",
+    "kind": null,
+    "reason": "Format utility: converts data to display or storage text.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "isTextOrCodeMime",
     "source": "packages/ui/src/preview/model.ts",
     "kind": null,
@@ -7088,6 +7124,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "readAppearancePayload",
+    "source": "packages/ui/src/theme/runtime.d.ts",
+    "kind": null,
+    "reason": "Headless read of the appearance payload a script-free document carries as data.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "readDndPayload",
     "source": "packages/ui/src/lib/dnd.ts",
     "kind": null,
@@ -7234,6 +7279,15 @@
     "source": "packages/ui/src/dashboard/layout.ts",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "resolveAppearance",
+    "source": "packages/ui/src/theme/runtime.d.ts",
+    "kind": null,
+    "reason": "Headless appearance resolution shared by bootstrap and by a document outside the app.",
     "status": "stable",
     "storyId": null
   },
@@ -8595,6 +8649,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "useRelationPickerSearch",
+    "source": "packages/ui/src/views/relation/relation-options.ts",
+    "kind": "contribution",
+    "owner": "@angee/ui:RelationFieldWidget",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "useRelationSelectedOption",
     "source": "packages/ui/src/views/relation/relation-options.ts",
     "kind": "contribution",
@@ -8882,16 +8945,6 @@
   },
   {
     "package": "@angee/ui",
-    "name": "useTrashActions",
-    "source": "packages/ui/src/views/resource/trash.tsx",
-    "kind": "region",
-    "owner": "@angee/ui:RecordActionBar",
-    "region": "command-band",
-    "status": "stable",
-    "storyId": "library-owners--hooks"
-  },
-  {
-    "package": "@angee/ui",
     "name": "useTrashPrompt",
     "source": "packages/ui/src/views/resource/trash.tsx",
     "kind": "surface",
@@ -8907,15 +8960,6 @@
     "owner": "@angee/ui:DeletePreviewDialog",
     "status": "stable",
     "storyId": null
-  },
-  {
-    "package": "@angee/ui",
-    "name": "useTrashRowActions",
-    "source": "packages/ui/src/views/resource/trash.tsx",
-    "kind": "contribution",
-    "owner": "@angee/ui:Action",
-    "status": "stable",
-    "storyId": "library-owners--hooks"
   },
   {
     "package": "@angee/ui",

@@ -99,9 +99,9 @@ serve_mode:
 
 serve_workers:
   type: int
-  default: 0
+  default: 2
   validator: '{% if serve_workers != 0 and serve_workers < 2 %}Use 0 for CPU count or at least 2 workers.{% endif %}'
-  help: Django ASGI worker count in production mode; 0 uses CPU count (minimum 2).
+  help: Django ASGI workers in production mode, at least 2. Each loads the whole app, about 550 MiB with nothing shared; 0 opts into one per CPU.
 
 db_pool_max_size:
   type: int
@@ -218,6 +218,15 @@ enable_celery:
 celery_queues:
   type: str
   default: ""
+
+# Prefork children of the shared Celery worker. Each child loads the whole
+# application, so Celery's own default (one per CPU) costs gigabytes on a
+# many-core host; the queue worker keeps its own thread pool.
+celery_concurrency:
+  type: int
+  default: 2
+  validator: '{% if celery_concurrency < 1 %}Run at least one worker process.{% endif %}'
+  help: Number of prefork processes of the shared Celery worker; each loads the whole application.
 
 # Sentry error reporting. An empty DSN (the default) renders nothing: Django
 # never starts the SDK and the SPA never loads it. sentry_dsn becomes SENTRY_DSN

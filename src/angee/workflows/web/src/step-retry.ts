@@ -30,13 +30,13 @@ export function useStepRetryActions(inline = false): readonly ActionDescriptor[]
   });
   const acknowledgement = useDuplicateAcknowledgement(t("action.duplicateDescription"));
   return [{
-    id: "retry", label: t(inline ? "timeline.retry" : "action.retry_step"), placement: "toolbar", primary: !inline, run: retry,
+    id: "retry", label: t(inline ? "timeline.retry" : "action.retry_step"), placement: inline ? "toolbar" : undefined, primary: !inline, run: retry,
     visibleWhen: (row) => row.can_retry === true && row.requires_duplicate_acknowledgement !== true,
     confirm: inline ? undefined : { title: t("action.retry_step"), body: t("action.retryDescription") },
   }, {
-    id: "retry-duplicate", label: t("action.retry_step_accepting_duplicate"), placement: "toolbar",
+    id: "retry-duplicate", label: t("action.retry_step_accepting_duplicate"),
     primary: true, danger: true, args: acknowledgement,
     visibleWhen: (row) => row.can_retry === true && row.requires_duplicate_acknowledgement === true,
-    submit: (_values, { record }) => typeof record?.id === "string" ? retryDuplicate(record.id) : null,
+    submit: (_values, { record }, options) => typeof record?.id === "string" ? retryDuplicate(record.id, {}, options) : null,
   }];
 }

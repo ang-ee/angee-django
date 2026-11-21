@@ -284,7 +284,9 @@ angee --root /srv/shop secret reveal admin-password
 stops before cloning and gives the command for any key still unset. It clones the
 repositories, cuts the `workspaces/src` slots, installs, composes, authors the
 host's migration history, provisions with a first administrator and builds the
-SPA. The flags, the deploy keys and the disposable-data contract are described in
+SPA. On an empty database the first `provision` alone takes several minutes (about
+8.5 for the Omelas composition, most of it in a few large initial migrations); it
+is working, not hung. The flags, the deploy keys and the disposable-data contract are described in
 [Templates](../../templates/README.md#deploy-a-staging-host-in-one-command).
 
 ### Quickstart: a dev VPS end to end

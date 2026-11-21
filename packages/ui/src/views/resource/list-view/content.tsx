@@ -1,20 +1,21 @@
 import * as React from "react";
-import { MAX_PAGE_SIZE, useAngeeAggregate } from "@angee/refine";
-import { ResourceQuery, modelLabelSegment, useModelMetadata } from "@angee/metadata";
+import { MAX_PAGE_SIZE, stableSerialize, useAngeeAggregate } from "@angee/refine";
+import { ResourceQuery, modelLabelSegment, rowPublicId, canDeleteRecord, useModelMetadata } from "@angee/metadata";
 import type { ModelFieldMetadata, Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
 import { titleCase } from "../../../lib/titleCase";
 import { BoardView } from "../BoardView";
 import { GalleryView, useGalleryRows } from "../../GalleryView";
 import { GroupedBoardBody } from "../board/grouped";
-import { type ResourceViewContextValue } from "../resource-view-context";
+import type { ResourceViewContextValue } from "../resource-view-context";
+import { useSelectionPlaces, type ShownSelection } from "../selection-channel";
 import { type ResourceViewFilter, type ResourceViewGroup, type ResourceViewKind } from "../resource-view-model";
 import { DeletePreviewDialog } from "../../tree/DeletePreviewDialog";
 import { type GroupedResourceViewSurface, type ResourceViewSurface } from "../resource-view-surface";
 import { GroupedListBody } from "../GroupedList";
 import { FlatListBody, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures, type FlatListBodyProps, type GroupMeasure } from "../resource-view-list-body";
 import { ResourceListFrame } from "../ResourceListFrame";
-import { listChromeState, type BoardCardSpec, type CardActionContext, type ListEmptyContent, type ListViewProps } from "../resource-view-types";
+import { listChromeState, type AllMatching, type BoardCardSpec, type CardActionContext, type ListEmptyContent, type ListViewProps } from "../resource-view-types";
 import { DeclaredBoardCardBody, DefaultBoardCardBody } from "../board/cards";
 import { columnsWithMetadataDefaults } from "../model-metadata-defaults";
 import { createLabelForResource } from "../resource-view-utils";
@@ -22,6 +23,9 @@ import type { ColumnDescriptor } from "../../page";
 import { useRelationFacets } from "../../relation/relation-facet";
 import { useScalarFacets } from "../../relation/scalar-facet";
 import { useBulkDelete } from "../useBulkDelete";
+import { renderBulkActions, useBulkAction, type PlacedBulkActions } from "../bulk-action";
+import { BulkArchiveActions } from "../archive";
+import { BulkTrashActions } from "../trash";
 import { recordRepresentationValue, titleText } from "../../form/form-view-model";
 import { requireDataResource, useAggregateOperation } from "../resource-operations";
 import { useResourceSearch } from "../search/use-resource-search";
@@ -29,8 +33,11 @@ import { useSearchCatalog } from "../search/catalog";
 import type { ResourceToolbarProps } from "../../../toolbars";
 import { PAGE_SIZE_OPTIONS } from "../page-size";
 import { EMPTY_SELECTED_IDS } from "../resource-view-codecs";
+import { EMPTY_ARRAY } from "../surface/types";
 import { ResourceViewUtilities } from "../resource-view-utilities";
 import { PaneListBody } from "./pane-list-body";
+import { placedRecords, selectedGroupsOf } from "../resource-view-grouped-model";
+import { useValueStable } from "../../../lib/use-value-stable";
 interface ListViewContentProps<TRow extends Row> {
   source?: ListViewProps<TRow>["source"];
   textFilterField?: string | null;
@@ -53,6 +60,8 @@ interface ListViewContentProps<TRow extends Row> {
   boardGroupingPinned: boolean;
   clientRowModel: boolean;
   serverGroupedMode: boolean;
+  /** The list's group read applies `GroupSpec.repeated` (`ValidatedListViewBody`). */
+  appliesRepeated: boolean;
   declaredFacets: ReturnType<typeof useRelationFacets>;
   scalarFacets: ReturnType<typeof useScalarFacets>;
   explicitGroupOptions: ListViewProps<TRow>["groupOptions"];
@@ -70,7 +79,7 @@ interface ListViewContentProps<TRow extends Row> {
   renderRowActions: ((row: TRow) => React.ReactNode) | undefined;
   draggableRow: ListViewProps<TRow>["draggableRow"];
   toolbarActions: ListViewProps<TRow>["toolbarActions"];
-  bulkActions: ListViewProps<TRow>["bulkActions"];
+  bulkActions: PlacedBulkActions<TRow> | undefined;
   cardActions: ListViewProps<TRow>["cardActions"];
   boardCard?: BoardCardSpec;
   gallery: ListViewProps<TRow>["gallery"];
@@ -104,6 +113,7 @@ export function ListViewContent<TRow extends Row = Row>({
   boardGroupingPinned,
   clientRowModel,
   serverGroupedMode,
+  appliesRepeated,
   declaredFacets,
   scalarFacets,
   explicitGroupOptions,
@@ -142,6 +152,7 @@ export function ListViewContent<TRow extends Row = Row>({
     search: searchDeclaration,
     inferOptions: !source,
     serverGrouping: !clientRowModel,
+    appliesRepeated,
     columns: resolvedColumns,
     rows: surface.rows,
     modelMetadata,
@@ -156,14 +167,74 @@ export function ListViewContent<TRow extends Row = Row>({
     textFilterField: declaredTextField,
   });
   const interactive = Boolean(onRowClick || rowHref);
+  // The page's href under this list's navigation scope: one function per scope, so a
+  // render that changes neither (a scroll frame) hands every row and card the same one.
+  const navigationScope = surface.listState.navigationScope;
+  const scopedRowHref = React.useMemo(() => rowHref ? (row: TRow) => rowHref(row, navigationScope) : undefined,
+    [rowHref, navigationScope]);
   const resolvedChrome = listChromeState(presentation, chrome, { ...surface.list, queryDirty: resourceView.queryDirty });
   const selectedIds = selectable ? surface.selectedIds : EMPTY_SELECTED_IDS;
-  // A card's checkbox toggles its row in the shared selection, keeping the row as its snapshot.
-  const toggleCardSelected = selectable ? resourceView.toggleSelectedId : undefined;
+  // "Select all N" (opt-in) selects what the surface's read behind its pager matches.
+  // The mode holds that read's key, so it is only ever this read's, and the total it
+  // last settled with, which it keeps while the read pages, refetches or fails.
+  const matching = surface.matching;
+  // The surface holds the read from its own request, so its key and copy follow that
+  // request, not each render (a scroll frame re-renders the list).
+  const selects = matching?.selects;
+  const matchingKey = React.useMemo(() => selects ? stableSerialize(selects) : null, [selects]);
+  // Under the mode every loaded row shows selected, and a write starts from them, with
+  // the row and the place each shows in.
+  const table = surface.table;
+  const groupedItems = surface.kind === "grouped" ? surface.groupedItems : null;
+  const placedShown = React.useMemo(() => groupedItems ? placedRecords(groupedItems) : null, [groupedItems]);
+  const shown = React.useMemo<ShownSelection | undefined>(() => matching && matchingKey !== null ? {
+    readKey: matchingKey, ids: matching.loaded,
+    observed: (id) => table.getCoreRowModel().rowsById[id]?.original,
+    ...(placedShown ? { placed: (id: string) => placedShown.get(id) ?? undefined } : {}),
+  } : undefined, [matching, matchingKey, table, placedShown]);
+  const placement = useSelectionPlaces(shown);
+  const mode = placement.allMatching;
+  const chosen = mode?.readKey === matchingKey ? mode : null;
+  const surfaceId = React.useId();
+  // Only the list that chose the mode moves its total; another list with the same read
+  // shows the mode's, so two lists whose reads settle apart never write over each other.
+  const entered = chosen?.surface === surfaceId ? chosen : null;
+  const chosenTotal = chosen ? (entered ? matching?.total : undefined) ?? chosen.total : undefined;
+  // A copy: a page changing what it received changes nothing in the list's reads.
+  const allMatching = React.useMemo(() => selects && chosenTotal !== undefined
+    ? structuredClone<AllMatching>({ ...selects, total: chosenTotal }) : undefined, [selects, chosenTotal]);
+  const { updateAllMatching, leaveAllMatching } = placement;
+  // This list reading otherwise, or no longer showing, ends the mode it chose: it never
+  // comes back by itself, and another list sharing the selection never ends it.
+  React.useLayoutEffect(() => matchingKey === null ? undefined : () => leaveAllMatching(surfaceId),
+    [matchingKey, leaveAllMatching, surfaceId]);
+  // A refetch of the list that chose the mode that settles with another total moves the mode with it.
+  React.useLayoutEffect(() => {
+    if (entered && matching?.total !== undefined) updateAllMatching(entered.readKey, matching.total);
+  }, [entered, matching?.total, updateAllMatching]);
+  // While the scope holds the mode, this list's or another's sharing the selection, the
+  // generic verbs and the Share utility refuse: they act on each selected row.
+  const disabledReason = mode
+    ? t(mode.unit === "groups" ? "list.selectedOnlyNotAllGroups" : "list.selectedOnlyNotAllRecords", { count: allMatching?.total ?? mode.total })
+    : matching ? null : undefined;
+  const deselectSucceeded = React.useCallback((ids: readonly string[]) => {
+    resourceView.setRowSelection((selection) => {
+      const remaining = { ...selection };
+      for (const id of ids) delete remaining[id];
+      return remaining;
+    });
+  }, [resourceView.setRowSelection]);
+  const bulk = useBulkAction(source ? null : modelMetadata?.resource, deselectSucceeded, disabledReason);
+  const selectedRowsById = React.useMemo(() => new Map(resourceView.selectedRows.map((row) => [rowPublicId(row), row])),
+    [resourceView.selectedRows]);
+  const deleteIds = React.useMemo(() => new Set([...selectedIds].filter((id) =>
+    canDeleteRecord(modelMetadata?.resource, selectedRowsById.get(id)))),
+  [selectedIds, selectedRowsById, modelMetadata]);
   const bulkDelete = useBulkDelete(
     source ? "" : resource,
-    selectedIds,
-    resourceView.clearSelectedIds,
+    deleteIds,
+    bulk,
+    resourceView.selectedRows,
   );
   const cardActionContext = React.useMemo(
     () => ({ refresh: surface.list.refetch }),
@@ -211,15 +282,17 @@ export function ListViewContent<TRow extends Row = Row>({
   const heading = chrome?.heading ?? (resolvedChrome.compact
     ? { label: modelMetadata?.pluralLabel ?? modelMetadata?.label ?? titleCase(modelLabelSegment(resource)) }
     : undefined);
-  const visibleFields = resolvedChrome.columnChooser ? surface.visibleFields : [];
+  const visibleFields = resolvedChrome.columnChooser ? surface.visibleFields : EMPTY_ARRAY;
   const contributedUtilities = (
     <ResourceViewUtilities
       modelBacked={!source}
       value={{
         resource: modelMetadata?.resource.modelLabel ?? resource,
         filter: effectiveFilter,
-        selectedIds,
+        // Under the mode a utility gets none: one that ignores the reason acts on nothing.
+        selectedIds: mode ? EMPTY_SELECTED_IDS : selectedIds,
         selectable,
+        disabledReason,
         fields: resolvedColumns.flatMap((column) => column.field ? [column.field] : []),
         refresh: () => void surface.list.refetch(),
       }}
@@ -245,13 +318,53 @@ export function ListViewContent<TRow extends Row = Row>({
     pagerMaxPageSize: clientRowModel ? undefined : MAX_PAGE_SIZE,
   };
 
-  const domainBulkActions = selectable && selectedIds.size > 0
-    ? bulkActions?.(selectedIds, resourceView.clearSelectedIds, {
-      filter: surface.mergedFilter,
-      // Scope snapshots are shared Rows; narrow to the declared row type (see bulkActions).
-      selectedRows: resourceView.selectedRows as readonly TRow[],
-    }) : null;
-  const replacesDelete = domainBulkActions != null && domainBulkActions !== false;
+  // The split exists only for a page's bulk actions over a selection. Only the
+  // server-grouped surface (list or board) places its loaded rows in groups.
+  const splitsSelection = Boolean(bulkActions) && selectable && selectedIds.size > 0;
+  const renderShown = surface.kind === "grouped" ? surface.shown : null;
+  // Value-stable, so a bulk action's memo or effect re-runs only when the split changes.
+  const selectedGroups = useValueStable(React.useMemo(() => splitsSelection
+    ? selectedGroupsOf(selectedIds, effectiveGroupStack,
+      groupedItems && renderShown ? { places: placement.places, items: groupedItems, shown: renderShown } : null)
+    : undefined, [splitsSelection, selectedIds, placement.places, effectiveGroupStack, groupedItems, renderShown]));
+  // Offered once every loaded row is selected and the read, settled, matches more.
+  const offersAll = Boolean(matching?.more && !chosen && matching.loaded.length > 0
+    && matching.loaded.every((id) => selectedIds.has(id)));
+  const barTotal = allMatching?.total ?? (offersAll ? matching?.total : undefined);
+  const barMatching = matching && matchingKey !== null && barTotal !== undefined ? {
+    total: barTotal, unit: matching.selects.unit, selected: Boolean(allMatching),
+    ...(offersAll ? { onSelectAll: () => placement.selectAllMatching({
+      readKey: matchingKey, unit: matching.selects.unit, total: barTotal, surface: surfaceId,
+    }) } : {}),
+  } : undefined;
+  // Every loaded row shows selected in the mode; the selection's ids stay the selected ones.
+  const shownSelectedIds = React.useMemo(() => allMatching && matching
+    ? new Set([...selectedIds, ...matching.loaded]) : selectedIds, [allMatching, matching?.loaded, selectedIds]);
+  // The flat body shows and writes the selection through what it is given: in the mode,
+  // every loaded row and the header selected, and this surface's writes, which start from them.
+  const flatView = React.useMemo<ResourceViewContextValue>(() => allMatching ? {
+    ...resourceView, setRowSelection: placement.setRowSelection, toggleSelectedId: placement.toggleSelectedId,
+    state: { ...resourceView.state, rowSelection: Object.fromEntries([...shownSelectedIds].map((id) => [id, true])) },
+  } : resourceView, [allMatching, resourceView, placement.setRowSelection, placement.toggleSelectedId, shownSelectedIds]);
+  // The header shows checked in the mode, so it only unticks: it clears the page's rows, every row it shows.
+  const pageIds: readonly string[] = surface.kind === "flat" ? surface.pageIds : EMPTY_ARRAY;
+  const clearPageSelection = React.useCallback(() => placement.setRowSelection((current) => Object.fromEntries(
+    Object.entries(current).filter(([id]) => !pageIds.includes(id)))), [placement.setRowSelection, pageIds]);
+  const flatSelection = (flat: ResourceViewSurface<TRow>) => allMatching ? {
+    resourceView: flatView, allPageSelected: true, somePageSelected: false, onPageSelectionChange: clearPageSelection,
+  } : {
+    resourceView, allPageSelected: flat.allPageSelected, somePageSelected: flat.somePageSelected,
+    onPageSelectionChange: flat.setPageSelection,
+  };
+  const domainBulkActions = renderBulkActions(bulkActions, selectedIds, {
+    selectedRows: resourceView.selectedRows, clearSelectedIds: resourceView.clearSelectedIds, allMatching: mode,
+  }, { filter: surface.mergedFilter, selectedGroups, ...(allMatching ? { allMatching } : {}) });
+  const genericSelection = !source && modelMetadata ? {
+    modelMetadata,
+    selectedRows: resourceView.selectedRows,
+    unprocessedCount: [...selectedIds].filter((id) => !selectedRowsById.has(id)).length,
+    bulk,
+  } : null;
 
   return (
     <ResourceListFrame
@@ -264,11 +377,19 @@ export function ListViewContent<TRow extends Row = Row>({
         count: selectedIds.size,
         onClear: resourceView.clearSelectedIds,
         onDelete:
-          !source && !replacesDelete && bulkDelete.canDelete
+          !source && bulkDelete.canDelete
             ? bulkDelete.deleteInitiate
             : undefined,
-        deletePending: !replacesDelete && bulkDelete.isPending,
-        actions: replacesDelete ? domainBulkActions : undefined,
+        deletePending: bulkDelete.isPending,
+        bulk,
+        matching: barMatching,
+        actions: <>
+          {domainBulkActions}
+          {genericSelection ? <>
+            <BulkArchiveActions {...genericSelection} />
+            <BulkTrashActions {...genericSelection} />
+          </> : null}
+        </>,
       } : undefined}
       error={surface.list.error}
       onRetry={() => void surface.list.refetch()}
@@ -309,11 +430,11 @@ export function ListViewContent<TRow extends Row = Row>({
           renderCard={galleryRenderCard}
           cardFrame={galleryFrame}
           cardActions={cardActions || renderRowActions ? (row) => boardCardActions(row, cardActionContext) : undefined}
-          cardHref={rowHref ? (row) => rowHref(row, surface.listState.navigationScope) : undefined}
+          cardHref={scopedRowHref}
           onCardClick={onRowClick}
           draggableRow={draggableRow}
-          selectedIds={selectedIds}
-          onToggleSelected={toggleCardSelected}
+          selectedIds={shownSelectedIds}
+          onToggleSelected={selectable ? placement.toggleSelectedId : undefined}
           fetching={surface.list.fetching}
           emptyContent={emptyContent}
         />
@@ -335,8 +456,8 @@ export function ListViewContent<TRow extends Row = Row>({
           cardActionContext={cardActionContext}
           renderCard={resolvedRenderCard}
           cardFrame={cardFrame ?? "inset"}
-          selectedIds={selectedIds}
-          onToggleSelected={toggleCardSelected}
+          selectedIds={shownSelectedIds}
+          onToggleSelected={selectable ? placement.toggleSelectedId : undefined}
           fetching={surface.list.fetching}
           error={surface.list.error}
           emptyContent={emptyContent}
@@ -363,7 +484,8 @@ export function ListViewContent<TRow extends Row = Row>({
           setGroupsExpanded={surface.setGroupsExpanded}
           setScopePage={surface.setScopePage}
           setScopePageSize={surface.setScopePageSize}
-          selectedIds={selectedIds}
+          selectedIds={shownSelectedIds}
+          {...(allMatching && shown ? { shown } : {})}
           interactive={interactive}
           rowHref={rowHref}
           renderRowActions={renderRowActions}
@@ -380,16 +502,12 @@ export function ListViewContent<TRow extends Row = Row>({
           groups={surface.groupedRows}
           resourceView={resourceView}
           modelMetadata={modelMetadata}
-          selectedIds={selectedIds}
-          onToggleSelected={toggleCardSelected}
+          selectedIds={shownSelectedIds}
+          onToggleSelected={selectable ? placement.toggleSelectedId : undefined}
           interactive={interactive}
           fetching={surface.list.fetching}
           emptyContent={emptyContent}
-          rowHref={
-            rowHref
-              ? (row) => rowHref(row, surface.listState.navigationScope)
-              : undefined
-          }
+          rowHref={scopedRowHref}
           onRowClick={onRowClick}
           cardActions={
             cardActions || renderRowActions ? boardCardActions : undefined
@@ -419,19 +537,12 @@ export function ListViewContent<TRow extends Row = Row>({
           tableScrollRef={surface.tableScrollRef}
           rowVirtualizer={surface.rowVirtualizer}
           visibleColumnCount={surface.visibleColumnCount}
-          allPageSelected={surface.allPageSelected}
-          somePageSelected={surface.somePageSelected}
-          onPageSelectionChange={surface.setPageSelection}
+          {...flatSelection(surface)}
           visibleFields={visibleFields}
           onVisibleFieldToggle={surface.toggleVisibleField}
-          resourceView={resourceView}
           groupStack={effectiveGroupStack}
           interactive={interactive}
-          rowHref={
-            rowHref
-              ? (row) => rowHref(row, surface.listState.navigationScope)
-              : undefined
-          }
+          rowHref={scopedRowHref}
           renderRowActions={renderRowActions}
           onRowClick={onRowClick}
           emptyContent={emptyContent}
@@ -449,19 +560,12 @@ export function ListViewContent<TRow extends Row = Row>({
           tableScrollRef={surface.tableScrollRef}
           rowVirtualizer={surface.rowVirtualizer}
           visibleColumnCount={surface.visibleColumnCount}
-          allPageSelected={surface.allPageSelected}
-          somePageSelected={surface.somePageSelected}
-          onPageSelectionChange={surface.setPageSelection}
+          {...flatSelection(surface)}
           visibleFields={visibleFields}
           onVisibleFieldToggle={surface.toggleVisibleField}
-          resourceView={resourceView}
           groupStack={effectiveGroupStack}
           interactive={interactive}
-          rowHref={
-            rowHref
-              ? (row) => rowHref(row, surface.listState.navigationScope)
-              : undefined
-          }
+          rowHref={scopedRowHref}
           renderRowActions={renderRowActions}
           onRowClick={onRowClick}
           emptyContent={emptyContent}

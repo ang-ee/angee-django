@@ -24,7 +24,7 @@ export function KnowledgeSettingsPage(): ReactElement {
     shouldInvalidate: (data) => data?.create_vault_from.ok === true,
   });
   const cloneSubmit = useCallback<NonNullable<ActionDescriptor["submit"]>>(
-    async (values, context) => {
+    async (values, context, options) => {
       const template = context.record?.id;
       if (typeof template !== "string" || !template || typeof values.name !== "string") {
         return { ok: false, message: t("vault.cloneFailed") };
@@ -35,7 +35,7 @@ export function KnowledgeSettingsPage(): ReactElement {
       }
       const data = await createFrom({
         template, name, owned: true, idempotency_key: pendingClone.current.key,
-      });
+      }, options);
       const outcome = extractActionOutcome(data, "create_vault_from");
       if (outcome?.ok) pendingClone.current = null;
       return outcome;
@@ -61,6 +61,7 @@ export function KnowledgeSettingsPage(): ReactElement {
           <Field name="accent" />
           <Action
             id="create-from-template"
+            placement="menu"
             label={t("vault.clone")}
             icon="copy"
             args={[{ name: "name", label: t("vault.cloneName"), widget: "text" }]}

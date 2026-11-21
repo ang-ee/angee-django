@@ -3,8 +3,12 @@ import {
   type DataResourceMetadata,
   type ModelFieldMetadata,
   type ModelMetadata,
-} from "./artifact";
-import type { QueryField } from "./query-schema";
+} from "./artifact.js";
+import type { CrudFilter } from "@refinedev/core";
+import { Filter } from "./filter.js";
+import { ResourceQuery, type QueryFilter } from "./query.js";
+import type { QueryField } from "./query-schema.js";
+import type { Row } from "./rows.js";
 
 /** A to-one relation explicitly projected by the node as a scalar identity. */
 export function isScalarIdRelation(
@@ -104,10 +108,17 @@ export function fieldUpdatable(
   metadata: ModelMetadata | null | undefined,
   fieldName: string,
 ): boolean {
-  if (!metadata?.resource.roots.update) return false;
-  const updateFields = metadata.resource.updateFields;
-  if (updateFields && !updateFields.includes(fieldName)) return false;
-  return metadata.fields[fieldName]?.updatable !== false;
+  return resourceFieldUpdatable(metadata?.resource, fieldName, metadata?.fields[fieldName]);
+}
+
+function resourceFieldUpdatable(
+  resource: DataResourceMetadata | null | undefined,
+  fieldName: string,
+  field: ModelFieldMetadata | undefined,
+): boolean {
+  return Boolean(resource?.roots.update)
+    && (!resource?.updateFields || resource.updateFields.includes(fieldName))
+    && field?.updatable !== false;
 }
 
 /**
@@ -119,6 +130,76 @@ export function trashFlagField(
   resource: DataResourceMetadata | null | undefined,
 ): string | null {
   return resource?.fields?.find((field) => field.trashable === true)?.name ?? null;
+}
+
+/** The resource's archive flag, classified by the backend rather than its name. */
+export function archiveFlagField(
+  resource: DataResourceMetadata | null | undefined,
+): string | null {
+  return resource?.fields?.find((field) => field.archivable === true)?.name ?? null;
+}
+
+export interface ResourceLifecycle {
+  /** Flag accepted by the update root, or null when Archive is unavailable. */
+  archiveFlag: string | null;
+  /** Filterability is independent of whether this resource permits writes. */
+  archiveFilter: { flag: string; field: string } | null;
+  /** Flag with a resource type for the shared trash and restore verbs. */
+  trashFlag: string | null;
+  canDelete: boolean;
+  /** Preserve flag projections even on read-only resources. */
+  flagFields: readonly string[];
+}
+
+/** Generic lifecycle capabilities from the resource's emitted contracts. */
+export function resourceLifecycle(
+  resource: DataResourceMetadata | null | undefined,
+  model?: ModelMetadata | null,
+): ResourceLifecycle {
+  const archive = archiveFlagField(resource);
+  const trash = trashFlagField(resource);
+  const filter = resource && archive ? ResourceQuery.from(resource).fields[archive]?.filter : undefined;
+  const archiveField = archive
+    ? model ? model.fields[archive] : resource?.fields?.find((field) => field.name === archive)
+    : undefined;
+  return {
+    archiveFlag: archive && resourceFieldUpdatable(resource, archive, archiveField) ? archive : null,
+    archiveFilter: archive && filter?.operators.includes("exact") ? { flag: archive, field: filter.field } : null,
+    trashFlag: trash && resource?.resourceType ? trash : null,
+    canDelete: Boolean(resource?.roots.deletePreview),
+    flagFields: [archive, trash].filter((flag): flag is string => flag !== null),
+  };
+}
+
+/** A trashable row must already be in the trash. Generic Delete needs a preview
+ * root; a form with an authored Delete action supplies that action's admission.
+ */
+export function canDeleteRecord(
+  resource: DataResourceMetadata | null | undefined,
+  record: Row | null | undefined,
+  offered = resourceLifecycle(resource).canDelete,
+): boolean {
+  const trash = trashFlagField(resource);
+  return offered && (!trash || record?.[trash] === true);
+}
+
+/**
+ * Narrow a collection to unarchived rows only when metadata declares the flag,
+ * its query contract supports exact filtering, and no supplied predicate names it.
+ * Picker transports may also supply native Refine filters, whose field names are
+ * wire paths; these stay native while this owner scopes the canonical filter.
+ */
+export function unarchivedFilter(
+  resource: DataResourceMetadata | null | undefined,
+  filter: QueryFilter,
+  nativeFilters?: readonly CrudFilter[],
+): QueryFilter {
+  const archive = resourceLifecycle(resource).archiveFilter;
+  if (!archive) return filter;
+  const { flag, field } = archive;
+  if (Filter.references(filter, flag)
+    || Filter.references(nativeFilters, field)) return filter;
+  return Filter.combine(filter, { [flag]: { exact: false } });
 }
 
 export function supportsChoiceFacet(support: ChoiceFacetSupport): boolean {

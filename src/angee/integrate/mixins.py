@@ -14,7 +14,7 @@ from django.utils import timezone
 from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.querysets import AngeeQuerySet
 from angee.integrate.errors import doubling_backoff
-from angee.integrate.states import SyncFailure, SyncFailureKind, SyncFailureStatus
+from angee.integrate.states import SyncFailure, SyncFailureKind, SyncFailureStatus, exempt_from_discovery
 from angee.provenance.statements import StatementsMixin
 
 if TYPE_CHECKING:
@@ -157,9 +157,12 @@ class SyncStateMixin(models.Model):
             return SyncFailure.from_state(self, slot, data)
 
     def resolve_failure(self, slot: int | None, *, conflict: bool = False) -> SyncFailure:
-        return self._transition_failure(slot, retry=False, conflict=conflict)
+        """Close one retained failure: local state, so it commits while discovery is pending."""
+        with exempt_from_discovery():
+            return self._transition_failure(slot, retry=False, conflict=conflict)
 
     def retry_failure(self, slot: int | None) -> SyncFailure:
+        """Make one retained failure due: a request for remote work, so it waits for discovery."""
         return self._transition_failure(slot, retry=True)
 
     def defer_failure(self, row: SyncFailure, *, details: Mapping[str, Any]) -> None:
@@ -205,9 +208,9 @@ class StatedRecordMixin(LinkedRecordMixin, StatementsMixin):
     class Meta:
         abstract = True
 
-    def delete_blocker(self) -> str | None:
-        """Name the refusal the statement tables' protected key enforces on every delete path."""
+    def delete_blocker(self, *, cascaded: bool = False) -> str | None:
+        """Name the refusal the statement tables' protected key enforces on every delete path, cascades included."""
 
         if self.carries_statements():
             return f"This {self._meta.verbose_name} carries source statements and is retained."
-        return cast(Any, super()).delete_blocker()
+        return cast(Any, super()).delete_blocker(cascaded=cascaded)

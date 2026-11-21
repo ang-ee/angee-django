@@ -15,15 +15,20 @@ import { useUiT } from "../../i18n";
 import {
   ListLoadingFooter,
   ListSelectionBar,
+  type ListSelectionMatching,
 } from "./resource-view-list-body";
 import type { ListChrome, ResourceCollectionPresentation } from "./resource-view-types";
+import type { BulkActionRunner } from "./bulk-action";
 
 export interface ResourceListFrameSelection {
   count: number;
   onClear: () => void;
   onDelete?: () => void;
   deletePending?: boolean;
+  /** The list's bulk runner: the bar waits for its run, and Delete refuses with its reason, as every generic verb does. */
+  bulk?: BulkActionRunner;
   actions?: React.ReactNode;
+  matching?: ListSelectionMatching;
 }
 
 export interface ResourceListFrameProps {
@@ -135,7 +140,10 @@ export function ResourceListFrame({
             onClear={selection.onClear}
             onDelete={selection.onDelete}
             deletePending={selection.deletePending}
+            pending={selection.bulk?.pending}
+            deleteDisabledReason={selection.bulk?.reason.disabledReason}
             actions={selection.actions}
+            matching={selection.matching}
           />
         ) : null}
         {error ? (

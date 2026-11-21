@@ -18,9 +18,10 @@ export function UpdateImapCredentialAction(): React.ReactElement {
       label={t("channel.imap.credential.button")}
       glyph="auth"
       when={isConnectedOrPaused}
+      transient
       args={[
         { name: "username", label: t("channel.imap.username") },
-        { name: "password", label: t("channel.imap.password"), widget: "password" },
+        { name: "password", label: t("channel.imap.password"), widget: "password", autoComplete: "new-password" },
       ]}
     />
   );

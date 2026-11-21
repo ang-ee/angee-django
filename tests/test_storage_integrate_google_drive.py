@@ -32,7 +32,7 @@ from angee.storage import exceptions as storage_exceptions
 from angee.storage import views
 from angee.storage_integrate.models import MountMode
 from angee.storage_integrate_google_drive.backends import GoogleDriveStorageBackend
-from angee.storage_integrate_google_drive.client import FOLDER_MIME, GoogleDriveError
+from angee.storage_integrate_google_drive.client import FOLDER_MIME, DriveFileError, GoogleDriveClient, GoogleDriveError
 from tests.conftest import (
     Backend,
     Credential,
@@ -635,14 +635,17 @@ def test_graphql_lists_accounts_browses_and_connects_with_the_session_users_acco
         execute_schema(
             schema,
             'query { mount_backend(backend_class: "google_drive") '
-            "{ requires_credential oauth_client oauth_scopes accounts { id display_name } } }",
+            "{ requires_credential oauth_client oauth_scopes accounts { id display_name blocked_reason } } }",
             user=admin,
         )
     )["mount_backend"]
     assert accounts["requires_credential"] is True
     assert accounts["oauth_scopes"] == ["https://www.googleapis.com/auth/drive.readonly"]
     assert accounts["oauth_client"] == str(drive_env.google.public_id)
-    assert [account["id"] for account in accounts["accounts"]] == [str(drive_env.credential.public_id)]
+    # A Mount admits every account it reads with (``Mount.credential_blocker``): one account reads many mounts.
+    assert [(account["id"], account["blocked_reason"]) for account in accounts["accounts"]] == [
+        (str(drive_env.credential.public_id), None)
+    ]
     others = result_data(
         execute_schema(
             schema,
@@ -719,7 +722,7 @@ def test_serving_reads_with_the_mounts_own_credential_while_it_is_connected(
     assert set(fake.bearers) == {TOKEN}
 
     fake.tokens.add("rotated-token")
-    drive_env.credential.update_material(access_token="rotated-token")
+    drive_env.credential.replace_material({"access_token": "rotated-token"})
     fake.bearers.clear()
     assert _read(storage, "x-served") == b"served"
     assert set(fake.bearers) == {"rotated-token"}
@@ -895,18 +898,44 @@ def test_a_source_refusal_keeps_its_reason_in_the_sync_failure(
     assert mount.sync_error == "The Google Drive folder is no longer available to the account."
 
 
-def test_accounts_without_the_drive_scope_are_neither_offered_nor_admitted(
+def test_a_mount_offers_only_the_users_own_google_grants_with_the_drive_scope(
     drive_env: SimpleNamespace, queued_mounts: list[Any]
 ) -> None:
-    """Only an account whose grant covers the backend's scopes reads its source."""
+    """The Mount reads with an OAuth grant of its client covering its scopes; it offers the user's own of those.
+
+    Another client's grant, a grant without the Drive scope and a key-pair
+    credential are neither read with nor offered; another user's grant is read
+    with but never offered, and a local folder reads with no account.
+    """
 
     drive_env.drive.folder("f-scoped", "Scoped")
-    narrow = _connect_account(drive_env.google, drive_env.owner, "google-owner", scope="openid email")
-    with system_context(reason="test Google Drive scoped accounts"):
-        assert not Mount.objects.connectable_credentials(drive_env.owner, "google_drive").exists()
-    with pytest.raises(ValidationError) as refused:
-        _connect(drive_env, "f-scoped", credential=narrow)
-    assert set(refused.value.message_dict) == {"credential"}
+    with system_context(reason="test Google Drive offered accounts"):
+        github = OAuthClient.objects.create(slug="github", display_name="GitHub", client_id="github-cid")
+    other_client = _connect_account(github, drive_env.owner, "github-owner", scope=f"openid {DRIVE_SCOPE}")
+    narrow = _connect_account(drive_env.google, drive_env.owner, "google-narrow", scope="openid email")
+    stranger = create_platform_admin(username="drive-offer-stranger", email="drive-offer-stranger@example.com")
+    foreign = _connect_account(drive_env.google, stranger, "google-stranger")
+    key_pair = _connect_account(drive_env.google, drive_env.owner, "google-key-pair")
+    with system_context(reason="test Google Drive key-pair credential"):
+        # A grant in every other respect: only its kind keeps the Mount from reading with it.
+        Credential.objects.filter(pk=key_pair.pk).update(kind=CredentialKind.JWT_BEARER)
+        key_pair.refresh_from_db()
+        mount = Mount.objects.build(backend_class="google_drive")
+        local = Mount.objects.build(backend_class="local_folder")
+        offered = set(mount.connectable_credentials(drive_env.owner))
+
+    assert offered == {drive_env.credential}
+    assert mount.reads_with(drive_env.credential) and mount.reads_with(foreign)
+    assert not any(mount.reads_with(credential) for credential in (other_client, narrow, key_pair))
+    # The admission rule the picker shows and every attachment raises.
+    assert mount.credential_blocker(drive_env.credential) is None
+    assert all(mount.credential_blocker(credential) for credential in (other_client, narrow, key_pair))
+    assert not local.reads_with(drive_env.credential)
+    for refused_credential in (other_client, narrow, foreign, key_pair):
+        with pytest.raises(ValidationError) as refused:
+            _connect(drive_env, "f-scoped", credential=refused_credential)
+        assert set(refused.value.message_dict) == {"credential"}
+    assert queued_mounts == []
 
 
 def test_a_mount_admits_on_every_attachment_only_an_account_its_backend_reads_with(
@@ -970,3 +999,38 @@ def test_an_alias_root_is_normalized_before_the_mounted_check(
     with pytest.raises(ValidationError) as again:
         _connect(drive_env, MY_DRIVE_ID, name="Again")
     assert set(again.value.message_dict) == {"root"}
+
+
+def _client() -> GoogleDriveClient:
+    """A Drive client on a credential that needs no refresh and is never renewed."""
+
+    credential = SimpleNamespace(
+        refreshable=False, ensure_fresh=lambda: None, auth_headers=lambda scopes=(): {"Authorization": "Bearer x"},
+    )
+    return GoogleDriveClient(credential)
+
+
+def _drive_refusal(status: int, reason: str = "") -> httpx2.Response:
+    return httpx2.Response(status, json={"error": {"errors": [{"reason": reason}]}} if reason else None)
+
+
+@pytest.mark.parametrize(("reason", "message"), [
+    pytest.param(
+        "cannotDownloadFile", "Google Drive does not allow downloading this file.", id="a-known-reason-in-our-words",
+    ),
+    pytest.param(
+        "someReasonGoogleMayAdd", "Google Drive refused this file (HTTP 403).", id="any-other-reason-one-phrase",
+    ),
+])
+def test_a_file_refusal_names_the_file_in_the_addons_words_never_googles(reason: str, message: str) -> None:
+    with mock_transport(lambda request: _drive_refusal(403, reason)), pytest.raises(DriveFileError) as refused:
+        _client().get("file-1")
+
+    assert str(refused.value) == message
+
+
+def test_a_refusal_that_reaches_no_file_names_its_status() -> None:
+    with mock_transport(lambda request: _drive_refusal(400)), pytest.raises(GoogleDriveError) as refused:
+        list(_client().shared_drives())
+
+    assert (str(refused.value), refused.value.transient) == ("Google Drive refused the request (HTTP 400).", False)

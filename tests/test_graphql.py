@@ -805,8 +805,8 @@ def test_unexpected_graphql_errors_hide_exception_details(caplog: pytest.LogCapt
     assert expected.errors[0].extensions == {"code": "BAD_USER_INPUT"}
 
 
-def test_variable_coercion_errors_preserve_client_details_without_logging(caplog: pytest.LogCaptureFixture) -> None:
-    """Request coercion retains graphql-core diagnostics without logging input values."""
+def test_request_validation_errors_preserve_client_details_without_logging(caplog: pytest.LogCaptureFixture) -> None:
+    """Document validation and coercion keep client diagnostics without logging input values."""
 
     @strawberry.type
     class Query:
@@ -833,6 +833,16 @@ def test_variable_coercion_errors_preserve_client_details_without_logging(caplog
     }
     assert "Unexpected" not in caplog.text
     assert invalid_value not in caplog.text
+
+    literal_result = schema.execute_sync('{ echo(value: "inline-literal-secret") }')
+
+    assert literal_result.data is None
+    assert literal_result.errors is not None
+    assert literal_result.errors[0].formatted == {
+        "message": 'Int cannot represent non-integer value: "inline-literal-secret"',
+        "locations": [{"line": 1, "column": 15}],
+    }
+    assert not caplog.records
 
 
 def test_variable_coercion_preserves_custom_scalar_error_code(caplog: pytest.LogCaptureFixture) -> None:

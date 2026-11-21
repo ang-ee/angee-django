@@ -20,6 +20,7 @@
 {# stack_template is the ref a framework-flavored wrapper records as template.active. #}
 {# Process mode always renders development, even if a caller bypasses the Copier validator. #}
 {% set effective_serve_mode = "development" %}{% if runtime_mode == "docker" %}{% set effective_serve_mode = serve_mode %}{% endif %}{% set database_url = "postgres://"|add:postgres_user|add:":${secret.db-password}@"|add:postgres_address|add:"/"|add:postgres_db %}{% set redis_url = "redis://"|add:redis_address|add:"/"|add:redis_db %}{% set celery_broker_url = "redis://"|add:redis_address|add:"/"|add:redis_broker_db %}
+{% set public_origin = "" %}{% if ingress_domain_value == "localhost" %}{% else %}{% set public_origin = "https://"|add:ingress_domain_value %}{% endif %}
 version: 1
 kind: stack
 {% if stack_flavor == "framework" %}
@@ -279,6 +280,10 @@ jobs:
         exec pnpm install --frozen-lockfile
 {% endif %}{% endif %}
 
+  # A framework stack installs its slots editable even when it serves production:
+  # its web build reads each fragment from the slot, where the fragment's tsconfig
+  # chain and pnpm dependencies live; a site-packages copy has neither. An instance
+  # builds its frontend from the baked web image and installs non-editable.
   py-sync:
 {% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
       ANGEE_DEPENDENCY_ACTION: "${inputs.action | default('sync')}"
@@ -289,8 +294,8 @@ jobs:
       - >-
         if [ "{{ job_dollar }}ANGEE_DEPENDENCY_ACTION" = sync ]; then
         if [ ! -f uv.lock ]; then uv lock || exit; fi;
-        exec uv sync --locked{% if effective_serve_mode == "production" %} --no-editable{% endif %}; fi;
-        exec "{{ job_dollar }}UV_PROJECT_ENVIRONMENT/bin/python" -m angee.platform_integrate_operator.preflight{% if effective_serve_mode == "production" %} --no-editable{% endif %}
+        exec uv sync --locked{% if effective_serve_mode == "production" and stack_flavor == "instance" %} --no-editable{% endif %}; fi;
+        exec "{{ job_dollar }}UV_PROJECT_ENVIRONMENT/bin/python" -m angee.platform_integrate_operator.preflight{% if effective_serve_mode == "production" and stack_flavor == "instance" %} --no-editable{% endif %}
         -- "{{ job_dollar }}ANGEE_DEPENDENCY_ACTION" "{{ job_dollar }}ANGEE_DEPENDENCY_REQUIREMENT"
     holds: &python-consumers [django{% if enable_celery %}, celery-worker{% if celery_queues %}, celery-queues{% endif %}{% endif %}]
 {% if stack_flavor == "framework" %}    depends_on: [deps]
@@ -334,10 +339,11 @@ jobs:
     mounts:
       - source://app:/app
     workdir: /app
-    command: ["sh", "-c", "corepack enable pnpm && exec pnpm --dir {{ web_path }} build"]{% if sentry_web_dsn %}
-    env:
+    command: ["sh", "-c", "corepack enable pnpm && exec pnpm --dir {{ web_path }} build"]{% if public_origin or sentry_web_dsn %}
+    env:{% if public_origin %}
+      ANGEE_PUBLIC_ORIGIN: "{{ public_origin }}"{% endif %}{% if sentry_web_dsn %}
       VITE_SENTRY_DSN: "{{ sentry_web_dsn }}"
-      VITE_SENTRY_ENVIRONMENT: "{{ effective_serve_mode }}"{% endif %}
+      VITE_SENTRY_ENVIRONMENT: "{{ effective_serve_mode }}"{% endif %}{% endif %}
     depends_on: [deps, compose, operator-schema]
 {% endif %}
 {% else %}
@@ -360,10 +366,11 @@ jobs:
         && if [ ! -f {{ container_project_dir }}/pnpm-lock.yaml ]; then
         pnpm install --lockfile-only --no-frozen-lockfile --lockfile-dir {{ container_project_dir }} || exit; fi
         && pnpm install --frozen-lockfile --lockfile-dir {{ container_project_dir }}
-        && pnpm --config.verify-deps-before-run=false --filter ./../angee-project/{{ web_path }} --fail-if-no-match run build{% if sentry_web_dsn %}
-    env:
+        && pnpm --config.verify-deps-before-run=false --filter ./../angee-project/{{ web_path }} --fail-if-no-match run build{% if public_origin or sentry_web_dsn %}
+    env:{% if public_origin %}
+      ANGEE_PUBLIC_ORIGIN: "{{ public_origin }}"{% endif %}{% if sentry_web_dsn %}
       VITE_SENTRY_DSN: "{{ sentry_web_dsn }}"
-      VITE_SENTRY_ENVIRONMENT: "{{ effective_serve_mode }}"{% endif %}
+      VITE_SENTRY_ENVIRONMENT: "{{ effective_serve_mode }}"{% endif %}{% endif %}
     depends_on: [compose, operator-schema]
 
 {% endif %}
@@ -382,7 +389,7 @@ services:
 {# the same path, so git over SSH resolves keys, aliases and known_hosts as on the host. #}
     runtime: container
     image: {{ operator_image }}
-    command: ["--root", "${stack.root}", "--bind", "0.0.0.0", "--port", "9000", "--token", "${secret.operator-token}"{% if effective_serve_mode == "production" %}, "--allowed-origin", "{% if ingress_domain_value == "localhost" %}http://localhost:{{ ui_port }}{% else %}https://{{ ingress_domain_value }}{% endif %}"{% endif %}]
+    command: ["--root", "${stack.root}", "--bind", "0.0.0.0", "--port", "9000", "--token", "${secret.operator-token}"{% if effective_serve_mode == "production" %}, "--allowed-origin", "{% if public_origin %}{{ public_origin }}{% else %}http://localhost:{{ ui_port }}{% endif %}"{% endif %}]
     mounts:
       - "bind://.:${stack.root}"
       - "bind:///var/run/docker.sock:/var/run/docker.sock"
@@ -469,6 +476,8 @@ services:
 {# for its connection, so the pool keeps 8 threads per queue; one process loads the app #}
 {# once for every queue instead of once per queue. The shared worker embeds beat #}
 {# (`--beat`): never scale it, beat has no leader lock (one scheduler per stack); beat's #}
+{# Its prefork pool runs `celery_concurrency` children: each loads the whole app, so the #}
+{# CPU-count default (Celery's) costs a gigabyte-scale footprint on a many-core host. #}
 {# schedule lives in the database. A blank `queue_worker` skips the queue worker's item. #}
 {% if celery_queues %}{% set queue_worker = "queues" %}{% else %}{% set queue_worker = "" %}{% endif %}
 {% for role in "worker,"|add:queue_worker|split:"," %}{% if role %}
@@ -478,13 +487,13 @@ services:
     # Let Celery finish a warm shutdown, then bound native supervisor updates;
     # a local worker that hangs on shutdown costs the whole restart its grace.
     stop_grace_period: 10s
-{% if runtime_mode == "process" %}    command: ["uv", "run", "--no-sync", "python", "manage.py", "celery", "worker", {% if role == "worker" %}"--beat"{% else %}"-Q", "{{ celery_queues }}", "--pool", "threads", "--concurrency", "{{ celery_queues|split:","|length * 8 }}"{% endif %}, "--loglevel=INFO"]
+{% if runtime_mode == "process" %}    command: ["uv", "run", "--no-sync", "python", "manage.py", "celery", "worker", {% if role == "worker" %}"--beat", "--concurrency", "{{ celery_concurrency }}"{% else %}"-Q", "{{ celery_queues }}", "--pool", "threads", "--concurrency", "{{ celery_queues|split:","|length * 8 }}"{% endif %}, "--loglevel=INFO"]
     after: [provision]
 {% else %}    command:
       - sh
       - "-c"
       - >-
-        exec uv run --no-sync python manage.py celery worker {% if role == "worker" %}--beat{% else %}-Q {{ celery_queues }} --pool threads --concurrency {{ celery_queues|split:","|length * 8 }}{% endif %} --loglevel=INFO
+        exec uv run --no-sync python manage.py celery worker {% if role == "worker" %}--beat --concurrency {{ celery_concurrency }}{% else %}-Q {{ celery_queues }} --pool threads --concurrency {{ celery_queues|split:","|length * 8 }}{% endif %} --loglevel=INFO
     after: [provision{% if redis_mode == "external" %}{% else %}, redis{% endif %}]
 {% endif %}
 {% endif %}{% endfor %}
@@ -501,7 +510,8 @@ services:
       ANGEE_DJANGO_URL: http://127.0.0.1:{{ django_port }}
       ANGEE_UI_PORT: "{{ ui_port }}"
       # The UI proxies /operator/* to the daemon (same-origin, no CORS).
-      ANGEE_OPERATOR_URL: "{{ operator_url }}"{% if sentry_web_dsn %}
+      ANGEE_OPERATOR_URL: "{{ operator_url }}"{% if public_origin %}
+      ANGEE_PUBLIC_ORIGIN: "{{ public_origin }}"{% endif %}{% if sentry_web_dsn %}
       VITE_SENTRY_DSN: "{{ sentry_web_dsn }}"
       VITE_SENTRY_ENVIRONMENT: "{{ effective_serve_mode }}"{% endif %}
     ready:
@@ -537,7 +547,8 @@ services:
       ANGEE_DJANGO_URL: http://django:8000
       ANGEE_UI_PORT: "{{ ui_port }}"
       ANGEE_OPERATOR_URL: "{{ operator_url }}"{% if ingress_domain_value == "localhost" %}{% else %}
-      ANGEE_UI_ALLOWED_HOSTS: "{{ ingress_domain_value }}{% if ingress_aliases %},{{ ingress_aliases }}{% endif %}"{% endif %}{% if sentry_web_dsn %}
+      ANGEE_UI_ALLOWED_HOSTS: "{{ ingress_domain_value }}{% if ingress_aliases %},{{ ingress_aliases }}{% endif %}"{% endif %}{% if public_origin %}
+      ANGEE_PUBLIC_ORIGIN: "{{ public_origin }}"{% endif %}{% if sentry_web_dsn %}
       VITE_SENTRY_DSN: "{{ sentry_web_dsn }}"
       VITE_SENTRY_ENVIRONMENT: "{{ effective_serve_mode }}"{% endif %}
     command:

@@ -21,8 +21,9 @@ The external key is the UID (its digest when too long), plus the
 events, cancelled instances included, and defines at most 100 time zones; both
 are counted before it is parsed (:attr:`IcsCalendarBackend.events_per_feed`,
 :attr:`IcsCalendarBackend.timezones_per_feed`). A rule is validated by the
-event's own field before any ``EXDATE`` is judged; a master names at most 10,000
-``EXDATE``s, each judged on its own window.
+event's own field before any ``EXDATE`` is judged (``cancelled_instances``); a
+master names at most 10,000 ``EXDATE``s (``excluded_dates``), each judged on its
+own window.
 
 **Zones are resolved per parse.** icalendar's parser caches each feed-defined
 ``VTIMEZONE`` in a process-wide registry, so a resolved value can carry another
@@ -41,13 +42,13 @@ Mapped properties:
   keeps its ``DTSTART`` zone as its own ``timezone`` when that maps to an IANA name
   (a UTC time keeps ``UTC``); a custom zone, a date or a floating time keeps the
   feed's ``X-WR-TIMEZONE``, else its calendar's zone;
-- the first ``RRULE``; each ``EXDATE`` becomes a cancelled instance (``RDATE`` is
-  not mapped);
+- the first ``RRULE`` (``series_rule``); each ``EXDATE`` that is an instance becomes
+  a cancelled one (``RDATE`` is not mapped);
 - ``STATUS``, ``TRANSP`` (``TRANSPARENT`` is free), ``CLASS`` (``PUBLIC`` is
   public, ``PRIVATE`` and ``CONFIDENTIAL`` private, none the calendar's default);
   an instance that states no ``TRANSP`` or ``CLASS`` takes its master's;
 - ``ORGANIZER`` and ``ATTENDEE`` ``mailto:`` addresses with ``CN``, ``ROLE`` and
-  ``PARTSTAT``;
+  ``PARTSTAT``, the organizer first (``organizer_first``);
 - the conference URL: ``CONFERENCE`` (RFC 7986), ``X-GOOGLE-CONFERENCE``,
   ``X-MICROSOFT-ONLINEMEETINGEXTERNALLINK``, ``X-MICROSOFT-SKYPETEAMSMEETINGURL``,
   then ``URL``, the first web address.
@@ -62,7 +63,7 @@ import hashlib
 import ipaddress
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from itertools import islice, takewhile
 from time import monotonic
@@ -71,7 +72,6 @@ from urllib.parse import urlsplit
 
 import icalendar
 from dateutil.rrule import rrulestr
-from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 from icalendar.parser import Contentlines
@@ -82,13 +82,17 @@ from angee.calendar.backends import (
     ParsedAttendee,
     ParsedCalendar,
     ParsedEvent,
+    cancelled_instances,
+    excluded_dates,
     instance_key,
+    organizer_first,
     series_key,
+    series_rule,
 )
 from angee.calendar.choices import AttendeeResponse, AttendeeRole, EventStatus, EventTransparency, EventVisibility
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
-from angee.integrate.http import DownloadResult, OutboundBudget
+from angee.integrate.http import DownloadResult, HttpRefusal, OutboundBudget
 from angee.integrate.net import AddressNotAllowedError, AddressResolutionError, is_unsafe_address, parse_http_url
 from angee.integrate.states import StreamPhase
 from angee.integrate.streams import StreamPage
@@ -175,8 +179,8 @@ class IcsCalendarBackend(CalendarBackend):
     """Polls one public ICS feed into its source's read-only calendar.
 
     The feed is the source's one remote calendar, keyed :data:`FEED_KEY`; its address
-    is the source credential's secret. The calendar takes no local edits: a feed
-    never takes a write (``writable`` stays false).
+    is the source credential's secret. The calendar takes no local edits: a feed is
+    only pulled (``direction`` stays ``PULL``).
     """
 
     key = "ics"
@@ -185,10 +189,7 @@ class IcsCalendarBackend(CalendarBackend):
     defaults = {"vendor": "ics", "poll_interval": 3600}
 
     events_per_feed: ClassVar[int] = 10_000
-    """The most events a feed may produce, cancelled instances included; a larger feed fails its poll.
-
-    It also bounds the dates one master's ``EXDATE`` properties may name: past it, that master is an invalid event.
-    """
+    """The most events a feed may produce, cancelled instances included; a larger feed fails its poll."""
 
     timezones_per_feed: ClassVar[int] = 100
     """The most VTIMEZONEs a feed may define; a larger feed fails its poll before it is parsed."""
@@ -198,16 +199,17 @@ class IcsCalendarBackend(CalendarBackend):
 
     _snapshot: _Snapshot | None = None
 
-    def admit_credential(self, credential: Any) -> None:
-        """Admit only a static token: the feed address a subscription keeps as its secret.
+    def credential_blocker(self, credential: Any) -> str | None:
+        """Refuse anything but a static token: the feed address a subscription keeps as its secret.
 
         The backend reads the feed address from that token alone, so any other kind
         (an OAuth grant, a key pair) would send another credential's material to a
         feed server.
         """
 
-        if credential.kind != CredentialKind.STATIC_TOKEN:
-            raise ValidationError({"credential": "An ICS feed subscription keeps its feed address as a static token."})
+        if credential.kind == CredentialKind.STATIC_TOKEN:
+            return None
+        return "An ICS feed subscription keeps its feed address as a static token."
 
     def discover(self) -> list[ParsedCalendar]:
         """Return the feed, the source's one remote calendar, named as subscribed."""
@@ -282,9 +284,11 @@ class IcsCalendarBackend(CalendarBackend):
         if deadline is None:
             deadline = monotonic() + self.parse_seconds
         feed = _read(result.content, events=self.events_per_feed, timezones=self.timezones_per_feed)
+        payloads = self._observe_feed(feed, zone=self.get_calendar(stream).timezone, deadline=deadline)
         return _Snapshot(
             {"etag": result.headers.get("etag", ""), "last_modified": result.headers.get("last-modified", "")},
-            self._observe_feed(feed, zone=self.get_calendar(stream).timezone, deadline=deadline),
+            # A master the feed serves unmappable keeps its linked instances, set aside with it.
+            self.quarantine_series_instances(stream, payloads),
         )
 
     # --- transport ---
@@ -301,8 +305,8 @@ class IcsCalendarBackend(CalendarBackend):
     def _fetch(self, validators: Mapping[str, Any]) -> DownloadResult:
         """GET the feed from a public address within :data:`_FEED_BUDGET`, conditionally on ``validators``.
 
-        A 304 to a conditional request returns as is; a 429 or 5xx is a transient
-        refusal that keeps the server's ``Retry-After``.
+        A 304 to a conditional request returns as is; any other status but a
+        success is the feed's refusal, classified by integrate's ``HttpRefusal``.
         """
 
         headers = {"Accept": "text/calendar, */*;q=0.1"}
@@ -320,16 +324,9 @@ class IcsCalendarBackend(CalendarBackend):
             raise IcsError("The calendar feed host could not be found.") from error
         if result is None:
             raise IcsError("The calendar feed could not be read within its size, time and redirect limits.")
-        status = result.status_code
-        if status == 304 and len(headers) > 1:
+        if (result.status_code == 304 and len(headers) > 1) or 200 <= result.status_code < 300:
             return result
-        if status == 429 or status >= 500:
-            raise IcsError(
-                f"The calendar feed returned HTTP {status}.", transient=True, retry_after=_retry_after(result.headers)
-            )
-        if not 200 <= status < 300:
-            raise IcsError(f"The calendar feed returned HTTP {status}.")
-        return result
+        raise HttpRefusal.of(result).as_error(IcsError, "The calendar feed")
 
     # --- snapshot ---
 
@@ -369,7 +366,6 @@ class IcsCalendarBackend(CalendarBackend):
                     feed_zone=feed_zone,
                     calendar_zone=zone,
                     master=masters.get(uid),
-                    exdate_cap=self.events_per_feed,
                     deadline=deadline,
                 )
             except IcsError:
@@ -583,22 +579,17 @@ def _events(
     feed_zone: str,
     calendar_zone: str,
     master: Any,
-    exdate_cap: int,
     deadline: float | None = None,
 ) -> list[tuple[str, ParsedEvent]]:
     """Map one VEVENT to its keyed event, then a master's cancelled ``EXDATE`` instances.
 
     ``master`` is the series' master VEVENT when the feed carries it. An instance
-    that states no ``TRANSP`` or ``CLASS`` takes its master's. A rule is validated
-    by the event's own owner first (``CalendarEvent.validate_rule``: its daily
-    floor, its ``COUNT`` bound, and an occurrence within about 30 years of its
-    start), so an invalid rule makes the master an invalid event before anything
-    expands it, and so does naming more than ``exdate_cap`` ``EXDATE``s.
-    Each ``EXDATE`` is then judged on its own (``CalendarEvent.is_instance``, which
-    reads only that moment's window), in the zone the stored series uses, against
-    the parse's ``deadline``: one that is no instance is dropped, and a cancelled
-    instance ends where the event owner's arithmetic puts it
-    (``CalendarEvent.occurrence_end``: an all-day instance spans local days).
+    that states no ``TRANSP`` or ``CLASS`` takes its master's. A master's rule and
+    its ``EXDATE``s go through :func:`~angee.calendar.backends.excluded_dates`, which
+    refuses a master naming more than 10,000 of them before any is mapped, and
+    :func:`~angee.calendar.backends.cancelled_instances`, which validates the rule (an
+    invalid one makes the master an invalid event) and keeps each ``EXDATE`` that is
+    an instance, judged on its own window after the parse's ``deadline`` is checked.
     ``calendar_zone`` is the calendar's.
     """
 
@@ -607,15 +598,8 @@ def _events(
     start = _instant(start_prop.dt, _param(start_prop, "TZID"), zones, zone)
     end = _end(component, start_prop.dt, start, all_day=all_day, zones=zones, zone=zone)
     rid = component.get("RECURRENCE-ID")
-    recurrence = "" if rid is not None else _rule(component)
+    recurrence = "" if rid is not None else series_rule(component)
     event_zone = _event_zone(start_prop, zones, feed_zone)
-    expansion = event_zone or calendar_zone
-    # The unsaved row only lends its owner's rule checks and occurrence arithmetic; nothing writes it.
-    series: Any = apps.get_model("calendar", "CalendarEvent")(
-        start=start, end=end, all_day=all_day, recurrence=recurrence, timezone=event_zone
-    )
-    if recurrence:
-        series.validate_rule(zone=expansion)
     original_start = _instant(rid.dt, _param(rid, "TZID"), zones, zone) if rid is not None else None
     override = original_start is not None and master is not None and master is not component
     series_master = master if override else None
@@ -649,27 +633,12 @@ def _events(
         attendees=_attendees(component),
     )
     observed = [(instance_key(uid, original_start) if original_start is not None else series_key(uid), event)]
-    exdates = _values(component, "EXDATE") if recurrence else []
-    if sum(len(exdate.dts) for exdate in exdates) > exdate_cap:
-        raise ValidationError(f"The event excludes more than {exdate_cap} dates.", code="too_many_exdates")
-    excluded = sorted(
-        {_instant(value.dt, _param(exdate, "TZID"), zones, zone) for exdate in exdates for value in exdate.dts}
-    )
-    for moment in excluded:
-        _check_deadline(deadline)
-        if not series.is_instance(moment, zone=expansion):
-            continue
-        cancelled = replace(
-            event,
-            start=moment,
-            end=series.occurrence_end(moment, zone=expansion),
-            recurrence="",
-            series=series_key(uid),
-            original_start=moment,
-            status=EventStatus.CANCELLED,
-            attendees=(),
+    excluded = [_instant(value, tzid, zones, zone) for value, tzid in excluded_dates(component)] if recurrence else []
+    observed.extend(
+        cancelled_instances(
+            event, uid, excluded, calendar_zone=calendar_zone, check_deadline=lambda: _check_deadline(deadline)
         )
-        observed.append((instance_key(uid, moment), cancelled))
+    )
     return observed
 
 
@@ -738,35 +707,22 @@ def _end(
 
 
 def _attendees(component: Any) -> tuple[ParsedAttendee, ...]:
-    """Return the ``mailto:`` attendees, the organizer first as the ``organizer`` attendee."""
+    """Return the ``mailto:`` attendees as listed, the organizer first (``organizer_first``)."""
 
-    listed: dict[str, ParsedAttendee] = {}
-    for prop in _values(component, "ATTENDEE"):
-        address = _mailto(prop)
-        if address:
-            listed.setdefault(
-                address.lower(),
-                ParsedAttendee(
-                    address=address,
-                    role=_ROLES.get(_param(prop, "ROLE").upper(), AttendeeRole.REQUIRED),
-                    response=_RESPONSES.get(_param(prop, "PARTSTAT").upper(), AttendeeResponse.NEEDS_ACTION),
-                    display_name=_param(prop, "CN"),
-                ),
-            )
-    organizer = component.get("ORGANIZER")
-    address = _mailto(organizer) if organizer is not None else ""
-    if not address:
-        return tuple(listed.values())
-    listed_as = listed.pop(address.lower(), None)
-    return (
+    listed = [
         ParsedAttendee(
             address=address,
-            role=AttendeeRole.ORGANIZER,
-            response=listed_as.response if listed_as is not None else AttendeeResponse.ACCEPTED,
-            display_name=_param(organizer, "CN") or (listed_as.display_name if listed_as is not None else ""),
-        ),
-        *listed.values(),
-    )
+            role=_ROLES.get(_param(prop, "ROLE").upper(), AttendeeRole.REQUIRED),
+            response=_RESPONSES.get(_param(prop, "PARTSTAT").upper(), AttendeeResponse.NEEDS_ACTION),
+            display_name=_param(prop, "CN"),
+        )
+        for prop in _values(component, "ATTENDEE")
+        if (address := _mailto(prop))
+    ]
+    organizer = component.get("ORGANIZER")
+    if organizer is None:
+        return organizer_first(listed, "")
+    return organizer_first(listed, _mailto(organizer), name=_param(organizer, "CN"))
 
 
 def _values(component: Any, name: str) -> list[Any]:
@@ -797,13 +753,6 @@ def _stated(component: Any, master: Any, name: str) -> str:
     return _text(component, name) or (_text(master, name) if master is not None else "")
 
 
-def _rule(component: Any) -> str:
-    """Return the first ``RRULE`` as its RFC 5545 text, or ``""``."""
-
-    rules = _values(component, "RRULE")
-    return rules[0].to_ical().decode().strip() if rules else ""
-
-
 def _param(prop: Any, name: str) -> str:
     """Return a property parameter's text, or ``""``."""
 
@@ -825,10 +774,3 @@ def _sequence(component: Any) -> int:
 
     text = _text(component, "SEQUENCE")
     return int(text) if text.isdecimal() else 0
-
-
-def _retry_after(headers: Mapping[str, str]) -> timedelta | None:
-    """Return a bounded ``Retry-After`` horizon in seconds, when the feed gives one."""
-
-    hint = headers.get("retry-after", "")
-    return timedelta(seconds=int(hint)) if hint.isdecimal() and 0 < int(hint) <= 86400 else None

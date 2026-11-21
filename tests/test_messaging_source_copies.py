@@ -5,6 +5,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
+from graphql import GraphQLError
 from rebac import actor_context, system_context
 
 from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
@@ -173,12 +174,31 @@ def test_a_person_keeps_copies_separate_and_confirms_them_again_without_moving_r
 
 
 @pytest.mark.django_db(transaction=True)
-def test_retained_source_identity_blocks_destructive_channel_purge(channel):
+@pytest.mark.parametrize("native_delete", (False, True))
+def test_retained_source_identity_blocks_destructive_channel_purge(channel, native_delete):
     other = make_integration("copy-retained", model=Channel, backend_class="manual", owner=channel.owner)
     _ingest([_parsed("retained@example.com")], channel=channel)
     _ingest([_parsed("retained@example.com")], channel=other)
-    with actor_context(channel.owner), pytest.raises(ProtectedError, match="Disconnect"):
-        Channel.objects.purge(channel)
+    if native_delete:
+        refused = execute_schema(
+            _schema(),
+            """mutation Delete($id: String!) {
+              delete_channels_by_pk(id: $id) { id }
+            }""",
+            {"id": str(channel.sqid)},
+            user=channel.owner,
+        )
+        assert refused.errors is not None
+        error = refused.errors[0]
+        assert isinstance(error.original_error, GraphQLError)
+        assert error.extensions == {"code": "BAD_USER_INPUT"}
+        assert error.message.startswith("Deletion is blocked by related records:")
+        assert (refused.data or {}).get("delete_channels_by_pk") is None
+    else:
+        with actor_context(channel.owner), pytest.raises(ProtectedError, match="Disconnect"):
+            Channel.objects.purge(channel)
+    assert Channel._base_manager.filter(pk=channel.pk).exists()
+    assert Thread._base_manager.filter(channel_id=channel.pk).exists()
     assert Message._base_manager.filter(channel_id=channel.pk).exists()
     assert Message._base_manager.filter(channel_id=other.pk).exists()
 

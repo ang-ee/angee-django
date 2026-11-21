@@ -1,30 +1,22 @@
 import { useCallback, useMemo, type ReactElement } from "react";
 import { useRouterState } from "@tanstack/react-router";
 import type { DataResourceMetadata } from "@angee/metadata";
-import { Glyph, recordNavigationHref, SelectionBarAction, useRouteHref, type ListViewNavigationScope, type ResourceListSnapshot } from "@angee/ui";
+import { recordNavigationHref, useRouteHref, type ListViewNavigationScope, type ResourceListSnapshot } from "@angee/ui";
 
 import { ALL_SCOPE, TRASH_SCOPE, type StorageFileRow } from "../data/file-rows";
-import type { FileActions } from "../data/use-file-actions";
 import type { StorageUpload } from "../data/use-upload";
-import { useStorageT } from "../i18n";
 import { FileBrowserContent } from "./FileBrowserContent";
 import type { StorageExplorerController } from "./StorageExplorer";
 
-/** The active drive/folder's list scope, row links, bulk verbs and upload destination. */
-export function StorageListContent({ controller, fileResource, navigationScope, uploads, fileActions, onListStateChange }: {
+/** The active drive/folder's list scope, row links and upload destination. */
+export function StorageListContent({ controller, fileResource, navigationScope, uploads, onListStateChange }: {
   controller: StorageExplorerController;
   fileResource: DataResourceMetadata | undefined;
   navigationScope: ListViewNavigationScope | null;
   uploads: StorageUpload;
-  fileActions: FileActions;
   onListStateChange: (state: ResourceListSnapshot<StorageFileRow>) => void;
 }): ReactElement {
-  const t = useStorageT();
   const routeHref = useRouteHref();
-  // The bulk verbs settle their own failures; a refusal keeps the selection.
-  const bulkAction = useCallback(async (ids: ReadonlySet<string>, clear: () => void, restore: boolean) => {
-    if (await (restore ? fileActions.restoreMany(ids) : fileActions.trashMany(ids))) clear();
-  }, [fileActions]);
   const driveId = controller.rootId;
   const effectiveScope = controller.selectedId ?? ALL_SCOPE;
   const baseFilter = useMemo(
@@ -60,30 +52,6 @@ export function StorageListContent({ controller, fileResource, navigationScope, 
       ),
     [routeHref, searchStr, fileResource, navigationScope],
   );
-  // The selection bar's bulk verbs: Restore in the Trash scope, else Trash.
-  const renderBulkActions = useCallback(
-    (ids: ReadonlySet<string>, clear: () => void) =>
-      effectiveScope === TRASH_SCOPE ? (
-        <SelectionBarAction
-          surface="brand"
-          pending={fileActions.busy}
-          onClick={() => void bulkAction(ids, clear, true)}
-        >
-          <Glyph name="restore" />
-          {t("bulk.restore")}
-        </SelectionBarAction>
-      ) : (
-        <SelectionBarAction
-          surface="brand"
-          pending={fileActions.busy}
-          onClick={() => void bulkAction(ids, clear, false)}
-        >
-          <Glyph name="trash" />
-          {t("bulk.trash")}
-        </SelectionBarAction>
-      ),
-    [bulkAction, effectiveScope, fileActions, t],
-  );
-  return <FileBrowserContent baseFilter={baseFilter} rowHref={rowHref} bulkActions={renderBulkActions}
+  return <FileBrowserContent baseFilter={baseFilter} rowHref={rowHref}
     onListStateChange={onListStateChange} uploads={uploads} uploadTarget={controller.uploadTarget} />;
 }

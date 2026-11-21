@@ -10,6 +10,8 @@ import {
   ListView,
   type GanttViewSpec,
   useEnumOptions,
+  mutationDialogValueCodecs,
+  relationValueId,
   useActionOutcomeMutation,
   useActionResultMutation,
   useActionResultRun,
@@ -35,7 +37,7 @@ import { TaskManagementTab } from "./task-declarations";
 
 export interface ProjectFormSelection {
   groups?: readonly ("planning" | "details")[];
-  verbs?: readonly ("pause" | "resume" | "complete" | "drop" | "createFromTemplate")[];
+  verbs?: readonly ("pause" | "resume" | "complete" | "drop" | "createFromTemplate" | "transfer")[];
   contextLine?: FormProps["contextLine"];
   /** Compact read-only extras the host adds to the record header (a card in `RecordHeader.extra`). */
   headerExtras?: FormProps["headerExtras"];
@@ -69,6 +71,9 @@ export function useProjectFormDeclaration(
   const resumeProject = useRecordAction((id, context) => resume(id, { expected_revision: context.record?.revision }));
   const completeProject = useRecordAction((id, context) => complete(id, { expected_revision: context.record?.revision }));
   const dropProject = useRecordAction((id, context) => drop(id, { expected_revision: context.record?.revision }));
+  const [transferOwnership, transferState] = useActionOutcomeMutation("transfer_project_ownership", {
+    invalidateModels: [PROJECT_MODEL],
+  });
   const [createFromTemplate] = useActionOutcomeMutation("create_project_from_template", {
     invalidateModels: [PROJECT_MODEL],
   });
@@ -86,30 +91,39 @@ export function useProjectFormDeclaration(
       return outcome;
     });
   });
-  const verbs = selection.verbs ?? ["pause", "resume", "complete", "drop", "createFromTemplate"];
+  const verbs = selection.verbs ?? ["pause", "resume", "complete", "drop", "createFromTemplate", "transfer"];
   const standardActions = <>
+    {verbs.includes("transfer") ? <Action
+      id="transfer-ownership" placement="menu" label={t("project.action.transferOwnership")} permission="transfer"
+      disabled={transferState.fetching}
+      args={[{ name: "owner", label: t("project.action.newOwner"), argKind: "relation", resource: "iam.User", optional: true,
+        fromContext: ({ record }) => relationValueId(record?.owner) }]}
+      submit={(values, context) => transferOwnership(
+        mutationDialogValueCodecs.requiredString(context.record?.id, "id"),
+        { owner: mutationDialogValueCodecs.string(values.owner) },
+      )} /> : null}
     {verbs.includes("pause") ? <Action
-      id="pause" label={t("project.action.pause")} permission="write"
-      icon="archive" run={pauseProject} visibleWhen={(record) => recordStatus(record) === "open"} /> : null}
+      id="pause" placement="menu" label={t("project.action.pause")} permission="write"
+      icon="archive" run={pauseProject} visibleWhen={(record) => record.is_template !== true && recordStatus(record) === "open"} /> : null}
     {verbs.includes("resume") ? <Action
-      id="resume" label={t("project.action.resume")} permission="write"
+      id="resume" primary label={t("project.action.resume")} permission="write"
       icon="activity" run={resumeProject}
-      visibleWhen={(record) => ["paused", "dropped"].includes(recordStatus(record))} /> : null}
+      visibleWhen={(record) => record.is_template !== true && ["paused", "dropped"].includes(recordStatus(record))} /> : null}
     {verbs.includes("complete") ? <Action
-      id="complete" placement="toolbar" label={t("project.action.complete")} permission="write"
+      id="complete" primary label={t("project.action.complete")} permission="write"
       icon="check" run={completeProject} visibleWhen={isActiveProject} /> : null}
     {verbs.includes("drop") ? <Action
       id="drop" label={t("project.action.drop")} permission="write"
       icon="circle-x" danger run={dropProject} visibleWhen={isActiveProject} /> : null}
     {verbs.includes("createFromTemplate") ? <Action
-      id="create-from-template" placement="toolbar" label={t("project.action.createFromTemplate")}
+      id="create-from-template" primary label={t("project.action.createFromTemplate")}
       icon="projects" run={createProject} visibleWhen={(record) => record.is_template === true} /> : null}
   </>;
   return (
     <Form
       {...props}
       resource={PROJECT_MODEL}
-      returning={["permissions", "on_path", "status_changed_at", "is_template", "selectable_milestones.id", "current_milestone.id", "current_milestone.name", ...(props.returning ?? []), ...(selection.returning ?? [])]}
+      returning={["owner.id", "permissions", "on_path", "status_changed_at", "is_template", "selectable_milestones.id", "current_milestone.id", "current_milestone.name", ...(props.returning ?? []), ...(selection.returning ?? [])]}
       contextLine={selection.contextLine ?? props.contextLine}
       headerExtras={selection.headerExtras ?? props.headerExtras}
       eyebrow={selection.eyebrow ?? props.eyebrow ?? t("project.eyebrow")}
@@ -143,9 +157,9 @@ export function useProjectFormDeclaration(
   );
 }
 
-function isActiveProject(record: { status?: unknown }): boolean {
+function isActiveProject(record: { status?: unknown; is_template?: unknown }): boolean {
   const status = recordStatus(record);
-  return status === "open" || status === "paused";
+  return record.is_template !== true && (status === "open" || status === "paused");
 }
 
 interface MilestoneRow extends StringIdRow {

@@ -5,6 +5,7 @@ import {
   type MutationDialogValues,
   useRouteHref,
 } from "@angee/ui";
+import type { AuthoredMutateOptions } from "@angee/refine";
 import { useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 
@@ -60,7 +61,7 @@ export function WorkspaceCreateDialog({
       })),
       placeholder: t("workspaces.create.templatePlaceholder"),
       required: true,
-      prefill: (value) => templateInputPrefill(templates, inputNames, value),
+      prefill: (value) => templateInputPrefill(templates, value),
     },
     {
       name: "name",
@@ -83,10 +84,12 @@ export function WorkspaceCreateDialog({
     })),
   ], [inputNames, t, templates]);
 
+  // The dialog renders every failure; each daemon call runs with its options, so none also toasts.
   const validate = React.useCallback(async (
     object: WorkspaceCreateInput,
+    options?: AuthoredMutateOptions,
   ): Promise<ValidationErrors | null> => {
-    const checked = (await preflight.run({ input: object }))?.workspaceCreatePreflight;
+    const checked = (await preflight.run({ input: object }, options))?.workspaceCreatePreflight;
     if (!checked) throw new Error(t("workspaces.create.failed"));
     if (checked.ok) return null;
     return {
@@ -95,8 +98,8 @@ export function WorkspaceCreateDialog({
     };
   }, [preflight, t]);
 
-  const submit = React.useCallback(async (object: WorkspaceCreateInput) => {
-    const workspace = (await create.run({ object }))?.insert_workspaces_one;
+  const submit = React.useCallback(async (object: WorkspaceCreateInput, options?: AuthoredMutateOptions) => {
+    const workspace = (await create.run({ object }, options))?.insert_workspaces_one;
     if (!workspace) throw new Error(t("workspaces.create.failed"));
     // Pull the snapshot before navigating: detail resolves by name from the
     // workspaces pane and would otherwise bounce back to the list.
@@ -162,21 +165,15 @@ function templateInputFor(
   return editableTemplateInputs(template?.inputs ?? []).find((input) => input.name === name) ?? null;
 }
 
+/** The chosen template's inputs at their initial values; another template's inputs leave the dialog's values as they hide. */
 function templateInputPrefill(
   templates: readonly TemplateDescriptor[],
-  inputNames: readonly string[],
   templateRef: unknown,
 ): Record<string, unknown> {
-  const cleared = Object.fromEntries(inputNames.map((name) => [name, undefined]));
-  if (typeof templateRef !== "string") return cleared;
   const template = templates.find((candidate) => candidate.ref === templateRef);
-  return {
-    ...cleared,
-    ...Object.fromEntries(
-      editableTemplateInputs(template?.inputs ?? [])
-        .map((input) => [input.name, initialTemplateInput(input)]),
-    ),
-  };
+  return Object.fromEntries(
+    editableTemplateInputs(template?.inputs ?? []).map((input) => [input.name, initialTemplateInput(input)]),
+  );
 }
 
 function initialTemplateInput(input: TemplateInputDescriptor): unknown {

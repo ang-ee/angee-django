@@ -46,7 +46,7 @@ test("explorer pane toolbars create a file folder and open a new knowledge note 
     });
   } finally {
     if (pageId) requireGraphQLData(await consoleApi.query(`mutation RemoveExplorerPage($id: ID!) {
-      delete_page(id: $id, confirm: true) { has_blockers total_deleted_count }
+      pages_delete(id: $id, confirm: true) { has_blockers total_deleted_count }
     }`, { id: pageId }));
     const { folders } = requireGraphQLData(await consoleApi.query<{ folders: Array<{ id: string }> }>(
       `query ExplorerFolder($name: String!, $drive: String!) {
@@ -54,7 +54,7 @@ test("explorer pane toolbars create a file folder and open a new knowledge note 
       }`, { name: folderName, drive: drives[0]!.id },
     ));
     for (const folder of folders) requireGraphQLData(await consoleApi.query(`mutation RemoveExplorerFolder($id: ID!) {
-      delete_folder(id: $id, confirm: true) { has_blockers total_deleted_count }
+      folders_delete(id: $id, confirm: true) { has_blockers total_deleted_count }
     }`, { id: folder.id }));
   }
 });

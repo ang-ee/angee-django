@@ -78,7 +78,7 @@ test("Related uploads a file, follows its record link and binds a knowledge page
     });
   } finally {
     if (pageId) requireGraphQLData(await consoleApi.query(`mutation RemoveBindingPage($id: ID!) {
-      delete_page(id: $id, confirm: true) { has_blockers total_deleted_count }
+      pages_delete(id: $id, confirm: true) { has_blockers total_deleted_count }
     }`, { id: pageId }));
     if (fileId) requireGraphQLData(await consoleApi.query(`mutation RemoveAttachedFile($id: ID!) {
       purge_file(id: $id)

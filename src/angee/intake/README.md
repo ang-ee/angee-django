@@ -8,6 +8,7 @@ A request's position is its Task's stage; after promotion it follows the project
 - A Need [resource row](resources.py) may carry `access: approve|deny` with `access_by`, the xref of who answered. After the row saves and asks its question, the adapter answers it once through `decide_access` as that user, only while it is open; a later load keeps the stored answer.
 - The [Task record contribution](web/src/index.tsx) shows each Need's current access decision as a card with the permitted Need verbs beside its requester. The decision link opens the audit history owned by [Decisions](../decisions/README.md). IAM owns credential issuance separately; deciding or resetting request access does not change a password.
 - Both task schema nodes project the first linked Need as `requester { display_name email }`. The name uses the linked party or captured claim; the email is returned only to a task writer. Lists select this field without reading a second collection.
+- A webform channel's `intake_field_map` maps a request's fields (`title`, `note`, `due_date`, `priority`, `estimate`, `claimed_name`) to the answers of a form submission, by question name. Intake reads the answers from the message's `webform` envelope (`Message.webform_submission()`) and checks only the map's shape and its own targets: it does not know the form, so a name the submission does not carry maps nothing, as does an answer the request's field refuses.
 - A channel's `intake_requester_domains` lists the domains whose claimed webform addresses get a passwordless account on capture; `["*"]` covers every domain. A claimed address is unverified: with `["*"]`, anyone who submits the form gets an account for whatever address they type. That account has no credential, no admission and no membership, so it reads nothing until the access decision admits it, and the address is only proposed to its party for review, never confirmed. Configure `["*"]` only where such accounts are acceptable; changing the list requires channel write and account-create permission.
 
 ## Clarifying a request
@@ -52,7 +53,7 @@ transaction, rechecking normal share and account authority; the Decision owner
 records chosen keys and emits the answer signal. The nullable `admitted_user` records
 the account granted access after successful owner application; a verdict alone
 grants no access. Reset or identity replacement clears that receipt. Failed application rolls back the verdict and owner changes together. Replacing
-an unanswered question withdraws it; answered questions remain audit history. Captured messaging webforms keep their own input schema.
+an unanswered question withdraws it; answered questions remain audit history.
 
 Task merges move Needs through their model-owned reference contract and normal
 assignment checks, inside the shared merge changeset. Need history retains every

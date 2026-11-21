@@ -448,7 +448,14 @@ Use these owners instead of maintaining another contract in an addon:
   therefore requires a **non-empty** registry: an addon whose impl set could
   otherwise be empty registers a noop/null-object default (storage's `local`;
   integrate's `none` VCS client), so a composition always has one selectable
-  impl and the enum is never empty.
+  impl and the enum is never empty. A key that leaves the registry (its addon
+  uninstalled, or the class moved to an addon the host has not installed)
+  strands the rows that store it: the database check `angee.E052`
+  ([`check_stored_impl_keys`](../../src/angee/base/checks.py)) names them by
+  model, field, key and count under `check --database` and at the start of
+  `migrate`, where a column the pending migrations have yet to add is passed
+  over, and the addon that stopped providing a key states the remedy in
+  `ANGEE_IMPL_KEY_REMEDIES`.
 - **Rowless implementation catalogues compose the same registry owner.**
   [`angee.base.implementations`](../../src/angee/base/implementations.py) owns registry checks, choice
   metadata for fields and settings-selected uses. Native enum projection belongs
@@ -622,6 +629,9 @@ data through REBAC, never a queryset bypass.
   (`check_sealed_permissions`), which refuses a fragment that changes one:
   messaging's [`check_derived_reads`](../../src/angee/messaging/checks.py)
   (`messaging.E003`) seals the thread and message `read` and `read_inbox`.
+  Storage's [`check_derived_permissions`](../../src/angee/storage/checks.py)
+  (`storage.E001`) also seals `inherit_visibility`, so only the drive's sharers
+  can restore file inheritance.
 - **One user identity for authorization and attribution.** Every person and
   agent acts as its own `AUTH_USER_MODEL` row. Workflows also act as their linked
   `kind=service` user for trigger admission and triggered runs; source-declared
@@ -764,7 +774,10 @@ data through REBAC, never a queryset bypass.
   (`token`, `key`, `secret`, `password`) before `user_login_failed` receivers
   see it, and pass the account it names unmasked so axes records the attempt
   under that account. Each request makes one attempt
-  ([`authenticate_once`](../../src/angee/iam/auth.py)). IAM's autoconfig owns
+  ([`authenticate_once`](../../src/angee/iam/auth.py)). Self-service current-password
+  verification uses the same owner: authenticate before taking
+  a row lock, require the authenticated user to be the actor, and reject a hash
+  changed between authentication and the lock. IAM's autoconfig owns
   the axes policy (the cool-off, no reset on success, the username and
   whitelist callables); a refusal of a genuine but spent credential is not a
   guess.
@@ -780,16 +793,31 @@ data through REBAC, never a queryset bypass.
   account is renamed.
   `create_user` stays the trusted bootstrap and OIDC path.
 - **Managed accounts change through IAM's account verbs.** `User.set_active`,
-  `rename`, `issue_password`, `issue_sign_in_link` and `reset_password` lock
+  `rename`, `issue_password`, `issue_sign_in_link`, `reset_password` and
+  `set_account_password` lock
   the row, check their own Zed permission, the expected revision and the shared
   `User.account_action_blockers`, then write elevated; the `account_actions`
-  projection batches the same conditions. Every verb refuses a protected
+  projection batches the same conditions. These verbs refuse a protected
   account: staff, superusers, the actor's own and effective members of
-  `iam/protected:main#member`. A consumer marks an elevated role by unioning it
+  `iam/protected:main#member`, except Set password admits another person's protected
+  account for a concrete platform-administrator user. Self
+  still requires Change password; non-person accounts remain refused.
+  A consumer marks an elevated role by unioning it
   into that permission from its fragment, never by mirroring holders; see
   [`tests/extcontrib`](../../tests/extcontrib/permissions.extends.zed). Generic
   updates pass `write` and `write__<field>` gates on changed fields only;
-  protected accounts additionally need `administer`.
+  protected accounts additionally need `administer`. Generic updates do not
+  accept `password`; use `set_user_password` with the observed revision.
+  Its sealed Zed permission intersects `admin->member`, `write` and
+  `write__password`, so the model and projection check one permission. Permission
+  and account kind are checked before password validation or hashing. Extending
+  `administer` never widens this audience. Successful sets log only the verb and
+  actor/target public ids after commit through IAM's logger. Actor-requested
+  creation, Set password and Change password share `User._set_validated_password`,
+  with the user as Django's validator context; trusted bootstrap/resource
+  factories retain their native behavior. **Change password** verifies the actor's current
+  password and keeps only the requesting session's auth hash current; see the
+  [IAM password contract](../../src/angee/iam/README.md#chosen-passwords).
 - **Read derived facts from their owner.** Native live ORM backing exposes
   user kind/activity, roster roles and selected tools without tuple mirrors.
   Platform administration is an ordinary `angee/role:admin#member` grant to a
@@ -917,8 +945,14 @@ data through REBAC, never a queryset bypass.
   - A model's own system verb folding a duplicate (no actor to authorize) calls
     the system entry [`MergeableMixin.fold`](../../src/angee/base/models/merge.py),
     which joins the open changeset and runs the same hooks under a system
-    boundary. Before core row locks, both entries call `lock_for_merge()`
-    so a domain can acquire its earlier lock class. Querysets use
+    boundary. Before core row locks, both entries call the model's
+    `lock_merge_records(records)` once for the whole batch, so a domain can
+    acquire its earlier lock class for every record in one pass; the default
+    calls each record's `lock_for_merge()` in key order. A model whose merge
+    also locks related rows overrides the classmethod and takes them all
+    before any record row, as [`Party`](../../src/angee/parties/models.py)
+    takes the records' same-person partners and every handle they state or
+    hold. Querysets use
     `redirect_group(survivor)` for the survivor plus its flattened one-hop
     redirects.
 - Native REBAC `create`/`insert` evaluates the unsaved candidate's field- and
@@ -1100,7 +1134,11 @@ which scopes rows to the subjects the actor may read. A statement read never
 widens what the subject reader may see: related rows (the member, the asserting
 principal) resolve through their own read gates at the serving seam, no group or
 filter axis reads a related row's columns, and serving surfaces own gated-field
-redaction. Writes use the asserting source's native REBAC write scope on the
+redaction. A subject's own definition may still read through statements: a
+directory's contact readers read the handles, addresses and employment edges its
+live links currently assert, and nothing another source asserts
+([parties permissions](../../src/angee/parties/permissions.zed), `stating_directory`).
+Writes use the asserting source's native REBAC write scope on the
 subject. Merge collisions remain retained as superseded rows outside the current
 per-aspect key. `Statement.sort_key(aspect)` is the one trust ordering — preferred
 rank, the aspect's source precedence (`Aspect.priority`), confidence, the row
@@ -1181,7 +1219,7 @@ hooks; pointing rows declare `MergePolicy` (an edge's `merge_policy`, a key's
 entry in `merge_policies` where its `on_delete` implies the wrong one) and their
 collision contract. `Changeset.revert` undoes a merge by replaying history, so
 every model a revertible merge moves (`moved_references()`) keeps history,
-which `angee.E051` checks; a derived or high-volume row is `KEEP` instead, and
+which `angee.E053` checks; a derived or high-volume row is `KEEP` instead, and
 its readers resolve the redirect through `MergeableQuerySet.survivor_id`,
 `survivor_field` and `redirect_groups`. Retained
 references include their historical versions. Redirects flatten in the same
@@ -1244,6 +1282,13 @@ attribute exactly. A response status of 400 or more, a GraphQL result with
 exception closes the rows as failed. Tests inherit a boundary from the root
 `conftest.py`; modules marked `entrypoint_boundaries` exercise the production ones.
 
+- **A row's `created_at` is when it came into being, as its provenance states.**
+  A creating owner states a source's creation time for the row's insert
+  (`stamp_created_at` on [`TimestampMixin`](../../src/angee/base/models/timestamps.py));
+  every other insert, a clone's or a re-insert's included, stamps now, whatever the
+  attribute holds. An owner's one writer may move it earlier later, never later
+  (`Party.backdate_creation`); a reader that means "arrived here" reads an arrival
+  fact of its own, never this stamp.
 - **Optimistic lock:** `OptimisticLockMixin` counts instance saves. A verb that
   accepts a client's `expected_revision` passes it to `save()` and maps
   `StaleRevisionError` to its conflict result; queryset updates never bump.
@@ -1295,7 +1340,15 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   `is_trashed`, subtracted outside any recursive arm (see
   [knowledge pages](../../src/angee/knowledge/permissions.zed)). The shared
   [`trash_record` / `restore_record`](../../src/angee/graphql/trash.py) verbs
-  check the row's `delete`; metadata marks the flag `trashable` for shared views.
+  accept a multi-table child's type and act on the same primary key through
+  the model storing the flag (`TrashMixin.trash_model()`), checking that
+  model's `delete` permission and `trash_targets()` scope.
+  [`hasura_model_resource`](../../src/angee/graphql/data/hasura.py) exposes
+  each composed mixin's flag without an addon node declaration and marks it
+  `trashable` or `archivable`, including inherited flags. The archive flag is
+  filterable; flag writes remain the resource's explicit decision, and read
+  gates are never bypassed. A removable record's removal action is Move to
+  trash when its model is trashable and Delete otherwise.
   A domain authority that is not `delete` (record-chatter moderation, the host's
   declared `ThreadedModelMixin.thread_moderate_access`, default `write`, beside
   `thread_read_access` and `thread_post_access`) keeps its own
@@ -1379,13 +1432,25 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   `concrete_kinds` ([projection](../../src/angee/graphql/data/metadata.py))
   instead of re-deriving inheritance.
 - **Deletion refusals have one model owner.** Override
-  [`AngeeModel.delete_blocker()`](../../src/angee/base/models/base.py) with a public-safe
-  message. [`DeletePreview`](../../src/angee/graphql/deletion.py) reports each
-  distinct refusal before deleting, without row counts or hidden identities.
-  A model overriding the hook must bind a `pre_delete` receiver enforcing that
-  same rule on every deletion path; an instance override cannot protect cascades.
+  [`AngeeModel.delete_blocker(cascaded=)`](../../src/angee/base/models/base.py) with a
+  public-safe message; `cascaded` says whether the delete started at the row or only
+  cascades to it, and the override decides for both.
+  [`DeletePreview`](../../src/angee/graphql/deletion.py) reports each distinct refusal
+  before deleting, judging its target as the start and every collected row as
+  cascaded, without row counts or hidden identities. A model overriding the hook must
+  bind a `pre_delete` receiver enforcing the hook's rule for where each row sits in the
+  delete on every deletion path, passing `cascaded=not starts_delete(instance, origin)`:
+  [`starts_delete`](../../src/angee/base/signals.py) owns that rule (the start of an
+  instance or queryset delete, else a cascade) for receivers and the preview alike; an
+  instance override cannot protect cascades.
   Receivers remain authoritative when state changes after preview and ensure
   Django collects those models rather than fast-deleting them.
+  Record-reference refusals use the same read-only
+  [`record_refs_for_delete()`](../../src/angee/base/models/refs.py) admission in
+  preview and `delete_record_refs`: each edge owns `blocks_target_delete` and
+  `live_reference_filter`. Preview passes all collected targets together; blocking
+  edges read them in bounded batches per target type. Confirmation retains a
+  readable blocker even when a deletion-time refusal names no retaining rows.
   When deleting a model needs locks in a domain order (a parent before the row),
   override its [`lock_for_delete()`](../../src/angee/base/models/base.py); its `pre_delete`
   receiver and every confirmed-delete caller of that model then lock through the
@@ -1570,7 +1635,14 @@ retains its native routing contract.
   own the operational cautions; routine startup never retires history.
 - **Removing a field, model or donor addon whose storage holds data needs a
   declared cutover.** `makemigrations` refuses the autodetected drop through the
-  [composer's drop guard](../composer.md#project-migration-history). An
+  [composer's drop guard](../composer.md#project-migration-history). The guard
+  judges authoring, on the database `makemigrations` runs on. Until the
+  framework pins django-compose 0.1.0.dev14, whose guard also judges pending
+  removals at `migrate`, the addon that owns a column whose data a template
+  carries away refuses the wrong order itself, in a `pre_migrate` receiver and
+  a database check (messaging's
+  [`refuse_removal_ahead_of_the_move`](../../src/angee/messaging/webform_columns.py)
+  and `angee.E054`, for the form columns its channels held). An
   project authors a native migration that preserves or retires the data and
   removes the field or model; an empty column needs
   nothing, and neither does a table holding only rows its own resource files
@@ -1697,6 +1769,19 @@ open fresh evaluator scopes for authorization and change-feed reads.
   write backends and their declared arguments; provenance owns creation claims,
   and the model owns optimistic locking. A host without provenance exposes no
   idempotency argument.
+- **Delete previews are generated with the resource's delete surface.**
+  [`hasura_model_resource`](../../src/angee/graphql/data/hasura.py) generates
+  `<resource>_delete(id, confirm)` and its metadata when `delete=True`.
+  Custom deletion belongs in the write backend's `delete_preview`, which both
+  that root and the native Hasura `delete` compose. Backends missing the method,
+  or overriding `delete` without a matching preview, fail at composition.
+  The default backend delegates to
+  [`delete_by_public_id`](../../src/angee/graphql/deletion.py) with its write
+  target queryset; model refusals remain `delete_blocker()`. An explicitly
+  gated authored preview on a `delete=False` resource uses the same root
+  spelling and `attach_delete_preview_metadata`.
+  A resource whose removal is the trash declares `delete=False` and uses the
+  shared trash verbs; see [storage files](../../src/angee/storage/README.md).
 - **Permission answers reuse the authorization owner.** Declare a type's
   `permissions` through [`permissions_field(names)`](../../src/angee/graphql/capabilities.py);
   it reports only the declared Zed permissions held by the current actor,
@@ -1837,7 +1922,10 @@ open fresh evaluator scopes for authorization and change-feed reads.
   inherited sources and the core's bounded `bulk_updated` batches use the same
   seam. A verb completing a conditional or bulk write publishes after its
   related rows are ready. `change_batch_targets` may coalesce publications;
-  local observers still receive original bulk batches where needed.
+  local observers still receive original bulk batches where needed. A verb that
+  mutes a long block (`mute_changes`) publishes its own summary after it, or
+  collects what the block wrote (`collect=MutedChanges()`) and observes each
+  committed row once with `publish()`, after the outermost commit.
 - **Publisher wiring reads prebuilt server metadata.** The ready-phase
   [schema integration](../../src/angee/graphql/sdl.py) emits `schemas/publishers.json`
   from finalized resources: published model labels and readable concrete fields,
@@ -1925,7 +2013,13 @@ lock both current and proposed scopes without invoking guarded transitions.
 This candidate is only for lock selection; it never becomes the write target.
 Callers reload through their original actor and surface scope and recheck write
 permission after waiting. Statement-member identity remains the hook's optional
-`members` argument. Plain Django models retain native row locking.
+`members` argument. A write spanning several subjects of one model, such as a
+statement pair's two endpoints, locks them through
+[`StatementsMixin.lock_subjects`](../../src/angee/provenance/statements.py): the
+default locks each subject in key order, and an owner whose subject lock takes
+prerequisite rows overrides it to take every subject's prerequisites before any
+subject row, so two subjects never interleave their lock order. Plain Django
+models retain native row locking.
 
 ### Direct record access
 
@@ -1946,7 +2040,12 @@ importing the composed model toolkit.
 native reverse relation's exclusion from automatic collection.
 Each edge declares `on_target_delete` as `CASCADE`, `PROTECT`, or `SET_NULL`; a
 model needing row-aware cleanup implements `teardown_for_target(target)` instead,
-which never blocks the target's deletion. The foundation target-delete receiver
+which never blocks the target's deletion. An edge whose owner declares rows that
+block (`blocks_target_delete`, narrowed by `live_reference_filter`) has them refuse
+first, with `ProtectedError`, as creation undo does; its teardown or policy then
+runs only while a row of it names the target, as
+[`RecordLink`](../../src/angee/integrate/models.py) keeps pulled rows and releases
+pushed ones. The foundation target-delete receiver
 invokes that one declaration for instance and queryset deletion paths, once per
 collected instance (an MTI child's deletion also collects its canonical parent, so
 a teardown is idempotent), whether the target names the edge through a reverse
@@ -2118,8 +2217,11 @@ managers retain identity and ingest policy. Event feeds are append-only and
 idempotent by domain identity, so they never create replica links. Mutable record
 replicas pin their own applied link history row as the comparison base.
 Adapters provide comparable JSON-native local and remote mapped projections;
-the driver normalizes both sides through the canonical JSON serializer before
-upstream `DeepDiff` compares them with that base. `canonical_json_sha256` is the sole
+the driver compares each side with that base as a JSON value
+([`json_equal`](../../src/angee/base/serialization.py)), never with Python's `==`,
+for which `False == 0`: a bool is never a number, and a number is the value its
+spelling denotes, so a base read back from `jsonb` compares as it was written.
+`canonical_json_sha256` is the sole
 source-hash owner; event feeds deduplicate through domain
 identity and are never payload-hashed. Cursors contain plain finite JSON,
 validated at the driver boundary.
@@ -2157,10 +2259,15 @@ bridge advisory lock as polling and delivery settlement.
   edits converge under the accepted record-sync design ruling. An origin
   stamp plus the returned version/hash makes a successful write-back recognizable
   on its next pull. The link checks its complete retained reflection precondition;
-  that does not replace the remote transport version fence.
+  that does not replace the remote transport version fence. A push may skip a row
+  only by the exact local version read with its projection, compared for equality
+  (`RecordLinkManager.changed_since_base`), never by a timestamp: one is stamped
+  before its commit. Its stream's sweep (`SyncStream.sweep_due`) still compares
+  every row, so what no version names converges.
 - **Applied evidence has one promoter.** Adapters return the actual mapped
-  payload and dependency digest in `ApplyResult`; the driver takes the declared
-  mapping version from the stream, promotes the primary link and pins the history
+  payload and dependency digest in `ApplyResult`; the driver takes the mapping
+  version of the stream's generation (a plain declaration's, or the one the stream
+  assigned its composed mapping), promotes the primary link and pins the history
   row written for that application. Observation saves the source on the link without changing that
   protected pointer. History is the observation log; inbound state retains
   simultaneous and closed failures, and refused writes retain link outbox state.

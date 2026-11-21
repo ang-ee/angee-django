@@ -877,6 +877,52 @@ def test_handle_persists_normalized_value_on_create_and_value_update(db: None) -
     assert handle.normalized_value == "alicesmith@googlemail.com"
 
 
+@pytest.mark.parametrize(
+    ("value", "key"),
+    [
+        pytest.param("ada@example.test", "ada@example.test", id="a-plain-domain"),
+        pytest.param("Ada@Bücher.Example", "ada@bücher.example", id="the-unicode-spelling-lower-cased"),
+        pytest.param("Ada@XN--BCHER-KVA.example", "ada@bücher.example", id="a-punycode-label-read-as-unicode"),
+        pytest.param("ada@mail.xn--bcher-kva.example", "ada@mail.bücher.example", id="one-label-among-several"),
+        pytest.param("ada@xn--9.example", "ada@xn--9.example", id="a-label-the-codec-cannot-read-stays-as-typed"),
+    ],
+)
+def test_handle_compares_an_email_domain_in_one_spelling(value: str, key: str) -> None:
+    """Both spellings of an internationalised domain are one comparison key; the value itself is never rewritten."""
+
+    assert Handle.normalize_value(Handle.Platform.EMAIL, value) == key
+
+
+@pytest.mark.parametrize(
+    ("value", "address"),
+    [
+        pytest.param("ada@example.test", True, id="a-plain-address"),
+        pytest.param("  Ada.Example@Example.TEST ", True, id="surrounding-whitespace-aside"),
+        pytest.param("jörg@example.test", True, id="jorg-with-an-umlaut"),
+        pytest.param("peña@example.test", True, id="pena-with-a-tilde"),
+        pytest.param("ada@exämple.test", True, id="an-internationalised-domain-as-typed"),
+        pytest.param("ada@xn--exmple-cua.test", True, id="an-internationalised-domain-punycoded"),
+        pytest.param("a" * 300 + "@example.test", True, id="as-long-as-an-address-may-be"),
+        pytest.param("", False, id="nothing"),
+        pytest.param("n/a", False, id="n-a"),
+        pytest.param("ada", False, id="a-bare-word"),
+        pytest.param("@example.test", False, id="no-name-before-the-at"),
+        pytest.param("ada@", False, id="no-domain-after-the-at"),
+        pytest.param("a@b@example.test", False, id="two-ats"),
+        pytest.param("a b@example.test", False, id="whitespace-in-the-name"),
+        pytest.param("ada\x07@example.test", False, id="a-control-character-in-the-name"),
+        pytest.param("ada\u200b@example.test", False, id="a-zero-width-space-in-the-name"),
+        pytest.param("ada\u202e@example.test", False, id="a-direction-override-in-the-name"),
+        pytest.param("ada@example", False, id="a-domain-the-validator-refuses"),
+        pytest.param("a" * 310 + "@example.test", False, id="longer-than-an-address-may-be"),
+    ],
+)
+def test_handle_says_what_can_be_an_email_address(value: str, address: bool) -> None:
+    """What cannot be an address at all is none; the name part may be in any script, with nothing unseen in it."""
+
+    assert Handle.is_email_address(value) is address
+
+
 def test_suggest_for_exact_match_autolinks_at_full_confidence(db: None) -> None:
     """An exact normalized-value match to a resolved handle auto-links (gmail dot/plus)."""
 
@@ -1013,6 +1059,32 @@ def test_suggest_for_org_domain_suggests_at_low_confidence(db: None) -> None:
     assert link.confidence == 0.4
     assert not link.is_confirmed
     assert link.source_kind == "rule"
+
+
+@pytest.mark.parametrize(
+    ("address", "stored"),
+    [
+        pytest.param("bob@bücher.example", "bücher.example", id="handle-unicode-organization-unicode"),
+        pytest.param("bob@bücher.example", "xn--bcher-kva.example", id="handle-unicode-organization-punycode"),
+        pytest.param("bob@xn--bcher-kva.example", "Bücher.example", id="handle-punycode-organization-unicode"),
+        pytest.param("bob@xn--bcher-kva.example", "XN--BCHER-KVA.example", id="handle-punycode-organization-punycode"),
+    ],
+)
+def test_suggest_for_org_domain_reads_both_spellings_of_an_internationalised_domain(
+    db: None, address: str, stored: str,
+) -> None:
+    """One rule for a domain on both sides: the handle's key, and the organization's domain as it was typed."""
+
+    del db
+    with system_context(reason="test suggest domain spellings"):
+        owner = _user("ines")
+        publisher = Organization._base_manager.create(display_name="Bücher", domain=stored, created_by=owner)
+        handle = Handle._base_manager.create(platform="email", value=address, created_by=owner)
+        link = Party.objects.suggest_for(handle)
+
+    assert link is not None
+    assert (link.subject_id, link.confidence, link.source_kind) == (publisher.pk, 0.4, "rule")
+    assert Organization._base_manager.get(pk=publisher.pk).domain == stored
 
 
 def test_suggest_for_stays_inside_the_parties_the_handle_creator_owns(db: None) -> None:
@@ -1192,7 +1264,7 @@ def test_a_party_merge_moves_what_points_at_the_merged_party_and_revert_restores
 
 
 def _party_references(merged: Any, actor: Any) -> list[tuple[Any, str]]:
-    """One row of each further kind a party merge moves that kept no history before ``angee.E051``."""
+    """One row of each further kind a party merge moves that kept no history before ``angee.E053``."""
 
     model = apps.get_model
     now = timezone.now()
@@ -1238,7 +1310,7 @@ def _handle_references(merged: Any, actor: Any) -> list[tuple[Any, str]]:
 def test_a_merge_revert_restores_every_moved_kind(
     db: None, django_capture_on_commit_callbacks: Any, model: Any, values: Any, references: Any,
 ) -> None:
-    """Every row a merge moves keeps history, so reverting the merge puts it back (``angee.E051``).
+    """Every row a merge moves keeps history, so reverting the merge puts it back (``angee.E053``).
 
     The rows' history is wiped first, as for rows written before their model kept
     history: the merge records each one's baseline in a changeset of its own.
@@ -1326,7 +1398,6 @@ def test_ingest_contact_upserts_carddav_employment_in_place(db: None) -> None:
             other_party_kind="organization",
         )
         parsed = ParsedContact(
-            uid="contact-1",
             display_name="Ada Lovelace",
             organization="Analytical Engines",
             title="Mathematician",
@@ -1350,7 +1421,7 @@ def test_ingest_contact_upserts_carddav_employment_in_place(db: None) -> None:
             created_by=owner,
         )
 
-        again = Party.objects.ingest_contact(parsed, stream=stream, created_by_id=owner.pk, link=link)
+        again = Party.objects.ingest_contact(parsed, stream=stream, created_by_id=owner.pk, link=link, target=person)
         unchanged = Relationship._base_manager.get(
             party=again,
             kind=employee,
@@ -1359,7 +1430,6 @@ def test_ingest_contact_upserts_carddav_employment_in_place(db: None) -> None:
         )
 
         changed = ParsedContact(
-            uid="contact-1",
             display_name="Ada Lovelace",
             organization="Analytical Engines",
             title="Principal Mathematician",
@@ -1368,7 +1438,7 @@ def test_ingest_contact_upserts_carddav_employment_in_place(db: None) -> None:
         Party.objects.ingest_contact(changed, stream=stream, created_by_id=owner.pk, link=link, target=person)
         refreshed = Relationship._base_manager.get(pk=first_pk)
         backend = ManualDirectoryBackend(directory)
-        local = backend._local_states(stream, ("contact-1",), links=(RecordLink.objects.get(pk=link.pk),))
+        local = backend.local_states(stream, ("contact-1",), links=(RecordLink.objects.get(pk=link.pk),))
         assert local["contact-1"][0].pk == person.pk
 
         foreign, _created = get_user_model()._base_manager.get_or_create(
@@ -1381,11 +1451,11 @@ def test_ingest_contact_upserts_carddav_employment_in_place(db: None) -> None:
         foreign_type = foreign_link.target_content_type_id
         with pytest.raises(ValidationError, match="Party"):
             Party.objects.ingest_contact(
-                replace(parsed, uid="foreign-contact", display_name="Wrong identity"),
+                replace(parsed, display_name="Wrong identity"),
                 stream=stream, created_by_id=owner.pk, link=foreign_link,
             )
         with pytest.raises(ValidationError, match="Party"):
-            backend._local_states(stream, ("foreign-contact",), links=(foreign_link,))
+            backend.local_states(stream, ("foreign-contact",), links=(foreign_link,))
         foreign_link.refresh_from_db()
         person.refresh_from_db()
         assert foreign_link.target_content_type_id == foreign_type
@@ -1422,7 +1492,7 @@ def test_a_card_pass_keeps_its_addresses_local_facts(db: None) -> None:
         stream = _contacts_stream(directory, owner)
         link = RecordLink.objects.observe(stream, "contact-4")
         RelationshipKind._base_manager.create(slug="employee", name="Employee", other_party_kind="organization")
-        card = ParsedContact(uid="contact-4", display_name="Ada Lovelace", addresses=(home, work, work))
+        card = ParsedContact(display_name="Ada Lovelace", addresses=(home, work, work))
         person = Party.objects.ingest_contact(card, stream=stream, created_by_id=owner.pk, link=link)
         assert Address._base_manager.filter(party=person, label="work").count() == 2
         located = Address._base_manager.get(party=person, label="home")
@@ -1461,7 +1531,7 @@ def test_ingest_contact_requires_employee_relationship_kind(db: None) -> None:
         )
         stream = _contacts_stream(directory, owner)
         link = RecordLink.objects.observe(stream, "contact-2")
-        parsed = ParsedContact(uid="contact-2", display_name="Grace", organization="Navy")
+        parsed = ParsedContact(display_name="Grace", organization="Navy")
 
         with pytest.raises(ValidationError, match="employee.*RelationshipKind"):
             Party.objects.ingest_contact(parsed, stream=stream, created_by_id=owner.pk, link=link)

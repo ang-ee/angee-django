@@ -1,8 +1,7 @@
 import * as React from "react";
-import { useNavigate } from "@tanstack/react-router";
 import {
-  Action, Field, Form, Group, ListView, registerForm, containerContents, useContainer, useRouteHref,
-  type ActionDescriptor, type ListColumn, type RecordPanelContext, type RecordTabDescriptor, type RegisteredFormProps, type StringIdRow,
+  Action, Field, Form, Group, ListView, registerForm, containerContents, useContainer,
+  type ListColumn, type RecordPanelContext, type RecordTabDescriptor, type RegisteredFormProps, type StringIdRow,
 } from "@angee/ui";
 
 import { PersonCirclesList } from "./CircleMembershipList";
@@ -10,6 +9,8 @@ import { IdentityTab } from "./IdentityTab";
 import { PartyAddresses } from "./PartyAddresses";
 import { PersonRelationshipsTab } from "./PersonRelationships";
 import { usePartiesT } from "./i18n";
+import { useMergeIntoAction } from "./merge-into";
+import { renderPartyUnavailable } from "./PartyRecordRedirect";
 import { usePartyContactActions } from "./party-contact-actions";
 
 const MODEL = "parties.Person";
@@ -56,6 +57,10 @@ export function personFields(t: ReturnType<typeof usePartiesT>, extraFields: Rea
       <Field name="family_name" label={t("person.field.familyName")} />
     </Group>
     <Field name="tags" />
+    <Group label={t("person.group.about")} columns={2}>
+      <Field name="occupation" label={t("person.field.occupation")} />
+      <Field name="languages" label={t("person.field.languages")} />
+    </Group>
     <Group label={t("person.group.details")} pane="personal-details" columns={2}>
       <Field name="additional_name" label={t("person.field.middleName")} />
       <Field name="nickname" label={t("person.field.nickname")} />
@@ -78,43 +83,15 @@ export function personFields(t: ReturnType<typeof usePartiesT>, extraFields: Rea
  */
 export function PersonForm({ resource: _resource, recordTabs, ...props }: RegisteredFormProps): React.ReactElement {
   const t = usePartiesT();
-  const navigate = useNavigate();
-  const routeHref = useRouteHref();
   const extraFields = containerContents(useContainer("parties.person#fields"));
   const contactActions = usePartyContactActions();
+  const mergeInto = useMergeIntoAction();
   const tabs = React.useMemo(() => personTabs(t), [t]);
-  const mergeSubmit = React.useCallback<NonNullable<ActionDescriptor["submit"]>>(
-    async (values, context) => {
-      const recordId = typeof context.record?.id === "string" ? context.record.id : "";
-      const otherId = typeof values.otherParty === "string" ? values.otherParty : "";
-      if (!recordId || !otherId || recordId === otherId) {
-        return {
-          ok: false,
-          message: t("person.action.mergeRequired"),
-          validationErrors: { otherParty: [t("person.action.mergeRequired")] },
-        };
-      }
-      await navigate({ to: routeHref("parties.merge", { left: recordId, right: otherId }) });
-      return { ok: true, message: "" };
-    },
-    [navigate, routeHref, t],
-  );
-  return <Form {...props} resource={MODEL} eyebrow={t("person.eyebrow")} recordTabs={recordTabs ?? tabs}>
+  return <Form {...props} resource={MODEL} eyebrow={t("person.eyebrow")} recordTabs={recordTabs ?? tabs}
+    renderUnavailable={renderPartyUnavailable}>
     {personFields(t, extraFields)}
     {contactActions}
-    <Action
-      id="merge-into"
-      label={t("person.action.merge")}
-      args={[{
-        name: "otherParty",
-        argKind: "relation",
-        resource: "parties.Party",
-        label: t("person.action.mergeOther"),
-        description: t("person.action.mergeOther.description"),
-      }]}
-      visibleWhen={() => true}
-      submit={mergeSubmit}
-    />
+    <Action {...mergeInto} />
   </Form>;
 }
 

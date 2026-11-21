@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { Row } from "@angee/metadata";
-import type { ActionOutcome, ListQueryFieldArgument } from "@angee/refine";
+import type { ActionOutcome, AuthoredMutateOptions, ListQueryFieldArgument } from "@angee/refine";
 import type { CrudFilter } from "@refinedev/core";
 import type { Resolver } from "react-hook-form";
 
@@ -83,6 +83,7 @@ interface ActionArgBase extends Pick<
   | "kind"
   | "options"
   | "placeholder"
+  | "autoComplete"
   | "description"
   | "currencyField"
   | "statusDisplay"
@@ -178,10 +179,15 @@ interface ActionBinding {
    * A `null`/`undefined` outcome — the shape the
    * outcome extractors return when the response carries no envelope — is a
    * form-level failure, so a caller passes it through rather than inventing one.
+   * The surface running it renders a failure itself, so it passes `options` that
+   * turn refine's generic error notification off: hand them to the authored call
+   * (`ActionMutate`'s and `AuthoredMutate`'s last argument), and a transport failure
+   * is reported once.
    */
   submit?: (
     values: Record<string, unknown>,
     context: ActionFormContext,
+    options?: AuthoredMutateOptions,
   ) => ActionSubmitResult | Promise<ActionSubmitResult>;
 }
 
@@ -198,9 +204,9 @@ export interface ActionProps extends ActionBinding {
   danger?: boolean;
   /** The verb on the collected form's submit button when it differs from the trigger's label ("Run report"). */
   submitLabel?: ReactNode;
-  /** Promote a frequent record verb out of the default Actions menu. */
+  /** Explicit placement wins over `primary` and band filling. Otherwise `primary` uses the toolbar; on a saved record the form's band fills to two buttons with its own visible, unplaced, non-danger verbs in declaration order, counting verbs already on the toolbar. Inside an Actions menu every verb stays in the menu. */
   placement?: "menu" | "toolbar";
-  /** The page's one primary verb: rendered as the primary button when it is on the toolbar and visible. */
+  /** Implies toolbar placement unless explicitly placed in the menu. The first visible toolbar action declaring `primary` gets primary styling (danger verbs keep their danger tone); verbs that fill the band stay secondary. */
   primary?: boolean;
   /** Static confirmation copy, or copy derived from the loaded record; a danger verb's copy takes the danger tone. */
   confirm?: ActionConfirm | ((record: Row) => ActionConfirm);

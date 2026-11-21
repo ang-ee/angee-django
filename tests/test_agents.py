@@ -1345,14 +1345,15 @@ def test_native_provider_errors_preserve_retry_classification_and_close_clients(
     assert all(client.is_closed() for client in clients)
 
 
-@pytest.mark.parametrize("status", [429, 500, 501, 502, 503, 504, 529, 599])
+@pytest.mark.parametrize("status", [408, 429, 500, 502, 503, 504, 529, 599])
 def test_inference_backend_classifies_transient_http_status(status):
-    """Native HTTP status owns retry policy, including every server-error code."""
+    """Integrate's status rule owns retry policy: a request timeout, a rate limit, and a server error a later
+    attempt can outlive."""
 
     assert InferenceBackend(SimpleNamespace()).is_transient_error(ModelHTTPError(status, "test-model"))
 
 
-@pytest.mark.parametrize("status", [400, 401, 403, 408, 409, 425, 600])
+@pytest.mark.parametrize("status", [400, 401, 403, 409, 425, 501, 505, 600])
 def test_inference_backend_does_not_retry_nontransient_http_status(status):
     assert not InferenceBackend(SimpleNamespace()).is_transient_error(ModelHTTPError(status, "test-model"))
 

@@ -107,8 +107,8 @@ function ActionArgsDialog({
         ? definition.resolver(values, resolverContext, options)
         : { values, errors: {} };
     },
-    submit: async (collected) => {
-      const result = await action.submit?.(serializeActionArgValues(args, collected), context);
+    submit: async (collected, options) => {
+      const result = await action.submit?.(serializeActionArgValues(args, collected), context, options);
       return result && "status" in result ? result : actionOutcomeSubmitResult(result);
     },
     onSuccess: (_values, outcome) => {
@@ -143,7 +143,7 @@ function ActionArgsDialog({
   const body = (
     <>
       {definition ? <ActionDescriptorFields definition={definition} control={form.control} readOnly={saveConflict} disabled={submitting} /> : null}
-      {!definition ? <DescriptorFieldList fields={args.map(actionArgField)} readOnly={saveConflict} /> : null}
+      {!definition ? <DescriptorFieldList fields={args.map(actionArgField)} readOnly={saveConflict} unregisterHidden /> : null}
       <ErrorBanner description={formError} />
     </>
   );
@@ -234,7 +234,7 @@ function ActionDescriptorFields({ definition, control, readOnly, disabled }: {
   const fields = typeof definition.fields === "function" ? definition.fields(values) : definition.fields;
   return <fieldset disabled={readOnly || disabled} className="grid gap-4">
     {definition.content}
-    <DescriptorFieldList fields={fields} readOnly={readOnly} />
+    <DescriptorFieldList fields={fields} readOnly={readOnly} unregisterHidden />
   </fieldset>;
 }
 

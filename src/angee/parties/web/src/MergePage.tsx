@@ -1,15 +1,17 @@
 import * as React from "react";
+import { useResourceInvalidates } from "@angee/metadata";
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import {
   Avatar, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Chip, Collapsible, ComparisonRows, CountBadge, EmptyState, ErrorBanner,
   LoadingPanel, MetaGrid, Page, PageBody, PageFooter, PageHeader, RadioGroup, RailPanel, avatarInitials, optionLabel,
   rowValueAtPath, useConfirm, useEnumOptions, useRouteHref, useRouteParam, type WidgetOption,
 } from "@angee/ui";
-import { useNavigate } from "@tanstack/react-router";
+import { useCanGoBack, useNavigate, useRouter } from "@tanstack/react-router";
 
 import {
   MergeParties,
   PARTY_MERGE_INVALIDATES,
+  PARTY_MERGE_RESOURCES,
   PartyMergeComparison,
   DismissSameAs,
   type MergePartyRecord,
@@ -152,10 +154,15 @@ function SurvivorOption({
   );
 }
 
-/** Compare two parties, select the survivor, and execute the model-owned merge. */
+/**
+ * Compare two parties, select the survivor, and execute the model-owned merge.
+ * Cancel and Keep separate go back to where the comparison was opened.
+ */
 export function MergePage(): React.ReactElement {
   const t = usePartiesT();
   const navigate = useNavigate();
+  const router = useRouter();
+  const canGoBack = useCanGoBack();
   const routeHref = useRouteHref();
   const leftId = useRouteParam("left") ?? "";
   const rightId = useRouteParam("right") ?? "";
@@ -167,11 +174,15 @@ export function MergePage(): React.ReactElement {
     enabled: Boolean(leftId && rightId && leftId !== rightId),
     models: PARTY_MERGE_INVALIDATES,
   });
+  // A merge or a keep-apart moves the authored reads and the resource lists (rows and totals) of these models.
+  const invalidates = useResourceInvalidates(PARTY_MERGE_RESOURCES);
   const [merge, mergeState] = useAuthoredMutation(MergeParties, {
     invalidateModels: PARTY_MERGE_INVALIDATES,
+    invalidates,
   });
   const [dismiss, dismissState] = useAuthoredMutation(DismissSameAs, {
     invalidateModels: PARTY_MERGE_INVALIDATES,
+    invalidates,
   });
   const [survivor, setSurvivor] = React.useState<MergeSide>("left");
   const [fieldChoices, setFieldChoices] = React.useState<Partial<Record<string, MergeSide>>>({});
@@ -218,16 +229,19 @@ export function MergePage(): React.ReactElement {
     : 0;
   const busy = mergeState.fetching || dismissState.fetching;
 
-  // The merge flow's home is the review queue (its route parent).
+  // Back is where the comparison was opened (the review queue, a person, a list in
+  // whichever app mounts it), restored by the router's history; a comparison
+  // opened directly falls back to the review queue, its route parent.
   const goBack = React.useCallback(() => {
-    void navigate({ to: routeHref("parties.review") });
-  }, [navigate, routeHref]);
+    if (canGoBack) router.history.back();
+    else void navigate({ to: routeHref("parties.review") });
+  }, [canGoBack, navigate, routeHref, router]);
 
   const submitMerge = React.useCallback(async () => {
     if (!left || !right) return;
     const into = survivor === "left" ? left : right;
     const source = survivor === "left" ? right : left;
-    // Merging is irreversible: the source record disappears into the survivor.
+    // The source record folds into the survivor; the merge reverts from its changeset, as the confirmation says.
     const ok = await confirm({
       title: t("merge.confirmTitle", { name: into.display_name }),
       body: t("merge.confirmBody", { source: source.display_name, name: into.display_name }),

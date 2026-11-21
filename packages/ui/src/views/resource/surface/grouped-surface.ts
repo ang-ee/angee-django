@@ -1,7 +1,6 @@
 import * as React from "react";
 import { ResourceQuery, type Row } from "@angee/metadata";
 import { getCoreRowModel, useReactTable, type ColumnDef, type Row as TableRowModel } from "@tanstack/react-table";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   MAX_PAGE_SIZE,
   clampPageSize,
@@ -10,6 +9,7 @@ import {
   useAngeeAggregate,
   useAngeeGroupByBatch,
   useAngeeListBatch,
+  useDerivedBatch,
   type AngeeListBatchEntry,
 } from "@angee/refine";
 import type { ResourceViewGroupExpansion } from "../resource-view-context";
@@ -28,15 +28,15 @@ import {
   type GroupedQueryResult,
 } from "../resource-view-grouped-model";
 import { useCollectionQueryBatch } from "../collection-source";
-import { useResourceViewTableChrome } from "./presentation";
+import { useResourceViewTableChrome, useResourceViewVirtualizer } from "./presentation";
 import { listResultFromPageState, useResourceRowsSnapshot, useResourceViewQueryFacts, useResourceViewTableState, useSettledPageClamp } from "./table-state";
 import { EMPTY_ARRAY, EMPTY_EXPANDED_KEYS, EMPTY_LEAF_RESULTS } from "./types";
-import type { GroupedResourceViewSurface, ResourceListResult, UseResourceViewSurfaceProps } from "./types";
+import type { GroupedResourceViewSurface, ResourceListResult, SurfaceMatching, UseResourceViewSurfaceProps } from "./types";
 /**
  * The server-grouped collection surface: the owner of a folded group view's render
  * model. It emits a single measured `listItems` stream (per-level `_groups`
  * headers, the leaf record rows of expanded buckets, and the per-group pagers)
- * driving the same `useVirtualizer` the flat list uses. The leaf `_groups` read
+ * driving the virtualizer the flat list uses (`useResourceViewVirtualizer`). The leaf `_groups` read
  * carries every group's first page (`rows`), so a grouped page is one request;
  * only a later or resized group page is requested on its own, batched into one
  * `useAngeeListBatch`. Per-group pagination is `setScopePage`. The thin list and
@@ -56,6 +56,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   defaultExpandedGroups = "all",
   laneSource,
   onListStateChange,
+  selectAllMatching = false,
 }: UseResourceViewSurfaceProps<TRow>): GroupedResourceViewSurface<TRow> {
   const t = useUiT();
   const dataResource = source
@@ -117,12 +118,16 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     () => (source ? undefined : query.toWhere(mergedFilter)),
     [source, query, mergedFilter],
   );
+  // A flat aggregate cannot apply a repeated level's HAVING, so its total would count
+  // every record while the groups list only the repeated ones: no footer total then.
+  const footerTotal = !source && rowGroupStack.length > 0 && measures.length > 0
+    && !rowGroupStack.some((level) => level.repeated);
   const grandTotal = useAngeeAggregate(aggregateOperation.target, {
     relatedModels,
     document: aggregateOperation.document,
     where,
     measures: queryMeasures,
-    enabled: !source && rowGroupStack.length > 0 && measures.length > 0,
+    enabled: footerTotal,
   });
 
   // Expansion belongs to the active grouping axis. Root buckets discovered in
@@ -169,9 +174,18 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     [expansionAxisKey, setExpansionState],
   );
 
+  // Per-level `_groups` requests stage over renders: the desired scope frontier is
+  // derived from the resolved buckets, so it grows one level deeper each time a
+  // parent resolves. `useAngeeGroupByBatch` is a single hook, so a dynamic-length
+  // array is rules-of-hooks safe.
+  const [groupScopes, setGroupScopes] =
+    React.useState<readonly GroupedGroupScope[]>(EMPTY_ARRAY);
+  // What each result answers: the batch follows a page change one effect later.
+  const requested = React.useMemo(() => new Map(groupScopes.map((scope) => [scope.key, scope.query])), [groupScopes]);
   const renderParams = React.useMemo<GroupedRenderParams>(
     () => ({
       query,
+      requested,
       leafPageSize: source?.leafPageSize,
       groupStack: rowGroupStack,
       baseFilter: mergedFilter,
@@ -193,6 +207,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     }),
     [
       query,
+      requested,
       source?.leafPageSize,
       rowGroupStack,
       mergedFilter,
@@ -207,12 +222,6 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     ],
   );
 
-  // Per-level `_groups` requests stage over renders: the desired scope frontier is
-  // derived from the resolved buckets, so it grows one level deeper each time a
-  // parent resolves. `useAngeeGroupByBatch` is a single hook, so a dynamic-length
-  // array is rules-of-hooks safe.
-  const [groupScopes, setGroupScopes] =
-    React.useState<readonly GroupedGroupScope[]>(EMPTY_ARRAY);
   // The generated groups document plus each group's first page of the list's fields.
   const groupDocument = React.useMemo(
     () =>
@@ -234,27 +243,22 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
       enabled: !source && rowGroupStack.length > 0,
     },
   );
-  const authoredGroups = useCollectionQueryBatch(source?.groups, groupScopes);
-  const groupByResults = React.useMemo<ReadonlyMap<string, GroupedQueryResult>>(
-    () =>
-      source
-        ? new Map(
-            [...authoredGroups].map(([key, result]) => [
-              key,
-              {
-                buckets: result.data?.buckets ?? EMPTY_ARRAY,
-                count: result.data?.count ?? 0,
-                totalCount: result.data?.totalCount ?? 0,
-                summary: result.data?.summary,
-                fetching: result.fetching,
-                error: result.error,
-                refetch: result.refetch,
-              },
-            ]),
-          )
-        : nativeGroupResults,
-    [source, authoredGroups, nativeGroupResults],
+  // A source's group results, each derived again only when its own read changes.
+  const authoredGroups = useDerivedBatch(
+    useCollectionQueryBatch(source?.groups, groupScopes),
+    (result): GroupedQueryResult => ({
+      buckets: result.data?.buckets ?? EMPTY_ARRAY,
+      count: result.data?.count ?? 0,
+      totalCount: result.data?.totalCount ?? 0,
+      summary: result.data?.summary,
+      fetching: result.fetching,
+      error: result.error,
+      updatedAt: result.updatedAt,
+      refetch: result.refetch,
+    }),
+    [],
   );
+  const groupByResults: ReadonlyMap<string, GroupedQueryResult> = source ? authoredGroups : nativeGroupResults;
   const scopeModel = React.useMemo(
     () =>
       buildGroupedRenderModel<TRow>(
@@ -320,32 +324,28 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     fields: requestedFields,
     enabled: !source && leafScopes.length > 0,
   });
-  const authoredLeaves = useCollectionQueryBatch(source?.rows, leafScopes);
-  const requestedLeafResults = React.useMemo<ReadonlyMap<string, AngeeListBatchEntry>>(
-    () =>
-      source
-        ? new Map(
-            [...authoredLeaves].map(([key, result]) => [
-              key,
-              {
-                rows: result.data?.rows ?? EMPTY_ARRAY,
-                total: result.data?.total,
-                fetching: result.fetching,
-                error: result.error,
-                refetch: result.refetch,
-              },
-            ]),
-          )
-        : nativeLeafResults,
-    [source, authoredLeaves, nativeLeafResults],
+  // A source's later group pages, each derived again only when its own read changes.
+  const authoredLeaves = useDerivedBatch(
+    useCollectionQueryBatch(source?.rows, leafScopes),
+    (result): AngeeListBatchEntry => ({
+      rows: result.data?.rows ?? EMPTY_ARRAY,
+      total: result.data?.total,
+      fetching: result.fetching,
+      error: result.error,
+      updatedAt: result.updatedAt,
+      refetch: result.refetch,
+    }),
+    [],
   );
+  const requestedLeafResults: ReadonlyMap<string, AngeeListBatchEntry> = source ? authoredLeaves : nativeLeafResults;
   const leafResults = React.useMemo<ReadonlyMap<string, AngeeListBatchEntry>>(
     () => new Map([...scopeModel.carriedLeaves, ...requestedLeafResults]),
     [scopeModel.carriedLeaves, requestedLeafResults],
   );
 
   // Persist corrections from settled native counts for both subgroup and leaf
-  // pages. Otherwise a later count increase could revive an obsolete old page.
+  // pages, when a count settles or a page is set past it (which may read the last
+  // page again). Otherwise a later count increase could revive an obsolete old page.
   React.useEffect(() => {
     setPaginationByScope((current) => {
       let next = current;
@@ -369,7 +369,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
       }
       return next;
     });
-  }, [groupByResults, requestedLeafResults, setPaginationByScope]);
+  }, [groupByResults, requestedLeafResults, paginationByScope, setPaginationByScope]);
 
   // One table over the in-display-order concatenation of loaded leaf rows: row
   // ids stay the bare public id so selection identity matches the flat surface.
@@ -405,14 +405,14 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     return byScope;
   }, [leafKeys, leafResults, rowModels]);
 
-  const groupedItems = React.useMemo(
+  const { items: groupedItems, shown } = React.useMemo(
     () =>
       buildGroupedRenderModel<TRow>(
         groupByResults,
         leafResults,
         rowModelsByScopeKey,
         renderParams,
-      ).items,
+      ),
     [groupByResults, leafResults, rowModelsByScopeKey, renderParams],
   );
 
@@ -448,20 +448,17 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
 
   const { visibleColumnCount, visibleFields, toggleVisibleField } =
     useResourceViewTableChrome(table, columnVisibility);
-  const tableScrollRef = React.useRef<HTMLDivElement | null>(null);
-  const rowVirtualizer = useVirtualizer({
-    count: groupedItems.length,
-    getScrollElement: () => tableScrollRef.current,
-    initialRect: { width: 1024, height: 600 },
-    estimateSize: (index) => estimateGroupedItemSize(groupedItems[index]),
-    overscan: 10,
-  });
+  const { tableScrollRef, rowVirtualizer } = useResourceViewVirtualizer(
+    groupedItems.length,
+    (index) => estimateGroupedItemSize(groupedItems[index]),
+  );
 
   const rootResult = scopeModel.rootResult;
-  const rootWindow =
-    rootResult && !rootResult.error
-      ? groupedPageWindow(rootResult, rootPage, statePageSize)
-      : undefined;
+  // A page of groups counts once its read has settled: one loading for the first time
+  // (the first load, another page) has no total yet, never 0, and a refetch keeps the
+  // total it last settled with. The pager and "Select all N" read the same.
+  const settledRoot = rootResult && !rootResult.error && rootResult.updatedAt !== null ? rootResult : undefined;
+  const rootWindow = settledRoot ? groupedPageWindow(settledRoot, rootPage, statePageSize) : undefined;
   const rootTotal = rootWindow?.total;
   const rootPageCount =
     rootTotal === undefined
@@ -475,8 +472,8 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   const refetch = React.useCallback(() => {
     for (const result of groupByResults.values()) result.refetch();
     for (const result of requestedLeafResults.values()) result.refetch();
-    if (measures.length > 0) grandTotal.refetch();
-  }, [groupByResults, requestedLeafResults, measures.length, grandTotal.refetch]);
+    if (footerTotal) grandTotal.refetch();
+  }, [groupByResults, requestedLeafResults, footerTotal, grandTotal.refetch]);
   const list = React.useMemo<ResourceListResult>(
     () => ({
       ...listResultFromPageState({
@@ -510,6 +507,27 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     onListStateChange,
   });
   const selectedIds = React.useMemo(() => idsFromRowSelectionState(resourceView.state.rowSelection), [resourceView.state.rowSelection]);
+  // The pager counts the root level's groups, which a verb acts on only when that is
+  // the one level, whose one scope is the root's: under nested grouping a root group
+  // holds records the person never saw.
+  const root = selectAllMatching && !source && rowGroupStack.length === 1 ? scopeModel.groupScopes[0] : undefined;
+  // The level's read as its groups request sent it, which holds while the list renders
+  // or refetches; until that request goes out, as this render asks for it.
+  const rootQuery = root ? requested.get(root.key) ?? root.query : undefined;
+  // Its order included: what the groups are, not which page of them shows.
+  const selects = React.useMemo<SurfaceMatching["selects"] | undefined>(() => {
+    if (!rootQuery) return undefined;
+    const { where, dimensions, having, orderBy } = rootQuery;
+    return { unit: "groups", read: { where, dimensions, ...(having ? { having } : {}), ...(orderBy ? { orderBy } : {}) } };
+  }, [rootQuery]);
+  const matching = React.useMemo<SurfaceMatching | undefined>(() => {
+    if (!selects) return undefined;
+    const loaded = [...new Set(groupedItems.flatMap((item) => item.kind === "record" ? [item.row.id] : []))];
+    // Every record the read holds is loaded only when this page lists all its groups and their records.
+    const held = !settledRoot ? 0 : rootPage === 1 && settledRoot.totalCount <= settledRoot.buckets.length
+      ? settledRoot.buckets.reduce((count, bucket) => count + bucket.count, 0) : Infinity;
+    return { selects, total: settledRoot?.totalCount, loaded, more: held > loaded.length };
+  }, [selects, settledRoot, groupedItems, rootPage]);
   return {
     kind: "grouped",
     list,
@@ -518,11 +536,13 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     requestedFields,
     mergedFilter,
     sortOrder,
-    footerAggregate: grandTotal.aggregate,
+    ...(matching ? { matching } : {}),
+    footerAggregate: footerTotal ? grandTotal.aggregate : null,
     measures: queryMeasures,
     setScopePage,
     setScopePageSize,
     groupedItems,
+    shown,
     tableColumns: tableColumns as readonly ColumnDef<TRow>[],
     table,
     columnVisibility,

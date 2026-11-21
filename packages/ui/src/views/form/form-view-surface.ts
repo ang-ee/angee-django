@@ -3,6 +3,8 @@ import { useWatch } from "react-hook-form";
 import { developmentMode } from "../../lib/development-mode";
 import { useLatestRef } from "../../lib/use-latest-ref";
 import {
+  resourceLifecycle,
+  canDeleteRecord,
   lineReadSelectionPaths,
   modelFieldForPath,
   refineResourceName,
@@ -43,6 +45,8 @@ import {
   type RelationFieldInfo,
 } from "../resource/model-metadata-defaults";
 import type { RecordActionDescriptor, RecordDeleteAction } from "./RecordActionBar";
+import { useArchiveActions } from "../resource/archive";
+import { useTrashActions } from "../resource/trash";
 import { recordRailGroups, visibleRecordRailGroups, type RecordRailGroupProps } from "./form-view-rail";
 import { rowDependentChildren, useContainerAdmission } from "./container-admission";
 import { resolveFieldLabels, resolveGroupLabels } from "./field-labels";
@@ -53,7 +57,9 @@ import {
   flattenedFormFields,
   formSections,
   formViewFieldLayout,
+  recordRepresentationValue,
   recordSubtitleParts,
+  titleText,
   withModeLockedFields,
   visibleSections,
   type FormSectionModel,
@@ -219,6 +225,7 @@ export interface FormViewSurface
   subtitleParts: readonly React.ReactNode[];
   lineRowErrors: readonly (ValidationErrors | undefined)[] | undefined;
   declaredActions: readonly RecordActionDescriptor[];
+  genericActions: readonly RecordActionDescriptor[];
   actionsBlocked: boolean;
   recordPanelContext: RecordPanelContext | null;
   recordToolbarContext: RecordToolbarContext;
@@ -555,6 +562,11 @@ export function useFormViewSurface({
     if (!isCreate && modelMetadata?.fields.permissions?.readable !== false && modelMetadata?.fields.permissions) {
       paths.add("permissions");
     }
+    if (!isCreate) {
+      for (const flag of resourceLifecycle(dataResource, modelMetadata).flagFields) {
+        if (flag) paths.add(flag);
+      }
+    }
     if (!isCreate && modelMetadata?.fields.redacted_fields?.readable !== false && modelMetadata?.fields.redacted_fields) {
       // The record queryset already owns this actor-specific ledger; selecting
       // it beside the row avoids a field-by-field permission query.
@@ -639,7 +651,7 @@ export function useFormViewSurface({
       if (path) paths.add(path);
     }
     return [...paths];
-  }, [attributionFields, canonicalTabFields, contributionFields, formFields, isCreate, modelMetadata, relationByField, resolvedContextFields, returning, schemaMetadata]);
+  }, [attributionFields, canonicalTabFields, contributionFields, dataResource, formFields, isCreate, modelMetadata, relationByField, resolvedContextFields, returning, schemaMetadata]);
   const refineFields = React.useMemo(
     () => refineFieldsFromPaths(selection),
     [selection],
@@ -669,10 +681,6 @@ export function useFormViewSurface({
     t,
     readOnly,
   });
-  const visibleRailGroups = React.useMemo(
-    () => visibleRecordRailGroups(railGroups, save.displayRecord, modelMetadata, railAdmits),
-    [railGroups, save.displayRecord, modelMetadata, railAdmits],
-  );
   const canonicalTabSelection = React.useMemo(
     () => refineFieldsFromPaths(["id", ...canonicalTabFields]),
     [canonicalTabFields],
@@ -717,28 +725,38 @@ export function useFormViewSurface({
     // Set during render, so React re-renders before painting and no fallback pane flashes first.
     setRuledRecordTab({ key: ruledRecordKey, tab: defaultRecordTab(tabRecord) });
   }
+  // The sheet's own declarations for this record, never a group it does not show.
+  const sheetFields = React.useMemo(
+    () => regularFormFieldsFor(save.displayRecord),
+    [regularFormFieldsFor, save.displayRecord],
+  );
   const fieldLayout = React.useMemo(
-    () =>
-      formViewFieldLayout(
-        // Title, status and body come from this record's own fields, never a group it does not show.
-        regularFormFieldsFor(save.displayRecord),
-        resolvedFields,
-        resolvedGroups,
-        modelMetadata,
-        isCreate,
-      ),
-    [isCreate, modelMetadata, regularFormFieldsFor, resolvedFields, resolvedGroups, save.displayRecord],
+    // Title, status and body come from the sheet's own fields.
+    () => formViewFieldLayout(sheetFields, resolvedFields, resolvedGroups, modelMetadata, isCreate),
+    [isCreate, modelMetadata, resolvedFields, resolvedGroups, sheetFields],
   );
   const declaredActions = React.useMemo(
     () => [
       ...pageActions,
-      ...contributedActions.flatMap(({ action, containerChild }) =>
-        containerChild === undefined || sectionAdmits(containerChild, save.displayRecord) ? [action] : []),
+      // Section contributions belong to the subject's menu unless explicitly placed.
+      ...contributedActions.flatMap<RecordActionDescriptor>(({ action, containerChild }) =>
+        containerChild === undefined || sectionAdmits(containerChild, save.displayRecord)
+          ? [{ ...action, placement: action.placement ?? "menu" }] : []),
     ],
     [contributedActions, pageActions, save.displayRecord, sectionAdmits],
   );
   const { titleField, titlePlacementField, statusField, bodyField, gridFields, gridGroups } =
     fieldLayout;
+  const recordName = React.useCallback((record: Row) => titleText(
+    titleField ? record[titleField.name] : recordRepresentationValue(record, modelMetadata),
+    t("form.record"),
+  ), [modelMetadata, t, titleField]);
+  const archiveActions = useArchiveActions(modelMetadata);
+  const trashActions = useTrashActions(dataResource, { name: recordName });
+  const genericActions = React.useMemo(
+    () => isCreate || readOnly ? [] : [...(submit ? [] : archiveActions), ...trashActions],
+    [archiveActions, isCreate, readOnly, submit, trashActions],
+  );
   const titleFieldMessages = titleField
     ? [
         ...fieldErrorMessages(
@@ -770,8 +788,14 @@ export function useFormViewSurface({
     },
     [declaredGroupSequences, gridFields, gridGroups, isCreate, save.displayRecord, save.linesActive, sectionAdmits],
   );
-  const sectionValues = useWatch({ control: save.form.control, disabled: !hasConditionalFields });
-  const shownSections = hasConditionalFields ? visibleSections(allSections, sectionValues) : allSections;
+  // The values the sheet's sections and the rail decide their conditional fields by, watched while
+  // any field is conditional (`formFields` holds the rail's, so they count) and read only by those.
+  const conditionValues = useWatch({ control: save.form.control, disabled: !hasConditionalFields });
+  const shownSections = hasConditionalFields ? visibleSections(allSections, conditionValues) : allSections;
+  const visibleRailGroups = React.useMemo(
+    () => visibleRecordRailGroups(railGroups, save.displayRecord, conditionValues, modelMetadata, railAdmits, sheetFields),
+    [railGroups, save.displayRecord, conditionValues, modelMetadata, railAdmits, sheetFields],
+  );
   // A `pane` group fills its own pane beneath the sheet; every other section is the sheet.
   const sections = React.useMemo(() => shownSections.filter((section) => section.pane === undefined), [shownSections]);
   const paneSections = React.useMemo(() => shownSections.filter((section) => section.pane !== undefined), [shownSections]);
@@ -810,6 +834,7 @@ export function useFormViewSurface({
   const linesTrailing = save.linesActive && !linesDeclared;
   const visibleDeleteAction =
     readOnly || deleteAction === undefined ||
+    !canDeleteRecord(dataResource, save.displayRecord, deleteAction.canDelete) ||
     (deleteVisibleWhen !== undefined &&
       (save.displayRecord == null || !deleteVisibleWhen(save.displayRecord)))
       ? undefined
@@ -906,6 +931,7 @@ export function useFormViewSurface({
     subtitleParts,
     lineRowErrors,
     declaredActions,
+    genericActions,
     actionsBlocked,
     recordPanelContext,
     recordToolbarContext,

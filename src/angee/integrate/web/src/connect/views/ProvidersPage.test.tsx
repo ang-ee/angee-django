@@ -48,9 +48,9 @@ function selected(row: Record<string, unknown>, fields: Selection): Record<strin
     : Object.entries(entry).map(([name, nested]) => [name, selected(row[name] as Record<string, unknown>, nested)])));
 }
 
-function renderProvider(configurationState: string): void {
+function renderProvider(configurationState: string, discoveryUrl = ""): void {
   const provider = {
-    id: "oac_1", display_name: "Google Gemini", slug: "gemini", discovery_url: "",
+    id: "oac_1", display_name: "Google Gemini", slug: "gemini", discovery_url: discoveryUrl,
     configuration_state: configurationState, permissions: ["write"],
   };
   const getOne = vi.fn(async ({ meta }: { meta?: { fields?: unknown } }) => ({
@@ -68,8 +68,16 @@ describe("ProvidersPage", () => {
   test("a ready provider offers Connect account", async () => {
     renderProvider("ready");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
-    expect(await screen.findByRole("menuitem", { name: "Connect account" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Connect account" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Connect account" })).toBeNull();
+  });
+
+  test("discovery stays in the menu beside a ready provider's Connect account", async () => {
+    renderProvider("ready", "https://provider.example/.well-known/openid-configuration");
+    expect(await screen.findByRole("button", { name: "Connect account" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Discover endpoints" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Discover endpoints" })).toBeNull();
   });
 
   test("a provider that still needs its client offers no connect", async () => {
@@ -77,6 +85,7 @@ describe("ProvidersPage", () => {
 
     expect(await screen.findByDisplayValue("gemini")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Connect account" })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: "Connect account", hidden: true })).toBeNull();
   });
 });

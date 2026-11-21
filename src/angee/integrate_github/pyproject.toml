@@ -5,7 +5,7 @@ name = "angee-integrate-github"
 version = "3.0.0"
 description = "GitHub backend for the VCS inventory — reads repositories over the GitHub REST API"
 keywords = ["github", "vcs"]
-dependencies = ["angee-integrate-vcs>=3,<4"]
+dependencies = ["angee-integrate>=3,<4", "angee-integrate-vcs>=3,<4"]
 dynamic = ["entry-points"]
 
 [tool.angee]

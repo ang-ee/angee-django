@@ -660,8 +660,7 @@ class StatementPairManager[T: StatementPair](_StatementPairManagerBase[T]):
                 raise PermissionDenied("A pair requires read on both endpoints.")
         ordered = sorted((left, right), key=lambda endpoint: endpoint.pk)
         with transaction.atomic():
-            for endpoint in ordered:
-                endpoint.lock_subject()
+            cast(type[StatementsMixin], model).lock_subjects(ordered)
             pair, _ = self.model._base_manager.get_or_create(
                 left_id=ordered[0].pk,
                 right_id=ordered[1].pk,
@@ -783,8 +782,10 @@ class StatementLinkMixin(models.Model):
 class Aspect:
     """One field group and its optional typed membership identity.
 
-    ``member`` reuses a canonical field name or maps names to new Django fields.
-    Shared members reuse one field. ``allow_fill`` fills missing winner values.
+    ``member`` reuses a canonical field name or maps names to new Django fields;
+    a mapped foreign key keeps the reverse name it declares
+    (:meth:`StatementRecords.copy_fields`). Shared members reuse one field.
+    ``allow_fill`` fills missing winner values.
     Value fields keep their subject names; :meth:`column` names their statement
     column.
     """
@@ -1056,6 +1057,19 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
                 self.refresh_from_db()
             elif resolved_fields:
                 self.refresh_from_db(fields=sorted(resolved_fields))
+
+    @classmethod
+    def lock_subjects(cls, subjects: Sequence[Any]) -> None:
+        """Lock several subjects of this model before a write that spans them, as a pair's endpoints.
+
+        The default locks each in key order (:meth:`lock_subject`). A subject whose
+        lock takes prerequisite rows first overrides this to take every subject's
+        prerequisites before any subject row, so two subjects never interleave
+        their lock order.
+        """
+
+        for subject in sorted(subjects, key=lambda row: row.pk):
+            subject.lock_subject()
 
     def require_statement_write(self, actor: SubjectRef | None) -> None:
         """Admit assertions through the subject's native REBAC write scope."""
@@ -1592,10 +1606,10 @@ class StatementPair(
             endpoint.require_statement_write(actor)
 
     def lock_subject(self, members: Mapping[str, Any] | None = None) -> Any:
-        """Lock both endpoint owners before their retained pair."""
+        """Lock both endpoint owners in one pass (``lock_subjects``) before their retained pair."""
 
-        for endpoint in (self.left, self.right):
-            endpoint.lock_subject()
+        endpoints = cast(type[StatementsMixin], _statement_foreign_key(type(self), "left").remote_field.model)
+        endpoints.lock_subjects((self.left, self.right))
         return super().lock_subject(members)
 
     @classmethod
@@ -1754,8 +1768,23 @@ class StatementRecords(HistoricalRecords):
         ]
 
     def copy_fields(self, model: Any) -> dict[str, models.Field]:
-        """Copy each statement column, a value field under its aspect's column name."""
+        """Copy each statement column, a value field under its aspect's column name.
 
+        simple-history rebuilds every copied foreign key with ``related_name="+"``,
+        so a copy of a subject field never takes the accessor that field holds. A
+        member an aspect maps to a new foreign key has no subject field: it keeps
+        the ``related_name`` it declares (Django formats ``%(class)s`` with the
+        statement model), and its target reaches the statements naming it. One
+        that declares none, and the statement table's own history, get none.
+        """
+
+        reverse_names = {
+            name: field.remote_field.related_name
+            for aspect in self.aspects_for(model).values()
+            if isinstance(aspect, Aspect) and isinstance(aspect.member, Mapping)
+            for name, field in aspect.member.items()
+            if isinstance(field, models.ForeignKey) and field.remote_field.related_name
+        }
         columns = self.value_columns(model)
         fields = {}
         for name, field in super().copy_fields(model).items():
@@ -1772,6 +1801,8 @@ class StatementRecords(HistoricalRecords):
                 field.remote_field.on_delete = models.PROTECT
                 field.remote_field.parent_link = False
                 field.db_constraint = True
+                if name in reverse_names:
+                    field.remote_field.related_name = reverse_names[name]
         return fields
 
     def get_extra_fields(self, model: Any, fields: Any) -> dict[str, Any]:

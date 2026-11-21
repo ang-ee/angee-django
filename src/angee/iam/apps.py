@@ -35,7 +35,8 @@ class IAMConfig(AppConfig):
 
         # Deferred to ready(): signal wiring and schema checks after app population.
         from angee.iam import signals
-        from angee.iam.checks import check_view_as_admin_only
+        from angee.iam.checks import check_set_password_permissions, check_view_as_admin_only
 
         signals.connect()
         checks.register(check_view_as_admin_only, checks.Tags.security)
+        checks.register(check_set_password_permissions, checks.Tags.security)

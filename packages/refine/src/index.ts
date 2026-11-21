@@ -104,6 +104,11 @@ export {
   type AuthoredVariables,
 } from "./dialect/authored-hooks";
 export {
+  useDerivedBatch,
+  useReportRefusedReads,
+  type QueryBatchEntry,
+} from "./dialect/query-batch";
+export {
   requestAuthoredData,
   sharedAuthoredMeta,
   useAuthoredErrorPolicy,
@@ -153,6 +158,7 @@ export {
   type DeletePreviewVariables,
   type FacetRequestSpec,
   type GroupByRequestOptions,
+  type GroupByVariables,
   type GroupRowsRequest,
   type GroupByResult,
   type GroupDimension,

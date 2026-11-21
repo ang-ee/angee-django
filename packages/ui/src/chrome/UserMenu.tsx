@@ -1,13 +1,14 @@
-import { useEffect, useState, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import { useNavigate } from "@tanstack/react-router";
 
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
-import { useColorSchemePreference, type ColorSchemePreference } from "../lib/color-scheme";
+import { useColorSchemePreference, type ColorScheme, type ColorSchemePreference } from "../lib/color-scheme";
 import { useOptionalAppearance } from "../theme";
 import { useContainer, useLoginPath, useRuntimeAuth, useRuntimeLogoutAction } from "../runtime";
 import { ContainerOutlet } from "../lib/container-outlet";
 import { avatarInitials } from "../ui/avatar";
+import { DialogReturnFocusContext } from "../ui/dialog";
 import {
   DropdownMenu,
   type DropdownMenuPositionerProps,
@@ -36,20 +37,16 @@ export function UserMenu({
   const t = useUiT();
   const { user, viewAs } = useRuntimeAuth();
   const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   // A preview selected in the contributed picker leaves the menu so the
   // persistent banner can receive focus and expose its exit action.
   useEffect(() => { if (viewAs?.pending) setOpen(false); }, [viewAs?.pending]);
   const { logout, fetching } = useRuntimeLogoutAction();
   const loginPath = useLoginPath();
   const navigate = useNavigate();
-  const localScheme = useColorSchemePreference();
   const appearance = useOptionalAppearance();
-  const resolved = appearance?.colorScheme ?? localScheme.resolved;
-  const nextTheme: ColorSchemePreference = resolved === "dark" ? "light" : "dark";
+  const schemeDisabled = Boolean(viewAs?.viewAs || viewAs?.pending);
   const contributedItems = useContainer("shell#user-menu");
-  const themeLabel = nextTheme === "dark"
-    ? t("chrome.switchToDarkTheme")
-    : t("chrome.switchToLightTheme");
   const userMenu = t("chrome.userMenu");
   const displayName = user?.name || user?.username || t("chrome.userFallback");
   const email = user?.email;
@@ -64,6 +61,7 @@ export function UserMenu({
   return (
     <DropdownMenu.Root open={open} onOpenChange={setOpen}>
       <DropdownMenu.Trigger
+        ref={triggerRef}
         aria-label={userMenu}
         className={cn(
           "grid size-8 place-content-center rounded-6 border border-border-on-rail bg-avatar-default-bg text-2xs font-semibold uppercase text-on-brand outline-none transition-colors hover:bg-rail-hi focus-visible:focus-ring",
@@ -72,7 +70,7 @@ export function UserMenu({
       >
         {avatarInitials(displayName)}
       </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
+      <DropdownMenu.Portal keepMounted>
         <DropdownMenu.Positioner side={side} align={align} sideOffset={sideOffset}>
           <DropdownMenu.Content aria-label={userMenu} className="w-60 text-13">
             <div className="border-b border-border-subtle px-3 pb-2 pt-1">
@@ -81,12 +79,16 @@ export function UserMenu({
                 <div className={textRoleVariants({ role: "caption", truncate: true })}>{email}</div>
               ) : null}
             </div>
-            <DropdownMenu.Item disabled={Boolean(viewAs?.viewAs || viewAs?.pending)}
-              onClick={() => appearance ? void appearance.setColorScheme(nextTheme) : localScheme.setPreference(nextTheme)}>
-              <Glyph name={nextTheme === "dark" ? "moon" : "sun"} />
-              <span className="flex-1 truncate">{themeLabel}</span>
-            </DropdownMenu.Item>
-            <ContainerOutlet entries={contributedItems} />
+            {appearance ? (
+              <ColorSchemeItem
+                resolved={appearance.colorScheme}
+                onSelect={(next) => void appearance.setColorScheme(next)}
+                disabled={schemeDisabled}
+              />
+            ) : <LocalColorSchemeItem disabled={schemeDisabled} />}
+            <DialogReturnFocusContext.Provider value={triggerRef}>
+              <ContainerOutlet entries={contributedItems} />
+            </DialogReturnFocusContext.Provider>
             <DropdownMenu.Separator />
             <DropdownMenu.Item
               disabled={fetching}
@@ -102,4 +104,32 @@ export function UserMenu({
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
   );
+}
+
+/** The scheme toggle, named for the scheme it switches to. */
+function ColorSchemeItem({ resolved, onSelect, disabled }: {
+  resolved: ColorScheme;
+  onSelect: (preference: ColorSchemePreference) => void;
+  disabled: boolean;
+}): ReactElement {
+  const t = useUiT();
+  const next: ColorSchemePreference = resolved === "dark" ? "light" : "dark";
+  return (
+    <DropdownMenu.Item disabled={disabled} onClick={() => onSelect(next)}>
+      <Glyph name={next === "dark" ? "moon" : "sun"} />
+      <span className="flex-1 truncate">
+        {next === "dark" ? t("chrome.switchToDarkTheme") : t("chrome.switchToLightTheme")}
+      </span>
+    </DropdownMenu.Item>
+  );
+}
+
+/**
+ * The toggle over the browser-local scheme: mounting it reads, applies and follows that
+ * preference, with the menu since its content stays mounted. Only a tree without an
+ * appearance provider renders it, because a provider is the document scheme's only writer.
+ */
+function LocalColorSchemeItem({ disabled }: { disabled: boolean }): ReactElement {
+  const { resolved, setPreference } = useColorSchemePreference();
+  return <ColorSchemeItem resolved={resolved} onSelect={setPreference} disabled={disabled} />;
 }

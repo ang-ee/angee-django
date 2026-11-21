@@ -38,6 +38,21 @@ export const ConnectOAuthResultFields = graphql(`
   }
 `);
 
+// What a connect-with-account action reads, on any type implementing `ConnectWithAccount`.
+// One owner for the selection; consumers spread it in their own query, which
+// `useConnectWithAccountQuery` reads.
+export const ConnectWithAccountFields = graphql(`
+  fragment ConnectWithAccountFields on ConnectWithAccount {
+    oauth_client
+    oauth_scopes
+    accounts {
+      id
+      display_name
+      blocked_reason
+    }
+  }
+`);
+
 export const ConnectIntegration = graphql(`
   mutation ConnectIntegration(
     $resource: String!
