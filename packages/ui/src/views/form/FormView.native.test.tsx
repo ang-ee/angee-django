@@ -2,9 +2,10 @@
 
 import { formSubmitError, savedFormSubmitResult } from "./validation-errors";
 import * as React from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { EditorView } from "@codemirror/view";
 import { createRootRoute, createRouter, createMemoryHistory, RouterContextProvider } from "@tanstack/react-router";
-import { Controller, useForm } from "react-hook-form";
+import { Controller, get, useForm } from "react-hook-form";
 import { schemaFieldMetadataFromDataResources, type DataResourceMetadata, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
@@ -680,16 +681,18 @@ test("a preset that gives a sibling its loaded value back leaves the form clean,
   expect(f.surface().form.formState.isDirty).toBe(false);
 });
 
-// A kind decides its settings: `rich` edits them whole, `split` field by field, `plain` and `bare`
-// take none. A mode `off` hides the whole settings too, and a detail shows only in mode `x`.
-const presetResource: DataResourceMetadata = {
-  ...resource,
-  fields: [...(resource.fields ?? []), ...["kind", "mode", "detail", "provider", "secret", "style", "settingsNote"].map((name) => ({
+/** A resource (the notes one unless given) with more writable String fields. */
+const withFields = (names: readonly string[], base: DataResourceMetadata = resource): DataResourceMetadata => ({
+  ...base,
+  fields: [...(base.fields ?? []), ...names.map((name) => ({
     name, kind: "scalar" as const, scalar: "String", readable: true,
     filterable: false, sortable: false, aggregatable: false, groupable: false,
     creatable: true, updatable: true, requiredOnCreate: false,
   }))],
-};
+});
+// A kind decides its settings: `rich` edits them whole, `split` field by field, `plain` and `bare`
+// take none. A mode `off` hides the whole settings too, and a detail shows only in mode `x`.
+const presetResource = withFields(["kind", "mode", "detail", "provider", "secret", "style", "settingsNote"]);
 const presetFields: readonly FieldDescriptor[] = [
   {
     name: "kind", label: "Kind", widget: "select",
@@ -707,10 +710,10 @@ const presetFields: readonly FieldDescriptor[] = [
 ];
 
 /** A saved record's form over the kinds above, with the values it holds. */
-async function presetForm(stored: Row, options: { fields?: readonly FieldDescriptor[]; submit?: FormSubmit } = {}) {
+async function presetForm(stored: Row, options: { fields?: readonly FieldDescriptor[]; submit?: FormSubmit; resource?: DataResourceMetadata } = {}) {
   let surface!: FormViewSaveSurface;
   const f = await fixture({
-    publicView: true, resourceMetadata: presetResource, record: stored, viewFields: options.fields ?? presetFields,
+    publicView: true, resourceMetadata: options.resource ?? presetResource, record: stored, viewFields: options.fields ?? presetFields,
     submit: options.submit, formExtras: (context) => { surface = context.form; return null; },
   });
   if (stored.kind !== undefined) {
@@ -1218,6 +1221,186 @@ test("typed into a kind's nested fields and back to the loaded kind, the form is
   expect(Object.hasOwn(typed.values(), "settings")).toBe(false);
   await waitFor(expectClean);
   expect(typed.update).not.toHaveBeenCalled();
+});
+
+// One saved record's form holding each kind of value an undo step must land on as it was recorded,
+// every control mounted at once. FormView binds no undo key or button of its own: its record
+// contexts carry `form.history` for the page to bind, which these tests call.
+const undoResource = withFields(["layout", "config"], presetResource);
+const undoFields: readonly FieldDescriptor[] = [
+  { name: "body", label: "Body" },
+  { name: "summary", label: "Summary", omittable: true },
+  { name: "note", label: "Note", nullable: true },
+  { name: "style.color", label: "Color", omittable: true },
+  // The declared default seeds the draft before the record's values arrive: an object widget
+  // refuses the "" a field without one starts with.
+  { name: "layout", label: "Layout", widget: "object", defaultValue: {}, objectTemplate: [
+    { name: "heading", label: "Heading" }, { name: "caption", label: "Caption", omittable: true },
+  ] },
+  { name: "config", label: "Config", widget: "json" },
+  ...presetFields.filter((field) => ["kind", "settings", "mode"].includes(field.name)),
+];
+const undoRecord: Row = {
+  body: "Loaded body", summary: "Loaded summary", note: "Loaded note", style: { color: "red", size: "big" },
+  layout: { heading: "Loaded heading", caption: "Loaded caption" }, config: { count: 1, label: "a" },
+  kind: "rich", settings: { depth: 2 }, mode: "",
+};
+
+async function undoForm() {
+  const form = await presetForm(undoRecord, { fields: undoFields, resource: undoResource });
+  await screen.findByText("Caption", { selector: "label" });
+  await screen.findByRole("textbox", { name: "Config" });
+  return form;
+}
+
+/** The record field labelled `label`: the root holding its control and its presence buttons. */
+function recordField(label: string): HTMLElement {
+  const root = screen.getByText(label, { selector: "label" }).closest<HTMLElement>("[data-layout]");
+  if (!root) throw new Error(`No field labelled ${label}`);
+  return root;
+}
+
+/** What a field with presence buttons shows: its value in its input, or the state it was left in. */
+function expectPresence(label: string, shown: { value: string } | { left: "Not set" | "Left empty" }) {
+  const field = within(recordField(label));
+  if ("value" in shown) {
+    expect((field.getByRole("textbox") as HTMLInputElement).value).toBe(shown.value);
+    return;
+  }
+  expect(field.queryByRole("textbox")).toBeNull();
+  expect(field.getByText(shown.left)).toBeTruthy();
+  expect(field.getByRole("button", { name: "Set value" })).toBeTruthy();
+}
+
+/** The value a JSON editor's text holds now. */
+function jsonShown(label: string): unknown {
+  return JSON.parse(EditorView.findFromDOM(screen.getByRole("textbox", { name: label }))!.state.doc.toString());
+}
+
+type UndoFrame = "loaded" | "changed";
+const undoKinds: readonly {
+  kind: string;
+  change: () => void | Promise<void>;
+  shows: (frame: UndoFrame) => void;
+  saves: Row;
+  /** A key the save holds as its own, or does not; a top-level key has the parent path "". */
+  member?: readonly [parent: string, key: string, held: boolean];
+  /** The known defect: undo and redo do not land on this frame (see the expected-failure rows below). */
+  lost?: true;
+}[] = [
+  {
+    kind: "plain text",
+    change: () => { edit("Body", "Second"); },
+    shows: (frame) => expect((screen.getByRole("textbox", { name: "Body" }) as HTMLInputElement).value)
+      .toBe(frame === "loaded" ? "Loaded body" : "Second"),
+    saves: { body: "Second" },
+  },
+  {
+    kind: "an omittable field left Not set", lost: true,
+    change: () => { fireEvent.click(within(recordField("Summary")).getByRole("button", { name: "Not set" })); },
+    shows: (frame) => expectPresence("Summary", frame === "loaded" ? { value: "Loaded summary" } : { left: "Not set" }),
+    saves: { summary: undefined }, member: ["", "summary", true],
+  },
+  {
+    kind: "a nullable field left empty",
+    change: () => { fireEvent.click(within(recordField("Note")).getByRole("button", { name: "Leave empty" })); },
+    shows: (frame) => expectPresence("Note", frame === "loaded" ? { value: "Loaded note" } : { left: "Left empty" }),
+    saves: { note: null },
+  },
+  {
+    kind: "a nested member left Not set", lost: true,
+    change: () => { fireEvent.click(within(recordField("Color")).getByRole("button", { name: "Not set" })); },
+    shows: (frame) => expectPresence("Color", frame === "loaded" ? { value: "red" } : { left: "Not set" }),
+    saves: { style: { color: undefined } }, member: ["style", "color", true],
+  },
+  {
+    kind: "a structured field's member left Not set, the object losing it",
+    change: () => { fireEvent.click(within(recordField("Caption")).getByRole("button", { name: "Not set" })); },
+    shows: (frame) => {
+      expectPresence("Heading", { value: "Loaded heading" });
+      expectPresence("Caption", frame === "loaded" ? { value: "Loaded caption" } : { left: "Not set" });
+    },
+    saves: { layout: { heading: "Loaded heading" } }, member: ["layout", "caption", false],
+  },
+  {
+    kind: "a whole object replaced by one without a member",
+    change: () => {
+      const editor = EditorView.findFromDOM(screen.getByRole("textbox", { name: "Config" }))!;
+      act(() => editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: '{"count": 2}' } }));
+    },
+    shows: (frame) => expect(jsonShown("Config")).toStrictEqual(frame === "loaded" ? { count: 1, label: "a" } : { count: 2 }),
+    saves: { config: { count: 2 } }, member: ["config", "label", false],
+  },
+  {
+    kind: "a preset that hides its target",
+    change: () => chooseKind("plain"),
+    shows: (frame) => {
+      expect(screen.getByRole("combobox", { name: "Kind" }).textContent).toContain(frame === "loaded" ? "rich" : "plain");
+      if (frame === "loaded") expect(jsonShown("Settings")).toStrictEqual({ depth: 2 });
+      else expect(screen.queryByRole("textbox", { name: "Settings" })).toBeNull();
+    },
+    // The draft drops the hidden target; the save writes the preset's value over the loaded one.
+    saves: { kind: "plain", settings: {} },
+  },
+];
+
+async function landsOnItsFrame({ change, shows, saves, member }: (typeof undoKinds)[number]): Promise<void> {
+  const form = await undoForm();
+  shows("loaded");
+  expectClean();
+  await change();
+  await waitFor(() => shows("changed"));
+  expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+  // A second, unrelated change, so the first undo lands ON the changed frame rather than on the loaded one.
+  edit("Mode", "m");
+  act(() => form.surface().history.undo());
+  await waitFor(() => shows("changed"));
+  expect((screen.getByRole("textbox", { name: "Mode" }) as HTMLInputElement).value).toBe("");
+  expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Discard" })).toBeTruthy();
+  act(() => form.surface().history.undo());
+  await waitFor(() => shows("loaded"));
+  await waitFor(expectClean);
+  act(() => form.surface().history.redo());
+  await waitFor(() => shows("changed"));
+  expect(screen.getByRole("button", { name: "Discard" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(form.update).toHaveBeenCalledOnce());
+  const { variables } = form.update.mock.calls[0]![0] as { variables: Row };
+  // `toStrictEqual` tells a key holding `undefined` from a missing key; `member` names the key in question.
+  expect(variables).toStrictEqual(saves);
+  if (member) {
+    const [parent, key, held] = member;
+    expect(Object.hasOwn((parent ? get(variables, parent) : variables) as object, key)).toBe(held);
+  }
+}
+
+test.each(undoKinds.filter((row) => !row.lost))("undo and redo land on the frame $kind recorded: its control shows it and the save writes it", landsOnItsFrame);
+
+// KNOWN DEFECT, expected to fail until it is fixed: react-hook-form reads `undefined` as take-the-default at registration. After the undo the
+// control still shows "Not set" while the form holds the loaded value and counts as unchanged, so a
+// save sends nothing. These rows flip to passing when that is fixed; move them up then.
+test.fails.each(undoKinds.filter((row) => row.lost))("undo and redo lose $kind: react-hook-form reads `undefined` as take-the-default at registration", landsOnItsFrame);
+
+test("undo while a text input has focus leaves it focused, and typing on is recorded and undoable", async () => {
+  const form = await undoForm();
+  const body = screen.getByRole("textbox", { name: "Body" }) as HTMLInputElement;
+  act(() => body.focus());
+  fireEvent.change(body, { target: { value: "Second" } });
+  act(() => form.surface().history.undo());
+  expect(body.value).toBe("Loaded body");
+  expect(screen.getByRole("textbox", { name: "Body" })).toBe(body);
+  expect(document.activeElement).toBe(body);
+  expect(body.selectionStart).toBe(body.value.length);
+  fireEvent.change(body, { target: { value: "Third" } });
+  expect(form.surface().history.canUndo).toBe(true);
+  expect(form.surface().history.canRedo).toBe(false);
+  act(() => form.surface().history.undo());
+  expect(body.value).toBe("Loaded body");
+  expect(document.activeElement).toBe(body);
+  act(() => form.surface().history.redo());
+  expect(body.value).toBe("Third");
+  expect(document.activeElement).toBe(body);
 });
 
 test("a stateful bound widget remounts when its nested scope changes", async () => {

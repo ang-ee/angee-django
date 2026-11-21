@@ -156,7 +156,7 @@ function parseMountConnectValues(
   const credentialId = mutationDialogValueCodecs.string(values[CONNECT_WITH_ACCOUNT_FIELD]);
   if (credentialId) variables.credentialId = credentialId;
   const copyBackendId = mutationDialogValueCodecs.string(values.copyBackendId);
-  if (copyBackendId && variables.mode === "COPY") variables.copyBackendId = copyBackendId;
+  if (copyBackendId) variables.copyBackendId = copyBackendId;
   return variables;
 }
 

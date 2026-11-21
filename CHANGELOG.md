@@ -10,6 +10,23 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: **Changed behaviour.** A dialog submits only the fields it shows:
+  a field a `showWhen` hides, when the dialog opens or after a value was typed
+  into it, is not submitted, and shows its initial value when it shows again,
+  as a record form's draft holds only the fields it shows. `DescriptorFieldList`
+  takes `unregisterHidden` with its declared `fields`, which `MutationDialog`
+  and `ActionFormDialog` set: a field the list declares or showed and does not
+  show leaves the form's values and keeps its default (a path a shown field
+  still holds or lives under stays), and a returning field takes that default
+  back before its control renders. A list showing part of a larger form (the
+  workflow studio's inspector) leaves it off, so a field it stops listing keeps
+  its value. `DescriptorFieldList` no longer takes `resolvedFields`; pass
+  `fields`. `DescriptorField.branchReset` stays and its docstring says what it
+  is: the quiet re-initialization of the fields that depend on a choice, which
+  a preset (`prefill`, validated and dirty) is not. The storage mount dialog no
+  longer checks the file handling before it sends the copy target, and the
+  operator's workspace dialog's template preset seeds only the chosen
+  template's inputs.
 - `@angee/ui`: dialog descriptor fields (`DescriptorFieldList`, under
   `MutationDialog`, `ActionFormDialog` and the workflow studio) use the record
   form's owners. Which fields a set of values shows is `visibleFields`, and a

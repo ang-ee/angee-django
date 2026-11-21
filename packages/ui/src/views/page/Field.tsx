@@ -41,6 +41,14 @@ export interface FieldDescriptor extends FieldPresentation {
   nullable?: boolean;
   /** Treat required as JSON property presence; emitted only by structured FormSpec. */
   presenceRequired?: boolean;
+  /**
+   * The value may be left "Not set": the member is then absent from the saved object. Emitted only
+   * by structured FormSpec. A field of its own holds "Not set" as `undefined`, which React Hook Form
+   * replaces by the form's default whenever the field registers again (an undo or redo replay, a
+   * pane that unmounts). Before such a member is shown as its own field in a pane that unmounts, or
+   * undo is bound in a record form, it must bind through its parent object's single registration,
+   * as the structured editor does (see `useFormHistory` and its expected-failure tests).
+   */
   omittable?: boolean;
   hasDefault?: boolean;
   minimum?: number;
