@@ -523,25 +523,29 @@ def test_contacts_read_before_they_carried_a_creation_time_move_as_a_re_read_bri
 
 
 def test_an_unchanged_re_read_bringing_an_earlier_creation_time_moves_the_person_without_applying_it(
-    hubspot: HubSpot, monkeypatch: pytest.MonkeyPatch
+    hubspot: HubSpot,
 ) -> None:
-    """The re-read is settled as unchanged: no apply, no ingest, and the move is one version of the party."""
+    """The re-read is settled as unchanged: no apply, so no ingest, and the move is one version of the party.
+
+    The ingest runs only from applying a record, so a link whose applied base and
+    application snapshots are unchanged was not ingested.
+    """
 
     created = datetime(2019, 4, 2, tzinfo=UTC)
     ada = hubspot.server.add("contacts", ADA, modified=ago(days=3), created=created)
     hubspot.drain()
     (person,), imported = read_before_creation_times(hubspot, [ada])
-    base = hubspot.link(ada).applied_base_id
+    base, applications = hubspot.link(ada).applied_base_id, applied_history().count()
     versions = Party._base_manager.get(pk=person).history.count()
-    ingests = []
-    manager = type(Party.objects)
-    ingest = manager.ingest_contact
-    monkeypatch.setattr(manager, "ingest_contact", lambda *args, **kwargs: ingests.append(1) or ingest(*args, **kwargs))
 
     hubspot.sweep(page_bound=100)
 
     party = Party._base_manager.get(pk=person)
-    assert (party.created_at, ingests, hubspot.link(ada).applied_base_id) == (created, [], base)
+    assert (party.created_at, hubspot.link(ada).applied_base_id, applied_history().count()) == (
+        created,
+        base,
+        applications,
+    )
     assert party.history.count() == versions + 1
     assert party.history.first().created_at == created
     assert party.updated_at > imported
