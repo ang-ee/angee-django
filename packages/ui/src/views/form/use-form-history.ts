@@ -28,6 +28,13 @@ export interface FormHistory {
  * Each changed RHF notification creates one immutable frame, reused by stacks
  * and availability checks. Both stacks retain at most limit frames (default 100).
  * Call reset when the caller loads another record or accepts a saved baseline.
+ * Before binding undo where a field of its own can be left "Not set" over a loaded
+ * value (a record form): a replay registers every mounted field again, and React Hook
+ * Form gives a field whose frame holds `undefined` or no key the form's default, so a
+ * "Not set" and an object's missing member come back with the loaded value. Such
+ * members must first bind through their parent object's single registration, as the
+ * structured editor does; the expected-failure rows in `use-form-history.test.tsx` and
+ * `FormView.native.test.tsx` flip when they do.
  * @owner FormView
  */
 export function useFormHistory<TValues extends FieldValues>(
