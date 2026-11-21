@@ -251,3 +251,27 @@ def test_a_sourced_notes_role_is_a_slug_of_its_own_and_its_new_title_must_be_fre
         _write(person, vault, "Prefers tea.", None)
     assert _notes(person) == []
     assert _write(person, vault, "Prefers tea.", None, title="Ada Example: remember (2)") == "written"
+
+
+def test_a_note_made_from_a_sources_text_carries_the_sources_time_and_a_later_write_keeps_it(db: None) -> None:
+    """The time the source says it noted the text is the new page's; its folder and later writes keep their own."""
+
+    from datetime import UTC, datetime
+
+    noted = datetime(2022, 9, 14, 18, 0, tzinfo=UTC)
+    vault = _people_vault()
+    person = _person(create_user("people-sourced-time"))
+    with system_context(reason="tests.knowledge.import"):
+        page = Page.objects.create_in(vault, title="Ada Example: met at the reading", created_at=noted)
+        assert page.created_at == noted
+        assert RecordBinding.objects.write_sourced_page(
+            person, vault=vault, role="remember", folder_title="Ada Example (folder)",
+            title="Ada Example: remember", body="Prefers tea.", written=None, created_at=noted,
+        ) == "written"
+    note = _note(person)
+    assert note.created_at == noted
+    with system_context(reason="tests.knowledge.folder.readback"):
+        assert Page.objects.get(pk=_folders(person)[0]).created_at > noted
+
+    assert _write(person, vault, "Prefers green tea.", "Prefers tea.") == "written"
+    assert _note(person).created_at == noted

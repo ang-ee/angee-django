@@ -2,6 +2,7 @@ import * as React from "react";
 import { useResourceInvalidates } from "@angee/metadata";
 import {
   groupByVariables, useAuthoredMutation, useAuthoredQuery, useInvalidateAuthoredModels, type AuthoredDocument,
+  type GroupByVariables,
 } from "@angee/refine";
 import { useInvalidate } from "@refinedev/core";
 import {
@@ -122,7 +123,7 @@ export function cursorField(read: AllMatchingGroups["read"]): string | null {
  * column's key does in the resource's filter. It never steps over a null key: the order puts nulls last, and under
  * "Select all" the read has a `having` and a repeated level's `where` keeps no group without a value.
  */
-function groupSetsVariables(groups: GroupListing, after: string | null): Record<string, unknown> {
+function groupSetsVariables(groups: GroupListing, after: string | null): GroupByVariables & { rows_limit: number } {
   const field = cursorField(groups.read);
   const where = after === null || field === null
     ? groups.read.where
@@ -260,10 +261,8 @@ export function DuplicatesDialog({
     : { limit: SETS_PAGE, after: lastPage?.after ?? null };
   const request = JSON.stringify(pageVariables);
   const listingDocument: AuthoredDocument = allGroups?.document ?? CertainSameAsPairs;
-  // The one cast at the schema boundary, and it cannot narrow to `group_by` alone: `groupByVariables` returns
-  // `Record<string, unknown>`, so `group_by` (each resource's own enum, `peopleGroupableField` or
-  // `organizationsGroupableField`) and `where`, `having` and `order_by` all arrive `unknown` to the generated
-  // variables; and `listingDocument`, one of three documents, is typed `AuthoredDocument`, whose variables are `never`.
+  // The one cast at the schema boundary: `listingDocument`, one of three documents, is typed `AuthoredDocument`, whose
+  // variables are `never`.
   // The end-of-run invalidation reaches the listing's pages too, so a later dialog reads them again.
   const pageRead = useAuthoredQuery(listingDocument, pageVariables as never, {
     enabled: paged && !pagesDone, errorNotification: false, models: PARTY_MERGE_INVALIDATES,

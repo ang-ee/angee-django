@@ -71,6 +71,7 @@ from angee.base.identity import public_data_id_field
 from angee.base.lineage import concrete_child
 from angee.base.models.hierarchy import HierarchyQuerySet
 from angee.base.models.identity import instances_from_public_ids, public_id_for
+from angee.base.models.timestamps import auto_now_stamps
 from angee.base.models.trash import ArchiveQuerySet
 from angee.base.pagination import clamp_page_size
 from angee.base.permissions import actor_user_id, reader_queryset
@@ -81,7 +82,15 @@ from angee.base.signals import MutedChanges, mute_changes, publish_change
 from angee.integrate.errors import IntegrationError
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager
 from angee.integrate.states import LinkStatus, StreamDirection
-from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedOrganization, ParsedPhoto
+from angee.parties.backends import (
+    CONTACTS,
+    AvatarReport,
+    ParsedAddress,
+    ParsedContact,
+    ParsedOrganization,
+    ParsedPhoto,
+    payload_created_at,
+)
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.provenance.context import changeset
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
@@ -1212,7 +1221,12 @@ class SamePersonLink(NamedTuple):
 
 
 def _age(party: Any) -> tuple[Any, Any]:
-    """A party's place in a merge: the oldest record survives, then key order."""
+    """A party's place in a merge: the oldest record survives, then key order.
+
+    Its age is its ``created_at``: the earliest time its provenance states, a
+    source's creation time included (``Party.backdate_creation``), so the record
+    its sources have known longest survives, not the one imported here first.
+    """
 
     return party.created_at, party.pk
 
@@ -2979,10 +2993,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         person merges by hand on the compare page; ``actor`` may merge every one in
         a batch (:meth:`batch_mergeable`); and no two of them were kept apart by a
         person. With ``certain`` each set must also be a certain pair
-        (:meth:`certain_pairs`). The oldest member survives and the others fold
-        into it in key order. More than :attr:`BATCH_SETS` sets refuse the batch.
-        ``groupings`` names, per set, the fields a list grouped it by (names only):
-        each that is a text merge field gets a row (:attr:`DuplicateSetPreview.grouping`).
+        (:meth:`certain_pairs`). The oldest member survives (the earliest
+        ``created_at``, a source's creation time included: :func:`_age`) and the
+        others fold into it in key order. More than :attr:`BATCH_SETS` sets refuse
+        the batch. ``groupings`` names, per set, the fields a list grouped it by
+        (names only): each that is a text merge field gets a row
+        (:attr:`DuplicateSetPreview.grouping`).
         """
 
         confirmed = self._confirmed_sets(sets, groupings)
@@ -3901,6 +3917,78 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             .select_related("stream")
         )
 
+    def backdate_creation(self, pk: Any, at: datetime | None) -> datetime | None:
+        """Move party ``pk``'s ``created_at`` back to ``at`` when ``at`` is earlier; return the time it moved to.
+
+        The one rule that moves a party's creation time after its insert: only
+        earlier, never later and never past now (:meth:`Party.backdate_creation`,
+        the instance form, calls it). A tracked update of the canonical row compared
+        in SQL, under the caller's changeset: history records one version, the
+        change feed publishes the party (or collects it under ``mute_changes``), and
+        ``updated_at`` is stamped. A party already as old costs one read and writes
+        nothing: no version, no event. ``None`` when ``at`` is ``None`` or nothing
+        moved.
+        """
+
+        if at is None:
+            return None
+        now = timezone.now()
+        at = min(at, now)
+        parties = apps.get_model("parties", "Party")
+        rows = parties._base_manager.filter(pk=pk, created_at__gt=at)
+        if not rows.exists() or not rows.update(created_at=at, **auto_now_stamps(parties, now)):
+            return None
+        return at
+
+    def backdate_from_sources(self) -> tuple[int, int, int, datetime | None, datetime | None]:
+        """Move each party's creation time back to the earliest its directory records state; return what it did.
+
+        The repair for parties imported before a contact carried its source's
+        creation time, run at every provision and as ``backdate_parties_from_sources``:
+        each canonical party's ``created_at`` becomes the earliest of its own and
+        the creation time each of its directory records' stored payloads states
+        (:func:`~angee.parties.backends.payload_created_at`), through
+        :meth:`Party.backdate_creation`. It needs no knowledge of which record
+        made the party: a party takes the minimum of every record it holds, and a
+        merge survivor holds the records it folded in. ``moved`` parties moved and
+        ``kept`` were already as old; ``unstated`` records' contact payloads state
+        no time (stored before a contact carried one, or from a source that states
+        none), which only a re-read of the source fills, never this repair. The
+        result is ``(moved, kept, unstated, oldest, newest)``: ``oldest`` and
+        ``newest`` are the earliest and the latest creation time it moved a party
+        to, ``None`` when it moved none. Idempotent: a second run moves nothing.
+        """
+
+        reason = "parties.backdate_from_sources"
+        parties = apps.get_model("parties", "Party")
+        directories = apps.get_model("parties", "Directory")._base_manager.values("pk")
+        earliest: dict[Any, datetime] = {}
+        unstated = 0
+        with changeset(fresh=True, activity="system", change_reason=reason), system_context(reason=reason):
+            stored = (
+                parties._base_manager.filter(
+                    merged_into__isnull=True,
+                    record_links__stream__key=CONTACTS,
+                    record_links__stream__integration__in=directories,
+                )
+                .values_list("pk", "record_links__source_payload")
+                .order_by("pk")
+            )
+            for pk, payload in stored.iterator(chunk_size=500):
+                if not isinstance(payload, dict) or "contact" not in payload:
+                    continue
+                at = payload_created_at(payload)
+                if at is None:
+                    unstated += 1
+                elif pk not in earliest or at < earliest[pk]:
+                    earliest[pk] = at
+            times = [
+                party.created_at
+                for party in parties._base_manager.filter(pk__in=list(earliest)).order_by("pk")
+                if party.backdate_creation(earliest[party.pk])
+            ]
+        return len(times), len(earliest) - len(times), unstated, min(times, default=None), max(times, default=None)
+
     def directory_merge_blocker(self, survivor: Party, merged: Sequence[Party]) -> str | None:
         """Return why merging ``merged`` into ``survivor`` would set two contacts of one directory on one person.
 
@@ -4505,7 +4593,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         employers. Addresses land through :meth:`AddressManager.land_addresses`
         and the employer through :meth:`RelationshipManager.land_employment`;
         removed members withdraw only this source's statements instead of
-        deleting rows.
+        deleting rows. The contact's creation time (``ParsedContact.created_at``)
+        is a minted person's own; on a person that exists it moves their creation
+        time earlier when it is earlier (``Party.backdate_creation``), never later.
         """
         container = stream.container if stream.container_id is not None else None
         folder = container.target if container is not None else None
@@ -4536,10 +4626,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 blocker = self.adoption_blocker(target, link=link, parsed=parsed, lookup=lookup, replaces=replaces)
                 if blocker is not None:
                     raise ValidationError(blocker)
-            person = target or people.create(
+            person = target or people.insert(people.model(
                 display_name=(parsed.display_name or parsed.family_name or people.model.PLACEHOLDER_NAME),
                 created_by_id=created_by_id,
-            )
+            ).stamp_created_at(parsed.created_at))
+            if target is not None:
+                person.backdate_creation(parsed.created_at)
             parent = apps.get_model("parties", "Party")._base_manager.get(pk=person.pk)
             through = through.canonical() if through is not None else self._adopted_through(parent, source=source)
             left = link.target if link.target_object_id and link.target_object_id != str(parent.pk) else None

@@ -1282,6 +1282,13 @@ attribute exactly. A response status of 400 or more, a GraphQL result with
 exception closes the rows as failed. Tests inherit a boundary from the root
 `conftest.py`; modules marked `entrypoint_boundaries` exercise the production ones.
 
+- **A row's `created_at` is when it came into being, as its provenance states.**
+  A creating owner states a source's creation time for the row's insert
+  (`stamp_created_at` on [`TimestampMixin`](../../src/angee/base/models/timestamps.py));
+  every other insert, a clone's or a re-insert's included, stamps now, whatever the
+  attribute holds. An owner's one writer may move it earlier later, never later
+  (`Party.backdate_creation`); a reader that means "arrived here" reads an arrival
+  fact of its own, never this stamp.
 - **Optimistic lock:** `OptimisticLockMixin` counts instance saves. A verb that
   accepts a client's `expected_revision` passes it to `save()` and maps
   `StaleRevisionError` to its conflict result; queryset updates never bump.

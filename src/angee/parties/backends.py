@@ -17,8 +17,8 @@ from __future__ import annotations
 import hashlib
 import logging
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import asdict, dataclass
-from datetime import date, timedelta
+from dataclasses import asdict, dataclass, replace
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django.apps import apps
@@ -41,7 +41,7 @@ from angee.integrate.states import (
 from angee.integrate.streams import ApplyResult, LocalChange, RecordChange, SemanticError, StreamPage
 
 if TYPE_CHECKING:
-    from angee.parties.managers import EmailLookup
+    from angee.parties.managers import EmailLookup, PartyManager
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +57,15 @@ so a backend without one keeps the payload it always had.
 """
 MAPPING_REFUSED = "mapping_refused"
 """The refusal code of a record a mapping cannot read or state; its details name the mapping, never the value."""
+CREATED_AT = "created_at"
+"""The payload key holding when the source says a contact came into being (``ParsedContact.created_at``), in ISO 8601.
+
+A payload carries it only when the source states one. It sits beside the
+compared ``contact`` projection, never inside it, so no record is a change to
+apply for it, and the link's source payload keeps it: an applied contact's ingest
+moves its person earlier, and a re-read settled as unchanged does through
+:meth:`DirectoryBackend.on_revalidated`.
+"""
 
 
 @dataclass(frozen=True)
@@ -126,7 +135,11 @@ class ParsedContact:
     ``(value, label, is_preferred)`` triples. ``organization``/``title``/``role``
     carry the employment (the map folds them onto an ``employee``
     ``Relationship``); ``birthday``/``anniversary`` are resolved dates; ``photo``
-    is the avatar.
+    is the avatar. ``created_at`` is when the source says the record came into
+    being, an aware time, ``None`` when it says nothing: a fact about the record,
+    not a contact field, so no projection compares it and the ingest states
+    nothing of it. The payload keeps it beside the contact's projection
+    (:data:`CREATED_AT`).
     """
 
     display_name: str = ""
@@ -146,6 +159,7 @@ class ParsedContact:
     phones: tuple[tuple[str, str, bool], ...] = ()
     addresses: tuple[ParsedAddress, ...] = ()
     photo: ParsedPhoto | None = None
+    created_at: datetime | None = None
 
 
 CONTACT_FIELDS = (
@@ -222,6 +236,19 @@ def contact_from_projection(projection: Mapping[str, Any]) -> ParsedContact:
     photo = values["photo"]
     values["photo"] = ParsedPhoto(content_hash=photo["hash"], mime=photo["mime"]) if photo else None
     return ParsedContact(**values)
+
+
+def contact_from_payload(payload: Mapping[str, Any]) -> ParsedContact:
+    """Decode a contact payload :meth:`DirectoryBackend.observe` made: its projection, with its creation time."""
+
+    return replace(contact_from_projection(payload["contact"]), created_at=payload_created_at(payload))
+
+
+def payload_created_at(payload: Mapping[str, Any]) -> datetime | None:
+    """Return when a contact payload :meth:`DirectoryBackend.observe` made says its record began; else ``None``."""
+
+    created = payload.get(CREATED_AT)
+    return datetime.fromisoformat(created) if created else None
 
 
 def _preferred(contact: ParsedContact) -> list[str]:
@@ -681,7 +708,9 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         ``PartyManager.prepare_contact``), so an unchanged source compares
         unchanged. ``replaces`` names the keys of the records a merge at the source
         folded into this one, in the source's order (the first one's person is the
-        survivor's: :meth:`apply_record`); the payload keeps each once.
+        survivor's: :meth:`apply_record`); the payload keeps each once. The
+        contact's creation time, when the source states one, is kept under
+        :data:`CREATED_AT`; a mapping never changes it.
         Call it while extracting, outside any transaction.
         """
 
@@ -698,6 +727,8 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
                     # The record alone is refused; the refusal names the mapping, never the value it could not read.
                     return {"error": MAPPING_REFUSED, "mapping": mapping.key}
         payload: dict[str, Any] = {"contact": contact_projection(self._prepare_contact(contact))}
+        if contact.created_at is not None:
+            payload[CREATED_AT] = contact.created_at.isoformat()
         if mappings:
             payload[MAPPINGS] = projections
         if replaced := list(dict.fromkeys(replaces)):
@@ -996,7 +1027,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             parties.lock_contact(target)
             parties.withdraw_contact(link, lookup=self._page_lookup)
         else:
-            parsed = contact_from_projection(record.source_payload["contact"])
+            parsed = contact_from_payload(record.source_payload)
             order = record.source_payload.get("replaces", ())
             replaced = sorted(
                 stream.links.filter(external_key__in=order).exclude(pk=link.pk),
@@ -1075,6 +1106,29 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
                 found.append((manager, aspects))
         return found
 
+    def on_revalidated(self, stream: Any, links: Sequence[Any]) -> None:
+        """Move a re-read contact's person back to the creation time its payload states, when that is earlier.
+
+        Integrate settles a contact whose ``contact`` projection is unchanged without
+        applying it, after storing the payload just read on its link
+        (:meth:`BridgeImpl.on_revalidated`). The creation time sits beside that
+        projection (:data:`CREATED_AT`), so a re-read that brings one, a contact read
+        before contacts carried it caught by the daily sweep, a resync or a delta's
+        overlap, moves the person the link names (a merged record's link follows
+        its survivor) through the one rule, :meth:`PartyManager.backdate_creation`:
+        earlier only, one read when the person is already as old, nothing for a
+        payload stating no time. The record is not applied and its statements are
+        untouched.
+        """
+
+        if stream.key != CONTACTS:
+            return
+        parties = cast("PartyManager[Any]", apps.get_model("parties", "Party").objects)
+        for link in links:
+            payload = link.source_payload
+            if link.target_object_id and isinstance(payload, dict) and "contact" in payload:
+                parties.backdate_creation(link.target_object_id, payload_created_at(payload))
+
     def on_absent(self, stream: Any, links: Sequence[Any]) -> dict[Any, ApplyResult] | None:
         """Withdraw what a confirmed-absent address book, or a pull-only stream's contact, stated.
 
@@ -1117,11 +1171,11 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
 def _refined(mapping: DirectoryMapping, contact: ParsedContact, values: Mapping[str, Any]) -> ParsedContact:
     """Return ``mapping``'s refinement of ``contact``; a field it sets that it does not declare fails the extract.
 
-    So does any change of an email or phone but its preferred flag (:data:`POINT_FIELDS`).
+    So does any change of an email or phone but its preferred flag (:data:`POINT_FIELDS`), or of the creation time.
     """
 
     refined = mapping.refine(contact, values)
-    changed = {name for name in CONTACT_FIELDS if getattr(refined, name) != getattr(contact, name)}
+    changed = {name for name in (*CONTACT_FIELDS, "created_at") if getattr(refined, name) != getattr(contact, name)}
     if undeclared := sorted(changed - set(mapping.refines)):
         raise ImproperlyConfigured(
             f"Directory mapping {mapping.key!r} refined the contact fields {undeclared!r}, which it does not declare: "

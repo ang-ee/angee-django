@@ -130,9 +130,12 @@ messaging inbox's [explorer](../tests/test_inbox_explorer.py),
 [part reads](../tests/test_inbox_part_reads.py), the composed member
 [person/projects planner budgets](../tests/test_composed_examples.py), and the composed
 [intake access decision](../tests/test_composed_intake.py). It also runs
-[task ordering](../tests/test_task_rank_allocation.py),
-[record tasks](../tests/test_projects_record_tasks.py), and
-[project access and projections](../tests/test_projects_access_projections.py).
+[task ordering](../tests/test_task_rank_allocation.py), whose rank allocation reads
+its tail through the saving connection. Authorization that rebac compiles per
+backend is proven on the backend that decides it in production, so the lane also
+runs, whole, the authorization contracts that hold on every backend; the files it
+covers are those the `uv-postgres` job's selection lists in
+[reusable checks](../.github/workflows/reusable-checks.yml).
 `test_connections.py`, `test_system_queryset.py`, `test_integrate_scheduler.py` and
 `test_transitions.py` contribute only their PostgreSQL test nodes because each also has
 SQLite-only tests, and `test_parties_directory_backend.py` its lock nodes because its strict

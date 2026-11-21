@@ -47,6 +47,49 @@ live in code docstrings.
   declaration (`showWhen`, `resolve`); its rail row decides only how it
   presents, and one rail row never decides another's. The module-level
   `resolveDescriptorFields`, never exported from `@angee/ui`, is removed.
+- `angee.base`, `angee.integrate`, `angee.parties`, `angee.knowledge`, `angee.parties_integrate_hubspot`:
+  a record a bridge creates carries its source's creation date. `created_at` is a
+  `CreatedAtField` (`angee.base.models.timestamps`): Django's `auto_now_add`, except
+  that an insert keeps a time its creating owner stated for it with
+  `TimestampMixin.stamp_created_at` (a future one clamped to now), once. Every other
+  insert stamps now, whatever the attribute holds, a cloned or re-inserted row's
+  included, and fixtures loaded raw keep their values, as before. It deconstructs as
+  Django's `DateTimeField`, so no host migrates, and its column types as one in
+  expressions. What changes, in plain words:
+  - A person a directory contact makes is dated by the source (HubSpot's
+    `createdAt`), and a party's date is the earliest its provenance states: a
+    contact landing on a younger person, or a merge folding an older record into a
+    younger survivor, moves it earlier, never later (`Party.backdate_creation`). A
+    contact re-read unchanged moves its person the same way: an adapter's
+    `on_revalidated` may now project, from the payload just stored, a fact its change
+    comparison leaves out, idempotently and without applying the record.
+  - A batch merge's "oldest record survives" now means the record its sources have
+    known longest, not the one imported here first.
+  - The People and Organizations lists' Created column, its sort and its grouping
+    by month show the sources' dates for imported records; a record made here
+    shows when it was made here.
+  - History's `+` snapshot carries the stated date, while its `history_date` stays
+    the moment the row was recorded here.
+  - A note page a mapping makes from a source's text carries the text's own time
+    when the mapping passes it (`Page.objects.create_in(..., created_at=)`,
+    `RecordBinding.objects.write_sourced_page(..., created_at=)`).
+  - Handles, statements and record links keep the moment they were recorded;
+    registrations and orders state no date until their owner reads an arrival
+    stamp of its own.
+  Upgrade: no migration. A contact read before this release has no time in its
+  stored payload: its next read from the source stores it and moves its person,
+  changed or not. The daily sweep re-reads every contact, so within a day of the
+  deploy, while the directory syncs, every person carries the earliest time its
+  sources state; a Resync of the contacts stream, or a change at the source, reads
+  a contact sooner. Every provision also runs `backdate_parties_from_sources`, the
+  catch-up for payloads already holding a time; its line gives the counts (moved,
+  already as old, records stating no time) and, when it moved any, the earliest and
+  latest new time, never a name or an id, so it is not the total of what moved.
+  Requires
+  `strawberry-django-aggregates` 0.15.0 (the GraphQL manifest's floor), which
+  aggregates the created-time field as the `DateTimeField` it stores: with
+  0.14.1 a grouping by `created_at` loses its type and date buckets.
+
 - `angee.parties`: roles of its own, `parties/role` (`PartiesRole`):
   `contact_reader`, `contact_manager` and `contact_admin` hold on every party,
   and on the handles, addresses, relationships and circle memberships it holds
@@ -81,7 +124,10 @@ live in code docstrings.
   `contact_manager`, `contact_admin`); a contact admin removes the vault's
   pages through the new `knowledge/vault#page_delete`, never the vault.
   Knowledge revision 11, extends revision 9. Nobody holds a role until
-  a deployment grants it. Upgrade: `rebac sync`; load the install tier.
+  a deployment grants it. Upgrade: a host generates one state-only `CreateModel`
+  for `PartiesRole` with `makemigrations parties` (the anchor is
+  `managed = False`, so Django issues no SQL), runs `rebac sync` for the raised
+  revisions and loads the install tier.
 - `angee.parties`: the batch dialog lists every group a list's "Select all N"
   matched by key, not by offset. It forwards the list's own groups read as the
   list sent it, order included (`AllMatchingGroups.read.orderBy`, always the

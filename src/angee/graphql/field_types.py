@@ -20,6 +20,7 @@ opaque-id ``SqidField`` is a non-concrete column projected explicitly as
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from django.core.exceptions import ImproperlyConfigured
@@ -28,6 +29,7 @@ from strawberry_django.fields.types import field_type_map
 
 from angee.base.fields.ordering import FractionalRankField
 from angee.base.fields.text import ColorField, DiagnosticTextField, ModelLabelField
+from angee.base.models.timestamps import CreatedAtField
 
 
 def register_field_type(field_class: type[models.Field[Any, Any]], wire_type: type) -> None:
@@ -57,3 +59,4 @@ register_field_type(FractionalRankField, float)
 register_field_type(DiagnosticTextField, str)
 register_field_type(ModelLabelField, str)
 register_field_type(ColorField, str)
+register_field_type(CreatedAtField, datetime)
