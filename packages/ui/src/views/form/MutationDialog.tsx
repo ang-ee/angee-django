@@ -379,7 +379,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
       trigger={trigger}
     >
       <ActionFormProvider {...{ ...form, registerFieldValidation }}>
-        <DescriptorFieldList resolvedFields={shownFields} />
+        <DescriptorFieldList fields={fields} unregisterHidden />
       </ActionFormProvider>
       <ErrorBanner description={error} />
     </DialogForm>

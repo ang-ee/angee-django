@@ -835,6 +835,9 @@ export function useFormViewSave({
         },
       );
       // The draft holds only the fields visible for its new values, as it was loaded (`emptyDraft`).
+      // A dialog keeps this rule by what its list does not show (DescriptorFieldList's
+      // `unregisterHidden`); this form's controls also unmount for tabs and sections, so it computes
+      // the hidden paths from its model instead, and makes the same two calls.
       if (written.length && preset === own) {
         const hidden = hiddenDraftPaths(form.getValues(), saveFields, written);
         if (hidden.length) form.unregister(hidden, { keepDefaultValue: true });
