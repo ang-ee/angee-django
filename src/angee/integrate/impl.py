@@ -183,7 +183,16 @@ class BridgeImpl(IntegrationImpl):
         """
 
     def on_revalidated(self, stream: Any, links: Sequence[Any]) -> None:
-        """Restore native projection visibility after unchanged-row revalidation."""
+        """Act on links whose re-read records the driver settled as unchanged; by default nothing.
+
+        The driver calls it inside the record's savepoint, after observing the
+        record, so each link's ``source_payload`` is the payload just read. The
+        first case is restoring native projection visibility after unchanged-row
+        revalidation. An adapter may also project, from that stored payload, a
+        fact its change comparison deliberately leaves out of the mapped payload,
+        provided the projection is idempotent, never applies the record (the
+        applied base stays as it is) and writes nothing when the fact adds nothing.
+        """
 
     def on_absent(self, stream: Any, links: Sequence[Any]) -> Mapping[Any, ApplyResult] | None:
         """Withdraw native projection visibility when absence changes link status.

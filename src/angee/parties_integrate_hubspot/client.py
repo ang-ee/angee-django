@@ -207,10 +207,23 @@ class HubSpotObject(_HubSpotKey):
 
     ``unreadable`` marks a record HubSpot stated in another shape (a property value
     that is not a string, say): only its id was read, and ``properties`` is empty.
+    ``created_at`` is when HubSpot says the record was created, its ``createdAt``,
+    which every read states without being asked for a property; ``None`` when
+    the answer states none that can be read, which never makes the record
+    unreadable.
     """
 
     properties: dict[str, str | None] = Field(default_factory=dict)
+    created_at: datetime | None = None
     unreadable: bool = False
+
+    @field_validator("created_at", mode="before")
+    @classmethod
+    def _readable_time_or_none(cls, value: Any) -> datetime | None:
+        try:
+            return parse_datetime(value) if isinstance(value, str) else None
+        except ValueError:
+            return None
 
     def modified_at(self, object_type: str) -> datetime | None:
         """Return the record's last-modified time, or ``None`` when it was not read or cannot be parsed."""

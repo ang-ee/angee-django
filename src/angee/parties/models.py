@@ -25,6 +25,7 @@ from __future__ import annotations
 import unicodedata
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import asdict, replace
+from datetime import datetime
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
@@ -675,6 +676,35 @@ class Party(
         if aspect != "same_as":
             super().apply_pair(aspect=aspect, other=other, statement=statement)
 
+    def backdate_creation(self, at: datetime | None) -> bool:
+        """Move this party's ``created_at`` back to ``at`` when ``at`` is earlier; return whether it moved.
+
+        A party's creation time is the earliest any of its provenance states: its
+        insert, or the time a source gave the record it was minted from
+        (``CreatedAtField``). It moves it afterwards, only earlier, never later
+        and never past now, through the one rule
+        (:meth:`PartyManager.backdate_creation`): the contact ingest calls it when
+        a source with an earlier time lands on an existing party, and a merge when
+        the survivor folds in an older record (:meth:`merge_fields`), so a survivor
+        a person chose takes the earliest time of what it folds in. A tracked
+        update compared in SQL: history records the move, and a party already as
+        old writes nothing, no version and no live event. The stamp only ever
+        moves earlier, so a time no earlier than the one this instance holds
+        cannot move it, and is answered without a query.
+
+        So a batch merge's "oldest" (``PartyManager.merge_duplicates``) is the
+        source-oldest record. No reader of a party's ``created_at`` means "arrived
+        here since" (``CreatedAtField`` names what was searched).
+        """
+
+        if at is None or (self.created_at is not None and at >= self.created_at):
+            return False
+        moved = cast("PartyManager[Party]", apps.get_model("parties", "Party").objects).backdate_creation(self.pk, at)
+        if moved is None:
+            return False
+        self.created_at = moved
+        return True
+
     def validate_merge(self, merged: Sequence[Any]) -> None:
         """Refuse a pair a person kept apart, and records of different kinds (a person and an organization)."""
 
@@ -704,9 +734,12 @@ class Party(
         leaves empty (:meth:`merge_values`, read here, under the merge's locks);
         ``confirmed_fields`` names the fields the merging person saw, the only ones
         recorded as their choice beside the overrides (:meth:`keep_merge_fields`).
+        The survivor takes the earliest creation time of the records it folds in
+        (:meth:`backdate_creation`), read from the locked rows.
         """
 
         super().merge_fields(merged, **options)
+        self.backdate_creation(min((row.created_at for row in merged), default=None))
         fills = self.merge_values(merged) if fill_empty else {}
         for row in merged:
             self.keep_merge_fields(row, field_overrides, fills=fills, confirmed=confirmed_fields)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -12,6 +12,7 @@ from django.core.exceptions import ValidationError
 from django.db import OperationalError, connection
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
@@ -94,6 +95,72 @@ def test_a_certain_pair_merges_into_the_older_record_and_pins_nothing(db: None) 
     with system_context(reason="duplicates readback"):
         assert Party._base_manager.get(pk=older.pk).display_name == "Zoë Example-Smith"
     assert _pairs() == []
+
+
+SOURCE_CREATED = datetime(2019, 4, 2, 10, 30, tzinfo=UTC)
+"""When an invented source says its record came into being."""
+
+
+def _created_at(party: Any) -> Any:
+    with system_context(reason="duplicates readback"):
+        return Party._base_manager.get(pk=party.pk).created_at
+
+
+def _versions(party: Any) -> int:
+    with system_context(reason="duplicates readback"):
+        return int(Person._base_manager.get(pk=party.pk).history.count())
+
+
+def test_a_partys_creation_time_moves_only_earlier_and_a_move_that_moves_nothing_writes_nothing(db: None) -> None:
+    del db
+    owner = create_user("duplicates-backdate")
+    (person,) = _people(owner, "Ada Example")
+    inserted, versions = _created_at(person), _versions(person)
+
+    with system_context(reason="duplicates backdate"):
+        row = Party._base_manager.get(pk=person.pk)
+        assert not row.backdate_creation(inserted + timedelta(days=1))
+        assert not row.backdate_creation(timezone.now() + timedelta(days=30))
+        assert not row.backdate_creation(None)
+        assert (_created_at(person), _versions(person)) == (inserted, versions)
+
+        assert row.backdate_creation(SOURCE_CREATED)
+        assert not row.backdate_creation(SOURCE_CREATED)
+
+    assert (_created_at(person), _versions(person)) == (SOURCE_CREATED, versions + 1)
+    with system_context(reason="duplicates readback"):
+        assert Party._base_manager.get(pk=person.pk).updated_at > inserted
+
+
+def test_a_batch_keeps_the_record_its_sources_have_known_longest(db: None) -> None:
+    """The record imported here last survives when its source says it came into being first."""
+
+    del db
+    owner = create_user("duplicates-source-oldest")
+    imported_first, imported_last = _people(owner, "Zoë Example", "Zoe Example")
+    with system_context(reason="duplicates a source's creation time"):
+        Party._base_manager.get(pk=imported_last.pk).backdate_creation(SOURCE_CREATED)
+
+    assert _merge(owner, [imported_first, imported_last]) == [("merged", imported_last.pk, "")]
+    assert _merged_into(imported_first) == [imported_last.pk]
+
+
+def test_a_survivor_a_person_chose_takes_the_earliest_creation_time_of_what_it_folds_in(db: None) -> None:
+    del db
+    owner = create_user("duplicates-hand-merge")
+    older, younger = _people(owner, "Ada Example", "Ada Example")
+    with system_context(reason="duplicates a source's creation time"):
+        Party._base_manager.get(pk=older.pk).backdate_creation(SOURCE_CREATED)
+    versions = _versions(younger)
+
+    with actor_context(owner):
+        Party.objects.get(pk=younger.pk).with_actor(owner).merge(records=[older.public_id])
+
+    assert _merged_into(older) == [younger.pk]
+    assert _created_at(younger) == SOURCE_CREATED
+    with system_context(reason="duplicates readback"):
+        moved = Person._base_manager.get(pk=younger.pk).history.filter(created_at=SOURCE_CREATED)
+        assert moved.exists() and _versions(younger) > versions
 
 
 def _organizations(owner: Any) -> list[Any]:
@@ -1114,3 +1181,51 @@ def test_a_selection_over_the_bound_is_refused_with_its_count(db: None) -> None:
 
     with pytest.raises(ValidationError, match="1,001 are selected"):
         Party.objects.selection_duplicate_sets(actor=owner, ids=ids)
+
+
+def test_a_batch_keeps_its_source_oldest_member_with_the_earliest_time_and_publishes_each_record_once(
+    db: None, django_capture_on_commit_callbacks: Any,
+) -> None:
+    """The batch survivor is the earliest by its sources and keeps the set's minimum, published once."""
+
+    del db
+    from angee.graphql.testing import capture_broadcasts
+
+    owner = create_user("duplicates-batch-source-dates")
+    imported_first, imported_middle, imported_last = _people(
+        owner, "Zoe Dated", "Zoe Dated", "Zoe Dated", value="dated@example.com",
+    )
+    with system_context(reason="duplicates sources' creation times"):
+        Party._base_manager.get(pk=imported_last.pk).backdate_creation(SOURCE_CREATED)
+        Party._base_manager.get(pk=imported_middle.pk).backdate_creation(SOURCE_CREATED + timedelta(days=200))
+    members = [imported_first, imported_middle, imported_last]
+    earliest = min(_created_at(member) for member in members)
+
+    with capture_broadcasts() as sent, django_capture_on_commit_callbacks(execute=True):
+        outcomes = _merge(owner, members)
+
+    assert outcomes == [("merged", imported_last.pk, "")]
+    assert _merged_into(imported_first, imported_middle) == [imported_last.pk, imported_last.pk]
+    assert _created_at(imported_last) == earliest == SOURCE_CREATED
+    parties = [pair for pair in _sent_parties(sent) if pair[0] == "parties.Party"]
+    assert parties == sorted(("parties.Party", member.public_id) for member in members)
+
+
+def test_a_hand_merge_into_the_youngest_is_published_with_the_earliest_time(
+    db: None, django_capture_on_commit_callbacks: Any,
+) -> None:
+    """A survivor a person chose takes the earliest time of what it folds in, and its readers hear of it."""
+
+    del db
+    from angee.graphql.testing import capture_broadcasts
+
+    owner = create_user("duplicates-hand-source-dates")
+    older, younger = _people(owner, "Ada Dated", "Ada Dated", value="ada.dated@example.com")
+    with system_context(reason="duplicates a source's creation time"):
+        Party._base_manager.get(pk=older.pk).backdate_creation(SOURCE_CREATED)
+
+    with capture_broadcasts() as sent, django_capture_on_commit_callbacks(execute=True), actor_context(owner):
+        Party.objects.get(pk=younger.pk).with_actor(owner).merge(records=[older.public_id])
+
+    assert _created_at(younger) == SOURCE_CREATED
+    assert ("parties.Party", younger.public_id) in _sent_parties(sent)
