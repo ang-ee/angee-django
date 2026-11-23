@@ -166,7 +166,6 @@ describe("page element markers", () => {
 
   test("preserves the complete Field descriptor contract", () => {
     const resolve = (row: Record<string, unknown>) => ({
-      name: "title",
       readOnly: row.status === "PUBLISHED",
     });
     const [field] = parsePageFields(

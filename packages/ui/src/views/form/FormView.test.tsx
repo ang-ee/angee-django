@@ -3259,7 +3259,7 @@ describe("FormView", () => {
       <Field name="title" label="Title" title />
       <Group label="Details">
         <Field name="status" label="Status" widget="statusbar" options={statusOptions}
-          readOnly={lock === "field"} resolve={lock === "resolve" ? (values) => ({ name: "status", readOnly: values.wordCount === 3 }) : undefined} />
+          readOnly={lock === "field"} resolve={lock === "resolve" ? (values) => ({ readOnly: values.wordCount === 3 }) : undefined} />
         <Field name="wordCount" label="Words" />
       </Group>
     </FormView>);
@@ -4120,7 +4120,6 @@ describe("FormView", () => {
         label: "Title",
         title: true,
         resolve: (record: Row) => ({
-          name: "title",
           title: true,
           readOnly: record.status === "PUBLISHED",
         }),
@@ -4131,7 +4130,6 @@ describe("FormView", () => {
         body: true,
         kind: "textarea",
         resolve: (record: Row) => ({
-          name: "description",
           readOnly: record.status === "PUBLISHED",
         }),
       },
@@ -4140,7 +4138,6 @@ describe("FormView", () => {
         name: "wordCount",
         label: "Word Count",
         resolve: (record: Row) => ({
-          name: "wordCount",
           readOnly: record.status === "PUBLISHED",
         }),
       },
@@ -4192,7 +4189,6 @@ describe("FormView", () => {
       wordCount: 3,
     };
     const readOnlyWhenPublished = (record: Row) => ({
-      name: "wordCount",
       readOnly: record.status === "PUBLISHED",
     });
     renderWithProviders(
@@ -4201,7 +4197,6 @@ describe("FormView", () => {
           name="title"
           title
           resolve={(record) => ({
-            name: "title",
             title: true,
             readOnly: record.status === "PUBLISHED",
           })}

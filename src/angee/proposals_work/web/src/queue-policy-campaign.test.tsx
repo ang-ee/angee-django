@@ -24,5 +24,5 @@ test.each([
   );
   const queue = fields.find((child) => isValidElement<FieldDescriptor>(child) && child.props.name === "clarification_queue");
   if (!isValidElement<FieldDescriptor>(queue) || !queue.props.resolve) throw new Error("Expected the queue field");
-  expect(queue.props.resolve({ permissions })).toEqual({ name: "clarification_queue", readOnly });
+  expect(queue.props.resolve({ permissions })).toEqual({ readOnly });
 });

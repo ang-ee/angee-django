@@ -69,8 +69,19 @@ export interface FieldDescriptor extends FieldPresentation {
   showWhen?: (values: Row) => boolean;
   /** Keep this field in form values and mutation data without rendering a control. */
   hidden?: boolean;
-  /** Resolve implementation-dependent presentation from current form values; the field keeps its declared `name`. */
-  resolve?: (values: Row) => FieldDescriptor;
+  /**
+   * Presentation that follows the form's current values (the chosen implementation's, say): everything
+   * it returns is laid over this declaration, except `readOnly`, which stays set when either sets it.
+   * It returns this descriptor's own type without `name`: a dialog field's may return dialog members
+   * alone, and a subtype's own required members are returned with it. A type derived from a
+   * descriptor by `Omit` or `Pick`, the `<Field>` element's props among them, returns the base
+   * descriptor's. It cannot rename the field, which keeps reading and writing its declared `name`:
+   * the compiler refuses a returned value whose type carries a string `name` (a literal giving one, a
+   * spread of a whole descriptor, a value typed as a descriptor), and `resolveField` ignores a name
+   * that gets past it (a value typed without `name` or loosely, as `Record`, `object` or `any`; a
+   * cast; JavaScript).
+   */
+  resolve?: (values: Row) => Omit<this, "name"> & { name?: never };
   /**
    * The preset this field loads onto sibling fields when it changes, from its value, the form's
    * current values and the values the form was loaded with (this field's scope in a nested form),

@@ -10,6 +10,34 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: a field's `resolve` no longer returns `name`, since the field
+  keeps its declared name whatever `resolve` returns. A field type's `resolve`
+  returns that type without `name` (`Omit<this, "name"> & { name?: never }` on
+  `FieldDescriptor`), so a dialog (`DescriptorField`) or FormSpec
+  (`FormSpecFieldDescriptor`) producer may return only its own members, and a
+  subtype's own required members are returned with it; a type derived from a
+  descriptor by `Omit` or `Pick`, the `<Field>` element's props among them,
+  returns the base descriptor's. A returned value whose type carries a string
+  `name` (a literal giving one, a spread of a whole descriptor, a value typed as
+  a descriptor) is a compile error; a value typed without `name` or loosely
+  (`Record`, `object`, `any`), a cast or JavaScript still reaches `resolveField`,
+  which keeps the declared name. The fields `useImplConfigFields` returns have a
+  `resolve` whose result no longer carries `name` (it carried the prefixed name
+  before); what a form resolves a field to (`resolveField`) is unchanged, and
+  nothing else changes at runtime. `resolveField` and `visibleFields`, internal
+  to the package, now return the caller's descriptor type, so the dialog
+  surfaces no longer cast their results. Upgrade: a TypeScript consumer deletes
+  `name` from what its `resolve` returns; takes it out of a whole field it
+  spreads there first (`const { name: _name, ...rest } = field`); annotates a
+  helper that returned a descriptor type with that type's own result,
+  `ReturnType<NonNullable<DescriptorField["resolve"]>>` for a dialog field's
+  (TS2741 or TS2353 otherwise); no longer casts a `resolve` result to a
+  descriptor type or passes one where a descriptor is expected (TS2352, TS2345,
+  TS2322 otherwise), and lays it over the field instead
+  (`{ ...field, ...field.resolve(values) }`); returns, from the `resolve` of a
+  descriptor subtype with required members of its own, those members too; and
+  reads a `useImplConfigFields` field's `name` from the field, not from its
+  `resolve`.
 - `@angee/ui`: **Changed behaviour.** A dialog submits only the fields it shows:
   a field a `showWhen` hides, when the dialog opens or after a value was typed
   into it, is not submitted, and shows its initial value when it shows again,

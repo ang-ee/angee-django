@@ -309,7 +309,7 @@ export function emptyDraft(
 }
 
 /** The fields a draft for `values` holds: those visible for them, resolved against them. */
-export function visibleFields(fields: readonly FieldDescriptor[], values: FormValues): FieldDescriptor[] {
+export function visibleFields<T extends FieldDescriptor>(fields: readonly T[], values: FormValues): T[] {
   return fields.map((field) => resolveField(field, values)).filter((field) => isFieldVisible(field, values));
 }
 
@@ -621,11 +621,12 @@ export function mutationData(
 }
 
 /**
- * `field` as it presents for `values`: what its `resolve` returns over its declaration, read-only
- * when either is. A `resolve` never renames the value: the field keeps reading and writing its
- * declared `name`, whatever name the resolved descriptor carries.
+ * `field` as it presents for `values`, as the caller's descriptor type: what its `resolve` returns
+ * over its declaration, read-only when either is, so a subtype's own members are kept from the
+ * declaration or laid over by `resolve`. A `resolve` never renames the value: the field keeps
+ * reading and writing its declared `name`, whatever name arrives.
  */
-export function resolveField(field: FieldDescriptor, values: FormValues): FieldDescriptor {
+export function resolveField<T extends FieldDescriptor>(field: T, values: FormValues): T {
   const resolved = field.resolve?.(values);
   return resolved
     ? { ...field, ...resolved, name: field.name, readOnly: Boolean(field.readOnly || resolved.readOnly) }

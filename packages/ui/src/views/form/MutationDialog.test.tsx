@@ -17,6 +17,7 @@ import {
 } from "./MutationDialog";
 import { deserializeFormSpec } from "./form-spec";
 import type { FormSubmitResult } from "./validation-errors";
+import type { DescriptorField } from "./DescriptorFieldList";
 import { createUiTestProviders } from "../../testing";
 
 const { Provider, clearClients } = createUiTestProviders({
@@ -273,7 +274,6 @@ describe("MutationDialog", () => {
             name: "outcome",
             label: "Outcome",
             resolve: (values) => ({
-              name: "outcome",
               widget: "select",
               options: [
                 { value: "", label: "Any outcome" },
@@ -316,11 +316,12 @@ describe("MutationDialog", () => {
           {
             name: "value",
             label: "Value",
+            // This cast hides the returned `name` from the compiler; the declared name must still win.
             resolve: (values) => ({
               name: "wrong-name",
               required: values.mode === "custom",
               readOnly: values.mode !== "custom",
-            }),
+            }) as Omit<DescriptorField, "name">,
           },
         ]}
         initialValues={{ mode: "fixed", value: "" }}

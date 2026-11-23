@@ -79,7 +79,7 @@ export function WorkspaceCreateDialog({
       showWhen: (values) => templateInputFor(templates, values.template, name) !== null,
       resolve: (values) => {
         const input = templateInputFor(templates, values.template, name);
-        return input ? templateInputField(input) : { name, label: name };
+        return input ? templateInputField(input) : { label: name };
       },
     })),
   ], [inputNames, t, templates]);
@@ -134,10 +134,9 @@ function templateLabel(template: TemplateDescriptor): string {
   return template.name || template.ref;
 }
 
-function templateInputField(input: TemplateInputDescriptor): DescriptorField {
+function templateInputField(input: TemplateInputDescriptor): ReturnType<NonNullable<DescriptorField["resolve"]>> {
   const type = input.type?.toLowerCase();
   return {
-    name: input.name,
     label: input.name,
     required: input.required,
     kind:

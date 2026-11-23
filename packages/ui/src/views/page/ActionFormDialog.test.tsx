@@ -693,7 +693,7 @@ describe("ActionFormDialog", () => {
         { name: "collection", label: "Collection", relation: {
           resource: "Collection", optionDescriptionField: "description", optionStatusField: "verification_state",
           optionStatusArguments: [{ name: "company_id", type: "ID!", value: "company_7" }],
-        }, resolve: (values) => ({ name: "collection", filters: [{ field: "scope", operator: "eq", value: values.scope }] }) },
+        }, resolve: (values) => ({ filters: [{ field: "scope", operator: "eq", value: values.scope }] }) },
       ] },
     });
     fireEvent.click(screen.getByRole("combobox", { name: "Collection" }));

@@ -278,8 +278,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
     }
   }, [fields, form, initialValues, open]);
   const values = useWatch({ control: form.control });
-  // Resolving lays `resolve`'s descriptor over each declared one, so its DescriptorField members stay.
-  const shownFields = visibleFields(fields, values) as DescriptorField[];
+  const shownFields = visibleFields(fields, values);
   const renderedFieldNames = shownFields.filter((field) => !field.hidden).map((field) => field.name);
   const submitting = form.formState.isSubmitting;
   const error = form.formState.errors.root?.server?.message ?? null;
@@ -397,8 +396,7 @@ export function requiredDialogErrors(
   message: string,
   validateConstraints = true,
 ): FieldErrors<Record<string, unknown>> {
-  // Resolving lays `resolve`'s descriptor over each declared one, so its DescriptorField members stay.
-  const resolved = visibleFields(typeof fields === "function" ? fields(values) : fields, values) as DescriptorField[];
+  const resolved = visibleFields(typeof fields === "function" ? fields(values) : fields, values);
   const editable = resolved.filter((field) => isFieldControlVisible(field, values) && !field.readOnly && !field.readOnlyWhen?.(values));
   const missing = editable.flatMap((field) => {
     if (isStructuredPresenceField(field)) {
