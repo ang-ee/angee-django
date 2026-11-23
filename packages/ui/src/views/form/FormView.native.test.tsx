@@ -1232,9 +1232,7 @@ const undoFields: readonly FieldDescriptor[] = [
   { name: "summary", label: "Summary", omittable: true },
   { name: "note", label: "Note", nullable: true },
   { name: "style.color", label: "Color", omittable: true },
-  // The declared default seeds the draft before the record's values arrive: an object widget
-  // refuses the "" a field without one starts with.
-  { name: "layout", label: "Layout", widget: "object", defaultValue: {}, objectTemplate: [
+  { name: "layout", label: "Layout", widget: "object", objectTemplate: [
     { name: "heading", label: "Heading" }, { name: "caption", label: "Caption", omittable: true },
   ] },
   { name: "config", label: "Config", widget: "json" },
@@ -1401,6 +1399,86 @@ test("undo while a text input has focus leaves it focused, and typing on is reco
   act(() => form.surface().history.redo());
   expect(body.value).toBe("Third");
   expect(document.activeElement).toBe(body);
+});
+
+// An `object` widget accepts only an object and a `list` widget only an array, so the form gives
+// them one before a record's values arrive and in a create form.
+const structuredResource: DataResourceMetadata = { ...withFields(["layout", "steps"]), createFields: ["title", "layout", "steps"] };
+const structuredFields: readonly FieldDescriptor[] = [
+  { name: "title", label: "Title" },
+  { name: "layout", label: "Layout", widget: "object", objectTemplate: [
+    { name: "heading", label: "Heading" }, { name: "caption", label: "Caption" },
+  ] },
+  { name: "steps", label: "Steps", widget: "list", itemTemplate: { name: "step" } },
+];
+
+function textboxValue(name: string): string {
+  return (screen.getByRole("textbox", { name }) as HTMLInputElement).value;
+}
+
+// A code-split widget's first mount waits for its code, by when the record's values are in; every
+// later form renders it at once, with what the form holds when the record first paints. So each
+// test opens one record, then the next. Each record lacks the other structured field.
+test("an object field shows its members with the values of each record that arrives after the first paint", async () => {
+  for (const opened of ["First", "Next"]) {
+    await presetForm({ layout: { heading: `${opened} heading`, caption: `${opened} caption` } }, { fields: structuredFields, resource: structuredResource });
+    await screen.findByRole("textbox", { name: "Heading" });
+    expect(textboxValue("Heading")).toBe(`${opened} heading`);
+    expect(textboxValue("Caption")).toBe(`${opened} caption`);
+    expect(await screen.findByRole("button", { name: "Add item" })).toBeTruthy();
+    expectClean();
+    cleanup();
+  }
+});
+
+test("a list field shows its items with the values of each record that arrives after the first paint", async () => {
+  for (const opened of ["First", "Next"]) {
+    await presetForm({ steps: [`${opened} step one`, `${opened} step two`] }, { fields: structuredFields, resource: structuredResource });
+    await screen.findByRole("textbox", { name: "Item 1" });
+    expect(textboxValue("Item 1")).toBe(`${opened} step one`);
+    expect(textboxValue("Item 2")).toBe(`${opened} step two`);
+    expect(((await screen.findByRole("textbox", { name: "Heading" })) as HTMLInputElement).value).toBe("");
+    expectClean();
+    cleanup();
+  }
+});
+
+// The form's structured check refuses null in a templated field it declares not nullable, and so
+// every save of that record; a record holding null is read through nullable declarations.
+const nullableStructuredFields = structuredFields.map((field) => field.name === "title" ? field : { ...field, nullable: true });
+
+test.each([
+  ["absent", {}, structuredFields],
+  ["absent from a nullable field", {}, nullableStructuredFields],
+  ["null in a nullable field", { layout: null, steps: null }, nullableStructuredFields],
+] as const)("untouched object and list fields whose record value is %s leave the form clean and out of a save of another field", async (_value, stored, fields) => {
+  const form = await presetForm(stored, { fields, resource: structuredResource });
+  await waitFor(() => expect(textboxValue("Title")).toBe("First"));
+  expectClean();
+  fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "Changed" } });
+  fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+  await waitFor(() => expect(form.update).toHaveBeenCalledOnce());
+  expect((form.update.mock.calls[0]![0] as { variables: Row }).variables).toStrictEqual({ title: "Changed" });
+});
+
+test("a create form renders an object field's members and a list field's add button, and a save sends what they hold", async () => {
+  const f = await fixture({ publicView: true, id: null, resourceMetadata: structuredResource, viewFields: structuredFields });
+  fireEvent.change(await screen.findByRole("textbox", { name: "Heading" }), { target: { value: "New heading" } });
+  fireEvent.click(await screen.findByRole("button", { name: "Add item" }));
+  fireEvent.change(await screen.findByRole("textbox", { name: "Item 1" }), { target: { value: "New step" } });
+  fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "New note" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create" }));
+  await waitFor(() => expect(f.update).toHaveBeenCalledOnce());
+  expect((f.update.mock.calls[0]![0] as { variables: Row }).variables)
+    .toStrictEqual({ title: "New note", layout: { heading: "New heading" }, steps: ["New step"] });
+});
+
+test("a create form sends an untouched object field as an empty object and an untouched list field as an empty list", async () => {
+  const f = await fixture({ publicView: true, id: null, resourceMetadata: structuredResource, viewFields: structuredFields });
+  fireEvent.change(await screen.findByRole("textbox", { name: "Title" }), { target: { value: "New note" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create" }));
+  await waitFor(() => expect(f.update).toHaveBeenCalledOnce());
+  expect((f.update.mock.calls[0]![0] as { variables: Row }).variables).toStrictEqual({ title: "New note", layout: {}, steps: [] });
 });
 
 test("a stateful bound widget remounts when its nested scope changes", async () => {

@@ -10,6 +10,15 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: **Changed behaviour.** A record form's `object` or `list` field
+  showed its loading placeholder for good in a create form, and in an edit form
+  once the widget had been shown before, because the form gave it an empty
+  string, which those widgets refuse. The form now gives an `object` field an
+  empty object and a `list` field an empty list, as a `json` field already gets
+  an empty object, so a create form sends `{}` and `[]` for those fields when
+  nobody touched them. A required field holding an empty object now counts as
+  missing, as an empty list and an empty string do; this also applies to a
+  `json` field.
 - `@angee/ui`: **Changed behaviour.** A dialog submits only the fields it shows:
   a field a `showWhen` hides, when the dialog opens or after a value was typed
   into it, is not submitted, and shows its initial value when it shows again,
