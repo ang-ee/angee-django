@@ -104,10 +104,11 @@ target's `permits`:
   next load tries again.
 - **Any change of the row serves its declared content again.** A row that
   changes only `name` or `theme_id`, reorders `aliases`, or whose entry gains a
-  `create_only` field, still serves its `version`: a version staff published
-  since is replaced by the declared one. An entry that leaves the questions to
-  staff once the form exists lists `version` under `create_only`; the row still
-  states it, and the form is made serving it.
+  `create_only` field other than `version`, still serves its `version`: a
+  version staff published since is replaced by the declared one. An entry that
+  leaves the questions to staff once the form exists lists `version` under
+  `create_only`; the row still states it, the form is made serving it, and no
+  later load serves it again.
 - **`aliases`** are added when the form lacks them (`Form.ensure_aliases`), when
   the form is made and on every changed row; staff's own aliases stay, and the
   declaration never removes one. A slug another form holds refuses the load,
@@ -131,9 +132,12 @@ target's `permits`:
 `webforms_messaging` migration template, or by the addon's own code) is not
 adopted by itself: a form has no adoptable key, and the declared form is refused
 while the earlier one posts on the same channel and slug. Bind the earlier form
-to the row's xref once, before the first load that carries the row:
+to the row's xref once, after it exists and before any load that carries the
+row. The `source` is the entry's ledger path, its manifest path under
+`resources/`:
 
 ```python
+# manage.py shell
 from django.apps import apps
 from rebac import system_context
 
@@ -144,10 +148,18 @@ with system_context(reason="acme: adopt the intake form"):
     )
 ```
 
+Sequence the releases so the bind falls between them: `provision` runs
+`resources load` right after `migrate`, so a release that ships the row loads it
+before anyone could bind. When the move template makes the earlier form, ship
+the template in one release, bind once it has applied, and ship the row in a
+later release. A form the addon's own code made exists already: bind it before
+deploying the release that ships the row.
+
 The next load then treats the row as changed: it applies the declared fields
 (not a create-only `retention_days`), serves the declared content as a new
-version unless the form serves it already, and adds the declared aliases beside
-the form's own.
+version unless the form serves it already (or the entry lists `version` under
+`create_only`, which leaves the earlier form's version served), and adds the
+declared aliases beside the form's own.
 
 A consumer links to the form through `publicAddress(slug)`, which `@angee/webforms`
 exports: the one place the web side names where a form answers.
@@ -333,9 +345,10 @@ makes its owner's records as system work, for anyone who submits the form, so
 managing forms is not enough to choose one: the owner answers with its own
 access check. It is asked when a form's target or its configuration changes
 under an acting user, and every target states it. A target may also refuse a
-configuration its owner will never take, whoever chooses it (`clean`, raising
-`ValidationError`): `Form.clean` asks it when the target or its configuration
-changes, system work included, such as a form a resource row declares. A
+configuration its owner will never take (`clean`, raising `ValidationError`):
+`Form.clean` asks it when the target or its configuration changes and the form
+is validated (`full_clean`), as the console and the resource loader do, for an
+acting user and for system work alike. A plain `save()` does not ask it. A
 collection edit (`Form.objects.filter(…).update(target_class=…)`) is refused:
 the owner is asked one form at a time. What `deliver` returns must be a record of a type the
 target's addon declared on `webforms/response_record`; anything else fails the

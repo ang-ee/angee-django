@@ -59,3 +59,24 @@ def test_import_target_resolves_only_a_channel_of_the_named_backend(import_owner
         Channel.objects.require_backend_target(channel.sqid, backend_class="email")
     with pytest.raises(ValidationError, match="No Manual channel 'chn_missing'"):
         Channel.objects.require_backend_target("chn_missing", backend_class="manual")
+
+
+def test_an_import_target_read_for_an_actor_is_refused_as_missing_when_they_cannot_read_it(
+    import_owner: Any,
+) -> None:
+    """The actor's own access decides: an unreadable channel is indistinguishable from no channel."""
+
+    with system_context(reason="test.messaging.channel.import.scoped"):
+        channel = Channel.objects.create_disconnected(import_owner, name="Archive", backend_class="manual")
+        outsider = get_user_model().objects.create_user(username="channel-import-outsider")
+
+    found = Channel.objects.require_backend_target(channel.sqid, backend_class="manual", actor=import_owner)
+    assert found.pk == channel.pk
+    refusals = []
+    for public_id in (channel.sqid, "chn_missing"):
+        with pytest.raises(ValidationError) as refused:
+            Channel.objects.require_backend_target(public_id, backend_class="manual", actor=outsider)
+        refusals.append(refused.value.message_dict)
+    assert refusals == [
+        {"target": [f"No Manual channel {channel.sqid!r}."]}, {"target": ["No Manual channel 'chn_missing'."]},
+    ]

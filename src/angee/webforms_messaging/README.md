@@ -16,13 +16,16 @@ target_config:
   slug: enquiries
 ```
 
-- `channel` is a channel with the `webform` backend. A form whose target or
-  configuration changes is refused, under `target_config`, a channel that is
-  gone or has another backend, whoever chooses it, system work included
-  ([`MessageTarget.clean`](targets.py)): no response could be posted on it.
-  Posting on a channel is messaging's to allow, so someone may point a form at
-  one only if they may also write on it ([`MessageTarget.permits`](targets.py)
-  asks the channel's own `write` check). An addon that declares the form as a
+- `channel` is a channel with the `webform` backend. When a form whose target
+  or configuration changes is validated (`full_clean`), as the console and the
+  resource loader do, a channel that is gone or has another backend is refused
+  under `target_config` ([`MessageTarget.clean`](targets.py)): no response could
+  be posted on it. For an acting user the channel is read through their own
+  access, so one they cannot read is refused as a missing one; system work reads
+  it elevated, as delivery does. Posting on a channel is messaging's to allow,
+  so someone may point a form at one only if they may also write on it
+  ([`MessageTarget.permits`](targets.py) asks the channel's own `write` check).
+  An addon that declares the form as a
   resource row ([a form an addon declares](../webforms/README.md#a-form-an-addon-declares))
   names a channel its resources declare by xref (`channel: acme.intake`):
   `MessageTargetConfig` declares `channel` a relation to `messaging.Channel`, so

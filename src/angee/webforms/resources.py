@@ -79,6 +79,15 @@ class FormResource(AngeeResource):
         except (ValueError, LookupError) as error:
             raise ValidationError({"target_config": str(error)}) from error
 
+    def validate_instance(
+        self, instance: Any, import_validation_errors: Any = None, validate_unique: bool = True,
+    ) -> None:
+        """Report a ``target_config`` reference that did not resolve alone: the target would only restate it."""
+
+        if import_validation_errors and "target_config" in import_validation_errors:
+            raise ValidationError(import_validation_errors)
+        super().validate_instance(instance, import_validation_errors, validate_unique)
+
     def save_instance(self, instance: Any, is_create: bool, row: Mapping[str, Any], **kwargs: Any) -> None:
         """Save the form, serve its declared version and add its declared addresses, as the row's named actor.
 

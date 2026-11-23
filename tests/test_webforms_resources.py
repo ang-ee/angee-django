@@ -372,9 +372,11 @@ def test_a_channel_reference_is_resolved_among_the_loads_own_addons(declaring: D
 def test_a_channel_reference_that_names_no_webform_channel_is_refused_and_makes_nothing(
     declaring: Declaring, reference: str, refusal: str,
 ) -> None:
-    with pytest.raises(ResourceLoadError, match=rf"target_config.*{refusal}"):
+    with pytest.raises(ResourceLoadError, match=rf"target_config.*{refusal}") as refused:
         declaring.load(target_config={"channel": reference, "slug": "intake"})
 
+    # A reference that did not resolve is reported once, not judged again as a channel id.
+    assert ("No Public Webform channel" in str(refused.value)) is (reference == "webforms_seed.mailbox")
     nothing_made(declaring)
 
 
@@ -451,14 +453,16 @@ def test_a_form_made_before_the_declaration_is_adopted_by_binding_it_to_the_rows
     with pytest.raises(ResourceLoadError, match="Another form already posts on this channel under this slug"):
         declaring.load(retention_days=30)
 
+    # The source is the one the loader keeps for the entry: its manifest path under the ledger's ``resources/``.
+    source = f"resources/{FORM}"
     with system_context(reason="webforms resources tests: adopt the earlier form"):
-        Resource.objects.bind_instance(
-            addon=declaring.addon, xref="intake_form", instance=earlier, source=f"resources/{FORM}",
-        )
+        Resource.objects.bind_instance(addon=declaring.addon, xref="intake_form", instance=earlier, source=source)
     assert declaring.load(retention_days=30).updated == 1
 
     form = declaring.form()
     assert form.pk == earlier.pk
+    with system_context(reason="webforms resources tests read"):
+        assert Resource.objects.get(source_addon=declaring.addon.name, xref="intake_form").source_path == source
     # Declared fields apply, the retention stays the deployment's, the declared content is served, the aliases stay.
     assert (form.name, form.retention_days, form.published_version.number) == ("Intake", 90, 2)
     assert versions(form) == [(1, LONGER, True), (2, DEFINITION, True)]
