@@ -28,13 +28,11 @@ export interface FormHistory {
  * different group commits the previous one. Undo/redo preserve the active group
  * so continued typing without a new focus event remains undoable. Wrap other
  * synchronous changes in perform; asynchronous work must finish before that call.
- * One user intention is one step: in a form's lines, adding a line is one step and
- * typing in its cell another, and removing, duplicating or reordering a line is one
- * step each. Each changed RHF notification creates one immutable frame, reused by
- * stacks and availability checks; perform also reads the form's values after its
- * action, so a change that sends no notification (a field-array append, insert,
- * remove or move) is a step like any other. Both stacks retain at most limit
- * frames (default 100).
+ * One user intention is one step: a group holds a field's typing, and perform holds
+ * one discrete change. Each changed RHF notification creates one immutable frame,
+ * reused by stacks and availability checks; perform also reads the form's values
+ * after its action, so a change that sends no values notification is still a step.
+ * Both stacks retain at most limit frames (default 100).
  * Call reset when the caller loads another record or accepts a saved baseline.
  * Before binding undo where a field of its own can be left "Not set" over a loaded
  * value (a record form): a replay registers every mounted field again, and React Hook

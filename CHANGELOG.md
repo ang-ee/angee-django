@@ -11,17 +11,25 @@ live in code docstrings.
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
 - `@angee/ui`: **Changed behaviour.** Edits made in a record form's lines are now
-  undo steps; before, undo skipped them. One user intention is one step: adding a
-  line is one step, typing in one of its cells another (until the cell is left
-  or another field starts), and removing, duplicating or reordering a line, or a
-  widget's row patch, is one step each. `EditableLines` takes an optional
-  `history` with the form's `perform`, `start` and `commit`; the record form
-  passes it, so its `onFieldInteractionStart` and `onFieldInteractionCommit` now
-  also receive a line cell's path (`lines.2.label`). Without it the lines record
-  nothing, as before. `useFormHistory`'s `perform` now reads the form's values
-  after its action, so a change that sends no values notification, such as a
-  field-array append, is still recorded. A line the lines editor adds or
-  duplicates carries its client key from the moment it is added.
+  undo steps of their own; before, they were not: an undo after a title step and a
+  cell edit reverted the title and discarded the cell edit. One user intention is
+  one step: adding a line is one step, typing in one of its cells another, and
+  removing, duplicating or reordering a line is one step each. A cell's group ends
+  when its control commits, when another field or a row operation starts, or at
+  undo; before a row operation the lines editor commits the cell groups it started,
+  since their paths name rows by position. A widget's row patch sent while its
+  cell's group is open joins that group, so a change and a row patch made in one
+  click are one step; any other row patch is a step of its own. `EditableLines`
+  takes an optional `history` with the form's `perform`, `start` and `commit`; the
+  record form passes it, so its `onFieldInteractionStart` and
+  `onFieldInteractionCommit` now also receive a line cell's path (`lines.2.label`).
+  Without it the lines record nothing, as before.
+  `useFormHistory`'s `perform` now reads the form's values after its action, so a
+  change that sends no values notification, such as a field-array append, is still
+  recorded. `emptyLineRow` and `duplicateLineRow` now return the row with a client
+  key of its own (`duplicateLineRow` still drops the source row's id and key): a
+  line added by code is built with one of them, or carries its own key, and then
+  performed, so each undo back through it changes what the form shows.
 - `@angee/ui`: **Changed behaviour.** A record form's `object`, `list` or `rows`
   field showed its loading placeholder for good in a create form, and in an edit
   form once the widget's code was loaded. Those widgets refuse the empty string

@@ -11,7 +11,6 @@ import {
 
 import { Glyph } from "../../chrome/Glyph";
 import { useUiT } from "../../i18n";
-import { createClientKey } from "../../lib/client-key";
 import { titleCase } from "../../lib/titleCase";
 import { Chip } from "../../ui/chip";
 import { Button } from "../../ui/button";
@@ -64,12 +63,19 @@ export interface EditableLinesProps {
     parentRow: Row | null,
   ) => readonly CrudFilter[] | undefined;
   /**
-   * The composing form's undo verbs; without them the lines record no step. A cell's
-   * change starts its group, named by the cell's form path (`lines.2.label`), before
-   * it writes, and the cell's control commits it where that control offers a commit.
-   * Adding, duplicating, removing or reordering a line, and a widget's row patch, each
-   * run inside `perform` as one step. A record form passes its interaction callbacks
-   * as `start` and `commit`, so they see a cell as they see any other field.
+   * The composing form's undo verbs; without them the lines record no step. One user
+   * intention is one step. A cell's change starts its group, named by the cell's form
+   * path (`lines.2.label`), before it writes; the group ends when the cell's control
+   * commits it, when another field or a row operation starts, or at undo. Adding,
+   * duplicating, removing or reordering a line is one step through `perform`, and the
+   * editor commits the cell groups it started first, since their paths name rows by
+   * position. A row patch a widget sends while its cell's group is open joins that
+   * group; any other row patch is one step through `perform`. A line added by code is
+   * built with `emptyLineRow` or `duplicateLineRow` (or carries its own client key)
+   * and then performed. Give the editor and the history the same read-only state: a
+   * read-only history runs no `perform`, so the row controls would do nothing while
+   * the cells still write. A record form passes its interaction callbacks as `start`
+   * and `commit`, so they see a cell as they see any other field.
    */
   history?: Pick<FormHistory, "perform" | "start" | "commit">;
 }
@@ -125,7 +131,8 @@ export function EditableLines({
   const { fields, append, insert, move, remove } = useFieldArray({ control, name, keyName: "rhfKey" });
   const { isDirty: formIsDirty } = useFormState({ control });
   const rows = (useWatch({ control, name }) as Row[] | undefined) ?? [];
-  // A new row another writer added gets RHF's key; the editor's own rows bring theirs.
+  // The fallback for a row that arrives with no identity (a create form's seed rows, a
+  // hand-built row): its client key is RHF's field-array key.
   React.useEffect(() => {
     fields.forEach((field, index) => {
       const row = rows[index];
@@ -142,22 +149,34 @@ export function EditableLines({
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
-  // One user intention is one step of the form's history, when the form has one.
-  const performStep = React.useCallback((action: () => void) => {
+  // The cell groups this editor started and no commit has ended yet, by form path.
+  const openCells = React.useRef(new Set<string>());
+  // One user intention is one step of the form's history, when the form has one. A row
+  // operation moves rows under the paths that name the open cell groups: end them first.
+  const performRowOperation = React.useCallback((action: () => void) => {
     const recorder = latest.current.history;
-    if (recorder) recorder.perform(action); else action();
+    if (!recorder) { action(); return; }
+    for (const path of openCells.current) recorder.commit(path);
+    openCells.current.clear();
+    recorder.perform(action);
   }, []);
-  const patchRow = React.useCallback((key: string, patch: Record<string, unknown>) => {
+  const patchRow = React.useCallback((key: string, cell: string, patch: Record<string, unknown>) => {
     const current = latest.current;
     if (!mounted.current || current.readOnly) return;
     const index = current.fields.findIndex((field) => field.rhfKey === key);
     if (index < 0) return;
-    performStep(() => {
+    const write = () => {
       for (const [field, value] of Object.entries(patch)) {
         current.setValue<string>(`${name}.${index}.${field}`, value, { shouldDirty: true });
       }
-    });
-  }, [name, performStep]);
+    };
+    const recorder = current.history;
+    const group = `${name}.${index}.${cell}`;
+    if (!recorder) write();
+    // A patch sent while its cell's group is open belongs to that group's step.
+    else if (openCells.current.has(group)) { recorder.start(group); write(); }
+    else recorder.perform(write);
+  }, [name]);
   const viewRows = React.useMemo(() => fields.map((field, index) => ({
     id: field.rhfKey, index, value: rows[index] ?? {},
   })), [fields, rows]);
@@ -202,8 +221,11 @@ export function EditableLines({
         return <div className="min-w-0">
           <Controller control={control} name={path}
             render={({ field: controller }) => {
-              const onChange = (next: unknown) => { history?.start(path); controller.onChange(next); };
-              const onCommit = history && (() => history.commit(path));
+              const onChange = (next: unknown) => {
+                if (history) { history.start(path); openCells.current.add(path); }
+                controller.onChange(next);
+              };
+              const onCommit = history && (() => { openCells.current.delete(path); history.commit(path); });
               return relationMulti ? (
                 <RelationMultiFieldWidget
                   controlProps={controlProps}
@@ -226,7 +248,7 @@ export function EditableLines({
                   controlProps={controlProps} controlRef={controller.ref} field={descriptor}
                   row={value} parentRow={parentRow} value={controller.value}
                   messages={messages} readOnly={cellReadOnly} onChange={onChange} onCommit={onCommit}
-                  onRowChange={(patch) => patchRow(id, patch)}
+                  onRowChange={(patch) => patchRow(id, field.name, patch)}
                 />
               );
             }}
@@ -263,12 +285,12 @@ export function EditableLines({
     defineRowAction<LineViewRow>({
       kind: "page", id: "duplicate", label: t("lines.duplicate"), icon: "copy",
       presentation: "icon", variant: "ghost", pendingPolicy: "disable-actions", visible: unlocked,
-      onSelect: ({ index }) => performStep(() => insert(index + 1, withClientKey(duplicateLineRow(rows[index] ?? {}, config)) as never)),
+      onSelect: ({ index }) => performRowOperation(() => insert(index + 1, duplicateLineRow(rows[index] ?? {}, config) as never)),
     }),
     defineRowAction<LineViewRow>({
       kind: "page", id: "remove", label: t("lines.remove"), icon: "trash",
       presentation: "icon", variant: "danger", pendingPolicy: "disable-actions", visible: unlocked,
-      onSelect: ({ index }) => performStep(() => remove(index)),
+      onSelect: ({ index }) => performRowOperation(() => remove(index)),
     }),
   ];
   return <div className="min-w-0">
@@ -282,11 +304,11 @@ export function EditableLines({
         if (current.readOnly) return;
         const from = current.fields.findIndex((field) => field.rhfKey === fromId);
         const to = current.fields.findIndex((field) => field.rhfKey === toId);
-        if (from >= 0 && to >= 0 && from !== to) performStep(() => move(from, to));
+        if (from >= 0 && to >= 0 && from !== to) performRowOperation(() => move(from, to));
       }}
       canReorderRow={unlocked}
       footerRow={readOnly ? undefined : <Button type="button" variant="ghost" size="sm"
-        onClick={() => performStep(() => append(withClientKey(emptyLineRow(fields.length, config)) as never))}>
+        onClick={() => performRowOperation(() => append(emptyLineRow(fields.length, config) as never))}>
         <Glyph name="plus" decorative />{t("lines.add")}
       </Button>}
     />
@@ -302,14 +324,6 @@ export function EditableLines({
     ) : null}
     {footer ? <div className="pt-2">{footer(rows)}</div> : null}
   </div>;
-}
-
-/**
- * A line the editor adds carries its client identity from the step that adds it, so
- * the key write after the render has nothing to change inside an open undo group.
- */
-function withClientKey(row: Row): Row {
-  return { ...row, [CLIENT_LINE_KEY]: createClientKey("line") };
 }
 
 function rowMessages(

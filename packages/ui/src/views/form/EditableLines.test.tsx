@@ -102,9 +102,15 @@ function rowPatchFixture({ recorded = false }: { recorded?: boolean } = {}) {
   ] };
   const productWidget = {
     read: ({ row }: WidgetRenderProps) => <span>Locked {String((row as { label: string }).label)}</span>,
-    edit: ({ row, onRowChange }: WidgetRenderProps) => {
+    edit: ({ row, onChange, onRowChange }: WidgetRenderProps) => {
       const label = String((row as { label: string }).label);
-      return <button type="button" onClick={() => callbacks.set(label, onRowChange!)}>Preview {label}</button>;
+      return <>
+        <button type="button" onClick={() => callbacks.set(label, onRowChange!)}>Preview {label}</button>
+        <button type="button" onClick={() => {
+          onChange?.({ id: "picked", name: "Picked" });
+          onRowChange?.({ label: "Picked label", quantity: 1 });
+        }}>Pick for {label}</button>
+      </>;
     },
   };
   function PatchLines({ readOnly, history }: { readOnly: boolean; history?: FormHistory }) {
@@ -389,39 +395,64 @@ describe("EditableLines", () => {
     expect(screen.queryByRole("img", { name: "Locked row" })).toBeNull();
   });
 
-  test("without the form's history the lines edit as before and record no step", async () => {
+  test("without the form's history every cell edit and row operation writes the lines and nothing throws", async () => {
     let form!: UseFormReturn<Record<string, unknown>>;
-    let history!: FormHistory;
+    // The host builds no history at all, so there is nothing the editor could call.
     function UnrecordedHost(): React.ReactElement {
       form = useForm<Record<string, unknown>>({ defaultValues: { lines: [
         { id: "one", label: "Widget", quantity: 2, position: 0 },
         { id: "two", label: "Gadget", quantity: 5, position: 1 },
       ] } });
-      history = useFormHistory(form);
       return <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
         <ModalsHost><EditableLines control={form.control} setValue={form.setValue} name="lines" lines={LINES} /></ModalsHost>
       </AppRuntimeProvider>;
     }
-    render(<UnrecordedHost />);
-    const label = screen.getAllByRole("textbox", { name: "Label" })[0]!;
-    fireEvent.change(label, { target: { value: "Widget edited" } });
-    fireEvent.blur(label);
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Add line" })); });
-    await act(async () => { fireEvent.click(screen.getAllByRole("button", { name: "Duplicate line" })[0]!); });
-    await act(async () => {
-      fireEvent.keyDown(screen.getAllByRole("button", { name: "Reorder row" })[1]!, { key: "ArrowUp", altKey: true });
-    });
-    await act(async () => { fireEvent.click(screen.getAllByRole("button", { name: "Remove line" })[2]!); });
-    const edited = (form.getValues("lines") as Record<string, unknown>[]).map(({ id, label }) => ({ id, label }));
-    expect(edited).toEqual([
+    const thrown: unknown[] = [];
+    const report = (event: ErrorEvent) => { thrown.push(event.error); };
+    window.addEventListener("error", report);
+    const shown = () => (form.getValues("lines") as Record<string, unknown>[]).map(({ id, label }) => ({ id, label }));
+    try {
+      render(<UnrecordedHost />);
+      const label = screen.getAllByRole("textbox", { name: "Label" })[0]!;
+      fireEvent.change(label, { target: { value: "Widget edited" } });
+      fireEvent.blur(label);
+      expect(shown()).toEqual([{ id: "one", label: "Widget edited" }, { id: "two", label: "Gadget" }]);
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Add line" })); });
+      expect(shown()).toEqual([
+        { id: "one", label: "Widget edited" }, { id: "two", label: "Gadget" }, { id: undefined, label: "" },
+      ]);
+      await act(async () => { fireEvent.click(screen.getAllByRole("button", { name: "Duplicate line" })[0]!); });
+      await act(async () => {
+        fireEvent.keyDown(screen.getAllByRole("button", { name: "Reorder row" })[1]!, { key: "ArrowUp", altKey: true });
+      });
+      await act(async () => { fireEvent.click(screen.getAllByRole("button", { name: "Remove line" })[2]!); });
+    } finally {
+      window.removeEventListener("error", report);
+    }
+    expect(thrown).toEqual([]);
+    expect(shown()).toEqual([
       { id: undefined, label: "Widget edited" }, { id: "one", label: "Widget edited" }, { id: undefined, label: "" },
     ]);
-    expect(history.canUndo).toBe(false);
-    act(() => history.undo());
-    expect((form.getValues("lines") as Record<string, unknown>[]).map(({ id, label }) => ({ id, label }))).toEqual(edited);
+    expect(form.getFieldState("lines").isDirty).toBe(true);
   });
 
-  test("with the form's history a widget's row patch is one step", () => {
+  test("with the form's history a cell change and the row patch its widget sends in the same click are one step", () => {
+    const f = rowPatchFixture({ recorded: true });
+    fireEvent.click(screen.getByRole("button", { name: "Pick for Gadget" }));
+    const picked = { product: { id: "picked", name: "Picked" }, label: "Picked label", quantity: 1 };
+    expect(f.form().getValues("lines.1")).toMatchObject(picked);
+    act(() => f.history().undo());
+    expect(f.form().getValues("lines")).toEqual([
+      { id: "one", label: "Widget", quantity: 2, position: 0 },
+      { id: "two", label: "Gadget", quantity: 5, position: 1 },
+    ]);
+    expect(f.history().canUndo).toBe(false);
+    act(() => f.history().redo());
+    expect(f.form().getValues("lines.1")).toMatchObject(picked);
+    expect(f.history().canRedo).toBe(false);
+  });
+
+  test("with the form's history a widget's row patch sent while no cell group is open is one step of its own", () => {
     const f = rowPatchFixture({ recorded: true });
     fireEvent.click(screen.getByRole("button", { name: "Preview Gadget" }));
     const patched = { product: { id: "new-product", name: "New" }, label: "Patched" };

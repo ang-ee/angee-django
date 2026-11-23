@@ -1,13 +1,17 @@
 import type { DataResourceLinesMetadata, Row } from "@angee/metadata";
 import type { LineInput } from "@angee/refine";
 
+import { createClientKey } from "../../lib/client-key";
 import { relationIdList, relationValueId } from "../../widgets/types";
 
 /**
- * An unsaved form row's client identity, retained for save correlation. A line the
- * lines editor adds or duplicates carries a minted key from the step that adds it;
- * any other new row gets RHF's field-array key. Readers compare it only with itself,
- * never with the field array's key, which a form reset regenerates.
+ * An unsaved form row's client identity, retained for save correlation. `emptyLineRow`
+ * and `duplicateLineRow` mint it, so a line added by code is built with one of them
+ * (or carries its own client key) and then performed: the row is whole in the step
+ * that adds it. A row that arrives without one gets RHF's field-array key from the
+ * lines editor after it renders, a write that lands in whatever undo group is open.
+ * Readers compare it only with itself, never with the field array's key, which a form
+ * reset regenerates.
  */
 export const CLIENT_LINE_KEY = "__angeeClientLineKey";
 
@@ -195,7 +199,9 @@ export function recordLinesToRows(
   return lines.map((line, index) => rowFromLine(asRow(line), index, config));
 }
 
-/** A blank row for the composer's "add line" action, its `position` at the tail.
+/**
+ * A blank row for the composer's "add line" action, its `position` at the tail and a
+ * client key of its own.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
@@ -205,6 +211,7 @@ export function emptyLineRow(index: number, config: LineDiffConfig): Row {
     row[name] = emptyCellValue(name, config);
   }
   if (config.positionField) row[config.positionField] = index;
+  row[CLIENT_LINE_KEY] = createClientKey("line");
   return row;
 }
 
@@ -225,14 +232,16 @@ export function lineLockedFields(row: Row | undefined, config: LineDiffConfig): 
   return Array.isArray(locked) ? locked.filter((name): name is string => typeof name === "string") : [];
 }
 
-/** Duplicate a row for the composer's "duplicate" action, dropping its identity and lock.
+/**
+ * Duplicate a row for the composer's "duplicate" action: the copy drops the source's
+ * id, client key and lock, and gets a client key of its own.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function duplicateLineRow(row: Row, config: LineDiffConfig): Row {
   const { [config.idField]: _id, [CLIENT_LINE_KEY]: _clientKey, ...rest } = row;
   if (config.lockField) delete rest[config.lockField];
-  return { ...rest };
+  return { ...rest, [CLIENT_LINE_KEY]: createClientKey("line") };
 }
 
 /** Adopt server IDs for submitted new lines without losing later edits or order. */
