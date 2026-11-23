@@ -19,6 +19,83 @@ the addon that owns it.
 - A `FormAlias` is a public address of a form (a unique lower-case slug),
   optionally in one language.
 
+## A form an addon declares
+
+An addon that ships a form declares it as one row of its resources, in a
+`<NNN>_webforms.form.yaml` file its `[tool.angee.resources]` lists. The row names
+the form's fields, the content of the version it serves (`version`, the fields of
+`FormVersion.CONTENT_FIELDS`) and the slugs it answers at (`aliases`):
+
+```yaml
+# <addon>/resources/install/030_webforms.form.yaml
+rows:
+  - xref: intake_form
+    fields:
+      name: Intake
+      target_class: message
+      target_config:
+        channel: acme.intake        # the channel's xref; stored as its public id
+        slug: intake
+      theme_id: acme.paper          # optional
+      retention_days: 365           # optional, and create_only
+      aliases: [intake]
+      version:
+        definition:
+          elements:
+            - {type: text, name: name, isRequired: true, title: Your name}
+            - {type: text, name: email, inputType: email}
+        languages: [en]
+        default_language: en
+        personal_questions: [name, email]
+        contact_question: email
+```
+
+```toml
+[tool.angee.resources]
+install = [
+  { path = "install/030_webforms.form.yaml", depends_on = "install/020_messaging.channel.yaml",
+    create_only = ["retention_days"] },
+]
+```
+
+[`FormResource`](resources.py) saves the form and hands the rest to the form's
+verbs, inside the load's one transaction and its seed changeset, as the load's
+system work:
+
+- **Identity** is the row's xref in the resource ledger, never an alias. Staff
+  may rename or delete an alias; the next load neither fails nor makes a second
+  form.
+- **An unchanged row is skipped**, by the ledger's content hash, so what staff
+  changed since stands: a closed form, a version they published, an alias they
+  renamed or deleted.
+- **A changed row** applies the form fields it names (`name`, `target_class`,
+  `target_config`, `theme_id`) and serves its `version` (`Form.serve`). The
+  version served now stays when it holds exactly that content; otherwise a new
+  version holding it is made and published (`FormVersion.publish`). Content the
+  form served before, such as a declaration returned to its earlier questions, is
+  published again as a new version: the declaration, not an older version, says
+  what is served. Publishing opens a draft form; a closed form stays closed. A
+  version the publication refuses fails the load and leaves nothing: the ledger
+  keeps the declaration that last applied, so the next load tries again.
+- **`aliases`** are added when the form lacks them (`Form.ensure_aliases`), when
+  the form is made and on every changed row; staff's own aliases stay, and the
+  declaration never removes one. A slug another form holds refuses the load.
+- **`retention_days` is create-only.** A form's retention is what it tells its
+  respondents and removes responses when it passes, so once the form exists it is
+  the deployment's: a file that declares it lists it under the entry's
+  `create_only`, and the load refuses one that does not. Every other form field is
+  applied on every changed row; an entry may list it under `create_only` too.
+- **`target_config`** names records by xref where its target's `config_model`
+  declares a relation (`json_schema_extra={"relation": {"resource": "<app.Model>"}}`):
+  each resolves to its record's public id when the row applies, through the
+  resource ledger (`Resource.objects.resolve_config_references`). A public id
+  stays as written. An xref that names nothing, or a record of another kind,
+  refuses the load under `target_config`. Web forms reads only the target's
+  schema; what the record is stays the target's.
+
+A consumer links to the form through `publicAddress(slug)`, which `@angee/webforms`
+exports: the one place the web side names where a form answers.
+
 ## The stored definition
 
 A version's `definition` is a checked subset of a

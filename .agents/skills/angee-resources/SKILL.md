@@ -37,8 +37,10 @@ description: "Declares and loads an addon's master, install and demo data: pypro
   `angee.resources.testing` (the `src/angee/resources/testing/__init__.py` module docstring).
 - Shared catalogues exist: `integrate.Vendor` (`src/angee/integrate/models.py`), `money.Currency`
   (`src/angee/money/models.py`); contribute rows with `adopt`.
-- Owner-verb adapters exist: `WorkflowDefinitionResource`, `TriggerResource` (`src/angee/workflows/resources.py`);
-  non-row declarations use `ResourceEntryKind` (`src/angee/resources/kinds.py`).
+- Owner-verb adapters exist: `WorkflowDefinitionResource`, `TriggerResource` (`src/angee/workflows/resources.py`),
+  `FormResource` (`src/angee/webforms/resources.py`: a published form, its xref-named config records resolved
+  through `Resource.objects.resolve_config_references`); non-row declarations use `ResourceEntryKind`
+  (`src/angee/resources/kinds.py`).
 
 ## Steps
 

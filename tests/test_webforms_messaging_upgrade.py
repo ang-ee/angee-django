@@ -497,6 +497,23 @@ def test_what_a_schema_says_that_a_form_does_not_is_named_and_not_dropped_silent
     ]
 
 
+def test_a_field_shown_as_a_date_becomes_a_date_question_a_published_version_takes() -> None:
+    """The previous FormSpec offered ``widget: date`` on a string; the form asks for a date the same way."""
+
+    schema = {
+        "type": "object", "required": ["due"],
+        "properties": {"due": {"type": "string", "widget": "date", "label": "Due date"}},
+    }
+
+    definition, left_out = template.definition_from_form_spec(schema, title="Request form")
+    content, _left_out = template.version_from_form_spec(schema, title="Request form", language="en", published=True)
+
+    assert definition["elements"] == [
+        {"type": "text", "inputType": "date", "name": "due", "title": "Due date", "isRequired": True},
+    ]
+    assert (left_out, content["definition"]) == ([], definition)
+
+
 @pytest.mark.parametrize(("schema", "refusal"), [
     pytest.param({"type": "object", "properties": {}}, "definition: .*should be non-empty", id="no-question"),
     pytest.param({"type": "object", "properties": {"a": {"type": "string", "enum": ["Very good"]}}},

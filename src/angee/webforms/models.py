@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import traceback
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
 from typing import Any, ClassVar, Self
 
@@ -64,7 +65,9 @@ from angee.jobs.enqueue import enqueue_task
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
+from angee.resources.mixins import ResourceLoadMixin
 from angee.webforms.constants import DELIVER_RESPONSE_TASK
+from angee.webforms.resources import FormResource
 from angee.webforms.targets import DeliveryRefused, FormTarget
 from angee.webforms.validators import (
     CONTACT_LIMIT,
@@ -188,9 +191,14 @@ class FormQuerySet[FormT: Form](ArchiveQuerySet[FormT], AngeeHistoryQuerySet[For
 FormManager = AngeeHistoryManager.from_queryset(FormQuerySet)
 
 
-class Form(HistoryMixin, ArchiveMixin, AngeeDataModel, concrete=True):
-    """One public form: its name for staff, whether it takes submissions, and what a response becomes."""
+class Form(ResourceLoadMixin, HistoryMixin, ArchiveMixin, AngeeDataModel, concrete=True):
+    """One public form: its name for staff, whether it takes submissions, and what a response becomes.
 
+    An addon declares a form as one resource row (:class:`~angee.webforms.resources.FormResource`):
+    the form, the version it serves (:meth:`serve`) and its addresses (:meth:`ensure_aliases`).
+    """
+
+    resource_class = FormResource
     sqid_prefix = "wbf_"
 
     name = models.CharField(max_length=160)
@@ -313,6 +321,59 @@ class Form(HistoryMixin, ArchiveMixin, AngeeDataModel, concrete=True):
     @transition(status, source=FormStatus.PUBLISHED, target=FormStatus.CLOSED, on_success=save_state)
     def close(self) -> None:
         """Stop taking submissions; what was received stays."""
+
+    def serve(self, content: Mapping[str, Any]) -> Any:
+        """Serve ``content``, a version's content by field name (``FormVersion.CONTENT_FIELDS``); return its version.
+
+        The version served now is kept when it holds exactly that content.
+        Otherwise a new version holding it is made and published
+        (:meth:`FormVersion.publish`), in one transaction, so content the
+        publication refuses leaves no version behind. Content the form served
+        before, and serves no longer, is a new version too: what is served is
+        decided by the version served now, never by an older one. A field
+        ``content`` leaves out takes the version's default. Like ``publish``, it
+        opens a draft form and leaves a published or closed one in its state.
+        """
+
+        self.require_access("write")
+        versions = _model("FormVersion")
+        unknown = sorted(str(name) for name in set(content) - set(versions.CONTENT_FIELDS))
+        if unknown:
+            raise ValidationError({"version": (
+                f"A version holds {', '.join(versions.CONTENT_FIELDS)}; it does not hold {', '.join(unknown)}."
+            )})
+        candidate = versions(form_id=self.pk, **content)
+        with transaction.atomic():
+            # The form's lock first, as publish takes it: the version served is read as it stands.
+            form = _model("Form").system_queryset(lock=("self",)).get(pk=self.pk)
+            served = versions._base_manager.filter(pk=form.published_version_id).first()
+            if served is not None and served._content() == candidate._content():
+                return served
+            candidate.save()
+            candidate.publish()
+        self.refresh_from_db(fields=("published_version", "status", "updated_at"))
+        return candidate
+
+    def ensure_aliases(self, slugs: Iterable[str]) -> None:
+        """Give the form an alias for each of ``slugs`` it lacks; never remove one.
+
+        An alias the form already has, under a declared slug or another, stays
+        as it is. A slug another form holds is refused under ``aliases``, before
+        any alias is made.
+        """
+
+        self.require_access("write")
+        wanted = list(dict.fromkeys(slugs))
+        aliases = _model("FormAlias")
+        held = dict(aliases._base_manager.filter(slug__in=wanted).values_list("slug", "form_id"))
+        taken = [slug for slug in wanted if held.get(slug, self.pk) != self.pk]
+        if taken:
+            raise ValidationError({"aliases": [f"The address forms/{slug} belongs to another form." for slug in taken]})
+        for slug in wanted:
+            if slug not in held:
+                alias = aliases(form=self, slug=slug)
+                alias.clean_fields(exclude=["form"])
+                alias.save()
 
 
 class FormVersionQuerySet(ClosedUpdateQuerySet[Any], AngeeQuerySet):

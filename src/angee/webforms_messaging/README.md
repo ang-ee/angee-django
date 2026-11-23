@@ -19,7 +19,13 @@ target_config:
 - `channel` is a channel with the `webform` backend. Posting on a channel is
   messaging's to allow, so someone may point a form at one only if they may
   write on it ([`MessageTarget.permits`](targets.py) asks the channel's own
-  `write` check).
+  `write` check). An addon that declares the form as a resource row
+  ([a form an addon declares](../webforms/README.md#a-form-an-addon-declares))
+  names a channel its resources declare by xref (`channel: acme.intake`):
+  `MessageTargetConfig` declares `channel` a relation to `messaging.Channel`, so
+  the load stores that channel's public id, and refuses an xref that names no
+  channel. The relation is the bridge's: web forms reads the target's schema and
+  never learns what a channel is.
 - `slug` names the form's messages on that channel. Each response is the message
   `webform:<slug>:<submission id>`, so delivering one again finds the message it
   posted. All of them share the conversation `webform:<slug>`, titled with the
