@@ -20,9 +20,10 @@ from typing import Any
 
 import httpx2
 import pytest
-from django.db import transaction
+from django.db import connection, transaction
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
-from rebac import to_subject_ref
+from rebac import actor_context, to_subject_ref
 
 from angee.integrate.states import (
     LinkStatus,
@@ -35,7 +36,7 @@ from angee.integrate.states import (
 from angee.integrate.streams import BridgeSyncError, begin_stream_cycle, open_stream
 from angee.integrate.testing.integration import Integration
 from angee.integrate.testing.models import RecordLink, SyncStream
-from angee.messaging.testing.models import Directory, Person
+from angee.messaging.testing.models import Directory, Party, Person
 from angee.parties.backends import MAPPING_REFUSED
 from angee.parties_integrate_hubspot.backends import (
     OBJECTS,
@@ -48,7 +49,7 @@ from angee.parties_integrate_hubspot.checks import check_object_mappings
 from angee.parties_integrate_hubspot.client import parse_number, parse_string
 from angee.parties_integrate_hubspot.testing.server import error_response
 from tests.test_parties_integrate_hubspot_mapping import NumberMapping
-from tests.test_parties_integrate_hubspot_sync import ADA, GRACE, HubSpot, ago, failures
+from tests.test_parties_integrate_hubspot_sync import ADA, GRACE, MARY, HubSpot, ago, failures
 from tests.test_parties_integrate_hubspot_sync import hubspot as hubspot  # noqa: F401 -- the scripted directory
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -354,6 +355,162 @@ def test_a_new_version_of_the_mapping_replays_every_record_once(hubspot: HubSpot
     assert sorted(record.id for record, _source in RECEIVED) == sorted((deal, other))
     assert [page.count for page in revised.drain()] == [0]
     assert _colour(hubspot, ada) == "green"
+
+
+def _merge_away(hubspot: HubSpot, contact: str) -> Any:
+    """Merge the person ``contact`` landed on into a new person, as a person merges two from the console.
+
+    The merge moves the contact's link to the survivor, which it returns.
+    """
+
+    owner = hubspot.directory.owner
+    survivor = Person.objects.create(display_name="Ada Example (kept)", created_by=owner)
+    with actor_context(owner):
+        Party.objects.get(pk=survivor.pk).with_actor(owner).merge(records=[hubspot.person(contact).public_id])
+    assert hubspot.link(contact).target_object_id == str(survivor.pk)
+    return survivor
+
+
+def _received_ids() -> list[str]:
+    return [record.id for record, _source in RECEIVED]
+
+
+def test_a_record_whose_contacts_person_is_merged_states_again_at_its_next_read_and_no_other_record_does(
+    hubspot: HubSpot, settings: Any
+) -> None:
+    """A record follows the party its contact's link points at: a merge moves that link to the survivor.
+
+    Nothing changed at HubSpot. The stream's sweep, which reads every record, states the merged contact's record
+    again, now on the survivor, and once; a record on another contact applies nothing, then or later.
+    """
+
+    deals, ada, deal = _landed_deal(hubspot, settings)
+    grace = hubspot.server.add("contacts", GRACE, modified=ago(days=1))
+    hubspot.drain()
+    other = hubspot.server.add("deals", {"dealname": "blue"}, modified=ago(days=1))
+    hubspot.server.associate("deals", other, "contacts", grace)
+    assert [page.count for page in deals.drain()] == [1]
+    deals.sweep(page_bound=100)
+    RECEIVED.clear()
+
+    survivor = _merge_away(hubspot, ada)
+    deals.sweep(page_bound=100)
+
+    ((record, _source),) = RECEIVED
+    assert (record.id, record.person(ada)) == (deal, survivor)
+    RECEIVED.clear()
+    deals.drain()
+    deals.sweep(page_bound=100)
+    assert RECEIVED == []
+
+
+def test_a_record_none_of_whose_contacts_changed_is_not_stated_again(hubspot: HubSpot, settings: Any) -> None:
+    """The record was applied against the parties its contacts' links point at, and its reads find them unchanged.
+
+    Sweep after sweep it applies nothing, and a merge of another contact's person changes nothing for it.
+    """
+
+    deals, _ada, deal = _landed_deal(hubspot, settings)
+    grace = hubspot.server.add("contacts", GRACE, modified=ago(days=1))
+    hubspot.drain()
+    RECEIVED.clear()
+
+    deals.sweep(page_bound=100)
+    _merge_away(hubspot, grace)
+    deals.sweep(page_bound=100)
+
+    assert RECEIVED == []
+    assert deals.link(deal).dependency_digest != ""
+
+
+def test_a_link_applied_before_records_followed_their_contacts_states_once_at_its_next_read_and_settles(
+    hubspot: HubSpot, settings: Any
+) -> None:
+    """A link applied with no dependency digest, as every link was before records followed their contacts' parties.
+
+    Its next read compares it as changed and states it once, which also restates one whose person was merged
+    before; from then on it settles.
+    """
+
+    deals, _ada, deal = _landed_deal(hubspot, settings)
+    link = deals.link(deal)
+    RecordLink._base_manager.filter(pk=link.pk).update(dependency_digest="")
+    type(link.applied_base)._base_manager.filter(pk=link.applied_base_id).update(dependency_digest="")
+    RECEIVED.clear()
+
+    deals.sweep(page_bound=100)
+
+    assert _received_ids() == [deal]
+    assert deals.link(deal).dependency_digest != ""
+    RECEIVED.clear()
+    deals.sweep(page_bound=100)
+    assert RECEIVED == []
+
+
+def test_a_records_dependency_digest_ignores_association_and_page_order_and_moves_once_its_contact_lands(
+    hubspot: HubSpot, settings: Any
+) -> None:
+    """The digest pairs each associated contact, sorted, with the party its link points at, or none without a link.
+
+    Two records on the same contacts associated in either order digest alike, a record digests alike on any page,
+    a record without contacts has none, and a contact that lands later moves its record's digest.
+    """
+
+    _register(settings, DealMapping)
+    hubspot.server.scopes.add(DEALS_READ)
+    ada, grace = (
+        hubspot.server.add("contacts", properties, modified=ago(days=days))
+        for days, properties in zip((3, 2), (ADA, GRACE), strict=True)
+    )
+    hubspot.drain()
+    mary = hubspot.server.add("contacts", MARY, modified=timezone.now())
+    first, second, alone, waiting = (
+        hubspot.server.add("deals", {"dealname": name}, modified=ago(days=1)) for name in ("a", "b", "c", "d")
+    )
+    for record, contacts in ((first, (grace, ada)), (second, (ada, grace)), (waiting, (mary,))):
+        for contact in contacts:
+            hubspot.server.associate("deals", record, "contacts", contact)
+    deals = _objects(hubspot, DealMapping)
+
+    def digests(*keys: str) -> dict[str, str]:
+        return {change.external_key: change.dependency_digest for change in deals.backend.read_keys(deals.stream, keys)}
+
+    page = digests(first, second, alone, waiting)
+    assert page == digests(waiting, alone, second, first)
+    assert digests(first) == {first: page[first]}
+    assert page[first] == page[second] != ""
+    assert page[alone] == ""
+    assert page[waiting] not in ("", page[first])
+
+    hubspot.drain()
+
+    assert hubspot.link(mary).target_object_id
+    assert digests(waiting)[waiting] not in ("", page[waiting])
+
+
+def test_a_page_reads_its_records_contact_links_in_one_query_however_many_records_it_holds(
+    hubspot: HubSpot, settings: Any
+) -> None:
+    """A page's dependency digests come from one read of its records' contact links, never one read per record."""
+
+    _register(settings, DealMapping)
+    hubspot.server.scopes.add(DEALS_READ)
+    ada, grace = (
+        hubspot.server.add("contacts", properties, modified=ago(days=days))
+        for days, properties in zip((3, 2), (ADA, GRACE), strict=True)
+    )
+    hubspot.drain()
+    records = [hubspot.server.add("deals", {"dealname": name}, modified=ago(days=1)) for name in ("a", "b", "c")]
+    for record, contact in zip(records, (ada, grace, ada), strict=True):
+        hubspot.server.associate("deals", record, "contacts", contact)
+    deals = _objects(hubspot, DealMapping)
+
+    def queries(keys: list[str]) -> int:
+        with CaptureQueriesContext(connection) as captured:
+            list(deals.backend.read_keys(deals.stream, keys))
+        return len(captured)
+
+    assert queries(records[:1]) == queries(records)
 
 
 def test_a_deleted_record_reaches_the_gone_hook_on_the_second_sweep_and_what_it_stated_is_withdrawn(
