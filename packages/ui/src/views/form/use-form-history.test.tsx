@@ -294,7 +294,11 @@ function landsOnItsFrame({ change, changed, path }: FrameRow): void {
 
 test.each(frameRows.filter((row) => !row.lost))("undo and redo land on the frame $kind recorded, own keys included", landsOnItsFrame);
 
-// KNOWN DEFECT, expected to fail until it is fixed: react-hook-form reads `undefined` as take-the-default at registration. The replay resets
+// KNOWN DEFECT, expected to fail: react-hook-form reads `undefined` as take-the-default at registration. The replay resets
 // the form, every mounted field registers again, and where the frame holds `undefined` or no key the
-// field takes the loaded value. These rows flip to passing when that is fixed; move them up then.
+// field takes the loaded value. This harness registers its fields itself, so these rows MODEL a form's
+// binding and do not test one: the two "Not set" rows flip when the harness stops registering a member
+// that can be left "Not set", as a form must (see `useFormHistory`); the rendered rows in
+// `FormView.native.test.tsx` are the test of that. The third row is not about "Not set": a registered
+// member whose whole object was replaced by one without it, a separate loss that stays.
 test.fails.each(frameRows.filter((row) => row.lost))("undo and redo lose $kind: react-hook-form reads `undefined` as take-the-default at registration", landsOnItsFrame);

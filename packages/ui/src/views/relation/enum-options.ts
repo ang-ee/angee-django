@@ -67,6 +67,11 @@ export interface ImplConfigFields {
  * engine; choices without a declaration continue to use their native raw JSON
  * field. The fields are named under `configField`, the model's JSON field that
  * holds the chosen implementation's configuration (`config` unless it names another).
+ * Each field is declared from the FIRST implementation that names it and resolved to
+ * the chosen one, and `resolveField` lays the resolved descriptor over the declaration:
+ * a key the chosen implementation's field lacks (`omittable`, `presenceRequired`,
+ * `required`, `nullable`, a default, options) is inherited from the first. Until that
+ * is repaired here, implementations that share a field name must give it the same keys.
  * @owner RelationFieldWidget
  */
 export function useImplConfigFields(

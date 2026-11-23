@@ -38,11 +38,18 @@ export interface FormHistory {
  * Call reset when the caller loads another record or accepts a saved baseline.
  * Before binding undo where a field of its own can be left "Not set" over a loaded
  * value (a record form): a replay registers every mounted field again, and React Hook
- * Form gives a field whose frame holds `undefined` or no key the form's default, so a
- * "Not set" and an object's missing member come back with the loaded value. Such
- * members must first bind through their parent object's single registration, as the
- * structured editor does; the expected-failure rows in `use-form-history.test.tsx` and
- * `FormView.native.test.tsx` flip when they do.
+ * Form gives a registered field whose frame holds `undefined` or no key the form's
+ * default, so a "Not set" comes back with the loaded value. Measured: such a member
+ * must first stop being a registered field of its own (its value read by path and
+ * written with `setValue`, "Not set" an own key holding `undefined`). Binding it
+ * through its parent object's registration does not do it: member dirtiness collapses
+ * to the root, and a "Not set" held as an absent key reads as a dropped field and takes
+ * the loaded value back. The form must then supply what registration gave: the member's
+ * focus target and, after a failed save, which error takes focus, since React Hook Form
+ * focuses only registered fields. The two expected-failure rows in
+ * `FormView.native.test.tsx` are the tripwire; the three in `use-form-history.test.tsx`
+ * register their own fields and only model the binding. A registered member whose whole
+ * object was replaced by one without it comes back the same way: a separate loss.
  * @owner FormView
  */
 export function useFormHistory<TValues extends FieldValues>(

@@ -1378,7 +1378,9 @@ test.each(undoKinds.filter((row) => !row.lost))("undo and redo land on the frame
 
 // KNOWN DEFECT, expected to fail until it is fixed: react-hook-form reads `undefined` as take-the-default at registration. After the undo the
 // control still shows "Not set" while the form holds the loaded value and counts as unchanged, so a
-// save sends nothing. These rows flip to passing when that is fixed; move them up then.
+// save sends nothing. These two rendered rows are the tripwire: they flip to passing when a field
+// that can be left "Not set" is no longer a registered field of its own (see `useFormHistory`);
+// move them up then.
 test.fails.each(undoKinds.filter((row) => row.lost))("undo and redo lose $kind: react-hook-form reads `undefined` as take-the-default at registration", landsOnItsFrame);
 
 test("undo while a text input has focus leaves it focused, and typing on is recorded and undoable", async () => {
