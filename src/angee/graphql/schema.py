@@ -6,7 +6,7 @@ import copy
 import logging
 import threading
 import traceback
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from importlib import import_module
@@ -32,6 +32,7 @@ from strawberry.types.base import StrawberryObjectDefinition, get_object_definit
 from strawberry.types.enum import StrawberryEnumDefinition
 from strawberry.types.execution import ExecutionContext
 from strawberry.types.field import StrawberryField
+from strawberry.types.graphql import OperationType
 from strawberry.types.scalar import ScalarDefinition
 from strawberry.types.union import StrawberryUnion
 from strawberry_django_hasura import hasura_config
@@ -39,7 +40,7 @@ from strawberry_django_hasura import hasura_config
 from angee.base.addons import addon_contribution, addon_facts, is_angee_addon, optional_addon_module
 from angee.base.exceptions import DomainError, classify_error, validation_error
 from angee.base.models.locks import StaleRevisionError
-from angee.base.permissions import require_rebac_queryset
+from angee.base.permissions import read_operation, require_rebac_queryset
 from angee.graphql.data.contracts import DataResourceMetadata
 from angee.graphql.data.metadata import (
     data_resource_contributions,
@@ -92,6 +93,26 @@ _NON_ROOT_KEYS = {"types", "extensions", "type_extensions", "input_extensions"}
 _ROOT_TYPE_NAMES = {key: key.title() for key in SCHEMA_PART_KEYS if key not in _NON_ROOT_KEYS}
 
 
+class ReadOperationExtension(SchemaExtension):
+    """Resolve a query operation as a read operation (``angee.base.permissions.read_operation``).
+
+    Under ``REBAC_INHERIT_THROUGH_LINKS = False`` an elevated read inside it must
+    name the policy arm it relies on; with the default nothing changes.
+    """
+
+    def on_execute(self) -> Iterator[None]:
+        try:
+            query = self.execution_context.operation_type is OperationType.QUERY
+        except RuntimeError:
+            # Strawberry owns missing/ambiguous operation selection and its error.
+            query = False
+        if not query:
+            yield
+            return
+        with read_operation():
+            yield
+
+
 class AngeeSchema(strawberry.Schema):
     """Strawberry schema that exposes stable REBAC denial codes."""
 
@@ -99,7 +120,7 @@ class AngeeSchema(strawberry.Schema):
     """Model resource metadata carried by this built schema."""
 
     def get_extensions(self, sync: bool = False) -> list[SchemaExtension]:
-        """Add configured native extension factories to every named schema.
+        """Add the read-operation marker and configured native extension factories to every named schema.
 
         ``ANGEE_GRAPHQL_EXTENSION_FACTORIES`` contains dotted callables accepting
         Strawberry's ``sync`` flag and returning a native SchemaExtension class.
@@ -109,6 +130,7 @@ class AngeeSchema(strawberry.Schema):
 
         return [
             *super().get_extensions(sync=sync),
+            ReadOperationExtension(),
             *(import_string(path)(sync=sync)() for path in settings.ANGEE_GRAPHQL_EXTENSION_FACTORIES),
         ]
 

@@ -22,3 +22,6 @@ depends_on = "integrate_google:install/010_integrate.oauthclient.yaml"
 
 [tool.angee.platform]
 category = "Integration"
+
+[tool.angee.rebac]
+evaluated_policy = true

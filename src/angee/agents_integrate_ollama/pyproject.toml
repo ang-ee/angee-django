@@ -30,3 +30,6 @@ adopt = ["provider", "name"]
 
 [tool.angee.platform]
 category = "Integration"
+
+[tool.angee.rebac]
+evaluated_policy = true

@@ -8,6 +8,7 @@ readers keep reading its chatter through it.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,24 +18,40 @@ import pytest
 from django.apps import apps
 from django.core.checks.registry import registry
 from django.db import connection
+from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
-from rebac import MissingActorError, actor_context, system_context
+from rebac import MissingActorError, PermissionDenied, actor_context, system_context
+from rebac.backends import backend
 from rebac.evaluator import evaluator_scope
+from rebac.links import is_generated
 from rebac.models import SchemaOverride, SchemaPermission
-from rebac.schema import PermBinOp, PermRef, permission_sources
+from rebac.schema import FieldBinding, PermBinOp, PermRef, permission_sources
+from rebac.testing import install_schema
 
 from angee.base.build import extension_source_map, merged_schemas
+from angee.base.models.identity import public_id_for
 from angee.base.permissions import contextual_action_holds, purpose_read_holds
 from angee.base.testing.permissions import installed_field_owners
+from angee.graphql.testing.documents import execute_schema, result_data, unreadable_rows
 from angee.messaging.checks import check_derived_reads
 from angee.messaging.inbox_results import InboxResultOptions, InboxResults
-from angee.messaging.testing.models import Channel, Message, Part, Thread, ThreadAttachment
+from angee.messaging.testing.models import (
+    Channel,
+    Message,
+    Part,
+    Person,
+    Thread,
+    ThreadAttachment,
+    ThreadFollower,
+    ThreadNotification,
+)
 from angee.projects.testing.models import Project, ProjectBinding, Task
 from tests.chatterdemo.models import ChatterDoc
 from tests.conftest import Page, Vault, create_platform_admin, make_integration
 from tests.messaging_campaign import grant
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
+from tests.test_messaging_graphql import _schema as messaging_console_schema
 from tests.test_zed_extensions import _addon, _apply_emitted_schema_paths, _contrib_addon
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
@@ -428,3 +445,236 @@ def test_record_readers_read_its_chatter_never_through_the_inbox(
         assert not rows.with_actor(reader).inbox().filter(pk=row.pk).exists(), (kind, row)
         for action in ("read", "read_inbox"):
             assert not row.with_actor(outsider).has_access(action), (kind, row, action)
+
+
+RECORD_FEED = """
+query RecordFeed($model: String!, $id: ID!) {
+  record_thread(input: {model_label: $model, record_id: $id}) {
+    error_code
+    messages { id preview }
+  }
+}
+"""
+
+
+@pytest.mark.parametrize("inherits", (True, False))
+@pytest.mark.parametrize("kind", ("chatterdemo/doc", "projects/project", "projects/task", "knowledge/page"))
+def test_the_record_feed_shows_no_message_rebac_denies(
+    campaign_access: Any, campaign_user: Any, kind: str, inherits: bool,
+) -> None:
+    """The feed reads chatter through the record's read only where that read reads the thread.
+
+    ``REBAC_INHERIT_THROUGH_LINKS = False`` lends a task's chatter only the task's
+    own grants, so the project's reader, who still reads the task through its
+    project, is refused the feed instead of shown messages REBAC denies them.
+    """
+
+    owner, reader = (campaign_user(role) for role in ("feed-owner", "feed-reader"))
+    record, granted, relation = _record_of(kind, owner)
+    grant(granted, relation, reader)
+    with system_context(reason="tests.messaging.inbox_read.record_feed"):
+        chatter = ThreadAttachment.objects.ensure_for_record(record).thread
+        comment = Message._base_manager.create(
+            created_by=owner, thread=chatter, message_type="comment", status="synced", sent_at=T0,
+        )
+    variables = {"model": type(record)._meta.label, "id": public_id_for(type(record), record.pk)}
+    schema = messaging_console_schema()
+    with override_settings(REBAC_INHERIT_THROUGH_LINKS=inherits):
+        assert record.with_actor(reader).has_access("read")
+        readable = comment.with_actor(reader).has_access("read")
+        assert readable is (inherits or kind != "projects/task")
+        assert unreadable_rows(schema, RECORD_FEED, variables, actor=reader) == []
+        feed = result_data(execute_schema(schema, RECORD_FEED, variables, user=reader))["record_thread"]
+        assert [message["id"] for message in feed["messages"]] == ([comment.sqid] if readable else [])
+        assert (feed["error_code"] is None) is readable
+        with actor_context(reader):
+            if readable:
+                assert Message.objects.for_record(record)[0] == [comment]
+            else:
+                with pytest.raises(PermissionDenied):
+                    Message.objects.for_record(record)
+
+
+def _deliver(thread: Any, author: Any, recipient: Any) -> Any:
+    """Post a comment on ``thread`` and run its delivery owner, as posting does, addressing ``recipient``."""
+
+    with system_context(reason="tests.messaging.inbox_read.deliver"):
+        message = Message._base_manager.create(
+            thread=thread, message_type="comment", direction="internal", created_by=author, sent_at=T0,
+        )
+        ThreadNotification.objects.fanout_for_message(
+            message, attachment=ThreadAttachment._base_manager.get(thread=thread, role="chatter"),
+            created_by_id=author.pk, recipient_user_ids=(recipient.pk,),
+        )
+    return message
+
+
+@pytest.mark.parametrize("inherits", (True, False))
+def test_chatter_follows_notifications_and_state_reach_only_its_readers(
+    campaign_access: Any, campaign_user: Any, inherits: bool,
+) -> None:
+    """The record rule for chatter (follow, fan-out, cleanup, state, the timeline ping) holds only where it is lent.
+
+    A project reader reads a task through its project. ``REBAC_INHERIT_THROUGH_LINKS
+    = False`` lends the task's chatter only the task's own grants, so that reader
+    is no longer admitted as a follower, notified, kept as a follower by the
+    cleanups, shown chatter state or pinged about chatter activity; a row written
+    before the setting was turned off no longer tells them its message exists.
+    """
+
+    owner, reader, newcomer = (campaign_user(role) for role in ("audience-owner", "audience-reader", "audience-new"))
+    direct = campaign_user("audience-direct")
+    record, granted, relation = _record_of("projects/task", owner)
+    for user in (reader, newcomer):
+        grant(granted, relation, user)
+    grant(record, "reader", direct)
+    with system_context(reason="tests.messaging.inbox_read.audience"):
+        chatter = ThreadAttachment.objects.ensure_for_record(record).thread
+    with override_settings(REBAC_INHERIT_THROUGH_LINKS=True):
+        with actor_context(reader):
+            ThreadFollower.objects.subscribe(record, user=reader)
+        earlier = _deliver(chatter, owner, reader)
+    with override_settings(REBAC_INHERIT_THROUGH_LINKS=inherits):
+        readable = chatter.with_actor(reader).has_access("read")
+        assert readable is inherits
+        assert record.with_actor(reader).has_access("read")
+        assert (reader.pk in record.thread_reader_ids([reader])) is readable
+        later = _deliver(chatter, owner, reader)
+        assert ThreadNotification._base_manager.filter(message=later, user=reader).exists() is readable
+        notifications = ThreadNotification.objects.with_actor(reader).with_action("read_inbox").disclosed()
+        disclosed = set(notifications.values_list("message_id", flat=True))
+        assert disclosed == ({earlier.pk, later.pk} if readable else set())
+        # A reader of the task itself reads its chatter under either policy, and is told.
+        told = _deliver(chatter, owner, direct)
+        assert ThreadNotification._base_manager.filter(message=told, user=direct).exists()
+        with actor_context(reader):
+            if readable:
+                record.with_actor(reader).message_suggested_recipients(user=reader)
+            else:
+                with pytest.raises(PermissionDenied):
+                    record.with_actor(reader).message_suggested_recipients(user=reader)
+        with system_context(reason="tests.messaging.inbox_read.audience"):
+            bare = Task.objects.create(project=record.project)
+        grant(bare, "reader", owner)
+        for target in (record, bare):
+            # A task with no chatter thread yet: the follow creates it, and REBAC decides on it.
+            with actor_context(newcomer):
+                if readable:
+                    ThreadFollower.objects.subscribe(target, user=newcomer)
+                else:
+                    with pytest.raises(PermissionDenied):
+                        ThreadFollower.objects.subscribe(target, user=newcomer)
+        assert (bare._attached_thread() is not None) is readable
+        with actor_context(owner):
+            ThreadFollower.objects.subscribe(bare, user=owner)
+        assert bare.thread_reader_allowed(owner)
+        follows =ThreadFollower._base_manager.filter(thread=chatter, party__person__user=reader)
+        ThreadFollower.objects.end_unreadable_for_record(record)
+        assert follows.exists() is readable
+        if not readable:
+            with override_settings(REBAC_INHERIT_THROUGH_LINKS=True), actor_context(reader):
+                ThreadFollower.objects.subscribe(record, user=reader)
+            with system_context(reason="tests.messaging.inbox_read.audience"):
+                party = Person.objects.for_user(reader)
+            ThreadFollower.objects.end_unreadable_for_party(party)
+            assert not follows.exists()
+
+
+@pytest.mark.parametrize("inherits", (True, False))
+def test_an_old_notification_changes_unseen_once_its_message_is_unreadable(
+    campaign_access: Any, campaign_user: Any, inherits: bool,
+) -> None:
+    """A row fanned out while links lent whole, then changed by the system, tells its recipient nothing under False.
+
+    Its recipient reads the row (it is theirs) but, under ``False``, not its message: the lists hide the row
+    and its change stream does too.
+    """
+
+    from rebac import to_subject_ref
+
+    from angee.graphql.events import ChangePayload
+    from angee.messaging.schema import NotificationChangeGate
+
+    owner, reader = campaign_user("old-row-owner"), campaign_user("old-row-reader")
+    record, granted, relation = _record_of("projects/task", owner)
+    grant(granted, relation, reader)
+    with system_context(reason="tests.messaging.inbox_read.old_row"):
+        chatter = ThreadAttachment.objects.ensure_for_record(record).thread
+    with override_settings(REBAC_INHERIT_THROUGH_LINKS=True):
+        message = _deliver(chatter, owner, reader)
+    notice = ThreadNotification._base_manager.get(user=reader, message=message)
+    with override_settings(REBAC_INHERIT_THROUGH_LINKS=inherits):
+        with system_context(reason="tests.messaging.inbox_read.system_change"):
+            notice.metadata = {"delivery": "retried"}
+            notice.save(update_fields=["metadata"])
+        payload = ChangePayload.from_instance(notice, action="update", update_fields=["metadata"])
+        event = NotificationChangeGate(ThreadNotification, to_subject_ref(reader)).filter(payload)
+        assert (event is not None) is inherits
+
+
+@pytest.mark.parametrize("inherits", (True, False))
+def test_a_first_post_needs_the_chatter_thread_its_poster_will_read(
+    campaign_access: Any, campaign_user: Any, inherits: bool,
+) -> None:
+    """A project editor writes a task through its project; under ``False`` they read none of its chatter.
+
+    Their first comment would create a chatter thread they cannot read: it is refused, and the thread with
+    it. The task's owner, whom the narrowed policy still lends the chatter, posts under either policy.
+    """
+
+    owner, editor = campaign_user("first-post-owner"), campaign_user("first-post-editor")
+    with system_context(reason="tests.messaging.inbox_read.first_post"):
+        project = Project.objects.create(title="First post project")
+        task = Task.objects.create(project=project, owner=owner)
+    grant(project, "editor", editor)
+    with override_settings(REBAC_INHERIT_THROUGH_LINKS=inherits):
+        assert task.with_actor(editor).can_post()
+        with actor_context(editor):
+            if inherits:
+                task.with_actor(editor).message_post("First post by the project editor.")
+            else:
+                with pytest.raises(PermissionDenied, match="reading its chatter thread"):
+                    task.with_actor(editor).message_post("First post by the project editor.")
+        assert (task._attached_thread() is not None) is inherits
+        with actor_context(owner):
+            task.with_actor(owner).message_post("First post by the owner.")
+        assert task._attached_thread() is not None
+
+
+def _with_thread_link() -> Any:
+    """The host policy with ``messaging/message#thread`` filtered over the thread's table, which makes it a link."""
+
+    published = backend().schema()
+
+    def relink(definition: Any) -> Any:
+        if definition.resource_type != "messaging/message":
+            return definition
+        linked = FieldBinding("thread", (("thread__channel__isnull", False),))
+        relations = tuple(
+            replace(relation, backing=linked) if relation.name == "thread" else relation
+            for relation in definition.relations
+        )
+        return replace(definition, relations=relations)
+
+    return replace(published, definitions=[relink(definition) for definition in published.definitions])
+
+
+def test_the_inbox_proofs_read_the_policy_rebac_decides_with(db: None) -> None:
+    """The proofs hold while the evaluated policy states them, and fail closed where only the published one does."""
+
+    del db
+    for inherits in (True, False):
+        with override_settings(REBAC_INHERIT_THROUGH_LINKS=inherits):
+            # The host policy keeps every arrow the proofs read: foreign keys of the row.
+            assert purpose_read_holds(Thread, "read_inbox") and purpose_read_holds(Message, "read_inbox")
+            assert contextual_action_holds(Part, "read_inbox")
+    install_schema(_with_thread_link(), backend=backend())
+    with override_settings(REBAC_INHERIT_THROUGH_LINKS=True):
+        assert purpose_read_holds(Message, "read_inbox") and contextual_action_holds(Part, "read_inbox")
+    with override_settings(REBAC_INHERIT_THROUGH_LINKS=False):
+        # Through the link the message reads what a thread lends, under a generated name.
+        arrows = permission_sources(backend().evaluated_schema(), "messaging/message", "read_inbox").arrows
+        assert any(via == "thread" and is_generated(target) for via, target in arrows), arrows
+        assert purpose_read_holds(Thread, "read_inbox")
+        assert not purpose_read_holds(Message, "read_inbox")
+        assert not contextual_action_holds(Part, "read_inbox")

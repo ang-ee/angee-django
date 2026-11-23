@@ -29,6 +29,8 @@ from strawberry_django.utils.requests import get_request
 
 from angee.base.models.identity import instance_from_public_id
 from angee.base.models.trash import TrashQuerySet
+from angee.base.permissions import elevated_read, links_narrowed, reader_queryset
+from angee.graphql.access import ChangeReadGate
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,
@@ -70,6 +72,7 @@ from angee.messaging.managers import (
     message_subtype_options,
     strip_null_bytes,
 )
+from angee.messaging.mixins import MESSAGES_READ
 from angee.messaging.models import Message as MessageModel
 from angee.messaging.models import Part as PartModel
 from angee.messaging.models import Thread as ThreadModel
@@ -1033,7 +1036,9 @@ class RecordThreadPayload(RecordThreadStatePayload, RecordErrorPayload):
 
         if self.thread is None:
             return 0
-        replies = Message.objects.sudo(reason="messaging.record_thread.reply_count").for_thread(self.thread)
+        replies = elevated_read(
+            Message.objects.all(), MESSAGES_READ, reason="messaging.record_thread.reply_count",
+        ).for_thread(self.thread)
         kinds = {
             strip_null_bytes(value or "").strip().lower()
             for value in self._reply_message_types
@@ -1361,7 +1366,10 @@ class MessagingMutation:
         actor = _request_user(info)
         if actor is None:
             raise PermissionDenied("Authentication required.")
-        notification = authorized_permission_target(info, ThreadNotification, id, "read_inbox")
+        # A row whose message its recipient may no longer read reads as not found (``disclosed``).
+        notification = authorized_permission_target(
+            info, ThreadNotification, id, "read_inbox", narrow=lambda rows: cast(Any, rows).disclosed(),
+        )
         return cast(ThreadNotificationType, ThreadNotification.objects.mark_read(notification, actor))
 
     @strawberry.mutation
@@ -1929,12 +1937,15 @@ _MESSAGE_EDGE_RESOURCE = hasura_model_resource(
 def _notification_inbox_queryset(info: strawberry.Info) -> Any:
     """Pin every generated inbox read, including by-pk and aggregates, to its recipient.
 
-    A notification about a trashed message leaves the inbox with its message.
+    A notification about a trashed message leaves the inbox with its message, and
+    one about a message its recipient may no longer read leaves it too (``disclosed``).
     """
 
     del info
     return (
-        ThreadNotification.objects.with_action("read_inbox").filter(TrashQuerySet.untrashed_q("message__"))
+        ThreadNotification.objects.with_action("read_inbox")
+        .filter(TrashQuerySet.untrashed_q("message__"))
+        .disclosed()
     )
 
 
@@ -2028,6 +2039,26 @@ def related_counts() -> tuple[RelatedCount, ...]:
     return (RelatedCount("messaging.conversations", ThreadAttachment.objects.source_threads_for_record),)
 
 
+class NotificationChangeGate(ChangeReadGate):
+    """A delivery row's change reaches its recipient only while they may read its message.
+
+    Under ``REBAC_INHERIT_THROUGH_LINKS = False`` a row written before the setting
+    was turned off can name a message its recipient no longer reads; the lists
+    hide it (``ThreadNotificationQuerySet.disclosed``) and so does its change
+    stream: REBAC decides the message's read at each delivery, and a row no longer
+    stored tells nothing. With the published policy the row's read decides alone.
+    """
+
+    def filter(self, payload: Any) -> Any:
+        event = super().filter(payload)
+        if event is None or not links_narrowed():
+            return event
+        row = instance_for_id(ThreadNotification, event.id, queryset=ThreadNotification._base_manager.all())
+        if row is None or not reader_queryset(Message, self.actor).filter(pk=row.message_id).exists():
+            return None
+        return event
+
+
 schemas = {
     "console": {
         **_MESSAGING_SCHEMA_BUCKET,
@@ -2036,7 +2067,7 @@ schemas = {
             changes(Channel, field="channelChanged"),
             changes(Message, field="messageChanged"),
             changes(Thread, field="threadChanged"),
-            changes(ThreadNotification, field="threadNotificationChanged"),
+            changes(ThreadNotification, field="threadNotificationChanged", read_gate=NotificationChangeGate),
             changes(MessageStar, field="messageStarChanged"),
             changes(Part, field="partChanged"),
             changes(Participant, field="participantChanged"),
@@ -2204,7 +2235,7 @@ def _prime_record_messages(messages: list[Any]) -> None:
     if not messages:
         return
     sender_names = dict(
-        Message.objects.sudo(reason="messaging.record_thread.sender_labels")
+        elevated_read(Message.objects.all(), MESSAGES_READ, reason="messaging.record_thread.sender_labels")
         .filter(pk__in=[message.pk for message in messages])
         .annotate(_sender_name=Message.objects.sender_name_expression())
         .values_list("pk", "_sender_name")
@@ -2301,7 +2332,8 @@ def _record_thread_payload(
     removed_message_count = None
     if record_access[1]:
         removed_message_count = (
-            Message.objects.sudo(reason="messaging.record_thread.removed_count").for_thread(thread).trashed().count()
+            elevated_read(Message.objects.all(), MESSAGES_READ, reason="messaging.record_thread.removed_count")
+            .for_thread(thread).trashed().count()
             if thread is not None
             else 0
         )

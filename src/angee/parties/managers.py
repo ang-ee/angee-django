@@ -74,7 +74,7 @@ from angee.base.models.identity import instances_from_public_ids, public_id_for
 from angee.base.models.timestamps import auto_now_stamps
 from angee.base.models.trash import ArchiveQuerySet
 from angee.base.pagination import clamp_page_size
-from angee.base.permissions import actor_user_id, reader_queryset
+from angee.base.permissions import ShownFacts, actor_user_id, elevated_read, reader_queryset
 from angee.base.querysets import MergeableQuerySet, by_key, query_batch_size
 from angee.base.refs import generic_pointer_model
 from angee.base.serialization import canonical_json
@@ -114,6 +114,11 @@ if TYPE_CHECKING:
     from angee.parties.models import Circle, Directory, Folder, Handle, Organization, Party, Person, Relationship
 
 logger = logging.getLogger(__name__)
+
+USER_IDENTITY = ShownFacts(
+    "parties/party", "which person party is a user's own identity, by id, to place that user (a follower, a root)",
+)
+
 
 _DISPLAY_OWN_AVATAR = "_display_own_avatar"
 """Where a page's prefetch parks each party's own avatar the actor can read."""
@@ -3427,7 +3432,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         """Return the existing Person party linked to ``user_id`` without creating one."""
 
         person_model = apps.get_model("parties", "Person")
-        party_id = self.sudo(reason="parties.party.identity_for_user").person_id_for_user(user_id)
+        identities = elevated_read(self.all(), USER_IDENTITY, reason="parties.party.identity_for_user")
+        party_id = identities.person_id_for_user(user_id)
         return person_model._base_manager.filter(pk=party_id).first() if party_id is not None else None
 
     def user_for(self, party: Any) -> Any | None:
@@ -3438,7 +3444,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         organization or external Person without a user resolves to ``None``.
         """
 
-        return self.sudo(reason="parties.party.user_for").account_for_party(party.pk)
+        return elevated_read(self.all(), USER_IDENTITY, reason="parties.party.user_for").account_for_party(party.pk)
 
     def ingest_connections(
         self, parsed_connections: Iterable[tuple[ParsedConnection, Any]], *, created_by_id: Any, asserted_by: Any

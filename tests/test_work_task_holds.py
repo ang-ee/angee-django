@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from django.core.exceptions import ValidationError
 from django.db.models import Q
+from django.test import override_settings
 from django.utils import timezone
 from rebac import PermissionDenied, actor_context, system_context
 
@@ -144,6 +145,18 @@ class TaskHoldTests(WorkCase):
         self.assertEqual(events, [(awaited.pk, "reply", reply.pk)])
         self.assertIsNone(self.hold(awaited)[0])
         self.assertIsNotNone(self.hold(unawaited)[0])
+
+    def test_a_chatter_reply_wakes_a_hold_only_while_reading_a_task_reads_its_chatter(self):
+        """A woken hold tells every reader of the task that its awaited user replied in its chatter."""
+
+        for inherits in (True, False):
+            with self.subTest(inherits=inherits), override_settings(REBAC_INHERIT_THROUGH_LINKS=inherits):
+                task = self.task("Triage")
+                self.snooze(task, awaiting=self.owner)
+                with self.woken() as events, actor_context(self.owner):
+                    reply = self.as_user(task).message_post("Next week.")
+                self.assertEqual(events, [(task.pk, "reply", reply.pk)] if inherits else [])
+                self.assertEqual(self.hold(task)[0] is None, inherits)
 
     def test_due_holds_wake_row_by_row_with_their_revision(self):
         due, later = self.task("Triage"), self.task("Triage")

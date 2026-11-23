@@ -319,6 +319,33 @@ not peak resident memory; their total statement ceilings also count audit writes
 The examples profile runs the member planner gate on PostgreSQL and the console
 document statement budgets on SQLite.
 
+`unreadable_in` in the same document helpers witnesses that a document shows no row its
+actor cannot read: it looks each row the data names up in that model's `read` queryset
+for the actor, so the library decides rather than the path that delivered the row. A row
+is named by an object of a REBAC model's type (select `__typename`: `with_typenames`),
+by the rows its model says a readable row speaks for (`speaks_for`, as a notification
+speaks for its message), and by any public id anywhere in a returned string, found by its
+model's unique sqid prefix, so no field declares it and a field or type added later is
+read the same way. A name, a count, a status or a flag computed from rows names none, so
+a test asserts it beside the witness. The
+[composed witness](../tests/native_inherit_through_links.py) runs under
+`REBAC_INHERIT_THROUGH_LINKS = False`, as a platform admin, a member, a project reader who
+follows a task, a work-queue member and a colleague who only reads the member's mail
+channel: every query operation the installed web packages author for the console and the
+public schema, with variables drawn from the seeded records (an authored query that runs for
+no reader fails unless `UNRUN` says why), and every root query that takes no required
+argument, with each field of its result that takes none. Neither may name a row REBAC
+denies, or meet the read-operation refusal of an elevated read that names no policy arm.
+Beside it the console documents, a record feed, notifications, tasks with requesters,
+record files, a timeline and a search run under each value, with the facts no row shows
+asserted: who a comment notifies, a requester's name, what a search counts. Its own
+composed profile (`test_composed_documents_without_inheritance_through_links`) runs it on
+SQLite and PostgreSQL. [The switch's own tests](../tests/test_inherit_through_links.py)
+hold every policy arm the framework names to the library's report, the read-operation
+refusal, the start-up refusal of an undeclared app, and the enumerations of text lookups,
+computed resource filters and ambient elevations in resolver modules. The suite runs with
+the published policy: tests that assert access through a link fail by design under `False`.
+
 ### Owner Search
 
 Before adding a backend abstraction, search for the native owner first. Run the

@@ -36,8 +36,20 @@ from rebac.resources import model_resource_type
 from angee.base.exceptions import DomainError
 from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.models.identity import instance_from_public_id
-from angee.base.permissions import actor_user_id
+from angee.base.permissions import PolicyArm, actor_user_id, elevated_read, instance_actor, links_narrowed
 from angee.base.refs import generic_pointer_model
+
+MESSAGES_READ = PolicyArm("messaging/message", "read", "thread", "read")
+"""A thread's readers read its messages; a trashed one is withheld from them."""
+
+FOLLOWS_READ = PolicyArm("messaging/thread_follower", "read", "thread", "read")
+"""A thread's readers read who follows it."""
+
+OWN_FOLLOW = PolicyArm("messaging/thread_follower", "read", "user")
+"""A person reads their own follow."""
+
+NOTIFICATIONS_READ = PolicyArm("messaging/thread_notification", "read", "thread", "read")
+"""A thread's readers read its delivery rows."""
 
 if TYPE_CHECKING:
     from django.contrib.auth.base_user import AbstractBaseUser
@@ -574,18 +586,24 @@ class ThreadedModelMixin(models.Model):
         target = attachment.require_threaded_target() if attachment is not None else self
         if not target.can_post():
             raise PermissionDenied(f"Posting on {target._meta.label} requires {target.thread_post_access!r} access.")
-        return self.message_system_post(
-            body=body,
-            attachments=attachments,
-            message_type=message_type,
-            subtype_key=subtype_key,
-            parent=parent,
-            recipient_user_ids=recipient_user_ids,
-            autofollow_author=autofollow_author,
-            autofollow_recipients=autofollow_recipients,
-            idempotency_key=idempotency_key,
-            idempotency_actor=idempotency_actor,
-        )
+        # The post creates a missing chatter thread; under the narrowed policy one its poster
+        # may not read is refused, and the thread with it.
+        creates = attachment is None and links_narrowed()
+        with transaction.atomic() if creates else nullcontext():
+            if creates and not target._message_read_allowed(ensure=True):
+                raise PermissionDenied(f"Posting on {target._meta.label} requires reading its chatter thread.")
+            return self.message_system_post(
+                body=body,
+                attachments=attachments,
+                message_type=message_type,
+                subtype_key=subtype_key,
+                parent=parent,
+                recipient_user_ids=recipient_user_ids,
+                autofollow_author=autofollow_author,
+                autofollow_recipients=autofollow_recipients,
+                idempotency_key=idempotency_key,
+                idempotency_actor=idempotency_actor,
+            )
 
     def message_system_post(
         self,
@@ -758,9 +776,9 @@ class ThreadedModelMixin(models.Model):
         thread = attachment.thread if attachment is not None else None
         follower_ids = {
             str(user_id)
-            for user_id in self.message_followers()
-            .sudo(reason="messaging suggested recipients follower suppression")
-            .values_list("party__person__user_id", flat=True)
+            for user_id in elevated_read(
+                self.message_followers(), FOLLOWS_READ, reason="messaging suggested recipients follower suppression",
+            ).values_list("party__person__user_id", flat=True)
         }
         current_user_id = user.pk if user is not None else None
         suggestions: list[dict[str, Any]] = []
@@ -842,7 +860,7 @@ class ThreadedModelMixin(models.Model):
             # autofollow elevation note in MessageManager.post_to_thread.
             with system_context(reason="messaging.autofollow"):
                 account = get_user_model()._base_manager.get(pk=created_by_id)
-                if account.kind != "person" or self.thread_reader_allowed(account):
+                if account.kind != "person" or self.thread_reader_allowed(account, admitting=True):
                     follower_model.objects.subscribe(
                         self,
                         user=account,
@@ -870,22 +888,46 @@ class ThreadedModelMixin(models.Model):
             return True
         return self._message_read_allowed() and self.has_access(self.thread_post_access)
 
-    def _message_read_allowed(self) -> bool:
-        """Return whether the ambient actor can read personal chatter state."""
+    def _message_read_allowed(self, *, ensure: bool = False) -> bool:
+        """Return whether the ambient actor can read personal chatter state.
 
-        return self.has_access(self.thread_read_access) if isinstance(self, RebacMixin) else True
+        The record's ``thread_read_access``. Under ``REBAC_INHERIT_THROUGH_LINKS =
+        False`` (:func:`~angee.base.permissions.links_narrowed`) also REBAC's read of
+        the chatter thread, once it exists; ``ensure`` creates it first, as the
+        post that asks would.
+        """
 
-    def thread_reader_allowed(self, user: Any) -> bool:
+        if not isinstance(self, RebacMixin):
+            return True
+        if not self.has_access(self.thread_read_access):
+            return False
+        if not links_narrowed():
+            return True
+        thread = self._attached_thread(ensure=ensure)
+        actor = instance_actor(self)
+        return thread is None or (thread.with_actor(actor) if actor is not None else thread).has_access("read")
+
+    def thread_reader_allowed(self, user: Any, *, role: str = "chatter", admitting: bool = False) -> bool:
         """Check one recipient through the same explicit-account audience gate."""
 
-        return actor_user_id(to_subject_ref(user)) in self.thread_reader_ids((user,))
+        return actor_user_id(to_subject_ref(user)) in self.thread_reader_ids((user,), role=role, admitting=admitting)
 
-    def thread_reader_ids(self, accounts: Iterable[models.Model | SubjectRef]) -> set[Any]:
-        """Return the accounts that hold this record's read permission.
+    def thread_reader_ids(
+        self, accounts: Iterable[models.Model | SubjectRef], *, role: str = "chatter", admitting: bool = False,
+    ) -> set[Any]:
+        """Return the accounts that may read this record's thread in ``role``: its follows, notifications and feed.
 
-        The permission backend decides the whole audience in one bulk check:
-        each item pins its account even under system-context fan-out, and no
-        relationship or visibility rule is reconstructed here.
+        They hold this record's read permission. The permission backend decides
+        the whole audience in one bulk check: each item pins its account even
+        under system-context fan-out, and no relationship or visibility rule is
+        reconstructed here. Under ``REBAC_INHERIT_THROUGH_LINKS = False``
+        (:func:`~angee.base.permissions.links_narrowed`) a record no longer lends
+        its thread to its readers by the framework's rule: the same bulk check
+        also asks REBAC for the thread's own ``read``, for every role, whatever
+        the policy states. REBAC decides that only for a thread that exists: until
+        the record's first attachment in ``role`` the audience is empty, and a
+        caller ``admitting`` a chatter follower creates the attachment first, as
+        the follow itself would.
         """
 
         subjects = (to_subject_ref(account) for account in accounts)
@@ -896,14 +938,43 @@ class ThreadedModelMixin(models.Model):
         if not isinstance(self, RebacMixin) or not model_resource_type(self):
             return set(account_subjects)
         resource = to_object_ref(self)
-        results = backend().check_bulk_permissions(
-            CheckItem(subject, self.thread_read_access, resource) for subject in account_subjects.values()
-        )
+        if not links_narrowed():
+            results = backend().check_bulk_permissions(
+                CheckItem(subject, self.thread_read_access, resource) for subject in account_subjects.values()
+            )
+            return {
+                account_id
+                for account_id, result in zip(account_subjects, results, strict=True)
+                if result.allowed
+            }
+        thread = self._attached_thread(role=role, ensure=admitting)
+        if thread is None:
+            return set()
+        thread_ref = to_object_ref(thread)
+        decided = list(backend().check_bulk_permissions([
+            *(CheckItem(subject, self.thread_read_access, resource) for subject in account_subjects.values()),
+            *(CheckItem(subject, "read", thread_ref) for subject in account_subjects.values()),
+        ]))
+        count = len(account_subjects)
         return {
             account_id
-            for account_id, result in zip(account_subjects, results, strict=True)
-            if result.allowed
+            for account_id, record, chatter in zip(account_subjects, decided[:count], decided[count:], strict=True)
+            if record.allowed and chatter.allowed
         }
+
+    def _attached_thread(self, *, role: str = "chatter", ensure: bool = False) -> Thread | None:
+        """This record's thread in ``role``, as bookkeeping; a chatter thread is created when ``ensure``."""
+
+        attachment_model = apps.get_model("messaging", "ThreadAttachment")
+        attachment: Any
+        with system_context(reason="messaging.thread_audience.thread"):
+            if ensure and role == attachment_model.AttachmentRole.CHATTER:
+                attachment = attachment_model.objects.ensure_for_record(
+                    self, role=role, title=self.message_thread_title(),
+                )
+            else:
+                attachment = attachment_model.objects.for_record(self, role=role)
+        return attachment.thread if attachment is not None else None
 
     @classmethod
     def check(cls, **kwargs: Any) -> list[Any]:

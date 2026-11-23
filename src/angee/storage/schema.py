@@ -12,7 +12,7 @@ from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, Val
 from django.db.models import Prefetch
 from django.urls import reverse
 from graphql import GraphQLError
-from rebac import ObjectRef, PermissionDenied, generic_target, system_context
+from rebac import ObjectRef, PermissionDenied, current_actor, generic_target, system_context
 from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry.permission import BasePermission
@@ -235,7 +235,7 @@ class StorageQuery:
 
         Which record types carry files is the edge schema's fact, projected to
         clients as resource metadata; a record-scoped upload also needs the
-        record-file arm and write on the record.
+        record-file arm and what the upload's edge insert checks (``attach_allowed``).
         """
 
         try:
@@ -249,7 +249,9 @@ class StorageQuery:
             return RecordFilesType(can_upload=False, attachments=[])
         manager = FileAttachment._default_manager
         return RecordFilesType(
-            can_upload=manager.has_record_arm(generic_target(record)) and record.has_access("write"),
+            can_upload=(
+                manager.has_record_arm(generic_target(record)) and manager.attach_allowed(record, current_actor())
+            ),
             attachments=list(with_record_reference_access(manager.for_record(record))),
         )
 

@@ -20,3 +20,6 @@ kind = "grants"
 
 [tool.angee.platform]
 category = "Foundation"
+
+[tool.angee.rebac]
+evaluated_policy = true

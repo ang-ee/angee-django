@@ -1,6 +1,7 @@
 """Startup declarations and request policy use their separate native authorities."""
 
 import os
+from dataclasses import replace
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -9,7 +10,7 @@ from django.apps import AppConfig
 from django.db import models
 from django.test.utils import isolate_apps
 from rebac.mixins import RebacModelBase
-from rebac.schema import parse_zed
+from rebac.schema import PermArrow, PermBinOp, PermExpr, parse_zed
 
 from angee.base import permissions
 from angee.base.permissions import (
@@ -148,6 +149,85 @@ def test_a_purpose_read_holds_only_while_the_derived_reads_are_stated_as_declare
         _PARENT.format(read="reader") + _purpose(*_DECLARED),
     )
     assert purpose_read_holds(Record, "read_inbox") is holds
+
+
+def _lent_through(relation: str, expression: PermExpr) -> PermExpr:
+    """``expression`` with each arrow through ``relation`` reading what the target lends, as a narrowed link does."""
+
+    if isinstance(expression, PermArrow) and expression.via == relation:
+        return PermArrow(relation, f"lent({expression.target})")
+    if isinstance(expression, PermBinOp):
+        return PermBinOp(
+            expression.op, _lent_through(relation, expression.left), _lent_through(relation, expression.right),
+        )
+    return expression
+
+
+def _narrowed(monkeypatch, published: str) -> None:
+    """Serve ``published`` as the synced policy and declaration; REBAC decides with its ``parent`` link narrowed."""
+
+    _policy(monkeypatch, published)
+    synced = parse_zed(published)
+    evaluated = replace(synced, definitions=[
+        replace(definition, permissions=tuple(
+            replace(permission, expression=_lent_through("parent", permission.expression))
+            for permission in definition.permissions
+        ))
+        for definition in synced.definitions
+    ])
+    backend = SimpleNamespace(schema=lambda: synced, evaluated_schema=lambda: evaluated)
+    monkeypatch.setattr('angee.base.permissions.backend', lambda: backend)
+    monkeypatch.setattr('angee.base.permissions.inherits_through_links', lambda: False)
+
+
+@pytest.mark.parametrize(
+    ("read", "read_inbox", "published_holds", "evaluated_holds"),
+    [
+        # Renamed alike, the action and the read arm still name one parent action.
+        ("parent->read + reader", "parent->read", True, True),
+        # The parent's narrower action and its read are lent under different names: unproved.
+        ("parent->read + reader", "parent->read_inbox", True, False),
+        # The narrowing renames arrows and never adds an arm, so it proves nothing the published policy does not.
+        ("parent->read + reader", "parent->read + reader", False, False),
+        ("(parent->read + reader) - blocked", "parent->read", False, False),
+    ],
+)
+@isolate_apps()
+def test_the_contextual_proof_reads_the_arrows_rebac_evaluates(
+    monkeypatch, read, read_inbox, published_holds, evaluated_holds,
+):
+    class Record(models.Model, metaclass=RebacModelBase):
+        class Meta:
+            abstract = True
+            app_label = 'policy_probe'
+            rebac_resource_type = 'probe/record'
+
+    record = (
+        "definition probe/record {\nrelation parent: probe/parent\nrelation reader: auth/user\n"
+        f"relation blocked: auth/user\npermission read = {read}\npermission read_inbox = {read_inbox}\n}}"
+    )
+    published = _PARENT.format(read="reader") + record
+    _policy(monkeypatch, published)
+    assert contextual_action_holds(Record, "read_inbox") is published_holds
+    _narrowed(monkeypatch, published)
+    assert contextual_action_holds(Record, "read_inbox") is evaluated_holds
+
+
+@isolate_apps()
+def test_the_purpose_proof_detects_overrides_on_the_published_policy_and_reads_evaluated_arrows(monkeypatch):
+    class Record(models.Model, metaclass=RebacModelBase):
+        class Meta:
+            abstract = True
+            app_label = 'policy_probe'
+            rebac_resource_type = 'probe/record'
+
+    published = _PARENT.format(read="reader") + _purpose(*_DECLARED)
+    _policy(monkeypatch, published)
+    assert purpose_read_holds(Record, "read_inbox")
+    # The evaluated arrows differ from the declaration, yet no override is read into them: the
+    # published policy still states both reads as declared. The renamed parent arm proves nothing.
+    _narrowed(monkeypatch, published)
+    assert not purpose_read_holds(Record, "read_inbox")
 
 
 def test_startup_snapshot_needs_no_policy_backend(tmp_path, monkeypatch):

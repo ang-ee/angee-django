@@ -31,7 +31,7 @@ from angee.base.identity import public_subject_ref
 from angee.base.models.base import record_display_label
 from angee.base.models.identity import public_id_for, public_id_of
 from angee.base.pagination import valid_page_size
-from angee.base.permissions import reader_queryset, relation_read_queryset, require_rebac_queryset
+from angee.base.permissions import elevated_read, reader_queryset, relation_read_queryset, require_rebac_queryset
 from angee.base.refs import generic_pointer_model
 from angee.base.serialization import json_safe
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
@@ -44,6 +44,7 @@ from angee.graphql.ids import PublicID, instance_for_id, require_instance_for_id
 from angee.provenance.context import changeset_model
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory, record_history
 from angee.provenance.evidence import FactAuthority
+from angee.provenance.models import RECORD_HISTORY
 from angee.provenance.models import Changeset as ChangesetContract
 from angee.provenance.querysets import model_history
 from angee.provenance.statements import (
@@ -332,7 +333,9 @@ class RecordHistory:
     def changesets(self) -> models.QuerySet[Any]:
         """The record's closed changesets, newest first; ordering is the changeset owner's."""
 
-        return Changeset.objects.sudo(reason="provenance.record_history").closed_for_record(self.record)
+        return elevated_read(
+            Changeset.objects.all(), RECORD_HISTORY, reason="provenance.record_history",
+        ).closed_for_record(self.record)
 
     def entries(self, changesets: Iterable[Any]) -> list[HistoryEntryType]:
         """Project an already bounded window, also used by the combined Comments feed."""

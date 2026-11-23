@@ -26,3 +26,6 @@ adopt = ["group", "party"]
 
 [tool.angee.platform]
 category = "Productivity"
+
+[tool.angee.rebac]
+evaluated_policy = true

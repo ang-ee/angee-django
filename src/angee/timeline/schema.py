@@ -17,6 +17,7 @@ from strawberry_django.auth.utils import get_current_user
 from strawberry_django.utils.requests import get_request
 
 from angee.base.pagination import InvalidKeysetCursor, clamp_page_size
+from angee.base.permissions import reader_queryset
 from angee.base.refs import RecordRef
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.subscriptions import subscribe_group
@@ -42,6 +43,22 @@ def _timeline_record(model: str, id: PublicID, actor: Any) -> models.Model:
     return require_instance_for_id(
         record_model, str(id), queryset=record_model.objects.with_actor(actor),
     )
+
+
+def _reads_a_changed_row(rows: list[list[Any]], actor: Any) -> bool:
+    """Whether REBAC lets ``actor`` read one of the changed source rows a timeline payload names.
+
+    A row since deleted, or of a model no longer installed, is read by no one.
+    """
+
+    for label, pk in rows:
+        try:
+            model = apps.get_model(label)
+        except LookupError:
+            continue
+        if reader_queryset(model, actor).filter(pk=pk).exists():
+            return True
+    return False
 
 
 def _timeline(info: strawberry.Info, model: str, id: PublicID) -> Timeline:
@@ -92,23 +109,30 @@ class TimelineSubscription:
         """Invalidate this timeline only while its record remains readable.
 
         Admission and every delivery use the read's actor-scoped lookup. An
-        inaccessible, missing or revoked record reveals no timeline activity.
+        inaccessible, missing or revoked record reveals no timeline activity, and
+        a change whose payload names its source rows (under
+        ``REBAC_INHERIT_THROUGH_LINKS = False``) is announced only to a reader REBAC
+        lets read one of them.
         """
 
         actor = current_actor()
         if actor is None:
             return
         read = database_sync_to_async(_timeline_record, thread_sensitive=False)
+        reveals = database_sync_to_async(_reads_a_changed_row, thread_sensitive=False)
         try:
             record = await read(model, id, actor)
         except ValidationError:
             return
         async with aclosing(subscribe_group(timeline_group(RecordRef.from_instance(record)))) as stream:
-            async for _payload in stream:
+            async for payload in stream:
                 try:
                     await read(model, id, actor)
                 except ValidationError:
                     return
+                changed = payload.get("rows") if isinstance(payload, dict) else None
+                if changed and not await reveals(changed, actor):
+                    continue
                 yield True
 
 

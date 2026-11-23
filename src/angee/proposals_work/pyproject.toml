@@ -11,3 +11,6 @@ dynamic = ["entry-points"]
 
 [tool.angee.platform]
 category = "Productivity"
+
+[tool.angee.rebac]
+evaluated_policy = true

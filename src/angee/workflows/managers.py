@@ -22,15 +22,16 @@ from django.db.models.deletion import ProtectedError, RestrictedError
 from django.db.models.functions import Concat, Least, Now
 from pydantic import Field, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
-from rebac import actor_context, generic_target, system_context, to_subject_ref
+from rebac import actor_context, check_new, generic_target, system_context, to_subject_ref
 from rebac.errors import MissingActorError, NoActorResolvedError
+from rebac.resources import model_resource_type
 
 from angee.base.fields.text import ModelLabelField
 from angee.base.managers import AngeeManager
 from angee.base.models.append_only import AppendOnlyQuerySet
 from angee.base.models.identity import public_id_of
 from angee.base.models.locks import StaleRevisionError, require_revision
-from angee.base.permissions import actor_user_id
+from angee.base.permissions import actor_user_id, links_narrowed
 from angee.base.querysets import AngeeQuerySet, by_key, query_batch_size, row_lock_paths
 from angee.base.refs import RecordRef, record_view_refs
 from angee.base.serialization import canonical_json_sha256
@@ -588,6 +589,19 @@ _WorkflowRunManagerBase = AngeeManager.from_queryset(WorkflowRunQuerySet)
 class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
     """Own run admission, cancellation and retained row updates under the run lock."""
 
+    def run_create_allowed(self, workflow: Any, actor: Any) -> bool:
+        """Whether ``actor``, who holds ``workflow``'s ``start``, is admitted to create its run.
+
+        ``workflows/run#create = workflow->start`` states it with the published
+        policy. Under ``REBAC_INHERIT_THROUGH_LINKS = False`` that arrow lends only
+        the workflow's direct grants, so REBAC decides the run's own ``create``.
+        """
+
+        return not links_narrowed() or check_new(
+            subject=to_subject_ref(actor), action="create", resource_type=model_resource_type(self.model) or "",
+            relationships={"workflow": (to_subject_ref(workflow),)},
+        ).allowed
+
     def start(
         self,
         workflow: Any,
@@ -613,6 +627,9 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
         actor = workflow.require_access("start", actor)
         if actor is None:
             raise PermissionDenied("A run requires an actor.")
+        # The run is inserted elevated below, admitted by the workflow's ``start``.
+        if not self.run_create_allowed(workflow, actor):
+            raise PermissionDenied("Starting this workflow requires the run's create access.")
         if from_node is not None and reprocess_of is None:
             raise ValidationError("Only a reprocess starts from a node.")
         if (parent_step is None and relation is not None) or (

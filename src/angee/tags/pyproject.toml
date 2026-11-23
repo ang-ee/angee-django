@@ -15,3 +15,6 @@ demo = ["demo/005_tags.tagcategory.yaml", {path = "demo/010_tags.tag.yaml", depe
 
 [tool.angee.platform]
 category = "Foundation"
+
+[tool.angee.rebac]
+evaluated_policy = true

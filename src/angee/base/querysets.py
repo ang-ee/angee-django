@@ -18,6 +18,7 @@ from rebac.watch import by_key as native_by_key
 
 from angee.base.models.identity import instance_from_public_id
 from angee.base.pagination import KeysetOrder, KeysetPage, keyset_signer
+from angee.base.permissions import elevation_mark, refuse_unnamed_elevation
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 _QuerySetT = TypeVar("_QuerySetT", bound=models.QuerySet[Any])
@@ -296,6 +297,62 @@ class AngeeQuerySet(
     RebacQuerySet[_ModelT],
 ):
     """QuerySet API shared by Angee source and runtime models."""
+
+    def sudo(self, *, reason: str) -> Self:
+        """REBAC's ``sudo``, marked with the policy arm it relies on (``angee.base.permissions.elevated_read``)."""
+
+        clone = super().sudo(reason=reason)
+        cast(Any, clone)._angee_elevation = elevation_mark()
+        return clone
+
+    def system_context(self, *, reason: str) -> Self:
+        """REBAC's ``system_context``, marked as :meth:`sudo` is."""
+
+        clone = super().system_context(reason=reason)
+        cast(Any, clone)._angee_elevation = elevation_mark()
+        return clone
+
+    def _clone(self, **kwargs: Any) -> Self:
+        """Carry the elevation mark (``angee.base.permissions.refuse_unnamed_elevation``)."""
+
+        clone = super()._clone(**kwargs)
+        mark = getattr(self, "_angee_elevation", None)
+        if mark is not None:
+            cast(Any, clone)._angee_elevation = mark
+        return clone
+
+    def _fetch_all(self) -> None:
+        """Read rows unless an unnamed elevation reads in a read operation (``refuse_unnamed_elevation``)."""
+
+        if self._result_cache is None:
+            refuse_unnamed_elevation(self)
+        super()._fetch_all()
+
+    def iterator(self, chunk_size: int | None = None) -> Iterator[_ModelT]:
+        """Stream rows under the same rule as :meth:`_fetch_all`."""
+
+        refuse_unnamed_elevation(self)
+        return super().iterator(chunk_size=chunk_size)
+
+    def count(self) -> int:
+        """Count rows under the same rule as :meth:`_fetch_all`."""
+
+        if self._result_cache is None:
+            refuse_unnamed_elevation(self)
+        return super().count()
+
+    def exists(self) -> bool:
+        """Test for rows under the same rule as :meth:`_fetch_all`."""
+
+        if self._result_cache is None:
+            refuse_unnamed_elevation(self)
+        return super().exists()
+
+    def aggregate(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """Aggregate rows under the same rule as :meth:`_fetch_all`."""
+
+        refuse_unnamed_elevation(self)
+        return super().aggregate(*args, **kwargs)
 
     def readable_scalar_subquery(
         self,

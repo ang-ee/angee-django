@@ -11,9 +11,13 @@ from django.db import models
 from rebac import GenericTarget, generic_target, system_context
 
 from angee.base.pagination import clamp_page_size
+from angee.base.permissions import PolicyArm
 from angee.graphql.relations import with_record_reference_access
 from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind, actor_label
 from angee.workflows.states import RunStatus, StepRunStatus, WaitingKind
+
+STEP_RUNS_READ = PolicyArm("workflows/step_run", "read", "run", "read")
+"""A run's readers read its steps."""
 
 KIND = "workflows.run"
 RUN_MODEL = "workflows.WorkflowRun"
@@ -84,7 +88,7 @@ class RunKind(TimelineKind):
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
         runs = apps.get_model("workflows", "WorkflowRun").objects.with_actor(actor)
         rows = runs.filter(self._record_filter(record)).distinct().scoped()
-        waiting = apps.get_model("workflows", "StepRun").system_queryset().filter(
+        waiting = apps.get_model("workflows", "StepRun").system_queryset(shows=STEP_RUNS_READ).filter(
             status=StepRunStatus.WAITING,
         ).defer("input", "output", "state", "notes").order_by("rank", "map_index")
         return rows.select_related("version__workflow", "run_as").prefetch_related(

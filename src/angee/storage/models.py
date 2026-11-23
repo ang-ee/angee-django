@@ -84,7 +84,13 @@ from angee.base.models.ownership import ItemOwnershipMixin, OwnerMixin, OwnerQue
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.roles import role_anchor
 from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet, TrashMixin, TrashQuerySet
-from angee.base.permissions import DirectRecordAccess, actor_user_id, user_subject_ref
+from angee.base.permissions import (
+    DirectRecordAccess,
+    actor_user_id,
+    candidate_relationships,
+    links_narrowed,
+    user_subject_ref,
+)
 from angee.base.querysets import row_lock_queryset
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
@@ -2000,6 +2006,21 @@ class FileAttachmentManager[AttachmentT: FileAttachment](_FileAttachmentManagerB
             ):
                 return True
         return False
+
+    def attach_allowed(self, record: models.Model, actor: Any) -> bool:
+        """Whether ``actor`` may add an edge from a file to ``record``: what the edge's insert will decide.
+
+        The edge's ``create`` is its ``target_write``, which the published policy
+        states as the record's ``write`` for each declared target type. Under the
+        policy narrowed at links (:func:`~angee.base.permissions.links_narrowed`)
+        the proposed edge's own ``create`` decides, as REBAC decides the insert.
+        """
+
+        if not links_narrowed():
+            return bool(cast(Any, record).has_access("write"))
+        target = generic_target(record)
+        candidate = candidate_relationships(self.model(**target.lookups(self.model, "target")), "create")
+        return candidate is not None and actor is not None and candidate.allows(actor, "create")
 
     def require_record_arm(self, target: GenericTarget) -> None:
         """Reject record-scoped uploads without the declared read/write arm."""

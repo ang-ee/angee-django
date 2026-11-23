@@ -23,3 +23,6 @@ depends_on = ["install/030_provenance.rule.yaml"]
 
 [tool.angee.platform]
 category = "Data"
+
+[tool.angee.rebac]
+evaluated_policy = true

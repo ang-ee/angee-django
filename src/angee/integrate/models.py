@@ -82,7 +82,7 @@ from angee.base.models.merge_references import ForeignKeyReference, MergePolicy,
 from angee.base.models.ownership import OwnerMixin, OwnerQuerySet
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.transitions import StateTransitions, save_state, transition
-from angee.base.permissions import actor_user_id, instance_actor
+from angee.base.permissions import ShownFacts, actor_user_id, elevated_read, instance_actor
 from angee.base.querysets import row_lock_queryset
 from angee.base.refs import generic_pointer_model, generic_pointer_target
 from angee.base.serialization import canonical_json, canonical_json_sha256, json_equal
@@ -214,6 +214,20 @@ class CredentialStatus(models.TextChoices):
     REVOKED = "revoked", "Revoked"
 
 
+READY_REGISTRATIONS = ShownFacts(
+    "integrate/oauth_client", "which registration of a vendor is ready, offered to everyone who may connect it",
+)
+VENDOR_BRANDING = ShownFacts("integrate/vendor", "a connection's vendor slug and display name, beside the connection")
+CONNECTION_HEALTH = ShownFacts(
+    "integrate/credential", "a connection's credential status, expiry, refresh outcome and scopes, never its secret",
+)
+CHILD_INTEGRITY = ShownFacts(
+    "integrate/integration",
+    "that a connection has its one concrete child, and that child's implementation key; the child is read as "
+    "its reader reads it",
+)
+
+
 class OAuthClientQuerySet[OAuthClientT: OAuthClient](AngeeHistoryQuerySet[OAuthClientT]):
     """REBAC-scoped reads for OAuth client registration."""
 
@@ -225,7 +239,9 @@ class OAuthClientQuerySet[OAuthClientT: OAuthClient](AngeeHistoryQuerySet[OAuthC
         """
 
         alternatives = (
-            self.model.objects.sudo(reason="integrate.oauth.environment_preference")
+            elevated_read(
+                self.model.objects.all(), READY_REGISTRATIONS, reason="integrate.oauth.environment_preference",
+            )
             .filter(
                 slug=OuterRef("slug"),
             )
@@ -247,7 +263,7 @@ class OAuthClientQuerySet[OAuthClientT: OAuthClient](AngeeHistoryQuerySet[OAuthC
     def connectable(self) -> Self:
         """Use the model's readiness rule for the public connection picker."""
 
-        public = self.system_context(reason="integrate.graphql.connectable")
+        public = elevated_read(self, READY_REGISTRATIONS, reason="integrate.graphql.connectable", system=True)
         return public.filter(pk__in=[row.pk for row in public.ready_registrations()])
 
     def enabled_for_slug(self, slug: str, *, environment: str = "prod") -> OAuthClientT | None:
@@ -1001,7 +1017,7 @@ class CredentialQuerySet[CredentialT: Credential](AngeeHistoryQuerySet[Credentia
         """
 
         return (
-            self.sudo(reason="integrate.connection.health")
+            elevated_read(self, CONNECTION_HEALTH, reason="integrate.connection.health")
             .select_related("oauth_client")
             .only(
                 "status",
@@ -2338,7 +2354,9 @@ class IntegrationQuerySet[IntegrationT: Integration](AngeeHistoryQuerySet[Integr
                 prefetches.append(
                     Prefetch(
                         path,
-                        queryset=child_model.objects.sudo(reason="integrate.integration.child_integrity"),
+                        queryset=elevated_read(
+                            child_model.objects.all(), CHILD_INTEGRITY, reason="integrate.integration.child_integrity",
+                        ),
                         to_attr=integrity_attr,
                     )
                 )
@@ -2525,7 +2543,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         queryset = (
             model.objects.with_actor(actor)
             if authorized
-            else model.objects.sudo(reason="integrate.integration.child_integrity")
+            else elevated_read(model.objects.all(), CHILD_INTEGRITY, reason="integrate.integration.child_integrity")
         )
         if type(self) not in model._meta.parents:
             parent_model = next(iter(model._meta.parents))
@@ -2711,8 +2729,8 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         """Public health scalars from a protected credential, without a joined object."""
 
         credential = (
-            apps.get_model("integrate", "Credential")
-            .objects.sudo(
+            elevated_read(
+                apps.get_model("integrate", "Credential").objects.all(), CONNECTION_HEALTH,
                 reason="integrate.connection.public_health",
             )
             .filter(pk=OuterRef("credential_id"))
@@ -2731,8 +2749,8 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         """
 
         vendor = (
-            apps.get_model("integrate", "Vendor")
-            .objects.sudo(
+            elevated_read(
+                apps.get_model("integrate", "Vendor").objects.all(), VENDOR_BRANDING,
                 reason="integrate.connection.public_vendor",
             )
             .filter(pk=OuterRef("vendor_id"))
@@ -2745,7 +2763,9 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             if not any(isinstance(field, ImplClassField) for field in model._meta.fields):
                 continue
             field = model.capability_impl_field()
-            rows = model.objects.sudo(reason="integrate.connection.public_selector").filter(pk=OuterRef("pk"))
+            rows = elevated_read(
+                model.objects.all(), CHILD_INTEGRITY, reason="integrate.connection.public_selector",
+            ).filter(pk=OuterRef("pk"))
             selectors.append(
                 models.When(
                     concrete_type_id=ContentType.objects.get_for_model(model).pk,
@@ -2770,7 +2790,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             return cast(dict[str, str], self.__dict__["_connection_vendor_branding"])
         vendor = apps.get_model("integrate", "Vendor")
         branding = (
-            vendor.objects.sudo(reason="integrate.connection.public_vendor")
+            elevated_read(vendor.objects.all(), VENDOR_BRANDING, reason="integrate.connection.public_vendor")
             .values("slug", "display_name")
             .get(pk=self.vendor_id)
         )

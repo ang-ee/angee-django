@@ -16,4 +16,6 @@ class ChatterDemoConfig(AppConfig):
 
     name = "tests.chatterdemo"
     label = "chatterdemo"
+    # Its rules lend no row through a link (angee.base.permissions.undeclared_policy_apps).
+    rebac_evaluated_policy = True
     default_auto_field = "django.db.models.BigAutoField"

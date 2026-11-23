@@ -42,7 +42,7 @@ from angee.base.models.identity import SqidMixin
 from angee.base.models.merge_references import MergePolicy
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.roles import role_anchor
-from angee.base.permissions import actor_user_id, instance_actor
+from angee.base.permissions import ShownFacts, actor_user_id, instance_actor
 from angee.base.serialization import canonical_json, canonical_json_sha256, json_safe
 from angee.base.signals import send_bulk_update
 from angee.provenance.context import changeset, current_changeset
@@ -97,6 +97,12 @@ class Seed(StatementPrincipal, concrete=True):
         abstract = True
         rebac_resource_type = "provenance/seed"
 
+
+
+RECORD_HISTORY = ShownFacts(
+    "provenance/changeset",
+    "a record's closed changesets and what they changed, shown as its history to whoever reads the record",
+)
 
 class Changeset(Composable, RecordRefMixin, SqidMixin, RebacMixin, concrete=True):
     """One logical write's attribution and touched-model index; never historized.

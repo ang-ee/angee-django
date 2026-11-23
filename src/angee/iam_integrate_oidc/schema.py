@@ -20,6 +20,7 @@ from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 from strawberry_django.utils.requests import get_request
 
+from angee.base.permissions import ShownFacts, elevated_read
 from angee.graphql.actions import session_user as _session_user
 from angee.iam.schema import UserType
 from angee.iam_integrate_oidc import identity
@@ -74,6 +75,11 @@ class LinkAccountResult:
     """With ``consent_required``: the same link started again asking for consent; follow it."""
 
 
+LOGIN_CONNECTIONS = ShownFacts(
+    "integrate/oauth_client", "which OAuth registrations can start a sign-in, offered on the public login picker",
+)
+
+
 def _available_connections(info: strawberry.Info) -> Any:
     """Return enabled, configured, login-capable OAuth clients for the public picker.
 
@@ -83,7 +89,9 @@ def _available_connections(info: strawberry.Info) -> Any:
     """
 
     del info
-    queryset = cast(Any, OAuthClient.objects).system_context(reason="iam_integrate_oidc.available_connections")
+    queryset = elevated_read(
+        OAuthClient.objects.all(), LOGIN_CONNECTIONS, reason="iam_integrate_oidc.available_connections", system=True,
+    )
     return OAuthClient.login_picker_queryset(queryset)
 
 

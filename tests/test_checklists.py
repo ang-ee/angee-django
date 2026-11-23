@@ -8,6 +8,7 @@ under the actor that holds the inspection's write and reads the report.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, cast
 from unittest.mock import patch
 
@@ -21,6 +22,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import connection, models
 from django.db.models import Value
 from django.db.models.lookups import Exact
+from django.test import override_settings
 from django.test.utils import CaptureQueriesContext, isolate_apps
 from rebac import (
     MissingActorError,
@@ -31,7 +33,10 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
+from rebac.backends import backend
 from rebac.models import SchemaOverride, SchemaPermission
+from rebac.schema import AllowedSubject, FieldBinding, PermArrow, Permission, Relation
+from rebac.testing import install_schema
 from strawberry import auto
 
 from angee.base.permissions import bind_rebac_schema
@@ -50,8 +55,9 @@ from angee.checklists.timeline import ChecklistResultKind
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.graphql.node import AngeeNode
-from angee.graphql.testing.documents import execute_schema, measure_graphql_document, result_data
+from angee.graphql.testing.documents import execute_schema, measure_graphql_document, result_data, unreadable_rows
 from angee.graphql.testing.publishing import capture_broadcasts
+from angee.projects.testing.models import Project, Task
 from tests.checklistdemo.models import CraneInspection, Inspection, Notice, Report
 from tests.conftest import addon_schema, create_platform_admin, create_user
 from tests.mtidemo.models import MtiParent
@@ -307,6 +313,52 @@ def test_an_unreadable_latest_result_never_falls_back_to_an_older_readable_one(w
     assessed = _assert_parity(world, world.auditor)
     owner = next(item for item in assessed.items if item.key == "owner")
     assert (owner.status, owner.result, owner.detail) == ("not_checked", None, "No check result is available.")
+
+
+def _with_task_evidence() -> Any:
+    """The host policy plus an evidence type whose read inherits through a row's foreign key.
+
+    A task reads its project's readers through ``inherited_project``; through the
+    evidence link, ``REBAC_INHERIT_THROUGH_LINKS = False`` lends only the task's own
+    grants, so ``read`` subtracts ``evidence_hidden`` under a generated name.
+    """
+
+    published = backend().schema()
+    definitions = [
+        definition.extend(
+            relations=[Relation("task", (AllowedSubject("projects/task"),), backing=FieldBinding("record"))],
+            permission_arms=[Permission("record_read", PermArrow("task", "read"))],
+        )
+        if definition.resource_type == "checklists/evidence"
+        else definition
+        for definition in published.definitions
+    ]
+    return replace(published, definitions=definitions)
+
+
+@pytest.mark.parametrize("inherits", [True, False])
+def test_the_status_rule_shows_a_result_only_where_the_evaluated_policy_reads_it(world: Any, inherits: bool) -> None:
+    """The rule decomposes ``read`` only while the policy REBAC decides with states it so; else it checks ``read``."""
+
+    install_schema(_with_task_evidence(), backend=backend())
+    with actor_context(world.writer):
+        project = Project.objects.create(title="Evidence project")
+        task = Task.objects.create(project=project, title="Evidence task", owner=world.writer)
+    # The auditor reads the inspection directly and the task only through its project.
+    _grant(project, "reader", world.auditor)
+    result = _record(world, "owner", "passed", "Confirmed by the task.", evidence=(task,))
+    with override_settings(REBAC_INHERIT_THROUGH_LINKS=inherits):
+        assert read_decomposes() is inherits
+        readable = ChecklistResult.objects.with_actor(world.auditor).filter(pk=result.pk).exists()
+        assert readable is inherits
+        assert Task.objects.with_actor(world.auditor).filter(pk=task.pk).exists()
+        status = _statuses(_assert_parity(world, world.auditor))["owner"]
+        # The witness: the node projection names no evidence row the auditor cannot read. A
+        # result's status names no row, so the projection's item is held to the library's read.
+        assert unreadable_rows(_schema(), _DOCUMENT, {}, actor=world.auditor) == []
+        data = result_data(execute_schema(_schema(), _DOCUMENT, user=world.auditor))
+        items = {item["key"]: item for item in data["inspections"][0]["checklist"]["items"]}
+    assert status == items["owner"]["status"] == ("passed" if readable else "not_checked")
 
 
 # The status rule.

@@ -19,6 +19,11 @@ from rebac import system_context
 from rebac.resources import model_resource_type
 
 from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for
+from angee.base.permissions import ShownFacts, elevated_read
+
+USER_LABELS = ShownFacts(
+    "auth/user", "a user's display name (full name, else sign-in name) beside a row that names the user",
+)
 
 
 def group_subject_type() -> str:
@@ -43,9 +48,9 @@ def user_label(user: Any) -> str:
 def user_label_queryset() -> QuerySet[Any]:
     """Keep scalar-label source rows narrow and explicitly elevated inside IAM."""
 
-    return get_user_model().objects.system_context(reason="iam.identity.user_label").only(
-        "first_name", "last_name", "username",
-    )
+    return elevated_read(
+        get_user_model().objects.all(), USER_LABELS, reason="iam.identity.user_label", system=True,
+    ).only("first_name", "last_name", "username")
 
 
 def user_label_expression(prefix: str = "") -> Coalesce:

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
+from django.test import override_settings
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.models import active_relationship_model
 
@@ -160,6 +161,25 @@ def test_project_manager_role_grants_read_and_follow_then_removes_both(audience_
         case.record.remove_manager(seat)
         assert not case.record.thread_reader_allowed(case.recipient)
         assert not case.record.message_is_follower(user=case.recipient)
+
+
+def test_a_project_manager_is_admitted_without_the_follow_the_narrowed_policy_refuses(audience_record):
+    """Under ``REBAC_INHERIT_THROUGH_LINKS = False`` a team moderator reads the project through its team.
+
+    The narrowed project lends its chatter thread only its own grants, so REBAC refuses the moderator the
+    chatter: the admission keeps the seat and leaves the follow out instead of failing whole.
+    """
+
+    case = audience_record
+    with system_context(reason="test.audience.project_manager_team"):
+        case.team.owner = case.author
+        case.team.save(update_fields=("owner",))
+    with override_settings(REBAC_INHERIT_THROUGH_LINKS=False), actor_context(case.author):
+        seat = case.record.admit_manager(case.recipient)
+        assert case.record.with_actor(case.recipient).has_access("read")
+        assert not case.record.thread_reader_allowed(case.recipient)
+        assert not case.record.message_is_follower(user=case.recipient)
+        assert seat.role == "moderator"
 
 
 def test_changing_the_record_named_account_moves_the_audience(audience_record):

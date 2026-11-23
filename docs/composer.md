@@ -259,6 +259,8 @@ An addon ships its own `pyproject.toml` as package data. Common metadata stays i
 - `[tool.angee.platform]` owns catalogue category.
 - `[tool.angee.resources]` owns resource tiers and retirement declarations.
 - `[tool.angee.graphql]` owns schema/domain declaration overrides.
+- `[tool.angee.rebac]` declares `evaluated_policy = true` when no rule of the addon's own lends a row
+  through a link except by asking REBAC ([REBAC guidelines](backend/guidelines.md#rebac), `angee.E055`).
 - `AppConfig.rebac_schema` owns the permission schema path.
 - Conventional Python modules own executable contributions.
 - `web/package.json` owns web identity, external `angee.codegen` entries,

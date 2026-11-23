@@ -13,3 +13,6 @@ dynamic = ["entry-points"]
 
 [tool.angee.platform]
 category = "Platform"
+
+[tool.angee.rebac]
+evaluated_policy = true

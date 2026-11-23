@@ -10,6 +10,38 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.base`, `angee.graphql`, `angee.messaging`, `angee.checklists`, `angee.intake`,
+  `angee.timeline`, `angee.work`, `angee.workflows`, `angee.storage`, `angee.integrate`:
+  the framework follows the library's `REBAC_INHERIT_THROUGH_LINKS = False`, under which
+  REBAC decides with a narrower policy in which an arrow through a link lends only what
+  the linked record grants directly. Framework code reads the setting only through
+  `angee.base.permissions.links_narrowed()`. With the setting `True` (the default) every
+  path issues the statements it did. **Changed behaviour under `False`:** a record lends
+  its thread to no reader by the framework's rule: `ThreadAttachmentManager.readable_for_record`
+  and `ThreadedModelMixin.thread_reader_ids` ask REBAC's read of the thread for every
+  role, so the record feed, follows, fan-out, autofollow, message pointers, chatter state,
+  the timeline's chatter follow it; a `timelineChanged` payload names the changed
+  source rows and reaches only a subscriber REBAC lets read one; a first post that would create a thread its poster cannot
+  read is refused; a chatter reply wakes no work hold; `Project.admit_manager` keeps the
+  seat and skips a follow REBAC refuses; notification lists, mark-read and the notification change stream keep a row
+  only while its recipient reads its message (`ThreadNotificationQuerySet.disclosed`,
+  `NotificationChangeGate`). A task
+  names its requester's party, filters by that name and shows `requester_user` only where
+  its reader reads the party; a workflow start and `record_files.can_upload` ask the run's
+  and the attachment edge's own `create`; message search matches an attachment's file
+  name or title only among files its reader reads. An elevated read names what discloses
+  its rows, `elevated_read(queryset, PolicyArm(...) | ShownFacts(...), reason=...)`: it
+  elevates only while the evaluated policy states the arm unchanged (`arm_holds`), and in
+  a GraphQL query a framework queryset elevated by `sudo()` or `system_context()` without
+  a name refuses to read (`read_operation`). Proofs about the policy read
+  `evaluated_rebac_schema()`. Every Angee addon declares `evaluated_policy = true` under
+  `[tool.angee.rebac]`, and any other app binding a REBAC policy
+  `rebac_evaluated_policy = True` on its `AppConfig`; while one does not, the setting
+  `False` refuses at start-up and at each framework reading (`angee.E055`).
+  `angee.graphql.testing.documents.unreadable_in` reads every public id a result names
+  by its sqid prefix. This needs the django-zed-rebac release that carries
+  `evaluated_schema()` and `rebac.links`.
+
 - `@angee/ui`: **Changed behaviour.** A dialog submits only the fields it shows:
   a field a `showWhen` hides, when the dialog opens or after a value was typed
   into it, is not submitted, and shows its initial value when it shows again,

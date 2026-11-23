@@ -17,6 +17,29 @@ if TYPE_CHECKING:
 check_settings = partial(check_hooks, ("ANGEE_MERGE_GUARDS",))
 
 
+def refuse_undeclared_narrowed_policy() -> None:
+    """Refuse to start a process that reads ``REBAC_INHERIT_THROUGH_LINKS = False`` with an undeclared app.
+
+    Every process that serves, works or runs a command reads the setting through
+    REBAC; a worker or ``--skip-checks`` runs no system check, so the refusal
+    (``angee.base.permissions.links_narrowed``, ``angee.E055``) holds here, after app
+    population. A value that is not a bool is REBAC's own ``rebac.E028``, which
+    refuses every decision.
+    """
+
+    from django.core.exceptions import ImproperlyConfigured
+    from rebac.links import inherits_through_links
+
+    from angee.base.permissions import links_narrowed
+
+    try:
+        inherits = inherits_through_links()
+    except ImproperlyConfigured:
+        return
+    if not inherits:
+        links_narrowed()
+
+
 class BaseConfig(AppConfig):
     """Register checks shared by every composed application."""
 
@@ -74,6 +97,7 @@ class BaseConfig(AppConfig):
             applies=lambda model: issubclass(model, RowLockMixin),
             dispatch_uid="angee.row_lock.delete",
         )
+        refuse_undeclared_narrowed_policy()
 
         # Model-owned checks require completed app population.
         from angee.base.checks import (

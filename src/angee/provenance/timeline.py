@@ -10,7 +10,9 @@ from django.db import models
 from django.db.models.functions import Cast
 from rebac import SubjectRef, resolve_subjects
 
+from angee.base.permissions import elevated_read
 from angee.provenance.contrib.angee.history import HistoryDocumentMixin, record_history
+from angee.provenance.models import RECORD_HISTORY
 from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind
 
 
@@ -30,7 +32,9 @@ class ChangeKind(TimelineKind):
 
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
         model = apps.get_model("provenance", "Changeset")
-        return model.objects.sudo(reason="provenance.record_history").closed_for_record(record).scoped()
+        return elevated_read(
+            model.objects.all(), RECORD_HISTORY, reason="provenance.record_history",
+        ).closed_for_record(record).scoped()
 
     def fold(self, record: Any) -> tuple[Any, Any]:
         integer_key = models.Q(origin_object_id__regex=r"^[0-9]{1,18}$") | models.Q(

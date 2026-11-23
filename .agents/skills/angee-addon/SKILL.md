@@ -74,7 +74,14 @@ wires declarations only; the reference example throughout is `examples/src/examp
    `apps.py` declares foreign Django app edges through django-compose's
    `requires_apps` extension; it carries no
    copy of addon requirements. GraphQL overrides live under `tool.angee.graphql`;
-   permission paths belong to `AppConfig.rebac_schema`. MCP uses its Python
+   permission paths belong to `AppConfig.rebac_schema`. Declare
+   `tool.angee.rebac.evaluated_policy = true` only once no rule of the addon's own
+   lends a row through a link ("whoever reads the linked record may see, follow, be
+   notified of or name this row") except by asking REBAC for the row under the
+   actor, and every elevated read in a reader path names what discloses its rows
+   (`angee.base.permissions.elevated_read`); without it `angee.E055` refuses
+   `REBAC_INHERIT_THROUGH_LINKS = False`
+   ([REBAC guidelines](../../../docs/backend/guidelines.md#rebac)). MCP uses its Python
    contribution owner rather than redundant tool metadata. Resource paths are
    relative to `resources/`; the resource owner preserves canonical ledger paths.
    Describe required data upgrades for existing projects; projects author them

@@ -45,7 +45,7 @@ from angee.base.expressions import JSONArraySubquery
 from angee.base.managers import AngeeManager
 from angee.base.models.append_only import AppendOnlyQuerySet
 from angee.base.models.identity import public_id_for
-from angee.base.permissions import _arrows, effective_rebac_definition, require_rebac_queryset
+from angee.base.permissions import _arrows, evaluated_rebac_definition, require_rebac_queryset
 from angee.base.prefetch import InstancePrefetch
 from angee.base.querysets import AngeeQuerySet
 from angee.checklists.contracts import ATTENTION_STATUSES, PASSING_STATUSES, Checklist, ChecklistStatus
@@ -104,7 +104,7 @@ def _holding(actor: Any, permission: str) -> models.QuerySet[Any] | None:
 
 
 def read_decomposes() -> bool:
-    """Whether the effective policy states a result's read as its record's ``target_read`` less ``evidence_hidden``.
+    """Whether the policy REBAC decides with states a result's read as ``target_read`` less ``evidence_hidden``.
 
     The status rule checks ``target_read`` once per record and ``evidence_hidden``
     per result. That stands in for ``read`` only while ``read`` is exactly
@@ -112,10 +112,15 @@ def read_decomposes() -> bool:
     through an unfiltered ``record``-backed relation, so it answers the same for
     every result of one record; a relation or permission named directly would
     answer per result. An override that changes either leaves it unproved, and the
-    rule checks ``read`` per result instead.
+    rule checks ``read`` per result instead. The proof reads the evaluated policy
+    (:func:`~angee.base.permissions.evaluated_rebac_definition`): where
+    ``REBAC_INHERIT_THROUGH_LINKS = False`` narrows what an evidence record lends,
+    ``read`` subtracts ``evidence_hidden`` under a generated name that hides more
+    than the permission the rule would check, so the shape no longer matches and
+    the rule checks ``read``.
     """
 
-    definition = effective_rebac_definition(_result_model())
+    definition = evaluated_rebac_definition(_result_model())
     if definition is None:
         return False
     expressions = {permission.name: permission.expression for permission in definition.permissions}

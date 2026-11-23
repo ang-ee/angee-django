@@ -7,3 +7,6 @@ dependencies = ["angee-parties>=3,<4"]
 dynamic = ["entry-points"]
 
 [tool]
+
+[tool.angee.rebac]
+evaluated_policy = true

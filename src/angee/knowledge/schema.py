@@ -603,13 +603,17 @@ class KnowledgeQuery:
 
     @strawberry.field(name="record_knowledge_can_bind")
     def record_knowledge_can_bind(self, model_label: str, record_id: PublicID) -> bool:
-        """Report whether the record's type carries bindings and the actor writes it.
+        """Report whether the record's type carries bindings and the actor may bind it (``target_writable``).
 
         Page writes remain independent.
         """
 
         record = _record_for_binding(model_label, record_id)
-        return record is not None and RecordBinding.declares_target(type(record)) and bool(record.has_access("write"))
+        return (
+            record is not None
+            and RecordBinding.declares_target(type(record))
+            and RecordBinding._default_manager.target_writable(record)
+        )
 
     @strawberry.field(name="page_record_bindings")
     def page_record_bindings(

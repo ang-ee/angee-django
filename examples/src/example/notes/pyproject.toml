@@ -59,3 +59,6 @@ depends_on = "demo/100_workflows.workflow.yaml"
 
 [tool.angee.platform]
 category = "Example"
+
+[tool.angee.rebac]
+evaluated_policy = true

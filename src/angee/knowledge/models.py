@@ -55,7 +55,7 @@ from angee.base.models.merge_references import MergePolicy
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.trash import TrashMixin, TrashQuerySet
-from angee.base.permissions import actor_user_id, scoped_relation_read
+from angee.base.permissions import actor_user_id, candidate_relationships, links_narrowed, scoped_relation_read
 from angee.base.querysets import row_lock_queryset
 from angee.base.signals import send_created_batch
 from angee.knowledge.retrieval import MAX_SEARCH_PAGE_SIZE, RetrievalBackend, RetrievalHit, RetrievalResult
@@ -681,6 +681,24 @@ class RecordBindingManager[BindingT: RecordBinding](_RecordBindingManagerBase[Bi
 
     DEFAULT_ROLE = "related"
     FOLDER_ROLE = "folder"
+
+    def target_writable(self, record: models.Model) -> bool:
+        """Whether the actor may bind knowledge to ``record`` on the record's side.
+
+        A binding's ``target_write`` is the record's ``write`` for each declared
+        target type. Under ``REBAC_INHERIT_THROUGH_LINKS = False`` that arrow lends
+        only the record's own writers, so the proposed binding's own
+        ``target_write`` decides, as REBAC decides the write. Page writes remain
+        independent.
+        """
+
+        if not links_narrowed():
+            return bool(cast(Any, record).has_access("write"))
+        candidate = candidate_relationships(
+            self.model(**generic_target(record).lookups(self.model, "target")), "target_write",
+        )
+        actor = current_actor()
+        return candidate is not None and actor is not None and candidate.allows(actor, "target_write")
     """The role a party's folder page is bound under (:meth:`party_folder`); like every role, it grants nothing."""
 
     def party_folder(self, party: models.Model, *, vault: Vault, title: str) -> Any:

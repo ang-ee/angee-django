@@ -24,7 +24,7 @@ from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
 from angee.intake.choices import NeedAccessAction
-from angee.intake.models import task_requester_name, task_requester_rows
+from angee.intake.models import requester_account_id, task_requester_name, task_requester_rows
 from angee.messaging.schema import ChannelType, MessageType
 from angee.parties.schema import PartyType
 from angee.projects.schema import ProjectType, TaskType
@@ -72,15 +72,9 @@ class NeedType(AngeeNode):
     claimed_name: auto
     claimed_email: str | None
 
-    @strawberry_django.field(annotate={
-        "_requester_user_id": lambda info: models.Subquery(
-            apps.get_model("parties", "Person")._base_manager.filter(
-                pk=models.OuterRef("party_id"),
-            ).values("user_id")[:1],
-        ),
-    })
+    @strawberry_django.field(annotate={"_requester_user_id": lambda info: requester_account_id()})
     def requester_user(self) -> strawberry.ID | None:
-        """Project the linked account without resolving each party separately."""
+        """Project the linked account without resolving each party separately, where the party may be named."""
 
         return optional_public_id(user_public_id(cast(Any, self)._requester_user_id))
     requester_access_granted: bool = strawberry_django.field(only=["admitted_user_id"])

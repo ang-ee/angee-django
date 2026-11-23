@@ -61,7 +61,7 @@ EXPECTED_VERBS = {
     "workflows.TriggerEvent.queryset": "pending",
     "workflows.Workflow.manager": "authoring_outcomes install_definition publish save_draft save_identity",
     "workflows.WorkflowRun.manager": (
-        "cancel cancel_abandoned prune reap_interrupted reprocess start"
+        "cancel cancel_abandoned prune reap_interrupted reprocess run_create_allowed start"
     ),
     "workflows.WorkflowRun.queryset": (
         "about about_filter blocking for_subject lock_owned_runs lock_run retention_candidates working_on"

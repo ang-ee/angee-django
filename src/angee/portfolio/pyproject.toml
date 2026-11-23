@@ -32,3 +32,6 @@ depends_on = "demo/010_portfolio.product.yaml"
 
 [tool.angee.platform]
 category = "Productivity"
+
+[tool.angee.rebac]
+evaluated_policy = true

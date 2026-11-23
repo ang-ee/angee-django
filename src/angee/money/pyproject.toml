@@ -20,3 +20,6 @@ depends_on = "master/010_money.currency.yaml"
 
 [tool.angee.platform]
 category = "Foundation"
+
+[tool.angee.rebac]
+evaluated_policy = true

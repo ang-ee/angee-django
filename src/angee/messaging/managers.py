@@ -62,6 +62,7 @@ from rebac import (
 )
 from rebac.actors import is_anonymous_actor, is_sudo
 from rebac.backends import backend
+from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
 from angee.base.locks import task_locks_are_cross_process
@@ -71,7 +72,14 @@ from angee.base.models.identity import instances_from_public_ids
 from angee.base.models.ownership import OwnerQuerySet
 from angee.base.models.trash import TrashQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
-from angee.base.permissions import actor_user_id, purpose_read_holds, reader_queryset, require_rebac_queryset
+from angee.base.permissions import (
+    actor_user_id,
+    elevated_read,
+    links_narrowed,
+    purpose_read_holds,
+    reader_queryset,
+    require_rebac_queryset,
+)
 from angee.base.prefetch import InstancePrefetch, ReaderMemo, prefetched_objects
 from angee.base.querysets import AngeeQuerySet, MergeableQuerySet, row_lock_queryset
 from angee.base.refs import generic_pointer_model, generic_pointer_target
@@ -101,9 +109,15 @@ from angee.messaging.constants import (
 )
 from angee.messaging.events import message_ingested
 from angee.messaging.expressions import AttachedFileSkipReason
-from angee.messaging.mixins import NotificationPreference, ThreadedModelMixin
+from angee.messaging.mixins import (
+    MESSAGES_READ,
+    NOTIFICATIONS_READ,
+    OWN_FOLLOW,
+    NotificationPreference,
+    ThreadedModelMixin,
+)
 from angee.messaging.source_copies import observe_email_identity
-from angee.parties.managers import Signing
+from angee.parties.managers import USER_IDENTITY, Signing
 from angee.parties.models import Handle
 from angee.provenance.context import changeset, changeset_model, require_changeset
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
@@ -569,23 +583,30 @@ def message_subtype_options(model_label: str = "") -> tuple[dict[str, Any], ...]
     return tuple(sorted(options.values(), key=lambda option: (option["sequence"], option["key"])))
 
 
-def _message_search_query(term: str) -> models.Q:
+def _message_search_query(term: str, *, files: models.QuerySet[Any] | None = None) -> models.Q:
     """Return the Odoo-style search predicate for one chatter search token.
 
     Titles need no arm of their own: a ``TITLE`` part's text is fragment text like
     any body paragraph, so ``parts__fragment__text`` covers subjects too. The
     substring arms serve the record-scoped chatter search (bounded by the record
-    gate).
+    gate). An attachment's file name and title are another model's columns: given
+    ``files`` (the reader's readable files), those arms match only among them, so a
+    search, its count and its paging flags never probe a file REBAC denies.
     """
 
+    if files is None:
+        attached = models.Q(parts__file__filename__icontains=term) | models.Q(parts__file__title__icontains=term)
+    else:
+        attached = models.Q(parts__file__in=files.filter(
+            models.Q(filename__icontains=term) | models.Q(title__icontains=term),
+        ).order_by().values("pk"))
     return (
         models.Q(preview__icontains=term)
         | models.Q(subtype__name__icontains=term)
         | models.Q(subtype__description__icontains=term)
         | models.Q(parts__name__icontains=term)
         | models.Q(parts__fragment__text__icontains=term)
-        | models.Q(parts__file__filename__icontains=term)
-        | models.Q(parts__file__title__icontains=term)
+        | attached
     )
 
 
@@ -1093,6 +1114,7 @@ _READABLE_ATTACHMENTS = ReaderMemo("_messaging_readable_attachments")
 """A record's readable thread attachments per role, for the reader that read them."""
 
 
+
 class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryManager[ThreadAttachmentT]):
     """Owns the polymorphic edge from a model row to its chatter thread.
 
@@ -1147,8 +1169,11 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
         """Return ``for_record``'s edge once the actor may read the thread it discloses.
 
         An admitted record implies only its own chatter role. Any other role, such
-        as an attached ``source`` conversation, also requires the thread's read.
-        The edge is remembered on ``record`` per role for the reader (a
+        as an attached ``source`` conversation, also requires the thread's read,
+        and so does the chatter role under ``REBAC_INHERIT_THROUGH_LINKS = False``
+        (:func:`~angee.base.permissions.links_narrowed`): a record then lends its
+        chatter to no reader by the framework's rule, and REBAC decides the
+        thread's read whatever the policy states. The edge is remembered on ``record`` per role for the reader (a
         ``ReaderMemo``: never without an actor or under sudo), so the reads of one
         record payload resolve it once. An absent edge is not remembered (a verb
         may create it next), and the verbs that bind or remove a record's edges
@@ -1160,7 +1185,7 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
             return attachment
         attachment = self.for_record(record, role=role)
         own_role = role == self.model.AttachmentRole.CHATTER
-        if attachment is not None and not own_role and not attachment.thread.has_access("read"):
+        if attachment is not None and (not own_role or links_narrowed()) and not attachment.thread.has_access("read"):
             raise PermissionDenied("Reading this attachment requires thread read access.")
         _READABLE_ATTACHMENTS.remember(record, role, actor, attachment)
         return attachment
@@ -1484,7 +1509,10 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
             with system_context(reason="messaging.follower.person"):
                 account = user if user is not None else get_user_model()._base_manager.get(pk=resolved_user_id)
                 return apps.get_model("parties", "Party").objects.for_user(account).pk
-        parties = apps.get_model("parties", "Party").objects.system_context(reason="messaging.follower.person")
+        parties = elevated_read(
+            apps.get_model("parties", "Party").objects.all(), USER_IDENTITY, reason="messaging.follower.person",
+            system=True,
+        )
         return parties.person_id_for_user(resolved_user_id)
 
     def _require_follow_access(self, record: Any, party_id: Any) -> None:
@@ -1505,9 +1533,18 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         return parties.account_for_party(party_id)
 
     def end_unreadable_for_record(self, record: Any, *, role: str = "chatter") -> int:
-        """End person-account follows after an access owner's revoke or seat removal."""
+        """End person-account follows after an access owner's revoke or seat removal.
 
-        attachment = _record_attachment(record, role=role)
+        Under ``REBAC_INHERIT_THROUGH_LINKS = False`` the edge is resolved as
+        bookkeeping: whether its caller reads the thread decides nothing here,
+        each follower's own read does (``thread_reader_ids``).
+        """
+
+        attachment = (
+            apps.get_model("messaging", "ThreadAttachment").objects.for_record(record, role=role)
+            if links_narrowed()
+            else _record_attachment(record, role=role)
+        )
         if attachment is None:
             return 0
         people = list(
@@ -1521,7 +1558,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
             .select_related("user")
         )
         allowed = attachment.require_threaded_target().thread_reader_ids(
-            account for person in people if (account := person.user) is not None
+            (account for person in people if (account := person.user) is not None), role=role,
         )
         with system_context(reason="messaging.follower.read_revoked"):
             removed, _ = self.model._base_manager.filter(
@@ -1629,6 +1666,20 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
                 .filter(pk__in=record_ids)
                 .scoped()
             )
+            if links_narrowed():
+                # A record lends its chatter by no framework rule: REBAC decides each thread's read too.
+                chatter = {
+                    record_id: thread_id
+                    for thread_id, (thread_type, record_id) in targets.items()
+                    if thread_type == content_type_id and record_id in record_ids
+                }
+                threads = set(
+                    require_rebac_queryset(thread_model, actor=subject).with_action("read")
+                    .filter(pk__in=chatter.values()).scoped().order_by().values_list("pk", flat=True)
+                )
+                readable = readable.filter(
+                    pk__in=[record_id for record_id, thread_id in chatter.items() if thread_id in threads],
+                )
             allowed[(content_type_id, follower_party_id)] = set(readable.order_by().values_list("pk", flat=True))
         revoked = []
         for pk, attachment_id, follower_party_id in follow_rows:
@@ -1692,7 +1743,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
                 if resolved_user_id is None:
                     raise ValueError("A party or user is required to follow a thread.")
                 account = user if user is not None else get_user_model()._base_manager.get(pk=resolved_user_id)
-                if account.kind == "person" and not target.thread_reader_allowed(account):
+                if account.kind == "person" and not target.thread_reader_allowed(account, role=role, admitting=True):
                     raise PermissionDenied("Only a person with record read access may follow.")
                 party_id = self.get_party_id(user=account, create=True)
             else:
@@ -1700,7 +1751,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
                     raise ValueError("Pass a party or a user, not both.")
                 party_id = self.get_party_id(party=party)
                 account = self._person_account(party_id)
-                if account is not None and not target.thread_reader_allowed(account):
+                if account is not None and not target.thread_reader_allowed(account, role=role, admitting=True):
                     raise PermissionDenied("Only a person with record read access may follow.")
             self._require_follow_access(target, party_id)
             if attachment is None:
@@ -1834,7 +1885,8 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
             return apps.get_model("messaging", "Message")._base_manager.none()
         message_model = apps.get_model("messaging", "Message")
         follower = (
-            self.sudo(reason="messaging.follower.effective").effective_for_thread(thread).filter(party_id=party_id)
+            elevated_read(self.all(), OWN_FOLLOW, reason="messaging.follower.effective")
+            .effective_for_thread(thread).filter(party_id=party_id)
             .select_related("last_read_message")
             .first()
         )
@@ -1914,7 +1966,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         if party_id is None:
             return False
         follower = (
-            self.sudo(reason="messaging.follower.effective")
+            elevated_read(self.all(), OWN_FOLLOW, reason="messaging.follower.effective")
             .effective_for_thread(message.thread)
             .filter(party_id=party_id)
             .select_related("last_read_message")
@@ -1983,6 +2035,23 @@ class ThreadNotificationQuerySet[ThreadNotificationT: ThreadNotification](AngeeQ
             thread_id__in=attachment.thread.member_threads().values("pk"),
         )
 
+    def disclosed(self) -> Self:
+        """The rows that may tell their recipient a message exists: those whose message they may read.
+
+        A row is its recipient's own, and its time, type and count speak for its
+        message. With the published policy, fan-out notified only readers of the
+        record's chatter, and every row stays. Under ``REBAC_INHERIT_THROUGH_LINKS
+        = False`` a row written to a reader who no longer reads its message
+        (before the setting was turned off) is filtered out as the list reads, in
+        the same statement, by REBAC's read of the message; nothing is deleted, so
+        turning the setting back restores it.
+        """
+
+        if not links_narrowed():
+            return self
+        messages = reader_queryset(apps.get_model("messaging", "Message"), relation_actor(self))
+        return self.filter(message_id__in=messages.scoped().order_by().values("pk"))
+
 
 _ThreadNotificationManagerBase = AngeeManager.from_queryset(ThreadNotificationQuerySet)
 
@@ -2048,7 +2117,9 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
             key = (attachment.content_type_id, attachment.object_id)
             if key not in allowed:
                 target = attachment.target
-                allowed[key] = isinstance(target, ThreadedModelMixin) and target.thread_reader_allowed(actor)
+                allowed[key] = isinstance(target, ThreadedModelMixin) and target.thread_reader_allowed(
+                    actor, role=attachment.role,
+                )
             message = messages.get(row.message_id)
             if allowed[key] and message is not None and not message.is_trashed:
                 message._inbox_attachment = attachment
@@ -2102,7 +2173,7 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
         # already authorised the whole chatter read, so scope the reads with sudo
         # and let the chainable predicates own the filters.
         return (
-            self.sudo(reason="messaging.notification.for_record")
+            elevated_read(self.all(), NOTIFICATIONS_READ, reason="messaging.notification.for_record")
             .for_attachment(attachment)
             .filter(TrashQuerySet.untrashed_q("message__"), user_id=resolved_user_id)
         )
@@ -2185,7 +2256,8 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
         eligible = {
             key: account for key, account in accounts.items() if created_by_id is None or str(key) != str(created_by_id)
         }
-        reader_ids = record.thread_reader_ids(eligible.values()) if record is not None else set(eligible)
+        role = attachment.role if attachment is not None else "chatter"
+        reader_ids = record.thread_reader_ids(eligible.values(), role=role) if record is not None else set(eligible)
         existing = {row.user_id: row for row in self.model._base_manager.filter(message=message)}
         new_rows: list[Any] = []
         for user_id, (policy, follower) in deliveries.items():
@@ -2594,9 +2666,20 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         )
 
     def searching(self, term: str) -> Self:
-        """Return messages matching one Odoo-style chatter search token."""
+        """Return messages matching one Odoo-style chatter search token.
 
-        return self.filter(_message_search_query(term))
+        Under ``REBAC_INHERIT_THROUGH_LINKS = False`` the attachment arms match only
+        files the reader (this queryset's actor, else the ambient one) reads, by
+        REBAC's decision in the same statement. With the published policy they
+        join the file's columns as they always have, which reaches files the
+        reader may not read where an exclusion hides one.
+        """
+
+        if not links_narrowed():
+            return self.filter(_message_search_query(term))
+        reader = self.effective_actor()[0] or current_actor()
+        files = reader_queryset(apps.get_model("storage", "File"), reader).scoped()
+        return self.filter(_message_search_query(term, files=files))
 
     def with_title_text(self) -> Self:
         """Annotate each row's title text (its ``TITLE`` part's fragment) as ``_title_text``.
@@ -2863,7 +2946,7 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         # role, the thread's read) already authorised the whole feed, so scope with sudo
         # and compose the chainable read predicates.
         queryset = (
-            self.sudo(reason="messaging.message.for_record")
+            elevated_read(self, MESSAGES_READ, reason="messaging.message.for_record")
             .filter(self.record_filter(record, role=role, trashed=trashed, attachment=attachment))
             .select_related("thread", "subtype", "sender", "channel", "parent", "parent__subtype")
             .prefetch_related(
@@ -3660,7 +3743,11 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     if autofollow_author and created_by_id is not None:
                         candidates.add(created_by_id)
                     accounts = list(get_user_model()._base_manager.filter(pk__in=candidates))
-                    readers = record.thread_reader_ids(account for account in accounts if account.kind == "person")
+                    readers = record.thread_reader_ids(
+                        (account for account in accounts if account.kind == "person"),
+                        role=attachment.role,
+                        admitting=True,
+                    )
                     for account in accounts:
                         if account.kind != "person" or account.pk in readers:
                             follower_model.objects.subscribe(record, user=account, role=attachment.role)
@@ -3828,7 +3915,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         if attachment is None:
             return None
         return (
-            self.sudo(reason="messaging.message.in_record")
+            elevated_read(self.all(), MESSAGES_READ, reason="messaging.message.in_record")
             .for_thread(attachment.thread)
             .filter(is_trashed=trashed, **self.model.public_id_lookup(str(message_id)))
             .first()

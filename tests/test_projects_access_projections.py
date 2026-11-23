@@ -4,9 +4,10 @@ from copy import deepcopy
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db import connection
+from django.db import connection, transaction
+from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
-from rebac import PermissionDenied, actor_context, system_context
+from rebac import PermissionDenied, actor_context, generic_target, system_context
 from rebac.backends import backend
 from rebac.schema.parser import parse_zed
 from rebac.testing import install_schema
@@ -109,6 +110,39 @@ def test_phase_only_permission_discloses_name_without_project_access(project_cas
             assert len(queries) == 1, queries.captured_queries
     finally:
         install_schema(original, backend=active)
+
+
+@pytest.mark.parametrize("inherits", [True, False])
+def test_the_upload_capability_is_what_the_edge_insert_allows(project_case, campaign_user, inherits):
+    """``record_files.can_upload`` offers an upload only where the attachment edge's insert is allowed.
+
+    A project editor writes the task through its project. With
+    ``REBAC_INHERIT_THROUGH_LINKS = False`` the edge's ``target_write`` lends only
+    the task's own write, so the editor is neither offered the upload nor admitted.
+    """
+
+    _, _, _, project, task = project_case
+    editor = campaign_user("project-editor")
+    grant(project, "editor", editor)
+    with system_context(reason="tests.t3.upload"):
+        backend_row = Backend.objects.create(slug="upload-files", label="Files", backend_class="local")
+        drive = Drive.objects.create(backend=backend_row, slug="upload-files", name="Files", owner=editor)
+        file = File.objects.create(
+            drive=drive, filename="upload.txt", content_hash="d" * 64, storage_path="upload.txt",
+            owner=editor, upload_state="ready",
+        )
+    with override_settings(REBAC_INHERIT_THROUGH_LINKS=inherits):
+        assert task.with_actor(editor).has_access("write")
+        offered = FileAttachment.objects.attach_allowed(task, editor)
+        try:
+            with transaction.atomic(), actor_context(editor):
+                FileAttachment.objects.create(file=file, **generic_target(task).lookups(FileAttachment, "target"))
+                transaction.set_rollback(True)
+        except PermissionDenied:
+            inserted = False
+        else:
+            inserted = True
+    assert offered is inserted is inherits
 
 
 def test_record_file_follows_task_and_download_rechecks_after_narrowing(project_case):

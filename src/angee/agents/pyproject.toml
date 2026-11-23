@@ -21,3 +21,6 @@ depends_on = ["demo/020_agents.mcpserver.yaml", "iam:demo/010_iam.user.yaml"]
 
 [tool.angee.platform]
 category = "Agents"
+
+[tool.angee.rebac]
+evaluated_policy = true

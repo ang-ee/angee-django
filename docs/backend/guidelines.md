@@ -1050,6 +1050,89 @@ data through REBAC, never a queryset bypass.
   identity changes and before system checks. This includes removed addons and
   packages whose last `permissions.zed` disappeared. `--force-overwrite` remains
   a separate explicit choice for replacing locally managed live policy.
+- **Inheritance through links is the library's `REBAC_INHERIT_THROUGH_LINKS`.**
+  `True` (the default) evaluates the published policy, and the framework issues the
+  statements it always has. `False` makes REBAC decide with a narrower policy derived
+  from it: a permission still inherits whole through the row's own foreign key,
+  constants, memberships and relations within one type, but through a link (a path of
+  several hops, a reverse, many-to-many or generic relation, a filter over another
+  table) it is lent only what the linked record grants directly. A project sets it in
+  its `settings.yaml` as a YAML boolean (`REBAC_INHERIT_THROUGH_LINKS: false`); any
+  other value is REBAC's `rebac.E028`, and every decision refuses. The stored policy,
+  `rebac sync` and the exported `.zed` are unchanged. `manage.py rebac links` lists
+  every arrow the setting narrows and what each target still lends; the library warns
+  with `rebac.W012` while it is `False`. Framework code reads the setting only through
+  [`links_narrowed`](../../src/angee/base/permissions.py), never the setting itself.
+- **Under `False` a reader who reached a record only through a link reaches nothing of
+  it, by structure.** Framework code does not decide which arrows the narrowing keeps;
+  where it would lend a row through a link it lets REBAC decide:
+  - *A record lends its thread to no reader by the framework's rule.* The one owner of a
+    record's thread edges, `ThreadAttachmentManager.readable_for_record`, asks REBAC's
+    `read` of the thread for every role, the record's own chatter included, and the one
+    audience owner, `ThreadedModelMixin.thread_reader_ids`, asks it in the same bulk
+    check as the record's read. Everything that reads or tells a record's chatter goes
+    through them: the record feed and its windows, single messages and the removed list,
+    unread counts and needaction flags, follows and their cleanups, notification
+    fan-out, autofollow, message pointers, chatter state (stars, reactions, done marks,
+    suggested recipients), the timeline's chatter entries, and posting: a first post that
+    would create a thread its poster cannot read is refused. A notification list and its
+    change stream keep a row only while its recipient may read its message
+    (`ThreadNotificationQuerySet.disclosed`, `NotificationChangeGate`). A chatter reply
+    wakes no work hold.
+  - *A change is announced to whoever reads what changed.* Under `False` a
+    `timelineChanged` payload names the changed source rows (a comment, a task about
+    the record, a decision), and a subscriber is told only when REBAC lets it read one.
+  - *An elevated read names what discloses its rows.*
+    [`elevated_read`](../../src/angee/base/permissions.py) takes a `PolicyArm`, the arm
+    of the published policy the read relies on, by the identity the library's
+    `rebac.links.narrowed_arrows()` reports (resource type, the permission it is written
+    in, relation, target), or `ShownFacts`, facts the framework shows beyond a row's
+    read (a connection's vendor branding). It elevates only while the policy REBAC
+    decides with states the arm unchanged in a granting position (`arm_holds`); a
+    narrowed arrow is renamed there, and an arm spelled another way or not stated is not
+    found, so the read falls back to REBAC deciding each row for its actor;
+    `system_queryset(shows=...)` takes the same name. Inside a read operation (each GraphQL
+    query, `read_operation`), a framework queryset elevated by its own `sudo()` or
+    `system_context()` without a name refuses to read under `False`: a reader path that
+    forgets fails instead of showing what REBAC denies.
+  - *Rules that copy an arrow ask REBAC instead.* A task names its requester's party,
+    filters by that name and shows `requester_user` only where its reader reads the
+    party; a workflow start asks REBAC for the run's own `create`; `record_files.can_upload`
+    asks the attachment edge's own `create`; message search matches an attachment's
+    file name or title only among the files its reader reads. A proof about the policy
+    (the inbox's contextual and purpose reads, the checklist status rule's decomposition)
+    reads [`evaluated_rebac_schema`](../../src/angee/base/permissions.py) and fails
+    closed where only the published policy supports it; listing, rendering and
+    validating declared names read the published policy (`effective_rebac_definition`).
+  - *Every reach into another model's columns is decided.* A resource's relation
+    filters, orderings and groupings read the related row through its REBAC scope
+    (`actor_scoped_relation_expression`); a text lookup that crosses a relation, and a
+    resource filter computed by an expression, is listed with its decision in
+    [the switch's tests](../../tests/test_inherit_through_links.py), so a new one fails
+    until it is decided.
+- **What `False` cannot promise.** Only GraphQL query operations refuse an unnamed
+  elevated read: a mutation's payload, a subscription, MCP, a view or a worker reads as
+  it does today, and an ambient `system_context` block, a base manager or a subquery
+  embedded in another statement is not refused at run time; the witness and the
+  enumerations above are what hold those. A follow made before the setting was turned
+  off stays stored, inert, until a cleanup ends it; a notification row it produced stays
+  hidden from the lists and from its change stream (`NotificationChangeGate`), not deleted,
+  so turning the setting back restores it. `can_post` cannot know, before a record's first comment,
+  whether its poster will read the thread that comment creates: the post refuses. A
+  threaded type whose policy states no `messaging/thread#chatter_read` arm
+  (`proposals.Round`, the examples' `notes.Note`) loses its chatter for the record's
+  readers; declaring the arm restores it. What the setting takes away from whom is
+  generated from the library's report, not written here: run `rebac links` on the
+  deployment's composed policy.
+- **An app declares that its reads follow the policy REBAC decides with.** An Angee
+  addon whose rules that lend a row through a link all let REBAC decide (or name the
+  arm they rely on) declares `evaluated_policy = true` in its `pyproject.toml`'s
+  `[tool.angee.rebac]` table; any other installed app that binds a REBAC policy sets
+  `rebac_evaluated_policy = True` on its `AppConfig`. The framework cannot vouch for
+  code it has not read: while one does not declare it, reading the setting `False`
+  refuses (`angee.E055`), at start-up in every process (a worker and `--skip-checks`
+  included) and at each framework reading. Every framework addon declares it; the
+  addons outside the framework, the messaging bridges among them, do not yet.
 
 ## Pitfalls
 

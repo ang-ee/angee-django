@@ -32,7 +32,7 @@ from angee.base.models.merge_references import MergePolicy
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
-from angee.base.permissions import require_rebac_queryset
+from angee.base.permissions import ShownFacts, require_rebac_queryset
 from angee.base.prefetch import InstancePrefetch, ReaderMemo
 from angee.base.querysets import row_lock_paths
 from angee.base.refs import RecordRef
@@ -121,6 +121,12 @@ class RunGraph:
 
 
 logger = logging.getLogger(__name__)
+
+PINNED_POLICY = ShownFacts(
+    "workflows/version",
+    "the definition a run pins (labels, outcomes, failure routes), read beside the run its reader reads",
+)
+
 _READER = ReaderMemo("_workflows_reader_answers")
 """A run row's answers from one reader's batch read (graph, write, open work)."""
 
@@ -384,7 +390,8 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         version = cls._meta.get_field("version").related_model
         assert version is not None
         return models.Prefetch(
-            f"{prefix}_policy_versions", queryset=cast(Any, version).system_queryset().only("document"),
+            f"{prefix}_policy_versions",
+            queryset=cast(Any, version).system_queryset(shows=PINNED_POLICY).only("document"),
             to_attr="policy_version",
         )
 
@@ -398,7 +405,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
                 return self.version
         model = self._meta.get_field("version").related_model
         assert model is not None and issubclass(model, WorkflowVersion)
-        return model.system_queryset().get(pk=self.version_id)
+        return model.system_queryset(shows=PINNED_POLICY).get(pk=self.version_id)
 
     @property
     def subject_model_class(self) -> type[models.Model] | None:
@@ -886,12 +893,14 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         return self.policy_version.definition.reprocess_plan(rows, from_node)
 
     def can_reprocess(self, actor: Any) -> bool:
-        """Reprocessing needs terminal execution, run write and workflow start access."""
+        """Reprocessing needs terminal execution, run write, workflow start access and the new run's create."""
         if not self.is_terminal or not self._write_access(actor):
             return False
         with system_context(reason="workflows.reprocess_policy"):
             workflow = self.policy_version.workflow
-        return bool(workflow.with_actor(actor).has_access("start"))
+        return bool(workflow.with_actor(actor).has_access("start")) and type(self).objects.run_create_allowed(
+            workflow, actor,
+        )
 
     class Meta:
         """Django options for execution identity and terminal timestamps."""

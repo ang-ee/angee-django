@@ -15,3 +15,6 @@ install = ["install/100_workflows.workflow.yaml"]
 
 [tool.angee.platform]
 category = "Workflows"
+
+[tool.angee.rebac]
+evaluated_policy = true

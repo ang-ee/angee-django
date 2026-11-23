@@ -45,3 +45,6 @@ adopt = ["proposal", "reviewer"]
 
 [tool.angee.platform]
 category = "Productivity"
+
+[tool.angee.rebac]
+evaluated_policy = true

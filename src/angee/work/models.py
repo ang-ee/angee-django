@@ -37,7 +37,7 @@ from angee.base.models.locks import ImmutableFieldsMixin, RowLockMixin, RowLockQ
 from angee.base.models.stages import Stage as StagePrimitive
 from angee.base.models.stages import StagedModelMixin
 from angee.base.models.transitions import StateTransitions, StateTransitionsMixin
-from angee.base.permissions import actor_user_id, instance_actor
+from angee.base.permissions import actor_user_id, instance_actor, links_narrowed
 from angee.base.querysets import AngeeQuerySet
 from angee.projects.models import Task as ProjectTask
 from angee.projects.models import TaskManager as ProjectTaskManager
@@ -838,7 +838,12 @@ class ProjectWork(Composable, extends="projects.Project"):
 
     @transaction.atomic
     def admit_manager(self, user: User) -> Membership:
-        """Add a team moderator and follow this project in the same transaction."""
+        """Add a team moderator and follow this project in the same transaction.
+
+        Under ``REBAC_INHERIT_THROUGH_LINKS = False`` a project lends its chatter to
+        no reader by the framework's rule; a manager REBAC does not let read the
+        chatter thread is admitted without the follow, which would be refused.
+        """
 
         if not self.has_access("share") or self.team_id is None:
             raise PermissionDenied("Project share and a team are required to add a manager.")
@@ -856,7 +861,8 @@ class ProjectWork(Composable, extends="projects.Project"):
             role=membership_model.MembershipRole.MODERATOR,
         )
         with system_context(reason="work.project.manager.follow"):
-            self.message_subscribe(user=user)
+            if not links_narrowed() or self.thread_reader_allowed(user, admitting=True):
+                self.message_subscribe(user=user)
         return membership
 
     @transaction.atomic
@@ -1031,9 +1037,16 @@ class TaskWorkQuerySet[TaskT: TaskWork](ProjectTaskQuerySet[TaskT]):
         return self.filter(snoozed_awaiting_id=replier_id).wake_each(self.model.WakeReason.REPLY, message=message)
 
     def wake_on_chatter_reply(self, message: Any) -> int:
-        """Wake the selected holds whose chatter thread carries ``message`` and that await its author."""
+        """Wake the selected holds whose chatter thread carries ``message`` and that await its author.
 
-        if message.thread_id is None:
+        A woken hold tells every reader of the task that its awaited user replied
+        in its chatter. Under the policy narrowed at links
+        (:func:`~angee.base.permissions.links_narrowed`) a task's readers need not
+        read its chatter, so a chatter reply wakes nothing, and the hold wakes at
+        its date, by hand or on a conversation tied to its awaited user.
+        """
+
+        if message.thread_id is None or links_narrowed():
             return 0
         chatter = (
             apps.get_model("messaging", "ThreadAttachment")

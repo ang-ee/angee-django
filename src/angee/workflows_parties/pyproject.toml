@@ -16,3 +16,6 @@ demo = ["demo/010_parties.party.yaml", {path = "demo/020_parties.handle.yaml", d
 
 [tool.angee.platform]
 category = "Workflows"
+
+[tool.angee.rebac]
+evaluated_policy = true

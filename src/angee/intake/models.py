@@ -36,7 +36,7 @@ from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.locks import OptimisticLockMixin
-from angee.base.permissions import actor_user_id, instance_actor
+from angee.base.permissions import actor_user_id, instance_actor, links_narrowed, reader_queryset
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.intake.choices import NeedAccessAction
 from angee.intake.resources import NeedResource
@@ -713,7 +713,11 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
             if assignment_changed and values["task_id"] is not None and values["party_id"] is not None:
                 with system_context(reason="intake.need.follow_requester"):
                     account = candidate._account_for_party(values["party_id"])
-                    if account is None or account.kind != "person" or candidate.target.thread_reader_allowed(account):
+                    if (
+                        account is None
+                        or account.kind != "person"
+                        or candidate.target.thread_reader_allowed(account, admitting=True)
+                    ):
                         candidate.target.message_subscribe(party=candidate.party)
 
     def _link_requester(self, *, allow_create: bool, system_reason: str | None = None, address: str = "") -> Any:
@@ -877,7 +881,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
         self.party = party
         self.save(update_fields=("party", "updated_at"))
         approved = self.decide_access(str(NeedAccessAction.INTAKE_APPROVE))
-        if approved is None or not self.target.thread_reader_allowed(user):
+        if approved is None or not self.target.thread_reader_allowed(user, admitting=True):
             raise PermissionDenied("The admitted requester must be able to read the record.")
         with system_context(reason="intake.need.admit_requester.follow"):
             self.target.message_subscribe(user=user)
@@ -975,7 +979,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
                 and user.is_person
             ):
                 with system_context(reason="intake.need.follow_approved_requester"):
-                    if locked.target.thread_reader_allowed(user):
+                    if locked.target.thread_reader_allowed(user, admitting=True):
                         locked.target.message_subscribe(user=user)
         self.refresh_from_db()
         return user
@@ -1033,15 +1037,40 @@ def task_requester_rows(task: str = "pk") -> models.QuerySet[Any]:
     )
 
 
-def task_requester_name() -> models.Subquery:
-    """The name a task shows for its requester: the first request's party, else the name it claimed."""
+def requester_parties(actor: Any = None) -> models.QuerySet[Any] | None:
+    """The requester parties a task's reader may see named, as ids; ``None`` while that is every one.
+
+    A task names the party that filed it to the task's readers, and a request
+    its requester's account, as the published policy lends the party's read
+    through the request's task (``parties/party#read_granted: filed_task->read``).
+    Under the policy narrowed at links (:func:`~angee.base.permissions.links_narrowed`)
+    only the parties ``actor`` (the ambient actor when ``None``) reads by REBAC's
+    own decision are named, in the same statement.
+    """
+
+    if not links_narrowed():
+        return None
+    return reader_queryset(apps.get_model("parties", "Party"), actor).scoped().order_by().values("pk")
+
+
+def task_requester_name(actor: Any = None) -> models.Subquery:
+    """The name a task shows for its requester: the first request's party, else the name it claimed.
+
+    The party's name only where its reader may see it named (:func:`requester_parties`).
+    """
 
     blank = models.Value("", output_field=models.TextField())
+    party_name: Any = models.F("party__display_name")
+    parties = requester_parties(actor)
+    if parties is not None:
+        party_name = models.Case(
+            models.When(party_id__in=parties, then=party_name), default=None, output_field=models.TextField(),
+        )
     return models.Subquery(
         task_requester_rows()
         .annotate(
             name=Coalesce(
-                NullIf(models.F("party__display_name"), blank),
+                NullIf(party_name, blank),
                 NullIf(models.F("claimed_name"), blank),
                 output_field=models.TextField(),
             )
@@ -1051,11 +1080,38 @@ def task_requester_name() -> models.Subquery:
     )
 
 
-def _requester_name_filter(queryset: models.QuerySet[Any]) -> models.Subquery:
+def requester_account_id(actor: Any = None) -> models.Subquery:
+    """The account of a request's party (``party_id`` of the outer query), where its reader may see it named."""
+
+    people = apps.get_model("parties", "Person")._base_manager.filter(pk=models.OuterRef("party_id"))
+    parties = requester_parties(actor)
+    if parties is not None:
+        people = people.filter(pk__in=parties)
+    return models.Subquery(people.values("user_id")[:1])
+
+
+class _RequesterName(models.Expression):
+    """:func:`task_requester_name` for one actor, built as the query resolves it.
+
+    Schema composition reads a filter expression's ``output_field`` at import,
+    before the policy store exists; the name asks the policy whether its link is
+    narrowed (:func:`requester_parties`), so it is built only when a query uses it.
+    """
+
+    output_field = models.TextField(null=True)
+
+    def __init__(self, actor: Any) -> None:
+        super().__init__()
+        self.actor = actor
+
+    def resolve_expression(self, *args: Any, **kwargs: Any) -> Any:
+        return task_requester_name(self.actor).resolve_expression(*args, **kwargs)
+
+
+def _requester_name_filter(queryset: models.QuerySet[Any]) -> models.Expression:
     """Filter on the first request's shown name, never its email or a later request's name."""
 
-    del queryset
-    return task_requester_name()
+    return _RequesterName(relation_actor(queryset))
 
 
 def _requested_by_viewer_filter(queryset: models.QuerySet[Any]) -> models.Expression:

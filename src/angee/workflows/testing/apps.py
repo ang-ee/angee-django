@@ -8,3 +8,5 @@ class WorkflowsTestingConfig(AppConfig):
 
     name = "angee.workflows.testing"
     label = "workflows_testing"
+    # Its rules lend no row through a link (angee.base.permissions.undeclared_policy_apps).
+    rebac_evaluated_policy = True

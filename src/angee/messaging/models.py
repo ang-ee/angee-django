@@ -1779,6 +1779,13 @@ class ThreadNotification(AuditMixin, AngeeDataModel, concrete=True):
     objects = ThreadNotificationManager()
     _message_pointers = MessagePointers()
 
+    speaks_for: ClassVar[tuple[str, ...]] = ("message",)
+    """A delivery row's existence, time, type and count tell its recipient its message exists.
+
+    The notification lists keep a row only while its recipient may read the message
+    (``ThreadNotificationQuerySet.disclosed``); ``unreadable_rows`` holds them to it.
+    """
+
     class Meta:
         """Django model options for thread notifications."""
 

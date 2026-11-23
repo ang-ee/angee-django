@@ -15,11 +15,13 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import DataError, IntegrityError, OperationalError, connection, transaction
 from django.db.models import F
 from django.db.models.functions import Now
+from django.test import override_settings
 from hypothesis import HealthCheck, given
 from hypothesis import strategies as st
 from kombu.message import Message
 from pydantic import BaseModel, Field, field_serializer, field_validator
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac.preflight import check_new
 from rebac.roles import grant as grant_role
 
 from angee.base.models.locks import StaleRevisionError
@@ -45,6 +47,44 @@ class RetainedBody(Echo):
     def run(self, ctx):
         Workflow.objects.filter(pk=ctx.run.version.workflow_id).update(name="Successful body retained")
         return ctx.done(ctx.input)
+
+
+@pytest.mark.parametrize("inherits", [True, False])
+def test_a_start_admits_the_run_as_its_create_decides(execution, inherits):
+    """The run is inserted elevated, so admission asks what REBAC decides for its ``create``.
+
+    A continuing workflow's principal starts the workflow it continues through
+    ``continues->principal``. ``workflows/run#create = workflow->start`` reaches the
+    workflow through the run's version, a link: with ``REBAC_INHERIT_THROUGH_LINKS =
+    False`` it lends only the workflow's direct grants, so that principal holds
+    the workflow's ``start`` but not the run's ``create``, and the start is refused.
+    """
+
+    actor, _ = execution
+    continued = load_workflow(document("entry"), key="continued_import", actor=actor)
+    continuing = load_workflow(document("entry"), key="continuing_receiver", actor=actor)
+    with system_context(reason="tests.workflows.continues"):
+        continued = Workflow._base_manager.get(pk=continued.pk)
+        principal = Workflow._base_manager.get(pk=continuing.pk).user
+    write_relationships([RelationshipTuple(
+        resource=to_object_ref(continued), relation="continues", subject=to_subject_ref(continuing),
+    )])
+    with override_settings(REBAC_INHERIT_THROUGH_LINKS=inherits):
+        assert continued.with_actor(principal).has_access("start")
+        create = check_new(
+            subject=to_subject_ref(principal), action="create", resource_type="workflows/run",
+            relationships={"workflow": (to_subject_ref(continued),)},
+        )
+        assert create.allowed is inherits
+        # The reprocess flag asks the same admission.
+        assert WorkflowRun.objects.run_create_allowed(continued, principal) is inherits
+        with actor_context(principal):
+            if inherits:
+                run = WorkflowRun.objects.start(continued, actor=principal, request_key="continued")
+                assert run.run_as_id == principal.pk
+            else:
+                with pytest.raises(PermissionDenied):
+                    WorkflowRun.objects.start(continued, actor=principal, request_key="continued")
 
 
 @pytest.mark.django_db(transaction=True)

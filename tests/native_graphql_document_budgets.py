@@ -412,8 +412,8 @@ PLANNER_BUDGETS = {
 }
 
 
-class ConsoleDocumentBudgetTests(TransactionTestCase):
-    """Each console read stays within its fixed statement ceiling."""
+class ConsoleDocuments(TransactionTestCase):
+    """The console documents, the readers they are measured for and the rows seeded for them; no tests."""
 
     def setUp(self):
         call_command("rebac", "sync", verbosity=0)
@@ -674,6 +674,10 @@ class ConsoleDocumentBudgetTests(TransactionTestCase):
             ),
             "related": (RELATED, {"target": f"file:{ids['file']}", "source": ids["message"]}),
         }
+
+
+class ConsoleDocumentBudgetTests(ConsoleDocuments):
+    """Each console read stays within its fixed statement ceiling."""
 
     def test_console_reads_stay_within_their_fixed_ceilings(self):
         actors = {"admin": self.admin, "member": self.member}

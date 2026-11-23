@@ -3,23 +3,34 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
+from functools import lru_cache
 from os import PathLike
 from pathlib import Path
-from typing import Any, overload
+from typing import Any, cast, overload
 
 from django.apps import AppConfig, apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from django.db.models.query import EmptyQuerySet
-from rebac import SubjectRef, check_new, current_actor, proposed_forward_relationships, to_subject_ref
+from rebac import (
+    PermissionDenied,
+    SubjectRef,
+    check_new,
+    current_actor,
+    proposed_forward_relationships,
+    to_subject_ref,
+)
 from rebac import user_subject_type as _user_subject_type
 from rebac.backends import backend
+from rebac.links import inherits_through_links, is_generated
 from rebac.managers import RebacQuerySet
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_for_resource_type, model_resource_type
-from rebac.schema import Definition, PermArrow, PermBinOp, PermExpr, Schema, resolve_schema_path
+from rebac.schema import Definition, PermArrow, PermBinOp, PermExpr, PermRef, Schema, resolve_schema_path
 from rebac.schema.introspection import relation_dependencies
 from rebac.schema.parser import parse_zed
 
@@ -155,10 +166,297 @@ def merged_schema_relpath(package: str) -> Path:
 
 
 def effective_rebac_definition(model: type[models.Model]) -> Definition | None:
-    """Read request policy through the native synced, scope-pinned backend."""
+    """Read request policy through the native synced, scope-pinned backend.
+
+    This is the published policy: its declared names and relations are what a
+    caller lists, renders and validates. A proof about what REBAC decides reads
+    :func:`evaluated_rebac_definition` instead.
+    """
 
     resource_type = model_resource_type(model)
     return backend().schema().get_definition(resource_type) if resource_type else None
+
+
+def evaluated_rebac_schema() -> Schema:
+    """The policy REBAC decides with: ``rebac.backend().evaluated_schema()``.
+
+    It is the published policy unless ``REBAC_INHERIT_THROUGH_LINKS = False``
+    narrows it, so that an arrow through a link lends only what the linked record
+    grants directly. Framework code that proves something about decisions (that
+    one action stands in for another, that a rule answers alike for every row of
+    a record, that reading a record reads another) reads this policy; a proof made
+    over the published one can be false here and then shows what REBAC denies.
+    It may hold permissions the narrowing generates (``rebac.links.is_generated``):
+    they are not actions, so a proof never names one to a user or a REBAC entry.
+    """
+
+    return backend().evaluated_schema()
+
+
+def evaluated_rebac_definition(model: type[models.Model]) -> Definition | None:
+    """``model``'s definition in the policy REBAC decides with (:func:`evaluated_rebac_schema`)."""
+
+    resource_type = model_resource_type(model)
+    return evaluated_rebac_schema().get_definition(resource_type) if resource_type else None
+
+
+def _published_and_evaluated() -> tuple[Schema, Schema]:
+    """The published policy and the one REBAC decides with, read once while they are one policy."""
+
+    published = backend().schema()
+    return published, published if inherits_through_links() else evaluated_rebac_schema()
+
+
+# ---------- The policy narrowed at links (``REBAC_INHERIT_THROUGH_LINKS = False``) ----------
+
+EVALUATED_POLICY_CAPABILITY = "angee.rebac"
+"""The addon table that declares ``evaluated_policy = true`` (:func:`undeclared_policy_apps`)."""
+
+EVALUATED_POLICY_ATTRIBUTE = "rebac_evaluated_policy"
+"""The ``AppConfig`` attribute an app that is no Angee addon sets to ``True`` to declare the same."""
+
+
+def links_narrowed() -> bool:
+    """Whether REBAC decides with the policy narrowed at links: ``REBAC_INHERIT_THROUGH_LINKS = False``.
+
+    The framework reads the library's setting here only. While it is ``False`` a
+    reader that reached a record only through a link reaches it no more, and
+    framework code lets REBAC decide wherever it would otherwise lend a row
+    through a link (a record's chatter to the record's readers, a party's name to
+    a task's readers). Reading ``False`` refuses (``ImproperlyConfigured``,
+    ``angee.E055``) while an installed app that has not declared its reads follow
+    that policy is installed (:func:`undeclared_policy_apps`), so a path that
+    consults the setting fails rather than decide with rules nobody read; the
+    base app refuses to start the same way. A value that is not a bool is the
+    library's ``rebac.E028`` and raises too. With the default ``True`` nothing
+    else is read.
+    """
+
+    if inherits_through_links():
+        return False
+    missing = undeclared_policy_apps()
+    if missing:
+        raise ImproperlyConfigured(
+            "REBAC_INHERIT_THROUGH_LINKS = False needs every installed addon, and every other app that binds a "
+            f"REBAC policy, to declare that its reads follow the policy REBAC decides with; these do not: "
+            f"{', '.join(missing)} (angee.E055). Audit each one's rules that lend a row through a link, then "
+            f"declare `evaluated_policy = true` under [tool.angee.rebac] in its pyproject.toml (an app that is no "
+            f"addon sets `{EVALUATED_POLICY_ATTRIBUTE} = True` on its AppConfig); or keep the setting True."
+        )
+    return True
+
+
+def undeclared_policy_apps() -> tuple[str, ...]:
+    """The installed apps that have not declared their reads follow the policy REBAC decides with.
+
+    Every Angee addon declares it in its ``pyproject.toml``
+    (``[tool.angee.rebac] evaluated_policy = true``); every other installed app
+    that binds a REBAC policy declares it on its ``AppConfig``
+    (``rebac_evaluated_policy = True``). The framework cannot vouch for code it
+    has not read: such an app may lend rows through links by rules of its own.
+    """
+
+    return _undeclared_policy_apps(tuple(config.name for config in apps.get_app_configs()))
+
+
+@lru_cache(maxsize=8)
+def _undeclared_policy_apps(names: tuple[str, ...]) -> tuple[str, ...]:
+    # Addon identity reads installed metadata; this module imports before the addon index.
+    from django_compose.components import installed_components
+
+    from angee.base.addons import addon_facts, is_angee_addon
+
+    del names
+    index = installed_components("angee.addons")
+    missing = []
+    for config in apps.get_app_configs():
+        if is_angee_addon(config, index=index):
+            declared = addon_facts(config.name, EVALUATED_POLICY_CAPABILITY, index=index).get("evaluated_policy")
+        elif declared_schema_path(config) is not None:
+            declared = getattr(config, EVALUATED_POLICY_ATTRIBUTE, None)
+        else:
+            continue
+        if declared is not True:
+            missing.append(config.name)
+    return tuple(sorted(missing))
+
+
+@dataclass(frozen=True)
+class PolicyArm:
+    """One arm of the published policy an elevated read relies on, by the identity ``rebac.links`` reports.
+
+    ``resource_type#permission`` is the permission the arm is written in;
+    ``relation->target`` is the arrow (``rebac.links.NarrowedArrow``: resource
+    type, permission, relation, target), or ``relation`` itself when ``target``
+    is empty. An elevated read in a reader path names the arm its rows are
+    disclosed by: "every holder of ``target`` on the record ``relation`` names
+    may read these rows". Arms are declared once, at module level, so that the
+    framework's tests can enumerate every one (:data:`POLICY_ARMS`).
+    """
+
+    resource_type: str
+    permission: str
+    relation: str
+    target: str = ""
+
+    def __post_init__(self) -> None:
+        POLICY_ARMS.add(self)
+
+    def __str__(self) -> str:
+        arm = f"{self.relation}->{self.target}" if self.target else self.relation
+        return f"{self.resource_type}#{self.permission}: {arm}"
+
+
+POLICY_ARMS: set[PolicyArm] = set()
+"""Every :class:`PolicyArm` declared in an imported module."""
+
+
+@dataclass(frozen=True)
+class ShownFacts:
+    """Facts of ``resource_type`` rows the framework shows beyond the rows' own read, to whom, and why.
+
+    An elevated read that discloses only such facts (a connection's vendor branding
+    beside the connection, a record's own change history to the record's readers)
+    relies on no arrow of the policy: whoever sees them was admitted by another
+    REBAC decision, so the policy narrowed at links does not change it. Declared
+    once, at module level, so that the framework's tests can enumerate every one
+    (:data:`SHOWN_FACTS`).
+    """
+
+    resource_type: str
+    facts: str
+
+    def __post_init__(self) -> None:
+        SHOWN_FACTS.add(self)
+
+    def __str__(self) -> str:
+        return f"{self.resource_type}: {self.facts}"
+
+
+SHOWN_FACTS: set[ShownFacts] = set()
+"""Every :class:`ShownFacts` declared in an imported module."""
+
+
+def arm_holds(arm: PolicyArm | ShownFacts) -> bool:
+    """Whether REBAC still lends ``arm`` whole: it is written, unchanged, in the policy REBAC decides with.
+
+    With the published policy evaluated it holds, and no policy is read. Under
+    ``REBAC_INHERIT_THROUGH_LINKS = False`` the evaluated policy is read
+    (``rebac.backend().evaluated_schema()``, the very object decisions read): an
+    arrow the narrowing lends only in part is renamed there (``relation->lent(P)``),
+    so it is not found, and neither is an arm the policy spells otherwise (through
+    another permission, a relation of another name) or does not state. Only an arm
+    found in a granting position of ``resource_type#permission`` holds. Nothing is
+    kept between calls: the answer is the evaluated policy's now.
+    """
+
+    if isinstance(arm, ShownFacts) or not links_narrowed():
+        return True
+    definition = evaluated_rebac_schema().get_definition(arm.resource_type)
+    permission = next((p for p in definition.permissions if p.name == arm.permission), None) if definition else None
+    if permission is None:
+        return False
+    return any(
+        (isinstance(node, PermArrow) and (node.via, node.target) == (arm.relation, arm.target))
+        or (not arm.target and isinstance(node, PermRef) and node.name == arm.relation)
+        for node in _granting_leaves(permission.expression)
+    )
+
+
+def _granting_leaves(expression: PermExpr) -> Iterator[PermExpr]:
+    """The leaves of ``expression`` under an even number of right-hand sides of ``-``."""
+
+    pending: list[tuple[PermExpr, bool]] = [(expression, False)]
+    while pending:
+        node, negative = pending.pop()
+        if isinstance(node, PermBinOp):
+            pending.append((node.left, negative))
+            pending.append((node.right, negative ^ (node.op == "-")))
+        elif not negative:
+            yield node
+
+
+_READ_OPERATION: ContextVar[bool] = ContextVar("angee_read_operation", default=False)
+"""Set while a read operation (a GraphQL query) resolves: :func:`read_operation`."""
+
+_ELEVATING_FOR: ContextVar[PolicyArm | ShownFacts | None] = ContextVar("angee_elevating_for", default=None)
+"""The arm :func:`elevated_read` names while it elevates a queryset."""
+
+
+class _Unnamed:
+    """A queryset elevated by ``sudo()`` or ``system_context()`` that names no policy arm."""
+
+    def __repr__(self) -> str:
+        return "UNNAMED_ELEVATION"
+
+
+UNNAMED_ELEVATION: Any = _Unnamed()
+"""The elevation mark of a framework queryset elevated outside :func:`elevated_read`."""
+
+
+def elevation_mark() -> PolicyArm | ShownFacts | Any:
+    """The mark a framework queryset's ``sudo()`` or ``system_context()`` carries: its arm, else unnamed."""
+
+    return _ELEVATING_FOR.get() or UNNAMED_ELEVATION
+
+
+@contextmanager
+def read_operation() -> Iterator[None]:
+    """Resolve the block as a read operation: under the narrowed policy an elevated read in it names its arm.
+
+    The GraphQL schema wraps each query operation in it. While
+    :func:`links_narrowed`, a framework queryset (``AngeeQuerySet``) elevated by
+    its ``sudo()`` or ``system_context()`` refuses to read inside the block unless
+    it was elevated by :func:`elevated_read`, which names the policy arm the read
+    relies on and elevates only while that arm holds: a reader path that forgets
+    fails instead of showing rows REBAC denies. With the default nothing changes.
+    """
+
+    token = _READ_OPERATION.set(True)
+    try:
+        yield
+    finally:
+        _READ_OPERATION.reset(token)
+
+
+def refuse_unnamed_elevation(queryset: models.QuerySet[Any]) -> None:
+    """Refuse to read a queryset elevated without a named arm inside a read operation under the narrowed policy.
+
+    Framework querysets call it before they read. Outside a read operation, and
+    with the published policy evaluated, it reads nothing and returns.
+    """
+
+    if not _READ_OPERATION.get() or getattr(queryset, "_angee_elevation", None) is not UNNAMED_ELEVATION:
+        return
+    if not cast(RebacQuerySet[Any], queryset).is_sudo() or not links_narrowed():
+        return
+    raise PermissionDenied(
+        f"An elevated read of {queryset.model._meta.label} in a read operation names no policy arm "
+        "(REBAC_INHERIT_THROUGH_LINKS = False; angee.base.permissions.elevated_read)."
+    )
+
+
+def elevated_read[Q: models.QuerySet[Any]](
+    queryset: Q, arm: PolicyArm | ShownFacts, *, reason: str, system: bool = False,
+) -> Q:
+    """``queryset`` read elevated because ``arm`` discloses its rows; else as its actor reads it.
+
+    While ``arm`` holds (:func:`arm_holds`) this is ``queryset.sudo(reason=...)``,
+    marked as relying on ``arm``. Where it does not, the queryset is returned as
+    it is: REBAC decides each row for its actor, so a reader the arm no longer
+    lends to sees what REBAC lets them see and nothing more. A read that shows
+    only :class:`ShownFacts` relies on no arm and always elevates. ``system``
+    elevates with ``system_context()`` instead, which holds where sudo is disabled.
+    """
+
+    if not arm_holds(arm):
+        return queryset
+    token = _ELEVATING_FOR.set(arm)
+    try:
+        rows = cast(Any, queryset)
+        return cast(Q, rows.system_context(reason=reason) if system else rows.sudo(reason=reason))
+    finally:
+        _ELEVATING_FOR.reset(token)
 
 
 def declared_rebac_schema(app_config: AppConfig) -> Schema | None:
@@ -209,38 +507,44 @@ def declared_rebac_definition(model: type[models.Model]) -> Definition | None:
 def contextual_action_holds(model: type[models.Model], action: str) -> bool:
     """Whether a listing constrained to readable parents may scope ``model`` by ``action`` instead of ``read``.
 
-    The effective policy (the synced schema with its overrides) must state the
-    contextual child action as exactly one arrow, ``relation->parent_action``, while
-    ``read`` stays a union with an arrow arm through the same relation: the child's
-    own actor-scoped read checks its live parent, so the listing selects the parents
-    with joins instead of a second, separately scoped parent subquery. Any other arm
-    on the action (a direct grant beside the arrow) could admit a child of an
-    unreadable parent and leaves it unproved, as does an exclusion or intersection
-    over ``read`` (a tightening override); extending ``read`` does not. A
-    ``parent_action`` narrower than the parent's permission the arm names must hold
-    on the parent as a purpose read (:func:`purpose_read_holds`). Unproved, the
-    caller keeps ``read`` inside the scoped parent population. Field gates are
-    unaffected; they keep their own ``read__<field>`` checks under either action.
+    The policy REBAC decides with (:func:`evaluated_rebac_schema`: the synced
+    schema with its overrides, narrowed where ``REBAC_INHERIT_THROUGH_LINKS`` says
+    so) must state the contextual child action as exactly one arrow,
+    ``relation->parent_action``, while ``read`` stays a union with an arrow arm
+    through the same relation: the child's own actor-scoped read checks its live
+    parent, so the listing selects the parents with joins instead of a second,
+    separately scoped parent subquery. Any other arm on the action (a direct grant
+    beside the arrow) could admit a child of an unreadable parent and leaves it
+    unproved, as does an exclusion or intersection over ``read`` (a tightening
+    override); extending ``read`` does not. A ``parent_action`` narrower than the
+    parent's permission the arm names must hold on the parent as a purpose read
+    (:func:`purpose_read_holds`). Where the narrowing lends the parent's actions
+    through the arrow under generated names, the arms no longer name the same
+    action and the proof fails closed. Unproved, the caller keeps ``read`` inside
+    the scoped parent population. Field gates are unaffected; they keep their own
+    ``read__<field>`` checks under either action.
     """
 
     resource_type = model_resource_type(model)
-    return resource_type is not None and _contextual_holds(backend().schema(), resource_type, action)
+    return resource_type is not None and _contextual_holds(*_published_and_evaluated(), resource_type, action)
 
 
 def purpose_read_holds(model: type[models.Model], action: str) -> bool:
     """Whether a read of ``model``'s own population may check its purpose read ``action`` instead of ``read``.
 
     A purpose read, such as ``messaging/thread#read_inbox``, holds while the
-    effective policy states it and ``read`` exactly as the model's composed
-    declaration does, whose owner proves the purpose read answers as ``read`` within
-    the population its read selects; an override on either, or a store not yet
-    synced to the declaration, leaves it unproved. An arrow to a parent's narrower
-    action, where ``read`` takes the parent's ``read``, holds only while that
-    parent's purpose read holds in turn. Unproved, the caller keeps ``read``.
+    published effective policy states it and ``read`` exactly as the model's
+    composed declaration does, whose owner proves the purpose read answers as
+    ``read`` within the population its read selects; an override on either, or a
+    store not yet synced to the declaration, leaves it unproved. The arrows are
+    read from the policy REBAC decides with (:func:`evaluated_rebac_schema`): an
+    arrow to a parent's narrower action, where ``read`` takes the parent's
+    ``read``, holds only while that parent's purpose read holds in turn, and an
+    arrow the narrowing renames proves nothing. Unproved, the caller keeps ``read``.
     """
 
     resource_type = model_resource_type(model)
-    return resource_type is not None and _purpose_holds(backend().schema(), resource_type, action)
+    return resource_type is not None and _purpose_holds(*_published_and_evaluated(), resource_type, action)
 
 
 def _narrow_and_read(schema: Schema, resource_type: str, action: str) -> tuple[Definition, PermExpr, PermExpr] | None:
@@ -254,41 +558,51 @@ def _narrow_and_read(schema: Schema, resource_type: str, action: str) -> tuple[D
     return (definition, narrow, read) if narrow is not None and read is not None else None
 
 
-def _contextual_holds(schema: Schema, resource_type: str, action: str) -> bool:
-    found = _narrow_and_read(schema, resource_type, action)
+def _contextual_holds(published: Schema, evaluated: Schema, resource_type: str, action: str) -> bool:
+    found = _narrow_and_read(evaluated, resource_type, action)
     if found is None:
         return False
     definition, narrow, read = found
     if not isinstance(narrow, PermArrow):
         return False
     arms = {arm.via: arm.target for arm in _union_arms(read) if isinstance(arm, PermArrow)}
-    return _parent_holds(schema, definition, narrow, arms.get(narrow.via))
+    return _parent_holds(published, evaluated, definition, narrow, arms.get(narrow.via))
 
 
-def _purpose_holds(schema: Schema, resource_type: str, action: str) -> bool:
-    found = _narrow_and_read(schema, resource_type, action)
-    if found is None:
+def _purpose_holds(published: Schema, evaluated: Schema, resource_type: str, action: str) -> bool:
+    """The override detection reads the published policy; the arrows, the evaluated one."""
+
+    effective = _narrow_and_read(published, resource_type, action)
+    found = _narrow_and_read(evaluated, resource_type, action)
+    if effective is None or found is None:
         return False
-    definition, narrow, read = found
     model = model_for_resource_type(resource_type)
     declared = declared_rebac_definition(model) if model is not None else None
     stated = {permission.name: permission.expression for permission in declared.permissions} if declared else {}
-    if stated.get(action) != narrow or stated.get("read") != read:
+    if stated.get(action) != effective[1] or stated.get("read") != effective[2]:
         return False
+    definition, narrow, read = found
     reads = {(arrow.via, arrow.target) for arrow in _arrows(read)}
     return all(
-        _parent_holds(schema, definition, arrow, "read" if (arrow.via, "read") in reads else None)
+        _parent_holds(published, evaluated, definition, arrow, "read" if (arrow.via, "read") in reads else None)
         for arrow in _arrows(narrow)
         if (arrow.via, arrow.target) not in reads
     )
 
 
-def _parent_holds(schema: Schema, definition: Definition, arrow: PermArrow, target: str | None) -> bool:
-    """Whether ``arrow``'s parent action stands in for ``target``, the parent permission ``read`` takes."""
+def _parent_holds(
+    published: Schema, evaluated: Schema, definition: Definition, arrow: PermArrow, target: str | None,
+) -> bool:
+    """Whether ``arrow``'s parent action stands in for ``target``, the parent permission ``read`` takes.
+
+    A generated target is no declared action, so it is a purpose read of nothing.
+    """
 
     return target is not None and (
         arrow.target == target
-        or target == "read" and _purpose_holds(schema, _parent_type(definition, arrow.via), arrow.target)
+        or target == "read"
+        and not is_generated(arrow.target)
+        and _purpose_holds(published, evaluated, _parent_type(definition, arrow.via), arrow.target)
     )
 
 

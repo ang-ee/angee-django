@@ -25,3 +25,6 @@ adopt = "slug"
 
 [tool.angee.platform]
 category = "Data"
+
+[tool.angee.rebac]
+evaluated_policy = true

@@ -9,6 +9,7 @@ from typing import Any, ClassVar, Self
 from django.db import models
 from rebac.managers import RebacQuerySet
 
+from angee.base.permissions import PolicyArm, ShownFacts, elevated_read
 from angee.base.querysets import row_lock_paths, row_lock_queryset
 
 
@@ -72,13 +73,24 @@ class PersistenceMixin(models.Model):
         cls,
         *,
         lock: tuple[str, ...] | None = None,
+        shows: PolicyArm | ShownFacts | None = None,
     ) -> models.QuerySet[Self]:
-        """Return an elevated unscoped queryset with the shared lock contract."""
+        """Return an elevated unscoped queryset with the shared lock contract.
+
+        A reader path names what its rows are shown by (``shows``,
+        ``angee.base.permissions.elevated_read``): it then elevates only while that
+        holds, and a read operation under the policy narrowed at links accepts it.
+        """
 
         model = cls
         queryset = model._default_manager.get_queryset()
         if isinstance(queryset, RebacQuerySet):
-            queryset = queryset.system_context(reason=f"{model._meta.label_lower}.system_queryset")
+            reason = f"{model._meta.label_lower}.system_queryset"
+            queryset = (
+                queryset.system_context(reason=reason)
+                if shows is None
+                else elevated_read(queryset, shows, reason=reason, system=True)
+            )
         if lock is None:
             return queryset
         return queryset.select_for_update(of=row_lock_paths(model, lock))

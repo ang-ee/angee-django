@@ -36,3 +36,6 @@ depends_on = "demo/030_projects.task.yaml"
 
 [tool.angee.platform]
 category = "Productivity"
+
+[tool.angee.rebac]
+evaluated_policy = true

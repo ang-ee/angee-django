@@ -16,4 +16,6 @@ class LinesDemoConfig(AppConfig):
 
     name = "tests.linesdemo"
     label = "linesdemo"
+    # Its rules lend no row through a link (angee.base.permissions.undeclared_policy_apps).
+    rebac_evaluated_policy = True
     default_auto_field = "django.db.models.BigAutoField"
