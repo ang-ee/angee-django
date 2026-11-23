@@ -108,7 +108,7 @@ export {
   parseFormSpecPayload,
   type FormSpecWire,
 } from "./form/form-spec-schema";
-export { structuredFieldErrorPaths, textValue } from "./form/field-values";
+export { structuredFieldErrors, textValue, type FieldRuleError } from "./form/field-values";
 export { useUnsavedChangesNavigationGuard } from "./form/use-unsaved-changes-navigation-guard";
 export {
   ActionFormDialog,

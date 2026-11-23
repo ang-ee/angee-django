@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { get, set } from "react-hook-form";
+import { get, set, type FieldErrors } from "react-hook-form";
 import { replaceEqualDeep } from "@tanstack/react-query";
 import {
   publicIdLabel,
@@ -25,7 +25,10 @@ import {
   type GroupDescriptor,
 } from "../page";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
-import { isStructuredPresenceField, structuredFieldErrorPaths, textValue } from "./field-values";
+import {
+  REQUIRED_RULE, isStructuredPresenceField, structuredFieldErrors, textValue, type FieldRuleError,
+} from "./field-values";
+import { fieldErrorsFromRules } from "./validation-errors";
 
 export type FormValues = Record<string, unknown>;
 const MISSING_DOTTED_VALUE = Symbol("missing-dotted-value");
@@ -529,20 +532,33 @@ export function isFieldControlVisible(field: FieldDescriptor, values: FormValues
   return !field.hidden && isFieldVisible(field, values);
 }
 
-export function missingRequiredFieldNames(
+/**
+ * A record form's errors for the rules its fields fail. A structured field, one with a presence
+ * flag, a template or a bound (`isStructuredPresenceField`), answers to presence, nullability and
+ * its constraints (a number's type, its bounds), and its `required` flag is not read; any other
+ * field fails `required` when it is required and empty. It shares with a dialog's check
+ * (`dialogRuleErrors`) how a structured field's failed rule is found (`structuredFieldErrors`)
+ * and how a failed rule becomes an error with its message (`fieldErrorsFromRules`). They differ
+ * in which fields they ask and how they read values: this one asks every field visible for
+ * `values`, hidden and read-only ones included, counts `requiredFieldNames` as required outside
+ * the structured branch, always checks a structured field's constraints, and reads dotted paths,
+ * where an own key holding `undefined` is absent.
+ */
+export function formRuleErrors(
   values: FormValues,
   fields: readonly FieldDescriptor[],
   requiredFieldNames: ReadonlySet<string>,
-): readonly string[] {
-  return visibleFields(fields, values).flatMap((field) => {
+  t: UiTranslate,
+): FieldErrors<FormValues> {
+  return fieldErrorsFromRules(visibleFields(fields, values).flatMap((field): readonly FieldRuleError[] => {
     const value = dottedValue(values, field.name);
     if (isStructuredPresenceField(field)) {
-      return structuredFieldErrorPaths(field, value, hasDottedValue(values, field.name));
+      return structuredFieldErrors(field, value, hasDottedValue(values, field.name));
     }
     return (field.required || requiredFieldNames.has(field.name)) && isEmptyFieldValue(value)
-      ? [field.name]
+      ? [{ path: field.name, ...REQUIRED_RULE }]
       : [];
-  });
+  }), t);
 }
 
 export function visibleSections(

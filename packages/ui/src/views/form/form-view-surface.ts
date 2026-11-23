@@ -207,7 +207,6 @@ export interface FormViewSurface
   relationByField: ReadonlyMap<string, RelationFieldInfo>;
   /** Fields rendered by the relation multi-select, with the related model it lists. */
   relationListByField: ReadonlyMap<string, RelationFieldInfo>;
-  requiredMessage: string;
   titleField: FieldDescriptor | undefined;
   titlePlacementField: FieldDescriptor | undefined;
   titleFieldMessages: readonly string[];
@@ -917,7 +916,6 @@ export function useFormViewSurface({
     attributionFields,
     relationByField,
     relationListByField,
-    requiredMessage: t("form.required"),
     titleField,
     titlePlacementField,
     titleFieldMessages,

@@ -5,6 +5,8 @@ import { describe, expect, test } from "vitest";
 import { useForm } from "react-hook-form";
 import { boundedGraphQLTransportError } from "@angee/refine";
 import { errorFromUnknown } from "../../data/errors";
+import { enUiBundle } from "../../i18n";
+import { createAngeeI18nInstance } from "../../runtime/i18n";
 import { fieldErrorMessages } from "./form-view-model";
 
 import {
@@ -14,6 +16,7 @@ import {
   formSubmitError,
   applyFormErrors,
   directDottedPathMessages,
+  jsonSchemaErrorMessage,
   lineRowErrorsFromDottedPaths,
   messagesForDottedPath,
   useDottedPathFieldErrors,
@@ -21,6 +24,25 @@ import {
   validationErrorMessages,
   validationErrorsFromError,
 } from "./validation-errors";
+
+const t = createAngeeI18nInstance(enUiBundle).getFixedT(null, "ui");
+
+test.each([
+  { keyword: "minLength", limit: 1, message: "Enter at least 1 character." },
+  { keyword: "minLength", limit: 3, message: "Enter at least 3 characters." },
+  { keyword: "maxLength", limit: 1, message: "Enter no more than 1 character." },
+  { keyword: "maxLength", limit: 64, message: "Enter no more than 64 characters." },
+  { keyword: "minItems", limit: 1, message: "Add at least 1 item." },
+  { keyword: "minItems", limit: 2, message: "Add at least 2 items." },
+  { keyword: "maxItems", limit: 1, message: "Keep no more than 1 item." },
+  { keyword: "maxItems", limit: 3, message: "Keep no more than 3 items." },
+  { keyword: "minimum", limit: 1, message: "Enter a value of at least 1." },
+  { keyword: "maximum", limit: 1, message: "Enter a value of at most 1." },
+  { keyword: "exclusiveMinimum", limit: 1, message: "Enter a value greater than 1." },
+  { keyword: "exclusiveMaximum", limit: 1, message: "Enter a value less than 1." },
+])("a failed $keyword with a limit of $limit says: $message", ({ keyword, limit, message }) => {
+  expect(jsonSchemaErrorMessage({ keyword, params: { limit } }, t)).toBe(message);
+});
 
 describe("lineRowErrorsFromDottedPaths", () => {
   test("projects indexed child paths and ignores unrelated or malformed paths", () => {

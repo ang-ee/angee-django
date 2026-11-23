@@ -10,6 +10,30 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: **Changed behaviour.** A value that breaks one of a field's rules now
+  says which, in a record form and in a dialog without a schema resolver: too short,
+  too long, out of range, too few or too many items, or the wrong type ("Enter no
+  more than 64 characters.", "Enter a valid whole number."). Before, each of them
+  said "This field is required.", and a cleared number field that said the field
+  was required now says "Enter a valid whole number.". A missing value, or a `null`
+  the field does not allow, still says the field is required, and so does an empty
+  text under a minimum length of one character (a cleared slug) in a field that is
+  not `omittable`; in an `omittable` field it says "Enter at least 1 character.",
+  which a dialog with a schema resolver says for both. The messages are the ones a
+  dialog with a schema resolver already shows, and a count of one reads in the
+  singular ("Keep no more than 1 item."): the bundle's `form.validation.minLength`,
+  `maxLength`, `minItems` and `maxItems` now have `_one` and `_other` forms that
+  interpolate `{count}`, not `{limit}`. The error's `type` is the rule's keyword
+  (`maxLength`, `minimum`, `type`, ...); a missing value's stays `required`.
+  `structuredFieldErrorPaths` is renamed `structuredFieldErrors` and returns, for each
+  failing path, the rule it fails with its parameters (`FieldRuleError`,
+  `{ path, keyword, params }`, exported beside it) instead of the bare path.
+  `@angee/ui/views/validation-errors` newly exports `jsonSchemaErrorMessage`, the
+  message function that was private to `@angee/ui/views/json-schema`, with
+  `JsonSchemaRule`, the failed rule it takes, and `fieldErrorsFromRules`, which
+  turns failed rules into a form's errors; a record form and a dialog use them
+  without loading Ajv. `FormViewSurface.requiredMessage`, which nothing read, is
+  removed.
 - `@angee/ui`: **Changed behaviour.** Edits made in a record form's lines are now
   undo steps of their own; before, they were not: an undo after a title step and a
   cell edit reverted the title and discarded the cell edit. One user intention is

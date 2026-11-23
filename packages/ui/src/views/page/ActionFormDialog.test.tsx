@@ -33,6 +33,7 @@ import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider, type FormOverrideMap } from "../../runtime";
 import { defaultWidgets } from "../../widgets";
 import { ActionFormDialog, serializeActionArgValues } from "../form/ActionFormDialog";
+import { deserializeFormSpec } from "../form/form-spec";
 import { jsonSchemaActionArgs } from "../form/json-schema";
 import { registerForm, type RegisteredFormProps } from "../form/registered-form";
 import type { ActionArg, ActionDescriptor, ActionFormContext } from ".";
@@ -470,6 +471,38 @@ describe("ActionFormDialog", () => {
     expect(args).toHaveBeenCalledTimes(1);
   });
 
+  test("a schema dialog words a cleared required slug by its length rule, where a record form and a schema-less dialog say it is required: both are true", async () => {
+    const submit = vi.fn();
+    renderDialog({ id: "rename", label: "Rename", submit, args: jsonSchemaActionArgs({
+      type: "object", required: ["slug"], properties: {
+        slug: { type: "string", label: "Slug", minLength: 1, maxLength: 64 },
+        handle: { type: "string", label: "Handle", minLength: 3 },
+      },
+    }, defaultWidgets, { initialValues: { slug: "", handle: "" } }) });
+    await screen.findByRole("textbox", { name: "Slug" });
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+
+    await screen.findByText("Enter at least 3 characters.");
+    const messageUnder = (label: string) => screen.getByText(label).closest('[data-layout="stack"]')?.textContent;
+    expect(messageUnder("Slug")).toContain("Enter at least 1 character.");
+    expect(messageUnder("Slug")).not.toContain("This field is required.");
+    expect(messageUnder("Handle")).not.toContain("This field is required.");
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  test("a schema dialog says an optional empty text under a minimum length of one is too short", async () => {
+    const submit = vi.fn();
+    renderDialog({ id: "rename", label: "Rename", submit, args: jsonSchemaActionArgs({
+      type: "object", properties: { nick: { type: "string", label: "Nick", minLength: 1, omittable: true } },
+    }, defaultWidgets, { initialValues: { nick: "" } }) });
+    await screen.findByRole("textbox", { name: "Nick" });
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+
+    expect(await screen.findByText("Enter at least 1 character.")).toBeTruthy();
+    expect(screen.queryByText("This field is required.")).toBeNull();
+    expect(submit).not.toHaveBeenCalled();
+  });
+
   test("reports a malformed record schema inside the action dialog", async () => {
     renderDialog({ id: "review", label: "Review", args: () => {
       throw new Error("The saved schema is invalid.");
@@ -588,6 +621,25 @@ describe("ActionFormDialog", () => {
       { amount: "500.00", zero: 0, fallback: "Default" }, context, { errorNotification: false }
     ));
     expect(onSucceeded).toHaveBeenCalledWith(outcome);
+  });
+
+  test("a resolver-less definition's cleared optional number is not submitted: the submit stops at the number message", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Saved." });
+    renderDialog({ id: "size", label: "Resize", submit, args: {
+      fields: deserializeFormSpec({ type: "object", properties: {
+        size: { type: "integer", label: "Size", omittable: true },
+      } }, defaultWidgets),
+      defaultValues: { size: 3 },
+    } });
+    const size = screen.getByLabelText("Size");
+    fireEvent.change(size, { target: { value: "" } });
+    fireEvent.blur(size);
+    const button = screen.getByRole<HTMLButtonElement>("button", { name: "Resize" });
+    await waitFor(() => expect(button.disabled).toBe(true));
+    fireEvent.submit(button.closest("form")!);
+
+    expect(await screen.findByText("Enter a valid whole number.")).toBeTruthy();
+    expect(submit).not.toHaveBeenCalled();
   });
 
   test("serializes datetime args with the picked local UTC offset", async () => {

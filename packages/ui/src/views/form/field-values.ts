@@ -1,4 +1,5 @@
 import type { FieldDescriptor } from "../page";
+import type { JsonSchemaRule } from "./validation-errors";
 
 /** Normalize scalar text without interpreting domain-specific objects.
  * @kind null
@@ -19,57 +20,84 @@ export function emptyValueForField(field: Pick<FieldDescriptor, "widget" | "kind
   return "";
 }
 
-/** Validate JSON presence, optionally leaving value constraints to a schema resolver. */
-export function invalidPresenceValue(
+/** The rule a field's value fails at one dotted form path, in the keyword and parameters `jsonSchemaErrorMessage` reads. */
+export interface FieldRuleError extends JsonSchemaRule {
+  path: string;
+}
+
+/** The rule a missing value fails: `required`, which carries no parameters; frozen, and typed read-only. */
+export const REQUIRED_RULE: Readonly<{ keyword: "required"; params: Readonly<Record<string, never>> }> =
+  Object.freeze({ keyword: "required", params: Object.freeze({}) });
+
+/**
+ * The first rule `value` fails: `required` when it is absent or a `null` the field does not
+ * allow; then, unless `validateConstraints` is off and a schema resolver reports the rest, the
+ * descriptor's constraints.
+ */
+function failedValueRule(
   field: FieldDescriptor,
   value: unknown,
   present: boolean,
-  validateConstraints = true,
-): boolean {
-  if (!present || value === undefined) return true;
-  if (value === null) return !field.nullable;
-  return validateConstraints && invalidDescriptorConstraint(field, value);
+  validateConstraints: boolean,
+): JsonSchemaRule | undefined {
+  if (!present || value === undefined || (value === null && !field.nullable)) return REQUIRED_RULE;
+  if (value === null || !validateConstraints) return undefined;
+  return failedDescriptorConstraint(field, value);
 }
 
-function invalidDescriptorConstraint(field: FieldDescriptor, value: unknown): boolean {
+/**
+ * The first descriptor constraint a present, non-null value fails: an integer or number field's
+ * `type`, then the lower and the upper bound of its size, `minLength`/`maxLength` for text,
+ * `minimum`/`maximum` for a number, `minItems`/`maxItems` for a list. An empty text under a
+ * `minLength` of one in a field that is not omittable is a missing value: `required`; an
+ * omittable field keeps the `minLength` rule.
+ */
+function failedDescriptorConstraint(field: FieldDescriptor, value: unknown): JsonSchemaRule | undefined {
   if ((field.kind === "integer" || field.kind === "number") && typeof value !== "number") {
-    return true;
+    return { keyword: "type", params: { type: field.kind } };
   }
-  if (typeof value === "string") {
-    return (field.minLength !== undefined && value.length < field.minLength)
-      || (field.maxLength !== undefined && value.length > field.maxLength);
+  const bounds = typeof value === "string" ? { size: value.length, lower: "minLength", upper: "maxLength" } as const
+    : typeof value === "number" ? { size: value, lower: "minimum", upper: "maximum" } as const
+    : Array.isArray(value) ? { size: value.length, lower: "minItems", upper: "maxItems" } as const
+    : undefined;
+  if (!bounds) return undefined;
+  const min = field[bounds.lower];
+  const max = field[bounds.upper];
+  if (min !== undefined && bounds.size < min) {
+    return bounds.lower === "minLength" && min === 1 && !field.omittable
+      ? REQUIRED_RULE
+      : { keyword: bounds.lower, params: { limit: min } };
   }
-  if (typeof value === "number") {
-    return (field.minimum !== undefined && value < field.minimum)
-      || (field.maximum !== undefined && value > field.maximum);
-  }
-  if (Array.isArray(value)) {
-    return (field.minItems !== undefined && value.length < field.minItems)
-      || (field.maxItems !== undefined && value.length > field.maxItems);
-  }
-  return false;
+  if (max !== undefined && bounds.size > max) return { keyword: bounds.upper, params: { limit: max } };
+  return undefined;
 }
 
-/** Return exact dotted paths violating a structured FormSpec declaration.
- * With `validateConstraints=false`, check only presence and nullability at every depth.
+/** The rules a structured FormSpec value fails, one per dotted path, the field's path before its
+ * members' and its list items'. A path reports the first rule it fails, in this order: presence
+ * (`required`: absent, or `null` where the field is not nullable), then an integer or number
+ * field's `type`, then the lower bound before the upper (`minLength`, `maxLength`, `minimum`,
+ * `maximum`, `minItems`, `maxItems`), each with its `limit`. One case reads as presence: an
+ * empty text under a `minLength` of one is `required` when the field is not omittable. With
+ * `validateConstraints=false`, only presence is checked, at every depth.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
-export function structuredFieldErrorPaths(
+export function structuredFieldErrors(
   field: FieldDescriptor,
   value: unknown,
   present: boolean,
   path = field.name,
   validateConstraints = true,
-): readonly string[] {
-  const errors: string[] = [];
-  if ((field.presenceRequired || present) && invalidPresenceValue(field, value, present, validateConstraints)) {
-    errors.push(path);
-  }
+): readonly FieldRuleError[] {
+  const errors: FieldRuleError[] = [];
+  const failed = field.presenceRequired || present
+    ? failedValueRule(field, value, present, validateConstraints)
+    : undefined;
+  if (failed) errors.push({ path, ...failed });
   if (value && typeof value === "object" && !Array.isArray(value) && field.objectTemplate) {
     const record = value as Record<string, unknown>;
     for (const child of field.objectTemplate) {
-      errors.push(...structuredFieldErrorPaths(
+      errors.push(...structuredFieldErrors(
         child,
         record[child.name],
         Object.hasOwn(record, child.name),
@@ -80,7 +108,7 @@ export function structuredFieldErrorPaths(
   }
   if (Array.isArray(value) && field.itemTemplate) {
     value.forEach((item, index) => {
-      errors.push(...structuredFieldErrorPaths(field.itemTemplate!, item, true, `${path}.${index}`, validateConstraints));
+      errors.push(...structuredFieldErrors(field.itemTemplate!, item, true, `${path}.${index}`, validateConstraints));
     });
   }
   return errors;

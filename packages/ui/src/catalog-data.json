@@ -7673,7 +7673,7 @@
   },
   {
     "package": "@angee/ui",
-    "name": "structuredFieldErrorPaths",
+    "name": "structuredFieldErrors",
     "source": "packages/ui/src/views/form/field-values.ts",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",

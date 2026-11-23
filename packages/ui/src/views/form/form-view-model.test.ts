@@ -1,6 +1,8 @@
 import { get, set } from "react-hook-form";
 import { describe, expect, test } from "vitest";
 
+import { enUiBundle } from "../../i18n";
+import { createAngeeI18nInstance } from "../../runtime/i18n";
 import type { FieldDescriptor } from "../page";
 import type { FormSpecFieldDescriptor } from "./form-spec";
 import {
@@ -8,10 +10,10 @@ import {
   emptyDraft,
   addFieldSelection,
   fieldErrorMessages,
+  formRuleErrors,
   formSections,
   formViewFieldLayout,
   isCompositeFieldDescriptor,
-  missingRequiredFieldNames,
   mutationData,
   createPresetMemory,
   recordToValues,
@@ -21,7 +23,10 @@ import {
   titleText,
   type PresetMemory,
 } from "./form-view-model";
-import { requiredDialogErrors } from "./MutationDialog";
+import { dialogRuleErrors } from "./MutationDialog";
+
+const t = createAngeeI18nInstance(enUiBundle).getFixedT(null, "ui");
+const required = { type: "required", message: "This field is required." };
 
 const fields: readonly FieldDescriptor[] = [
   { name: "config.local_root", widget: "text" },
@@ -240,8 +245,63 @@ test("an empty object or json field drafts as an empty object and an empty list 
 
 test("a required json field holding an empty object is not missing, in a record form as in a dialog", () => {
   const config: FieldDescriptor = { name: "config", widget: "json", required: true };
-  expect(missingRequiredFieldNames({ config: {} }, [config], new Set())).toEqual([]);
-  expect(requiredDialogErrors([config], { config: {} }, "Required")).toEqual({});
+  expect(formRuleErrors({ config: {} }, [config], new Set(), t)).toEqual({});
+  expect(dialogRuleErrors([config], { config: {} }, t)).toEqual({});
+});
+
+test("a field's failed rule says the same thing in a record form as in a dialog", () => {
+  const ruleFields: FieldDescriptor[] = [
+    { name: "slug", required: true, minLength: 1, maxLength: 64 },
+    { name: "cleared", minLength: 1 },
+    { name: "nick", minLength: 1, omittable: true },
+    { name: "handle", minLength: 3 },
+    { name: "low", kind: "integer", minimum: 5 },
+    { name: "high", kind: "number", maximum: 10 },
+    { name: "count", kind: "integer", omittable: true },
+    { name: "tags", kind: "array", minItems: 2 },
+    { name: "limits", kind: "array", maxItems: 1 },
+    { name: "token", presenceRequired: true },
+    { name: "remark", presenceRequired: true },
+    { name: "title", required: true },
+  ];
+  const values = {
+    slug: "a".repeat(65), cleared: "", nick: "", handle: "", low: 2, high: 11, count: "",
+    tags: ["a"], limits: ["a", "b"], remark: null, title: " ",
+  };
+  const expected = {
+    slug: { type: "maxLength", message: "Enter no more than 64 characters." },
+    cleared: required,
+    nick: { type: "minLength", message: "Enter at least 1 character." },
+    handle: { type: "minLength", message: "Enter at least 3 characters." },
+    low: { type: "minimum", message: "Enter a value of at least 5." },
+    high: { type: "maximum", message: "Enter a value of at most 10." },
+    count: { type: "type", message: "Enter a valid whole number." },
+    tags: { type: "minItems", message: "Add at least 2 items." },
+    limits: { type: "maxItems", message: "Keep no more than 1 item." },
+    token: required,
+    remark: required,
+    title: required,
+  };
+  expect(formRuleErrors(values, ruleFields, new Set(), t)).toEqual(expected);
+  expect(dialogRuleErrors(ruleFields, values, t)).toEqual(expected);
+});
+
+test.each<{ label: string; field: FieldDescriptor; values: Record<string, unknown>; recordForm: object; dialog: object }>([
+  {
+    label: "a hidden required field", field: { name: "token", required: true, hidden: true }, values: { token: "" },
+    recordForm: { token: required }, dialog: {},
+  },
+  {
+    label: "a read-only required field", field: { name: "code", required: true, readOnly: true }, values: { code: "" },
+    recordForm: { code: required }, dialog: {},
+  },
+])("$label is an expected difference between a record form and a dialog", ({ field, values, recordForm, dialog }) => {
+  expect(formRuleErrors(values, [field], new Set(), t)).toStrictEqual(recordForm);
+  expect(dialogRuleErrors([field], values, t)).toStrictEqual(dialog);
+});
+
+test.fails("defect: a dialog says a bounded optional field is required when its value is an own key holding undefined; it should say nothing", () => {
+  expect(dialogRuleErrors([{ name: "nickname", maxLength: 64 }], { nickname: undefined }, t)).toStrictEqual({});
 });
 
 describe("dotted form fields", () => {
@@ -310,21 +370,21 @@ describe("dotted form fields", () => {
         required: values.backend_class === "strict",
       }),
     };
-    expect(missingRequiredFieldNames(
-      { backend_class: "strict", config: { shared: "" } }, [dynamic], new Set(),
-    )).toEqual(["config.shared"]);
-    expect(missingRequiredFieldNames(
-      { backend_class: "loose", config: { shared: "" } }, [dynamic], new Set(),
-    )).toEqual([]);
+    expect(formRuleErrors(
+      { backend_class: "strict", config: { shared: "" } }, [dynamic], new Set(), t,
+    )).toEqual({ config: { shared: required } });
+    expect(formRuleErrors(
+      { backend_class: "loose", config: { shared: "" } }, [dynamic], new Set(), t,
+    )).toEqual({});
   });
 
   test("accepts explicit null only for a nullable required descriptor", () => {
-    expect(missingRequiredFieldNames(
-      { note: null }, [{ name: "note", required: true, nullable: true, presenceRequired: true }], new Set(),
-    )).toEqual([]);
-    expect(missingRequiredFieldNames(
-      { note: null }, [{ name: "note", required: true }], new Set(),
-    )).toEqual(["note"]);
+    expect(formRuleErrors(
+      { note: null }, [{ name: "note", required: true, nullable: true, presenceRequired: true }], new Set(), t,
+    )).toEqual({});
+    expect(formRuleErrors(
+      { note: null }, [{ name: "note", required: true }], new Set(), t,
+    )).toEqual({ note: required });
   });
 
   test("hydrates explicit null and omission without changing their presence", () => {
@@ -345,17 +405,22 @@ describe("dotted form fields", () => {
       { name: "title", required: true, presenceRequired: true },
       { name: "items", required: true, presenceRequired: true, kind: "array" },
     ];
-    expect(missingRequiredFieldNames({ title: "", items: [] }, presenceFields, new Set())).toEqual([]);
-    expect(missingRequiredFieldNames({ title: "" }, presenceFields, new Set())).toEqual(["items"]);
-    expect(missingRequiredFieldNames(
-      { title: "", items: [] }, [{ ...presenceFields[0]!, minLength: 1 }, { ...presenceFields[1]!, minItems: 1 }], new Set(),
-    )).toEqual(["title", "items"]);
-    expect(missingRequiredFieldNames(
-      { title: "" }, [{ name: "title", required: true }], new Set(),
-    )).toEqual(["title"]);
+    expect(formRuleErrors({ title: "", items: [] }, presenceFields, new Set(), t)).toEqual({});
+    expect(formRuleErrors({ title: "" }, presenceFields, new Set(), t)).toEqual({ items: required });
+    expect(formRuleErrors(
+      { title: "", items: [] }, [{ ...presenceFields[0]!, minLength: 1 }, { ...presenceFields[1]!, minItems: 1 }], new Set(), t,
+    )).toEqual({
+      title: required,
+      items: { type: "minItems", message: "Add at least 1 item." },
+    });
+    expect(formRuleErrors(
+      { title: "" }, [{ name: "title", required: true }], new Set(), t,
+    )).toEqual({ title: required });
     const optional = { name: "summary", omittable: true, minLength: 2 };
-    expect(missingRequiredFieldNames({}, [optional], new Set())).toEqual([]);
-    expect(missingRequiredFieldNames({ summary: "" }, [optional], new Set())).toEqual(["summary"]);
+    expect(formRuleErrors({}, [optional], new Set(), t)).toEqual({});
+    expect(formRuleErrors({ summary: "" }, [optional], new Set(), t)).toEqual({
+      summary: { type: "minLength", message: "Enter at least 2 characters." },
+    });
   });
 
   test("submits nested config through its writable root and nested dirty state", () => {

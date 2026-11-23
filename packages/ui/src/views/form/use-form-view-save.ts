@@ -24,7 +24,7 @@ import {
   type Fields,
   type HttpError,
 } from "@refinedev/core";
-import { get, set, useForm, type FieldErrors } from "react-hook-form";
+import { get, set, useForm } from "react-hook-form";
 import { replaceEqualDeep, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import type { UiTranslate } from "../../i18n";
@@ -46,10 +46,10 @@ import {
   dirtyArrayValues,
   emptyDraft,
   fieldValidationSummary,
+  formRuleErrors,
   hiddenDraftPaths,
   hiddenResetWrites,
   missingDraftValues,
-  missingRequiredFieldNames,
   mutationData,
   recordToValues,
   resolveField,
@@ -408,8 +408,7 @@ export function useFormViewSave({
     defaultValues: emptyValues,
     shouldUnregister: false,
     resolver: (formValues) => {
-      const missing = missingRequiredFieldNames(formValues, formFields, requiredFieldNames);
-      const errors = requiredErrors(missing, t("form.required"));
+      const errors = formRuleErrors(formValues, formFields, requiredFieldNames, t);
       validateFields(formValues, (name, error) => set(errors, name, error));
       return Object.keys(errors).length
         ? { values: {}, errors }
@@ -929,10 +928,4 @@ export function useFormViewSave({
 
 function isFormSubmitAcknowledgement(value: Row | FormSubmitAcknowledgement): value is FormSubmitAcknowledgement {
   return value.kind === "form-submit-acknowledgement" && "record" in value && "values" in value;
-}
-
-function requiredErrors(names: readonly string[], message: string): FieldErrors<FormValues> {
-  const errors: FieldErrors<FormValues> = {};
-  for (const name of names) set(errors, name, { type: "required", message });
-  return errors;
 }

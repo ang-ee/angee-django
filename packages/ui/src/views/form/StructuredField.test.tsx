@@ -10,7 +10,7 @@ import { defaultWidgets } from "../../widgets";
 import { deserializeFormSpec, formSpecInitialValues, normalizeFormSpecValues } from "./form-spec";
 import { LabeledDescriptorField } from "./DescriptorFieldList";
 import { listWidget, objectWidget } from "./StructuredField";
-import { structuredFieldErrorPaths } from "./field-values";
+import { structuredFieldErrors } from "./field-values";
 import type { WidgetRenderProps } from "../../widgets/types";
 import { RowsField, type RowsValue } from "./RowsField";
 
@@ -151,11 +151,21 @@ describe("structured FormSpec widgets", () => {
     expect((input as HTMLInputElement).value).toBe("0");
     fireEvent.change(input, { target: { value: "42" } });
     expect((input as HTMLInputElement).value).toBe("42");
-    expect(structuredFieldErrorPaths(
+    expect(structuredFieldErrors(
       { name: "limit", kind: "integer", nullable: true },
       "",
       true,
-    )).toEqual(["limit"]);
+    )).toEqual([{ path: "limit", keyword: "type", params: { type: "integer" } }]);
+  });
+
+  test("an empty text under a minimum length of one is missing unless the field is omittable, and under a minimum above one is too short", () => {
+    expect(structuredFieldErrors({ name: "slug", minLength: 1, maxLength: 64 }, "", true))
+      .toEqual([{ path: "slug", keyword: "required", params: {} }]);
+    expect(structuredFieldErrors({ name: "nick", minLength: 1, omittable: true }, "", true))
+      .toEqual([{ path: "nick", keyword: "minLength", params: { limit: 1 } }]);
+    expect(structuredFieldErrors({ name: "handle", minLength: 3 }, "", true))
+      .toEqual([{ path: "handle", keyword: "minLength", params: { limit: 3 } }]);
+    expect(structuredFieldErrors({ name: "slug", minLength: 1 }, " ", true)).toEqual([]);
   });
 
   test("schema-resolved nested values retain presence checks without preempting constraint messages", () => {
@@ -171,12 +181,56 @@ describe("structured FormSpec widgets", () => {
     } }, defaultWidgets);
     const value = { title: "no", rows: [{ note: "x" }, {}] };
 
-    expect(structuredFieldErrorPaths(field!, value, true)).toEqual([
-      "config.title", "config.rows", "config.rows.0.note", "config.rows.1.note",
+    expect(structuredFieldErrors(field!, value, true)).toEqual([
+      { path: "config.title", keyword: "minLength", params: { limit: 3 } },
+      { path: "config.rows", keyword: "minItems", params: { limit: 3 } },
+      { path: "config.rows.0.note", keyword: "minLength", params: { limit: 3 } },
+      { path: "config.rows.1.note", keyword: "required", params: {} },
     ]);
-    expect(structuredFieldErrorPaths(field!, value, true, "config", false)).toEqual([
-      "config.rows.1.note",
+    expect(structuredFieldErrors(field!, value, true, "config", false)).toEqual([
+      { path: "config.rows.1.note", keyword: "required", params: {} },
     ]);
+  });
+
+  test("each failed rule comes with its keyword and limit at its path, members and list items included", () => {
+    const [field] = deserializeFormSpec({ properties: {
+      config: { type: "object", widget: "object", properties: {
+        handle: { type: "string", minLength: 3 },
+        code: { type: "string", maxLength: 4 },
+        low: { type: "integer", minimum: 5 },
+        high: { type: "number", maximum: 10 },
+        count: { type: "integer", omittable: true },
+        tags: { type: "array", widget: "list", minItems: 2, items: { type: "string", maxLength: 1 } },
+        limits: { type: "array", widget: "list", maxItems: 1, items: { type: "string" } },
+        token: { type: "string", presenceRequired: true },
+        remark: { type: "string", presenceRequired: true },
+        note: { type: "string", nullable: true, omittable: true },
+      } },
+    } }, defaultWidgets);
+
+    expect(structuredFieldErrors(field!, {
+      handle: "ab", code: "abcde", low: 2, high: 10.5, count: "seven", tags: ["xy"], limits: ["a", "b"], remark: null, note: null,
+    }, true)).toEqual([
+      { path: "config.handle", keyword: "minLength", params: { limit: 3 } },
+      { path: "config.code", keyword: "maxLength", params: { limit: 4 } },
+      { path: "config.low", keyword: "minimum", params: { limit: 5 } },
+      { path: "config.high", keyword: "maximum", params: { limit: 10 } },
+      { path: "config.count", keyword: "type", params: { type: "integer" } },
+      { path: "config.tags", keyword: "minItems", params: { limit: 2 } },
+      { path: "config.tags.0", keyword: "maxLength", params: { limit: 1 } },
+      { path: "config.limits", keyword: "maxItems", params: { limit: 1 } },
+      { path: "config.token", keyword: "required", params: {} },
+      { path: "config.remark", keyword: "required", params: {} },
+    ]);
+  });
+
+  test("a path reports one failed rule: presence, then type, then the lower bound before the upper", () => {
+    const count = { name: "count", kind: "integer", presenceRequired: true, minimum: 5, maxLength: 1 } as const;
+    expect(structuredFieldErrors(count, undefined, false)).toEqual([{ path: "count", keyword: "required", params: {} }]);
+    expect(structuredFieldErrors(count, null, true)).toEqual([{ path: "count", keyword: "required", params: {} }]);
+    expect(structuredFieldErrors(count, "12", true)).toEqual([{ path: "count", keyword: "type", params: { type: "integer" } }]);
+    expect(structuredFieldErrors({ name: "code", minLength: 3, maxLength: 1 }, "ab", true))
+      .toEqual([{ path: "code", keyword: "minLength", params: { limit: 3 } }]);
   });
 
   test("keeps an optional nullable Decimal union editable through a null transition", () => {
