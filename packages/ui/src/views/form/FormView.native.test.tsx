@@ -1513,14 +1513,15 @@ test("a create form renders a rows field's columns each time it opens", async ()
 });
 
 // The create rule for a container field, whichever widget holds it: untouched, it is sent as an
-// empty container. The object and list fields are required on create by the model's metadata.
+// empty container. The json, object, list and rows fields are JSON scalars, as a model's JSON
+// column is: with that metadata an untouched object, list or rows field used to be left out.
 const containerNames = ["config", "members", "labels", "layout", "steps", "mappings"];
+const jsonColumns = ["config", "layout", "steps", "mappings"];
 const containerBase = withFields(containerNames);
 const containerResource: DataResourceMetadata = {
   ...containerBase,
   createFields: ["title", ...containerNames],
-  requiredCreateFields: ["layout", "steps"],
-  fields: containerBase.fields?.map((field) => ["layout", "steps"].includes(field.name) ? { ...field, requiredOnCreate: true } : field),
+  fields: containerBase.fields?.map((field) => jsonColumns.includes(field.name) ? { ...field, scalar: "JSON" } : field),
 };
 const containerFields: readonly FieldDescriptor[] = [
   { name: "title", label: "Title" },

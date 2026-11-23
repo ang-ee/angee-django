@@ -33,12 +33,16 @@ live in code docstrings.
 - `@angee/ui`: **Changed behaviour.** A record form's `object`, `list` or `rows`
   field showed its loading placeholder for good in a create form, and in an edit
   form once the widget's code was loaded. Those widgets refuse the empty string
-  the form gave the field in a create form, and in an edit form before the
-  record's values arrived. The form now gives an `object` field an empty
-  object and a `list` or `rows` field an empty list, as it gives a `json` field
-  an empty object. An untouched `object`, `list` or `rows` field is therefore
-  sent as an empty container when a record is created, as untouched `json`,
-  `tagInput` and `many2many` fields already are.
+  the form gave the field in a create form, in an edit form before the record's
+  values arrived, and for a record that lacks the field. The form now gives an
+  `object` field an empty object and a `list` or `rows` field an empty list, as
+  it gives a `json` field an empty object. An untouched `object`, `list` or
+  `rows` field is therefore sent as an empty container (`{}` or `[]`) when a
+  record is created, as untouched `json`, `tagInput` and `many2many` fields
+  already are. Before, such a field was left out of the create (or sent as an
+  empty string when the model's metadata does not describe it), so the server's
+  default or NULL applied: a form that declares one of these widgets on a
+  nullable or defaulted column now writes the empty container instead.
 - `@angee/ui`: **Changed behaviour.** A dialog submits only the fields it shows:
   a field a `showWhen` hides, when the dialog opens or after a value was typed
   into it, is not submitted, and shows its initial value when it shows again,
