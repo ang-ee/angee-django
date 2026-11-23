@@ -2687,6 +2687,26 @@ describe("FormView", () => {
     expect(sdkMocks.mutate).not.toHaveBeenCalled();
   });
 
+  test("a cleared nullable text under a minimum length of one keeps the length message, and a cleared required one says the field is required", async () => {
+    sdkMocks.record = { id: "note-1", caption: "hi", slug: "front-desk" };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={deserializeFormSpec({ type: "object", properties: {
+      caption: { type: "string", label: "Caption", minLength: 1, nullable: true },
+      slug: { type: "string", label: "Slug", minLength: 1 },
+    } }, defaultWidgets)} />);
+    const caption = await screen.findByRole("textbox", { name: "Caption" });
+    await waitFor(() => expect((caption as HTMLInputElement).value).toBe("hi"));
+    fireEvent.change(caption, { target: { value: "" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Slug" }), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await screen.findByText("Enter at least 1 character.");
+    const messageUnder = (label: string) => screen.getByText(label).closest('[data-layout="stack"]')?.textContent;
+    expect(messageUnder("Caption")).toContain("Enter at least 1 character.");
+    expect(messageUnder("Caption")).not.toContain("This field is required.");
+    expect(messageUnder("Slug")).toContain("This field is required.");
+    expect(sdkMocks.mutate).not.toHaveBeenCalled();
+  });
+
   test("each value rule a record form checks shows its own message, and a missing value says the field is required", async () => {
     sdkMocks.mutate.mockClear();
     const descriptors = deserializeFormSpec({ type: "object", properties: {
@@ -2747,6 +2767,19 @@ describe("FormView", () => {
     expect(await screen.findByText("Enter a valid whole number.")).toBeTruthy();
     expect(sdkMocks.mutate).not.toHaveBeenCalled();
     expect(dataProvider.update).not.toHaveBeenCalled();
+  });
+
+  test("a number typed into a JSON root's member is sent as a number in its root", async () => {
+    sdkMocks.record = { id: "note-1", config: { timeout: 30 } };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={configFields({ timeout: timeoutMember })} />);
+    const timeout = await screen.findByLabelText("Timeout");
+    await waitFor(() => expect((timeout as HTMLInputElement).value).toBe("30"));
+    fireEvent.change(timeout, { target: { value: "7" } });
+    fireEvent.blur(timeout);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate.mock.calls[0]![0].data).toStrictEqual({ id: "note-1", config: { timeout: 7 } });
   });
 
   test("does not apply impl prefill on edit when the impl field is create-only", async () => {

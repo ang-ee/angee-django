@@ -14,17 +14,22 @@ live in code docstrings.
   says which, in a record form and in a dialog without a schema resolver: too short,
   too long, out of range, too few or too many items, or the wrong type ("Enter no
   more than 64 characters.", "Enter a valid whole number."). Before, each of them
-  said "This field is required.", and a cleared number field that said the field
-  was required now says "Enter a valid whole number.". A missing value, or a `null`
-  the field does not allow, still says the field is required, and so does an empty
-  text under a minimum length of one character (a cleared slug) in a field that is
-  not `omittable`; in an `omittable` field it says "Enter at least 1 character.",
-  which a dialog with a schema resolver says for both. The messages are the ones a
-  dialog with a schema resolver already shows, and a count of one reads in the
-  singular ("Keep no more than 1 item."): the bundle's `form.validation.minLength`,
-  `maxLength`, `minItems` and `maxItems` now have `_one` and `_other` forms that
-  interpolate `{count}`, not `{limit}`. The error's `type` is the rule's keyword
-  (`maxLength`, `minimum`, `type`, ...); a missing value's stays `required`.
+  said "This field is required.". A cleared number field that is `omittable`,
+  presence-required or bounded, and not nullable, now says "Enter a valid whole
+  number." ("Enter a valid number." where its type is `number`) where it said the
+  field was required; a required number field with no presence flag or bound still
+  says the field is required. A missing value, or a `null` the field does not allow,
+  still says the field is required, and so does an empty text under a minimum length
+  of one character (a cleared slug) in a field that is neither `omittable` nor
+  nullable; in a field that is either, it says "Enter at least 1 character.". A
+  dialog with a schema resolver says "Enter at least 1 character." in each case, and
+  for a text declared nullable with `anyOf` also "Enter a valid empty value. Enter a
+  valid value.". The messages are the ones a dialog with a schema resolver already
+  shows, and a count of one reads in the singular ("Keep no more than 1 item."): the
+  bundle's `form.validation.minLength`, `maxLength`, `minItems` and `maxItems` now
+  have `_one` and `_other` forms that interpolate `{count}`, not `{limit}`. The
+  error's `type` is the rule's keyword (`maxLength`, `minimum`, `type`, ...); a
+  missing value's stays `required`.
   `structuredFieldErrorPaths` is renamed `structuredFieldErrors` and returns, for each
   failing path, the rule it fails with its parameters (`FieldRuleError`,
   `{ path, keyword, params }`, exported beside it) instead of the bare path.

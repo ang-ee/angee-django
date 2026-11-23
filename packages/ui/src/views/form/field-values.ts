@@ -49,8 +49,8 @@ function failedValueRule(
  * The first descriptor constraint a present, non-null value fails: an integer or number field's
  * `type`, then the lower and the upper bound of its size, `minLength`/`maxLength` for text,
  * `minimum`/`maximum` for a number, `minItems`/`maxItems` for a list. An empty text under a
- * `minLength` of one in a field that is not omittable is a missing value: `required`; an
- * omittable field keeps the `minLength` rule.
+ * `minLength` of one in a field that is neither omittable nor nullable is a missing value:
+ * `required`; a field that may be left without a value keeps the `minLength` rule.
  */
 function failedDescriptorConstraint(field: FieldDescriptor, value: unknown): JsonSchemaRule | undefined {
   if ((field.kind === "integer" || field.kind === "number") && typeof value !== "number") {
@@ -64,7 +64,7 @@ function failedDescriptorConstraint(field: FieldDescriptor, value: unknown): Jso
   const min = field[bounds.lower];
   const max = field[bounds.upper];
   if (min !== undefined && bounds.size < min) {
-    return bounds.lower === "minLength" && min === 1 && !field.omittable
+    return bounds.lower === "minLength" && min === 1 && !field.omittable && !field.nullable
       ? REQUIRED_RULE
       : { keyword: bounds.lower, params: { limit: min } };
   }
@@ -77,8 +77,8 @@ function failedDescriptorConstraint(field: FieldDescriptor, value: unknown): Jso
  * (`required`: absent, or `null` where the field is not nullable), then an integer or number
  * field's `type`, then the lower bound before the upper (`minLength`, `maxLength`, `minimum`,
  * `maximum`, `minItems`, `maxItems`), each with its `limit`. One case reads as presence: an
- * empty text under a `minLength` of one is `required` when the field is not omittable. With
- * `validateConstraints=false`, only presence is checked, at every depth.
+ * empty text under a `minLength` of one is `required` when the field is neither omittable nor
+ * nullable. With `validateConstraints=false`, only presence is checked, at every depth.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */

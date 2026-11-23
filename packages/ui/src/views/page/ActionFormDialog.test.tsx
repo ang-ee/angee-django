@@ -192,6 +192,20 @@ function Harness({ action, onSucceeded }: {
   );
 }
 
+/** A resolver-less definition of one integer field, "Size", holding 3. */
+function sizeDefinition(size: Readonly<Record<string, boolean>>) {
+  return {
+    fields: deserializeFormSpec({ type: "object", properties: { size: { type: "integer", label: "Size", ...size } } }, defaultWidgets),
+    defaultValues: { size: 3 },
+  };
+}
+
+function clearNumber(label: string): void {
+  const input = screen.getByLabelText(label);
+  fireEvent.change(input, { target: { value: "" } });
+  fireEvent.blur(input);
+}
+
 /** Open the collection relation picker and select an option by its label. */
 async function pickCollection(label: string): Promise<void> {
   fireEvent.click(screen.getByRole("combobox", { name: "Collection" }));
@@ -503,6 +517,21 @@ describe("ActionFormDialog", () => {
     expect(submit).not.toHaveBeenCalled();
   });
 
+  test("a schema dialog says each alternative a cleared nullable text fails, its length rule first, and does not submit it", async () => {
+    const submit = vi.fn();
+    renderDialog({ id: "rename", label: "Rename", submit, args: jsonSchemaActionArgs({
+      type: "object", properties: { caption: { label: "Caption", anyOf: [{ type: "string", minLength: 1 }, { type: "null" }] } },
+    }, defaultWidgets, { initialValues: { caption: "hi" } }) });
+    fireEvent.change(await screen.findByRole("textbox", { name: "Caption" }), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+
+    const messageUnder = (label: string) => screen.getByText(label).closest('[data-layout="stack"]')?.textContent;
+    await waitFor(() => expect(messageUnder("Caption"))
+      .toContain("Enter at least 1 character. Enter a valid empty value. Enter a valid value."));
+    expect(messageUnder("Caption")).not.toContain("This field is required.");
+    expect(submit).not.toHaveBeenCalled();
+  });
+
   test("reports a malformed record schema inside the action dialog", async () => {
     renderDialog({ id: "review", label: "Review", args: () => {
       throw new Error("The saved schema is invalid.");
@@ -625,18 +654,56 @@ describe("ActionFormDialog", () => {
 
   test("a resolver-less definition's cleared optional number is not submitted: the submit stops at the number message", async () => {
     const submit = vi.fn().mockResolvedValue({ ok: true, message: "Saved." });
-    renderDialog({ id: "size", label: "Resize", submit, args: {
-      fields: deserializeFormSpec({ type: "object", properties: {
-        size: { type: "integer", label: "Size", omittable: true },
-      } }, defaultWidgets),
-      defaultValues: { size: 3 },
-    } });
-    const size = screen.getByLabelText("Size");
-    fireEvent.change(size, { target: { value: "" } });
-    fireEvent.blur(size);
+    renderDialog({ id: "size", label: "Resize", submit, args: sizeDefinition({ omittable: true }) });
+    clearNumber("Size");
     const button = screen.getByRole<HTMLButtonElement>("button", { name: "Resize" });
     await waitFor(() => expect(button.disabled).toBe(true));
     fireEvent.submit(button.closest("form")!);
+
+    expect(await screen.findByText("Enter a valid whole number.")).toBeTruthy();
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  test("a resolver-less definition submits a cleared nullable number with no bound or presence flag as an empty string", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Saved." });
+    renderDialog({ id: "size", label: "Resize", submit, args: sizeDefinition({ nullable: true }) });
+    clearNumber("Size");
+    fireEvent.click(screen.getByRole("button", { name: "Resize" }));
+
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(submit.mock.calls[0]![0]).toStrictEqual({ size: "" });
+  });
+
+  test("a resolver-less definition sends a filled number as the number", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Saved." });
+    renderDialog({ id: "size", label: "Resize", submit, args: sizeDefinition({ omittable: true }) });
+    const size = screen.getByLabelText("Size");
+    fireEvent.change(size, { target: { value: "7" } });
+    fireEvent.blur(size);
+    fireEvent.click(screen.getByRole("button", { name: "Resize" }));
+
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(submit.mock.calls[0]![0]).toStrictEqual({ size: 7 });
+  });
+
+  test("a cleared required number argument is not submitted and says the field is required", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Saved." });
+    renderDialog({ id: "size", label: "Resize", submit, args: [{ name: "size", label: "Size", kind: "integer", defaultValue: 3 }] });
+    clearNumber("Size");
+    fireEvent.submit(screen.getByRole("button", { name: "Resize" }).closest("form")!);
+
+    expect(await screen.findByText("This field is required.")).toBeTruthy();
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  test("a schema dialog refuses a cleared optional number before submit", async () => {
+    const submit = vi.fn();
+    renderDialog({ id: "size", label: "Resize", submit, args: jsonSchemaActionArgs({
+      type: "object", properties: { size: { type: "integer", label: "Size", omittable: true } },
+    }, defaultWidgets, { initialValues: { size: 3 } }) });
+    await screen.findByLabelText("Size");
+    clearNumber("Size");
+    fireEvent.click(screen.getByRole("button", { name: "Resize" }));
 
     expect(await screen.findByText("Enter a valid whole number.")).toBeTruthy();
     expect(submit).not.toHaveBeenCalled();

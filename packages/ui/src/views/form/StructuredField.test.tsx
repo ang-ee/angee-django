@@ -158,11 +158,13 @@ describe("structured FormSpec widgets", () => {
     )).toEqual([{ path: "limit", keyword: "type", params: { type: "integer" } }]);
   });
 
-  test("an empty text under a minimum length of one is missing unless the field is omittable, and under a minimum above one is too short", () => {
+  test("an empty text under a minimum length of one is missing unless the field is omittable or nullable, and under a minimum above one is too short", () => {
     expect(structuredFieldErrors({ name: "slug", minLength: 1, maxLength: 64 }, "", true))
       .toEqual([{ path: "slug", keyword: "required", params: {} }]);
     expect(structuredFieldErrors({ name: "nick", minLength: 1, omittable: true }, "", true))
       .toEqual([{ path: "nick", keyword: "minLength", params: { limit: 1 } }]);
+    expect(structuredFieldErrors({ name: "caption", minLength: 1, nullable: true }, "", true))
+      .toEqual([{ path: "caption", keyword: "minLength", params: { limit: 1 } }]);
     expect(structuredFieldErrors({ name: "handle", minLength: 3 }, "", true))
       .toEqual([{ path: "handle", keyword: "minLength", params: { limit: 3 } }]);
     expect(structuredFieldErrors({ name: "slug", minLength: 1 }, " ", true)).toEqual([]);

@@ -4,13 +4,18 @@
 
 A value that breaks one of a field's rules now says which, in a record form and
 in a dialog without a schema resolver: too short, too long, out of range, too few
-or too many items, or the wrong type. Each said "This field is required." before,
-and a cleared number field that said so now says "Enter a valid whole number.".
-A missing value still says the field is required, and so does an empty text under
-a minimum length of one character in a field that is not `omittable`; in an
-`omittable` field it says "Enter at least 1 character.", which a dialog with a
-schema resolver says for both. `@angee/ui/views/validation-errors` exports
-`jsonSchemaErrorMessage`, `JsonSchemaRule` and `fieldErrorsFromRules`.
+or too many items, or the wrong type. Each said "This field is required." before.
+A cleared number field that is `omittable`, presence-required or bounded, and not
+nullable, now says "Enter a valid whole number." ("Enter a valid number." where
+its type is `number`) where it said the field was required; a required number
+field with no presence flag or bound still says the field is required. A missing
+value still says the field is required, and so does an empty text under a minimum
+length of one character in a field that is neither `omittable` nor nullable; in a
+field that is either, it says "Enter at least 1 character.". A dialog with a
+schema resolver says "Enter at least 1 character." in each case, and for a text
+declared nullable with `anyOf` also "Enter a valid empty value. Enter a valid
+value.". `@angee/ui/views/validation-errors` exports `jsonSchemaErrorMessage`,
+`JsonSchemaRule` and `fieldErrorsFromRules`.
 Upgrade: `structuredFieldErrorPaths` is renamed `structuredFieldErrors` and
 returns, for each failing path, `{ path, keyword, params }` (`FieldRuleError`)
 instead of the bare path; `FormViewSurface.requiredMessage`, which nothing read,

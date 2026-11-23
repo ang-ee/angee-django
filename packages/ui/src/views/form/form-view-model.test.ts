@@ -293,6 +293,7 @@ test("a field's failed rule says the same thing in a record form as in a dialog"
     { name: "slug", required: true, minLength: 1, maxLength: 64 },
     { name: "cleared", minLength: 1 },
     { name: "nick", minLength: 1, omittable: true },
+    { name: "caption", minLength: 1, nullable: true },
     { name: "handle", minLength: 3 },
     { name: "low", kind: "integer", minimum: 5 },
     { name: "high", kind: "number", maximum: 10 },
@@ -304,13 +305,14 @@ test("a field's failed rule says the same thing in a record form as in a dialog"
     { name: "title", required: true },
   ];
   const values = {
-    slug: "a".repeat(65), cleared: "", nick: "", handle: "", low: 2, high: 11, count: "",
+    slug: "a".repeat(65), cleared: "", nick: "", caption: "", handle: "", low: 2, high: 11, count: "",
     tags: ["a"], limits: ["a", "b"], remark: null, title: " ",
   };
   const expected = {
     slug: { type: "maxLength", message: "Enter no more than 64 characters." },
     cleared: required,
     nick: { type: "minLength", message: "Enter at least 1 character." },
+    caption: { type: "minLength", message: "Enter at least 1 character." },
     handle: { type: "minLength", message: "Enter at least 3 characters." },
     low: { type: "minimum", message: "Enter a value of at least 5." },
     high: { type: "maximum", message: "Enter a value of at most 10." },

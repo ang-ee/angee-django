@@ -38,8 +38,12 @@ export interface ValidationErrors {
   formErrors: readonly string[];
 }
 
-/** A failed rule in JSON Schema's vocabulary: its keyword and the keyword's parameters, as an Ajv error carries them. */
-export type JsonSchemaRule = Pick<ErrorObject<string, Record<string, unknown>>, "keyword" | "params">;
+/**
+ * A failed rule in JSON Schema's vocabulary: its keyword and the keyword's parameters, as an Ajv
+ * error carries them. Read-only, parameters included, since one rule object may be shared
+ * (`REQUIRED_RULE` is frozen).
+ */
+export type JsonSchemaRule = Readonly<Pick<ErrorObject<string, Readonly<Record<string, unknown>>>, "keyword" | "params">>;
 
 function typeLabel(value: unknown, t: UiTranslate): string | undefined {
   switch (value) {
