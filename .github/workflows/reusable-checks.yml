@@ -300,7 +300,6 @@ jobs:
             tests/test_knowledge_graph_pgvector_index.py tests/test_knowledge_graph_pgvector_jobs.py \
             tests/test_knowledge_graph_pgvector_evaluation.py \
             tests/test_knowledge_graph_pgvector_postgres.py tests/test_knowledge_graph_pgvector_resolution.py \
-            tests/test_knowledge_access_campaign.py::test_record_note_and_binding_keep_locks_replay_and_rollback \
             tests/test_messaging.py tests/test_messaging_concurrency_campaign.py \
             tests/test_messaging_channel_concurrency.py tests/test_messaging_reaction_concurrency.py \
             tests/test_messaging_inbox_read.py tests/test_inbox_explorer.py tests/test_inbox_part_reads.py \
@@ -312,8 +311,6 @@ jobs:
             tests/test_sequence.py \
             tests/test_spaces_concurrency_campaign.py tests/test_stage_fractional_transition.py \
             tests/test_storage.py tests/test_storage_upload_campaign.py \
-            tests/test_storage_access_campaign.py::test_download_urls_are_window_aligned_and_expire_from_the_window_start \
-            tests/test_storage_access_campaign.py::test_download_url_changes_for_new_content_inside_one_window \
             tests/test_system_queryset.py::test_system_queryset_emits_for_update_on_postgresql \
             tests/test_tags_categories_concurrency.py \
             tests/test_task_locks.py \
@@ -321,10 +318,24 @@ jobs:
             tests/test_task_rank_allocation.py tests/test_projects_record_tasks.py \
             tests/test_webforms_concurrency.py tests/test_webforms_messaging_concurrency.py \
             tests/test_webforms_messaging_upgrade.py \
-            tests/test_projects_access_projections.py tests/test_parties_roles.py \
+            tests/test_projects_access_projections.py \
             tests/test_timeline_concurrency.py \
             tests/test_work_intake_lock_campaign.py tests/test_work_stage_lock_campaign.py \
             tests/test_workflows_integrate_cycle.py tests/test_workflows_integrate_steps.py
+            # Authorization that rebac compiles per backend is proven on the backend that
+            # decides it (docs/checks.md): the decision table of each addon, and every other
+            # module that is, whole, an authorization contract holding on every backend.
+            set -- "$@" \
+            tests/test_calendar_access.py tests/test_iam_people_directory.py \
+            tests/test_knowledge_access_campaign.py tests/test_messaging_permissions_campaign.py \
+            tests/test_parties_roles.py tests/test_project_access.py tests/test_proposals_access.py \
+            tests/test_spaces_permissions_campaign.py tests/test_storage_access_campaign.py \
+            tests/test_work_project_team_campaign.py \
+            tests/test_decisions_read_granted.py tests/test_grouping_relation_permissions.py \
+            tests/test_held_permissions_contract.py tests/test_iam_composite_access.py \
+            tests/test_messaging_access.py tests/test_people_access.py \
+            tests/test_record_changeset_visibility.py tests/test_record_thread_role_access.py \
+            tests/test_task_create_access.py
           fi
           uv run --locked python -m pytest -q -n 4 --dist loadfile --nomigrations --durations=25 --junitxml=postgresql-contracts.xml \
             --splits ${{ strategy.job-total }} --group ${{ matrix.group }} --splitting-algorithm least_duration \

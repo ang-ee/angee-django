@@ -140,8 +140,8 @@ covers are those the `uv-postgres` job's selection lists in
 `test_transitions.py` contribute only their PostgreSQL test nodes because each also has
 SQLite-only tests, and `test_parties_directory_backend.py` its lock nodes because its strict
 expected failure would read as a skip;
-the PostgreSQL branches in `test_extraction_models.py` and
-`test_knowledge_access_campaign.py`, the [resource ledger's](../tests/test_resource_ledger.py)
+the PostgreSQL branches in `test_extraction_models.py`, the
+[resource ledger's](../tests/test_resource_ledger.py)
 concurrent upsert, a form's submission, delivery and publication
 [races](../tests/test_webforms_concurrency.py), and the composed profiles that carry PostgreSQL contracts also run by
 node. The selection also runs the
