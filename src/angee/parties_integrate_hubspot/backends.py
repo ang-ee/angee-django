@@ -355,18 +355,53 @@ class HubSpotObjectRecord:
     def person(self, contact_id: str) -> Any | None:
         """Return the person this directory's contact ``contact_id`` landed on, ``None`` until it has.
 
-        A contact lands when the directory's contacts stream binds its link to a
-        person (``PartyManager.contact_people``: a trashed person is nobody's);
-        one not read yet, refused or gone has landed nowhere. A mapping that needs
-        the person raises :class:`ContactNotLanded` to wait for it. The person is
-        read as committed, not locked; the verb that writes on it takes its locks.
+        A contact lands when the directory's contacts stream binds its link
+        (:func:`_contact_links`) to a person (``PartyManager.contact_people``: a
+        trashed person is nobody's); one not read yet, refused or gone has landed
+        nowhere. A mapping that needs the person raises :class:`ContactNotLanded`
+        to wait for it. The person is read as committed, not locked; the verb that
+        writes on it takes its locks.
         """
 
-        links = apps.get_model("integrate", "RecordLink").objects.filter(
-            stream__integration_id=self.directory.pk, stream__key=CONTACTS, external_key=contact_id
-        )
-        link = links.observing().first()
+        link = _contact_links(self.directory, [contact_id]).get(contact_id)
         return None if link is None else apps.get_model("parties", "Party").objects.contact_people([link])[link.pk]
+
+
+def _contact_links(directory: Any, contact_ids: Iterable[str]) -> dict[str, Any]:
+    """Return the link of each of ``contact_ids`` in ``directory``'s contacts stream, by contact id, in one query.
+
+    A contact's link is its observing one (neither tombstoned nor withdrawn), the
+    first by primary key; a contact without one is left out. A merge of the person
+    a link points at moves the link to the survivor.
+    """
+
+    wanted = sorted(set(contact_ids))
+    if not wanted:
+        return {}
+    links = apps.get_model("integrate", "RecordLink").objects.filter(
+        stream__integration_id=directory.pk, stream__key=CONTACTS, external_key__in=wanted
+    )
+    found: dict[str, Any] = {}
+    for link in links.observing().order_by("pk"):
+        found.setdefault(link.external_key, link)
+    return found
+
+
+def _contacts_digest(contacts: Sequence[str], links: Mapping[str, Any]) -> str:
+    """Return what a record of ``contacts`` applies against besides itself: each contact with its party's key.
+
+    ``links`` holds the contacts' links by contact id (:func:`_contact_links`).
+    The contacts are sorted, and each is paired with the key of the party its link
+    points at, ``None`` for a contact without a link or with an unbound one, so a
+    link that appears or moves (a merge moves it to the survivor) changes the
+    digest, and association and page order never do. A record naming no contact
+    has none (``""``).
+    """
+
+    if not contacts:
+        return ""
+    bound = {key: link.target_object_id or None for key, link in links.items()}
+    return canonical_json_sha256([[contact, bound.get(contact)] for contact in sorted(set(contacts))])
 
 
 class HubSpotObjectMapping(ImplBase):
@@ -392,13 +427,16 @@ class HubSpotObjectMapping(ImplBase):
     ids are kept on the link, in its history without limit, and compared, so a
     change the projection hides applies nothing; it drops what must not be kept
     (a long text replaced by its digest, say). :meth:`apply_record` lands one
-    record inside the page transaction, database work only, and runs again
-    whenever those values, its contacts or the mapping change. It receives the
-    values and, from the read that applies it, what HubSpot sent
-    (:attr:`HubSpotObjectRecord.properties`), so it can write the full text whose
-    digest alone is kept. Whatever it states, it states through ``link`` as the
-    integration (``link.asserting_source()``), so :meth:`withdraw_record` can
-    withdraw it. A record whose contact has not landed
+    record inside the page transaction, database work only, and runs again,
+    so a second run must be safe, whenever those values, its contacts, the
+    person a contact landed on or the mapping change. A merge of that person
+    moves the contact to the survivor, and the record follows at its next read:
+    the stream's daily sweep, or the baseline a resync of the stream runs on its
+    next cycle. It receives the values and, from the read that applies it, what
+    HubSpot sent (:attr:`HubSpotObjectRecord.properties`), so it can write the
+    full text whose digest alone is kept. Whatever it states, it states through
+    ``link`` as the integration (``link.asserting_source()``), so
+    :meth:`withdraw_record` can withdraw it. A record whose contact has not landed
     raises :class:`ContactNotLanded` and waits. A ``ValueError`` from either step
     refuses that record alone (``MAPPING_REFUSED``, naming the mapping, never the
     value), the rest of its page lands, and the rescan retries it; any other error
@@ -648,9 +686,10 @@ class HubSpotDirectoryBackend(DirectoryBackend):
         Any other is handed to :meth:`HubSpotObjectMapping.apply_record` as a
         :class:`HubSpotObjectRecord` carrying the values its payload holds and,
         when this backend's last read produced exactly this payload, what HubSpot
-        sent; its link holds the row the mapping returns. The mapping's
-        ``ValueError`` refuses the record alone (``MAPPING_REFUSED``, naming the
-        mapping).
+        sent; its link holds the row the mapping returns, and the record's
+        dependency digest, the one the driver compared, is applied with it. The
+        mapping's ``ValueError`` refuses the record alone (``MAPPING_REFUSED``,
+        naming the mapping).
         """
 
         if stream.key != OBJECTS:
@@ -675,8 +714,8 @@ class HubSpotDirectoryBackend(DirectoryBackend):
             raise SemanticError(MAPPING_REFUSED, details={"mapping": mapping.key}) from error
         if target is None:
             # An explicit ``None`` target would withdraw the link: a record on no row of its own binds nothing.
-            return ApplyResult(mapped_payload=payload)
-        return ApplyResult(target=target, mapped_payload=payload)
+            return ApplyResult(mapped_payload=payload, dependency_digest=record.dependency_digest)
+        return ApplyResult(target=target, mapped_payload=payload, dependency_digest=record.dependency_digest)
 
     def finish_page(self, stream: Any, page: StreamPage, outcomes: Sequence[ApplyResult]) -> None:
         """Drop what HubSpot sent for the page's records, once the page is applied: nothing outlives its pass."""
@@ -864,11 +903,23 @@ class HubSpotDirectoryBackend(DirectoryBackend):
 
         The local side of each comparison is what this source last applied (the
         link's applied base), as on every pull-only stream, so an unchanged record
-        applies nothing. A payload carrying ``error`` is that record's refusal.
+        applies nothing. A record's dependency digest (:func:`_contacts_digest`),
+        from one read of the page's contact links, names the party each of its
+        contacts' links points at: the driver compares it with the one the record
+        was applied against, so a record whose contact's person was merged away
+        applies again at its next read, unchanged at HubSpot or not. A payload
+        carrying ``error`` is that record's refusal.
         """
 
         links = stream.links.filter(external_key__in=list(payloads)).with_sync_evidence()
         applied = {link.external_key: link.applied_base.mapped_payload for link in links if link.applied_base_id}
+        named = (
+            contact
+            for payload in payloads.values()
+            if payload is not None and "error" not in payload
+            for contact in payload["contacts"]
+        )
+        contact_links = _contact_links(self.bridge, named)
         changes = []
         for key, payload in payloads.items():
             base = applied.get(key)
@@ -879,8 +930,16 @@ class HubSpotDirectoryBackend(DirectoryBackend):
                 failure = SemanticError(payload["error"], details=details)
                 changes.append(RecordChange(key, dict(payload), canonical_json_sha256(payload), failure=failure))
             else:
-                digest = canonical_json_sha256(payload)
-                changes.append(RecordChange(key, dict(payload), digest, mapped_payload=dict(payload), projection=base))
+                changes.append(
+                    RecordChange(
+                        key,
+                        dict(payload),
+                        canonical_json_sha256(payload),
+                        mapped_payload=dict(payload),
+                        projection=base,
+                        dependency_digest=_contacts_digest(payload["contacts"], contact_links),
+                    )
+                )
         return changes
 
     def source_url(self, link: Any) -> str | None:

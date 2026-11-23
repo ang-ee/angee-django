@@ -10,6 +10,21 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties_integrate_hubspot`: a HubSpot object record (a deal, a note)
+  follows the person its contact landed on. When that person is merged into
+  another, the merge moves the contact to the survivor, and the record is
+  stated again on the survivor at its next read: the stream's daily sweep, or
+  at once on a resync of the stream. Only the records of that contact are
+  stated again; HubSpot need not change them. Each record's link keeps a
+  dependency digest, the record's contacts, sorted, each with the key of the
+  party its link points at (none for a contact without one), read for a whole
+  page at once, and integrate's driver compares it as it compares a mapping's
+  version. A mapping writes nothing new, but its `apply_record` must be safe to
+  run again, as a version change already required. Upgrade: no migration. After
+  the upgrade every object record that names a contact is stated once more at
+  its next read, because no link holds a digest yet (a record naming none is
+  not); that covers merges made before the change, and replaces moving a
+  mapping's version by hand after a merge.
 - `@angee/ui`: **Changed behaviour.** A dialog submits only the fields it shows:
   a field a `showWhen` hides, when the dialog opens or after a value was typed
   into it, is not submitted, and shows its initial value when it shows again,
