@@ -1338,8 +1338,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   one user intention is one step. Group a field's typing, run every other change (adding,
   removing, duplicating or reordering a line) through `perform`, and reset history when
   accepting a saved or reloaded baseline; `EditableLines` takes the form's verbs as `history`.
-  A line added by code is built with `emptyLineRow` or `duplicateLineRow` (or carries its
-  own client key) and then performed, also while a cell of the lines is being edited.
+  A line added by code is built with `emptyLineRow` or `duplicateLineRow` and then performed.
+  While a line's cell is being edited that is still one step per intention, but `EditableLines`
+  ends the cell's group only after the rows changed, under a path that then names whichever
+  row sits at that position, if any; before its own row operations it ends the group first.
 - Editable named entries use the [keyed collection](../../packages/ui/src/views/form/keyed-collection.ts)
   in authored order; client identities survive renaming and own duplicate-key issues.
 - Schema path selection composes [SchemaPathPicker](../../packages/ui/src/views/SchemaPathPicker.tsx)

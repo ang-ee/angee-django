@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { StrictMode } from "react";
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { ModelMetadataProvider, schemaFieldMetadataFromDataResources, type DataResourceLinesMetadata } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
@@ -450,6 +451,38 @@ describe("EditableLines", () => {
     act(() => f.history().redo());
     expect(f.form().getValues("lines.1")).toMatchObject(picked);
     expect(f.history().canRedo).toBe(false);
+  });
+
+  test("under StrictMode a cell's change stays one open group while the editor is mounted, and unmounting the editor ends it", () => {
+    const commits: string[] = [];
+    const loaded = [
+      { id: "one", label: "Widget", quantity: 2, position: 0 },
+      { id: "two", label: "Gadget", quantity: 5, position: 1 },
+    ];
+    let form!: UseFormReturn<Record<string, unknown>>;
+    let history!: FormHistory;
+    function StrictHost({ shown }: { shown: boolean }): React.ReactElement {
+      form = useForm<Record<string, unknown>>({ defaultValues: { lines: loaded } });
+      history = useFormHistory(form);
+      return <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+        <ModalsHost>{shown ? <EditableLines control={form.control} setValue={form.setValue} name="lines" lines={LINES}
+          history={{
+            perform: history.perform, start: history.start,
+            commit: (path) => { commits.push(path); history.commit(path); },
+          }} /> : null}</ModalsHost>
+      </AppRuntimeProvider>;
+    }
+    const view = render(<StrictMode><StrictHost shown /></StrictMode>);
+    const label = screen.getAllByRole("textbox", { name: "Label" })[0]!;
+    fireEvent.change(label, { target: { value: "Widget 1" } });
+    fireEvent.change(label, { target: { value: "Widget 12" } });
+    // StrictMode ran the editor's effects and their cleanups twice at mount, before any cell changed.
+    expect(commits).toEqual([]);
+    view.rerender(<StrictMode><StrictHost shown={false} /></StrictMode>);
+    expect(commits).toEqual(["lines.0.label"]);
+    act(() => history.undo());
+    expect(form.getValues("lines")).toEqual(loaded);
+    expect(history.canUndo).toBe(false);
   });
 
   test("with the form's history a widget's row patch sent while no cell group is open is one step of its own", () => {

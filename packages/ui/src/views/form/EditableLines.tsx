@@ -66,19 +66,24 @@ export interface EditableLinesProps {
    * The composing form's undo verbs; without them the lines record no step. One user
    * intention is one step. A cell's change starts its group, named by the cell's form
    * path (`lines.2.label`), before it writes. A row patch a widget sends is written
-   * inside its cell's group and ends it: with the change it was sent beside it is one
-   * step, alone it is a step of its own. Adding, duplicating, removing or reordering a
-   * line is one step through `perform`. Since a cell's path names its row by position,
-   * the editor ends the cell groups it started when their control commits, when a row
-   * patch for the cell is written, before its own row operations, and when the rows
-   * change under it (a row operation code performs, an undo, a redo, a discard): a cell
-   * changed on after an undo starts a step of its own. The history itself records a
-   * group's step when another field starts. A line added by code is built with
-   * `emptyLineRow` or `duplicateLineRow` (or carries its own client key) and then
-   * performed, also while a cell's group is open. Give the editor and the history the
-   * same read-only state: a read-only history runs no `perform`, so the row controls
-   * would do nothing while the cells still write. A record form passes its interaction
-   * callbacks as `start` and `commit`, so they see a cell as they see any other field.
+   * inside its cell's group and ends it: a patch sent after its cell's change in the
+   * same interaction joins that change's step; one sent first, or alone, is a step of
+   * its own, and a change sent after it starts another. Adding, duplicating, removing
+   * or reordering a line is one step through `perform`. Since a cell's path names its
+   * row by position, the editor ends the cell groups it started when their control
+   * commits, when a row patch for the cell is written, when the editor unmounts, before
+   * its own row operations, and right after the rows change under it otherwise (a row
+   * operation other code performs, an undo, a redo, a discard). After a row operation by
+   * other code the steps are still one per intention and the interaction callbacks stay
+   * paired, but that late commit's path names whichever row then sits at that position,
+   * if any. A cell changed on after an undo starts a step of its own. The history
+   * itself records a group's step when another field starts. A line added by code is
+   * built with `emptyLineRow` or `duplicateLineRow` and then performed; while a cell's
+   * group is open that is still one step, with the cell's late commit as above. Give the
+   * editor and the history the same read-only state: a read-only history runs no
+   * `perform`, so the row controls would do nothing while the cells still write. A
+   * record form passes its interaction callbacks as `start` and `commit`, so they see a
+   * cell as they see any other field.
    */
   history?: Pick<FormHistory, "perform" | "start" | "commit">;
 }
@@ -143,21 +148,30 @@ export function EditableLines({
     return () => { mounted.current = false; };
   }, []);
   // The cell groups this editor started and has not seen committed, by form path, held
-  // only to end them: a group's path names its row by position. Committing a path whose
-  // group the history already ended (another field started) records nothing, and one the
-  // form already ended (a discard, a refresh, a save) does nothing at all.
+  // only to end them. A path names its row by position: the editor ends them before it
+  // moves rows itself, and right after anything else has moved them, when the path may
+  // already name another row. Committing a path whose group the history already ended
+  // (another field started) records nothing, and one the form already ended (a discard,
+  // a refresh, a save) does nothing at all.
   const openCells = React.useRef(new Set<string>());
   const endCell = React.useCallback((path: string) => {
     openCells.current.delete(path);
     latest.current.history?.commit(path);
   }, []);
   const endOpenCells = React.useCallback(() => openCells.current.forEach(endCell), [endCell]);
-  // End them when the rows change under those paths: a row operation, whoever ran it, or
-  // a form reset (an undo, a redo, a discard), which gives every row a new key; a cell
-  // changed on after an undo then starts a group of its own. Declared before the fallback
-  // below, so a key that fallback writes joins no cell group.
+  // End them right after the rows changed under those paths by anything but this editor's
+  // own row operations (which end them first, below): a row operation other code
+  // performed, or a form reset (an undo, a redo, a discard), which gives every row a new
+  // key. After another's row operation the steps stay one per intention and the commit
+  // still pairs its start, but its path names whichever row now sits at that position, if
+  // any. A cell changed on after an undo then starts a group of its own. Declared before
+  // the fallback below, so a key that fallback writes joins no cell group.
   const rowKeys = fields.map((field) => field.rhfKey).join(" ");
   React.useEffect(() => { endOpenCells(); }, [endOpenCells, rowKeys]);
+  // And when the editor unmounts (a pane that hides the lines, a closed record), so no start
+  // is left without its commit. Only a cell's change records a path, after mount, so the
+  // mount-time cleanup React's StrictMode runs finds none.
+  React.useEffect(() => endOpenCells, [endOpenCells]);
   // The fallback for a row that arrives with no identity (a create form's seed rows, a
   // hand-built row): its client key is RHF's field-array key.
   React.useEffect(() => {
@@ -176,8 +190,8 @@ export function EditableLines({
     endOpenCells();
     recorder.perform(action);
   }, [endOpenCells]);
-  // Written inside its cell's group: joined to the change it was sent beside, or a step of
-  // its own, and the group ends either way.
+  // Written inside its cell's group: joined to a change of the cell sent before it, or a
+  // step of its own, and the group ends either way.
   const patchRow = React.useCallback((key: string, cell: string, patch: Record<string, unknown>) => {
     const current = latest.current;
     if (!mounted.current || current.readOnly) return;

@@ -40,14 +40,18 @@ live in code docstrings.
   brought both back. One user intention is one step: adding a line is one step,
   typing in one of its cells another, and removing, duplicating or reordering a
   line is one step each. A widget's row patch is written inside its cell's group
-  and ends it, so a change and a row patch made in one click are one step, and a
-  row patch sent alone is a step of its own. Since a cell's group is named by its
-  row's position, the lines editor ends the cell groups it started when their
-  control commits, when a row patch for the cell is written, before its own row
-  operations, and when the rows change under it (code that performs a row
-  operation, or an undo, redo or discard); the history itself records a cell's
-  step when another field starts. `EditableLines` takes an optional `history` with
-  the form's `perform`, `start` and `commit`; the record form passes it, so its
+  and ends it: a row patch sent after its cell's change in the same interaction
+  joins that change's step, and one sent first, or alone, is a step of its own (a
+  change sent after it starts another). Since a cell's group is named by its row's
+  position, the lines editor ends the cell groups it started when their control
+  commits, when a row patch for the cell is written, when the editor unmounts,
+  before its own row operations, and right after the rows change under it
+  otherwise (code that performs a row operation, or an undo, redo or discard); the
+  history itself records a cell's step when another field starts. After a row
+  operation by other code the steps are still one per intention and the interaction
+  callbacks stay paired, but that late commit's path names whichever row then sits
+  at that position, if any. `EditableLines` takes an optional `history` with the
+  form's `perform`, `start` and `commit`; the record form passes it, so its
   `onFieldInteractionStart` and `onFieldInteractionCommit` now also receive a line
   cell's path (`lines.2.label`), a row patch's included. Without it the lines
   record nothing, as before.
@@ -55,8 +59,10 @@ live in code docstrings.
   change that sends no values notification, such as a field-array append, is still
   recorded. `emptyLineRow` and `duplicateLineRow` now return the row with a client
   key of its own (`duplicateLineRow` still drops the source row's id and key): a
-  line added by code is built with one of them, or carries its own key, and then
-  performed, so each undo back through it changes what the form shows.
+  line added by code is built with one of them and then performed, so each undo
+  back through it changes what the form shows. A row built by hand without a client
+  key and performed while another field is being edited is a step undo cannot get
+  past.
 - `@angee/ui`: **Changed behaviour.** A record form's `object`, `list` or `rows`
   field showed its loading placeholder for good in a create form, and in an edit
   form once the widget's code was loaded. Those widgets refuse the empty string
