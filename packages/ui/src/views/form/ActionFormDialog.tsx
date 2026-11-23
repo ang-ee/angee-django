@@ -14,7 +14,7 @@ import { useRuntimeViewAs } from "../../runtime";
 import {
   emptyValueForField,
   mutationDialogValueCodecs,
-  requiredDialogErrors,
+  dialogRuleErrors,
 } from "./MutationDialog";
 import { useRecordChromeContextMaybe } from "../resource/record-chrome-context";
 import { useActionForm } from "./use-action-form";
@@ -101,7 +101,7 @@ function ActionArgsDialog({
   const actionForm = useActionForm<ArgValues, ActionOutcome>({
     defaultValues: definition?.defaultValues ?? argDefaultValues(args, context),
     resolver: async (values, resolverContext, options) => {
-      const errors = requiredDialogErrors(fields, values, t("form.required"), validateConstraints);
+      const errors = dialogRuleErrors(fields, values, t, validateConstraints);
       if (Object.keys(errors).length) return { values: {}, errors };
       return definition?.resolver
         ? definition.resolver(values, resolverContext, options)
@@ -205,7 +205,7 @@ function ActionSubmitButton({
   const values = useWatch({ control }) as ArgValues;
   const preview = useRuntimeViewAs();
   const t = useUiT();
-  const ready = Object.keys(requiredDialogErrors(fields, values, t("form.required"), validateConstraints)).length === 0;
+  const ready = Object.keys(dialogRuleErrors(fields, values, t, validateConstraints)).length === 0;
   return (
     <Button
       type={onSubmit ? "button" : "submit"}

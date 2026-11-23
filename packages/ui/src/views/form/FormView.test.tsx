@@ -114,6 +114,34 @@ const fields = [
   { name: "wordCount", label: "Word Count", readOnly: true },
 ] satisfies readonly FormField[];
 
+// One FormSpec property per value rule, a value breaking it, and what each field then says.
+const ruleSchemaProperties = {
+  handle: { type: "string", label: "Handle", minLength: 3 },
+  code: { type: "string", label: "Code", maxLength: 4 },
+  low: { type: "integer", label: "Low", minimum: 5 },
+  high: { type: "integer", label: "High", maximum: 10 },
+  count: { type: "integer", label: "Count", omittable: true },
+  tags: { type: "array", widget: "list", label: "Tags", minItems: 2, items: { type: "string" } },
+  limits: { type: "array", widget: "list", label: "Limits", maxItems: 1, items: { type: "string" } },
+} as const;
+const ruleValues = { handle: "ab", code: "abcde", low: 2, high: 11, count: "", tags: ["a"], limits: ["a", "b"] };
+const ruleMessages = {
+  Handle: "Enter at least 3 characters.",
+  Code: "Enter no more than 4 characters.",
+  Low: "Enter a value of at least 5.",
+  High: "Enter a value of at most 10.",
+  Count: "Enter a valid whole number.",
+  Tags: "Add at least 2 items.",
+  Limits: "Keep no more than 1 item.",
+};
+
+// A JSON root's FormSpec members shown as their own fields, as an implementation's config is.
+function configFields(properties: Readonly<Record<string, Readonly<Record<string, unknown>>>>) {
+  return deserializeFormSpec({ type: "object", properties }, defaultWidgets)
+    .map((field) => ({ ...field, name: `config.${field.name}` }));
+}
+const timeoutMember = { type: "integer", label: "Timeout", omittable: true } as const;
+
 describe("FormView", () => {
   afterEach(() => {
     cleanup();
@@ -2618,6 +2646,142 @@ describe("FormView", () => {
     expect(sdkMocks.mutate).not.toHaveBeenCalled();
   });
 
+  test("a config slug longer than its limit says so, a cleared one says the field is required, and correcting it clears the message", async () => {
+    sdkMocks.mutate.mockClear();
+    const descriptors = deserializeFormSpec({
+      type: "object", required: ["slug"],
+      properties: { slug: { type: "string", label: "Slug", minLength: 1, maxLength: 64, widget: "slug" } },
+    }, defaultWidgets).map((field) => ({ ...field, name: `target_config.${field.name}` }));
+    renderWithProviders(
+      <FormView resource="OAuthClient" fields={descriptors} defaultValues={{ target_config: { slug: "a".repeat(65) } }} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    expect(await screen.findByText("Enter no more than 64 characters.")).toBeTruthy();
+    expect(screen.queryByText("This field is required.")).toBeNull();
+    const slug = screen.getByRole("textbox", { name: "Slug" });
+    fireEvent.change(slug, { target: { value: "" } });
+    expect(await screen.findByText("This field is required.")).toBeTruthy();
+    expect(screen.queryByText(/Enter (at least|no more than)/)).toBeNull();
+    fireEvent.change(slug, { target: { value: "front-desk" } });
+    await waitFor(() => expect(screen.queryByText("This field is required.")).toBeNull());
+    expect(sdkMocks.mutate).not.toHaveBeenCalled();
+  });
+
+  test("an empty text under a minimum length of one is required unless the field is omittable, and keeps the length message under a minimum above one", async () => {
+    sdkMocks.mutate.mockClear();
+    const descriptors = deserializeFormSpec({ type: "object", properties: {
+      slug: { type: "string", label: "Slug", minLength: 1, maxLength: 64 },
+      nick: { type: "string", label: "Nick", minLength: 1, omittable: true },
+      handle: { type: "string", label: "Handle", minLength: 3 },
+    } }, defaultWidgets);
+    renderWithProviders(<FormView resource="OAuthClient" fields={descriptors} defaultValues={{ slug: "", nick: "", handle: "" }} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await screen.findByText("Enter at least 3 characters.");
+    const messageUnder = (label: string) => screen.getByText(label).closest('[data-layout="stack"]')?.textContent;
+    expect(messageUnder("Slug")).toContain("This field is required.");
+    expect(messageUnder("Nick")).toContain("Enter at least 1 character.");
+    expect(messageUnder("Nick")).not.toContain("This field is required.");
+    expect(messageUnder("Handle")).not.toContain("This field is required.");
+    expect(sdkMocks.mutate).not.toHaveBeenCalled();
+  });
+
+  test("a cleared nullable text under a minimum length of one keeps the length message, and a cleared required one says the field is required", async () => {
+    sdkMocks.record = { id: "note-1", caption: "hi", slug: "front-desk" };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={deserializeFormSpec({ type: "object", properties: {
+      caption: { type: "string", label: "Caption", minLength: 1, nullable: true },
+      slug: { type: "string", label: "Slug", minLength: 1 },
+    } }, defaultWidgets)} />);
+    const caption = await screen.findByRole("textbox", { name: "Caption" });
+    await waitFor(() => expect((caption as HTMLInputElement).value).toBe("hi"));
+    fireEvent.change(caption, { target: { value: "" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Slug" }), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await screen.findByText("Enter at least 1 character.");
+    const messageUnder = (label: string) => screen.getByText(label).closest('[data-layout="stack"]')?.textContent;
+    expect(messageUnder("Caption")).toContain("Enter at least 1 character.");
+    expect(messageUnder("Caption")).not.toContain("This field is required.");
+    expect(messageUnder("Slug")).toContain("This field is required.");
+    expect(sdkMocks.mutate).not.toHaveBeenCalled();
+  });
+
+  test("each value rule a record form checks shows its own message, and a missing value says the field is required", async () => {
+    sdkMocks.mutate.mockClear();
+    const descriptors = deserializeFormSpec({ type: "object", properties: {
+      ...ruleSchemaProperties,
+      token: { type: "string", label: "Token", presenceRequired: true },
+      remark: { type: "string", label: "Remark", presenceRequired: true },
+    } }, defaultWidgets);
+    renderWithProviders(<FormView resource="OAuthClient" fields={descriptors} defaultValues={{ ...ruleValues, remark: null }} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await screen.findByText(ruleMessages.Handle);
+    const messageUnder = (label: string) => screen.getByText(label).closest('[data-layout="stack"]')?.textContent;
+    for (const [label, message] of Object.entries({
+      ...ruleMessages, Token: "This field is required.", Remark: "This field is required.",
+    })) {
+      expect(messageUnder(label)).toContain(message);
+    }
+    expect(screen.getAllByText("This field is required.")).toHaveLength(2);
+    expect(sdkMocks.mutate).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    {
+      shape: "the only member of a JSON root", label: "Timeout", loaded: "30",
+      record: { config: { timeout: 30 } }, fields: () => configFields({ timeout: timeoutMember }),
+    },
+    {
+      shape: "a member of a JSON root beside a sibling", label: "Timeout", loaded: "30",
+      record: { config: { timeout: 30, label: "a" } },
+      fields: () => configFields({ timeout: timeoutMember, label: { type: "string", label: "Label" } }),
+    },
+    {
+      shape: "nested in an object member of a JSON root", label: "Delay", loaded: "5",
+      record: { config: { retry: { delay: 5 }, label: "a" } },
+      fields: () => configFields({
+        retry: { type: "object", widget: "object", label: "Retry", properties: {
+          delay: { type: "integer", label: "Delay", omittable: true },
+        } },
+        label: { type: "string", label: "Label", omittable: true },
+      }),
+    },
+    {
+      shape: "a top-level optional field", label: "Count", loaded: "3",
+      record: { count: 3 },
+      fields: () => deserializeFormSpec({ type: "object", properties: {
+        count: { type: "integer", label: "Count", omittable: true },
+      } }, defaultWidgets),
+    },
+  ])("a cleared number that is $shape is not saved: the save stops at the number message", async ({ label, loaded, record, fields }) => {
+    sdkMocks.record = { id: "note-1", ...record };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={fields()} />);
+    const input = await screen.findByLabelText(label);
+    await waitFor(() => expect((input as HTMLInputElement).value).toBe(loaded));
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.blur(input);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByText("Enter a valid whole number.")).toBeTruthy();
+    expect(sdkMocks.mutate).not.toHaveBeenCalled();
+    expect(dataProvider.update).not.toHaveBeenCalled();
+  });
+
+  test("a number typed into a JSON root's member is sent as a number in its root", async () => {
+    sdkMocks.record = { id: "note-1", config: { timeout: 30 } };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={configFields({ timeout: timeoutMember })} />);
+    const timeout = await screen.findByLabelText("Timeout");
+    await waitFor(() => expect((timeout as HTMLInputElement).value).toBe("30"));
+    fireEvent.change(timeout, { target: { value: "7" } });
+    fireEvent.blur(timeout);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate.mock.calls[0]![0].data).toStrictEqual({ id: "note-1", config: { timeout: 7 } });
+  });
+
   test("does not apply impl prefill on edit when the impl field is create-only", async () => {
     sdkMocks.record = {
       id: "client-1",
@@ -3259,7 +3423,7 @@ describe("FormView", () => {
       <Field name="title" label="Title" title />
       <Group label="Details">
         <Field name="status" label="Status" widget="statusbar" options={statusOptions}
-          readOnly={lock === "field"} resolve={lock === "resolve" ? (values) => ({ name: "status", readOnly: values.wordCount === 3 }) : undefined} />
+          readOnly={lock === "field"} resolve={lock === "resolve" ? (values) => ({ readOnly: values.wordCount === 3 }) : undefined} />
         <Field name="wordCount" label="Words" />
       </Group>
     </FormView>);
@@ -4120,7 +4284,6 @@ describe("FormView", () => {
         label: "Title",
         title: true,
         resolve: (record: Row) => ({
-          name: "title",
           title: true,
           readOnly: record.status === "PUBLISHED",
         }),
@@ -4131,7 +4294,6 @@ describe("FormView", () => {
         body: true,
         kind: "textarea",
         resolve: (record: Row) => ({
-          name: "description",
           readOnly: record.status === "PUBLISHED",
         }),
       },
@@ -4140,7 +4302,6 @@ describe("FormView", () => {
         name: "wordCount",
         label: "Word Count",
         resolve: (record: Row) => ({
-          name: "wordCount",
           readOnly: record.status === "PUBLISHED",
         }),
       },
@@ -4192,7 +4353,6 @@ describe("FormView", () => {
       wordCount: 3,
     };
     const readOnlyWhenPublished = (record: Row) => ({
-      name: "wordCount",
       readOnly: record.status === "PUBLISHED",
     });
     renderWithProviders(
@@ -4201,7 +4361,6 @@ describe("FormView", () => {
           name="title"
           title
           resolve={(record) => ({
-            name: "title",
             title: true,
             readOnly: record.status === "PUBLISHED",
           })}

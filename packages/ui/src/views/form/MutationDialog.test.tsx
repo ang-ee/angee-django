@@ -17,6 +17,7 @@ import {
 } from "./MutationDialog";
 import { deserializeFormSpec } from "./form-spec";
 import type { FormSubmitResult } from "./validation-errors";
+import type { DescriptorField } from "./DescriptorFieldList";
 import { createUiTestProviders } from "../../testing";
 
 const { Provider, clearClients } = createUiTestProviders({
@@ -273,7 +274,6 @@ describe("MutationDialog", () => {
             name: "outcome",
             label: "Outcome",
             resolve: (values) => ({
-              name: "outcome",
               widget: "select",
               options: [
                 { value: "", label: "Any outcome" },
@@ -316,11 +316,12 @@ describe("MutationDialog", () => {
           {
             name: "value",
             label: "Value",
+            // This cast hides the returned `name` from the compiler; the declared name must still win.
             resolve: (values) => ({
               name: "wrong-name",
               required: values.mode === "custom",
               readOnly: values.mode !== "custom",
-            }),
+            }) as Omit<DescriptorField, "name">,
           },
         ]}
         initialValues={{ mode: "fixed", value: "" }}
@@ -356,6 +357,86 @@ describe("MutationDialog", () => {
     await waitFor(() => expect(button.disabled).toBe(false));
     fireEvent.click(button);
     await waitFor(() => expect(submit).toHaveBeenCalledWith({ note: null }, { errorNotification: false }));
+  });
+
+  test("each value rule shows its own message, not that the field is required", async () => {
+    const submit = vi.fn().mockResolvedValue(ok);
+    const fields = deserializeFormSpec({ type: "object", properties: {
+      handle: { type: "string", label: "Handle", minLength: 3 },
+      code: { type: "string", label: "Code", maxLength: 4 },
+      low: { type: "integer", label: "Low", minimum: 5 },
+      high: { type: "integer", label: "High", maximum: 10 },
+      count: { type: "integer", label: "Count", omittable: true },
+      tags: { type: "array", widget: "list", label: "Tags", minItems: 2, items: { type: "string" } },
+      limits: { type: "array", widget: "list", label: "Limits", maxItems: 1, items: { type: "string" } },
+    } }, defaultWidgets);
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Rules" fields={fields}
+        initialValues={{ handle: "ab", code: "abcde", low: 2, high: 11, count: "", tags: ["a"], limits: ["a", "b"] }}
+        submitLabel="Save" parseValues={parseRawValues} onSubmit={submit} />
+    </AppRuntimeProvider>);
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("Enter at least 3 characters.");
+    const messageUnder = (label: string) => screen.getByText(label).closest('[data-layout="stack"]')?.textContent;
+    for (const [label, message] of Object.entries({
+      Handle: "Enter at least 3 characters.",
+      Code: "Enter no more than 4 characters.",
+      Low: "Enter a value of at least 5.",
+      High: "Enter a value of at most 10.",
+      Count: "Enter a valid whole number.",
+      Tags: "Add at least 2 items.",
+      Limits: "Keep no more than 1 item.",
+    })) {
+      expect(messageUnder(label)).toContain(message);
+    }
+    expect(screen.queryByText("This field is required.")).toBeNull();
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  test("an empty text under a minimum length of one is required unless the field is omittable, and keeps the length message under a minimum above one", async () => {
+    const submit = vi.fn().mockResolvedValue(ok);
+    const fields = deserializeFormSpec({ type: "object", properties: {
+      slug: { type: "string", label: "Slug", minLength: 1, maxLength: 64 },
+      nick: { type: "string", label: "Nick", minLength: 1, omittable: true },
+      handle: { type: "string", label: "Handle", minLength: 3 },
+    } }, defaultWidgets);
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Texts" fields={fields} initialValues={{ slug: "", nick: "", handle: "" }}
+        submitLabel="Save" parseValues={parseRawValues} onSubmit={submit} />
+    </AppRuntimeProvider>);
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("Enter at least 3 characters.");
+    const messageUnder = (label: string) => screen.getByText(label).closest('[data-layout="stack"]')?.textContent;
+    expect(messageUnder("Slug")).toContain("This field is required.");
+    expect(messageUnder("Nick")).toContain("Enter at least 1 character.");
+    expect(messageUnder("Nick")).not.toContain("This field is required.");
+    expect(messageUnder("Handle")).not.toContain("This field is required.");
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  test("a cleared nullable text under a minimum length of one keeps the length message, and a cleared required one says the field is required", async () => {
+    const submit = vi.fn().mockResolvedValue(ok);
+    const fields = deserializeFormSpec({ type: "object", properties: {
+      caption: { type: "string", label: "Caption", minLength: 1, nullable: true },
+      slug: { type: "string", label: "Slug", minLength: 1 },
+    } }, defaultWidgets);
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Texts" fields={fields} initialValues={{ caption: "hi", slug: "front-desk" }}
+        submitLabel="Save" parseValues={parseRawValues} onSubmit={submit} />
+    </AppRuntimeProvider>);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Caption" }), { target: { value: "" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Slug" }), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await screen.findByText("Enter at least 1 character.");
+    const messageUnder = (label: string) => screen.getByText(label).closest('[data-layout="stack"]')?.textContent;
+    expect(messageUnder("Caption")).toContain("Enter at least 1 character.");
+    expect(messageUnder("Caption")).not.toContain("This field is required.");
+    expect(messageUnder("Slug")).toContain("This field is required.");
+    expect(submit).not.toHaveBeenCalled();
   });
 
   test("hidden required fields do not block the editable dialog", async () => {
