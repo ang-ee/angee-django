@@ -10,6 +10,36 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: **Changed behaviour.** A member of an object field (a FormSpec
+  `object` widget) keeps its message. In a `MutationDialog`, which checks every
+  change, a value that broke a member's rule disabled Save with no message on
+  screen; in an `ActionFormDialog` and a record form, which check from the first
+  submit on, the member's message showed after a refused submit and went at the
+  next edit, though the value still failed. A list item's message stayed. Now, in
+  a record form, a `MutationDialog` and an `ActionFormDialog` (unless its
+  definition brings a resolver other than the one `jsonSchemaActionArgs` returns),
+  a member's message behaves as a top-level field's: a `MutationDialog` shows it
+  as soon as the value fails, and these forms keep it through an edit that still
+  fails and remove it when the value is corrected; correcting one of two failing
+  members removes only that member's message, and a member of an object inside the
+  object behaves the same. A form whose resolver is another one an action form
+  definition brings, or `createJsonSchemaResolver` used directly, still loses a
+  member's message at the next edit, and a member named `type` or `ref` shows no
+  message in any form, since `fieldErrorMessages` skips those keys. Which rules
+  fail and what a form saves or sends are unchanged. React Hook Form keeps a
+  changed field's error only when it has a `type` or a `message`, or is a list's
+  array, and an object field is one registered control whose members' errors sit
+  under its own node, which had neither. `markMemberErrors`
+  (`@angee/ui/views/validation-errors`) gives that node the `type` `MEMBER_ERRORS`
+  (`"memberErrors"`), exported beside it, and no message, at the node of each
+  object field (a field with an `objectTemplate`) the form shows for the values
+  checked; a field without a template (a `json` field, a root of dotted fields, a
+  scalar) is never marked. The record form's, `MutationDialog`'s and
+  `ActionFormDialog`'s resolvers and the one `jsonSchemaActionArgs` returns run it
+  on the tree they return, with the fields they show; `createJsonSchemaResolver`,
+  which knows no fields, does not, and neither does any other resolver an action
+  form definition brings. Code that compares such an error tree deeply expects
+  that `type`.
 - `@angee/ui`: **Changed behaviour.** A value that breaks one of a field's rules now
   says which, in a record form and in a dialog without a schema resolver: too short,
   too long, out of range, too few or too many items, or the wrong type ("Enter no

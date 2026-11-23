@@ -1034,3 +1034,69 @@ describe("ActionFormDialog", () => {
     expect(submit.mock.calls[0]?.[0]).toMatchObject({ documentIds: ["doc-2"] });
   });
 });
+
+describe("an object argument's member messages", () => {
+  // An object argument with a constrained member, beside a top-level text with the same rule.
+  const memberSpec = { type: "object", properties: {
+    retry: { type: "object", widget: "object", label: "Retry", properties: {
+      handle: { type: "string", label: "Handle", minLength: 3 },
+    } },
+    code: { type: "string", label: "Code", minLength: 3 },
+  } } as const;
+  const valid = { retry: { handle: "abc" }, code: "abc" };
+  const rule = "Enter at least 3 characters.";
+  const input = (label: string) => screen.getByLabelText(label) as HTMLInputElement;
+  const messageUnder = (label: string) => screen.getByText(label).closest('[data-layout="stack"]')?.textContent ?? "";
+  const tune = () => screen.getByRole<HTMLButtonElement>("button", { name: "Tune" });
+  // The change's validation runs after the event; a macrotask lets it settle before asserting what stays.
+  const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+  const definitions = {
+    "a definition without a resolver": () => ({ fields: deserializeFormSpec(memberSpec, defaultWidgets), defaultValues: valid }),
+    "a schema definition": () => jsonSchemaActionArgs(memberSpec, defaultWidgets, { initialValues: valid }),
+  };
+
+  test.fails.each([["a top-level field", "Code"], ["a member", "Handle"]])(
+    "defect: before any submit, a definition without a resolver disables its submit for %s failing its rule with no message on screen; the message should show while the submit is disabled",
+    async (_shape, label) => {
+      const submit = vi.fn().mockResolvedValue({ ok: true, message: "Tuned." });
+      renderDialog({ id: "tune", label: "Tune", submit, args: definitions["a definition without a resolver"]() });
+      await screen.findByLabelText("Handle");
+      await waitFor(() => expect(tune().disabled).toBe(false));
+
+      fireEvent.change(input(label), { target: { value: "ab" } });
+      await waitFor(() => expect(tune().disabled).toBe(true));
+      expect(await screen.findByText(rule)).toBeTruthy();
+      expect(messageUnder(label)).toContain(rule);
+      expect(input(label).getAttribute("aria-invalid")).toBe("true");
+      expect(submit).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each(Object.keys(definitions) as (keyof typeof definitions)[])(
+    "%s: after a blocked submit, an edit that still fails keeps the member's message, and correcting it lets the submit through",
+    async (kind) => {
+      const submit = vi.fn().mockResolvedValue({ ok: true, message: "Tuned." });
+      renderDialog({ id: "tune", label: "Tune", submit, args: definitions[kind]() });
+      await screen.findByLabelText("Handle");
+      fireEvent.change(input("Handle"), { target: { value: "ab" } });
+      fireEvent.submit(tune().closest("form")!);
+      expect(await screen.findByText(rule)).toBeTruthy();
+      expect(submit).not.toHaveBeenCalled();
+
+      fireEvent.change(input("Handle"), { target: { value: "a" } });
+      await settle();
+      expect(messageUnder("Handle")).toContain(rule);
+      expect(input("Handle").getAttribute("aria-invalid")).toBe("true");
+      fireEvent.submit(tune().closest("form")!);
+      await settle();
+      expect(submit).not.toHaveBeenCalled();
+
+      fireEvent.change(input("Handle"), { target: { value: "abcd" } });
+      await waitFor(() => expect(screen.queryByText(rule)).toBeNull());
+      await waitFor(() => expect(tune().disabled).toBe(false));
+      fireEvent.click(tune());
+      await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+      expect(submit.mock.calls[0]![0]).toStrictEqual({ retry: { handle: "abcd" }, code: "abc" });
+    },
+  );
+});

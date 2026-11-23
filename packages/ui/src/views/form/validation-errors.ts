@@ -3,9 +3,10 @@ import type { ErrorObject } from "ajv";
 import {
   extractActionOutcome, publicGraphQLErrorsFromUnknown, type ActionOutcome, type AuthoredMutateOptions,
 } from "@angee/refine";
-import { set, type FieldErrors, type FieldValues, type Path, type UseFormReturn } from "react-hook-form";
+import { get, set, type FieldErrors, type FieldValues, type Path, type UseFormReturn } from "react-hook-form";
 import { errorFromUnknown, graphQLErrorsFromUnknown } from "../../data/errors";
 import type { UiTranslate } from "../../i18n";
+import type { FieldDescriptor } from "../page";
 import type { FieldRuleError } from "./field-values";
 
 /**
@@ -126,6 +127,45 @@ export function fieldErrorsFromRules(
 ): FieldErrors<Record<string, unknown>> {
   const errors: FieldErrors<Record<string, unknown>> = {};
   for (const error of failed) set(errors, error.path, { type: error.keyword, message: jsonSchemaErrorMessage(error, t) });
+  return errors;
+}
+
+/**
+ * The `type` of an object field's error that is its members' errors. An object field, one that
+ * owns an `objectTemplate`, is one registered control whose members report their errors under
+ * its own node; `markMemberErrors` gives that node this `type` and no message of its own. Its
+ * messages are its members'.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export const MEMBER_ERRORS = "memberErrors";
+
+/**
+ * A resolver's error tree in the shape react-hook-form keeps. At a change the library keeps the
+ * changed field's error only when it has a `type` or a `message`, or is an array, so the node of
+ * an object field whose members failed, a plain object of their errors, would be dropped, and
+ * their messages with it, while the form stays invalid. Of the `fields` a form shows, each object
+ * field (one that owns an `objectTemplate`) whose node is a plain object with neither a `type` nor
+ * a `message` of its own gets `type: MEMBER_ERRORS` and no message: the field error that also
+ * carries its members' errors, as the library's type for an object-valued field describes it. A
+ * field without a template (a `json` field holding an object, a root of dotted fields, a scalar)
+ * is never marked, whatever sits under its path; nor is an object field's leaf error, the root
+ * above it, an object member inside it, or an object field with no error. Returns `errors`,
+ * marked in place.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export function markMemberErrors<TErrors extends object>(
+  errors: TErrors,
+  fields: Iterable<Pick<FieldDescriptor, "name" | "objectTemplate">>,
+): TErrors {
+  for (const field of fields) {
+    if (!field.objectTemplate) continue;
+    const node: unknown = get(errors, field.name);
+    if (node && typeof node === "object" && !Array.isArray(node) && !("type" in node) && !("message" in node)) {
+      Object.assign(node, { type: MEMBER_ERRORS });
+    }
+  }
   return errors;
 }
 

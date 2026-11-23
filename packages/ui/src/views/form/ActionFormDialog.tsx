@@ -20,7 +20,8 @@ import { useRecordChromeContextMaybe } from "../resource/record-chrome-context";
 import { useActionForm } from "./use-action-form";
 import { ActionFormProvider } from "./ActionFormProvider";
 import { DescriptorFieldList, type DescriptorField } from "./DescriptorFieldList";
-import { actionOutcomeSubmitResult } from "./validation-errors";
+import { visibleFields } from "./form-view-model";
+import { actionOutcomeSubmitResult, markMemberErrors } from "./validation-errors";
 import type { ActionArg, ActionArgs, ActionDescriptor, ActionFormContext, ActionFormDefinition } from "../page";
 
 export interface ActionFormDialogProps {
@@ -101,7 +102,8 @@ function ActionArgsDialog({
   const actionForm = useActionForm<ArgValues, ActionOutcome>({
     defaultValues: definition?.defaultValues ?? argDefaultValues(args, context),
     resolver: async (values, resolverContext, options) => {
-      const errors = dialogRuleErrors(fields, values, t, validateConstraints);
+      const declared = typeof fields === "function" ? fields(values) : fields;
+      const errors = markMemberErrors(dialogRuleErrors(declared, values, t, validateConstraints), visibleFields(declared, values));
       if (Object.keys(errors).length) return { values: {}, errors };
       return definition?.resolver
         ? definition.resolver(values, resolverContext, options)

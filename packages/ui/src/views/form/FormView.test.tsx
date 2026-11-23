@@ -44,6 +44,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import { useFormState } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../../feedback";
@@ -2778,6 +2779,84 @@ describe("FormView", () => {
     fireEvent.blur(timeout);
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate.mock.calls[0]![0].data).toStrictEqual({ id: "note-1", config: { timeout: 7 } });
+  });
+
+  const handleMember = { handle: { type: "string", label: "Handle", minLength: 3 } } as const;
+  const retryMember = { retry: { type: "object", widget: "object", label: "Retry", properties: handleMember } } as const;
+  test.each([
+    {
+      shape: "a top-level text field", record: { handle: "abc" }, saved: { handle: "abcd" },
+      fields: () => deserializeFormSpec({ type: "object", properties: handleMember }, defaultWidgets),
+    },
+    {
+      shape: "a member of an object field", record: { retry: { handle: "abc" } }, saved: { retry: { handle: "abcd" } },
+      fields: () => deserializeFormSpec({ type: "object", properties: retryMember }, defaultWidgets),
+    },
+    {
+      shape: "a member of an object field in a JSON root", record: { config: { retry: { handle: "abc" } } },
+      saved: { config: { retry: { handle: "abcd" } } }, fields: () => configFields(retryMember),
+    },
+  ])("after a blocked save, $shape keeps its message through an edit that still fails, and saves once corrected", async ({ record, saved, fields }) => {
+    sdkMocks.record = { id: "note-1", ...record };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={fields()} />);
+    const rule = "Enter at least 3 characters.";
+    const handle = () => screen.getByLabelText("Handle") as HTMLInputElement;
+    const save = () => screen.getByRole("button", { name: "Save" });
+    const messageUnder = (label: string) => screen.getByText(label).closest('[data-layout="stack"]')?.textContent ?? "";
+    // The change's validation runs after the event; a macrotask lets it settle before asserting what stays.
+    const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    await waitFor(() => expect(handle().value).toBe("abc"));
+    fireEvent.change(handle(), { target: { value: "ab" } });
+    fireEvent.blur(handle());
+    fireEvent.click(save());
+    expect(await screen.findByText(rule)).toBeTruthy();
+    expect(sdkMocks.mutate).not.toHaveBeenCalled();
+
+    fireEvent.change(handle(), { target: { value: "a" } });
+    await settle();
+    expect(messageUnder("Handle")).toContain(rule);
+    expect(handle().getAttribute("aria-invalid")).toBe("true");
+    fireEvent.click(save());
+    await settle();
+    expect(sdkMocks.mutate).not.toHaveBeenCalled();
+
+    fireEvent.change(handle(), { target: { value: "abcd" } });
+    fireEvent.blur(handle());
+    await waitFor(() => expect(screen.queryByText(rule)).toBeNull());
+    fireEvent.click(save());
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate.mock.calls[0]![0].data).toStrictEqual({ id: "note-1", ...saved });
+  });
+
+  test("a hidden JSON root beside its dotted member holds no error once the member is corrected, and the form saves", async () => {
+    sdkMocks.record = { id: "note-1", config: { timeout: 30 } };
+    // What the form's error state holds at the root, read inside the form.
+    function ConfigErrorState() {
+      const { errors } = useFormState();
+      return <output>{errors.config ? "config has an error" : "config has no error"}</output>;
+    }
+    renderWithProviders(<FormView resource="notes.Note" id="note-1"
+      fields={[{ name: "config", widget: "json", hidden: true }, ...configFields({ timeout: timeoutMember })]}
+      formExtras={() => <ConfigErrorState />} />);
+    const timeout = () => screen.getByLabelText("Timeout") as HTMLInputElement;
+    const save = () => screen.getByRole("button", { name: "Save" });
+    const rule = "Enter a valid whole number.";
+    await waitFor(() => expect(timeout().value).toBe("30"));
+    fireEvent.change(timeout(), { target: { value: "" } });
+    fireEvent.blur(timeout());
+    fireEvent.click(save());
+    expect(await screen.findByText(rule)).toBeTruthy();
+    expect(screen.getByText("config has an error")).toBeTruthy();
+    expect(sdkMocks.mutate).not.toHaveBeenCalled();
+
+    fireEvent.change(timeout(), { target: { value: "7" } });
+    fireEvent.blur(timeout());
+    await waitFor(() => expect(screen.queryByText(rule)).toBeNull());
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    expect(screen.getByText("config has no error")).toBeTruthy();
+    fireEvent.click(save());
     await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
     expect(sdkMocks.mutate.mock.calls[0]![0].data).toStrictEqual({ id: "note-1", config: { timeout: 7 } });
   });

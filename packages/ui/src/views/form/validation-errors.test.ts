@@ -18,6 +18,8 @@ import {
   directDottedPathMessages,
   jsonSchemaErrorMessage,
   lineRowErrorsFromDottedPaths,
+  markMemberErrors,
+  MEMBER_ERRORS,
   messagesForDottedPath,
   useDottedPathFieldErrors,
   validationErrorMap,
@@ -42,6 +44,56 @@ test.each([
   { keyword: "exclusiveMaximum", limit: 1, message: "Enter a value less than 1." },
 ])("a failed $keyword with a limit of $limit says: $message", ({ keyword, limit, message }) => {
   expect(jsonSchemaErrorMessage({ keyword, params: { limit } }, t)).toBe(message);
+});
+
+describe("markMemberErrors", () => {
+  const leaf = (type: string) => ({ type, message: `Fails ${type}.` });
+  // An object field owns a template of its members; any other field does not.
+  const objectField = (name: string) => ({ name, objectTemplate: [{ name: "handle" }, { name: "delay" }] });
+
+  test("an object field's node of member errors gets the members' type and no message; the tree is the one given", () => {
+    const errors = { retry: { handle: leaf("minLength"), delay: leaf("maximum") } };
+    expect(markMemberErrors(errors, [objectField("retry")])).toBe(errors);
+    expect(errors).toStrictEqual({ retry: { type: MEMBER_ERRORS, handle: leaf("minLength"), delay: leaf("maximum") } });
+  });
+
+  test("an object field inside a dotted root is marked at its own path; the root above it and the object below it are not", () => {
+    const errors = { config: { retry: { handle: leaf("minLength"), backoff: { factor: leaf("minimum") } } } };
+    markMemberErrors(errors, [objectField("config.retry")]);
+    expect(errors).toStrictEqual({
+      config: { retry: { type: MEMBER_ERRORS, handle: leaf("minLength"), backoff: { factor: leaf("minimum") } } },
+    });
+  });
+
+  test.each([
+    {
+      node: "the node of a field without a template, though a bare object of errors sits there",
+      errors: () => ({ config: { timeout: leaf("type") } }), fields: [{ name: "config" }, { name: "config.timeout" }],
+    },
+    { node: "a scalar field's leaf error", errors: () => ({ title: leaf("required") }), fields: [{ name: "title" }] },
+    { node: "an object field's own leaf error", errors: () => ({ retry: leaf("required") }), fields: [objectField("retry")] },
+    {
+      node: "an object field's leaf error with a message and no type",
+      errors: () => ({ retry: { message: "Enter a retry." } }), fields: [objectField("retry")],
+    },
+    {
+      node: "an object field's node that has a type of its own",
+      errors: () => ({ retry: { ...leaf("server"), handle: leaf("required") } }), fields: [objectField("retry")],
+    },
+    {
+      node: "an object field's array node (a member named with a number)",
+      errors: () => ({ retry: [leaf("required")] }), fields: [{ name: "retry", objectTemplate: [{ name: "0" }] }],
+    },
+    {
+      node: "an unregistered root of member errors",
+      errors: () => ({ config: { token: leaf("required") } }), fields: [{ name: "config.token" }],
+    },
+    { node: "an object field with no error", errors: () => ({ title: leaf("required") }), fields: [objectField("retry")] },
+  ])("$node is left as it is", ({ errors, fields }) => {
+    const given = errors();
+    expect(markMemberErrors(given, fields)).toBe(given);
+    expect(given).toStrictEqual(errors());
+  });
 });
 
 describe("lineRowErrorsFromDottedPaths", () => {
