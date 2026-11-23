@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { RouterProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 import type { Row } from "@angee/metadata";
-import { AppRuntimeProvider, RecordActionBar, ToastProvider, createRouteHref } from "@angee/ui";
+import { AppRuntimeProvider, ModalsHost, RecordActionBar, ToastProvider, createRouteHref } from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
 import { afterEach, describe, expect, test } from "vitest";
 
@@ -26,15 +26,14 @@ function PersonVerbs({ record }: { record: Row | null }) {
   </>;
 }
 
+// The record bar confirms danger verbs through `ModalsHost`: the tree is the merge page's native test's.
 async function renderVerbs(record: Row | null): Promise<void> {
   const root = createRootRoute({ component: () => <PersonVerbs record={record} /> });
   const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: ["/"] }) });
   render(
-    <Provider>
-      <AppRuntimeProvider runtime={{ routeHref: createRouteHref(parties.routes ?? []) }}>
-        <ToastProvider><RouterProvider router={router} /></ToastProvider>
-      </AppRuntimeProvider>
-    </Provider>,
+    <Provider><AppRuntimeProvider runtime={{ routeHref: createRouteHref(parties.routes ?? []) }}><ModalsHost><ToastProvider>
+      <RouterProvider router={router} />
+    </ToastProvider></ModalsHost></AppRuntimeProvider></Provider>,
   );
   await screen.findByText("Person verbs");
 }
