@@ -2127,7 +2127,8 @@ test("a bound descriptor whose resolve returns another name reads and writes its
     },
     mountedFields: [],
     boundFields: [{ scope: "settings", field: {
-      name: "retry", label: "Retry", resolve: () => ({ name: "elsewhere", label: "Retry" }),
+      // This cast hides the returned `name` from the compiler; the declared path must still win.
+      name: "retry", label: "Retry", resolve: () => ({ name: "elsewhere", label: "Retry" }) as Omit<DescriptorField, "name">,
     } }],
   });
   expect((await screen.findByLabelText("Retry") as HTMLInputElement).value).toBe("later");

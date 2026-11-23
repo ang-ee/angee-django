@@ -6,6 +6,7 @@ import { describe, expect, test, vi } from "vitest";
 
 import { AppRuntimeProvider } from "../../runtime";
 import { defaultWidgets } from "../../widgets";
+import { deserializeFormSpec } from "../form/form-spec";
 import { useEnumOptions, useImplCategory, useImplConfigFields, useImplPrefill } from "./enum-options";
 
 vi.mock("@angee/metadata", async (importOriginal) => ({
@@ -87,7 +88,6 @@ describe("useImplConfigFields", () => {
     expect(result.current.fields.slice(0, 2).map(({ name }) => name)).toEqual(["target_config.local_root", "target_config.local_name"]);
     expect(result.current.fields[0]?.showWhen?.({ target_class: "local" })).toBe(true);
     expect(result.current.fields[0]?.showWhen?.({ target_class: "legacy" })).toBe(false);
-    expect(result.current.fields[0]?.resolve?.({ target_class: "local" })).toMatchObject({ name: "target_config.local_root" });
   });
 
   test("projects declared config through FormSpec and leaves undeclared choices raw", () => {
@@ -114,14 +114,49 @@ describe("useImplConfigFields", () => {
     expect(result.current.fields.map(({ name }) => name)).toContain("config.second_only");
     const shared = result.current.fields.find(({ name }) => name === "config.shared");
     expect(shared?.resolve?.({ backend_class: "first-conflict" })).toMatchObject({
-      name: "config.shared", label: "Shared string", widget: "text", defaultValue: "first",
+      label: "Shared string", widget: "text", defaultValue: "first",
     });
     expect(shared?.resolve?.({ backend_class: "second-conflict" })).toMatchObject({
-      name: "config.shared", label: "Shared boolean", widget: "boolean", defaultValue: true,
+      label: "Shared boolean", widget: "boolean", defaultValue: true,
     });
     expect(shared?.resolve?.({ backend_class: "SECOND-CONFLICT" })).toMatchObject({
-      name: "config.shared", label: "Shared boolean", widget: "boolean", defaultValue: true,
+      label: "Shared boolean", widget: "boolean", defaultValue: true,
     });
+  });
+
+  test("a resolved variant carries every member of the chosen declaration except its name", () => {
+    const rich = {
+      type: "object",
+      properties: {
+        target: {
+          type: "string", label: "Target", enum: ["inbox", "archive"], default: "archive",
+          omittable: true, presenceRequired: true,
+        },
+        scope: { type: "object", label: "Scope", properties: { path: { type: "string", label: "Path" } }, required: ["path"] },
+      },
+    };
+    const supplied = [
+      { key: "plain", category: "Plain", defaults: {}, config_schema: {
+        type: "object", properties: { target: { type: "string" }, scope: { type: "string" } },
+      } },
+      { key: "rich", category: "Rich", defaults: {}, config_schema: rich },
+    ];
+    const { result } = renderHook(
+      () => useImplConfigFields("workflows.Step", "step_class", supplied),
+      { wrapper: RuntimeOwner },
+    );
+
+    const [target, scope] = result.current.fields.map((field) => field.resolve?.({ step_class: "rich" }));
+    expect(target).toMatchObject({
+      label: "Target", widget: "select", defaultValue: "archive", hasDefault: true, omittable: true, presenceRequired: true,
+      options: [expect.objectContaining({ value: "inbox" }), expect.objectContaining({ value: "archive" })],
+    });
+    expect(scope).toMatchObject({
+      label: "Scope", widget: "object", objectTemplate: [expect.objectContaining({ name: "path", required: true })],
+    });
+    // Each resolved field is the chosen declaration, member for member, without its name.
+    expect([target, scope]).toEqual(deserializeFormSpec(rich, defaultWidgets)
+      .map(({ name: _name, ...members }) => ({ ...members, showWhen: expect.any(Function) })));
   });
 
   test("uses supplied operation choices without enabling the generic catalogue query", () => {

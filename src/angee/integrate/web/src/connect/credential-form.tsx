@@ -66,7 +66,7 @@ function replacementFields(record: Row | null): string[] {
 
 /** Resolve field editability from the credential owner's projection, never from an unsaved kind. */
 const credentialNameField: NonNullable<FieldDescriptor["resolve"]> = (record) => ({
-  name: "name", readOnly: !Array.isArray(record.editable_fields) || !record.editable_fields.includes("name"),
+  readOnly: !Array.isArray(record.editable_fields) || !record.editable_fields.includes("name"),
 });
 
 /**

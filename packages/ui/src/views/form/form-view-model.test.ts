@@ -1,9 +1,10 @@
 import { get, set } from "react-hook-form";
-import { describe, expect, test } from "vitest";
+import { describe, expect, expectTypeOf, test } from "vitest";
 
 import { enUiBundle } from "../../i18n";
 import { createAngeeI18nInstance } from "../../runtime/i18n";
 import type { FieldDescriptor } from "../page";
+import type { DescriptorField } from "./DescriptorFieldList";
 import type { FormSpecFieldDescriptor } from "./form-spec";
 import {
   EDITABLE_LINES_SECTION,
@@ -21,6 +22,7 @@ import {
   resolveField,
   seedPreset,
   titleText,
+  visibleFields,
   type PresetMemory,
 } from "./form-view-model";
 import { dialogRuleErrors } from "./MutationDialog";
@@ -124,12 +126,49 @@ test("dynamic resolution cannot unlock a field already locked by form mode", () 
   const locked: FieldDescriptor = {
     name: "collection",
     readOnly: true,
-    resolve: () => ({ name: "collection", readOnly: false }),
+    resolve: () => ({ readOnly: false }),
   };
   expect(resolveField(locked, {})).toMatchObject({ name: "collection", readOnly: true });
   expect(resolveField({ ...locked, readOnly: false }, {})).toMatchObject({
     name: "collection", readOnly: false,
   });
+});
+
+test("a resolve that returns a name does not compile, and the field keeps its declared name", () => {
+  const field: FieldDescriptor = {
+    name: "collection",
+    // @ts-expect-error A `resolve` cannot rename its field, so the compiler refuses a returned `name`.
+    resolve: () => ({ name: "elsewhere", readOnly: true }),
+  };
+  expect(resolveField(field, {})).toMatchObject({ name: "collection", readOnly: true });
+});
+
+test("a dialog field's resolve may return only dialog members, and never a name", () => {
+  const relationOnly: DescriptorField = { name: "account", resolve: () => ({ relation: { resource: "Account" } }) };
+  const renamed: DescriptorField = {
+    name: "account",
+    // @ts-expect-error A `resolve` cannot rename its field, so the compiler refuses a returned `name`.
+    resolve: () => ({ name: "elsewhere", relation: { resource: "Account" } }),
+  };
+  expect(resolveField(relationOnly, {})).toMatchObject({ name: "account", relation: { resource: "Account" } });
+  expect(resolveField(renamed, {})).toMatchObject({ name: "account", relation: { resource: "Account" } });
+});
+
+test("a FormSpec field's resolve may return only FormSpec members", () => {
+  const listOnly: FormSpecFieldDescriptor = { name: "lines", resolve: () => ({ addLabel: "Add line", layout: "input" }) };
+  expect(resolveField(listOnly, {})).toMatchObject({ name: "lines", addLabel: "Add line", layout: "input" });
+});
+
+test("resolveField and visibleFields return the caller's descriptor type", () => {
+  const dialog: DescriptorField = { name: "account", relation: { resource: "Account" }, resolve: () => ({ readOnly: true }) };
+  const spec: FormSpecFieldDescriptor = { name: "lines", addLabel: "Add line", resolve: () => ({ layout: "input" }) };
+  const resolvedDialog: DescriptorField = resolveField(dialog, {});
+  const resolvedSpec: FormSpecFieldDescriptor = resolveField(spec, {});
+  expectTypeOf(resolveField(dialog, {})).toEqualTypeOf<DescriptorField>();
+  expectTypeOf(resolveField(spec, {})).toEqualTypeOf<FormSpecFieldDescriptor>();
+  expectTypeOf(visibleFields([dialog], {})).toEqualTypeOf<DescriptorField[]>();
+  expect(resolvedDialog).toMatchObject({ name: "account", relation: { resource: "Account" }, readOnly: true });
+  expect(resolvedSpec).toMatchObject({ name: "lines", addLabel: "Add line", layout: "input" });
 });
 
 test("explicit panes retain their long text and status fields instead of hoisting them into the hero", () => {
@@ -366,7 +405,6 @@ describe("dotted form fields", () => {
     const dynamic: FieldDescriptor = {
       name: "config.shared",
       resolve: (values) => ({
-        name: "config.shared",
         required: values.backend_class === "strict",
       }),
     };

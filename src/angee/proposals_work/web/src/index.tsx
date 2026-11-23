@@ -25,7 +25,6 @@ export default defineBaseAddon({
               name="clarification_queue"
               label={labelKey("round.queue")}
               resolve={(values) => ({
-                name: "clarification_queue",
                 readOnly: !holdsPermission(values, "write"),
               })}
             />
