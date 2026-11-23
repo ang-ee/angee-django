@@ -10,6 +10,18 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: **Changed behaviour.** Edits made in a record form's lines are now
+  undo steps; before, undo skipped them. One user intention is one step: adding a
+  line is one step, typing in one of its cells another (until the cell is left
+  or another field starts), and removing, duplicating or reordering a line, or a
+  widget's row patch, is one step each. `EditableLines` takes an optional
+  `history` with the form's `perform`, `start` and `commit`; the record form
+  passes it, so its `onFieldInteractionStart` and `onFieldInteractionCommit` now
+  also receive a line cell's path (`lines.2.label`). Without it the lines record
+  nothing, as before. `useFormHistory`'s `perform` now reads the form's values
+  after its action, so a change that sends no values notification, such as a
+  field-array append, is still recorded. A line the lines editor adds or
+  duplicates carries its client key from the moment it is added.
 - `@angee/ui`: **Changed behaviour.** A record form's `object` or `list` field
   showed its loading placeholder for good in a create form, and in an edit form
   once the widget had been shown before, because the form gave it an empty

@@ -12,6 +12,7 @@ import { CLIENT_LINE_KEY } from "./editable-lines";
 import { AppRuntimeProvider } from "../../runtime";
 import { defaultWidgets, type WidgetRenderProps } from "../../widgets";
 import { EditableLines } from "./EditableLines";
+import { useFormHistory, type FormHistory } from "./use-form-history";
 import type { ValidationErrors } from "./validation-errors";
 
 const LINES = {
@@ -90,8 +91,9 @@ function Host({
   );
 }
 
-function rowPatchFixture() {
+function rowPatchFixture({ recorded = false }: { recorded?: boolean } = {}) {
   let form!: UseFormReturn<Record<string, unknown>>;
+  let history!: FormHistory;
   const callbacks = new Map<string, NonNullable<WidgetRenderProps["onRowChange"]>>();
   const metadata = schemaFieldMetadataFromDataResources([testDataResource("demo.Product")]);
   const lines: DataResourceLinesMetadata = { ...LINES, fields: [
@@ -105,11 +107,7 @@ function rowPatchFixture() {
       return <button type="button" onClick={() => callbacks.set(label, onRowChange!)}>Preview {label}</button>;
     },
   };
-  function PatchHost({ readOnly = false }: { readOnly?: boolean }) {
-    form = useForm<Record<string, unknown>>({ defaultValues: { lines: [
-      { id: "one", label: "Widget", quantity: 2, position: 0 },
-      { id: "two", label: "Gadget", quantity: 5, position: 1 },
-    ] } });
+  function PatchLines({ readOnly, history }: { readOnly: boolean; history?: FormHistory }) {
     return <ModelMetadataProvider metadata={metadata}>
       <AppRuntimeProvider runtime={{ widgets: { ...defaultWidgets, "demo.product": productWidget } }}>
         <ModalsHost><EditableLines
@@ -118,12 +116,27 @@ function rowPatchFixture() {
           name="lines"
           lines={lines}
           readOnly={readOnly}
+          history={history}
         /></ModalsHost>
       </AppRuntimeProvider>
     </ModelMetadataProvider>;
   }
+  function RecordedPatchLines({ readOnly }: { readOnly: boolean }) {
+    history = useFormHistory(form);
+    return <PatchLines readOnly={readOnly} history={history} />;
+  }
+  function PatchHost({ readOnly = false }: { readOnly?: boolean }) {
+    form = useForm<Record<string, unknown>>({ defaultValues: { lines: [
+      { id: "one", label: "Widget", quantity: 2, position: 0 },
+      { id: "two", label: "Gadget", quantity: 5, position: 1 },
+    ] } });
+    return recorded ? <RecordedPatchLines readOnly={readOnly} /> : <PatchLines readOnly={readOnly} />;
+  }
   const view = render(<PatchHost />);
-  return { form: () => form, callbacks, lock: () => view.rerender(<PatchHost readOnly />), unmount: view.unmount };
+  return {
+    form: () => form, history: () => history, callbacks,
+    lock: () => view.rerender(<PatchHost readOnly />), unmount: view.unmount,
+  };
 }
 
 async function toggleField(label: string) {
@@ -374,6 +387,54 @@ describe("EditableLines", () => {
     render(<Host />);
     expect(screen.queryByRole("columnheader", { name: "System" })).toBeNull();
     expect(screen.queryByRole("img", { name: "Locked row" })).toBeNull();
+  });
+
+  test("without the form's history the lines edit as before and record no step", async () => {
+    let form!: UseFormReturn<Record<string, unknown>>;
+    let history!: FormHistory;
+    function UnrecordedHost(): React.ReactElement {
+      form = useForm<Record<string, unknown>>({ defaultValues: { lines: [
+        { id: "one", label: "Widget", quantity: 2, position: 0 },
+        { id: "two", label: "Gadget", quantity: 5, position: 1 },
+      ] } });
+      history = useFormHistory(form);
+      return <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+        <ModalsHost><EditableLines control={form.control} setValue={form.setValue} name="lines" lines={LINES} /></ModalsHost>
+      </AppRuntimeProvider>;
+    }
+    render(<UnrecordedHost />);
+    const label = screen.getAllByRole("textbox", { name: "Label" })[0]!;
+    fireEvent.change(label, { target: { value: "Widget edited" } });
+    fireEvent.blur(label);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Add line" })); });
+    await act(async () => { fireEvent.click(screen.getAllByRole("button", { name: "Duplicate line" })[0]!); });
+    await act(async () => {
+      fireEvent.keyDown(screen.getAllByRole("button", { name: "Reorder row" })[1]!, { key: "ArrowUp", altKey: true });
+    });
+    await act(async () => { fireEvent.click(screen.getAllByRole("button", { name: "Remove line" })[2]!); });
+    const edited = (form.getValues("lines") as Record<string, unknown>[]).map(({ id, label }) => ({ id, label }));
+    expect(edited).toEqual([
+      { id: undefined, label: "Widget edited" }, { id: "one", label: "Widget edited" }, { id: undefined, label: "" },
+    ]);
+    expect(history.canUndo).toBe(false);
+    act(() => history.undo());
+    expect((form.getValues("lines") as Record<string, unknown>[]).map(({ id, label }) => ({ id, label }))).toEqual(edited);
+  });
+
+  test("with the form's history a widget's row patch is one step", () => {
+    const f = rowPatchFixture({ recorded: true });
+    fireEvent.click(screen.getByRole("button", { name: "Preview Gadget" }));
+    const patched = { product: { id: "new-product", name: "New" }, label: "Patched" };
+    act(() => f.callbacks.get("Gadget")!(patched));
+    expect(f.form().getValues("lines.1")).toMatchObject(patched);
+    act(() => f.history().undo());
+    expect(f.form().getValues("lines")).toEqual([
+      { id: "one", label: "Widget", quantity: 2, position: 0 },
+      { id: "two", label: "Gadget", quantity: 5, position: 1 },
+    ]);
+    expect(f.history().canUndo).toBe(false);
+    act(() => f.history().redo());
+    expect(f.form().getValues("lines.1")).toMatchObject(patched);
   });
 });
 

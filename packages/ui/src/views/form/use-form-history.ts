@@ -5,7 +5,10 @@ import type { FieldValues, UseFormReturn } from "react-hook-form";
 export interface FormHistory {
   canUndo: boolean;
   canRedo: boolean;
-  /** Record synchronous changes; return false without running when read-only. */
+  /**
+   * Record synchronous changes as one step, read from the form after the action;
+   * return false without running when read-only.
+   */
   perform: (action: () => void) => boolean;
   /** Begin one undo group, for example when a text field receives focus. */
   start: (group: string) => void;
@@ -25,8 +28,13 @@ export interface FormHistory {
  * different group commits the previous one. Undo/redo preserve the active group
  * so continued typing without a new focus event remains undoable. Wrap other
  * synchronous changes in perform; asynchronous work must finish before that call.
- * Each changed RHF notification creates one immutable frame, reused by stacks
- * and availability checks. Both stacks retain at most limit frames (default 100).
+ * One user intention is one step: in a form's lines, adding a line is one step and
+ * typing in its cell another, and removing, duplicating or reordering a line is one
+ * step each. Each changed RHF notification creates one immutable frame, reused by
+ * stacks and availability checks; perform also reads the form's values after its
+ * action, so a change that sends no notification (a field-array append, insert,
+ * remove or move) is a step like any other. Both stacks retain at most limit
+ * frames (default 100).
  * Call reset when the caller loads another record or accepts a saved baseline.
  * Before binding undo where a field of its own can be left "Not set" over a loaded
  * value (a record form): a replay registers every mounted field again, and React Hook
@@ -57,19 +65,20 @@ export function useFormHistory<TValues extends FieldValues>(
   }
   const frames = framesRef.current;
   const [, redraw] = React.useReducer((value: number) => value + 1, 0);
+  /** Bring the current frame up to `values`; true when that moved it. */
+  const capture = React.useCallback((values: TValues) => {
+    const key = stableSerialize(values);
+    if (key === frames.current.key) return false;
+    frames.current = { values: structuredClone(values), key };
+    return true;
+  }, [frames]);
   const availability = React.useSyncExternalStore(
     React.useCallback((notify) => {
-      const update = (values: TValues) => {
-        const key = stableSerialize(values);
-        if (key !== frames.current.key) {
-          frames.current = { values: structuredClone(values), key };
-          notify();
-        }
-      };
+      const update = (values: TValues) => { if (capture(values)) notify(); };
       const unsubscribe = subscribe({ formState: { values: true }, callback: ({ values }) => update(values) });
       update(getValues());
       return unsubscribe;
-    }, [frames, getValues, subscribe]),
+    }, [capture, getValues, subscribe]),
     React.useCallback(() => {
       const changed = frames.active !== null && frames.active.before.key !== frames.current.key;
       return (frames.past.length > 0 || changed ? 1 : 0) | (!changed && frames.future.length > 0 ? 2 : 0);
@@ -98,11 +107,13 @@ export function useFormHistory<TValues extends FieldValues>(
     finish();
     const before = frames.current;
     try { action(); } finally {
+      // A field-array operation changes the values without a notification.
+      capture(getValues());
       record(before);
       frames.active = group === undefined ? null : { group, before: frames.current };
     }
     return true;
-  }, [frames, finish, readOnly, record]);
+  }, [capture, frames, finish, getValues, readOnly, record]);
   const start = React.useCallback((group: string) => {
     if (readOnly || frames.active?.group === group) return;
     finish();

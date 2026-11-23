@@ -11,6 +11,7 @@ import {
 
 import { Glyph } from "../../chrome/Glyph";
 import { useUiT } from "../../i18n";
+import { createClientKey } from "../../lib/client-key";
 import { titleCase } from "../../lib/titleCase";
 import { Chip } from "../../ui/chip";
 import { Button } from "../../ui/button";
@@ -28,6 +29,7 @@ import {
   CLIENT_LINE_KEY, duplicateLineRow, emptyLineRow, lineDiffConfig, lineLockedFields,
 } from "./editable-lines";
 import { FieldDescriptorControl } from "./field-descriptor-control";
+import type { FormHistory } from "./use-form-history";
 import type { ValidationErrors } from "./validation-errors";
 
 export interface EditableLinesProps {
@@ -61,6 +63,15 @@ export interface EditableLinesProps {
     fieldName: string,
     parentRow: Row | null,
   ) => readonly CrudFilter[] | undefined;
+  /**
+   * The composing form's undo verbs; without them the lines record no step. A cell's
+   * change starts its group, named by the cell's form path (`lines.2.label`), before
+   * it writes, and the cell's control commits it where that control offers a commit.
+   * Adding, duplicating, removing or reordering a line, and a widget's row patch, each
+   * run inside `perform` as one step. A record form passes its interaction callbacks
+   * as `start` and `commit`, so they see a cell as they see any other field.
+   */
+  history?: Pick<FormHistory, "perform" | "start" | "commit">;
 }
 
 /** Authored presentation of one line field, keyed by its name. */
@@ -104,7 +115,7 @@ type LineViewRow = { id: string; index: number; value: Row };
  */
 export function EditableLines({
   control, setValue, name, lines, parentRow, readOnly, footer, rowErrors,
-  primaryFields, fields: authoredFields = [], supplementalColumns = [], relationFilters,
+  primaryFields, fields: authoredFields = [], supplementalColumns = [], relationFilters, history,
 }: EditableLinesProps): React.ReactElement {
   const t = useUiT();
   const controlId = React.useId();
@@ -114,6 +125,7 @@ export function EditableLines({
   const { fields, append, insert, move, remove } = useFieldArray({ control, name, keyName: "rhfKey" });
   const { isDirty: formIsDirty } = useFormState({ control });
   const rows = (useWatch({ control, name }) as Row[] | undefined) ?? [];
+  // A new row another writer added gets RHF's key; the editor's own rows bring theirs.
   React.useEffect(() => {
     fields.forEach((field, index) => {
       const row = rows[index];
@@ -123,22 +135,29 @@ export function EditableLines({
     });
   }, [config.idField, fields, name, rows, setValue]);
   // Async widgets resolve their RHF identity at completion, never a captured index.
-  const latest = React.useRef({ fields, readOnly, setValue });
-  latest.current = { fields, readOnly, setValue };
+  const latest = React.useRef({ fields, readOnly, setValue, history });
+  latest.current = { fields, readOnly, setValue, history };
   const mounted = React.useRef(true);
   React.useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; };
+  }, []);
+  // One user intention is one step of the form's history, when the form has one.
+  const performStep = React.useCallback((action: () => void) => {
+    const recorder = latest.current.history;
+    if (recorder) recorder.perform(action); else action();
   }, []);
   const patchRow = React.useCallback((key: string, patch: Record<string, unknown>) => {
     const current = latest.current;
     if (!mounted.current || current.readOnly) return;
     const index = current.fields.findIndex((field) => field.rhfKey === key);
     if (index < 0) return;
-    for (const [field, value] of Object.entries(patch)) {
-      current.setValue<string>(`${name}.${index}.${field}`, value, { shouldDirty: true });
-    }
-  }, [name]);
+    performStep(() => {
+      for (const [field, value] of Object.entries(patch)) {
+        current.setValue<string>(`${name}.${index}.${field}`, value, { shouldDirty: true });
+      }
+    });
+  }, [name, performStep]);
   const viewRows = React.useMemo(() => fields.map((field, index) => ({
     id: field.rhfKey, index, value: rows[index] ?? {},
   })), [fields, rows]);
@@ -179,33 +198,38 @@ export function EditableLines({
           presentation: "cell", id: `${controlId}-${id}-${field.name}`,
           "aria-invalid": messages.length > 0 || undefined,
         };
+        const path = `${name}.${index}.${field.name}`;
         return <div className="min-w-0">
-          <Controller control={control} name={`${name}.${index}.${field.name}`}
-            render={({ field: controller }) => relationMulti ? (
-              <RelationMultiFieldWidget
-                controlProps={controlProps}
-                value={Array.isArray(controller.value) ? controller.value : []}
-                onChange={controller.onChange} readOnly={cellReadOnly} relation={relationMulti}
-                filters={relationFilters?.(field.name, parentRow ?? null)}
-                aria-label={header}
-              />
-            ) : relation ? (
-              <RelationFieldWidget
-                controlProps={controlProps} controlRef={controller.ref}
-                value={relationValueId(controller.value) || null}
-                onChange={controller.onChange} readOnly={cellReadOnly} relation={relation}
-                filters={relationFilters?.(field.name, parentRow ?? null)}
-                selectedOption={relationSelectedOption(controller.value, relation.labelField)}
-                aria-label={header}
-              />
-            ) : (
-              <FieldDescriptorControl
-                controlProps={controlProps} controlRef={controller.ref} field={descriptor}
-                row={value} parentRow={parentRow} value={controller.value}
-                messages={messages} readOnly={cellReadOnly} onChange={controller.onChange}
-                onRowChange={(patch) => patchRow(id, patch)}
-              />
-            )}
+          <Controller control={control} name={path}
+            render={({ field: controller }) => {
+              const onChange = (next: unknown) => { history?.start(path); controller.onChange(next); };
+              const onCommit = history && (() => history.commit(path));
+              return relationMulti ? (
+                <RelationMultiFieldWidget
+                  controlProps={controlProps}
+                  value={Array.isArray(controller.value) ? controller.value : []}
+                  onChange={onChange} onCommit={onCommit} readOnly={cellReadOnly} relation={relationMulti}
+                  filters={relationFilters?.(field.name, parentRow ?? null)}
+                  aria-label={header}
+                />
+              ) : relation ? (
+                <RelationFieldWidget
+                  controlProps={controlProps} controlRef={controller.ref}
+                  value={relationValueId(controller.value) || null}
+                  onChange={onChange} onCommit={onCommit} readOnly={cellReadOnly} relation={relation}
+                  filters={relationFilters?.(field.name, parentRow ?? null)}
+                  selectedOption={relationSelectedOption(controller.value, relation.labelField)}
+                  aria-label={header}
+                />
+              ) : (
+                <FieldDescriptorControl
+                  controlProps={controlProps} controlRef={controller.ref} field={descriptor}
+                  row={value} parentRow={parentRow} value={controller.value}
+                  messages={messages} readOnly={cellReadOnly} onChange={onChange} onCommit={onCommit}
+                  onRowChange={(patch) => patchRow(id, patch)}
+                />
+              );
+            }}
           />
           {messages.map((message, index) => (
             <p key={index} className="mt-1 text-12 text-danger-text">{message}</p>
@@ -239,12 +263,12 @@ export function EditableLines({
     defineRowAction<LineViewRow>({
       kind: "page", id: "duplicate", label: t("lines.duplicate"), icon: "copy",
       presentation: "icon", variant: "ghost", pendingPolicy: "disable-actions", visible: unlocked,
-      onSelect: ({ index }) => insert(index + 1, duplicateLineRow(rows[index] ?? {}, config) as never),
+      onSelect: ({ index }) => performStep(() => insert(index + 1, withClientKey(duplicateLineRow(rows[index] ?? {}, config)) as never)),
     }),
     defineRowAction<LineViewRow>({
       kind: "page", id: "remove", label: t("lines.remove"), icon: "trash",
       presentation: "icon", variant: "danger", pendingPolicy: "disable-actions", visible: unlocked,
-      onSelect: ({ index }) => remove(index),
+      onSelect: ({ index }) => performStep(() => remove(index)),
     }),
   ];
   return <div className="min-w-0">
@@ -258,11 +282,11 @@ export function EditableLines({
         if (current.readOnly) return;
         const from = current.fields.findIndex((field) => field.rhfKey === fromId);
         const to = current.fields.findIndex((field) => field.rhfKey === toId);
-        if (from >= 0 && to >= 0 && from !== to) move(from, to);
+        if (from >= 0 && to >= 0 && from !== to) performStep(() => move(from, to));
       }}
       canReorderRow={unlocked}
       footerRow={readOnly ? undefined : <Button type="button" variant="ghost" size="sm"
-        onClick={() => append(emptyLineRow(fields.length, config) as never)}>
+        onClick={() => performStep(() => append(withClientKey(emptyLineRow(fields.length, config)) as never))}>
         <Glyph name="plus" decorative />{t("lines.add")}
       </Button>}
     />
@@ -278,6 +302,14 @@ export function EditableLines({
     ) : null}
     {footer ? <div className="pt-2">{footer(rows)}</div> : null}
   </div>;
+}
+
+/**
+ * A line the editor adds carries its client identity from the step that adds it, so
+ * the key write after the render has nothing to change inside an open undo group.
+ */
+function withClientKey(row: Row): Row {
+  return { ...row, [CLIENT_LINE_KEY]: createClientKey("line") };
 }
 
 function rowMessages(

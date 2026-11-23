@@ -1334,8 +1334,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   consumers own connection policy, selection and persisted layout.
 - Filter entry composes [FilterClauseEditor](../../packages/ui/src/toolbars/FilterClauseEditor.tsx);
   custom pickers retain their own keyboard interaction.
-- Form undo composes [useFormHistory](../../packages/ui/src/views/form/use-form-history.ts);
-  group field interactions and reset history when accepting a saved or reloaded baseline.
+- Form undo composes [useFormHistory](../../packages/ui/src/views/form/use-form-history.ts):
+  one user intention is one step. Group a field's typing, run every other change (adding,
+  removing, duplicating or reordering a line) through `perform`, and reset history when
+  accepting a saved or reloaded baseline; `EditableLines` takes the form's verbs as `history`.
 - Editable named entries use the [keyed collection](../../packages/ui/src/views/form/keyed-collection.ts)
   in authored order; client identities survive renaming and own duplicate-key issues.
 - Schema path selection composes [SchemaPathPicker](../../packages/ui/src/views/SchemaPathPicker.tsx)

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { act, cleanup, renderHook } from "@testing-library/react";
-import { useForm, type UseFormReturn } from "react-hook-form";
+import { useFieldArray, useForm, type UseFieldArrayReturn, type UseFormReturn } from "react-hook-form";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { createUiTestProviders } from "../../testing";
@@ -190,6 +190,37 @@ test("partially completed actions remain undoable when an action throws", () => 
   });
   act(() => result.current.history.undo());
   expect(result.current.form.getValues("detail.count")).toBe(1);
+});
+
+type LineValues = { lines: { label: string }[] };
+const LOADED_LINES: LineValues["lines"] = [{ label: "a" }, { label: "b" }];
+interface ArrayRow { verb: string; change: (array: UseFieldArrayReturn<LineValues>) => void; changed: LineValues["lines"] }
+const arrayRows: readonly ArrayRow[] = [
+  { verb: "append", change: (array) => array.append({ label: "c" }), changed: [...LOADED_LINES, { label: "c" }] },
+  { verb: "remove", change: (array) => array.remove(0), changed: [{ label: "b" }] },
+];
+
+test.each(arrayRows)("a performed field-array $verb, which sends no values notification, is one step that undo and redo replay", ({ change, changed }) => {
+  const { result } = renderHook(() => {
+    const form = useForm<LineValues>({ defaultValues: { lines: structuredClone(LOADED_LINES) } });
+    const array = useFieldArray({ control: form.control, name: "lines" });
+    return { form, array, history: useFormHistory(form) };
+  }, { wrapper: Provider });
+  const rows = () => ({
+    values: result.current.form.getValues("lines"),
+    fields: result.current.array.fields.map(({ label }) => ({ label })),
+  });
+  act(() => { result.current.history.perform(() => change(result.current.array)); });
+  expect(rows()).toEqual({ values: changed, fields: changed });
+  expect(result.current.history.canUndo).toBe(true);
+  act(() => result.current.history.undo());
+  expect(rows()).toEqual({ values: LOADED_LINES, fields: LOADED_LINES });
+  expect(result.current.history.canUndo).toBe(false);
+  expect(result.current.history.canRedo).toBe(true);
+  act(() => result.current.history.redo());
+  expect(rows()).toEqual({ values: changed, fields: changed });
+  expect(result.current.history.canUndo).toBe(true);
+  expect(result.current.history.canRedo).toBe(false);
 });
 
 type Values = Record<string, unknown>;

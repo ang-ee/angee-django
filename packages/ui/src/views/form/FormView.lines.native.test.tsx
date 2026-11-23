@@ -14,6 +14,7 @@ import { AppRuntimeProvider, containersFromChildren, type ComposedContainers } f
 import { createUiTestProviders } from "../../testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
 import { defaultWidgets } from "../../widgets";
+import { CLIENT_LINE_KEY } from "./editable-lines";
 import { FORM_CONTAINERS, FormView } from "./FormView";
 import { acknowledgeFormSubmit, useFormViewSave, type FormSubmit, type FormViewSaveSurface } from "./use-form-view-save";
 import { Group, type FieldDescriptor } from "../page";
@@ -64,7 +65,10 @@ async function fixture(options: {
   publicView?: boolean;
   save?: (variables: ResourceSaveVariables) => Promise<Row>;
   recordExtras?: ComponentProps<typeof FormView>["recordExtras"];
-  formProps?: Pick<ComponentProps<typeof FormView>, "recordTabs" | "linesTabLabel" | "groups">;
+  formProps?: Pick<
+    ComponentProps<typeof FormView>,
+    "recordTabs" | "linesTabLabel" | "groups" | "onFieldInteractionStart" | "onFieldInteractionCommit"
+  >;
   containers?: ComposedContainers;
   /** The form loads with its lines in values but not on the page. */
   linesHidden?: boolean;
@@ -635,31 +639,127 @@ test.each([true, false])("concurrent edits to a newly saved line remain intact a
 
 const lineLabels = () => screen.getAllByLabelText("Label").map((cell) => (cell as HTMLInputElement).value);
 const loadedLabels = initialLines.map((row) => String(row.label));
+const titleValue = () => (screen.getByLabelText("Title") as HTMLTextAreaElement).value;
+type Fixture = Awaited<ReturnType<typeof fixture>>;
+const formLines = (f: Fixture) => f.surface().form.getValues("lines") as Row[];
+/** Replay one step and let the effects it causes (a client-key write among them) land. */
+const replay = (f: Fixture, direction: "undo" | "redo") => act(async () => { f.surface().history[direction](); });
 
-// Skipped, a known gap: a change made through the lines editor records no undo step. The editor
-// starts no history group, and a field-array operation sends no values notification; the first one
-// that carries a new row is the editor's own client-key write after the render, outside any step.
-test.skip("a line added through the lines' controls is one undo step, and undo and redo show and save the rows it recorded", async () => {
+test("adding a line, typing its label and changing the title are one undo step each, walked back to the loaded rows and forward to the save", async () => {
   const f = await fixture({ publicView: true });
-  fireEvent.click(screen.getByRole("button", { name: "Add line" }));
-  const added = screen.getAllByLabelText("Label").find((cell) => (cell as HTMLInputElement).value === "")!;
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Add line" })); });
+  const added = screen.getAllByLabelText("Label").at(-1)!;
+  fireEvent.change(added, { target: { value: "N" } });
   fireEvent.change(added, { target: { value: "New" } });
-  expect(lineLabels()).toEqual([...loadedLabels, "New"]);
-  // A second, unrelated change, so the first undo lands ON the changed frame rather than on the loaded one.
+  fireEvent.blur(added);
   fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Other" } });
-  act(() => f.surface().history.undo());
-  await waitFor(() => expect(lineLabels()).toEqual([...loadedLabels, "New"]));
-  expect((screen.getByLabelText("Title") as HTMLTextAreaElement).value).toBe("Original");
-  act(() => f.surface().history.undo());
-  await waitFor(() => expect(lineLabels()).toEqual(loadedLabels));
+  fireEvent.blur(screen.getByLabelText("Title"));
+  const frames = [
+    { title: "Original", labels: loadedLabels },
+    { title: "Original", labels: [...loadedLabels, ""] },
+    { title: "Original", labels: [...loadedLabels, "New"] },
+    { title: "Other", labels: [...loadedLabels, "New"] },
+  ];
+  for (const frame of frames.slice(0, -1).reverse()) {
+    await replay(f, "undo");
+    expect({ title: titleValue(), labels: lineLabels() }).toEqual(frame);
+  }
+  expect(f.surface().history.canUndo).toBe(false);
+  expect(formLines(f)).toEqual(initialLines);
   expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
-  act(() => f.surface().history.redo());
-  await waitFor(() => expect(lineLabels()).toEqual([...loadedLabels, "New"]));
+  for (const frame of frames.slice(1)) {
+    await replay(f, "redo");
+    expect({ title: titleValue(), labels: lineLabels() }).toEqual(frame);
+  }
+  expect(f.surface().history.canRedo).toBe(false);
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(f.custom).toHaveBeenCalledOnce());
   expect(f.custom).toHaveBeenCalledWith(expect.objectContaining({
-    payload: { pk: "doc-1", patch: {}, lines: [...initialLines, { label: "New", position: 3 }] },
+    payload: { pk: "doc-1", patch: { title: "Other" }, lines: [...initialLines, { label: "New", position: 3 }] },
   }));
+});
+
+test.each([
+  { verb: "removing", control: "Remove line", labels: ["Alpha", "Charlie"] },
+  { verb: "duplicating", control: "Duplicate line", labels: ["Alpha", "Bravo", "Bravo", "Charlie"] },
+  { verb: "reordering", control: "Reorder row", labels: ["Bravo", "Alpha", "Charlie"] },
+])("$verb a line is one undo step: undo restores the loaded rows, their order and cells with nothing to save, and redo repeats it", async ({ control, labels }) => {
+  const f = await fixture({ publicView: true });
+  const target = screen.getAllByRole("button", { name: control })[1]!;
+  await act(async () => {
+    if (control === "Reorder row") fireEvent.keyDown(target, { key: "ArrowUp", altKey: true });
+    else fireEvent.click(target);
+  });
+  expect(lineLabels()).toEqual(labels);
+  await replay(f, "undo");
+  expect(lineLabels()).toEqual(loadedLabels);
+  expect(formLines(f)).toEqual(initialLines);
+  expect(f.surface().history.canUndo).toBe(false);
+  expect(f.surface().formIsDirty).toBe(false);
+  expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+  await replay(f, "redo");
+  expect(lineLabels()).toEqual(labels);
+  expect(f.surface().history.canUndo).toBe(true);
+  expect(f.surface().history.canRedo).toBe(false);
+  expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+});
+
+test("adding a line is exactly one step: its undo leaves the loaded rows without a client key, and its redo brings the row back keyed while the save sends no key", async () => {
+  const f = await fixture({ publicView: true });
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Add line" })); });
+  expect(formLines(f)).toHaveLength(4);
+  expect(typeof formLines(f)[3]![CLIENT_LINE_KEY]).toBe("string");
+  await replay(f, "undo");
+  expect(f.surface().history.canUndo).toBe(false);
+  expect(formLines(f)).toEqual(initialLines);
+  expect(formLines(f).filter((row) => Object.hasOwn(row, CLIENT_LINE_KEY))).toEqual([]);
+  expect(lineLabels()).toEqual(loadedLabels);
+  await replay(f, "redo");
+  expect(lineLabels()).toEqual([...loadedLabels, ""]);
+  expect(typeof formLines(f)[3]![CLIENT_LINE_KEY]).toBe("string");
+  expect(f.surface().history.canRedo).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(f.custom).toHaveBeenCalledOnce());
+  expect(f.custom).toHaveBeenCalledWith(expect.objectContaining({
+    payload: { pk: "doc-1", patch: {}, lines: [...initialLines, { label: "", position: 3 }] },
+  }));
+});
+
+test("adding a line while a cell's typing is still open records no step a person cannot see", async () => {
+  const f = await fixture({ publicView: true });
+  fireEvent.change(screen.getByDisplayValue("Alpha"), { target: { value: "Alpha edited" } });
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Add line" })); });
+  expect(typeof formLines(f)[3]![CLIENT_LINE_KEY]).toBe("string");
+  const shown: string[][] = [lineLabels()];
+  while (f.surface().history.canUndo && shown.length < 6) {
+    await replay(f, "undo");
+    shown.push(lineLabels());
+  }
+  expect(shown).toEqual([
+    ["Alpha edited", "Bravo", "Charlie", ""],
+    ["Alpha edited", "Bravo", "Charlie"],
+    loadedLabels,
+  ]);
+  expect(formLines(f)).toEqual(initialLines);
+});
+
+test("typing in one cell is one undo step until another cell starts the next, and the form's interaction callbacks see each cell's path", async () => {
+  const starts = vi.fn();
+  const commits = vi.fn();
+  const f = await fixture({ publicView: true, formProps: { onFieldInteractionStart: starts, onFieldInteractionCommit: commits } });
+  const alpha = screen.getByDisplayValue("Alpha");
+  for (const value of ["AlphaX", "AlphaXY", "AlphaXYZ"]) fireEvent.change(alpha, { target: { value } });
+  fireEvent.blur(alpha);
+  const bravo = screen.getByDisplayValue("Bravo");
+  fireEvent.change(bravo, { target: { value: "Bravo edited" } });
+  fireEvent.blur(bravo);
+  expect(starts.mock.calls).toEqual([["lines.0.label"], ["lines.1.label"]]);
+  expect(commits.mock.calls).toEqual([["lines.0.label"], ["lines.1.label"]]);
+  await replay(f, "undo");
+  expect(lineLabels()).toEqual(["AlphaXYZ", "Bravo", "Charlie"]);
+  await replay(f, "undo");
+  expect(lineLabels()).toEqual(loadedLabels);
+  expect(f.surface().history.canUndo).toBe(false);
 });
 
 test("a recorded step that adds a line: the lines show the rows each undo and redo lands on, and the save writes them", async () => {

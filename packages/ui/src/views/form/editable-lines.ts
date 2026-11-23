@@ -3,7 +3,12 @@ import type { LineInput } from "@angee/refine";
 
 import { relationIdList, relationValueId } from "../../widgets/types";
 
-/** RHF's stable field-array key, retained on unsaved form rows for save correlation. */
+/**
+ * An unsaved form row's client identity, retained for save correlation. A line the
+ * lines editor adds or duplicates carries a minted key from the step that adds it;
+ * any other new row gets RHF's field-array key. Readers compare it only with itself,
+ * never with the field array's key, which a form reset regenerates.
+ */
 export const CLIENT_LINE_KEY = "__angeeClientLineKey";
 
 /**
