@@ -22,15 +22,15 @@ live in code docstrings.
   after its action, so a change that sends no values notification, such as a
   field-array append, is still recorded. A line the lines editor adds or
   duplicates carries its client key from the moment it is added.
-- `@angee/ui`: **Changed behaviour.** A record form's `object` or `list` field
-  showed its loading placeholder for good in a create form, and in an edit form
-  once the widget had been shown before, because the form gave it an empty
-  string, which those widgets refuse. The form now gives an `object` field an
-  empty object and a `list` field an empty list, as a `json` field already gets
-  an empty object, so a create form sends `{}` and `[]` for those fields when
-  nobody touched them. A required field holding an empty object now counts as
-  missing, as an empty list and an empty string do; this also applies to a
-  `json` field.
+- `@angee/ui`: **Changed behaviour.** A record form's `object`, `list` or `rows`
+  field showed its loading placeholder for good in a create form, and in an edit
+  form once the widget's code was loaded. Those widgets refuse the empty string
+  the form gave the field in a create form, and in an edit form before the
+  record's values arrived. The form now gives an `object` field an empty
+  object and a `list` or `rows` field an empty list, as it gives a `json` field
+  an empty object. An untouched `object`, `list` or `rows` field is therefore
+  sent as an empty container when a record is created, as untouched `json`,
+  `tagInput` and `many2many` fields already are.
 - `@angee/ui`: **Changed behaviour.** A dialog submits only the fields it shows:
   a field a `showWhen` hides, when the dialog opens or after a value was typed
   into it, is not submitted, and shows its initial value when it shows again,

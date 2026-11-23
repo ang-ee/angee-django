@@ -15,7 +15,6 @@ import {
 
 import { formatNumber } from "../../lib/format-number";
 import { dateFromUnknown, formatDate } from "../../widgets/date-format";
-import { jsonObjectFromUnknown } from "../../widgets/json-value";
 import { canonicalOptionValue, relationIdList, relationValueId } from "../../widgets/types";
 import type { UiTranslate } from "../../i18n";
 import {
@@ -690,10 +689,11 @@ function emptyValue(field: FieldDescriptor): unknown {
   if (isNullableScalarWidget(field)) return null;
   if (field.widget === "tagInput" || isRelationListField(field)) return [];
   if (field.kind === "switch" || field.widget === "switch") return false;
-  // A widget whose control takes a container gets an empty one; it refuses a string.
+  // The `json` and `object` widgets get an empty object, the `list` and `rows` widgets an empty
+  // list; `object`, `list` and `rows` throw on a string.
   const widget = fieldWidgetId(field);
   if (widget === "json" || widget === "object") return {};
-  if (widget === "list") return [];
+  if (widget === "list" || widget === "rows") return [];
   return "";
 }
 
@@ -701,8 +701,7 @@ function isEmptyFieldValue(value: unknown): boolean {
   if (value == null) return true;
   if (typeof value === "string") return value.trim() === "";
   if (Array.isArray(value)) return value.length === 0;
-  const object = jsonObjectFromUnknown(value);
-  return object !== undefined && Object.keys(object).length === 0;
+  return false;
 }
 
 function isNullableScalarWidget(field: FieldDescriptor): boolean {

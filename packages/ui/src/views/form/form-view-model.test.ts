@@ -21,6 +21,7 @@ import {
   titleText,
   type PresetMemory,
 } from "./form-view-model";
+import { requiredDialogErrors } from "./MutationDialog";
 
 const fields: readonly FieldDescriptor[] = [
   { name: "config.local_root", widget: "text" },
@@ -223,31 +224,24 @@ test("an empty date or time field drafts as null, never a blank wire string", ()
   ])).toEqual({ due: null, at: null, starts: null });
 });
 
-test("an empty object or json field drafts as an empty object and an empty list field as an empty list", () => {
-  const structured: FieldDescriptor[] = [
+test("an empty object or json field drafts as an empty object and an empty list or rows field as an empty list", () => {
+  const structured: FormSpecFieldDescriptor[] = [
     { name: "layout", widget: "object", objectTemplate: [{ name: "heading" }] },
     { name: "steps", widget: "list", itemTemplate: { name: "step" } },
+    { name: "mappings", widget: "rows", rowTemplate: [{ name: "source" }] },
     { name: "config", widget: "json" },
   ];
-  const empty = { layout: {}, steps: [], config: {} };
+  const empty = { layout: {}, steps: [], mappings: [], config: {} };
   expect(emptyDraft(structured)).toStrictEqual(empty);
   expect(recordToValues({ id: "row-1" }, structured)).toStrictEqual(empty);
-  expect(recordToValues({ id: "row-1", layout: null, steps: null, config: null }, structured))
-    .toStrictEqual({ layout: null, steps: null, config: null });
+  expect(recordToValues({ id: "row-1", layout: null, steps: null, mappings: null, config: null }, structured))
+    .toStrictEqual({ layout: null, steps: null, mappings: null, config: null });
 });
 
-test("a required object, list or json field holding nothing is missing; one holding a member or an item is not", () => {
-  // Without a template or a presence flag, these fields reach the plain emptiness rule.
-  const required: FieldDescriptor[] = [
-    { name: "layout", widget: "object", required: true },
-    { name: "steps", widget: "list", required: true },
-    { name: "config", widget: "json", required: true },
-  ];
-  expect(missingRequiredFieldNames({ layout: {}, steps: [], config: {} }, required, new Set()))
-    .toEqual(["layout", "steps", "config"]);
-  expect(missingRequiredFieldNames(emptyDraft(required), required, new Set())).toEqual(["layout", "steps", "config"]);
-  expect(missingRequiredFieldNames({ layout: { heading: "Set" }, steps: ["One"], config: { count: 0 } }, required, new Set()))
-    .toEqual([]);
+test("a required json field holding an empty object is not missing, in a record form as in a dialog", () => {
+  const config: FieldDescriptor = { name: "config", widget: "json", required: true };
+  expect(missingRequiredFieldNames({ config: {} }, [config], new Set())).toEqual([]);
+  expect(requiredDialogErrors([config], { config: {} }, "Required")).toEqual({});
 });
 
 describe("dotted form fields", () => {
