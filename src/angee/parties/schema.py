@@ -23,6 +23,7 @@ from strawberry_django.queryset import run_type_get_queryset
 from angee.base.identity import public_subject_ref
 from angee.base.lineage import concrete_child_accessor, concrete_child_models
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, session_user
+from angee.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import (
     AngeeHasuraWriteBackend,
     declared_hasura_resource_fields,
@@ -81,6 +82,10 @@ _ORGANIZATION_EXTENSION_WRITE_FIELDS = tuple(
 _ORGANIZATION_EXTENSION_PUBLIC_ID_FIELDS = tuple(
     name for name in _ORGANIZATION_EXTENSION_WRITE_FIELDS if Organization._meta.get_field(name).is_relation
 )
+
+# What a person's and an organization's record form reads: `write` (editable), `delete` (Trash and
+# Restore), `share` (Share) and `merge_away` ("Merge into…").
+_PARTY_PERMISSIONS = ("delete", "merge_away", "share", "write")
 
 
 def _display_avatar_prefetch(name: str) -> Callable[[strawberry.Info], Prefetch]:
@@ -175,6 +180,7 @@ class PersonType(PartyType):
     anniversary: auto
     languages: auto
     occupation: auto
+    permissions = permissions_field(_PARTY_PERMISSIONS)
 
     @strawberry_django.field(only=["id"])
     def circle_names(self) -> list[str]:
@@ -195,6 +201,7 @@ class OrganizationType(PartyType):
 
     legal_name: auto
     domain: auto
+    permissions = permissions_field(_PARTY_PERMISSIONS)
 
 
 @strawberry_django.type(Handle)

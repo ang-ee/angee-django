@@ -70,6 +70,43 @@ live in code docstrings.
   empty string when the model's metadata does not describe it), so the server's
   default or NULL applied: a form that declares one of these widgets on a
   nullable or defaulted column now writes the empty container instead.
+- `angee.parties`: **Changed behaviour.** A person's and an organization's record
+  form follows what the reader may do on that record. Their types project
+  `permissions` (`delete`, `merge_away`, `share` and `write`), which the form
+  reads, and each changes one thing:
+  a reader without `write` (a contact reader, a directory's contact reader, a
+  person a record was shared with to read) sees the person and organization
+  forms read-only, where the form used to take edits the server then refused;
+  Trash and Restore show only to a reader with `delete`;
+  Share shows only to someone who may share the record;
+  the list of who reads the record now appears for someone who may share it
+  (it never did, since no person or organization read carried `share`);
+  and "Merge into…" shows only with `merge_away`, so a contact manager, who
+  writes a person but merges none away, no longer sees a verb the merge then
+  refused. A list's selection of one record still opens "Merge into…": its
+  rows carry no projection, and the compare page refuses whoever may not merge.
+  Who may write, delete, share or merge is unchanged. `parties/person` and
+  `parties/organization` gain `share`, their party's, delegated whole because
+  sharing one writes the grant on its party. Only reads that select
+  `permissions` pay for it, and no budgeted read does; the person read with
+  it selected takes the same statements and, on PostgreSQL, the same planner
+  memory as without it, for a reader in no contact role. Revision 42.
+  Upgrade: nothing by hand; the provision chain's `rebac sync` applies it.
+- `angee.parties_integrate_hubspot`: a HubSpot object record (a deal, a note)
+  follows the person its contact landed on. When that person is merged into
+  another, the merge moves the contact to the survivor, and the record is
+  stated again on the survivor at its next read: the stream's daily sweep, or
+  at once on a resync of the stream. Only the records of that contact are
+  stated again; HubSpot need not change them. Each record's link keeps a
+  dependency digest, the record's contacts, sorted, each with the key of the
+  party its link points at (none for a contact without one), read for a whole
+  page at once, and integrate's driver compares it as it compares a mapping's
+  version. A mapping writes nothing new, but its `apply_record` must be safe to
+  run again, as a version change already required. Upgrade: no migration. After
+  the upgrade every object record that names a contact is stated once more at
+  its next read, because no link holds a digest yet (a record naming none is
+  not); that covers merges made before the change, and replaces moving a
+  mapping's version by hand after a merge.
 - `@angee/ui`: **Changed behaviour.** A dialog submits only the fields it shows:
   a field a `showWhen` hides, when the dialog opens or after a value was typed
   into it, is not submitted, and shows its initial value when it shows again,

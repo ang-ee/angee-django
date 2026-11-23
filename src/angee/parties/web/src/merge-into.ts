@@ -7,8 +7,11 @@ import { usePartiesT } from "./i18n";
 /**
  * "Merge into…": choose the other record, then open the compare page for the
  * pair (`parties.merge`), which owns the merge, its choices and its refusals.
- * The person form declares it as a record verb (`<Action {...mergeInto} />`);
- * a list's selection of one record opens it through `ActionFormDialog`.
+ * The person form declares it as a record verb (`<Action {...mergeInto} />`),
+ * offered only on a record whose projected permissions hold `merge_away`, what
+ * the server asks of the record merged away; a list's selection of one record
+ * opens it through `ActionFormDialog`, whose rows carry no projection, so there
+ * the compare page refuses whoever may not merge.
  * Navigation goes through the router, whose app root keeps the current `?app=`.
  */
 export function useMergeIntoAction(): ActionDescriptor {
@@ -18,6 +21,7 @@ export function useMergeIntoAction(): ActionDescriptor {
   return React.useMemo<ActionDescriptor>(() => ({
     id: "merge-into",
     label: t("person.action.merge"),
+    permission: "merge_away",
     args: [{
       name: "otherParty",
       argKind: "relation",
@@ -25,7 +29,6 @@ export function useMergeIntoAction(): ActionDescriptor {
       label: t("person.action.mergeOther"),
       description: t("person.action.mergeOther.description"),
     }],
-    visibleWhen: () => true,
     submit: async (values, context) => {
       const recordId = typeof context.record?.id === "string" ? context.record.id : "";
       const otherId = typeof values.otherParty === "string" ? values.otherParty : "";

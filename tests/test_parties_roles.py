@@ -6,11 +6,13 @@ nobody) against every row the roles reach: a person and their party, an
 organization, a handle, an address, a relationship, a folder, a circle and its
 membership, the people vault and a page in it, a record task about the party and
 the directory. A directory's contact readers keep exactly what they read before
-roles existed.
+roles existed, and each actor's read of a person and an organization projects
+what the table holds.
 """
 
 from __future__ import annotations
 
+import importlib
 from types import SimpleNamespace
 from typing import Any
 
@@ -20,15 +22,18 @@ from django.contrib.auth import get_user_model
 from rebac import PermissionDenied, SubjectRef, actor_context, system_context, to_object_ref
 from rebac.roles import grant as grant_role
 
+from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Circle, CircleMember, Directory, Folder, Handle, Party, Person
 from angee.projects.testing.models import Task
 from angee.resources.testing.models import Resource
-from tests.conftest import MarkdownPage, Page, RecordBinding, Vault
+from tests.conftest import MarkdownPage, Page, RecordBinding, SchemaAddon, Vault
 from tests.iam_models import Group
 from tests.test_parties_directory_readers import _allowed, _grant, _scoped
 from tests.test_parties_directory_readers import contacts as contacts  # noqa: F401 -- the shared contacts world
 
 ROLES = ("contact_reader", "contact_manager", "contact_admin")
+parties_schema = importlib.import_module("angee.parties.schema")
 
 
 @pytest.fixture
@@ -142,6 +147,8 @@ MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
         # Merging away retires to the trash: through the roles, the contact admin's.
         "merge_away": (*ADMINS, "editor"),
         "delete": ADMINS,
+        # Sharing a person writes the grant on its party: the person's share is its party's.
+        "share": (*ADMINS, "editor"),
         # The person's owner column moves with its party's transfer.
         "write__owner": ADMINS,
         # Adoption runs through the roles' own members, never a platform admin's reach of every role.
@@ -167,9 +174,9 @@ MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
         "write": WRITERS,
         "merge_away": ADMINS,
         "delete": ADMINS,
-        # An organization's owner column moves with its party's transfer; a read grant on it is the party's share.
+        # An organization's owner column moves with its party's transfer, and sharing it is its party's share.
         "write__owner": ADMINS,
-        "share": (),
+        "share": ADMINS,
     },
     "handle": {"read": (*ROLE_HOLDERS, "owner", "platform"), "write": WRITERS, "share": ADMINS, "delete": ADMINS},
     "address": {"read": (*ROLE_HOLDERS, "owner", "dir reader", "platform"), "write": WRITERS, "delete": ADMINS},
@@ -209,6 +216,7 @@ MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
         "write": ("owner", "platform"),
         "merge_away": ("owner", "platform"),
         "delete": ("owner", "platform"),
+        "share": ("owner", "platform"),
         "write__owner": ("owner", "platform"),
         # The roles lend no adoption of an account's own person, which adoption refuses anyway.
         "adopt": ("owner",),
@@ -247,6 +255,63 @@ def test_the_decision_table_per_actor(world: SimpleNamespace) -> None:
         for action, allowed in actions.items():
             holders = sorted(label for label, actor in actors.items() if _allowed(rows[name], actor, action))
             assert holders == sorted(allowed), (name, action, holders)
+
+
+def test_whoever_moves_a_partys_owner_column_also_writes_it() -> None:
+    """On a person and an organization, ``write__owner`` sits inside ``write``.
+
+    The record form is read-only for an actor whose projected ``permissions`` lack
+    ``write``, so an owner move outside ``write`` would leave the owner field out of
+    reach of the one actor allowed to move it. ``write__owner`` is the party's
+    ``transfer`` (its owner, a contact admin, a platform admin), and the contact
+    admin's role sits inside the contact manager's, which ``write`` admits. The
+    decision table proves each cell against the schema; this pins how they relate.
+    """
+
+    for name in ("person", "organization", "account person"):
+        assert set(MATRIX[name]["write__owner"]) <= set(MATRIX[name]["write"]), name
+
+
+# The permissions the person and organization types project: the record form's verbs read them.
+PROJECTED = ("delete", "merge_away", "share", "write")
+
+
+def test_a_person_and_an_organization_project_what_the_table_says_each_actor_holds(world: SimpleNamespace) -> None:
+    """Each actor's read of a person and an organization projects exactly what the decision table holds.
+
+    The record form reads the projection: read-only without ``write``, Trash and
+    Restore with ``delete``, Share with ``share``, "Merge into…" with ``merge_away``.
+    A contact manager projects ``write`` but no ``merge_away``; a contact admin and
+    the owner project all four. An identity reader reads the person and projects
+    none of them, and an actor who reads no row gets none.
+    """
+
+    identity_reader = get_user_model().objects.create_user(username="role-identity-reader")
+    with system_context(reason="tests.parties_roles.identity_reader"):
+        for row in (world.person_party, Party.objects.get(pk=world.organization.pk)):
+            _grant(row, "identity_reader", identity_reader)
+    schema = GraphQLSchemas([SchemaAddon({"console": {
+        key: tuple(parties_schema.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS
+    }})]).build("console")
+    query = """query($person: String!, $organization: String!, $account: String!) {
+      person: people_by_pk(id: $person) { permissions }
+      organization: organizations_by_pk(id: $organization) { permissions }
+      account_person: people_by_pk(id: $account) { permissions }
+    }"""
+    variables = {"person": world.person.sqid, "organization": world.organization.sqid, "account": world.account.sqid}
+    rows = {"person": "person", "organization": "organization", "account_person": "account person"}
+    for label, actor in {**_actors(world), "identity reader": identity_reader}.items():
+        data = result_data(execute_schema(schema, query, variables, user=actor))
+        for field, name in rows.items():
+            projected = data[field] and sorted(data[field]["permissions"])
+            expected: list[str] | None
+            if label == "identity reader":
+                expected = [] if name != "account person" else None
+            elif label in MATRIX[name]["read"]:
+                expected = [permission for permission in PROJECTED if label in MATRIX[name][permission]]
+            else:
+                expected = None
+            assert projected == expected, (label, name, projected)
 
 
 def test_a_role_holder_sees_a_person_nobody_shared_with_them_and_their_pages(world: SimpleNamespace) -> None:
