@@ -50,6 +50,7 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 |---|---|
 | Focused Python test | `uv run --locked python -m pytest -q tests/<test_file>.py` |
 | Changed-path selection: the test files a change reaches, as a pull request's CI picks them | `git diff --name-only <base> \| uv run --locked python scripts/changed_path_selection.py` |
+| PostgreSQL timing map refresh: merge a green main push run's measured durations (needs `gh` signed in) | `uv run --locked python scripts/postgres_durations.py <run-id>` |
 | Python/addon/template handoff: full SQLite suite; required for shared foundation/composition changes | `env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
 | Randomized parallel isolation proof | `uv run --locked python -m pytest -q -n auto --dist loadfile -p randomly --randomly-seed=137 --durations=25` |
 | Python lint | `uv run --locked python -m ruff check . --no-cache` |
@@ -567,7 +568,11 @@ The current tiers are:
   limit, the named PostgreSQL contract selection runs with
   `-n 4 --dist loadfile --nomigrations` and prints its 25
   slowest test durations; each group writes JUnit output and checks that it did
-  not skip tests. Its PostgreSQL 17 service includes pgvector and enables `vector`
+  not skip tests. On a push to `main` each group splits by its own copy of the
+  map, which pytest-split's store then overwrites with the durations of exactly
+  the tests the group ran, and a green group keeps that file and its JUnit report
+  as its `postgres-durations-<group>` artifact for 14 days; CI never writes the
+  committed map. Its PostgreSQL 17 service includes pgvector and enables `vector`
   in `template1` before any test database is created. Its server runs with
   `max_locks_per_transaction = 256`, since
   each worker creates every table in one transaction. A pull request runs the same
@@ -602,18 +607,32 @@ duration and places it in exactly one shard. Ties in the assignment fall back
 to collection order, so an opt-in `-p randomly` run must give every shard one
 shared `--randomly-seed`. Refresh both maps after a change that moves test cost,
 after changing the PostgreSQL selection, or when a shard nears its limit or its
-balance drifts (the shards' printed estimates against their wall times). Record
-each map with its CI invocation and pytest-split's store, which sums setup, call
-and teardown per test; `--clean-durations` drops the entries of tests the run no
-longer collects, which pytest-split would otherwise keep when it merges into the
-existing map. For the SQLite suite:
+balance drifts (the shards' printed estimates against their wall times). Both
+maps are pytest-split's store, which sums setup, call and teardown per test.
+
+Record the SQLite map with its CI invocation; `--clean-durations` drops the
+entries of tests the run no longer collects, which pytest-split would otherwise
+keep when it merges into the existing map:
 
 ```bash
 env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --store-durations --clean-durations
 ```
 
-For the PostgreSQL selection, on a server prepared as in
-[Local PostgreSQL Prerequisites](#local-postgresql-prerequisites):
+Refresh the PostgreSQL map from a green push run on `main`, never from a local
+run, whose host load would become the map's. The
+[refresh](../scripts/postgres_durations.py) fetches the run's six
+`postgres-durations-<group>` artifacts with `gh run download`, or reads a
+directory of them, and merges their measured entries into the map: a measured
+entry replaces the map's, and an entry no group ran is kept. Review the result
+and commit it:
+
+```bash
+uv run --locked python scripts/postgres_durations.py <run-id>
+```
+
+To run the PostgreSQL selection locally, on a server prepared as in
+[Local PostgreSQL Prerequisites](#local-postgresql-prerequisites), read it from
+the workflow:
 
 ```bash
 export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/angee
@@ -629,13 +648,15 @@ print(' '.join(arg for arg in shlex.split(run.split('uv run --locked python -c',
 PY
 )
 test -n "$pg_tests"
-uv run --locked python -m pytest -q -n 4 --dist loadfile --nomigrations --store-durations --clean-durations --durations-path .test_durations_postgres $pg_tests
+uv run --locked python -m pytest -q -n 4 --dist loadfile --nomigrations $pg_tests
 ```
 
-Both maps came from local macOS arm64 runs of these commands (SQLite with
-`-n 6`) on a loaded host, the PostgreSQL one against `pgvector/pgvector:pg17`
-(PostgreSQL 17.10) with `max_locks_per_transaction = 256`. Use them for relative
-balance and check actual CI wall times against the 60-minute limit.
+The SQLite map came from a local macOS arm64 run of its command (with `-n 6`) on
+a loaded host. The PostgreSQL map holds local measurements, against
+`pgvector/pgvector:pg17` (PostgreSQL 17.10) with `max_locks_per_transaction = 256`
+and on a local PostgreSQL 18 server, until a refresh from a main run replaces
+them. Use them for relative balance and check actual CI wall times against the
+60-minute limit.
 
 The [staging smoke](../.github/workflows/staging-smoke.yml) deploys a staging host on
 the runner's Docker the way a host does: `angee init -t staging` and `angee up` with
