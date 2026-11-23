@@ -1339,7 +1339,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   removing, duplicating or reordering a line) through `perform`, and reset history when
   accepting a saved or reloaded baseline; `EditableLines` takes the form's verbs as `history`.
   A line added by code is built with `emptyLineRow` or `duplicateLineRow` (or carries its
-  own client key) and then performed.
+  own client key) and then performed, also while a cell of the lines is being edited.
 - Editable named entries use the [keyed collection](../../packages/ui/src/views/form/keyed-collection.ts)
   in authored order; client identities survive renaming and own duplicate-key issues.
 - Schema path selection composes [SchemaPathPicker](../../packages/ui/src/views/SchemaPathPicker.tsx)

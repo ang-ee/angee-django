@@ -9,7 +9,9 @@ import { relationIdList, relationValueId } from "../../widgets/types";
  * and `duplicateLineRow` mint it, so a line added by code is built with one of them
  * (or carries its own client key) and then performed: the row is whole in the step
  * that adds it. A row that arrives without one gets RHF's field-array key from the
- * lines editor after it renders, a write that lands in whatever undo group is open.
+ * lines editor after it renders, a write that lands in whatever undo group is open,
+ * so such a row performed while another field's group is open is a step undo cannot
+ * get past, each undo writing a new key and changing nothing else.
  * Readers compare it only with itself, never with the field array's key, which a form
  * reset regenerates.
  */

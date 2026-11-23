@@ -43,12 +43,13 @@ export interface FieldDescriptor extends FieldPresentation {
   presenceRequired?: boolean;
   /**
    * The value may be left "Not set": the member is then absent from the saved object. Emitted only
-   * by structured FormSpec. A field of its own holds "Not set" as an own key holding `undefined`
-   * (an absent key means the field was dropped from the draft), which React Hook Form replaces by
-   * the form's default whenever the field registers again (an undo or redo replay, a pane that
-   * unmounts). Before such a member is shown as its own field in a pane that unmounts, or undo is
-   * bound in a record form, it must stop being a registered field of its own: `useFormHistory`
-   * states the measured shape, what the form must then supply, and the tests that watch for it.
+   * by structured FormSpec. In a field of its own, choosing "Not set" writes an own key holding
+   * `undefined`; a member the record never had, and one dropped from the draft, have no key. React
+   * Hook Form replaces a "Not set" by the form's default whenever the field registers again (an
+   * undo or redo replay, a pane that unmounts). Before such a member is shown as its own field in
+   * a pane that unmounts, or undo is bound in a record form, it must stop being a registered field
+   * of its own: `useFormHistory` states the measured shape, what the form must then supply, and the
+   * tests that watch for it.
    */
   omittable?: boolean;
   hasDefault?: boolean;

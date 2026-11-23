@@ -65,17 +65,20 @@ export interface EditableLinesProps {
   /**
    * The composing form's undo verbs; without them the lines record no step. One user
    * intention is one step. A cell's change starts its group, named by the cell's form
-   * path (`lines.2.label`), before it writes; the group ends when the cell's control
-   * commits it, when another field or a row operation starts, or at undo. Adding,
-   * duplicating, removing or reordering a line is one step through `perform`, and the
-   * editor commits the cell groups it started first, since their paths name rows by
-   * position. A row patch a widget sends while its cell's group is open joins that
-   * group; any other row patch is one step through `perform`. A line added by code is
-   * built with `emptyLineRow` or `duplicateLineRow` (or carries its own client key)
-   * and then performed. Give the editor and the history the same read-only state: a
-   * read-only history runs no `perform`, so the row controls would do nothing while
-   * the cells still write. A record form passes its interaction callbacks as `start`
-   * and `commit`, so they see a cell as they see any other field.
+   * path (`lines.2.label`), before it writes. A row patch a widget sends is written
+   * inside its cell's group and ends it: with the change it was sent beside it is one
+   * step, alone it is a step of its own. Adding, duplicating, removing or reordering a
+   * line is one step through `perform`. Since a cell's path names its row by position,
+   * the editor ends the cell groups it started when their control commits, when a row
+   * patch for the cell is written, before its own row operations, and when the rows
+   * change under it (a row operation code performs, an undo, a redo, a discard): a cell
+   * changed on after an undo starts a step of its own. The history itself records a
+   * group's step when another field starts. A line added by code is built with
+   * `emptyLineRow` or `duplicateLineRow` (or carries its own client key) and then
+   * performed, also while a cell's group is open. Give the editor and the history the
+   * same read-only state: a read-only history runs no `perform`, so the row controls
+   * would do nothing while the cells still write. A record form passes its interaction
+   * callbacks as `start` and `commit`, so they see a cell as they see any other field.
    */
   history?: Pick<FormHistory, "perform" | "start" | "commit">;
 }
@@ -131,6 +134,30 @@ export function EditableLines({
   const { fields, append, insert, move, remove } = useFieldArray({ control, name, keyName: "rhfKey" });
   const { isDirty: formIsDirty } = useFormState({ control });
   const rows = (useWatch({ control, name }) as Row[] | undefined) ?? [];
+  // Async widgets resolve their RHF identity at completion, never a captured index.
+  const latest = React.useRef({ fields, readOnly, setValue, history });
+  latest.current = { fields, readOnly, setValue, history };
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  // The cell groups this editor started and has not seen committed, by form path, held
+  // only to end them: a group's path names its row by position. Committing a path whose
+  // group the history already ended (another field started) records nothing, and one the
+  // form already ended (a discard, a refresh, a save) does nothing at all.
+  const openCells = React.useRef(new Set<string>());
+  const endCell = React.useCallback((path: string) => {
+    openCells.current.delete(path);
+    latest.current.history?.commit(path);
+  }, []);
+  const endOpenCells = React.useCallback(() => openCells.current.forEach(endCell), [endCell]);
+  // End them when the rows change under those paths: a row operation, whoever ran it, or
+  // a form reset (an undo, a redo, a discard), which gives every row a new key; a cell
+  // changed on after an undo then starts a group of its own. Declared before the fallback
+  // below, so a key that fallback writes joins no cell group.
+  const rowKeys = fields.map((field) => field.rhfKey).join(" ");
+  React.useEffect(() => { endOpenCells(); }, [endOpenCells, rowKeys]);
   // The fallback for a row that arrives with no identity (a create form's seed rows, a
   // hand-built row): its client key is RHF's field-array key.
   React.useEffect(() => {
@@ -141,42 +168,28 @@ export function EditableLines({
       }
     });
   }, [config.idField, fields, name, rows, setValue]);
-  // Async widgets resolve their RHF identity at completion, never a captured index.
-  const latest = React.useRef({ fields, readOnly, setValue, history });
-  latest.current = { fields, readOnly, setValue, history };
-  const mounted = React.useRef(true);
-  React.useEffect(() => {
-    mounted.current = true;
-    return () => { mounted.current = false; };
-  }, []);
-  // The cell groups this editor started and no commit has ended yet, by form path.
-  const openCells = React.useRef(new Set<string>());
-  // One user intention is one step of the form's history, when the form has one. A row
-  // operation moves rows under the paths that name the open cell groups: end them first.
+  // One user intention is one step of the form's history, when the form has one. End the
+  // open cell groups first, while each path still names its row.
   const performRowOperation = React.useCallback((action: () => void) => {
     const recorder = latest.current.history;
     if (!recorder) { action(); return; }
-    for (const path of openCells.current) recorder.commit(path);
-    openCells.current.clear();
+    endOpenCells();
     recorder.perform(action);
-  }, []);
+  }, [endOpenCells]);
+  // Written inside its cell's group: joined to the change it was sent beside, or a step of
+  // its own, and the group ends either way.
   const patchRow = React.useCallback((key: string, cell: string, patch: Record<string, unknown>) => {
     const current = latest.current;
     if (!mounted.current || current.readOnly) return;
     const index = current.fields.findIndex((field) => field.rhfKey === key);
     if (index < 0) return;
-    const write = () => {
-      for (const [field, value] of Object.entries(patch)) {
-        current.setValue<string>(`${name}.${index}.${field}`, value, { shouldDirty: true });
-      }
-    };
-    const recorder = current.history;
-    const group = `${name}.${index}.${cell}`;
-    if (!recorder) write();
-    // A patch sent while its cell's group is open belongs to that group's step.
-    else if (openCells.current.has(group)) { recorder.start(group); write(); }
-    else recorder.perform(write);
-  }, [name]);
+    const path = `${name}.${index}.${cell}`;
+    current.history?.start(path);
+    for (const [field, value] of Object.entries(patch)) {
+      current.setValue<string>(`${name}.${index}.${field}`, value, { shouldDirty: true });
+    }
+    endCell(path);
+  }, [endCell, name]);
   const viewRows = React.useMemo(() => fields.map((field, index) => ({
     id: field.rhfKey, index, value: rows[index] ?? {},
   })), [fields, rows]);
@@ -225,7 +238,7 @@ export function EditableLines({
                 if (history) { history.start(path); openCells.current.add(path); }
                 controller.onChange(next);
               };
-              const onCommit = history && (() => { openCells.current.delete(path); history.commit(path); });
+              const onCommit = history && (() => endCell(path));
               return relationMulti ? (
                 <RelationMultiFieldWidget
                   controlProps={controlProps}

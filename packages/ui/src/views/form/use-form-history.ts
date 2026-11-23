@@ -44,9 +44,9 @@ export interface FormHistory {
  * to the root, and a "Not set" held as an absent key reads as a dropped field and takes
  * the loaded value back. The form must then supply what registration gave: the member's
  * focus target and, after a failed save, which error takes focus, since React Hook Form
- * focuses only registered fields. The two expected-failure rows in
- * `FormView.native.test.tsx` are the tripwire; the three in `use-form-history.test.tsx`
- * register their own fields and only model the binding. A registered member whose whole
+ * focuses only registered fields. The expected-failure rows of `FormView.native.test.tsx`
+ * render a record form and are the tripwire; those of `use-form-history.test.tsx` register
+ * their own fields, so they only model the binding. A registered member whose whole
  * object was replaced by one without it comes back the same way: a separate loss.
  * @owner FormView
  */

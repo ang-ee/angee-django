@@ -35,19 +35,22 @@ live in code docstrings.
   without loading Ajv. `FormViewSurface.requiredMessage`, which nothing read, is
   removed.
 - `@angee/ui`: **Changed behaviour.** Edits made in a record form's lines are now
-  undo steps of their own; before, they were not: an undo after a title step and a
-  cell edit reverted the title and discarded the cell edit. One user intention is
-  one step: adding a line is one step, typing in one of its cells another, and
-  removing, duplicating or reordering a line is one step each. A cell's group ends
-  when its control commits, when another field or a row operation starts, or at
-  undo; before a row operation the lines editor commits the cell groups it started,
-  since their paths name rows by position. A widget's row patch sent while its
-  cell's group is open joins that group, so a change and a row patch made in one
-  click are one step; any other row patch is a step of its own. `EditableLines`
-  takes an optional `history` with the form's `perform`, `start` and `commit`; the
-  record form passes it, so its `onFieldInteractionStart` and
-  `onFieldInteractionCommit` now also receive a line cell's path (`lines.2.label`).
-  Without it the lines record nothing, as before.
+  undo steps of their own; before, they were not: after a title step and then a
+  cell edit, an undo reverted the cell edit together with the title, and a redo
+  brought both back. One user intention is one step: adding a line is one step,
+  typing in one of its cells another, and removing, duplicating or reordering a
+  line is one step each. A widget's row patch is written inside its cell's group
+  and ends it, so a change and a row patch made in one click are one step, and a
+  row patch sent alone is a step of its own. Since a cell's group is named by its
+  row's position, the lines editor ends the cell groups it started when their
+  control commits, when a row patch for the cell is written, before its own row
+  operations, and when the rows change under it (code that performs a row
+  operation, or an undo, redo or discard); the history itself records a cell's
+  step when another field starts. `EditableLines` takes an optional `history` with
+  the form's `perform`, `start` and `commit`; the record form passes it, so its
+  `onFieldInteractionStart` and `onFieldInteractionCommit` now also receive a line
+  cell's path (`lines.2.label`), a row patch's included. Without it the lines
+  record nothing, as before.
   `useFormHistory`'s `perform` now reads the form's values after its action, so a
   change that sends no values notification, such as a field-array append, is still
   recorded. `emptyLineRow` and `duplicateLineRow` now return the row with a client
