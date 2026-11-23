@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 41
+// @rebac_schema_revision: 42
 
 // Parties, folders and circles are grant roots: each is owned through its
 // transferable `owner` column (OwnerMixin), which an insert defaults to the row's
@@ -164,6 +164,8 @@ definition parties/person {
     permission write = owner + editor + statement_source + party->role_manage + admin->member
     permission merge_away = owner + editor + statement_source + party->role_merge_away + admin->member
     permission delete = owner + party->role_delete + admin->member
+    // Delegated whole, not restated like its siblings: sharing a person writes the grant on its party (the grantable), so the server decides `share` on the party's definition.
+    permission share = party->share
     permission write__owner = party->transfer
     // Adopting the person binds a directory's contact to them: the directory becomes one of their statement
     // sources and its contact readers read them. Only who holds the person lends them so: their owner (the
@@ -192,6 +194,8 @@ definition parties/organization {
     permission write = owner + editor + statement_source + party->role_manage + admin->member
     permission merge_away = owner + editor + statement_source + party->role_merge_away + admin->member
     permission delete = owner + party->role_delete + admin->member
+    // Delegated whole, not restated like its siblings: sharing an organization writes the grant on its party (the grantable), so the server decides `share` on the party's definition.
+    permission share = party->share
     permission write__owner = party->transfer
 }
 
