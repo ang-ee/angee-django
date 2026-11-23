@@ -10,6 +10,105 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: **Changed behaviour.** A value that breaks one of a field's rules now
+  says which, in a record form and in a dialog without a schema resolver: too short,
+  too long, out of range, too few or too many items, or the wrong type ("Enter no
+  more than 64 characters.", "Enter a valid whole number."). Before, each of them
+  said "This field is required.". A cleared number field that is `omittable`,
+  presence-required or bounded, and not nullable, now says "Enter a valid whole
+  number." ("Enter a valid number." where its type is `number`) where it said the
+  field was required; a required number field with no presence flag or bound still
+  says the field is required. A missing value, or a `null` the field does not allow,
+  still says the field is required, and so does an empty text under a minimum length
+  of one character (a cleared slug) in a field that is neither `omittable` nor
+  nullable; in a field that is either, it says "Enter at least 1 character.". A
+  dialog with a schema resolver says "Enter at least 1 character." in each case, and
+  for a text declared nullable with `anyOf` also "Enter a valid empty value. Enter a
+  valid value.". The messages are the ones a dialog with a schema resolver already
+  shows, and a count of one reads in the singular ("Keep no more than 1 item."): the
+  bundle's `form.validation.minLength`, `maxLength`, `minItems` and `maxItems` now
+  have `_one` and `_other` forms that interpolate `{count}`, not `{limit}`. The
+  error's `type` is the rule's keyword (`maxLength`, `minimum`, `type`, ...); a
+  missing value's stays `required`.
+  `structuredFieldErrorPaths` is renamed `structuredFieldErrors` and returns, for each
+  failing path, the rule it fails with its parameters (`FieldRuleError`,
+  `{ path, keyword, params }`, exported beside it) instead of the bare path.
+  `@angee/ui/views/validation-errors` newly exports `jsonSchemaErrorMessage`, the
+  message function that was private to `@angee/ui/views/json-schema`, with
+  `JsonSchemaRule`, the failed rule it takes, and `fieldErrorsFromRules`, which
+  turns failed rules into a form's errors; a record form and a dialog use them
+  without loading Ajv. `FormViewSurface.requiredMessage`, which nothing read, is
+  removed.
+- `@angee/ui`: **Changed behaviour.** Edits made in a record form's lines are now
+  undo steps of their own; before, they were not: after a title step and then a
+  cell edit, an undo reverted the cell edit together with the title, and a redo
+  brought both back. One user intention is one step: adding a line is one step,
+  typing in one of its cells another, and removing, duplicating or reordering a
+  line is one step each. A widget's row patch is written inside its cell's group
+  and ends it: a row patch sent after its cell's change in the same interaction
+  joins that change's step, and one sent first, or alone, is a step of its own (a
+  change sent after it starts another). Since a cell's group is named by its row's
+  position, the lines editor ends the cell groups it started when their control
+  commits, when a row patch for the cell is written, when the editor unmounts,
+  before its own row operations, and right after the rows change under it
+  otherwise (code that performs a row operation, or an undo, redo or discard); the
+  history itself records a cell's step when another field starts. After a row
+  operation by other code the steps are still one per intention and the interaction
+  callbacks stay paired, but that late commit's path names whichever row then sits
+  at that position, if any. `EditableLines` takes an optional `history` with the
+  form's `perform`, `start` and `commit`; the record form passes it, so its
+  `onFieldInteractionStart` and `onFieldInteractionCommit` now also receive a line
+  cell's path (`lines.2.label`), a row patch's included. Without it the lines
+  record nothing, as before.
+  `useFormHistory`'s `perform` now reads the form's values after its action, so a
+  change that sends no values notification, such as a field-array append, is still
+  recorded. `emptyLineRow` and `duplicateLineRow` now return the row with a client
+  key of its own (`duplicateLineRow` still drops the source row's id and key): a
+  line added by code is built with one of them and then performed, so each undo
+  back through it changes what the form shows. A row built by hand without a client
+  key and performed while another field is being edited is a step undo cannot get
+  past.
+- `@angee/ui`: **Changed behaviour.** A record form's `object`, `list` or `rows`
+  field showed its loading placeholder for good in a create form, and in an edit
+  form once the widget's code was loaded. Those widgets refuse the empty string
+  the form gave the field in a create form, in an edit form before the record's
+  values arrived, and for a record that lacks the field. The form now gives an
+  `object` field an empty object and a `list` or `rows` field an empty list, as
+  it gives a `json` field an empty object. An untouched `object`, `list` or
+  `rows` field is therefore sent as an empty container (`{}` or `[]`) when a
+  record is created, as untouched `json`, `tagInput` and `many2many` fields
+  already are. Before, such a field was left out of the create (or sent as an
+  empty string when the model's metadata does not describe it), so the server's
+  default or NULL applied: a form that declares one of these widgets on a
+  nullable or defaulted column now writes the empty container instead.
+- `@angee/ui`: a field's `resolve` no longer returns `name`, since the field
+  keeps its declared name whatever `resolve` returns. A field type's `resolve`
+  returns that type without `name` (`Omit<this, "name"> & { name?: never }` on
+  `FieldDescriptor`), so a dialog (`DescriptorField`) or FormSpec
+  (`FormSpecFieldDescriptor`) producer may return only its own members, and a
+  subtype's own required members are returned with it; a type derived from a
+  descriptor by `Omit` or `Pick`, the `<Field>` element's props among them,
+  returns the base descriptor's. A returned value whose type carries a string
+  `name` (a literal giving one, a spread of a whole descriptor, a value typed as
+  a descriptor) is a compile error; a value typed without `name` or loosely
+  (`Record`, `object`, `any`), a cast or JavaScript still reaches `resolveField`,
+  which keeps the declared name. The fields `useImplConfigFields` returns have a
+  `resolve` whose result no longer carries `name` (it carried the prefixed name
+  before); what a form resolves a field to (`resolveField`) is unchanged, and
+  nothing else changes at runtime. `resolveField` and `visibleFields`, internal
+  to the package, now return the caller's descriptor type, so the dialog
+  surfaces no longer cast their results. Upgrade: a TypeScript consumer deletes
+  `name` from what its `resolve` returns; takes it out of a whole field it
+  spreads there first (`const { name: _name, ...rest } = field`); annotates a
+  helper that returned a descriptor type with that type's own result,
+  `ReturnType<NonNullable<DescriptorField["resolve"]>>` for a dialog field's
+  (TS2741 or TS2353 otherwise); no longer casts a `resolve` result to a
+  descriptor type or passes one where a descriptor is expected (TS2352, TS2345,
+  TS2322 otherwise), and lays it over the field instead
+  (`{ ...field, ...field.resolve(values) }`); returns, from the `resolve` of a
+  descriptor subtype with required members of its own, those members too; and
+  reads a `useImplConfigFields` field's `name` from the field, not from its
+  `resolve`.
 - `angee.parties`: **Changed behaviour.** A person's and an organization's record
   form follows what the reader may do on that record. Their types project
   `permissions` (`delete`, `merge_away`, `share` and `write`), which the form

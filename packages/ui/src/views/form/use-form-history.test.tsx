@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { act, cleanup, renderHook } from "@testing-library/react";
-import { useForm, type UseFormReturn } from "react-hook-form";
+import { useFieldArray, useForm, type UseFieldArrayReturn, type UseFormReturn } from "react-hook-form";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { createUiTestProviders } from "../../testing";
@@ -192,6 +192,37 @@ test("partially completed actions remain undoable when an action throws", () => 
   expect(result.current.form.getValues("detail.count")).toBe(1);
 });
 
+type LineValues = { lines: { label: string }[] };
+const LOADED_LINES: LineValues["lines"] = [{ label: "a" }, { label: "b" }];
+interface ArrayRow { verb: string; change: (array: UseFieldArrayReturn<LineValues>) => void; changed: LineValues["lines"] }
+const arrayRows: readonly ArrayRow[] = [
+  { verb: "append", change: (array) => array.append({ label: "c" }), changed: [...LOADED_LINES, { label: "c" }] },
+  { verb: "remove", change: (array) => array.remove(0), changed: [{ label: "b" }] },
+];
+
+test.each(arrayRows)("a performed field-array $verb, which sends no values notification, is one step that undo and redo replay", ({ change, changed }) => {
+  const { result } = renderHook(() => {
+    const form = useForm<LineValues>({ defaultValues: { lines: structuredClone(LOADED_LINES) } });
+    const array = useFieldArray({ control: form.control, name: "lines" });
+    return { form, array, history: useFormHistory(form) };
+  }, { wrapper: Provider });
+  const rows = () => ({
+    values: result.current.form.getValues("lines"),
+    fields: result.current.array.fields.map(({ label }) => ({ label })),
+  });
+  act(() => { result.current.history.perform(() => change(result.current.array)); });
+  expect(rows()).toEqual({ values: changed, fields: changed });
+  expect(result.current.history.canUndo).toBe(true);
+  act(() => result.current.history.undo());
+  expect(rows()).toEqual({ values: LOADED_LINES, fields: LOADED_LINES });
+  expect(result.current.history.canUndo).toBe(false);
+  expect(result.current.history.canRedo).toBe(true);
+  act(() => result.current.history.redo());
+  expect(rows()).toEqual({ values: changed, fields: changed });
+  expect(result.current.history.canUndo).toBe(true);
+  expect(result.current.history.canRedo).toBe(false);
+});
+
 type Values = Record<string, unknown>;
 const LOADED: Values = {
   title: "First", optional: "loaded", nullable: "x",
@@ -263,7 +294,11 @@ function landsOnItsFrame({ change, changed, path }: FrameRow): void {
 
 test.each(frameRows.filter((row) => !row.lost))("undo and redo land on the frame $kind recorded, own keys included", landsOnItsFrame);
 
-// KNOWN DEFECT, expected to fail until it is fixed: react-hook-form reads `undefined` as take-the-default at registration. The replay resets
+// KNOWN DEFECT, expected to fail: react-hook-form reads `undefined` as take-the-default at registration. The replay resets
 // the form, every mounted field registers again, and where the frame holds `undefined` or no key the
-// field takes the loaded value. These rows flip to passing when that is fixed; move them up then.
+// field takes the loaded value. This harness registers its fields itself, so these rows MODEL a form's
+// binding and do not test one: the two "Not set" rows flip when the harness stops registering a member
+// that can be left "Not set", as a form must (see `useFormHistory`); the rendered rows in
+// `FormView.native.test.tsx` are the test of that. The third row is not about "Not set": a registered
+// member whose whole object was replaced by one without it, a separate loss that stays.
 test.fails.each(frameRows.filter((row) => row.lost))("undo and redo lose $kind: react-hook-form reads `undefined` as take-the-default at registration", landsOnItsFrame);

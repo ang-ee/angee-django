@@ -215,7 +215,8 @@ describe("DescriptorFieldList", () => {
       fields={[
         { name: "mode", label: "Mode" },
         { name: "detail", label: "Detail", showWhen: (values) => values.mode !== "hidden",
-          resolve: (values) => ({ name: "ignored", readOnly: values.mode === "fixed" }) },
+          // This cast hides the returned `name` from the compiler; the declared name must still win.
+          resolve: (values) => ({ name: "ignored", readOnly: values.mode === "fixed" }) as Omit<DescriptorField, "name"> },
         { name: "token", hidden: true },
       ]} />);
 

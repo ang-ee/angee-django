@@ -1,17 +1,20 @@
 import { get, set } from "react-hook-form";
-import { describe, expect, test } from "vitest";
+import { describe, expect, expectTypeOf, test } from "vitest";
 
+import { enUiBundle } from "../../i18n";
+import { createAngeeI18nInstance } from "../../runtime/i18n";
 import type { FieldDescriptor } from "../page";
+import type { DescriptorField } from "./DescriptorFieldList";
 import type { FormSpecFieldDescriptor } from "./form-spec";
 import {
   EDITABLE_LINES_SECTION,
   emptyDraft,
   addFieldSelection,
   fieldErrorMessages,
+  formRuleErrors,
   formSections,
   formViewFieldLayout,
   isCompositeFieldDescriptor,
-  missingRequiredFieldNames,
   mutationData,
   createPresetMemory,
   recordToValues,
@@ -19,8 +22,13 @@ import {
   resolveField,
   seedPreset,
   titleText,
+  visibleFields,
   type PresetMemory,
 } from "./form-view-model";
+import { dialogRuleErrors } from "./MutationDialog";
+
+const t = createAngeeI18nInstance(enUiBundle).getFixedT(null, "ui");
+const required = { type: "required", message: "This field is required." };
 
 const fields: readonly FieldDescriptor[] = [
   { name: "config.local_root", widget: "text" },
@@ -118,12 +126,49 @@ test("dynamic resolution cannot unlock a field already locked by form mode", () 
   const locked: FieldDescriptor = {
     name: "collection",
     readOnly: true,
-    resolve: () => ({ name: "collection", readOnly: false }),
+    resolve: () => ({ readOnly: false }),
   };
   expect(resolveField(locked, {})).toMatchObject({ name: "collection", readOnly: true });
   expect(resolveField({ ...locked, readOnly: false }, {})).toMatchObject({
     name: "collection", readOnly: false,
   });
+});
+
+test("a resolve that returns a name does not compile, and the field keeps its declared name", () => {
+  const field: FieldDescriptor = {
+    name: "collection",
+    // @ts-expect-error A `resolve` cannot rename its field, so the compiler refuses a returned `name`.
+    resolve: () => ({ name: "elsewhere", readOnly: true }),
+  };
+  expect(resolveField(field, {})).toMatchObject({ name: "collection", readOnly: true });
+});
+
+test("a dialog field's resolve may return only dialog members, and never a name", () => {
+  const relationOnly: DescriptorField = { name: "account", resolve: () => ({ relation: { resource: "Account" } }) };
+  const renamed: DescriptorField = {
+    name: "account",
+    // @ts-expect-error A `resolve` cannot rename its field, so the compiler refuses a returned `name`.
+    resolve: () => ({ name: "elsewhere", relation: { resource: "Account" } }),
+  };
+  expect(resolveField(relationOnly, {})).toMatchObject({ name: "account", relation: { resource: "Account" } });
+  expect(resolveField(renamed, {})).toMatchObject({ name: "account", relation: { resource: "Account" } });
+});
+
+test("a FormSpec field's resolve may return only FormSpec members", () => {
+  const listOnly: FormSpecFieldDescriptor = { name: "lines", resolve: () => ({ addLabel: "Add line", layout: "input" }) };
+  expect(resolveField(listOnly, {})).toMatchObject({ name: "lines", addLabel: "Add line", layout: "input" });
+});
+
+test("resolveField and visibleFields return the caller's descriptor type", () => {
+  const dialog: DescriptorField = { name: "account", relation: { resource: "Account" }, resolve: () => ({ readOnly: true }) };
+  const spec: FormSpecFieldDescriptor = { name: "lines", addLabel: "Add line", resolve: () => ({ layout: "input" }) };
+  const resolvedDialog: DescriptorField = resolveField(dialog, {});
+  const resolvedSpec: FormSpecFieldDescriptor = resolveField(spec, {});
+  expectTypeOf(resolveField(dialog, {})).toEqualTypeOf<DescriptorField>();
+  expectTypeOf(resolveField(spec, {})).toEqualTypeOf<FormSpecFieldDescriptor>();
+  expectTypeOf(visibleFields([dialog], {})).toEqualTypeOf<DescriptorField[]>();
+  expect(resolvedDialog).toMatchObject({ name: "account", relation: { resource: "Account" }, readOnly: true });
+  expect(resolvedSpec).toMatchObject({ name: "lines", addLabel: "Add line", layout: "input" });
 });
 
 test("explicit panes retain their long text and status fields instead of hoisting them into the hero", () => {
@@ -223,6 +268,83 @@ test("an empty date or time field drafts as null, never a blank wire string", ()
   ])).toEqual({ due: null, at: null, starts: null });
 });
 
+test("an empty object or json field drafts as an empty object and an empty list or rows field as an empty list", () => {
+  const structured: FormSpecFieldDescriptor[] = [
+    { name: "layout", widget: "object", objectTemplate: [{ name: "heading" }] },
+    { name: "steps", widget: "list", itemTemplate: { name: "step" } },
+    { name: "mappings", widget: "rows", rowTemplate: [{ name: "source" }] },
+    { name: "config", widget: "json" },
+  ];
+  const empty = { layout: {}, steps: [], mappings: [], config: {} };
+  expect(emptyDraft(structured)).toStrictEqual(empty);
+  expect(recordToValues({ id: "row-1" }, structured)).toStrictEqual(empty);
+  expect(recordToValues({ id: "row-1", layout: null, steps: null, mappings: null, config: null }, structured))
+    .toStrictEqual({ layout: null, steps: null, mappings: null, config: null });
+});
+
+test("a required json field holding an empty object is not missing, in a record form as in a dialog", () => {
+  const config: FieldDescriptor = { name: "config", widget: "json", required: true };
+  expect(formRuleErrors({ config: {} }, [config], new Set(), t)).toEqual({});
+  expect(dialogRuleErrors([config], { config: {} }, t)).toEqual({});
+});
+
+test("a field's failed rule says the same thing in a record form as in a dialog", () => {
+  const ruleFields: FieldDescriptor[] = [
+    { name: "slug", required: true, minLength: 1, maxLength: 64 },
+    { name: "cleared", minLength: 1 },
+    { name: "nick", minLength: 1, omittable: true },
+    { name: "caption", minLength: 1, nullable: true },
+    { name: "handle", minLength: 3 },
+    { name: "low", kind: "integer", minimum: 5 },
+    { name: "high", kind: "number", maximum: 10 },
+    { name: "count", kind: "integer", omittable: true },
+    { name: "tags", kind: "array", minItems: 2 },
+    { name: "limits", kind: "array", maxItems: 1 },
+    { name: "token", presenceRequired: true },
+    { name: "remark", presenceRequired: true },
+    { name: "title", required: true },
+  ];
+  const values = {
+    slug: "a".repeat(65), cleared: "", nick: "", caption: "", handle: "", low: 2, high: 11, count: "",
+    tags: ["a"], limits: ["a", "b"], remark: null, title: " ",
+  };
+  const expected = {
+    slug: { type: "maxLength", message: "Enter no more than 64 characters." },
+    cleared: required,
+    nick: { type: "minLength", message: "Enter at least 1 character." },
+    caption: { type: "minLength", message: "Enter at least 1 character." },
+    handle: { type: "minLength", message: "Enter at least 3 characters." },
+    low: { type: "minimum", message: "Enter a value of at least 5." },
+    high: { type: "maximum", message: "Enter a value of at most 10." },
+    count: { type: "type", message: "Enter a valid whole number." },
+    tags: { type: "minItems", message: "Add at least 2 items." },
+    limits: { type: "maxItems", message: "Keep no more than 1 item." },
+    token: required,
+    remark: required,
+    title: required,
+  };
+  expect(formRuleErrors(values, ruleFields, new Set(), t)).toEqual(expected);
+  expect(dialogRuleErrors(ruleFields, values, t)).toEqual(expected);
+});
+
+test.each<{ label: string; field: FieldDescriptor; values: Record<string, unknown>; recordForm: object; dialog: object }>([
+  {
+    label: "a hidden required field", field: { name: "token", required: true, hidden: true }, values: { token: "" },
+    recordForm: { token: required }, dialog: {},
+  },
+  {
+    label: "a read-only required field", field: { name: "code", required: true, readOnly: true }, values: { code: "" },
+    recordForm: { code: required }, dialog: {},
+  },
+])("$label is an expected difference between a record form and a dialog", ({ field, values, recordForm, dialog }) => {
+  expect(formRuleErrors(values, [field], new Set(), t)).toStrictEqual(recordForm);
+  expect(dialogRuleErrors([field], values, t)).toStrictEqual(dialog);
+});
+
+test.fails("defect: a dialog says a bounded optional field is required when its value is an own key holding undefined; it should say nothing", () => {
+  expect(dialogRuleErrors([{ name: "nickname", maxLength: 64 }], { nickname: undefined }, t)).toStrictEqual({});
+});
+
 describe("dotted form fields", () => {
   test("seed and read nested record values through native RHF-shaped data", () => {
     expect(emptyDraft(fields, { config: { local_root: "/srv/repo" } })).toEqual({
@@ -285,25 +407,24 @@ describe("dotted form fields", () => {
     const dynamic: FieldDescriptor = {
       name: "config.shared",
       resolve: (values) => ({
-        name: "config.shared",
         required: values.backend_class === "strict",
       }),
     };
-    expect(missingRequiredFieldNames(
-      { backend_class: "strict", config: { shared: "" } }, [dynamic], new Set(),
-    )).toEqual(["config.shared"]);
-    expect(missingRequiredFieldNames(
-      { backend_class: "loose", config: { shared: "" } }, [dynamic], new Set(),
-    )).toEqual([]);
+    expect(formRuleErrors(
+      { backend_class: "strict", config: { shared: "" } }, [dynamic], new Set(), t,
+    )).toEqual({ config: { shared: required } });
+    expect(formRuleErrors(
+      { backend_class: "loose", config: { shared: "" } }, [dynamic], new Set(), t,
+    )).toEqual({});
   });
 
   test("accepts explicit null only for a nullable required descriptor", () => {
-    expect(missingRequiredFieldNames(
-      { note: null }, [{ name: "note", required: true, nullable: true, presenceRequired: true }], new Set(),
-    )).toEqual([]);
-    expect(missingRequiredFieldNames(
-      { note: null }, [{ name: "note", required: true }], new Set(),
-    )).toEqual(["note"]);
+    expect(formRuleErrors(
+      { note: null }, [{ name: "note", required: true, nullable: true, presenceRequired: true }], new Set(), t,
+    )).toEqual({});
+    expect(formRuleErrors(
+      { note: null }, [{ name: "note", required: true }], new Set(), t,
+    )).toEqual({ note: required });
   });
 
   test("hydrates explicit null and omission without changing their presence", () => {
@@ -324,17 +445,22 @@ describe("dotted form fields", () => {
       { name: "title", required: true, presenceRequired: true },
       { name: "items", required: true, presenceRequired: true, kind: "array" },
     ];
-    expect(missingRequiredFieldNames({ title: "", items: [] }, presenceFields, new Set())).toEqual([]);
-    expect(missingRequiredFieldNames({ title: "" }, presenceFields, new Set())).toEqual(["items"]);
-    expect(missingRequiredFieldNames(
-      { title: "", items: [] }, [{ ...presenceFields[0]!, minLength: 1 }, { ...presenceFields[1]!, minItems: 1 }], new Set(),
-    )).toEqual(["title", "items"]);
-    expect(missingRequiredFieldNames(
-      { title: "" }, [{ name: "title", required: true }], new Set(),
-    )).toEqual(["title"]);
+    expect(formRuleErrors({ title: "", items: [] }, presenceFields, new Set(), t)).toEqual({});
+    expect(formRuleErrors({ title: "" }, presenceFields, new Set(), t)).toEqual({ items: required });
+    expect(formRuleErrors(
+      { title: "", items: [] }, [{ ...presenceFields[0]!, minLength: 1 }, { ...presenceFields[1]!, minItems: 1 }], new Set(), t,
+    )).toEqual({
+      title: required,
+      items: { type: "minItems", message: "Add at least 1 item." },
+    });
+    expect(formRuleErrors(
+      { title: "" }, [{ name: "title", required: true }], new Set(), t,
+    )).toEqual({ title: required });
     const optional = { name: "summary", omittable: true, minLength: 2 };
-    expect(missingRequiredFieldNames({}, [optional], new Set())).toEqual([]);
-    expect(missingRequiredFieldNames({ summary: "" }, [optional], new Set())).toEqual(["summary"]);
+    expect(formRuleErrors({}, [optional], new Set(), t)).toEqual({});
+    expect(formRuleErrors({ summary: "" }, [optional], new Set(), t)).toEqual({
+      summary: { type: "minLength", message: "Enter at least 2 characters." },
+    });
   });
 
   test("submits nested config through its writable root and nested dirty state", () => {

@@ -175,6 +175,10 @@ jobs:
     if: ${{ inputs.uv-enabled }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      # A push to main measures the tests each group runs and keeps the measurements
+      # for the timing map refresh in docs/checks.md; CI never writes the map itself.
+      RECORD_DURATIONS: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     strategy:
       fail-fast: false
       matrix:
@@ -337,10 +341,29 @@ jobs:
             tests/test_record_changeset_visibility.py tests/test_record_thread_role_access.py \
             tests/test_task_create_access.py
           fi
+          # Recording, the group splits by its own copy of the map, which pytest-split
+          # then overwrites with the durations of exactly the tests the group ran.
+          durations=.test_durations_postgres
+          record=()
+          if [ "$RECORD_DURATIONS" = true ]; then
+            durations=postgres-durations-${{ matrix.group }}.json
+            cp .test_durations_postgres "$durations"
+            record=(--store-durations --clean-durations)
+          fi
           uv run --locked python -m pytest -q -n 4 --dist loadfile --nomigrations --durations=25 --junitxml=postgresql-contracts.xml \
             --splits ${{ strategy.job-total }} --group ${{ matrix.group }} --splitting-algorithm least_duration \
-            --durations-path .test_durations_postgres "$@"
+            --durations-path "$durations" "${record[@]}" "$@"
           uv run --locked python -c 'import xml.etree.ElementTree as ET; root = ET.parse("postgresql-contracts.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" for child in case) for case in cases); assert cases and skipped == 0, f"expected executed PostgreSQL tests, got tests={len(cases)}, skipped={skipped}"; print(f"PostgreSQL tests={len(cases)}, skipped={skipped}")'
+      - name: Keep the group's measured durations
+        # A green group's measurements and its JUnit report, for two weeks.
+        if: env.RECORD_DURATIONS == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: postgres-durations-${{ matrix.group }}
+          path: |
+            postgres-durations-${{ matrix.group }}.json
+            postgresql-contracts.xml
+          retention-days: 14
 
   # One verdict under the check name pull requests and callers already know:
   # a failed, cancelled or timed-out shard fails it.

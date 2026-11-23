@@ -13,7 +13,10 @@ import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider, containersFromChildren, type ComposedContainers } from "../../runtime";
 import { createUiTestProviders } from "../../testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
-import { defaultWidgets } from "../../widgets";
+import { defaultWidgets, type WidgetDefinition, type WidgetRenderProps } from "../../widgets";
+import { CLIENT_LINE_KEY, duplicateLineRow, emptyLineRow, lineDiffConfig } from "./editable-lines";
+import { EditableLines } from "./EditableLines";
+import type { RecordTabDescriptor } from "./form-view-surface";
 import { FORM_CONTAINERS, FormView } from "./FormView";
 import { acknowledgeFormSubmit, useFormViewSave, type FormSubmit, type FormViewSaveSurface } from "./use-form-view-save";
 import { Group, type FieldDescriptor } from "../page";
@@ -64,8 +67,13 @@ async function fixture(options: {
   publicView?: boolean;
   save?: (variables: ResourceSaveVariables) => Promise<Row>;
   recordExtras?: ComponentProps<typeof FormView>["recordExtras"];
-  formProps?: Pick<ComponentProps<typeof FormView>, "recordTabs" | "linesTabLabel" | "groups">;
+  formProps?: Pick<
+    ComponentProps<typeof FormView>,
+    "recordTabs" | "linesTabLabel" | "groups" | "onFieldInteractionStart" | "onFieldInteractionCommit" | "lineFields"
+  >;
   containers?: ComposedContainers;
+  /** Widgets registered beside the defaults, for a line field's authored widget. */
+  widgets?: Record<string, WidgetDefinition>;
   /** The form loads with its lines in values but not on the page. */
   linesHidden?: boolean;
 } = {}) {
@@ -90,7 +98,7 @@ async function fixture(options: {
   });
   const provider = {
     getOne,
-    getList: vi.fn(async () => ({ data: [], total: 0 })),
+    getList: vi.fn(async (): Promise<{ data: Row[]; total: number }> => ({ data: [], total: 0 })),
     create: vi.fn(options.create), update, custom,
   } satisfies RefineTestDataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
@@ -125,7 +133,10 @@ async function fixture(options: {
     <RouterContextProvider router={router}><ModalsHost><ToastProvider>
       {options.publicView ? (
         <OperationDocumentsProvider documents={{ [activeResource.schemaName]: { saves: { [activeResource.modelLabel]: saveDocument } } }}>
-          <AppRuntimeProvider runtime={{ widgets: defaultWidgets, ...(options.containers ? { containers: options.containers } : {}) }}>
+          <AppRuntimeProvider runtime={{
+            widgets: { ...defaultWidgets, ...options.widgets },
+            ...(options.containers ? { containers: options.containers } : {}),
+          }}>
             <FormView
               {...options.formProps}
               resource={activeResource.modelLabel}
@@ -635,31 +646,586 @@ test.each([true, false])("concurrent edits to a newly saved line remain intact a
 
 const lineLabels = () => screen.getAllByLabelText("Label").map((cell) => (cell as HTMLInputElement).value);
 const loadedLabels = initialLines.map((row) => String(row.label));
+const titleValue = () => (screen.getByLabelText("Title") as HTMLTextAreaElement).value;
+type Fixture = Awaited<ReturnType<typeof fixture>>;
+const formLines = (f: Fixture) => f.surface().form.getValues("lines") as Row[];
+/** Replay one step and let the effects it causes (a client-key write among them) land. */
+const replay = (f: Fixture, direction: "undo" | "redo") => act(async () => { f.surface().history[direction](); });
+/** The row's identity: its server id, or `+` and its client key while it is unsaved. */
+const rowIdentity = (row: Row) => row.id != null ? String(row.id) : `+${String(row[CLIENT_LINE_KEY])}`;
+/** Each line as `identity:label/quantity`, so right cells on the wrong rows do not pass. */
+const cellsOf = (rows: readonly Row[]) => rows.map((row) => `${rowIdentity(row)}:${String(row.label)}/${String(row.quantity)}`);
+const loadedCells = cellsOf(initialLines);
 
-// Skipped, a known gap: a change made through the lines editor records no undo step. The editor
-// starts no history group, and a field-array operation sends no values notification; the first one
-// that carries a new row is the editor's own client-key write after the render, outside any step.
-test.skip("a line added through the lines' controls is one undo step, and undo and redo show and save the rows it recorded", async () => {
+/**
+ * The form's interaction callbacks as one ordered list. After `readFrom`, a commit also
+ * records the value its path holds when the commit arrives.
+ */
+function interactionLog() {
+  const log: string[] = [];
+  let read: ((path: string) => unknown) | undefined;
+  return {
+    log,
+    readFrom: (f: Fixture) => { read = (path) => f.surface().form.getValues(path); },
+    formProps: {
+      onFieldInteractionStart: (path: string) => { log.push(`start ${path}`); },
+      onFieldInteractionCommit: (path: string) => {
+        log.push(read ? `commit ${path}: ${String(read(path))}` : `commit ${path}`);
+      },
+    },
+  };
+}
+
+test("adding a line, typing its label and changing the title are one undo step each, walked back to the loaded rows and forward to the save", async () => {
   const f = await fixture({ publicView: true });
-  fireEvent.click(screen.getByRole("button", { name: "Add line" }));
-  const added = screen.getAllByLabelText("Label").find((cell) => (cell as HTMLInputElement).value === "")!;
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Add line" })); });
+  const added = screen.getAllByLabelText("Label").at(-1)!;
+  fireEvent.change(added, { target: { value: "N" } });
   fireEvent.change(added, { target: { value: "New" } });
-  expect(lineLabels()).toEqual([...loadedLabels, "New"]);
-  // A second, unrelated change, so the first undo lands ON the changed frame rather than on the loaded one.
+  fireEvent.blur(added);
   fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Other" } });
-  act(() => f.surface().history.undo());
-  await waitFor(() => expect(lineLabels()).toEqual([...loadedLabels, "New"]));
-  expect((screen.getByLabelText("Title") as HTMLTextAreaElement).value).toBe("Original");
-  act(() => f.surface().history.undo());
-  await waitFor(() => expect(lineLabels()).toEqual(loadedLabels));
+  fireEvent.blur(screen.getByLabelText("Title"));
+  const frames = [
+    { title: "Original", labels: loadedLabels },
+    { title: "Original", labels: [...loadedLabels, ""] },
+    { title: "Original", labels: [...loadedLabels, "New"] },
+    { title: "Other", labels: [...loadedLabels, "New"] },
+  ];
+  for (const frame of frames.slice(0, -1).reverse()) {
+    await replay(f, "undo");
+    expect({ title: titleValue(), labels: lineLabels() }).toEqual(frame);
+  }
+  expect(f.surface().history.canUndo).toBe(false);
+  expect(formLines(f)).toEqual(initialLines);
   expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
-  act(() => f.surface().history.redo());
-  await waitFor(() => expect(lineLabels()).toEqual([...loadedLabels, "New"]));
+  for (const frame of frames.slice(1)) {
+    await replay(f, "redo");
+    expect({ title: titleValue(), labels: lineLabels() }).toEqual(frame);
+  }
+  expect(f.surface().history.canRedo).toBe(false);
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(f.custom).toHaveBeenCalledOnce());
   expect(f.custom).toHaveBeenCalledWith(expect.objectContaining({
-    payload: { pk: "doc-1", patch: {}, lines: [...initialLines, { label: "New", position: 3 }] },
+    payload: { pk: "doc-1", patch: { title: "Other" }, lines: [...initialLines, { label: "New", position: 3 }] },
   }));
+});
+
+test.each([
+  { verb: "removing", control: "Remove line", labels: ["Alpha", "Charlie"] },
+  { verb: "duplicating", control: "Duplicate line", labels: ["Alpha", "Bravo", "Bravo", "Charlie"] },
+  { verb: "reordering", control: "Reorder row", labels: ["Bravo", "Alpha", "Charlie"] },
+])("$verb a line is one undo step: undo restores the loaded rows, their order and cells with nothing to save, and redo repeats it", async ({ control, labels }) => {
+  const f = await fixture({ publicView: true });
+  const target = screen.getAllByRole("button", { name: control })[1]!;
+  await act(async () => {
+    if (control === "Reorder row") fireEvent.keyDown(target, { key: "ArrowUp", altKey: true });
+    else fireEvent.click(target);
+  });
+  expect(lineLabels()).toEqual(labels);
+  await replay(f, "undo");
+  expect(lineLabels()).toEqual(loadedLabels);
+  expect(formLines(f)).toEqual(initialLines);
+  expect(f.surface().history.canUndo).toBe(false);
+  expect(f.surface().formIsDirty).toBe(false);
+  expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+  await replay(f, "redo");
+  expect(lineLabels()).toEqual(labels);
+  expect(f.surface().history.canUndo).toBe(true);
+  expect(f.surface().history.canRedo).toBe(false);
+  expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+});
+
+test("adding a line is exactly one step: its undo leaves the loaded rows without a client key, and its redo brings the row back keyed while the save sends no key", async () => {
+  const f = await fixture({ publicView: true });
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Add line" })); });
+  expect(formLines(f)).toHaveLength(4);
+  expect(typeof formLines(f)[3]![CLIENT_LINE_KEY]).toBe("string");
+  await replay(f, "undo");
+  expect(f.surface().history.canUndo).toBe(false);
+  expect(formLines(f)).toEqual(initialLines);
+  expect(formLines(f).filter((row) => Object.hasOwn(row, CLIENT_LINE_KEY))).toEqual([]);
+  expect(lineLabels()).toEqual(loadedLabels);
+  await replay(f, "redo");
+  expect(lineLabels()).toEqual([...loadedLabels, ""]);
+  expect(typeof formLines(f)[3]![CLIENT_LINE_KEY]).toBe("string");
+  expect(f.surface().history.canRedo).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(f.custom).toHaveBeenCalledOnce());
+  expect(f.custom).toHaveBeenCalledWith(expect.objectContaining({
+    payload: { pk: "doc-1", patch: {}, lines: [...initialLines, { label: "", position: 3 }] },
+  }));
+});
+
+test("adding a line while a cell's typing is still open records no step a person cannot see", async () => {
+  const f = await fixture({ publicView: true });
+  fireEvent.change(screen.getByDisplayValue("Alpha"), { target: { value: "Alpha edited" } });
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Add line" })); });
+  expect(typeof formLines(f)[3]![CLIENT_LINE_KEY]).toBe("string");
+  const shown: string[][] = [lineLabels()];
+  while (f.surface().history.canUndo && shown.length < 6) {
+    await replay(f, "undo");
+    shown.push(lineLabels());
+  }
+  expect(shown).toEqual([
+    ["Alpha edited", "Bravo", "Charlie", ""],
+    ["Alpha edited", "Bravo", "Charlie"],
+    loadedLabels,
+  ]);
+  expect(formLines(f)).toEqual(initialLines);
+});
+
+test.each([
+  {
+    between: "leaving the first cell", leave: true,
+    interactions: ["start lines.0.label", "commit lines.0.label", "start lines.1.label", "commit lines.1.label"],
+  },
+  {
+    // The history records the first cell's step when the second starts; the first cell's
+    // commit arrives when the undo gives the rows new identities and the editor ends its groups.
+    between: "without leaving the first cell", leave: false,
+    interactions: ["start lines.0.label", "start lines.1.label", "commit lines.1.label", "commit lines.0.label"],
+  },
+])("typing in one cell is one undo step until another cell starts the next ($between), and the form's interaction callbacks see each cell's path, every start with its commit", async ({ leave, interactions }) => {
+  const { log, formProps } = interactionLog();
+  const f = await fixture({ publicView: true, formProps });
+  const alpha = screen.getByDisplayValue("Alpha");
+  for (const value of ["AlphaX", "AlphaXY", "AlphaXYZ"]) fireEvent.change(alpha, { target: { value } });
+  if (leave) fireEvent.blur(alpha);
+  const bravo = screen.getByDisplayValue("Bravo");
+  fireEvent.change(bravo, { target: { value: "Bravo edited" } });
+  fireEvent.blur(bravo);
+  await replay(f, "undo");
+  expect(lineLabels()).toEqual(["AlphaXYZ", "Bravo", "Charlie"]);
+  await replay(f, "undo");
+  expect(lineLabels()).toEqual(loadedLabels);
+  expect(f.surface().history.canUndo).toBe(false);
+  expect(log).toEqual(interactions);
+});
+
+const linesConfig = lineDiffConfig(renderedResource.linesResource!);
+
+test.each([
+  { builder: "emptyLineRow", build: (rows: readonly Row[]) => emptyLineRow(rows.length, linesConfig), added: "" },
+  { builder: "duplicateLineRow", build: (rows: readonly Row[]) => duplicateLineRow(rows[0]!, linesConfig), added: "Alpha" },
+])("a line code builds with $builder and performs while the title's typing is open is one step, and each undo back to the loaded rows changes what the form shows", async ({ build, added }) => {
+  const f = await fixture({ publicView: true });
+  fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Other" } });
+  act(() => { f.surface().history.perform(() => f.surface().form.setValue("lines", [...formLines(f), build(formLines(f))], { shouldDirty: true })); });
+  await waitFor(() => expect(lineLabels()).toEqual([...loadedLabels, added]));
+  const shown = [{ title: titleValue(), labels: lineLabels() }];
+  while (f.surface().history.canUndo && shown.length < 6) {
+    await replay(f, "undo");
+    shown.push({ title: titleValue(), labels: lineLabels() });
+  }
+  expect(shown).toEqual([
+    { title: "Other", labels: [...loadedLabels, added] },
+    { title: "Other", labels: loadedLabels },
+    { title: "Original", labels: loadedLabels },
+  ]);
+  expect(f.surface().history.canUndo).toBe(false);
+  expect(formLines(f)).toEqual(initialLines);
+});
+
+test.each([
+  {
+    operation: "removing the first line",
+    operate: () => fireEvent.click(screen.getAllByRole("button", { name: "Remove line" })[0]!),
+    shown: [["Bravo12", "Charlie"], ["Bravo1", "Charlie"], ["Alpha", "Bravo1", "Charlie"], loadedLabels],
+  },
+  {
+    operation: "moving it above the first line",
+    operate: () => fireEvent.keyDown(screen.getAllByRole("button", { name: "Reorder row" })[1]!, { key: "ArrowUp", altKey: true }),
+    shown: [["Bravo12", "Alpha", "Charlie"], ["Bravo1", "Alpha", "Charlie"], ["Alpha", "Bravo1", "Charlie"], loadedLabels],
+  },
+])("typing in the second line's cell without leaving it, then $operation, then typing on: each started cell is committed before the next starts, and each undo changes what the form shows", async ({ operate, shown: expected }) => {
+  const interactions: string[] = [];
+  const f = await fixture({ publicView: true, formProps: {
+    onFieldInteractionStart: (path) => interactions.push(`start ${path}`),
+    onFieldInteractionCommit: (path) => interactions.push(`commit ${path}`),
+  } });
+  fireEvent.change(screen.getByDisplayValue("Bravo"), { target: { value: "Bravo1" } });
+  await act(async () => { operate(); });
+  const moved = screen.getByDisplayValue("Bravo1");
+  fireEvent.change(moved, { target: { value: "Bravo12" } });
+  fireEvent.blur(moved);
+  expect(interactions).toEqual(["start lines.1.label", "commit lines.1.label", "start lines.0.label", "commit lines.0.label"]);
+  const shown: string[][] = [lineLabels()];
+  while (f.surface().history.canUndo && shown.length < 6) {
+    await replay(f, "undo");
+    shown.push(lineLabels());
+  }
+  expect(shown).toEqual(expected);
+  expect(formLines(f)).toEqual(initialLines);
+});
+
+test("a relation cell commits its group when a record is picked, and the pick is one step", async () => {
+  const related: DataResourceFieldMetadata = {
+    ...lineField("related", "ID"), kind: "relation", scalar: null, relationModelLabel: renderedResource.modelLabel,
+  };
+  const withRelation = testDataResource(renderedResource.modelLabel, {
+    ...renderedResource,
+    linesResource: { ...renderedResource.linesResource!, fields: [...renderedResource.linesResource!.fields!, related] },
+  });
+  const interactions: string[] = [];
+  const f = await fixture({ publicView: true, resourceMetadata: withRelation, formProps: {
+    onFieldInteractionStart: (path) => interactions.push(`start ${path}`),
+    onFieldInteractionCommit: (path) => interactions.push(`commit ${path}`),
+  } });
+  f.provider.getList.mockResolvedValue({ data: [{ id: "doc-2" }], total: 1 });
+  fireEvent.click(screen.getAllByRole("combobox", { name: /^Related/ })[0]!);
+  await act(async () => { fireEvent.click(await screen.findByRole("option", { name: "doc-2" })); });
+  expect(formLines(f)[0]).toMatchObject({ id: "a", related: "doc-2" });
+  expect(interactions).toEqual(["start lines.0.related", "commit lines.0.related"]);
+  await replay(f, "undo");
+  expect(formLines(f)).toEqual(initialLines);
+  expect(f.surface().history.canUndo).toBe(false);
+});
+
+const previewWidget: WidgetDefinition = {
+  read: ({ value }: WidgetRenderProps) => <span>{String(value)}</span>,
+  edit: ({ value, row, onChange, onRowChange, onCommit }: WidgetRenderProps) => {
+    const label = String((row as Row).label);
+    return <>
+      <button type="button" onClick={() => onRowChange?.({ label: `${label} patched` })}>Patch {label}</button>
+      <button type="button" onClick={() => { onChange?.(99); onRowChange?.({ label: `${label} picked` }); }}>Pick for {label}</button>
+      {/* The same two calls in the other order: the row patch first. */}
+      <button type="button" onClick={() => { onRowChange?.({ label: `${label} picked` }); onChange?.(99); }}>Patch, then pick for {label}</button>
+      {/* A cell change its control never commits, as a tag input's or a status bar's. */}
+      <button type="button" onClick={() => onChange?.(Number(value) + 1)}>Bump {label}</button>
+      <button type="button" onClick={() => { onChange?.(Number(value) + 5); onCommit?.(); }}>Settle {label}</button>
+    </>;
+  },
+};
+/** The record form with the preview widget as the lines' quantity cell. */
+const previewFixture = (formProps: ReturnType<typeof interactionLog>["formProps"]) => fixture({
+  publicView: true, widgets: { "review.preview": previewWidget },
+  formProps: { lineFields: [{ name: "quantity", widget: "review.preview" }], ...formProps },
+});
+const press = (name: string) => act(async () => { fireEvent.click(screen.getByRole("button", { name })); });
+/** Undo until nothing is left (at most six times), reading `shown` before and after each. */
+async function undoWalk<T>(f: Fixture, shown: () => T): Promise<T[]> {
+  const walk = [shown()];
+  while (f.surface().history.canUndo && walk.length < 7) {
+    await replay(f, "undo");
+    walk.push(shown());
+  }
+  return walk;
+}
+
+test.each([
+  { control: "Patch Bravo", changed: { label: "Bravo patched", quantity: 20 } },
+  { control: "Pick for Bravo", changed: { label: "Bravo picked", quantity: 99 } },
+])("a widget's row patch through the record form is one step ($control), joining the cell change sent before it in the same click, inside one start and commit of the cell", async ({ control, changed }) => {
+  const { log, formProps } = interactionLog();
+  const f = await previewFixture(formProps);
+  await press(control);
+  expect(formLines(f)[1]).toMatchObject({ id: "b", ...changed });
+  expect(log).toEqual(["start lines.1.quantity", "commit lines.1.quantity"]);
+  expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+  await replay(f, "undo");
+  expect(formLines(f)).toEqual(initialLines);
+  expect(f.surface().history.canUndo).toBe(false);
+  expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+  await replay(f, "redo");
+  expect(formLines(f)[1]).toMatchObject({ id: "b", ...changed });
+  expect(f.surface().history.canRedo).toBe(false);
+});
+
+test("the order decides: a row patch sent BEFORE its cell's change in the same click is a step of its own, and the change another", async () => {
+  const { log, formProps } = interactionLog();
+  const f = await previewFixture(formProps);
+  await press("Patch, then pick for Bravo");
+  const afterClick = [...log];
+  const shown = await undoWalk(f, () => cellsOf(formLines(f))[1]);
+  // The patch ends the cell's group; the change opens another, which the first undo ends.
+  expect({ afterClick, log, shown }).toEqual({
+    afterClick: ["start lines.1.quantity", "commit lines.1.quantity", "start lines.1.quantity"],
+    log: ["start lines.1.quantity", "commit lines.1.quantity", "start lines.1.quantity", "commit lines.1.quantity"],
+    shown: ["b:Bravo picked/99", "b:Bravo picked/20", "b:Bravo/20"],
+  });
+});
+
+const patchesAfter: readonly {
+  after: string;
+  prepare: (f: Fixture) => Promise<unknown>;
+  /** The interaction callbacks the preparation leaves. */
+  prepared: readonly string[];
+  /** The second line's quantity when the patches are sent, and its cells below them back to the loaded record. */
+  quantity: number;
+  below: readonly string[];
+}[] = [
+  { after: "nothing", prepare: async () => {}, prepared: [], quantity: 20, below: ["b:Bravo/20"] },
+  {
+    after: "a change its control committed", prepare: () => press("Settle Bravo"),
+    prepared: ["start lines.1.quantity", "commit lines.1.quantity"], quantity: 25, below: ["b:Bravo/25", "b:Bravo/20"],
+  },
+  {
+    // The discard ends the form's interaction without a commit callback, as for any field.
+    after: "a change the form discarded", prepare: async (f) => {
+      await press("Bump Bravo");
+      act(() => f.surface().discardChanges());
+    },
+    prepared: ["start lines.1.quantity"], quantity: 20, below: ["b:Bravo/20"],
+  },
+  {
+    // The refresh keeps the dirty lines, resets the history and ends the form's interaction, as for any field.
+    after: "a change, then a refresh of the same record", prepare: async (f) => {
+      await press("Bump Bravo");
+      await f.refresh(initialLines);
+    },
+    prepared: ["start lines.1.quantity"], quantity: 21, below: ["b:Bravo/21"],
+  },
+];
+
+test.each(patchesAfter)("after $after, two row patches in a row are a step each, each inside one start and commit of its cell", async ({ prepare, prepared, quantity, below }) => {
+  const { log, formProps } = interactionLog();
+  const f = await previewFixture(formProps);
+  await prepare(f);
+  await press("Patch Bravo");
+  await press("Patch Bravo patched");
+  const shown = await undoWalk(f, () => cellsOf(formLines(f))[1]);
+  expect({ log, shown }).toEqual({
+    log: [...prepared, "start lines.1.quantity", "commit lines.1.quantity", "start lines.1.quantity", "commit lines.1.quantity"],
+    shown: [`b:Bravo patched patched/${quantity}`, `b:Bravo patched/${quantity}`, ...below],
+  });
+});
+
+/**
+ * Code outside the lines editor changing the rows the way the docs say: built rows,
+ * performed. `shown` is the same change on the lines' cells, given the rows after it.
+ */
+const outsideOperations = {
+  "removes the line above": {
+    change: (rows: readonly Row[]) => rows.slice(1),
+    shown: (cells: readonly string[], _after: readonly Row[]) => cells.slice(1),
+  },
+  "inserts a duplicated line above": {
+    change: (rows: readonly Row[]) => [rows[0]!, duplicateLineRow(rows[2]!, linesConfig), ...rows.slice(1)],
+    shown: (cells: readonly string[], after: readonly Row[]) => [
+      cells[0]!, `+${String(after[1]![CLIENT_LINE_KEY])}:Charlie/30`, ...cells.slice(1),
+    ],
+  },
+};
+/** Perform `change` on the lines as outside code; resolves to the element focused when it ran. */
+const performOutside = async (f: Fixture, change: (rows: readonly Row[]) => Row[]) => {
+  let focused: Element | null = null;
+  await act(async () => {
+    f.surface().history.perform(() => {
+      focused = document.activeElement;
+      f.surface().form.setValue("lines", change(formLines(f)), { shouldDirty: true });
+    });
+  });
+  return focused;
+};
+/** Change the second line's cell and leave its group open; resolves to that cell's control. */
+const cellKinds = {
+  "a widget that never commits": {
+    path: "lines.1.quantity", edited: "b:Bravo/21", focused: false,
+    edit: async () => { await press("Bump Bravo"); return screen.getByRole("button", { name: "Bump Bravo" }); },
+  },
+  "a text cell kept focused": {
+    path: "lines.1.label", edited: "b:Bravo1/20", focused: true,
+    edit: async () => {
+      const cell = screen.getByDisplayValue("Bravo");
+      act(() => cell.focus());
+      fireEvent.change(cell, { target: { value: "Bravo1" } });
+      return cell;
+    },
+  },
+};
+
+test.each(Object.keys(outsideOperations).flatMap((operation) => Object.keys(cellKinds).map((cell) => ({
+  operation: operation as keyof typeof outsideOperations, cell: cell as keyof typeof cellKinds,
+}))))("with the second line's cell open in $cell, code that $operation is a step of its own: the first undo reverts it alone, the second the cell edit, and redo replays both", async ({ operation, cell }) => {
+  const { log, formProps } = interactionLog();
+  const f = await previewFixture(formProps);
+  const { path, edit, edited, focused } = cellKinds[cell];
+  const { change, shown } = outsideOperations[operation];
+  const control = await edit();
+  const editedCells = loadedCells.map((cells, index) => index === 1 ? edited : cells);
+  const focusedWhenPerformed = await performOutside(f, change);
+  const operatedCells = shown(editedCells, formLines(f));
+  const frame = () => ({ cells: cellsOf(formLines(f)), canUndo: f.surface().history.canUndo, canRedo: f.surface().history.canRedo });
+  const frames = [frame()];
+  for (const direction of ["undo", "undo", "redo", "redo"] as const) {
+    await replay(f, direction);
+    frames.push(frame());
+  }
+  expect({ cellFocusedWhenPerformed: focusedWhenPerformed === control, log, frames }).toEqual({
+    cellFocusedWhenPerformed: focused,
+    log: [`start ${path}`, `commit ${path}`],
+    frames: [
+      { cells: operatedCells, canUndo: true, canRedo: false },
+      { cells: editedCells, canUndo: true, canRedo: true },
+      { cells: loadedCells, canUndo: false, canRedo: true },
+      { cells: editedCells, canUndo: true, canRedo: true },
+      { cells: operatedCells, canUndo: true, canRedo: false },
+    ],
+  });
+});
+
+test.each([
+  {
+    operation: "removes the line above" as const, moved: "lines.0.quantity",
+    shown: (_added: string) => [
+      ["b:Bravo/22", "c:Charlie/30"], ["b:Bravo/21", "c:Charlie/30"], ["a:Alpha/10", "b:Bravo/21", "c:Charlie/30"], loadedCells,
+    ],
+  },
+  {
+    operation: "inserts a duplicated line above" as const, moved: "lines.2.quantity",
+    shown: (added: string) => [
+      ["a:Alpha/10", `${added}:Charlie/30`, "b:Bravo/22", "c:Charlie/30"],
+      ["a:Alpha/10", `${added}:Charlie/30`, "b:Bravo/21", "c:Charlie/30"],
+      ["a:Alpha/10", "b:Bravo/21", "c:Charlie/30"], loadedCells,
+    ],
+  },
+])("with a cell's change open, which its control never commits, code that $operation, and the cell changed on: each started path is committed once before the next starts, and each undo changes what the form shows", async ({ operation, moved, shown: expected }) => {
+  const { log, formProps } = interactionLog();
+  const f = await previewFixture(formProps);
+  await press("Bump Bravo");
+  await performOutside(f, outsideOperations[operation].change);
+  const added = rowIdentity(formLines(f)[1]!);
+  await press("Bump Bravo");
+  const shown = await undoWalk(f, () => cellsOf(formLines(f)));
+  expect({ log, shown }).toEqual({
+    log: ["start lines.1.quantity", "commit lines.1.quantity", `start ${moved}`, `commit ${moved}`],
+    shown: expected(added),
+  });
+  expect(formLines(f)).toEqual(initialLines);
+});
+
+test.each([
+  {
+    operation: "removes the line above" as const, cell: "Bravo", path: "lines.1.quantity", names: "the next line",
+    read: "30", atPath: (_after: readonly Row[]) => "c:Charlie/30",
+  },
+  {
+    operation: "inserts a duplicated line above" as const, cell: "Bravo", path: "lines.1.quantity", names: "the inserted line",
+    read: "30", atPath: (after: readonly Row[]) => `+${String(after[1]![CLIENT_LINE_KEY])}:Charlie/30`,
+  },
+  {
+    operation: "removes the line above" as const, cell: "Charlie", path: "lines.2.quantity", names: "no line",
+    read: "undefined", atPath: (_after: readonly Row[]) => "no row",
+  },
+])("known limit: with a cell change open at $path, code that $operation gets that cell's commit only after the change, when $path names $names", async ({ operation, cell, path, read, atPath }) => {
+  const { log, readFrom, formProps } = interactionLog();
+  const f = await previewFixture(formProps);
+  readFrom(f);
+  await press(`Bump ${cell}`);
+  await performOutside(f, outsideOperations[operation].change);
+  const after = formLines(f);
+  expect({ log, atPath: cellsOf(after)[Number(path.split(".")[1])] ?? "no row" }).toEqual({
+    log: [`start ${path}`, `commit ${path}: ${read}`],
+    atPath: atPath(after),
+  });
+});
+
+test.each([
+  {
+    operation: "removing the first line",
+    operate: () => fireEvent.click(screen.getAllByRole("button", { name: "Remove line" })[0]!),
+    shown: [["b:Bravo/22", "c:Charlie/30"], ["b:Bravo/21", "c:Charlie/30"], ["a:Alpha/10", "b:Bravo/21", "c:Charlie/30"], loadedCells],
+  },
+  {
+    operation: "moving it above the first line",
+    operate: () => fireEvent.keyDown(screen.getAllByRole("button", { name: "Reorder row" })[1]!, { key: "ArrowUp", altKey: true }),
+    shown: [
+      ["b:Bravo/22", "a:Alpha/10", "c:Charlie/30"], ["b:Bravo/21", "a:Alpha/10", "c:Charlie/30"],
+      ["a:Alpha/10", "b:Bravo/21", "c:Charlie/30"], loadedCells,
+    ],
+  },
+])("with the second line's cell change open, which its control never commits, $operation in the editor commits it while its path still names its row, and each undo changes what the form shows", async ({ operate, shown: expected }) => {
+  const { log, readFrom, formProps } = interactionLog();
+  const f = await previewFixture(formProps);
+  readFrom(f);
+  await press("Bump Bravo");
+  await act(async () => { operate(); });
+  await press("Bump Bravo");
+  const shown = await undoWalk(f, () => cellsOf(formLines(f)));
+  // The first undo lands on the frame after the operation, where the second line's change was 21.
+  expect({ log, shown }).toEqual({
+    log: ["start lines.1.quantity", "commit lines.1.quantity: 21", "start lines.0.quantity", "commit lines.0.quantity: 21"],
+    shown: expected,
+  });
+});
+
+test("a keyless row code builds by hand and performs while a cell's change is open gets its client key after the cell's group ends: each undo changes what the form shows", async () => {
+  const f = await previewFixture(interactionLog().formProps);
+  await press("Bump Bravo");
+  await performOutside(f, (rows) => [...rows, { label: "Hand", quantity: 1, position: 3 }]);
+  expect(typeof formLines(f)[3]![CLIENT_LINE_KEY]).toBe("string");
+  const hand = rowIdentity(formLines(f)[3]!);
+  const shown = await undoWalk(f, () => cellsOf(formLines(f)));
+  expect(shown).toEqual([
+    ["a:Alpha/10", "b:Bravo/21", "c:Charlie/30", `${hand}:Hand/1`], ["a:Alpha/10", "b:Bravo/21", "c:Charlie/30"], loadedCells,
+  ]);
+});
+
+test("an undo with a cell's change open ends that cell's group, and the cell's next change is a step of its own", async () => {
+  const { log, formProps } = interactionLog();
+  const f = await previewFixture(formProps);
+  const frame = () => ({ bravo: cellsOf(formLines(f))[1], canUndo: f.surface().history.canUndo, canRedo: f.surface().history.canRedo });
+  await press("Bump Bravo");
+  await press("Bump Bravo");
+  const frames = [frame()];
+  await replay(f, "undo");
+  frames.push(frame());
+  const afterUndo = [...log];
+  await press("Bump Bravo");
+  frames.push(frame());
+  await replay(f, "undo");
+  frames.push(frame());
+  await replay(f, "redo");
+  frames.push(frame());
+  expect({ afterUndo, log, frames }).toEqual({
+    afterUndo: ["start lines.1.quantity", "commit lines.1.quantity"],
+    log: ["start lines.1.quantity", "commit lines.1.quantity", "start lines.1.quantity", "commit lines.1.quantity"],
+    frames: [
+      { bravo: "b:Bravo/22", canUndo: true, canRedo: false },
+      { bravo: "b:Bravo/20", canUndo: false, canRedo: true },
+      { bravo: "b:Bravo/21", canUndo: true, canRedo: false },
+      { bravo: "b:Bravo/20", canUndo: false, canRedo: true },
+      { bravo: "b:Bravo/21", canUndo: true, canRedo: false },
+    ],
+  });
+});
+
+/**
+ * A record tab holding a lines editor wired as the record form wires its own lines. Like
+ * any tab not kept mounted, it unmounts when another tab is chosen.
+ */
+const quantitiesTab: RecordTabDescriptor = {
+  id: "quantities", label: "Quantities",
+  render: ({ form }) => <EditableLines
+    control={form.form.control} setValue={form.form.setValue} name="lines" lines={renderedResource.linesResource!}
+    fields={[{ name: "quantity", widget: "review.preview" }]}
+    history={{ perform: form.history.perform, start: form.startFieldInteraction, commit: form.commitFieldInteraction }}
+  />,
+};
+
+test("a lines editor that unmounts with a cell's change open ends that cell's group, and the next edit elsewhere is a step of its own", async () => {
+  const { log, formProps } = interactionLog();
+  const f = await fixture({ publicView: true, widgets: { "review.preview": previewWidget }, formProps: {
+    ...formProps, recordTabs: [quantitiesTab, { id: "notes", label: "Notes", render: () => <p>Notes pane</p> }],
+  } });
+  await act(async () => { fireEvent.click(screen.getByRole("tab", { name: "Quantities" })); });
+  await press("Bump Bravo");
+  await act(async () => { fireEvent.click(screen.getByRole("tab", { name: "Notes" })); });
+  expect(await screen.findByText("Notes pane")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Bump Bravo" })).toBeNull();
+  const afterUnmount = [...log];
+  fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Other" } });
+  fireEvent.blur(screen.getByLabelText("Title"));
+  const shown = await undoWalk(f, () => ({ title: titleValue(), bravo: cellsOf(formLines(f))[1] }));
+  expect({ afterUnmount, log, shown }).toEqual({
+    afterUnmount: ["start lines.1.quantity", "commit lines.1.quantity"],
+    log: ["start lines.1.quantity", "commit lines.1.quantity", "start title", "commit title"],
+    shown: [
+      { title: "Other", bravo: "b:Bravo/21" },
+      { title: "Original", bravo: "b:Bravo/21" },
+      { title: "Original", bravo: "b:Bravo/20" },
+    ],
+  });
 });
 
 test("a recorded step that adds a line: the lines show the rows each undo and redo lands on, and the save writes them", async () => {

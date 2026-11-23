@@ -24,8 +24,7 @@ export function allDayBoundDay(value: unknown, zone: unknown): unknown {
 // An all-day event's bounds are days: the form shows each as the day it names and sends a picked day
 // as a date, which the event places at midnight in its own zone, so a browser in another zone never
 // sends its own midnight as the bound. A timed event's bounds are instants in the viewer's zone.
-const asDay = (name: string) => (values: Readonly<Record<string, unknown>>) => ({
-  name,
+const asDay = (values: Readonly<Record<string, unknown>>) => ({
   ...(values.all_day === true ? {
     widget: "date",
     valueCodec: {
@@ -34,8 +33,6 @@ const asDay = (name: string) => (values: Readonly<Record<string, unknown>>) => (
     },
   } : {}),
 });
-const startAsDay = asDay("start");
-const endAsDay = asDay("end");
 
 /**
  * Toggling all day turns the bounds the viewer sees into whole days (the end is exclusive: the day
@@ -72,8 +69,8 @@ function CalendarEventForm({ resource: _resource, ...props }: RegisteredFormProp
         <Field name="calendar" widget={CALENDAR_PICKER_WIDGET} selectionPaths={CALENDAR_SELECTION} required
           defaultValue={soleCalendar} />
         <Field name="status" />
-        <Field name="start" resolve={startAsDay} />
-        <Field name="end" resolve={endAsDay} />
+        <Field name="start" resolve={asDay} />
+        <Field name="end" resolve={asDay} />
         <Field name="all_day" prefill={allDayBounds} />
         <Field name="recurrence" />
         <Field name="timezone" />

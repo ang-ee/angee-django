@@ -13,13 +13,18 @@ describes its pages in `.vite/angee-pages.json` inside the distribution).
 `generateWebRuntime` returns the resolved pages and the manifest's `pageCsp`,
 and fails when a declared entry is missing; the build fails when a declared
 page is not emitted, or when its document references `../` or uses `srcset`.
+A built page's document also preloads the modules its entry imports
+dynamically (`<link rel="modulepreload">`), which Vite does only for static
+imports.
 
 A page's document is given the design tokens and the installed themes as
 stylesheets (`@angee/ui/tokens.css`, a new export of the token sheet alone, and
 `runtime/web/themes.css`), not the host's own stylesheet. It carries no content
 security policy of its own: the ingress sends the manifest's `pageCsp` as a
 header, preview does the same, and development writes it into the document
-after Vite's own head scripts. A host needs no change.
+after Vite's own head scripts. A manifest that declares a page but publishes no
+`pageCsp` (or an empty one) fails `generateWebRuntime`, and with it the build
+and the dev server. A host needs no change.
 
 `@angee/ui/theme-runtime` exports `resolveAppearance`, the one resolution of
 what a document wears from the build's appearance payload (the host's theme,

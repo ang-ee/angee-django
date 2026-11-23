@@ -10,6 +10,21 @@ const resolverOptions: ResolverOptions<Record<string, unknown>> = {
 };
 
 describe("JSON Schema forms", () => {
+  test("the default messages read a limit of one in the singular, a minimum length of one included", () => {
+    const issue = (instancePath: string, keyword: string, limit: number) => ({ instancePath, schemaPath: "", keyword, params: { limit } });
+    expect(ajvValidationErrors([
+      issue("/slug", "minLength", 1), issue("/handle", "minLength", 3), issue("/code", "maxLength", 1),
+      issue("/tags", "minItems", 1), issue("/limits", "maxItems", 1), issue("/rows", "maxItems", 2),
+    ]).fieldErrors).toEqual({
+      slug: ["Enter at least 1 character."],
+      handle: ["Enter at least 3 characters."],
+      code: ["Enter no more than 1 character."],
+      tags: ["Add at least 1 item."],
+      limits: ["Keep no more than 1 item."],
+      rows: ["Keep no more than 2 items."],
+    });
+  });
+
   test("projects a selected action branch, resets its fields and validates typed acknowledgement", async () => {
     const args = jsonSchemaActionArgs({
       type: "object", discriminator: { propertyName: "kind" }, required: ["kind"],
