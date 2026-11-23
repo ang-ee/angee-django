@@ -1,12 +1,14 @@
 // @vitest-environment happy-dom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { FormProvider, useForm } from "react-hook-form";
+import { useForm } from "react-hook-form";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { AppRuntimeProvider } from "../../runtime";
 import { createUiTestProviders } from "../../testing";
 import { defaultWidgets } from "../../widgets";
+import { ActionFormProvider } from "./ActionFormProvider";
 import { DescriptorFieldList } from "./DescriptorFieldList";
+import { useFieldValidation } from "./use-field-validation";
 import { deserializeFormSpec, formSpecInitialValues } from "./form-spec";
 
 const { Provider, clearClients } = createUiTestProviders();
@@ -29,10 +31,11 @@ function fixture(widget: "select" | "combobox") {
   const submit = vi.fn();
   function Harness() {
     const form = useForm({ defaultValues: formSpecInitialValues(fields, {}) });
-    return <FormProvider {...form}><form onSubmit={form.handleSubmit(submit)}>
+    const { registerFieldValidation } = useFieldValidation();
+    return <ActionFormProvider {...form} registerFieldValidation={registerFieldValidation}><form onSubmit={form.handleSubmit(submit)}>
       <DescriptorFieldList fields={fields} />
       <button type="submit">Save</button>
-    </form></FormProvider>;
+    </form></ActionFormProvider>;
   }
   render(<Provider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><Harness /></AppRuntimeProvider></Provider>);
   return submit;

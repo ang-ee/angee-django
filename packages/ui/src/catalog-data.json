@@ -345,6 +345,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "APPEARANCE_PAYLOAD_ATTRIBUTE",
+    "source": "packages/ui/src/theme/runtime.d.ts",
+    "kind": null,
+    "reason": "Shared name of the data block a script-free document carries its appearance payload in.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "APPEARANCE_PREFERENCE_KEY",
     "source": "packages/ui/src/theme/appearance.tsx",
     "kind": null,
@@ -7115,6 +7124,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "readAppearancePayload",
+    "source": "packages/ui/src/theme/runtime.d.ts",
+    "kind": null,
+    "reason": "Headless read of the appearance payload a script-free document carries as data.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "readDndPayload",
     "source": "packages/ui/src/lib/dnd.ts",
     "kind": null,
@@ -7261,6 +7279,15 @@
     "source": "packages/ui/src/dashboard/layout.ts",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "resolveAppearance",
+    "source": "packages/ui/src/theme/runtime.d.ts",
+    "kind": null,
+    "reason": "Headless appearance resolution shared by bootstrap and by a document outside the app.",
     "status": "stable",
     "storyId": null
   },

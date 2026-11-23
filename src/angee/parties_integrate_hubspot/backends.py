@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from time import monotonic
 from typing import Any, ClassVar
@@ -913,17 +913,20 @@ class HubSpotDirectoryBackend(DirectoryBackend):
     def _payload(self, record: HubSpotObject, mapped: Sequence[str]) -> dict[str, Any]:
         """Return one contact's payload; a merge's survivor names the records it replaced, in HubSpot's order.
 
-        HubSpot's values of the ``mapped`` properties go to the base as the row its
-        mappings project, as HubSpot sent them: one the account does not define is
-        absent, an unset one is ``None``. A record HubSpot stated unreadably is the
-        base's error payload, which the driver quarantines under its id.
+        The contact carries the record's creation time as HubSpot states it
+        (``HubSpotObject.created_at``). HubSpot's values of the ``mapped``
+        properties go to the base as the row its mappings project, as HubSpot sent
+        them: one the account does not define is absent, an unset one is ``None``.
+        A record HubSpot stated unreadably is the base's error payload, which the
+        driver quarantines under its id.
         """
 
         if record.unreadable:
             return {"error": "unreadable_record"}
         properties = record.properties
         row = {name: properties[name] for name in mapped if name in properties}
-        return self.observe(contact_from_properties(properties), replaces=record.merged_ids(), row=row)
+        contact = replace(contact_from_properties(properties), created_at=record.created_at)
+        return self.observe(contact, replaces=record.merged_ids(), row=row)
 
 
 def _read_properties(mapped: Sequence[str]) -> tuple[str, ...]:

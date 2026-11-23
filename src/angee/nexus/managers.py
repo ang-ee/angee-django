@@ -436,12 +436,8 @@ class TieQuerySet[TieT: Tie](AngeeQuerySet[TieT]):
             statements = list(
                 party_model.objects.handle_statements()
                 .for_reader(current_actor())
-                .members()
-                .filter(
-                    subject_id__in=party_ids,
-                    status=statement_model.StatementStatus.ASSERTED,
-                    snak=statement_model.StatementSnak.VALUE,
-                )
+                .standing()
+                .filter(subject_id__in=party_ids)
                 .order_by(*statement_model.trust_ordering)[: edge_limit + 1]
             )
             if len(statements) > edge_limit:

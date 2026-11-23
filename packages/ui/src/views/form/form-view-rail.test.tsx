@@ -26,7 +26,7 @@ test("rail declarations keep only readable groups and field rows", () => {
     </>,
   })];
   const groups = recordRailGroups(entries);
-  const visible = visibleRecordRailGroups(groups, { id: "note-1", permissions: ["read"] }, metadata);
+  const visible = visibleRecordRailGroups(groups, { id: "note-1", permissions: ["read"] }, {}, metadata);
   expect(visible.map((group) => group.id)).toEqual(["properties"]);
   expect(visible[0]?.fields?.map(({ field }) => field.name)).toEqual(["due_date"]);
 });
@@ -47,7 +47,7 @@ test("a child's permission gates each group it declares without one of its own",
     { id: "public", permission: undefined, childPermission: undefined },
   ]);
   const visibleTo = (permissions: string[]) =>
-    visibleRecordRailGroups(groups, { id: "note-1", permissions }, metadata).map((group) => group.id);
+    visibleRecordRailGroups(groups, { id: "note-1", permissions }, {}, metadata).map((group) => group.id);
   expect(visibleTo(["read"])).toEqual(["public"]);
   expect(visibleTo(["read", "manage"])).toEqual(["private", "public"]);
 });
@@ -68,8 +68,8 @@ test("alternatives the record chooses between may share a group id, never with a
   });
   const groups = recordRailGroups([original, variant]);
   const admits = (child: string, record: { kind?: string }) => (child === "chat.health") === (record.kind === "chat");
-  expect(visibleRecordRailGroups(groups, { id: "n", kind: "chat" }, metadata, admits).map((group) => group.content)).toEqual(["Chat"]);
-  expect(visibleRecordRailGroups(groups, { id: "n", kind: "mail" }, metadata, admits).map((group) => group.content)).toEqual(["Generic"]);
+  expect(visibleRecordRailGroups(groups, { id: "n", kind: "chat" }, {}, metadata, admits).map((group) => group.content)).toEqual(["Chat"]);
+  expect(visibleRecordRailGroups(groups, { id: "n", kind: "mail" }, {}, metadata, admits).map((group) => group.content)).toEqual(["Generic"]);
   const fixed = railChild("notes.status", { content: <RecordRailGroup id="health" label="Status" /> });
   expect(() => recordRailGroups([fixed, variant])).toThrow(/duplicate record rail group id "health"/);
 });

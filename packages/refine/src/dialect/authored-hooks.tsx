@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import {
   useCustomMutation,
   useDataProvider,
@@ -31,6 +31,7 @@ import type {
 import { useActiveDataProviderName } from "./data-provider-context";
 import { authoredOperationData, mutationMeta } from "./wire";
 import { authoredQueryKey, authoredQueryOptions, useAuthoredErrorPolicy } from "./authored-query-options";
+import { labelBatchResults, projectQueryBatch, type QueryBatchEntry } from "./query-batch";
 export { authoredQueryKey, authoredQueryOptions } from "./authored-query-options";
 export { authoredOperationData } from "./wire";
 
@@ -115,33 +116,48 @@ export function useAuthoredQuery<TDocument extends AuthoredDocument>(
   return result;
 }
 
-/** Native query results addressed by a domain label; labels never key the cache. */
+/**
+ * Native query results addressed by a domain label; labels never key the cache.
+ * Each entry holds what callers read of its result ({@link QueryBatchEntry}). The
+ * Map, and each entry in it, keeps its identity until one of those or a label's
+ * request changes; a change replaces only the entries it touched.
+ */
 export function useAuthoredQueryBatch<TDocument extends AuthoredDocument>(
   scopes: readonly AuthoredQueryBatchScope<TDocument>[],
   options: AuthoredOperationOptions & Pick<AuthoredQueryOptions, "enabled" | "errorNotification" | "refetchInterval"> = {},
-): ReadonlyMap<string, UseQueryResult<DocumentData<TDocument>, Error>> {
+): ReadonlyMap<string, QueryBatchEntry<DocumentData<TDocument>>> {
   const activeProvider = useActiveDataProviderName();
   const provider = options.dataProviderName ?? activeProvider ?? "default";
   const dataProvider = useDataProvider();
   const client = useQueryClient();
-  const configured = scopes.map((scope) => authoredQueryOptions(
-    client, dataProvider, provider, scope.document, scope.variables, scope.models, scope.records, scope.relatedModels,
-  ));
   // Labels address results; only native provider/document/variables identity owns
   // requests. A dynamic batch may contain several labels for the same request.
-  const hashes = configured.map((query) => client.defaultQueryOptions(query).queryHash);
-  const unique = new Map(hashes.map((hash, index) => [hash, configured[index]!]));
-  const indexByHash = new Map([...unique.keys()].map((hash, index) => [hash, index]));
+  const labelled = scopes.map((scope) => {
+    const query = authoredQueryOptions(
+      client, dataProvider, provider, scope.document, scope.variables, scope.models, scope.records, scope.relatedModels,
+    );
+    return { label: scope.key, query, hash: client.defaultQueryOptions(query).queryHash };
+  });
+  const unique = new Map(labelled.map(({ hash, query }) => [hash, query]));
+  const requested = [...unique.keys()];
   const queries = [...unique.values()].map((query) => ({
     ...query,
     enabled: options.enabled ?? true,
     refetchInterval: options.refetchInterval,
   }));
-  const results = useQueries({ queries });
+  const entries = useQueries({
+    queries,
+    combine: (current) => projectQueryBatch<DocumentData<TDocument>, Error>(requested, current),
+  });
   const models = useStableArray([...new Set(scopes.flatMap((scope) => scope.models ?? []))].sort());
   useAuthoredLiveInterest(options.enabled ?? true, models);
   useAuthoredErrorPolicy(queries.map((query) => query.queryKey), { notify: options.errorNotification !== false });
-  return new Map(scopes.map((scope, index) => [scope.key, results[indexByHash.get(hashes[index]!)!]!]));
+  // The requests are rebuilt each render; each label's request, named by its hash,
+  // is one value keyed by its own content, so it changes exactly when they do.
+  const labels = useStableValue<readonly (readonly [string, string])[]>(
+    labelled.map(({ label, hash }) => [label, hash]), [],
+  );
+  return useMemo(() => labelBatchResults("useAuthoredQueryBatch", labels, entries), [entries, labels]);
 }
 
 /** Invalidate every authored read registered against any supplied model. */

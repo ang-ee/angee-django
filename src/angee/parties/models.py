@@ -25,11 +25,13 @@ from __future__ import annotations
 import unicodedata
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import asdict, replace
+from datetime import datetime
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
 from django.db import models, transaction
 from django_compose.models import Composable
 from phonenumbers import (
@@ -53,6 +55,7 @@ from angee.base.models.hierarchy import HierarchyMixin
 from angee.base.models.identity import public_id_of
 from angee.base.models.merge import MergeableMixin, merge_maintenance
 from angee.base.models.ownership import OwnerMixin
+from angee.base.models.roles import role_anchor
 from angee.base.models.trash import TrashMixin
 from angee.base.permissions import actor_user_id, instance_actor, reader_queryset
 from angee.base.prefetch import prefetched
@@ -114,7 +117,7 @@ class Party(
 
     _angee_base = AngeeHistoryMergeableUnscopedManager()
 
-    rebac_grantable = {"reader": "write", "identity_reader": "write"}
+    rebac_grantable = {"reader": "share", "identity_reader": "share"}
 
     owned_relations = ("addresses", "relationships")
 
@@ -209,7 +212,8 @@ class Party(
         historical_queryset=PartyStatementQuerySet,
     )
     same_as = PairAspect(link="integrate.RecordLink")
-    MERGED_PERMISSION = "write"
+    MERGED_PERMISSION = "merge_away"
+    """A merge retires the party merged away to the trash: its write, but only a contact admin's of the roles."""
     retains_merged = True
 
     display_name = models.TextField()
@@ -672,6 +676,35 @@ class Party(
         if aspect != "same_as":
             super().apply_pair(aspect=aspect, other=other, statement=statement)
 
+    def backdate_creation(self, at: datetime | None) -> bool:
+        """Move this party's ``created_at`` back to ``at`` when ``at`` is earlier; return whether it moved.
+
+        A party's creation time is the earliest any of its provenance states: its
+        insert, or the time a source gave the record it was minted from
+        (``CreatedAtField``). It moves it afterwards, only earlier, never later
+        and never past now, through the one rule
+        (:meth:`PartyManager.backdate_creation`): the contact ingest calls it when
+        a source with an earlier time lands on an existing party, and a merge when
+        the survivor folds in an older record (:meth:`merge_fields`), so a survivor
+        a person chose takes the earliest time of what it folds in. A tracked
+        update compared in SQL: history records the move, and a party already as
+        old writes nothing, no version and no live event. The stamp only ever
+        moves earlier, so a time no earlier than the one this instance holds
+        cannot move it, and is answered without a query.
+
+        So a batch merge's "oldest" (``PartyManager.merge_duplicates``) is the
+        source-oldest record. No reader of a party's ``created_at`` means "arrived
+        here since" (``CreatedAtField`` names what was searched).
+        """
+
+        if at is None or (self.created_at is not None and at >= self.created_at):
+            return False
+        moved = cast("PartyManager[Party]", apps.get_model("parties", "Party").objects).backdate_creation(self.pk, at)
+        if moved is None:
+            return False
+        self.created_at = moved
+        return True
+
     def validate_merge(self, merged: Sequence[Any]) -> None:
         """Refuse a pair a person kept apart, and records of different kinds (a person and an organization)."""
 
@@ -701,9 +734,12 @@ class Party(
         leaves empty (:meth:`merge_values`, read here, under the merge's locks);
         ``confirmed_fields`` names the fields the merging person saw, the only ones
         recorded as their choice beside the overrides (:meth:`keep_merge_fields`).
+        The survivor takes the earliest creation time of the records it folds in
+        (:meth:`backdate_creation`), read from the locked rows.
         """
 
         super().merge_fields(merged, **options)
+        self.backdate_creation(min((row.created_at for row in merged), default=None))
         fills = self.merge_values(merged) if fill_empty else {}
         for row in merged:
             self.keep_merge_fields(row, field_overrides, fills=fills, confirmed=confirmed_fields)
@@ -843,7 +879,7 @@ class Handle(
 
     _angee_base = AngeeHistoryMergeableUnscopedManager()
 
-    rebac_grantable = {"reader": "write"}
+    rebac_grantable = {"reader": "share"}
     retains_merged = True
 
     class Platform(models.TextChoices):
@@ -875,6 +911,11 @@ class Handle(
     platform = StateField(choices_enum=Platform, default=Platform.EMAIL)
     value = models.CharField(max_length=512)
     normalized_value = models.CharField(max_length=512, db_index=True, editable=False)
+    normalized_version = models.PositiveSmallIntegerField(default=0, db_index=True, editable=False)
+    """The :attr:`NORMALIZATION_VERSION` the rule had when ``normalized_value`` was computed; 0 before the rule had one.
+
+    Written beside the key by every write of it (:meth:`save`), never alone.
+    """
     external_id = models.CharField(max_length=512, blank=True, default="")
     display_name = models.CharField(max_length=4096, blank=True, default="")
     label = models.CharField(max_length=64, blank=True, default="")
@@ -960,6 +1001,18 @@ class Handle(
     ACCOUNT_PLATFORMS: ClassVar[tuple[str, ...]] = ("email", "phone")
     """Platforms whose value is itself an account's address: an email address, a phone number."""
 
+    NORMALIZATION_VERSION: ClassVar[int] = 1
+    """The version of the normalization rule; bump it whenever the rule returns something else.
+
+    The rule is :meth:`normalize_value` and :meth:`normalize_email_domain`.
+    ``normalized_value`` is stored, so a changed rule leaves stored keys behind.
+    Each row carries the version its key was computed under
+    (:attr:`normalized_version`), and provisioning saves again the rows whose
+    version is not this one (``HandleManager.renormalize_handles``). A test pins
+    the rule's outputs beside the number, so changing an output without a bump
+    fails.
+    """
+
     @classmethod
     def identifies_account(cls, platform: str, external_id: str = "") -> bool:
         """Whether a handle names one account: an email address, a phone number or a platform id.
@@ -995,13 +1048,20 @@ class Handle(
 
         Every platform strips surrounding whitespace and lowercases. Email keeps
         that rule and additionally collapses dots and plus-tags in Gmail local
-        parts for both ``gmail.com`` and ``googlemail.com`` domains. Phone and
+        parts for both ``gmail.com`` and ``googlemail.com`` domains, and compares
+        a domain in one spelling (:meth:`normalize_email_domain`), so both
+        spellings of an internationalised domain are one address while ``value``
+        keeps what was typed. Phone and
         WhatsApp values parse without an assumed region and format as E.164; values
         require a leading country code and must be possible and valid. Anything
         unparseable, invalid, or region-unknown falls back to its digits so
         punctuation still does not fork the same contact point. iMessage carries
         either kind of address, so it routes by value shape — the email rule when
         the value contains ``@``, the phone rule otherwise.
+
+        The key is stored: changing what this returns for any value means
+        bumping :attr:`NORMALIZATION_VERSION`, so provisioning saves the stored
+        keys again.
         """
 
         normalized = (value or "").strip().lower()
@@ -1009,7 +1069,7 @@ class Handle(
             local, _, domain = normalized.rpartition("@")
             if domain in ("gmail.com", "googlemail.com"):
                 local = local.split("+", 1)[0].replace(".", "")
-            return f"{local}@{domain}"
+            return f"{local}@{cls.normalize_email_domain(domain)}"
         if platform in (cls.Platform.PHONE, cls.Platform.WHATSAPP, cls.Platform.IMESSAGE):
             try:
                 number = parse(normalized, None)
@@ -1021,20 +1081,83 @@ class Handle(
         return normalized
 
     @staticmethod
+    def normalize_email_domain(domain: str) -> str:
+        """Return the one spelling an email domain compares by: lower-cased, each punycode label read as Unicode.
+
+        The one rule for a domain, whoever compares one: a handle's comparison key
+        (:meth:`normalize_value`) and a domain stored as typed elsewhere, such as
+        ``Organization.domain``, read through it on both sides. The standard
+        library's ``idna`` codec reads an ``xn--`` label, as Django's ``punycode``
+        writes one with it; a label the codec cannot read stays as typed.
+
+        Handle keys are stored from it: changing what this returns means bumping
+        :attr:`NORMALIZATION_VERSION`.
+        """
+
+        labels = []
+        for label in (domain or "").strip().lower().split("."):
+            if label.startswith("xn--"):
+                try:
+                    label = label.encode("ascii").decode("idna").lower()
+                except UnicodeError:
+                    pass
+            labels.append(label)
+        return ".".join(labels)
+
+    # Django hard-codes it in django/core/validators.py, EmailValidator.__call__ (len(value) > 320): RFC 3696 section 3.
+    EMAIL_ADDRESS_LIMIT: ClassVar[int] = 320
+    """The longest an email address may be (RFC 3696 section 3): the bound Django's ``EmailValidator`` applies."""
+
+    @classmethod
+    def is_email_address(cls, value: str) -> bool:
+        """Whether ``value`` can be an email address at all, read as :meth:`normalize_value` reads it.
+
+        What cannot be an address is no address; anything else is one, however
+        unusual. Surrounding whitespace aside, the value has exactly one ``@``,
+        a non-empty name part in any script (``jörg@``, ``peña@``) with no
+        whitespace, control or format character (Unicode categories ``Cc`` and
+        ``Cf``: a zero-width space, a direction mark), and a domain that passes
+        the domain rule of Django's ``EmailValidator``, which reads an
+        internationalised domain as typed or in its punycode form. A value
+        longer than an address may be (:attr:`EMAIL_ADDRESS_LIMIT`) or than the
+        ``value`` column holds is none. It says nothing of whether the mailbox
+        exists.
+        """
+
+        column = cls._meta.get_field("value")
+        assert isinstance(column, models.Field) and column.max_length is not None
+        address = (value or "").strip()
+        if not address or len(address) > min(cls.EMAIL_ADDRESS_LIMIT, column.max_length) or address.count("@") != 1:
+            return False
+        name, domain = address.split("@")
+        unseen = any(character.isspace() or unicodedata.category(character) in ("Cc", "Cf") for character in name)
+        if not name or unseen:
+            return False
+        return domain in validate_email.domain_allowlist or bool(validate_email.validate_domain_part(domain))
+
+    @staticmethod
     def normalize_display_name(value: str) -> str:
         """Return the comparison key used by cross-platform display-name pooling."""
 
         return " ".join((value or "").split()).casefold()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist the handle while keeping ``normalized_value`` in lockstep."""
+        """Persist the handle while keeping ``normalized_value`` in lockstep, with the version of its rule beside it.
+
+        The key is computed on an insert, on a full save, and whenever a partial
+        save names ``platform``, ``value`` or either key column; the two key
+        columns are then written together, so ``normalized_version`` always says
+        which rule ``normalized_value`` came from.
+        """
 
         update_fields = kwargs.get("update_fields")
-        normalization_fields = {"platform", "value", "normalized_value"}
-        if self._state.adding or update_fields is None or normalization_fields.intersection(update_fields):
+        key_fields = ("normalized_value", "normalized_version")
+        keyed = update_fields is None or {"platform", "value", *key_fields}.intersection(update_fields)
+        if self._state.adding or keyed:
             self.normalized_value = self.normalize_value(self.platform, self.value)
-            if update_fields is not None and "normalized_value" not in update_fields:
-                kwargs["update_fields"] = [*update_fields, "normalized_value"]
+            self.normalized_version = self.NORMALIZATION_VERSION
+            if update_fields is not None:
+                kwargs["update_fields"] = [*update_fields, *(name for name in key_fields if name not in update_fields)]
         super().save(*args, **kwargs)
 
     def validate_merge(self, merged: Sequence[Any]) -> None:
@@ -1901,7 +2024,7 @@ class Directory(Bridge, inherits="integrate.Integration"):
     """
 
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.CONNECT
-    rebac_grantable = {"contact_reader": "write"}
+    rebac_grantable = {"contact_reader": "share"}
 
     objects = DirectoryManager()
 
@@ -1973,3 +2096,10 @@ class Directory(Bridge, inherits="integrate.Integration"):
                 return False
             self.system_grant_record_access("contact_reader", owner)
         return True
+
+
+PartiesRole = role_anchor("parties/role")
+"""The ``parties/role`` anchor: ``contact_reader``, ``contact_manager`` and ``contact_admin`` hold on every party
+what a per-record ``reader``, ``editor`` and owner hold on one (``permissions.zed``). See
+:func:`angee.base.models.roles.role_anchor`.
+"""

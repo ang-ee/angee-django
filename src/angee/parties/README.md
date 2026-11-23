@@ -63,6 +63,25 @@ record of the page: it leaves the source's key walk, so the absence sweep
 tombstones its link. A two-way stream compares the person's own projection and
 keeps a vanished contact's statements.
 
+A party's `created_at` is the earliest time its provenance states. A contact
+carries the time its source says the record was created (`ParsedContact.created_at`,
+kept in the payload beside the compared projection, so it is never a change to
+apply); a person the contact makes takes it, and a contact landing on a person that
+exists moves the person's earlier when it is earlier, never later, as a merge moves
+its survivor's to the earliest of what it folds in (`Party.backdate_creation`, through
+the one rule `PartyManager.backdate_creation`). A contact re-read unchanged, which
+integrate settles without applying it, moves its person too
+(`DirectoryBackend.on_revalidated`, from the payload just stored; a merged record's
+link names its survivor). So on an instance whose contacts were read before they
+carried their time, people move as the directory reads them again: the daily sweep
+re-reads every contact, and a Resync or a change at the source reads one sooner.
+Every provision runs `backdate_parties_from_sources`
+(`PartyManager.backdate_from_sources`), the catch-up for payloads already holding a
+time: each party takes the earliest of its own and its directory records' stored
+times, and a record whose payload states none is counted and left for its next read
+from the source. Its line gives those counts and, when it moved any, the earliest
+and latest new time: no name or id.
+
 A consumer addon fills its own person columns from a pull-only directory's
 source fields in code, with a [directory mapping](backends.py)
 (`DirectoryMapping`): its donor of `parties.Person` declares the columns and the
@@ -95,7 +114,7 @@ is compared, versioned and stated by the ingest like the source's own, a
 person's own value still wins by rank, and removing the mapping replays the
 contact, whose ingest then states the source's own value. The preferred mark of
 the channel a contact chose is such a refinement when the contact brings that
-address (R20), so the ingest writes it once. A mapping may also write through
+address, so the ingest writes it once. A mapping may also write through
 other owners' verbs in its `apply_record`, declaring nothing for them: tags
 (`TagAssignment.objects.attach`) and the preferred mark of a handle the contact
 does not bring, a messenger's (`Handle.objects.upsert(..., is_preferred=True)`).
@@ -245,7 +264,7 @@ card names included, except two live contacts of one pull-only directory: the
 source keeps them separate, and the directory's statements would overwrite each
 other on every sync. A tombstoned link does not count, so once the source has
 merged or removed one of them, the two merge (`PartyManager.directory_merge_blocker`,
-from `Party.validate_merge`; default pending ruling O16). A trashed person is
+from `Party.validate_merge`). A trashed person is
 nobody's target (`PartyManager.contact_people`), so its record lands on a new
 person or adopts one; the link first withdraws what it stated on the trashed
 person, never handing it to another link of its source that names them too, and
@@ -295,6 +314,97 @@ decides nothing: its one caller is the page lookup (`PartyManager.lookup_emails`
 which a directory's claim rule, its adoption when on, and the holding rule read;
 the connections import shares its holding rule. Only a `HELD` answer holds the
 address.
+
+An integration that is no directory, whose records carry a contact (a name, an
+email address, a phone number), makes its person through one verb,
+[PartyManager.claimant_as_system](managers.py), under the same rule: each
+source creates its own people. The caller hands over the record that carried
+the contact (`evidence`). Which records are its own is the caller's rule, and
+`own` carries it: a queryset of them, the record links of its integration.
+The email decides, and a contact without one is decided by its number. The
+person found again is one whose standing claim on a handle of that address has
+a row of `own` behind it, never one a column names: a person a record of the
+source merely points at (one it adopted from someone else) is not its own.
+Another spelling is the same address, a trashed person is nobody's answer, a
+merged one is found as its survivor, and of several the earliest. Nobody else's
+person is taken, whoever holds or claims the address, an account's own person
+included; the verb makes a new person instead, named as given and created by
+the owner the caller names. A contact with neither an address nor a number finds
+nobody again. An email that cannot be an address at all is no address, and a
+number the handle owner reads nothing in, or refuses, is no number: each is
+left out and makes no handle, so two contacts that gave the same non-address
+are never one person for it. What can be an email address is the handle owner's
+one predicate, `Handle.is_email_address`: exactly one `@`, a non-empty name
+part in any script (`jörg@`, `peña@`) with no whitespace, control or format
+character (a zero-width space, a direction mark), a domain that passes the
+domain rule of Django's `EmailValidator` (an internationalised one as typed or
+punycoded), and no longer than an address may be or the handle's value holds.
+Both spellings of an internationalised domain are one address: the handle keeps
+its `value` as typed, and `Handle.normalize_value` reads the punycode labels of
+a domain as Unicode in the comparison key (`normalized_value`), the column
+every lookup of an address reads. A label the standard library's `idna` codec
+cannot read stays as typed. That is one rule, `Handle.normalize_email_domain`,
+for whoever compares a domain: the organization-domain suggestion
+(`PartyManager.suggest_for`) reads the handle's domain and
+`Organization.domain`, which is stored as typed, through it on both sides, so
+either spelling of either suggests the organization. A handle stores the key
+its rule gave when it was last saved (`normalized_value`) and, beside it, the
+version the rule had then (`normalized_version`; 0 for a row stored before the
+rule had one). The handle's save is the one writer of the key and writes the
+two together. Changing what `Handle.normalize_value` or
+`Handle.normalize_email_domain` returns means bumping
+`Handle.NORMALIZATION_VERSION`; a test pins the rule's outputs for a fixed
+sample beside the number, so an output that changes under one number fails.
+The `renormalize_handles` repair (`HandleManager.renormalize_handles`), which
+every provision runs (`PartiesConfig.compose_provision`), selects the handles
+of every platform whose version is not the rule's, by that column's index, and
+saves each again through the handle's own save, under its row lock: an earlier
+version, 0, or a later one that newer code wrote before a rollback. A row
+whose key is already what the rule gives has it written again unchanged beside
+its version, and leaves the selection. With no row behind, the repair is that
+one indexed query. A run takes the whole backlog, because a row left with a
+stale key is one the lookups that read keys miss, and a writer that misses it
+makes a second row. It saves in batches of `HandleManager.REPAIR_LIMIT` (500)
+rows, each in its own transaction, so an interrupted provision keeps what it
+saved and the next one resumes. Every batch starts after the last key the run
+selected, so a run selects no row twice and ends: a row deleted or already
+saved by another process is passed, and a row whose save raises is rolled
+back alone, logged, counted ("The comparison key of N handle(s) could not be
+saved; ...") and left for the next run while the rest are saved.
+`renormalize_handles --limit N` saves a share instead, and only then ends
+with "Stopped at the cap of N handle(s); M more await the next provision or
+renormalize_handles run". Nothing is stated in full:
+each handle the person does not hold is recorded as a claim for review
+(`propose_claimed_handle_as_system`)
+with the record behind it, which decides nothing and moves nothing. A claim
+gains one evidence reference per record that carried the address, deduplicated,
+and that is how the next record finds the person. A person found again has
+nothing new stated of them and carries a handle only when they hold it or a
+record of the source stands behind their claim on it; a new person's number is
+known or made. The rows of the address and of the number, their parties and
+their statements are locked in one `lock_identity_rows` call before any claim
+is read, and which claims are the source's own is then one read of its records
+by key, in batches within the database's parameter budget, however many
+records stand behind a claim and however many parties claim the address. The
+verb proposes no pair, and no caller needs to: a claim links its person to the
+address, so identity matching (below) proposes the claimant and whoever else is
+linked to it.
+
+Which claims still stand is one scope,
+[PartyStatementQuerySet.standing](managers.py), over handle statements the
+caller narrows by handle or by party: each party's strongest current stance on
+a handle, where it asserts a value. A stance its source withdrew or a merge
+superseded makes nothing stand, and a person's dismissal outranks every claim.
+`people_for_emails` and the identity lens of the party graph read it, and a
+caller that asks only who still claims what reads no evidence.
+`standing_claims` adds the records behind each claim, as its evidence names
+them. When two parties merge, the claims one source made for each collapse into
+one and the superseded one's records stay behind it, so two sources' claimants
+of one address, once merged, are each found as the survivor. A caller's own
+rule about which of its records may name a claimed address composes that read,
+and compares the references it returns with its own by the record each names
+(`EvidenceReference.named_record`: the label without case and the public id,
+the pointer aside), as the verb does.
 
 [PartyManager.ingest_organization](managers.py) lands a `ParsedOrganization`
 from a directory stream the same way: it binds the link, mints an Organization
@@ -356,6 +466,56 @@ the handle count, the birthday and the anniversary (`read_private`); the name
 parts and the nickname are identity, read by whoever reads the person, as are
 the languages and the occupation. The existing `reader` relation includes private Party reads; use it only
 when that wider access is intended. Both use the native record-access owner.
+
+Parties' roles (`parties/role`, anchored by `PartiesRole`) say once, for every
+party, what a per-record grant says for one: a **contact reader**
+(`contact_reader`) reads every party, and the handles, addresses, relationships
+and circle memberships that party holds (through the party, so a handle no party
+holds yet, a mailbox's sender or a calendar's attendee, is no role's), and every
+address-book folder and circle (they hold no party: their arms are constants), as
+a `reader` does, private fields included; a **contact
+manager** (`contact_manager`) also writes them as an `editor` does (correcting
+and confirming addresses, adopting where adoption applies (through the role's
+own members: a platform admin's reach of every role lends no adoption, as
+`parties/person#adopt` has no admin arm; but a role's member may be a set, and
+granting the platform admins' set, `angee/role:admin#member`, onto the contact
+manager or admin role makes every platform admin a member, and so every
+directory, whose owner is a platform admin, adopts the people it names), keeping two people
+separate), but merges none: a merge retires the party merged away to the
+trash, so `Party.MERGED_PERMISSION` is `merge_away`, which is that party's
+write with `role_merge_away` (the contact admin) in place of `role_manage`
+(`role_manage` there would let a manager merge, and so trash, without
+restoring); a
+**contact admin** (`contact_admin`) also deletes and transfers as an owner
+does, which is where trashing a party sits (its `delete`), grants per-record
+reads on a party or handle (their `share`, which backs `rebac_grantable`: a
+grant outlives its granter's role, so `role_share` is the contact admin;
+`role_manage` there would let a manager grant), reads every directory
+and shares who reads its contacts (`parties/directory#share`). Connecting,
+changing and removing a directory stay with its integration's writers and
+platform admins. Each choice a deployment's architect may flip is one line in
+`parties/party`: `role_private` (whether a contact reader reads private fields)
+and `role_delete` (whether a contact manager trashes, and with it deletes, a
+party, person or organization; the dependent rows, folders and circles stay with
+the contact admin through `role_admin` and their own constants), and the four
+decided here, `role_write_as_subject`, `role_merge_away`, `role_share` and
+`role_withheld`. A role holder also reads the record tasks about every party
+(`read_as_subject`) and sees people with an account in pickers, but writes,
+shares, deletes and transfers none of those tasks: `role_write_as_subject` is
+empty (`role_manage` there would lend a contact manager and admin the tasks'
+write). Parties grants
+the roles to nobody: a deployment grants membership in the Permissions Hub, which
+lists them as Contact Reader, Contact Manager and Contact Admin, or with a
+`kind = "grants"` resource row (`{resource: "parties/role:contact_manager",
+relation: member, subject: <a user's xref>}`). Of an account's own person (a
+colleague's, `Person.user` set) the roles read the identity and no more:
+`parties/party#role_withheld` subtracts that person from every role arm beyond
+`role_identity`, so no role reads their private fields, handles, addresses,
+relationships, circle memberships or record tasks, or writes, merges, shares,
+deletes, transfers or adopts them; pickers still show them. The person is the
+user's own, which adoption lends no directory either; `nil` there gives an
+account's person the same reach as any other. A
+directory's contact readers keep exactly what they read without the roles.
 Adding an address or relationship to a party takes write on that party
 (`create` on `parties/address` and `parties/relationship` in [permissions.zed](permissions.zed)):
 the row changes the party's projection, which a two-way directory writes to its
@@ -435,12 +595,27 @@ records disagree on a merge field, the merging person confirms the value kept
 
 Nothing merges unattended. A person may also merge in a batch: confirmed sets of
 two to ten records each (`PartyManager.merge_duplicates`, the `merge_duplicates`
-mutation; at most 50 sets), either the certain pairs the Review page lists
-(`certain_same_as_pairs`) or a selection from the People or Organizations list.
+mutation; at most 50 sets a request), either every certain pair awaiting review
+(`certain_same_as_pairs`, listed page by page, at most 1,000 a confirm, from the
+Review page's "Merge all certain pairs") or a selection from the People or
+Organizations list.
 There, one selected record opens "Merge into…" to choose the other, two open
-their compare page, and three or more are one explicit set, the whole
-selection, which the dialog lists before anything merges. Only an active person account that writes every record may (the party's
-`batch_merge` permission, `write & person->active_member`); a service or agent
+their compare page, and three or more on an ungrouped list are the duplicate
+sets the server finds among them (`PartyManager.selection_duplicate_sets`, under
+the person's own read): the same-person pairs the person may review between
+selected records (`selection_pairs`, the one rule), joined into connected groups,
+with the records that have no duplicate selected left out and counted; three to
+ten with no pair among them are one set, as selected, and above ten with none the
+dialog says what to do. A grouped list gives a set per group. Under the list's
+"Select all N" (`selectAllMatching`), a list grouped by one text merge field
+gives every group its read matches, each a set, listed page by page through the
+list resource's own groups read (at most 1,000 a confirm). The dialog lists the
+sets before anything merges. Only an active person account that may merge every record away may (the party's
+`batch_merge` permission, `merge_away & person->active_member`: a set's oldest
+survives, so each member may be the one merged; a contact manager, who writes but
+merges nothing away, is offered no set, and a set where exactly one record lacks
+`merge_away` is not offered though it could merge with that record surviving, on
+the compare page); a service or agent
 account merges nothing, and no agent tool offers it. A set never holds an account's
 own person (merged by hand, on the compare page), records of two kinds, a trashed
 or merged record, or two records a person kept apart; each is refused for that set
@@ -450,7 +625,8 @@ exactly the two are linked to an address the pair cites, and both bear a real
 name, none of the pair's cited addresses (a record named after its e-mail has no
 name of its own), equal to the other's but for case, accents and hyphens. In each
 set the oldest record survives and the others fold into it in key order, under one
-lock pass. A batch records no value as the person's choice: each record's
+lock pass: the oldest is the earliest `created_at`, which a source's creation time
+sets (below), so the record its sources have known longest survives. A batch records no value as the person's choice: each record's
 statements move to the survivor as their sources' own and the provenance ranking
 decides what shows; a field the survivor leaves empty takes a merged record's
 value as a plain value no one states (`Party.merge_values`). The dialog shows, for

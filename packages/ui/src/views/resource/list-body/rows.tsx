@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useInAppLink } from "../../../lib/in-app-link";
-import { type Row as TableRowModel } from "@tanstack/react-table";
+import { type Cell as TableCellModel, type Row as TableRowModel } from "@tanstack/react-table";
 import type { Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
 import { useRuntimeViewAs } from "../../../runtime";
@@ -8,6 +8,7 @@ import { dragSourceProps, useDropTarget, type DndPayload } from "../../../lib/dn
 import { Glyph } from "../../../chrome/Glyph";
 import { Button } from "../../../ui/button";
 import { cn } from "../../../lib/cn";
+import { shownContent } from "../../../lib/shown-content";
 import { Checkbox } from "../../../ui/checkbox";
 import { TableCell, TableHead, TableRow } from "../../../ui/table";
 import type { ResourceViewContextValue } from "../resource-view-context";
@@ -32,6 +33,7 @@ interface RowReorder {
 
 function RecordRowInner<TRow extends Row>({
   row,
+  cells,
   selected: storedSelected,
   onToggleSelected,
   interactive,
@@ -46,6 +48,12 @@ function RecordRowInner<TRow extends Row>({
   reorder,
 }: {
   row: TableRowModel<TRow>;
+  /**
+   * The row's visible cells (`row.getVisibleCells()`), which it draws. The table keeps
+   * that array per row until a column is shown, hidden, moved or pinned, so such a
+   * change reaches the memoised row and a scroll does not.
+   */
+  cells: readonly TableCellModel<TRow, unknown>[];
   selected: boolean;
   onToggleSelected: (id: string, selected?: boolean, row?: TRow) => void;
   interactive: boolean;
@@ -112,6 +120,7 @@ function RecordRowInner<TRow extends Row>({
     return (
       <LinkedRecordRow
         row={row}
+        cells={cells}
         selected={selected}
         onToggleSelected={onToggleSelected}
         selectable={selectable}
@@ -128,6 +137,7 @@ function RecordRowInner<TRow extends Row>({
   return (
     <PlainRecordRow
       row={row}
+      cells={cells}
       selected={selected}
       onToggleSelected={onToggleSelected}
       interactive={interactive}
@@ -143,14 +153,16 @@ function RecordRowInner<TRow extends Row>({
   );
 }
 
-// Memoised so a selection toggle re-renders only the affected row: `selected` is
-// the sole per-row-changing prop. Callers keep the row and its callbacks stable
-// across toggles: the flat list passes `toggleSelectedId` and page callbacks, the
-// grouped list memoises each row's own (`GroupedRecordRow`).
+// Memoised so a selection toggle or a range change renders only the rows it changes:
+// `selected` is the per-row prop that changes, and `cells` changes with the columns.
+// Callers keep the row and its callbacks stable: the flat list passes
+// `toggleSelectedId`, page callbacks and props stable per row set, the grouped list
+// memoises each row's own (`GroupedRecordRow`).
 export const RecordRow = React.memo(RecordRowInner) as typeof RecordRowInner;
 
 function LinkedRecordRow<TRow extends Row>({
   row,
+  cells,
   selected,
   onToggleSelected,
   selectable,
@@ -163,6 +175,7 @@ function LinkedRecordRow<TRow extends Row>({
   rowActions,
 }: {
   row: TableRowModel<TRow>;
+  cells: readonly TableCellModel<TRow, unknown>[];
   selected: boolean;
   onToggleSelected: (id: string, selected?: boolean, row?: TRow) => void;
   selectable: boolean;
@@ -177,7 +190,7 @@ function LinkedRecordRow<TRow extends Row>({
 }): React.ReactElement {
   const t = useUiT();
   const id = row.id;
-  const firstCell = row.getVisibleCells()[0];
+  const firstCell = cells[0];
   const ownsControls =
     firstCell && columnHasInteractiveContent(firstCell.column.columnDef);
   const link = React.useRef<HTMLAnchorElement>(null);
@@ -222,7 +235,7 @@ function LinkedRecordRow<TRow extends Row>({
       ) : reserveLeadingColumn ? (
         <TableCell className="w-8" />
       ) : null}
-      {row.getVisibleCells().map((cell, index) => (
+      {cells.map((cell, index) => (
         <TableCell
           key={cell.id}
           className={ALIGN_CLASS[alignOf(cell.column.columnDef)]}
@@ -262,6 +275,7 @@ function LinkedRecordRow<TRow extends Row>({
 
 function PlainRecordRow<TRow extends Row>({
   row,
+  cells,
   selected,
   onToggleSelected,
   interactive,
@@ -275,6 +289,7 @@ function PlainRecordRow<TRow extends Row>({
   rowActions,
 }: {
   row: TableRowModel<TRow>;
+  cells: readonly TableCellModel<TRow, unknown>[];
   selected: boolean;
   onToggleSelected: (id: string, selected?: boolean, row?: TRow) => void;
   interactive: boolean;
@@ -290,7 +305,7 @@ function PlainRecordRow<TRow extends Row>({
 }): React.ReactElement {
   const t = useUiT();
   const id = row.id;
-  const firstCell = row.getVisibleCells()[0];
+  const firstCell = cells[0];
   const ownsControls =
     firstCell && columnHasInteractiveContent(firstCell.column.columnDef);
   return (
@@ -336,7 +351,7 @@ function PlainRecordRow<TRow extends Row>({
       ) : reserveLeadingColumn ? (
         <TableCell className="w-8" />
       ) : null}
-      {row.getVisibleCells().map((cell, index) => (
+      {cells.map((cell, index) => (
         <TableCell
           key={cell.id}
           className={ALIGN_CLASS[alignOf(cell.column.columnDef)]}
@@ -417,6 +432,7 @@ export function renderListRow<TRow extends Row>({
     <RecordRow
       key={row.id}
       row={row}
+      cells={row.getVisibleCells()}
       selected={Boolean(resourceView.state.rowSelection[row.id])}
       onToggleSelected={resourceView.toggleSelectedId}
       interactive={interactive}
@@ -436,6 +452,12 @@ export interface SelectionToggleProps {
   checked: boolean;
   indeterminate?: boolean;
   disabled?: boolean;
+  /**
+   * Why the box cannot change (`Checkbox.disabledReason`): a reason disables it, and the
+   * box stays focusable with the reason as its tooltip and accessible description; null
+   * is none yet, keeping its tree for one to come.
+   */
+  disabledReason?: string | null;
   onCheckedChange: (checked: boolean) => void;
   className?: string;
 }
@@ -448,10 +470,12 @@ export function SelectionToggle({
   label,
   checked,
   indeterminate = false,
-  disabled = false,
+  disabled: disabledProp = false,
+  disabledReason,
   onCheckedChange,
   className,
 }: SelectionToggleProps): React.ReactElement {
+  const disabled = disabledProp || shownContent(disabledReason) !== null;
   return (
     <div
       className={cn("flex items-center justify-center", disabled ? "cursor-not-allowed" : "cursor-pointer", className)}
@@ -466,7 +490,8 @@ export function SelectionToggle({
         aria-label={label}
         checked={checked}
         indeterminate={indeterminate}
-        disabled={disabled}
+        disabled={disabledProp}
+        {...(disabledReason === undefined ? {} : { disabledReason })}
         onCheckedChange={(next) => onCheckedChange(next)}
       />
     </div>

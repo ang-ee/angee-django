@@ -23,13 +23,15 @@ export function VirtualPaddingRow({
  * The padding-row windowing math shared by every virtualized list body: the
  * leading/trailing spacer heights plus the indexes of the items to render. One
  * owner so the flat and grouped bodies window identically. `estimateSize` feeds
- * the pre-measure fallback (before the virtualizer has real rects), keyed per the
- * caller's item kinds.
+ * the fallback while the virtualizer has no window (its scroll element has no
+ * size): the first items render and the rest are padded by their estimate. The
+ * count and the estimate default to the virtualizer's own, which its surface
+ * gave it, so a body repeats neither.
  */
 export function useVirtualWindow(
   rowVirtualizer: Virtualizer<HTMLDivElement, Element>,
-  itemCount: number,
-  estimateSize: (index: number) => number,
+  itemCount: number = rowVirtualizer.options.count,
+  estimateSize: (index: number) => number = rowVirtualizer.options.estimateSize,
 ): { paddingTop: number; paddingBottom: number; visibleIndexes: number[] } {
   const virtualItems = rowVirtualizer.getVirtualItems();
   const visibleIndexes =

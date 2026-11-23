@@ -22,7 +22,8 @@ function RecordLinks({ board = false, interactiveCell = false, open }: {
   const row = table.getRowModel().rows[0]!;
   if (board) return <BoardRowCard row={row} columns={[]} groupFields={new Set()} laneId="all" dragEnabled={false} sortable={false}
     cardActionContext={{ refresh: () => undefined }} renderCard={() => "Record seven"} rowHref={() => "/records/7?view=all"} onRecordOpen={open} />;
-  return <table><tbody><RecordRow row={row} selected={false} onToggleSelected={() => undefined} interactive selectable={false}
+  return <table><tbody><RecordRow row={row} cells={row.getVisibleCells()} selected={false} onToggleSelected={() => undefined}
+    interactive selectable={false}
     rowHref={() => "/records/7?view=all"} onRecordOpen={open} /></tbody></table>;
 }
 

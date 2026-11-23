@@ -7,11 +7,17 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import { createAngeeChangeLiveProvider } from "../provider";
 import { useAuthoredQuery } from "./authored-hooks";
-import { groupByVariables } from "../operations";
+import { extractGroupBy, groupByVariables } from "../operations";
 import type { TypedDocumentNode } from "../typed-document";
 import { invalidateAuthoredQueries } from "../query-invalidation";
 import { createRefineTestProviders } from "../testing";
 import { useAngeeAggregate, useAngeeFacets, useAngeeGroupBy, useAngeeGroupByBatch, type GroupByBatchScope } from "./hooks";
+
+// Decoding counted, its result unchanged.
+vi.mock("../operations", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../operations")>();
+  return { ...actual, extractGroupBy: vi.fn(actual.extractGroupBy) };
+});
 
 const TARGET = { dataProviderName: "console", root: "messages_groups", modelLabel: "messaging.Message" };
 const DOCUMENT = "query Groups { messages_groups { key { channel_id } aggregate { count } } totalCount }";
@@ -311,6 +317,134 @@ test("aggregate totals register shared model interests and retain success after 
   await act(async () => { await invalidateAuthoredQueries(f.client, [TARGET.modelLabel]); });
   await waitFor(() => expect(result.current.error?.message).toBe("Refresh unavailable"));
   expect(result.current.aggregate?.count).toBe(5);
+});
+
+test("a render that changes nothing keeps every group and aggregate result; changed data changes it", async () => {
+  const totals = (groups: number, count: number) => ({ data: {
+    ...response(groups).data, messages_aggregate: { aggregate: { count } },
+  } });
+  const custom = vi.fn(async () => totals(1, 4));
+  const f = fixture(custom);
+  // Targets and scopes declared afresh on every render, as a surface's derivation does.
+  const { result, rerender } = renderHook(({ title }) => ({
+    title,
+    batch: useAngeeGroupByBatch({ ...TARGET }, SCOPES.map((scope) => ({ ...scope })), { document: DOCUMENT }),
+    single: useAngeeGroupBy({ ...TARGET }, { document: DOCUMENT, ...SCOPES[0]!.query }),
+    aggregate: useAngeeAggregate({ ...TARGET, root: "messages_aggregate" }, {
+      document: "query Total { messages_aggregate { aggregate { count } } }",
+    }),
+  }), { initialProps: { title: "First" }, wrapper: f.wrapper });
+  await waitFor(() => {
+    expect(result.current.batch.get("channels")?.totalCount).toBe(1);
+    expect(result.current.single.totalCount).toBe(1);
+    expect(result.current.aggregate.aggregate?.count).toBe(4);
+  });
+  const settled = result.current;
+  rerender({ title: "Unrelated title" });
+  expect(result.current.batch).toBe(settled.batch);
+  expect(result.current.batch.get("channels")).toBe(settled.batch.get("channels"));
+  expect(result.current.single).toBe(settled.single);
+  expect(result.current.aggregate).toBe(settled.aggregate);
+
+  custom.mockResolvedValue(totals(2, 5));
+  await act(async () => { await invalidateAuthoredQueries(f.client, [TARGET.modelLabel]); });
+  await waitFor(() => {
+    expect(result.current.batch.get("channels")?.totalCount).toBe(2);
+    expect(result.current.single.totalCount).toBe(2);
+    expect(result.current.aggregate.aggregate?.count).toBe(5);
+  });
+  expect(result.current.batch).not.toBe(settled.batch);
+  expect(result.current.single).not.toBe(settled.single);
+  expect(result.current.aggregate).not.toBe(settled.aggregate);
+});
+
+test("of two group reads one settling decodes only it, and the other's result stays the same object", async () => {
+  const answers = new Map<number, (value: ReturnType<typeof response>) => void>();
+  const custom = vi.fn(({ meta }: { meta?: { gqlVariables?: { offset?: number } } }) =>
+    new Promise<ReturnType<typeof response>>((resolve) => { answers.set(meta?.gqlVariables?.offset ?? 0, resolve); }));
+  const f = fixture(custom as never);
+  const scopes: readonly GroupByBatchScope[] = [SCOPES[0]!, { key: "next-page", query: { ...SCOPES[0]!.query, page: 2 } }];
+  const { result } = renderHook(() => useAngeeGroupByBatch(TARGET, scopes, { document: DOCUMENT }), { wrapper: f.wrapper });
+  await waitFor(() => expect(answers.size).toBe(2));
+  await act(async () => { answers.get(0)!(response(1)); });
+  await waitFor(() => expect(result.current.get("channels")?.totalCount).toBe(1));
+  const first = result.current.get("channels");
+  const decoded = vi.mocked(extractGroupBy).mock.calls.length;
+  await act(async () => { answers.get(50)!(response(2)); });
+  await waitFor(() => expect(result.current.get("next-page")?.totalCount).toBe(2));
+  expect(result.current.get("channels")).toBe(first);
+  expect(vi.mocked(extractGroupBy).mock.calls.slice(decoded).map(([data]) => (data as { totalCount: number }).totalCount))
+    .toEqual([2]);
+
+  // A refetch answering equal data moves that result's settle time, and only its.
+  const next = result.current.get("next-page")!;
+  const requested = custom.mock.calls.length;
+  await new Promise((resolve) => { setTimeout(resolve, 5); });
+  act(() => result.current.get("next-page")!.refetch());
+  await waitFor(() => expect(custom).toHaveBeenCalledTimes(requested + 1));
+  await act(async () => { answers.get(50)!(response(2)); });
+  await waitFor(() => expect(result.current.get("next-page")?.updatedAt).toBeGreaterThan(next.updatedAt!));
+  expect(result.current.get("next-page")).not.toBe(next);
+  expect(result.current.get("channels")).toBe(first);
+});
+
+test("a group read inserted at the front or removed from the middle decodes nothing else again", async () => {
+  const custom = vi.fn(async ({ meta }: { meta?: { gqlVariables?: { offset?: number } } }) =>
+    response(1 + (meta?.gqlVariables?.offset ?? 0) / 50));
+  const f = fixture(custom as never);
+  const page = (index: number): GroupByBatchScope => ({ key: `page-${index}`, query: { ...SCOPES[0]!.query, page: index } });
+  const { result, rerender } = renderHook(
+    ({ pages }) => useAngeeGroupByBatch(TARGET, pages.map(page), { document: DOCUMENT }),
+    { initialProps: { pages: [2, 3, 4] }, wrapper: f.wrapper },
+  );
+  await waitFor(() => expect([...result.current.values()].every((entry) => entry.updatedAt !== null && !entry.fetching)).toBe(true));
+  const settled = result.current;
+  const decoded = vi.mocked(extractGroupBy).mock.calls.length;
+  rerender({ pages: [1, 2, 3, 4] });
+  for (const key of ["page-2", "page-3", "page-4"]) expect(result.current.get(key)).toBe(settled.get(key));
+  rerender({ pages: [2, 4] });
+  for (const key of ["page-2", "page-4"]) expect(result.current.get(key)).toBe(settled.get(key));
+  // Only the inserted page (one group) may have decoded since.
+  expect(vi.mocked(extractGroupBy).mock.calls.slice(decoded)
+    .filter(([data]) => (data as { totalCount: number }).totalCount !== 1)).toEqual([]);
+});
+
+test("a group read whose payload the decoder refuses carries the error beside an intact sibling", async () => {
+  const custom = vi.fn(async ({ meta }: { meta?: { gqlVariables?: { offset?: number } } }) =>
+    meta?.gqlVariables?.offset ? { data: { messages_groups: [] } } : response(1));
+  const f = fixture(custom as never);
+  const scopes: readonly GroupByBatchScope[] = [SCOPES[0]!, { key: "next-page", query: { ...SCOPES[0]!.query, page: 2 } }];
+  const { result } = renderHook(() => useAngeeGroupByBatch(TARGET, scopes, { document: DOCUMENT }), { wrapper: f.wrapper });
+  await waitFor(() => expect(result.current.get("next-page")?.error?.message).toBe("Grouped response requires a numeric totalCount"));
+  expect(result.current.get("next-page")?.buckets).toEqual([]);
+  expect(result.current.get("channels")).toMatchObject({ error: null, totalCount: 1 });
+  // Reported as a failed read is: once, however often the batch renders.
+  await waitFor(() => expect(f.notify).toHaveBeenCalledTimes(1));
+  expect(f.notify).toHaveBeenCalledWith(expect.objectContaining({ type: "error", description: "Grouped response requires a numeric totalCount" }));
+  expect(f.onError).toHaveBeenCalledTimes(1);
+});
+
+test("two facets of one read keep their own results, each keeping its identity while another read settles", async () => {
+  let answerOther!: (value: ReturnType<typeof response>) => void;
+  const custom = vi.fn(({ meta }: { meta?: { gqlVariables?: { offset?: number } } }) => meta?.gqlVariables?.offset
+    ? new Promise<ReturnType<typeof response>>((resolve) => { answerOther = resolve; })
+    : Promise.resolve(response(1)));
+  const f = fixture(custom as never);
+  const facets = [
+    { id: "values", ...SCOPES[0]!.query },
+    // The same read, its options taken from a key the buckets lack.
+    { id: "absent", ...SCOPES[0]!.query, valueKey: "absent" },
+    { id: "later", ...SCOPES[0]!.query, page: 2 },
+  ];
+  const { result } = renderHook(() => useAngeeFacets(TARGET, { document: DOCUMENT, facets }), { wrapper: f.wrapper });
+  await waitFor(() => expect(result.current.facets.values?.options).toHaveLength(1));
+  expect(custom).toHaveBeenCalledTimes(2);
+  expect(result.current.facets.absent?.options).toEqual([]);
+  const settled = result.current.facets;
+  await act(async () => { answerOther(response(2)); });
+  await waitFor(() => expect(result.current.facets.later?.options).toHaveLength(2));
+  expect(result.current.facets.values).toBe(settled.values);
+  expect(result.current.facets.absent).toBe(settled.absent);
 });
 
 test("native aggregate and group polling survives unrelated renders, pauses without focus, and stops on unmount", async () => {

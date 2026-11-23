@@ -29,6 +29,13 @@ membership, run native lock authoring in its declared image/workspace environmen
 with that same flag, then retain the project lock. Verification must not silently
 change manifests or lockfiles.
 
+A change that adds or edits a web fragment's or a package's `package.json` carries
+this repository's own `pnpm-lock.yaml` change with it. A stack's lock is a
+different file and does not prove it: author the repository's lock in a clean
+clone of the repository, never in a stack slot, and confirm
+`pnpm install --frozen-lockfile --lockfile-only` accepts it there before
+handing the change over.
+
 Commands below using `python -m` invoke the selected environment's modules; this
 is a portable convention, not a claim that ordinary tool entrypoints are broken.
 The pnpm examples disable automatic dependency installation during scripts.
@@ -101,14 +108,15 @@ also covers [review waiters](../tests/test_workflows_review.py), their
 [locking races](../tests/test_agent_sessions_concurrency.py), plus
 [connection discovery races](../tests/test_integrate_discovery_concurrency.py),
 [cross-addon reply and inbound joins](../tests/test_framework_integration.py),
-[delivery contracts with their sweep, claim-fence and held-action races and webform submission
+[delivery contracts with their sweep, claim-fence and held-action
 races](../tests/test_composed_messaging.py), and the
 [comment reply workflow and scheduling races](../tests/test_composed_workflows.py). The selection
 also runs every remaining PostgreSQL-only contract: row locks, hierarchy, IAM,
 [OIDC disconnect admission under the user lock](../tests/test_oidc.py),
 knowledge, [pgvector test-database readiness](../tests/test_postgresql_extensions.py),
 messaging with its [channel owner](../tests/test_messaging_channel_concurrency.py) races,
-parties' [same-person pair](../tests/test_parties_same_as_concurrency.py) locks,
+parties' [same-person pair](../tests/test_parties_same_as_concurrency.py) locks and
+[handle-key repair](../tests/test_parties_handle_keys_concurrency.py) races,
 [portfolio report](../tests/test_portfolio_concurrency.py) locks, proposals,
 sequences, spaces, storage with its
 [window-aligned download URLs and expiry](../tests/test_storage_access_campaign.py),
@@ -122,17 +130,24 @@ messaging inbox's [explorer](../tests/test_inbox_explorer.py),
 [part reads](../tests/test_inbox_part_reads.py), the composed member
 [person/projects planner budgets](../tests/test_composed_examples.py), and the composed
 [intake access decision](../tests/test_composed_intake.py). It also runs
-[task ordering](../tests/test_task_rank_allocation.py),
-[record tasks](../tests/test_projects_record_tasks.py), and
-[project access and projections](../tests/test_projects_access_projections.py).
+[task ordering](../tests/test_task_rank_allocation.py), whose rank allocation reads
+its tail through the saving connection. Authorization that rebac compiles per
+backend is proven on the backend that decides it in production, so the lane also
+runs, whole, the authorization contracts that hold on every backend; the files it
+covers are those the `uv-postgres` job's selection lists in
+[reusable checks](../.github/workflows/reusable-checks.yml).
 `test_connections.py`, `test_system_queryset.py`, `test_integrate_scheduler.py` and
 `test_transitions.py` contribute only their PostgreSQL test nodes because each also has
 SQLite-only tests, and `test_parties_directory_backend.py` its lock nodes because its strict
 expected failure would read as a skip;
 the PostgreSQL branches in `test_extraction_models.py` and
 `test_knowledge_access_campaign.py`, the [resource ledger's](../tests/test_resource_ledger.py)
-concurrent upsert, and the composed profiles that carry PostgreSQL contracts also run by
-node. Every other listed file runs whole, which keeps the SQLite
+concurrent upsert, a form's submission, delivery and publication
+[races](../tests/test_webforms_concurrency.py), and the composed profiles that carry PostgreSQL contracts also run by
+node. The selection also runs the
+[move of webform channels to forms](../tests/test_webforms_messaging_upgrade.py), whose one migration writes rows
+and then alters the channel table, and the [race of two forms](../tests/test_webforms_messaging_concurrency.py)
+saved on one channel and slug. Every other listed file runs whole, which keeps the SQLite
 floor tests out of the PostgreSQL zero-skip gate. The six groups are assigned
 by pytest-split's `least_duration` algorithm over the
 [PostgreSQL timing map](../.test_durations_postgres); each runs with four xdist
@@ -232,6 +247,15 @@ Hosts installing provenance also register
 after the base plugin: it adds test attribution and loads every installed addon's
 install-tier statement principals (`provenance.Rule` and `Seed` rows and their
 grants) into the session baseline.
+
+A test that runs under both REBAC relationship storages switches with
+[`relationship_storage(mode)`](../src/angee/base/testing/fixtures.py), never by
+setting `REBAC_LOCAL_BACKEND_STORAGE` alone. The setting only names the table REBAC
+reads, and the session baseline's relationships (every install tier's grants, such
+as a rule source's write on the parties it states) stay in the storage the host
+configured, so a bare switch reads a table without them and refuses what the
+baseline grants. The helper copies them with `rebac migrate-storage`, selects the
+storage, and on exit restores the setting and removes what it added to that table.
 
 Declare a test-local model under Django's `isolate_apps` when the code under test
 accepts a registry. When its owner reads the installed registry (content types, the

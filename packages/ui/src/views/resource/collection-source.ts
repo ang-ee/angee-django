@@ -6,12 +6,15 @@ import {
 } from "@angee/metadata";
 import {
   useAuthoredQueryBatch,
+  useDerivedBatch,
+  useReportRefusedReads,
   type AuthoredDocument,
   type AuthoredVariables,
   type DocumentData,
   type GroupByResult,
   type TypedDocumentNode,
 } from "@angee/refine";
+import { errorFromUnknown } from "../../data/errors";
 import type {
   ResourceListOrder,
   ResourceViewFilter,
@@ -95,6 +98,8 @@ interface CollectionQueryResult<TResult> {
   data: TResult | undefined;
   fetching: boolean;
   error: Error | null;
+  /** When the read last settled, as native reads state it; null until it has. */
+  updatedAt: number | null;
   refetch: () => void;
 }
 
@@ -105,7 +110,7 @@ export function useCollectionQueryBatch<TRequest, TResult>(
 ): ReadonlyMap<string, CollectionQueryResult<TResult>> {
   const models = useCanonicalResourceModelLabels(source?.models);
   const prepared = React.useMemo(() => {
-    const errors = new Map<string, Error>();
+    const errors = new Map<string, Error | null>();
     const scopes = source
       ? requests.flatMap((request) => {
           try {
@@ -118,10 +123,7 @@ export function useCollectionQueryBatch<TRequest, TResult>(
               },
             ];
           } catch (error) {
-            errors.set(
-              request.key,
-              error instanceof Error ? error : new Error(String(error)),
-            );
+            errors.set(request.key, errorFromUnknown(error));
             return [];
           }
         })
@@ -132,29 +134,42 @@ export function useCollectionQueryBatch<TRequest, TResult>(
     dataProviderName: source?.dataProviderName,
     enabled: source?.enabled,
   });
-  return React.useMemo(() => {
-    const normalized = new Map<string, CollectionQueryResult<TResult>>(
-      [...results].map(([key, result]) => [
-        key,
-        {
-          data:
-            result.data === undefined ? undefined : source?.select(result.data),
-          fetching: result.isFetching,
-          error: result.error,
-          refetch: () => {
-            void result.refetch();
-          },
-        },
-      ]),
-    );
-    prepared.errors.forEach((error, key) =>
-      normalized.set(key, {
-        data: undefined,
-        fetching: false,
-        error,
-        refetch: () => {},
-      }),
-    );
-    return normalized;
-  }, [results, source, prepared.errors]);
+  // A result selects again only when its own read changes. A payload the source's
+  // `select` refuses is that read's error, reported as a failed read is, never a
+  // render that throws.
+  const selected = useDerivedBatch(results, (result): CollectionQueryResult<TResult> => {
+    let data: TResult | undefined;
+    let refused: Error | null = null;
+    if (result.data !== undefined && source) {
+      try {
+        data = source.select(result.data);
+      } catch (cause) {
+        refused = errorFromUnknown(cause);
+      }
+    }
+    return {
+      data,
+      fetching: result.isFetching,
+      error: result.error ?? refused,
+      updatedAt: result.dataUpdatedAt || null,
+      refetch: () => {
+        void result.refetch();
+      },
+    };
+  }, [source]);
+  useReportRefusedReads(results, selected);
+  const failed = React.useMemo(
+    () => new Map<string, CollectionQueryResult<TResult>>([...prepared.errors].map(([key, error]) => [key, {
+      data: undefined,
+      fetching: false,
+      error,
+      updatedAt: null,
+      refetch: () => {},
+    }])),
+    [prepared.errors],
+  );
+  return React.useMemo(
+    () => failed.size === 0 ? selected : new Map([...selected, ...failed]),
+    [selected, failed],
+  );
 }

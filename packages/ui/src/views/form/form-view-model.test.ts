@@ -1,3 +1,4 @@
+import { get, set } from "react-hook-form";
 import { describe, expect, test } from "vitest";
 
 import type { FieldDescriptor } from "../page";
@@ -12,10 +13,13 @@ import {
   isCompositeFieldDescriptor,
   missingRequiredFieldNames,
   mutationData,
+  createPresetMemory,
   recordToValues,
   relationListValue,
   resolveField,
+  seedPreset,
   titleText,
+  type PresetMemory,
 } from "./form-view-model";
 
 const fields: readonly FieldDescriptor[] = [
@@ -429,4 +433,118 @@ test("a saved-only group's fields stay off a create form instead of falling back
   const groups = [{ fields: [archived], actions: [], savedOnly: true }];
   expect(formSections([name, archived], groups, [], true)).toEqual([{ key: "fields", fields: [name] }]);
   expect(formSections([name, archived], groups, [], false).map((section) => section.fields)).toEqual([[name], [archived]]);
+});
+
+describe("seedPreset and PresetMemory", () => {
+  /** A form as a preset sees it: values and dirty paths, with every read and write recorded. */
+  function form(initial: Record<string, unknown> = {}, dirty: readonly string[] = []) {
+    const values = structuredClone(initial);
+    const dirtyPaths = new Set(dirty);
+    const reads: [string, unknown][] = [];
+    const writes: [string, unknown, boolean][] = [];
+    return {
+      values, reads, writes,
+      read: (path: string) => {
+        reads.push([path, structuredClone(get(values, path))]);
+        return { dirty: dirtyPaths.has(path), value: get(values, path) };
+      },
+      write: (path: string, seed: unknown, dirties: boolean) => {
+        writes.push([path, seed, dirties]);
+        set(values, path, seed);
+        if (dirties) dirtyPaths.add(path);
+      },
+    };
+  }
+  const seed = (
+    preset: FieldDescriptor,
+    target: ReturnType<typeof form>,
+    options: { isCreate?: boolean; memory?: PresetMemory; at?: (path: string) => string; loaded?: Record<string, unknown> } = {},
+  ) => seedPreset(preset, "chosen", target.values, options.loaded, {
+    isCreate: options.isCreate ?? false,
+    memory: options.memory ?? createPresetMemory(),
+    ...(options.at ? { at: options.at } : {}),
+    read: target.read,
+    write: target.write,
+  });
+
+  test("every seed dirties the form, in the preset's order, and the written paths come back", () => {
+    const target = form({ note: "now" });
+    const preset: FieldDescriptor = {
+      name: "kind",
+      prefill: (value, values, loaded) => ({ zeta: value, alpha: values.note, mid: loaded?.note, empty: undefined }),
+    };
+    expect(seed(preset, target, { loaded: { note: "then" } })).toEqual(["zeta", "alpha", "mid", "empty"]);
+    expect(target.writes).toEqual([["zeta", "chosen", true], ["alpha", "now", true], ["mid", "then", true], ["empty", undefined, true]]);
+    expect(target.reads).toEqual([]);
+  });
+
+  test("a createOnly preset writes only while the form creates", () => {
+    const preset: FieldDescriptor = { name: "kind", createOnly: true, prefill: () => ({ config: {} }) };
+    const editing = form();
+    expect(seed(preset, editing)).toEqual([]);
+    expect(editing.writes).toEqual([]);
+    const creating = form();
+    expect(seed(preset, creating, { isCreate: true })).toEqual(["config"]);
+    expect(creating.writes).toEqual([["config", {}, true]]);
+  });
+
+  test("a preset of nothing writes nothing", () => {
+    for (const preset of [{ name: "kind" }, { name: "kind", prefill: () => null }, { name: "kind", prefill: () => undefined }]) {
+      const target = form();
+      expect(seed(preset, target)).toEqual([]);
+      expect(target.writes).toEqual([]);
+    }
+  });
+
+  test("a dirty-preserving preset skips the person's own values, writes the rest undirtied, and replaces what it names", () => {
+    const memory = createPresetMemory();
+    memory.noteEdit("scope.secret");
+    const target = form({ scope: { secret: "", config: "typed config", style: "" } }, ["scope.config"]);
+    const preset: FieldDescriptor = {
+      name: "kind",
+      prefill: () => ({ secret: "preset", style: "plain", config: { mode: "fresh" }, note: "" }),
+      prefillPreserveDirty: true,
+      prefillReplace: ["config"],
+    };
+    expect(seed(preset, target, { memory, at: (path) => `scope.${path}` })).toEqual(["scope.style", "scope.config", "scope.note"]);
+    expect(target.writes).toEqual([
+      ["scope.style", "plain", false], ["scope.config", { mode: "fresh" }, true], ["scope.note", "", false],
+    ]);
+    // An undirtied seed is remembered as the preset's; a dirtying one is not.
+    expect(memory.isOwn("scope.style", { dirty: true, value: "plain" })).toBe(false);
+    expect(memory.isOwn("scope.config", { dirty: true, value: { mode: "fresh" } })).toBe(true);
+  });
+
+  test("a value is the person's own when they changed it, or when it is dirty and no longer the seed written there", () => {
+    const memory = createPresetMemory();
+    memory.noteEdit("edited");
+    expect(memory.isOwn("edited", { dirty: false, value: "" })).toBe(true);
+    expect(memory.isOwn("untouched", { dirty: false, value: "x" })).toBe(false);
+    expect(memory.isOwn("untouched", { dirty: true, value: "x" })).toBe(true);
+    memory.noteSeed("seeded", { mode: "fresh" });
+    expect(memory.isOwn("seeded", { dirty: true, value: { mode: "fresh" } })).toBe(false);
+    expect(memory.isOwn("seeded", { dirty: true, value: { mode: "mine" } })).toBe(true);
+  });
+
+  test("a cleared memory forgets every edit and seed", () => {
+    const memory = createPresetMemory();
+    memory.noteEdit("edited");
+    memory.noteSeed("seeded", "plain");
+    memory.clear();
+    expect(memory.isOwn("edited", { dirty: false, value: "" })).toBe(false);
+    expect(memory.isOwn("seeded", { dirty: true, value: "plain" })).toBe(true);
+  });
+
+  test("a target is read on its turn, after the seeds before it were written", () => {
+    const target = form({ settings: { a: "typed" } });
+    const preset: FieldDescriptor = {
+      name: "kind",
+      prefill: () => ({ settings: { a: "seeded", b: 1 }, "settings.a": "again" }),
+      prefillPreserveDirty: true,
+      prefillReplace: ["settings"],
+    };
+    expect(seed(preset, target)).toEqual(["settings", "settings.a"]);
+    expect(target.reads).toEqual([["settings.a", "seeded"]]);
+    expect(target.values).toEqual({ settings: { a: "again", b: 1 } });
+  });
 });

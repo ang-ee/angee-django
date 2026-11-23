@@ -48,12 +48,36 @@ export function applyAppearanceRoot({ themeId, colorScheme, tokens = {}, target 
   for (const [name, value] of Object.entries(tokens)) root.style.setProperty(name, value);
 }
 
+/**
+ * What a document wears, from the build's appearance payload: the host's theme,
+ * its forced or system color scheme and its token layers, unless a choice says
+ * otherwise. A named theme is worn with its own default tokens; one that is not
+ * installed cannot be worn, so the host's is. The one resolution shared by the
+ * first-paint bootstrap and by a document outside the app.
+ */
+export function resolveAppearance(payload, { themeId, colorSchemePreference = payload.host.colorScheme, tokenLayers, prefersDark } = {}) {
+  const installed = (id) => payload.catalogue.themes.find((theme) => theme.id === id);
+  const worn = themeId === undefined || (themeId !== null && themeId !== payload.host.themeId && !installed(themeId))
+    ? payload.host.themeId
+    : themeId;
+  const colorScheme = colorSchemePreference === "system" ? prefersDark?.() ? "dark" : "light" : colorSchemePreference;
+  const layers = tokenLayers ?? (worn === payload.host.themeId ? payload.host.tokenLayers : installed(worn)?.defaultTokens);
+  return { themeId: worn, colorScheme, tokens: { ...layers?.shared, ...layers?.[colorScheme] } };
+}
+
+/** The data block a document carries its appearance payload in, where it runs no inline script. */
+export const APPEARANCE_PAYLOAD_ATTRIBUTE = "data-angee-appearance";
+
+/** Read the appearance payload a document carries as data; nothing when it carries none. */
+export function readAppearancePayload(target = document) {
+  const block = target.querySelector(`script[${APPEARANCE_PAYLOAD_ATTRIBUTE}]`);
+  return block ? JSON.parse(block.textContent ?? "null") : null;
+}
+
 /** Synchronous first paint; the app bundles this headless owner as an inline IIFE. */
 export function bootstrapAppearance(payload, target = globalThis) {
-  const themes = new Map(payload.catalogue.themes.map((theme) => [theme.id, theme]));
-  let themeId = payload.host.themeId;
-  let preference = payload.host.colorScheme;
-  let tokenLayers = null;
+  const themes = new Set(payload.catalogue.themes.map((theme) => theme.id));
+  let remembered = {};
   try {
     const encoded = target.localStorage.getItem(APPEARANCE_CACHE_KEY);
     if (encoded && encoded.length <= APPEARANCE_CACHE_LIMIT) {
@@ -68,21 +92,19 @@ export function bootstrapAppearance(payload, target = globalThis) {
         for (const layer of ["shared", "light", "dark"]) {
           assertTokenLayer(cached.tokenLayers?.[layer], `appearance cache.${layer}`);
         }
-        themeId = themes.get(cached.themeId)?.id ?? cached.themeId;
-        preference = cached.colorSchemePreference;
-        tokenLayers = cached.tokenLayers;
+        remembered = {
+          themeId: cached.themeId,
+          colorSchemePreference: cached.colorSchemePreference,
+          tokenLayers: cached.tokenLayers,
+        };
       }
     }
   } catch { /* Invalid or unavailable disposable storage falls back to the host. */ }
-  const colorScheme = preference === "system"
-    ? target.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
-    : preference;
-  const layers = tokenLayers ?? (themeId === payload.host.themeId
-    ? payload.host.tokenLayers
-    : themes.get(themeId)?.defaultTokens);
   applyAppearanceRoot({
-    themeId, colorScheme,
-    tokens: { ...layers?.shared, ...layers?.[colorScheme] },
+    ...resolveAppearance(payload, {
+      ...remembered,
+      prefersDark: () => target.matchMedia("(prefers-color-scheme: dark)").matches,
+    }),
     target: target.document,
   });
 }

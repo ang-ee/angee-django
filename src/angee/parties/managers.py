@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import defaultdict
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from enum import StrEnum
@@ -51,6 +51,7 @@ from django.db.models.functions import Coalesce, NullIf
 from django.db.models.lookups import Exact
 from django.utils import timezone
 from django.utils.crypto import salted_hmac
+from django.utils.encoding import punycode
 from phonenumbers import PhoneNumberMatcher
 from pydantic import ValidationError as PydanticValidationError
 from rebac import (
@@ -66,18 +67,30 @@ from rebac.resources import model_resource_type
 
 from angee.base.fields.identity import SqidField
 from angee.base.hooks import resolve_hooks
+from angee.base.identity import public_data_id_field
 from angee.base.lineage import concrete_child
 from angee.base.models.hierarchy import HierarchyQuerySet
 from angee.base.models.identity import instances_from_public_ids, public_id_for
+from angee.base.models.timestamps import auto_now_stamps
 from angee.base.models.trash import ArchiveQuerySet
 from angee.base.pagination import clamp_page_size
 from angee.base.permissions import actor_user_id, reader_queryset
 from angee.base.querysets import MergeableQuerySet, by_key, query_batch_size
+from angee.base.refs import generic_pointer_model
 from angee.base.serialization import canonical_json
+from angee.base.signals import MutedChanges, mute_changes, publish_change
 from angee.integrate.errors import IntegrationError
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager
 from angee.integrate.states import LinkStatus, StreamDirection
-from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedOrganization, ParsedPhoto
+from angee.parties.backends import (
+    CONTACTS,
+    AvatarReport,
+    ParsedAddress,
+    ParsedContact,
+    ParsedOrganization,
+    ParsedPhoto,
+    payload_created_at,
+)
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.provenance.context import changeset
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
@@ -232,11 +245,24 @@ class _HandleSenderName(TypedDict):
     _sender_name: str
 
 
+class SelectionDuplicateSets(NamedTuple):
+    """The duplicate sets among records a person selected (:meth:`PartyManager.selection_duplicate_sets`)."""
+
+    sets: tuple[tuple[str, ...], ...]
+    """Each set's members by public id, as selected; a set over the member cap is kept whole, and refused."""
+    left_out: int
+    """Selected records in no set: no duplicate of theirs is selected (or they are not the reader's to read)."""
+    explicit: bool = False
+    """No pair was found among three to ten selected records: the whole selection is one set, as selected."""
+
+
 class SameAsReviewCounts(NamedTuple):
     """How many pairs a reader may review, and how many are certain (:meth:`PartyManager.same_as_review_counts`)."""
 
     pairs: int
     certain: int
+    capped: bool = False
+    """The count stopped at its cap: more pairs than ``pairs``, and possibly more certain ones."""
 
 
 class HolderRepair(NamedTuple):
@@ -355,11 +381,25 @@ class HandleQuerySet[HandleT: Handle](MergeableQuerySet[HandleT], AngeeHistoryQu
 _HandleManagerBase = AngeeHistoryManager.from_queryset(HandleQuerySet)
 
 
+class KeyRepair(NamedTuple):
+    """What a key repair did (:meth:`HandleManager.renormalize_handles`)."""
+
+    saved: int
+    """Rows whose comparison key was saved again, with the rule's version beside it."""
+    failed: int = 0
+    """Rows whose save raised: logged, left as they were, and still behind."""
+    remaining: int = 0
+    """Rows still behind when the run ended: the failed ones, and those a capped run did not reach."""
+
+
 class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
     """Factory + upsert for handles (the contact-point write path)."""
 
     REPAIR_LIMIT: ClassVar[int] = 500
-    """The most holders one holder repair writes by default (``resolve_stale_owners``); the next run continues."""
+    """The most holders one holder repair writes by default (``resolve_stale_owners``); the next run continues.
+
+    Also the most rows the key repair saves in one transaction (``renormalize_handles``), which has no cap of its own.
+    """
 
     def for_user(self, user: Any) -> Any:
         """Return the account's self-claimed handle for internal attribution."""
@@ -419,8 +459,8 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             raise TypeError("Handle control must be written through claim_control().")
         if {"party", "party_id", "party_link_confirmed"}.intersection(fields):
             raise TypeError("Handle.party is resolved from statements: state it with Party.objects.assert_handle().")
-        if "normalized_value" in fields:
-            raise TypeError("Handle.normalized_value is maintained by Handle.save().")
+        if {"normalized_value", "normalized_version"}.intersection(fields):
+            raise TypeError("Handle.normalized_value and its version are maintained by Handle.save().")
         normalized_value = self.model.normalize_value(platform, value)
         external_id = str(fields.get("external_id") or "")
         for name, identifier in {
@@ -803,6 +843,70 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             remaining += stale.count()
         return repair._replace(resolved=resolved, remaining=remaining)
 
+    def renormalize_handles(self, *, limit: int | None = None) -> KeyRepair:
+        """Save again every comparison key computed under another version of its rule; return what the run did.
+
+        ``normalized_value`` is what ``Handle.normalize_value`` gave when a row
+        was last saved, and ``normalized_version`` the version the rule had then.
+        A change of the rule (``Handle.NORMALIZATION_VERSION``) leaves stored keys
+        behind, the lookups that read keys miss those rows, and a writer that
+        misses a row makes a second one. So a run takes the whole backlog;
+        ``limit`` is for an operator who wants a share of it, the most rows the
+        run saves. The run selects the rows whose version is not the rule's, of
+        every platform, by the version's index: an earlier one, 0 for a row
+        stored before the rule had a version, or a later one that newer code
+        wrote before a rollback. Each is read again under its lock and saved
+        through the handle's own save, which derives the key and writes both key
+        columns together, so a row whose key is already what the rule gives has
+        it written again unchanged beside its version and leaves the selection.
+        ``value`` is never written, ``updated_at`` is stamped as every save of an
+        audited row stamps it, and the row's history records the save as any
+        other.
+
+        Rows are taken in key batches of at most :attr:`REPAIR_LIMIT`, each batch
+        in its own transaction, so an interrupted run keeps what it saved and
+        the next one resumes. The run ends because every batch starts after the
+        last key the run selected, whatever became of that row: no row is
+        selected twice in one run. A row deleted before its lock is not there to
+        save, one another process saved meanwhile is read at the rule's version
+        and skipped, and a save that raises is rolled back to its own savepoint,
+        logged with its traceback and counted in ``failed``. That row stays
+        behind for the next run and the rest of the backlog is still saved. With
+        nothing behind, the selection is the one query the repair issues. Named
+        system work. Idempotent.
+        """
+
+        version = self.model.NORMALIZATION_VERSION
+        # A range on either side of the version uses its index; a plain inequality would not.
+        behind = self.model._base_manager.filter(
+            Q(normalized_version__lt=version) | Q(normalized_version__gt=version)
+        ).order_by("pk")
+        size = min(query_batch_size(behind), self.REPAIR_LIMIT)
+        saved = failed = 0
+        last: Any = None
+        with system_context(reason="parties.handle.renormalize"):
+            while limit is None or saved < limit:
+                reach = size if limit is None else min(size, limit - saved)
+                batch = behind if last is None else behind.filter(pk__gt=last)
+                keys = list(batch.values_list("pk", flat=True)[:reach])
+                if not keys:
+                    # Every row that was behind has been selected once: the failed ones are what is left.
+                    return KeyRepair(saved, failed, remaining=failed)
+                last = keys[-1]
+                with transaction.atomic():
+                    for handle in self.filter(pk__in=keys).order_by("pk").lock_if_supported():
+                        if handle.normalized_version == version:
+                            continue
+                        try:
+                            with transaction.atomic():
+                                handle.save(update_fields=["normalized_value", "normalized_version"])
+                        except Exception:  # noqa: BLE001 -- one row never stops the backlog; it is logged and counted.
+                            logger.exception("The comparison key of handle %s could not be saved again.", handle.pk)
+                            failed += 1
+                        else:
+                            saved += 1
+            return KeyRepair(saved, failed, remaining=behind.count())
+
     def fill_avatar(self, report: AvatarReport) -> bool:
         """Set the avatar a source reports on its handle; return whether it changed.
 
@@ -883,6 +987,61 @@ class PartyStatementQuerySet[StatementT: PartyStatementMixin](StatementQuerySet[
                 | Q(source_kind__in=(SourceKind.DIRECTORY, SourceKind.PERSON)),
             )
         )
+
+    def standing(self) -> Self:
+        """Each party's strongest current stance on a handle, where it asserts a value: the claims that still stand.
+
+        One row per party and handle (:meth:`members`). A claim stands whatever
+        its confidence: a stance its source withdrew or a merge superseded makes
+        nothing stand, and a person's dismissal outranks every claim. A caller
+        that asks only who still claims what reads no evidence;
+        :meth:`standing_claims` adds the records behind each.
+        """
+
+        return self.members().filter(status=self.model.StatementStatus.ASSERTED, snak=self.model.StatementSnak.VALUE)
+
+    def standing_claims(self) -> dict[tuple[Any, Any], frozenset[EvidenceReference]]:
+        """Return the handle claims among these statements that still stand, each with the records behind it.
+
+        Keyed by ``(party id, handle id)``, for the claims :meth:`standing`
+        answers. The records behind a standing claim are the evidence of each
+        current stance that asserts the handle for the party, whichever source
+        states it, and of the stances a merge folded under one of them: two
+        parties' claims by one source collapse into one when the parties merge,
+        and the records that carried the address for either still stand behind
+        it. Evidence is parsed here, reference by reference, for the caller to
+        compare in Python (``EvidenceReference.named_record`` says which record
+        a reference names): a party and a handle share a handful of stances, and
+        asking a database whether a JSON list contains an entry is not portable.
+        Narrow the statements first, by handle or by party.
+        """
+
+        stance = self.model
+        claims: dict[tuple[Any, Any], set[EvidenceReference]] = {
+            pair: set() for pair in self.standing().order_by().values_list("subject_id", "handle_id")
+        }
+        if not claims:
+            return {}
+        asserting = Q(status=stance.StatementStatus.ASSERTED, snak=stance.StatementSnak.VALUE)
+        stated = self.handles().filter(asserting).order_by()
+        folded = stance._base_manager.filter(
+            asserting,
+            Exists(
+                stated.filter(
+                    subject_id=OuterRef("subject_id"),
+                    handle_id=OuterRef("handle_id"),
+                    asserted_by=OuterRef("asserted_by"),
+                )
+            ),
+            aspect="handle",
+            superseded__isnull=False,
+            handle_id__in=stated.values("handle_id"),
+        )
+        for stances in (stated, folded):
+            for party_id, handle_id, evidence in stances.values_list("subject_id", "handle_id", "evidence"):
+                if (party_id, handle_id) in claims:
+                    claims[party_id, handle_id].update(EvidenceReference.model_validate(ref) for ref in evidence)
+        return {pair: frozenset(records) for pair, records in claims.items()}
 
 class EmailBasis(StrEnum):
     """How :meth:`PartyManager.people_for_emails` found a person for an email address."""
@@ -1023,6 +1182,10 @@ class DuplicateSetPreview:
     fills: tuple[MergeFieldValues, ...] = ()
     """The merge fields exactly one value is stated for, the rest empty, only for a set that merges:
     nothing to choose, the merge gives the survivor that value (``Party.merge_values``)."""
+    grouping: tuple[MergeFieldValues, ...] = ()
+    """For a set that merges, a row for each field the list grouped it by that is a text merge field,
+    whether or not its members differ, so a member that moved from its group shows even when all
+    moved alike; a relation, a date bucket or another field gets none."""
     digest: str = ""
     """For a set that merges, a keyed digest of everything the dialog shows of it, the fills
     included, which the merge compares under its lock (:meth:`PartyManager.merge_duplicates`)."""
@@ -1058,7 +1221,12 @@ class SamePersonLink(NamedTuple):
 
 
 def _age(party: Any) -> tuple[Any, Any]:
-    """A party's place in a merge: the oldest record survives, then key order."""
+    """A party's place in a merge: the oldest record survives, then key order.
+
+    Its age is its ``created_at``: the earliest time its provenance states, a
+    source's creation time included (``Party.backdate_creation``), so the record
+    its sources have known longest survives, not the one imported here first.
+    """
 
     return party.created_at, party.pk
 
@@ -1224,61 +1392,61 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         person = person_model._base_manager.select_related("user").filter(pk=party_id).first()
         return person.user if person is not None and person.user_id is not None else None
 
+    REVIEW_WINDOW: ClassVar[int] = 20
+    """The fewest pairs one window of the review walk judges (:meth:`review_walk`)."""
+
     def same_as_pairs(
         self, *, limit: int | None = 50, parties: Collection[Any] | None = None, after: str | None = None,
     ) -> list[SameAsPair]:
         """The resolved value pairs the reader may review, in key order: at most ``limit`` after ``after``.
 
         A pair is the reader's to review when they read both endpoints and every
-        handle its evidence cites. Which pairs those are is decided for every pair
-        at once, in a fixed number of queries whatever their number, and only the
-        page's pairs are then read in full. The order is the pair rows' own key, so
+        handle its evidence cites. The pairs are walked window by window after the
+        cursor (:meth:`review_walk`) until the page is full or they end, and only
+        the page's pairs are read in full. The order is the pair rows' own key, so
         ``after`` (a pair's ``id``, the last of the previous page) continues past it
         however many pairs left the list meanwhile, a merged or kept-apart pair
         included: no page skips or repeats a pair. A caller's page is at most 101;
-        ``limit=None`` reads every pair, for the owners that judge them all.
-        ``parties`` narrows the read to pairs whose both endpoints are among those keys.
+        ``limit=None`` reads every pair. ``parties`` narrows the read to pairs whose
+        both endpoints are among those keys.
         """
 
         if limit is not None:
             limit = max(0, min(int(limit), 101))
             if not limit:
                 return []
+        page: list[tuple[Any, tuple[Any, ...]]] = []
+        for window, _examined in self.review_walk(parties=parties, after=after, size=2 * (limit or 0)):
+            page.extend(window)
+            if limit is not None and len(page) >= limit:
+                break
+        return self.review_pairs(page if limit is None else page[:limit])
+
+    def review_walk(
+        self, *, parties: Collection[Any] | None = None, after: str | None = None, size: int = 0,
+    ) -> Iterator[tuple[list[tuple[Any, tuple[Any, ...]]], int]]:
+        """Walk the reader's review pairs after ``after`` in key order, one window at a time.
+
+        Each step yields the window's pairs the reader may review, each with the
+        handles its evidence cites, and how many pairs the window judged. The
+        reader's read of both endpoints and the cursor (``pk > after``) are SQL, so
+        a window holds only pairs whose parties the reader reads; a window of at
+        least ``size`` pairs (and :attr:`REVIEW_WINDOW`) then reads their first
+        applied statements and every handle those cite, through the reader, and
+        leaves out a pair citing a handle the reader may not read. The walk is not
+        capped: a caller stops when it has what it needs, so every pair stays
+        reachable. Its cost is a few reads per window, flat for a reader who reads
+        the cited handles. The residual worst case: a reader who reads both
+        endpoints of a long run of pairs but not their cited handles walks that run.
+        """
+
+        actor, unscoped = self.effective_actor(strict=True)
         pair_model = self.model.same_as.model
         start = None
         if after is not None:
             start = cast(SqidField, pair_model._meta.get_field("sqid")).public_id_to_value(after)
             if start is None:
                 raise ValidationError({"after": "No such pair."})
-        reviewable = [entry for entry in self._reviewable_pairs(parties) if start is None or entry[0] > start]
-        page = reviewable if limit is None else reviewable[:limit]
-        if not page:
-            return []
-        actor, unscoped = self.effective_actor(strict=True)
-        endpoints = self.canonical() if unscoped else self.canonical().with_display_avatars(actor)
-        rows = pair_model._base_manager.prefetch_related(
-            *(Prefetch(side, queryset=endpoints) for side in ("left", "right")),
-        ).in_bulk([pk for pk, _cited in page])
-        return [
-            SameAsPair(
-                rows[pk].left, rows[pk].right, cited[0].normalized_value if cited else "", cited,
-                id=pair_model.public_id_from_pk(pk),
-            )
-            for pk, cited in page
-            if pk in rows
-        ]
-
-    def _reviewable_pairs(self, parties: Collection[Any] | None) -> list[tuple[Any, tuple[Any, ...]]]:
-        """Every pair the reader may review, in key order, with the handles its evidence cites (:meth:`same_as_pairs`).
-
-        Three reads whatever the number of pairs: the first applied statement of each
-        pair whose endpoints the reader reads, and every handle those statements
-        cite, through the reader. A pair citing a handle the reader may not read is
-        left out.
-        """
-
-        actor, unscoped = self.effective_actor(strict=True)
-        pair_model = self.model.same_as.model
         visible = self.canonical().scoped_for_aggregate().values("pk")
         statements = pair_model.statements.applied()
         statements = statements.sudo(reason="parties.same_as_pairs") if unscoped else statements.with_actor(actor)
@@ -1286,31 +1454,70 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
             pair_model._base_manager.filter(left_id__in=Subquery(visible), right_id__in=Subquery(visible))
             .untrashed()
             .filter(Q() if parties is None else Q(left_id__in=list(parties), right_id__in=list(parties)))
+            .filter(Exists(statements.filter(subject_id=OuterRef("pk"))))
+            .order_by("pk")
         )
-        cited: dict[Any, list[EvidenceReference]] = {}
-        for subject_id, evidence in (
-            statements.filter(subject_id__in=Subquery(pairs.values("pk")))
-            .order_by("subject_id", "pk")
-            .values_list("subject_id", "evidence")
-        ):
-            cited.setdefault(subject_id, [
-                ref for value in evidence
-                if (ref := EvidenceReference.model_validate(value)).model.lower() == "parties.handle"
-            ])
         handle_model = apps.get_model("parties", "Handle")
         handles = (
             handle_model.objects.sudo(reason="parties.same_as_pairs")
             if unscoped
             else handle_model.objects.with_actor(actor)
         )
-        readable = instances_from_public_ids(
-            handle_model, {ref.id for refs in cited.values() for ref in refs}, queryset=handles,
-        )
-        return [
-            (pk, tuple(readable[ref.id] for ref in refs))
-            for pk, refs in sorted(cited.items(), key=lambda item: item[0])
-            if all(ref.id in readable for ref in refs)
-        ]
+        size = max(size, self.REVIEW_WINDOW)
+        while True:
+            window = list(
+                (pairs if start is None else pairs.filter(pk__gt=start)).values_list("pk", flat=True)[:size]
+            )
+            if not window:
+                return
+            start = window[-1]
+            cited: dict[Any, list[EvidenceReference]] = {}
+            for subject_id, evidence in (
+                statements.filter(subject_id__in=window)
+                .order_by("subject_id", "pk")
+                .values_list("subject_id", "evidence")
+            ):
+                cited.setdefault(subject_id, [
+                    ref for value in evidence
+                    if (ref := EvidenceReference.model_validate(value)).model.lower() == "parties.handle"
+                ])
+            readable = instances_from_public_ids(
+                handle_model, {ref.id for refs in cited.values() for ref in refs}, queryset=handles,
+            )
+            yield [
+                (pk, tuple(readable[ref.id] for ref in cited[pk]))
+                for pk in window
+                if pk in cited and all(ref.id in readable for ref in cited[pk])
+            ], len(window)
+            if len(window) < size:
+                return
+
+    def review_pairs(self, entries: Sequence[tuple[Any, tuple[Any, ...]]]) -> list[SameAsPair]:
+        """Read these walked pairs (:meth:`review_walk`) in full, endpoints included, in their order.
+
+        The walk and this read are separate statements: a pair whose party was
+        merged away or trashed between them (its endpoint no longer canonical) is
+        moot and left out, never read through a missing relation.
+        """
+
+        if not entries:
+            return []
+        actor, unscoped = self.effective_actor(strict=True)
+        pair_model = self.model.same_as.model
+        rows = pair_model._base_manager.in_bulk([pk for pk, _cited in entries])
+        endpoints = self.canonical() if unscoped else self.canonical().with_display_avatars(actor)
+        parties = endpoints.in_bulk({pk for row in rows.values() for pk in (row.left_id, row.right_id)})
+        pairs = []
+        for pk, cited in entries:
+            row = rows.get(pk)
+            left = parties.get(row.left_id) if row is not None else None
+            right = parties.get(row.right_id) if row is not None else None
+            if left is None or right is None:
+                continue
+            pairs.append(SameAsPair(
+                left, right, cited[0].normalized_value if cited else "", cited, id=pair_model.public_id_from_pk(pk),
+            ))
+        return pairs
 
 
 _PartyManagerBase = AngeeHistoryManager.from_queryset(PartyQuerySet)
@@ -1794,6 +2001,182 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 evidence=refs,
             )
 
+    def claimant_as_system(
+        self,
+        *,
+        email: str = "",
+        phone: str = "",
+        display_name: str = "",
+        given_name: str = "",
+        family_name: str = "",
+        evidence: Any,
+        own: models.QuerySet[Any],
+        owner_id: Any = None,
+        reason: str,
+    ) -> tuple[Any, Any | None, Any | None]:
+        """Return the person a source makes of a contact its record carried, with their email and phone handles.
+
+        Each source creates its own people. ``evidence`` is the caller's record
+        that carried the contact. Which records are the caller's own is the
+        caller's rule, and ``own`` carries it: a queryset of them, the record
+        links of its integration. The email decides, and a contact without one
+        is decided by its number. The person found again is one whose standing
+        claim on a handle of that address has a row of ``own`` behind it
+        (:meth:`PartyStatementQuerySet.standing_claims`), never one a column
+        names: another spelling of the address is the same address, a trashed
+        person is nobody's answer, a merged one is found as its survivor
+        (``Party.canonical_ids``), and of several the earliest. Nobody else's
+        person is taken, whoever holds or claims the address, an account's own
+        person included; otherwise a new ``Person`` is made, named as given
+        (``Party.PLACEHOLDER_NAME`` without a name) and created by ``owner_id``.
+        A contact with neither finds nobody again. An email that cannot be an
+        address at all (``Handle.is_email_address``) is no address, and a number
+        the handle owner reads nothing in, or refuses, is no number: each is
+        left out, so two contacts that gave the same non-address are never one
+        person for it.
+
+        Nothing is stated in full. Each returned handle the person does not hold
+        is recorded as a claim for review with ``evidence`` behind it
+        (:meth:`propose_claimed_handle_as_system`): it decides nothing and moves
+        nothing away from whoever holds the address. A claim gains one evidence
+        reference per record that carried the address, deduplicated, which is how
+        the next record finds the person. A person found again has nothing new
+        stated of them: they carry a handle only when they hold it or a row of
+        ``own`` stands behind their claim on it, since a number given beside a
+        known address may be someone else's. A new person's number is known or
+        made.
+
+        The rows of the address and of the number, the parties they name and
+        their statements are locked in one :meth:`lock_identity_rows` call before
+        any claim is read, so two callers that meet a new address decide one
+        after the other and no claim read here changes before it is written. The
+        whole verb is named system work under ``reason``, in one transaction: the
+        caller's own gate admitted its record, so no actor is checked.
+
+        It proposes no same-person pair, and no caller needs to: a claim links
+        its person to the address (:attr:`LINKING_RULES`), so the scheduled
+        pairing pass (:meth:`reconcile_same_as` over :meth:`same_person_links`)
+        proposes the claimant and whoever else is linked to it for a person's
+        review.
+
+        Returns ``(person, email handle, phone handle)``; a handle is ``None``
+        where the contact has none or the person may not carry it.
+        """
+
+        if not reason.strip():
+            raise ValueError("A system claimant requires a named reason.")
+        if not isinstance(evidence, own.model):
+            raise TypeError("A claimant's evidence is a record of the caller's own kind.")
+        handle_model = apps.get_model("parties", "Handle")
+        person_model = apps.get_model("parties", "Person")
+        platforms = handle_model.Platform
+        name = " ".join(display_name.split()) or " ".join(f"{given_name} {family_name}".split())
+        address = email.strip() if handle_model.is_email_address(email) else ""
+        number = phone.strip() if handle_model.normalize_value(platforms.PHONE, phone) else ""
+        with system_context(reason=reason), transaction.atomic():
+            emails = self._address_handles(platforms.EMAIL, address)
+            if address and not emails:
+                emails = [
+                    handle_model.objects.upsert(
+                        platform=platforms.EMAIL, value=address, display_name=name, created_by_id=owner_id
+                    )
+                ]
+            numbers = self._address_handles(platforms.PHONE, number)
+            locked, _parties = self.lock_identity_rows(
+                party_ids=(), handle_ids=[row.pk for row in (*emails, *numbers)]
+            )
+            emails, numbers = [locked[row.pk] for row in emails], [locked[row.pk] for row in numbers]
+            stated = self.handle_statements().filter(handle__in=[*emails, *numbers]).standing_claims()
+            survivors = apps.get_model("parties", "Party").canonical_ids({party_id for party_id, _handle in stated})
+            claims: defaultdict[tuple[Any, Any], frozenset[EvidenceReference]] = defaultdict(frozenset)
+            for (party_id, handle_id), records in stated.items():
+                if party_id in survivors:
+                    claims[survivors[party_id], handle_id] |= records
+
+            # One read of ``own`` says which of these claims are the caller's, however many parties claim the rows.
+            vouched = self._vouched(claims, own)
+
+            def carried(person_id: Any, rows: Sequence[Any]) -> Any | None:
+                held = next((row for row in rows if row.party_id == person_id), None)
+                return held or next((row for row in rows if (person_id, row.pk) in vouched), None)
+
+            deciding = {row.pk for row in (emails if address else numbers)}
+            claimants = {party_id for party_id, handle_id in vouched if handle_id in deciding}
+            person = person_model._base_manager.filter(pk__in=claimants, is_trashed=False).order_by("pk").first()
+            if person is not None:
+                email_handle, phone_handle = carried(person.pk, emails), carried(person.pk, numbers)
+            else:
+                person = person_model.objects.create(
+                    display_name=name or person_model.PLACEHOLDER_NAME,
+                    given_name=given_name.strip(),
+                    family_name=family_name.strip(),
+                    created_by_id=owner_id,
+                )
+                email_handle = emails[0] if emails else None
+                phone_handle = numbers[0] if numbers else None
+                if phone_handle is None and number:
+                    try:
+                        phone_handle = handle_model.objects.upsert(
+                            platform=platforms.PHONE, value=number, created_by_id=owner_id
+                        )
+                    except ValidationError:
+                        phone_handle = None
+            for handle in (email_handle, phone_handle):
+                if handle is not None and handle.party_id != person.pk:
+                    # The record that carried the address stands behind the claim: the first one, and each after it.
+                    self.propose_claimed_handle_as_system(person, handle, evidence=evidence, reason=reason)
+            return person, email_handle, phone_handle
+
+    @staticmethod
+    def _address_handles(platform: str, value: str) -> list[Any]:
+        """Return the handle rows of ``value`` on ``platform``, every spelling of it, oldest first.
+
+        A row merged away is left out: its survivor is the address's row, and a
+        claim stated on a redirect would link nobody.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        if not value:
+            return []
+        return list(
+            handle_model._base_manager.filter(
+                platform=platform,
+                normalized_value=handle_model.normalize_value(platform, value),
+                merged_into__isnull=True,
+            ).order_by("pk")
+        )
+
+    @staticmethod
+    def _vouched(
+        claims: Mapping[tuple[Any, Any], Collection[EvidenceReference]], own: models.QuerySet[Any]
+    ) -> set[tuple[Any, Any]]:
+        """Return the claims a row of ``own`` stands behind, from one read of ``own`` by key for all of them.
+
+        A reference names a record by the model its generic pointers resolve to
+        and its public id (``EvidenceReference.named_record``, the one comparison
+        of which record a reference names), and the id decodes to the row's key
+        through the model's public id field. Only the keys the references name
+        are asked for, in batches within the database's parameter budget
+        (``by_key``), and only keys are read: ``own`` is never read as a whole,
+        and nothing is read when no reference is of its model.
+        """
+
+        model = generic_pointer_model(own.model)
+        field = public_data_id_field(model)
+        named: dict[tuple[Any, Any], set[Any]] = {}
+        for claim, references in claims.items():
+            for reference in references:
+                label, public_id = reference.named_record
+                if label != model._meta.label_lower:
+                    continue
+                key = field.public_id_to_value(public_id) if field else model._meta.pk.to_python(public_id)
+                if key is not None:
+                    named.setdefault(claim, set()).add(key)
+        ours: set[Any] = set()
+        for batch in by_key(own.order_by(), sorted(set().union(*named.values()))):
+            ours.update(batch.values_list("pk", flat=True))
+        return {claim for claim, keys in named.items() if keys & ours}
+
     def suggest_for(self, handle: Any) -> Any:
         """Propose a party for a freshly-seen, unresolved ``handle`` (the EMAIL_MATCH producer).
 
@@ -1801,7 +2184,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         pair: indexed normalized twins contribute distinct candidate parties (the
         first at ``1.0``, which decides the handle's party, competing parties at ``0.3`` for
         review); otherwise an email whose non-generic domain matches a tracked
-        :attr:`Organization.domain` contributes a rule suggestion at ``0.4``;
+        :attr:`Organization.domain` contributes a rule suggestion at ``0.4``,
+        both domains read in the one spelling ``Handle.normalize_email_domain``
+        gives, so a punycode and a Unicode spelling match;
         otherwise no-op. Both branches stay inside the partition of the handle's
         creator: handles that user created and parties that user owns. Public
         mailbox-provider domains never imply organization membership. Returns the
@@ -1843,16 +2228,25 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         if strongest is not None:
             return strongest
         if handle.platform == handle_model.Platform.EMAIL and "@" in handle.normalized_value:
-            domain = handle.normalized_value.rsplit("@", 1)[1]
+            domain = handle_model.normalize_email_domain(handle.normalized_value.rsplit("@", 1)[1])
             organization_model = apps.get_model("parties", "Organization")
-            org = (
-                organization_model.objects.filter(
-                    owner_id=handle.created_by_id,
-                    domain__iexact=domain,
-                ).first()
-                if domain and domain not in GENERIC_EMAIL_DOMAINS
-                else None
-            )
+            org = None
+            if domain and domain not in GENERIC_EMAIL_DOMAINS:
+                # An organization's domain is stored as typed, in either spelling: read both, compare by the one rule.
+                spelled = Q(domain__iexact=domain)
+                if not domain.isascii():
+                    try:
+                        spelled |= Q(domain__iexact=punycode(domain))
+                    except UnicodeError:
+                        pass
+                org = next(
+                    (
+                        row
+                        for row in organization_model.objects.filter(spelled, owner_id=handle.created_by_id)
+                        if handle_model.normalize_email_domain(row.domain) == domain
+                    ),
+                    None,
+                )
             if org is not None:
                 return self.assert_handle(
                     org,
@@ -2411,33 +2805,116 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         """The certain pairs awaiting ``actor``'s review that ``actor`` may merge in a batch, at most ``limit``.
 
         The batch is the first certain pairs (:meth:`certain_pairs`) of ``actor``'s
-        review list (:meth:`PartyQuerySet.same_as_pairs`) after ``after`` (the last
-        pair of the previous batch), in its order, at most :attr:`BATCH_SETS`: the
-        Review page's source for a batch merge, whose sets :meth:`merge_duplicates`
-        re-checks. The next batch continues past the last one, so a pair a batch
-        left unmerged is offered again only once the list starts over.
+        review list after ``after`` (the last pair of the previous batch), in its
+        order, at most :attr:`BATCH_SETS`: the Review page's source for a batch
+        merge, whose sets :meth:`merge_duplicates` re-checks. The review walk
+        (:meth:`PartyQuerySet.review_walk`) goes on window by window until the batch
+        is full or the pairs end, so the next batch continues past the last one and
+        every certain pair is reached.
         """
 
         limit = max(0, min(int(limit), self.BATCH_SETS))
         if not limit:
             return []
-        review = apps.get_model("parties", "Party")._default_manager.with_actor(actor).same_as_pairs(
-            limit=None, after=after,
+        readable = apps.get_model("parties", "Party")._default_manager.with_actor(actor)
+        batch: list[CertainSameAsPair] = []
+        for window, _examined in readable.review_walk(after=after, size=2 * limit):
+            batch.extend(self.certain_pairs(readable.review_pairs(window), actor=actor))
+            if len(batch) >= limit:
+                break
+        return batch[:limit]
+
+    SELECTION_LIMIT: ClassVar[int] = 1000
+    """The most records one ungrouped selection may hand :meth:`selection_duplicate_sets`."""
+
+    def selection_pairs(self, *, actor: Any, parties: Collection[Any]) -> list[tuple[Any, Any]]:
+        """Which two of these selected parties are one: the rule a selection's duplicate sets follow.
+
+        Two selected parties are one when ``actor`` may review a same-person pair
+        between them, by the review read's own scope and rules
+        (:meth:`PartyQuerySet.review_walk`): a proposed pair, certain or not, that no
+        person kept apart, whose parties ``actor`` reads and whose cited handles
+        ``actor`` reads. Whatever else should make two selected records one belongs here.
+        """
+
+        readable = apps.get_model("parties", "Party")._default_manager.with_actor(actor)
+        found: list[tuple[Any, Any]] = []
+        for window, _examined in readable.review_walk(parties=parties, size=500):
+            found.extend((pair.left.pk, pair.right.pk) for pair in readable.review_pairs(window))
+        return found
+
+    def selection_duplicate_sets(self, *, actor: Any, ids: Sequence[str]) -> SelectionDuplicateSets:
+        """The duplicate sets among records a person selected on an ungrouped list, under ``actor``'s own read.
+
+        The pairs between selected records (:meth:`selection_pairs`) join them; each
+        connected group is a set, a group over :attr:`SET_MEMBERS` kept whole, so the
+        merge refuses it with its reason rather than splitting what the person never
+        split. Selected records in no set are counted as left out. Three to ten
+        selected records with no pair among them are one explicit set, as selected:
+        the only way to merge records the system never paired. At most
+        :attr:`SELECTION_LIMIT` records.
+        """
+
+        named = list(dict.fromkeys(str(pk) for pk in ids))
+        if len(named) > self.SELECTION_LIMIT:
+            raise ValidationError(
+                {"ids": f"Select at most {self.SELECTION_LIMIT:,} records; {len(named):,} are selected."}
+            )
+        party_model = apps.get_model("parties", "Party")
+        found = instances_from_public_ids(party_model, named, queryset=party_model._default_manager.with_actor(actor))
+        public = {row.pk: public_id for public_id, row in found.items()}
+        root = {pk: pk for pk in public}
+
+        def find(pk: Any) -> Any:
+            while root[pk] != pk:
+                root[pk] = root[root[pk]]
+                pk = root[pk]
+            return pk
+
+        for left, right in self.selection_pairs(actor=actor, parties=list(public)):
+            root[find(left)] = find(right)
+        groups: defaultdict[Any, list[Any]] = defaultdict(list)
+        for pk in sorted(public):
+            groups[find(pk)].append(pk)
+        sets = tuple(
+            tuple(public[pk] for pk in members)
+            for members in sorted(groups.values(), key=lambda members: members[0])
+            if len(members) > 1
         )
-        return self.certain_pairs(review, actor=actor)[:limit]
+        if not sets and 3 <= len(named) <= self.SET_MEMBERS:
+            return SelectionDuplicateSets((tuple(named),), 0, explicit=True)
+        return SelectionDuplicateSets(sets, len(named) - sum(len(members) for members in sets))
 
-    def same_as_review_counts(self, *, actor: Any) -> SameAsReviewCounts:
-        """How many pairs ``actor`` may review and how many of those are certain, in a fixed number of reads."""
+    REVIEW_COUNT_CAP: ClassVar[int] = 1000
+    """The most pairs the Review page's totals count exactly (:meth:`same_as_review_counts`)."""
 
-        review = apps.get_model("parties", "Party")._default_manager.with_actor(actor).same_as_pairs(limit=None)
-        return SameAsReviewCounts(len(review), len(self.certain_pairs(review, actor=actor)))
+    def same_as_review_counts(self, *, actor: Any, cap: int | None = None) -> SameAsReviewCounts:
+        """How many pairs ``actor`` may review and how many of those are certain, counted up to a cap.
+
+        One review walk in the same scope as the rows counts the reviewable pairs
+        until it holds more than ``cap`` (:attr:`REVIEW_COUNT_CAP`) or they end, and
+        the certain pairs among the first ``cap`` of them. ``capped`` says the walk
+        stopped at the cap: then there are more than ``cap`` pairs, and the certain
+        count covers the first ``cap`` only, so more may be certain.
+        """
+
+        cap = self.REVIEW_COUNT_CAP if cap is None else max(0, int(cap))
+        readable = apps.get_model("parties", "Party")._default_manager.with_actor(actor)
+        counted: list[tuple[Any, tuple[Any, ...]]] = []
+        for window, _examined in readable.review_walk(size=500):
+            counted.extend(window)
+            if len(counted) > cap:
+                break
+        capped = len(counted) > cap
+        certain = self.certain_pairs(readable.review_pairs(counted[:cap]), actor=actor)
+        return SameAsReviewCounts(min(len(counted), cap), len(certain), capped)
 
     def certain_pairs(self, review: Sequence[SameAsPair], *, actor: Any) -> list[CertainSameAsPair]:
         """The certain pairs among these review pairs, each with its survivor: the one definition of certain.
 
         A pair is certain when both are people and neither is an account's own
         person, ``actor`` may merge both in a batch (``batch_merge``: an active
-        person account that writes them), both bear a real name that is none of the
+        person account that may merge each away), both bear a real name that is none of the
         pair's cited addresses (``Party.names_an_address``) and equals the other's
         but for case, accents and hyphens (``Party.comparable_name``), and exactly
         these two parties are linked to an address the pair cites
@@ -2487,10 +2964,11 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         ]
 
     def batch_mergeable(self, actor: Any, ids: Iterable[Any]) -> set[Any]:
-        """The parties among ``ids`` that ``actor`` may merge in a batch: an active person who writes them.
+        """The parties among ``ids`` that ``actor`` may merge in a batch: an active person who may merge them away.
 
-        The party's ``batch_merge`` permission (``write & person->active_member``),
-        so a service or agent account may merge none.
+        The party's ``batch_merge`` permission (``merge_away & person->active_member``),
+        so a service or agent account may merge none, and a contact manager, who
+        writes every party but merges none away, is offered none.
         """
 
         # Read on the party, the owner of the permission, whichever model's manager the caller used.
@@ -2499,7 +2977,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         return set(rows.values_list("pk", flat=True))
 
     def preview_duplicates(
-        self, *, actor: Any, sets: Sequence[Sequence[str]], certain: bool = False,
+        self,
+        *,
+        actor: Any,
+        sets: Sequence[Sequence[str]],
+        certain: bool = False,
+        groupings: Sequence[Sequence[str]] | None = None,
     ) -> list[DuplicateSetPreview]:
         """Each set of records ``actor`` confirms are one, as :meth:`merge_duplicates` would merge it now.
 
@@ -2510,12 +2993,16 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         person merges by hand on the compare page; ``actor`` may merge every one in
         a batch (:meth:`batch_mergeable`); and no two of them were kept apart by a
         person. With ``certain`` each set must also be a certain pair
-        (:meth:`certain_pairs`). The oldest member survives and the others fold
-        into it in key order. More than :attr:`BATCH_SETS` sets refuse the batch.
+        (:meth:`certain_pairs`). The oldest member survives (the earliest
+        ``created_at``, a source's creation time included: :func:`_age`) and the
+        others fold into it in key order. More than :attr:`BATCH_SETS` sets refuse
+        the batch. ``groupings`` names, per set, the fields a list grouped it by
+        (names only): each that is a text merge field gets a row
+        (:attr:`DuplicateSetPreview.grouping`).
         """
 
-        confirmed = self._confirmed_sets(sets)
-        return self._judge_sets(actor, confirmed, certain=certain)
+        confirmed = self._confirmed_sets(sets, groupings)
+        return self._judge_sets(actor, confirmed, certain=certain, groupings=groupings)
 
     def merge_duplicates(
         self,
@@ -2524,6 +3011,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         sets: Sequence[Sequence[str]],
         certain: bool = False,
         digests: Sequence[str] | None = None,
+        groupings: Sequence[Sequence[str]] | None = None,
     ) -> list[DuplicateSetOutcome]:
         """Merge each confirmed set of records into its oldest member as ``actor``'s merge; return every outcome.
 
@@ -2535,8 +3023,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         every Handle any of them holds or names are locked in one pass
         (``Party.lock_merge_records``), the set is judged again under those locks
         (:meth:`preview_duplicates`), and a set whose shown facts changed since the
-        preview (its ``digests`` entry, :attr:`DuplicateSetPreview.digest`, no
-        longer matches) is refused with :attr:`CHANGED_REASON`, as is a member that changed
+        preview (its ``digests`` entry, :attr:`DuplicateSetPreview.digest`, judged
+        with the same ``groupings``, no longer matches) is refused with
+        :attr:`CHANGED_REASON`, as is a member that changed
         since the person looked (merged elsewhere, trashed, kept apart from another)
         refuses the set rather than shrinking it. Then the others fold into the
         oldest in key order through ``Party.merge``, whose own permission and guards
@@ -2554,46 +3043,61 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         """
 
         party_model = apps.get_model("parties", "Party")
-        confirmed = self._confirmed_sets(sets)
+        confirmed = self._confirmed_sets(sets, groupings)
         if digests is not None and len(digests) != len(confirmed):
             raise ValidationError({"digests": "Send one digest for each set."})
         readable = self._readable_members(actor, confirmed)
         permitted = self.batch_mergeable(actor, sorted({row.pk for row in readable.values()}))
         outcomes = []
-        for index, ids in enumerate(confirmed):
-            if refusal := self._admission(ids, readable, permitted):
-                outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.REFUSED, reason=refusal))
-                continue
-            try:
-                with transaction.atomic():
-                    rows = instances_from_public_ids(party_model, ids, queryset=party_model._base_manager.all())
-                    if rows:
-                        party_model.lock_merge_records(sorted(rows.values(), key=lambda row: row.pk))
-                    (preview,) = self._judge_sets(actor, [ids], certain=certain)
-                    if preview.outcome is not None:
-                        outcomes.append(DuplicateSetOutcome(ids, preview.outcome, reason=preview.reason))
-                        continue
-                    if digests is not None and preview.digest != digests[index]:
-                        outcomes.append(
-                            DuplicateSetOutcome(ids, DuplicateMergeOutcome.REFUSED, reason=self.CHANGED_REASON)
+        # Each set's own writes would publish row by row as it ran, a stream of changes every viewer refetches on.
+        # The request's sets merge muted, collecting what they wrote, and every row a committed set wrote (its
+        # records, and what their merge re-pointed) is published once after the last, each through its own gate.
+        written = MutedChanges()
+        with mute_changes(collect=written):
+            for index, ids in enumerate(confirmed):
+                if refusal := self._admission(ids, readable, permitted):
+                    outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.REFUSED, reason=refusal))
+                    continue
+                try:
+                    with transaction.atomic():
+                        # The members the batch read before any lock (``_admission``) anchor the set's lock pass.
+                        party_model.lock_merge_records(sorted((readable[pk] for pk in ids), key=lambda row: row.pk))
+                        (preview,) = self._judge_sets(
+                            actor, [ids], certain=certain, groupings=None if groupings is None else [groupings[index]],
+                            permitted=permitted,
                         )
-                        continue
-                    survivor, *merged = preview.members
-                    kept = survivor.with_actor(actor).merge(
-                        records=[row.public_id for row in merged],
-                        fill_empty=True,
-                        confirmed_fields=self.BATCH_CONFIRMED_FIELDS,
-                    )
-            except (PermissionDenied, ValidationError) as error:
-                outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.REFUSED, reason=_refusal(error)))
-            except DatabaseError as error:
-                if _lock_conflict(error):
-                    outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.STOPPED, reason=self.STOPPED_REASON))
+                        if preview.outcome is not None:
+                            outcomes.append(DuplicateSetOutcome(ids, preview.outcome, reason=preview.reason))
+                            continue
+                        if digests is not None and preview.digest != digests[index]:
+                            outcomes.append(
+                                DuplicateSetOutcome(ids, DuplicateMergeOutcome.REFUSED, reason=self.CHANGED_REASON)
+                            )
+                            continue
+                        survivor, *merged = preview.members
+                        kept = survivor.with_actor(actor).merge(
+                            records=[row.public_id for row in merged],
+                            fill_empty=True,
+                            confirmed_fields=self.BATCH_CONFIRMED_FIELDS,
+                        )
+                        # The survivor gained the merged records even where its own row was not written: it is
+                        # collected with the set, so it is published once if the set commits.
+                        publish_change(survivor, action="update", update_fields=None)
+                except (PermissionDenied, ValidationError) as error:
+                    outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.REFUSED, reason=_refusal(error)))
+                except DatabaseError as error:
+                    if _lock_conflict(error):
+                        outcomes.append(
+                            DuplicateSetOutcome(ids, DuplicateMergeOutcome.STOPPED, reason=self.STOPPED_REASON)
+                        )
+                    else:
+                        logger.exception("parties.merge_duplicates: the database failed one set; nothing of it merged")
+                        outcomes.append(
+                            DuplicateSetOutcome(ids, DuplicateMergeOutcome.FAILED, reason=self.FAILED_REASON)
+                        )
                 else:
-                    logger.exception("parties.merge_duplicates: the database failed one set; nothing of it merged")
-                    outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.FAILED, reason=self.FAILED_REASON))
-            else:
-                outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.MERGED, survivor=kept))
+                    outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.MERGED, survivor=kept))
+        written.publish()
         return outcomes
 
     def _readable_members(
@@ -2627,16 +3131,31 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             return "Only an active person who may change every one of these records merges them in a batch."
         return ""
 
-    def _confirmed_sets(self, sets: Sequence[Sequence[str]]) -> list[tuple[str, ...]]:
+    def _confirmed_sets(
+        self, sets: Sequence[Sequence[str]], groupings: Sequence[Sequence[str]] | None = None,
+    ) -> list[tuple[str, ...]]:
         confirmed = [tuple(dict.fromkeys(str(pk) for pk in ids)) for ids in sets]
         if len(confirmed) > self.BATCH_SETS:
             raise ValidationError({"sets": f"Merge at most {self.BATCH_SETS} sets of records in one batch."})
+        if groupings is not None and len(groupings) != len(confirmed):
+            raise ValidationError({"groupings": "Name the grouping fields of each set, or of none."})
         return confirmed
 
     def _judge_sets(
-        self, actor: Any, confirmed: Sequence[tuple[str, ...]], *, certain: bool,
+        self,
+        actor: Any,
+        confirmed: Sequence[tuple[str, ...]],
+        *,
+        certain: bool,
+        groupings: Sequence[Sequence[str]] | None = None,
+        permitted: Collection[Any] | None = None,
     ) -> list[DuplicateSetPreview]:
-        """Judge every confirmed set against the live records in one batch of reads (:meth:`preview_duplicates`)."""
+        """Judge every confirmed set against the live records in one batch of reads (:meth:`preview_duplicates`).
+
+        ``permitted`` is the actor's batch permission (:meth:`batch_mergeable`) when
+        the caller asked it once for the whole batch, as :meth:`merge_duplicates`
+        does before any lock; ``Party.merge`` still checks write on every record.
+        """
 
         party_model = apps.get_model("parties", "Party")
         readable = party_model._default_manager.with_actor(actor)
@@ -2644,7 +3163,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         found = self._readable_members(actor, confirmed, statements=True)
         pks = sorted({row.pk for row in found.values()})
         people, organizations = self.party_kinds(pks)
-        permitted = self.batch_mergeable(actor, pks)
+        if permitted is None:
+            permitted = self.batch_mergeable(actor, pks)
         stance = party_model.same_as.model.statements.model
         # The same keep-apart decision ``StatementPairManager.kept_separate`` reads, for every pair of the sets at once.
         kept_apart = set(
@@ -2685,10 +3205,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 previews.append(DuplicateSetPreview(tuple(members), None))
         # Only a set the actor may merge discloses its members' values.
         differing = self._differing_fields(
-            actor, [preview.members if preview.outcome is None else () for preview in previews], people,
+            actor, [preview.members if preview.outcome is None else () for preview in previews], people, groupings,
         )
         judged = [
-            replace(preview, disagreements=differing[index][0], fills=differing[index][1])
+            replace(preview, disagreements=differing[index][0], fills=differing[index][1], grouping=differing[index][2])
             for index, preview in enumerate(previews)
         ]
         return [
@@ -2713,7 +3233,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         It covers what the reader was shown and nothing else: each member's id,
         name, creation time, first-met note (as the reader's gates leave it) and
         the readable handle statements with their source and handle, the
-        survivor, and the disagreements and the fills with the values that will show.
+        survivor, and the disagreements, the fills and the grouping rows with the values that will show.
         """
 
         def statement(row: Any) -> list[Any]:
@@ -2737,17 +3257,23 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             "survivor": preview.members[0].public_id if preview.members else None,
             "disagreements": [[row.field, list(row.values), row.shown] for row in preview.disagreements],
             "fills": [[row.field, list(row.values), row.shown] for row in preview.fills],
+            "grouping": [[row.field, list(row.values), row.shown] for row in preview.grouping],
         })
 
     @staticmethod
     def _differing_fields(
-        actor: Any, sets: Sequence[Sequence[Any]], people: Mapping[Any, Any],
-    ) -> list[tuple[tuple[MergeFieldValues, ...], tuple[MergeFieldValues, ...]]]:
-        """For each set, its disagreements and its fills (:class:`DuplicateSetPreview`), in fixed reads.
+        actor: Any,
+        sets: Sequence[Sequence[Any]],
+        people: Mapping[Any, Any],
+        groupings: Sequence[Sequence[str]] | None = None,
+    ) -> list[tuple[tuple[MergeFieldValues, ...], tuple[MergeFieldValues, ...], tuple[MergeFieldValues, ...]]]:
+        """For each set, its disagreements, fills and grouping rows (:class:`DuplicateSetPreview`), in fixed reads.
 
         A merge field whose values differ is a disagreement when its members state
         at least two different values, else a fill: one value stated, the rest
-        empty. Each row carries every member's value and what the survivor will show.
+        empty. A field ``groupings`` names for the set that is a text merge field
+        gets a grouping row whether or not its values differ. Each row carries every
+        member's value and what the survivor will show.
 
         ``sets`` hold members read through ``actor`` and the person rows are read
         through it too, so each field's own ``read__<field>`` gate has hidden what
@@ -2760,7 +3286,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         person_model = apps.get_model("parties", "Person")
         pks = sorted({row.pk for members in sets for row in members})
         if not pks:
-            return [((), ()) for _members in sets]
+            return [((), (), ()) for _members in sets]
         persons = person_model._default_manager.with_actor(actor).in_bulk([pk for pk in pks if pk in people])
         owners: dict[str, tuple[Any, str]] = {}
         stated: defaultdict[tuple[str, Any], list[Any]] = defaultdict(list)
@@ -2792,21 +3318,29 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         def source_of(row: Any, name: str) -> Any:
             return persons.get(row.pk, row) if name in personal else row
 
-        result: list[tuple[tuple[MergeFieldValues, ...], tuple[MergeFieldValues, ...]]] = []
-        for members in sets:
+        def is_text(name: str) -> bool:
+            field = (person_model if name in personal else party_model)._meta.get_field(name)
+            return isinstance(field, models.CharField | models.TextField)
+
+        result: list[tuple[tuple[MergeFieldValues, ...], tuple[MergeFieldValues, ...], tuple[MergeFieldValues, ...]]]
+        result = []
+        for index, members in enumerate(sets):
             if len(members) < 2:
-                result.append(((), ()))
+                result.append(((), (), ()))
                 continue
             kind = "person" if all(row.pk in people for row in members) else None
             fields = party_model.merge_scalar_fields_of(kind)
+            grouped = set(groupings[index]) if groupings is not None else set()
             disagreements: list[MergeFieldValues] = []
             fills: list[MergeFieldValues] = []
+            grouping: list[MergeFieldValues] = []
             for name in fields:
                 sources = [source_of(row, name) for row in members]
                 if any(name in redacted_fields(source) for source in sources):
                     continue
                 values = tuple(text(getattr(source, name, None)) for source in sources)
-                if len(set(values)) < 2:
+                differ = len(set(values)) > 1
+                if not differ and not (name in grouped and is_text(name)):
                     continue
                 _model, aspect = owners.get(name, (None, ""))
                 candidates = [statement for row in members for statement in stated.get((aspect, row.pk), ())]
@@ -2815,9 +3349,13 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                     shown = text(winner.stated_value(name))
                 else:
                     shown = next((value for value in values if value is not None), None)
-                given = {value for value in values if value is not None}
-                (disagreements if len(given) > 1 else fills).append(MergeFieldValues(name, values, shown))
-            result.append((tuple(disagreements), tuple(fills)))
+                compared = MergeFieldValues(name, values, shown)
+                if name in grouped and is_text(name):
+                    grouping.append(compared)
+                if differ:
+                    given = {value for value in values if value is not None}
+                    (disagreements if len(given) > 1 else fills).append(compared)
+            result.append((tuple(disagreements), tuple(fills), tuple(grouping)))
         return result
 
     def for_user(self, user: Any, *, adopt: Any = None) -> Any:
@@ -3116,8 +3654,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             claims: defaultdict[str, dict[Any, Any]] = defaultdict(dict)
             for value, subject_id, handle_id in (
                 statements.filter(handle__in=known, subject__in=live.values("pk"))
-                .members()
-                .filter(status=statements.model.StatementStatus.ASSERTED, snak=statements.model.StatementSnak.VALUE)
+                .standing()
                 .order_by("handle_id")
                 .values_list("handle__normalized_value", "subject_id", "handle_id")
             ):
@@ -3380,6 +3917,78 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             .select_related("stream")
         )
 
+    def backdate_creation(self, pk: Any, at: datetime | None) -> datetime | None:
+        """Move party ``pk``'s ``created_at`` back to ``at`` when ``at`` is earlier; return the time it moved to.
+
+        The one rule that moves a party's creation time after its insert: only
+        earlier, never later and never past now (:meth:`Party.backdate_creation`,
+        the instance form, calls it). A tracked update of the canonical row compared
+        in SQL, under the caller's changeset: history records one version, the
+        change feed publishes the party (or collects it under ``mute_changes``), and
+        ``updated_at`` is stamped. A party already as old costs one read and writes
+        nothing: no version, no event. ``None`` when ``at`` is ``None`` or nothing
+        moved.
+        """
+
+        if at is None:
+            return None
+        now = timezone.now()
+        at = min(at, now)
+        parties = apps.get_model("parties", "Party")
+        rows = parties._base_manager.filter(pk=pk, created_at__gt=at)
+        if not rows.exists() or not rows.update(created_at=at, **auto_now_stamps(parties, now)):
+            return None
+        return at
+
+    def backdate_from_sources(self) -> tuple[int, int, int, datetime | None, datetime | None]:
+        """Move each party's creation time back to the earliest its directory records state; return what it did.
+
+        The repair for parties imported before a contact carried its source's
+        creation time, run at every provision and as ``backdate_parties_from_sources``:
+        each canonical party's ``created_at`` becomes the earliest of its own and
+        the creation time each of its directory records' stored payloads states
+        (:func:`~angee.parties.backends.payload_created_at`), through
+        :meth:`Party.backdate_creation`. It needs no knowledge of which record
+        made the party: a party takes the minimum of every record it holds, and a
+        merge survivor holds the records it folded in. ``moved`` parties moved and
+        ``kept`` were already as old; ``unstated`` records' contact payloads state
+        no time (stored before a contact carried one, or from a source that states
+        none), which only a re-read of the source fills, never this repair. The
+        result is ``(moved, kept, unstated, oldest, newest)``: ``oldest`` and
+        ``newest`` are the earliest and the latest creation time it moved a party
+        to, ``None`` when it moved none. Idempotent: a second run moves nothing.
+        """
+
+        reason = "parties.backdate_from_sources"
+        parties = apps.get_model("parties", "Party")
+        directories = apps.get_model("parties", "Directory")._base_manager.values("pk")
+        earliest: dict[Any, datetime] = {}
+        unstated = 0
+        with changeset(fresh=True, activity="system", change_reason=reason), system_context(reason=reason):
+            stored = (
+                parties._base_manager.filter(
+                    merged_into__isnull=True,
+                    record_links__stream__key=CONTACTS,
+                    record_links__stream__integration__in=directories,
+                )
+                .values_list("pk", "record_links__source_payload")
+                .order_by("pk")
+            )
+            for pk, payload in stored.iterator(chunk_size=500):
+                if not isinstance(payload, dict) or "contact" not in payload:
+                    continue
+                at = payload_created_at(payload)
+                if at is None:
+                    unstated += 1
+                elif pk not in earliest or at < earliest[pk]:
+                    earliest[pk] = at
+            times = [
+                party.created_at
+                for party in parties._base_manager.filter(pk__in=list(earliest)).order_by("pk")
+                if party.backdate_creation(earliest[party.pk])
+            ]
+        return len(times), len(earliest) - len(times), unstated, min(times, default=None), max(times, default=None)
+
     def directory_merge_blocker(self, survivor: Party, merged: Sequence[Party]) -> str | None:
         """Return why merging ``merged`` into ``survivor`` would set two contacts of one directory on one person.
 
@@ -3389,10 +3998,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         separate on one person, and the directory's statements, keyed by its
         integration, would overwrite each other on every sync. A tombstoned or
         withdrawn link counts for nothing, and a pair already on one record is
-        not this merge's. Any other merge is the merging person's to make: an
-        account's own person, or a person a two-way card names, included
-        (default pending the architect's ruling, O16). ``None`` when nothing
-        refuses.
+        not this merge's. Any other merge is the merging person's to make, an
+        account's own person or a person a two-way card names included. ``None``
+        when nothing refuses.
         """
 
         ids = [survivor.pk, *(row.pk for row in merged)]
@@ -3422,15 +4030,17 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         """Return why ``link``'s directory may not bind its contact ``parsed`` to the existing ``person``, or ``None``.
 
         Adopting a person is an access change: the directory becomes one of their
-        statement sources and its contact readers read them. Every limit must hold
-        (rulings R2 and R9), each read from rows loaded here under the contact
+        statement sources and its contact readers read them. Every limit must hold,
+        each read from rows loaded here under the contact
         locks the caller holds, never from the objects passed in: the link's
         stream is pull-only; the person is live (neither trashed nor merged away)
         and no account's own; no address the contact carries is a person
         account's sign-in address in any spelling (``lookup.sign_in``), whichever
         address found the person and whether or not the account has a person;
-        the directory's owner holds ``adopt`` on them (their owner or an editor of their party:
-        no platform-admin arm), checked for that user though sync runs as system
+        the directory's owner holds ``adopt`` on them (their owner, an editor of their party or a
+        stored member of the contact manager or admin role: no platform-admin arm, so a platform
+        admin adopts only once a deployment grants the platform admins' set onto one of those
+        roles, after which every directory adopts), checked for that user though sync runs as system
         work; no other contact of the directory names them, a tombstoned one
         included, since its statements are keyed by integration, not by link
         (the links of the records ``replaces`` folded into this one are this
@@ -3983,7 +4593,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         employers. Addresses land through :meth:`AddressManager.land_addresses`
         and the employer through :meth:`RelationshipManager.land_employment`;
         removed members withdraw only this source's statements instead of
-        deleting rows.
+        deleting rows. The contact's creation time (``ParsedContact.created_at``)
+        is a minted person's own; on a person that exists it moves their creation
+        time earlier when it is earlier (``Party.backdate_creation``), never later.
         """
         container = stream.container if stream.container_id is not None else None
         folder = container.target if container is not None else None
@@ -4014,10 +4626,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 blocker = self.adoption_blocker(target, link=link, parsed=parsed, lookup=lookup, replaces=replaces)
                 if blocker is not None:
                     raise ValidationError(blocker)
-            person = target or people.create(
+            person = target or people.insert(people.model(
                 display_name=(parsed.display_name or parsed.family_name or people.model.PLACEHOLDER_NAME),
                 created_by_id=created_by_id,
-            )
+            ).stamp_created_at(parsed.created_at))
+            if target is not None:
+                person.backdate_creation(parsed.created_at)
             parent = apps.get_model("parties", "Party")._base_manager.get(pk=person.pk)
             through = through.canonical() if through is not None else self._adopted_through(parent, source=source)
             left = link.target if link.target_object_id and link.target_object_id != str(parent.pk) else None

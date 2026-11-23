@@ -143,7 +143,7 @@ function ActionArgsDialog({
   const body = (
     <>
       {definition ? <ActionDescriptorFields definition={definition} control={form.control} readOnly={saveConflict} disabled={submitting} /> : null}
-      {!definition ? <DescriptorFieldList fields={args.map(actionArgField)} readOnly={saveConflict} /> : null}
+      {!definition ? <DescriptorFieldList fields={args.map(actionArgField)} readOnly={saveConflict} unregisterHidden /> : null}
       <ErrorBanner description={formError} />
     </>
   );
@@ -234,7 +234,7 @@ function ActionDescriptorFields({ definition, control, readOnly, disabled }: {
   const fields = typeof definition.fields === "function" ? definition.fields(values) : definition.fields;
   return <fieldset disabled={readOnly || disabled} className="grid gap-4">
     {definition.content}
-    <DescriptorFieldList fields={fields} readOnly={readOnly} />
+    <DescriptorFieldList fields={fields} readOnly={readOnly} unregisterHidden />
   </fieldset>;
 }
 

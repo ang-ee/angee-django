@@ -163,9 +163,9 @@ appearance_options:
 
 serve_workers:
   type: int
-  default: 0
+  default: 2
   validator: '{% if serve_workers != 0 and serve_workers < 2 %}Use 0 for CPU count or at least 2 workers.{% endif %}'
-  help: Django ASGI worker count; 0 uses CPU count (minimum 2).
+  help: Django ASGI workers, at least 2. Each loads the whole app, about 550 MiB with nothing shared; 0 opts into one per CPU.
 
 db_pool_max_size:
   type: int

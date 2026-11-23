@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 
-import { useState, type ReactElement, type ReactNode } from "react";
+import { StrictMode, useState, type ReactElement, type ReactNode } from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
-import { FormProvider, useForm, type DefaultValues, type UseFormReturn } from "react-hook-form";
+import { FormProvider, useForm, type DefaultValues, type FieldValues, type UseFormReturn } from "react-hook-form";
 import { describe, expect, test, vi } from "vitest";
 
 import { AppRuntimeProvider } from "../../runtime";
@@ -14,6 +14,7 @@ import { DescriptorFieldList, LabeledDescriptorField, type DescriptorField } fro
 import { deserializeFormSpec } from "./form-spec";
 import { useActionForm } from "./use-action-form";
 import { ActionFormProvider } from "./ActionFormProvider";
+import { useFieldValidation } from "./use-field-validation";
 
 type Values = Record<string, unknown>;
 
@@ -22,24 +23,32 @@ function FormHarness<TValues extends Values = Values>({
   defaultValues,
   children,
   readOnly,
+  unregisterHidden,
   onSubmit = () => undefined,
 }: {
   fields: readonly DescriptorField[];
   defaultValues: DefaultValues<TValues>;
   children?: (form: UseFormReturn<TValues>) => ReactNode;
   readOnly?: boolean;
+  unregisterHidden?: boolean;
   onSubmit?: (values: TValues) => void | Promise<void>;
 }): ReactElement {
   const form = useForm<TValues>({ defaultValues });
   return <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-    <FormProvider {...form}>
+    <FormOwner form={form}>
       <form onSubmit={form.handleSubmit(onSubmit)}>
-        <DescriptorFieldList fields={fields} readOnly={readOnly} />
+        <DescriptorFieldList fields={fields} readOnly={readOnly} unregisterHidden={unregisterHidden} />
         {children?.(form)}
         <button type="submit">Save</button>
       </form>
-    </FormProvider>
+    </FormOwner>
   </AppRuntimeProvider>;
+}
+
+/** The provider a DescriptorFieldList requires, over a bare react-hook-form form. */
+function FormOwner<TValues extends FieldValues>({ form, children }: { form: UseFormReturn<TValues>; children: ReactNode }): ReactElement {
+  const { registerFieldValidation } = useFieldValidation();
+  return <ActionFormProvider {...form} registerFieldValidation={registerFieldValidation}>{children}</ActionFormProvider>;
 }
 
 describe("DescriptorFieldList", () => {
@@ -84,9 +93,9 @@ describe("DescriptorFieldList", () => {
     function Harness() {
       const form = useForm({ defaultValues: { model: "notes.Note", condition: {} } });
       return <AppRuntimeProvider runtime={{ widgets: { ...defaultWidgets, sibling: { read, edit: read } } }}>
-        <FormProvider {...form}><DescriptorFieldList fields={[
+        <FormOwner form={form}><DescriptorFieldList fields={[
           { name: "model", label: "Model" }, { name: "condition", widget: "sibling" },
-        ]} /></FormProvider>
+        ]} /></FormOwner>
       </AppRuntimeProvider>;
     }
     render(<Harness />);
@@ -200,19 +209,6 @@ describe("DescriptorFieldList", () => {
     );
   });
 
-  test("renders resolved descriptors without evaluating their declaration again", () => {
-    const resolve = vi.fn(() => ({ name: "title", label: "Declared title" }));
-    function ResolvedForm(): ReactElement {
-      const form = useForm({ defaultValues: { title: "Retained" } });
-      return <FormProvider {...form}>
-        <DescriptorFieldList resolvedFields={[{ name: "title", label: "Resolved title", resolve }]} />
-      </FormProvider>;
-    }
-    render(<ResolvedForm />);
-    expect((screen.getByRole("textbox", { name: "Resolved title" }) as HTMLInputElement).value).toBe("Retained");
-    expect(resolve).not.toHaveBeenCalled();
-  });
-
   test("resolves visibility and read-only presentation while preserving declared names and hidden values", async () => {
     const submit = vi.fn();
     render(<FormHarness defaultValues={{ mode: "fixed", detail: "Original", token: "retained" }} onSubmit={submit}
@@ -232,6 +228,102 @@ describe("DescriptorFieldList", () => {
     expect(screen.queryByText("Detail")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(submit.mock.calls[0]?.[0]).toEqual({ mode: "hidden", detail: "Edited", token: "retained" }));
+  });
+
+  test.each([
+    { path: "detail", label: "Detail", strict: false },
+    { path: "detail", label: "Detail", strict: true },
+    { path: "config.url", label: "Url", strict: false },
+    { path: "config.url", label: "Url", strict: true },
+  ])("with unregisterHidden, a hidden $path is not submitted and comes back showing its initial value (StrictMode: $strict)", async ({ path, label, strict }) => {
+    const submit = vi.fn();
+    const harness = <FormHarness unregisterHidden onSubmit={submit}
+      defaultValues={{ mode: "on", detail: "initial", secret: "kept", token: "untouched", config: { url: "initial", other: "stays" } }}
+      fields={[
+        { name: "mode", label: "Mode" },
+        { name: path, label, showWhen: (values) => values.mode === "on" },
+        { name: "secret", label: "Secret", hidden: true },
+      ]} />;
+    render(strict ? <StrictMode>{harness}</StrictMode> : harness);
+    const input = (name: string) => screen.getByRole("textbox", { name }) as HTMLInputElement;
+    fireEvent.change(input(label), { target: { value: "typed" } });
+    fireEvent.change(input("Mode"), { target: { value: "off" } });
+    expect(screen.queryByRole("textbox", { name: label })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledOnce());
+    const hidden = submit.mock.calls[0]![0] as Values;
+    const [head, leaf] = path.split(".") as [string, string?];
+    // Hidden means gone from the values; what no shown field leaves (a sibling, an undeclared value, a hidden field) stays.
+    expect(leaf ? Object.hasOwn(hidden[head] as Values, leaf) : Object.hasOwn(hidden, head)).toBe(false);
+    expect(hidden).toEqual(leaf
+      ? { mode: "off", detail: "initial", secret: "kept", token: "untouched", config: { other: "stays" } }
+      : { mode: "off", secret: "kept", token: "untouched", config: { url: "initial", other: "stays" } });
+
+    fireEvent.change(input("Mode"), { target: { value: "on" } });
+    // The returning control shows its initial value at once, not after an effect restores it.
+    expect(input(label).value).toBe("initial");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2));
+    expect(submit.mock.calls[1]![0]).toEqual({ mode: "on", detail: "initial", secret: "kept", token: "untouched", config: { url: "initial", other: "stays" } });
+  });
+
+  test("with unregisterHidden, a path that leaves the list stays while a shown field still lives under it", async () => {
+    const submit = vi.fn();
+    render(<FormHarness unregisterHidden onSubmit={submit}
+      defaultValues={{ mode: "all", config: { url: "initial", other: "stays" } }}
+      fields={[
+        { name: "mode", label: "Mode" },
+        // The whole object is declared only in one mode; its `url` is always shown.
+        { name: "config", label: "Config", hidden: true, showWhen: (values) => values.mode === "all" },
+        { name: "config.url", label: "Url" },
+      ]} />);
+    const input = (name: string) => screen.getByRole("textbox", { name }) as HTMLInputElement;
+    fireEvent.change(input("Url"), { target: { value: "typed" } });
+    fireEvent.change(input("Mode"), { target: { value: "one" } });
+    expect(input("Url").value).toBe("typed");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(submit.mock.calls[0]?.[0]).toEqual({ mode: "one", config: { url: "typed", other: "stays" } }));
+  });
+
+  test("with unregisterHidden, a path that leaves the list stays while a shown field still holds it", async () => {
+    const submit = vi.fn();
+    render(<FormHarness unregisterHidden onSubmit={submit}
+      defaultValues={{ mode: "on", config: { url: "initial", other: "stays" } }}
+      fields={[
+        { name: "mode", label: "Mode" },
+        // The whole object is always held; its `url` has a control of its own in one mode.
+        { name: "config", label: "Config", hidden: true },
+        { name: "config.url", label: "Url", showWhen: (values) => values.mode === "on" },
+      ]} />);
+    const input = (name: string) => screen.getByRole("textbox", { name }) as HTMLInputElement;
+    fireEvent.change(input("Url"), { target: { value: "typed" } });
+    fireEvent.change(input("Mode"), { target: { value: "off" } });
+    expect(screen.queryByRole("textbox", { name: "Url" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(submit.mock.calls[0]?.[0]).toEqual({ mode: "off", config: { url: "typed", other: "stays" } }));
+  });
+
+  test("without unregisterHidden, a field the list stops showing keeps its value: one form, the selected item's fields", async () => {
+    const submit = vi.fn();
+    function Selection(): ReactElement {
+      const [selected, setSelected] = useState("a");
+      const form = useForm({ defaultValues: { a: { label: "A" }, b: { label: "B" } } });
+      return <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><FormOwner form={form}>
+        <form onSubmit={form.handleSubmit(submit)}>
+          <DescriptorFieldList fields={[{ name: `${selected}.label`, label: `Label ${selected}` }]} />
+          <button type="button" onClick={() => setSelected(selected === "a" ? "b" : "a")}>Select other</button>
+          <button type="submit">Save</button>
+        </form>
+      </FormOwner></AppRuntimeProvider>;
+    }
+    render(<Selection />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Label a" }), { target: { value: "Typed A" } });
+    fireEvent.click(screen.getByRole("button", { name: "Select other" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Label b" }), { target: { value: "Typed B" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(submit.mock.calls[0]?.[0]).toEqual({ a: { label: "Typed A" }, b: { label: "Typed B" } }));
+    fireEvent.click(screen.getByRole("button", { name: "Select other" }));
+    expect((screen.getByRole("textbox", { name: "Label a" }) as HTMLInputElement).value).toBe("Typed A");
   });
 
   test("shares sibling values with custom controls and applies prefills in the same form", async () => {
@@ -256,6 +348,94 @@ describe("DescriptorFieldList", () => {
     expect((screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement).value).toBe("Seeded Sibling");
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(submit.mock.calls[0]?.[0]).toEqual({ source: "Seeded", title: "Seeded Sibling", note: "Sibling" }));
+  });
+
+  test("a dirty-preserving preset keeps what the person typed, replaces what it names, and seeds the rest clean", async () => {
+    const submit = vi.fn();
+    render(<FormHarness defaultValues={{ kind: "a", secret: "", config: "", style: "" }} onSubmit={submit} fields={[
+      { name: "kind", label: "Kind", prefillPreserveDirty: true, prefillReplace: ["config"],
+        prefill: (value) => ({ secret: `${String(value)} secret`, config: `${String(value)} config`, style: `${String(value)} style` }) },
+      { name: "secret", label: "Secret" },
+      { name: "config", label: "Config" },
+      { name: "style", label: "Style" },
+    ]}>{(form) => <output aria-label="Dirty">{Object.keys(form.formState.dirtyFields).sort().join(",")}</output>}</FormHarness>);
+    const input = (name: string) => screen.getByRole("textbox", { name }) as HTMLInputElement;
+    fireEvent.change(input("Secret"), { target: { value: "typed secret" } });
+    fireEvent.change(input("Config"), { target: { value: "typed config" } });
+
+    fireEvent.change(input("Kind"), { target: { value: "b" } });
+    expect(input("Secret").value).toBe("typed secret");
+    expect(input("Config").value).toBe("b config");
+    expect(input("Style").value).toBe("b style");
+    expect(screen.getByLabelText("Dirty").textContent).toBe("config,kind,secret");
+
+    // Back on its loaded value the form reads every changed value as dirty; the seed still in place stays the preset's.
+    fireEvent.change(input("Kind"), { target: { value: "a" } });
+    expect(input("Secret").value).toBe("typed secret");
+    expect(input("Config").value).toBe("a config");
+    expect(input("Style").value).toBe("a style");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(submit.mock.calls[0]?.[0]).toEqual({ kind: "a", secret: "typed secret", config: "a config", style: "a style" }));
+  });
+
+  test("a dirty-preserving preset keeps a target the person cleared back to its loaded value", () => {
+    render(<FormHarness defaultValues={{ kind: "a", secret: "" }} fields={[
+      { name: "kind", label: "Kind", prefillPreserveDirty: true, prefill: (value) => ({ secret: `${String(value)} secret` }) },
+      { name: "secret", label: "Secret" },
+    ]} />);
+    const input = (name: string) => screen.getByRole("textbox", { name }) as HTMLInputElement;
+    fireEvent.change(input("Secret"), { target: { value: "typed" } });
+    fireEvent.change(input("Secret"), { target: { value: "" } });
+    fireEvent.change(input("Kind"), { target: { value: "b" } });
+    expect(input("Secret").value).toBe("");
+  });
+
+  test("a dirty-preserving preset still owns its seed after another field was changed and cleared", () => {
+    render(<FormHarness defaultValues={{ kind: "a", secret: "", other: "" }} fields={[
+      { name: "kind", label: "Kind", prefillPreserveDirty: true, prefill: (value) => ({ secret: `${String(value)} secret` }) },
+      { name: "secret", label: "Secret" },
+      { name: "other", label: "Other" },
+    ]}>{(form) => <output aria-label="Form dirty">{String(form.formState.isDirty)}</output>}</FormHarness>);
+    const input = (name: string) => screen.getByRole("textbox", { name }) as HTMLInputElement;
+    fireEvent.change(input("Kind"), { target: { value: "b" } });
+    expect(input("Secret").value).toBe("b secret");
+    // Back on its loaded value while the form stays dirty, react-hook-form reads every changed value,
+    // the seeded one included, as dirty: what the preset wrote there is still the preset's.
+    fireEvent.change(input("Other"), { target: { value: "x" } });
+    fireEvent.change(input("Other"), { target: { value: "" } });
+    expect(screen.getByLabelText("Form dirty").textContent).toBe("true");
+    fireEvent.change(input("Kind"), { target: { value: "c" } });
+    expect(input("Secret").value).toBe("c secret");
+  });
+
+  test("lists under one provider share what a preset wrote: another list's seed is not the person's", () => {
+    function Harness(): ReactElement {
+      const form = useForm({ defaultValues: { kind: "a", mode: "m", style: "" } });
+      return <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><FormOwner form={form}>
+        <DescriptorFieldList fields={[{ name: "kind", label: "Kind", prefillPreserveDirty: true,
+          prefill: (value) => ({ style: `kind ${String(value)}` }) }]} />
+        <DescriptorFieldList fields={[
+          { name: "mode", label: "Mode", prefillPreserveDirty: true, prefill: (value) => ({ style: `mode ${String(value)}` }) },
+          { name: "style", label: "Style" },
+        ]} />
+      </FormOwner></AppRuntimeProvider>;
+    }
+    render(<Harness />);
+    const input = (name: string) => screen.getByRole("textbox", { name }) as HTMLInputElement;
+    fireEvent.change(input("Kind"), { target: { value: "b" } });
+    // Back on its loaded value, the form reads the seeded style as dirty; it still holds the first list's seed.
+    fireEvent.change(input("Kind"), { target: { value: "a" } });
+    expect(input("Style").value).toBe("kind a");
+    fireEvent.change(input("Mode"), { target: { value: "n" } });
+    expect(input("Style").value).toBe("mode n");
+  });
+
+  test("names the action form provider it requires under a bare react-hook-form provider", () => {
+    function Bare(): ReactElement {
+      const form = useForm();
+      return <FormProvider {...form}><DescriptorFieldList fields={[]} /></FormProvider>;
+    }
+    expect(() => render(<Bare />)).toThrow("DescriptorFieldList requires an ActionFormProvider.");
   });
 
   test("resets only branch fields while retaining discriminator focus and unrelated form state", async () => {

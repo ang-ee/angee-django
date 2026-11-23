@@ -36,7 +36,6 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVectorField
 from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, ValidationError
-from django.core.validators import MinValueValidator
 from django.db import models, transaction
 from django.db.models.fields.json import KeyTextTransform
 from django.db.models.functions import MD5, Coalesce
@@ -80,10 +79,6 @@ from angee.messaging.backends import (
     ChannelBackend,
     OutboundEmailChannelMissing,
     PairingActionError,
-    ParsedHandle,
-    ParsedMessage,
-    ParsedPart,
-    ParsedThread,
 )
 from angee.messaging.constants import DELIVERY_TASK_EXPIRES
 from angee.messaging.delivery import queue_message_delivery
@@ -126,7 +121,6 @@ from angee.messaging.mixins import (
 )
 from angee.messaging.resources import MessageResource
 from angee.messaging.source_copies import SourceCopyMixin
-from angee.messaging.webforms import WebformChanged, WebformSpec, WebformUnavailable, default_webform_schema
 from angee.parties.models import Handle
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
 from angee.provenance.contrib.angee.managers import AngeeHistoryMergeableUnscopedManager
@@ -206,16 +200,6 @@ class Channel(Bridge, inherits="integrate.Integration"):
         if self.lifecycle != self.Lifecycle.CONNECTED:
             raise OutboundEmailChannelMissing
         return self.backend.outbound_sender()
-
-    def validate_webform_answers(self, answers: dict[str, Any]) -> None:
-        """Validate domain meaning after the public form's scalar validation.
-
-        Same-row Channel donors may override this hook and call ``super()`` to
-        cooperate with other contributors. Raise ``ValidationError`` with answer
-        field names as keys so the public form can return structured errors.
-        """
-
-        del answers
 
     def test_connection(self) -> str:
         """Exercise the selected backend's connection (the Integration test contract)."""
@@ -370,146 +354,6 @@ class Channel(Bridge, inherits="integrate.Integration"):
         if self.subscription_state.get("desired") == self.LiveState.LIVE:
             return None
         return super()._next_sync_at(now=now)
-
-
-class ChannelWebform(Composable, extends="messaging.Channel"):
-    """Same-row public-form configuration and message mapping for ``messaging.Channel``."""
-
-    hasura_readable_fields: ClassVar[tuple[str, ...]] = (
-        "slug",
-        "is_published",
-        "form_schema_version",
-        "form_schema",
-        "max_body_bytes",
-        "max_field_bytes",
-    )
-    hasura_filterable_fields: ClassVar[tuple[str, ...]] = ("slug", "is_published", "form_schema_version")
-    hasura_sortable_fields: ClassVar[tuple[str, ...]] = hasura_filterable_fields
-    hasura_aggregatable_fields: ClassVar[tuple[str, ...]] = ()
-    hasura_groupable_fields: ClassVar[tuple[str, ...]] = ("is_published", "form_schema_version")
-    hasura_updatable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
-
-    slug = models.SlugField(max_length=80, blank=True, default="")
-    is_published = models.BooleanField(default=False)
-    form_schema_version = models.PositiveSmallIntegerField(
-        default=1,
-        validators=(MinValueValidator(1),),
-    )
-    form_schema = models.JSONField(default=default_webform_schema, blank=True)
-    max_body_bytes = models.PositiveIntegerField(
-        default=65_536,
-        validators=(MinValueValidator(1),),
-    )
-    max_field_bytes = models.PositiveIntegerField(
-        default=4_096,
-        validators=(MinValueValidator(1),),
-    )
-
-    class Meta:
-        """Abstract webform columns and the public-slug identity constraint."""
-
-        abstract = True
-        constraints = (
-            models.UniqueConstraint(
-                fields=("slug",),
-                condition=~models.Q(slug=""),
-                name="uq_messaging_channel_webform_slug",
-            ),
-        )
-
-    def clean(self) -> None:
-        """Keep published/form-specific facts attached only to webform channels."""
-
-        super().clean()
-        is_webform = str(self.backend_class) == "webform"
-        errors: dict[str, str] = {}
-        if (self.slug or self.is_published) and not is_webform:
-            errors["backend_class"] = "A public form requires the webform channel backend."
-        if self.is_published and not self.slug:
-            errors["slug"] = "A published public form requires a slug."
-        if errors:
-            raise ValidationError(errors)
-        if is_webform:
-            self.webform_spec()
-
-    def submit_webform(self, parsed: Any) -> None:
-        """Ingest one validated submission only while this observed form is still current.
-
-        The published row is re-read under its lock, so an unpublish or a
-        configuration change committed after the caller validated the answers
-        refuses the submission instead of landing it against a stale form.
-        """
-
-        with system_context(reason=f"public form {self.slug}"), transaction.atomic():
-            locked = (
-                type(self).objects.published_webforms(self.slug).filter(pk=self.pk).lock_if_supported().first()
-            )
-            if locked is None:
-                raise WebformUnavailable
-            if any(getattr(locked, name) != getattr(self, name) for name in (
-                "form_schema_version", "form_schema", "max_body_bytes", "max_field_bytes",
-            )):
-                raise WebformChanged
-            apps.get_model("messaging", "Message").objects.ingest([parsed], channel=locked, quote_edges=False)
-
-    def webform_spec(self) -> WebformSpec:
-        """Return this row's server-validated versioned form spec."""
-
-        return WebformSpec.deserialize(
-            self.form_schema,
-            version=int(self.form_schema_version),
-        )
-
-    def webform_message(
-        self,
-        *,
-        submission_id: str,
-        answers: dict[str, Any],
-    ) -> Any:
-        """Map one validated answer envelope to messaging's neutral ingest DTO."""
-
-        spec = self.webform_spec()
-        email_field = spec.email_field
-        email = str(answers.get(email_field.name) or "").strip() if email_field else ""
-        content_answers = (
-            {name: value for name, value in answers.items() if name != email_field.name} if email_field else answers
-        )
-        stable_id = f"webform:{self.slug}:{submission_id}"
-        sender = ParsedHandle(
-            platform="other",
-            value=stable_id,
-            external_id=stable_id,
-            display_name="Anonymous",
-        )
-        title = str(self.display_name or f"Public form {self.slug}")
-        now = timezone.now()
-        return ParsedMessage(
-            external_id=stable_id,
-            platform="other",
-            sender=sender,
-            sent_at=now,
-            received_at=now,
-            thread=ParsedThread(
-                external_id=f"webform:{self.slug}",
-                title=title,
-                metadata={"webform_slug": self.slug},
-            ),
-            body=ParsedPart(
-                type="text/plain",
-                role="body",
-                text=spec.render_markdown(content_answers),
-            ),
-            metadata={
-                "webform": {
-                    "slug": self.slug,
-                    "schema_version": int(self.form_schema_version),
-                    "submission_id": submission_id,
-                    "answers": content_answers,
-                    "unverified_submitter_email": email or None,
-                }
-            },
-        )
-
 
 
 class ChatterHistory(ModelHistory):
@@ -1488,7 +1332,12 @@ class Message(
         return addresses
 
     def webform_submission(self) -> WebformSubmission | None:
-        """Read the public-form envelope without interpreting it in consumers."""
+        """Read the ``webform`` envelope a form submission's message carries in its metadata.
+
+        The envelope holds the ``answers`` by question name and the
+        ``unverified_submitter_email``. Consumers read it here and never
+        interpret the metadata themselves; a message without one returns ``None``.
+        """
 
         envelope = (self.metadata or {}).get("webform")
         if not isinstance(envelope, dict) or not isinstance(envelope.get("answers"), dict):

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -12,10 +12,20 @@ from django.core.exceptions import ValidationError
 from django.db import OperationalError, connection
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
-from angee.messaging.testing.models import Handle, Organization, Party, Person
+from angee.messaging.testing.models import (
+    Circle,
+    CircleMember,
+    Handle,
+    Organization,
+    Party,
+    Person,
+    Relationship,
+    RelationshipKind,
+)
 from tests.conftest import create_user
 from tests.test_parties_same_as import _address, _kept_separate, _pairs, _reconcile
 
@@ -85,6 +95,72 @@ def test_a_certain_pair_merges_into_the_older_record_and_pins_nothing(db: None) 
     with system_context(reason="duplicates readback"):
         assert Party._base_manager.get(pk=older.pk).display_name == "Zoë Example-Smith"
     assert _pairs() == []
+
+
+SOURCE_CREATED = datetime(2019, 4, 2, 10, 30, tzinfo=UTC)
+"""When an invented source says its record came into being."""
+
+
+def _created_at(party: Any) -> Any:
+    with system_context(reason="duplicates readback"):
+        return Party._base_manager.get(pk=party.pk).created_at
+
+
+def _versions(party: Any) -> int:
+    with system_context(reason="duplicates readback"):
+        return int(Person._base_manager.get(pk=party.pk).history.count())
+
+
+def test_a_partys_creation_time_moves_only_earlier_and_a_move_that_moves_nothing_writes_nothing(db: None) -> None:
+    del db
+    owner = create_user("duplicates-backdate")
+    (person,) = _people(owner, "Ada Example")
+    inserted, versions = _created_at(person), _versions(person)
+
+    with system_context(reason="duplicates backdate"):
+        row = Party._base_manager.get(pk=person.pk)
+        assert not row.backdate_creation(inserted + timedelta(days=1))
+        assert not row.backdate_creation(timezone.now() + timedelta(days=30))
+        assert not row.backdate_creation(None)
+        assert (_created_at(person), _versions(person)) == (inserted, versions)
+
+        assert row.backdate_creation(SOURCE_CREATED)
+        assert not row.backdate_creation(SOURCE_CREATED)
+
+    assert (_created_at(person), _versions(person)) == (SOURCE_CREATED, versions + 1)
+    with system_context(reason="duplicates readback"):
+        assert Party._base_manager.get(pk=person.pk).updated_at > inserted
+
+
+def test_a_batch_keeps_the_record_its_sources_have_known_longest(db: None) -> None:
+    """The record imported here last survives when its source says it came into being first."""
+
+    del db
+    owner = create_user("duplicates-source-oldest")
+    imported_first, imported_last = _people(owner, "Zoë Example", "Zoe Example")
+    with system_context(reason="duplicates a source's creation time"):
+        Party._base_manager.get(pk=imported_last.pk).backdate_creation(SOURCE_CREATED)
+
+    assert _merge(owner, [imported_first, imported_last]) == [("merged", imported_last.pk, "")]
+    assert _merged_into(imported_first) == [imported_last.pk]
+
+
+def test_a_survivor_a_person_chose_takes_the_earliest_creation_time_of_what_it_folds_in(db: None) -> None:
+    del db
+    owner = create_user("duplicates-hand-merge")
+    older, younger = _people(owner, "Ada Example", "Ada Example")
+    with system_context(reason="duplicates a source's creation time"):
+        Party._base_manager.get(pk=older.pk).backdate_creation(SOURCE_CREATED)
+    versions = _versions(younger)
+
+    with actor_context(owner):
+        Party.objects.get(pk=younger.pk).with_actor(owner).merge(records=[older.public_id])
+
+    assert _merged_into(older) == [younger.pk]
+    assert _created_at(younger) == SOURCE_CREATED
+    with system_context(reason="duplicates readback"):
+        moved = Person._base_manager.get(pk=younger.pk).history.filter(created_at=SOURCE_CREATED)
+        assert moved.exists() and _versions(younger) > versions
 
 
 def _organizations(owner: Any) -> list[Any]:
@@ -782,3 +858,374 @@ def test_the_digest_changes_when_a_fill_appears_or_changes(db: None) -> None:
     changed = nickname("Zed")
 
     assert len({plain, appeared, changed}) == 3
+
+
+def test_the_review_counts_stop_at_their_cap_and_say_so(db: None) -> None:
+    """Exact in the rows' scope up to the cap, and say so past it; a reader who may not merge has no certain pair."""
+
+    del db
+    from angee.graphql.testing.documents import execute_schema, result_data
+    from tests.test_parties_graphql import _schema
+
+    owner, viewer = create_user("duplicates-counts-cap"), create_user("duplicates-counts-cap-viewer")
+    parties = []
+    for index in range(4):
+        parties.extend(_people(owner, f"Zoe Example {index}", f"Zoe Example {index}", value=f"cap{index}@example.com"))
+    _reconcile()
+    with actor_context(owner):
+        for party in Party.objects.filter(pk__in=[party.pk for party in parties]):
+            party.grant_record_access("identity_reader", viewer)
+
+    capped = Party.objects.same_as_review_counts(actor=owner, cap=3)
+    exact = Party.objects.same_as_review_counts(actor=owner)
+    document = "query { same_as_pair_counts { pairs certain capped } }"
+    schema = result_data(execute_schema(_schema("console"), document, user=owner))["same_as_pair_counts"]
+
+    assert tuple(capped) == (3, 3, True)
+    assert tuple(exact) == (4, 4, False)
+    assert schema == {"pairs": 4, "certain": 4, "capped": False}
+    assert Party.objects.same_as_review_counts(actor=viewer).certain == 0
+
+
+
+def test_a_grouping_text_field_has_a_row_whether_or_not_its_members_differ(db: None) -> None:
+    """The members' values of a field the list grouped by, for a text merge field only; never a value sent."""
+
+    del db
+    owner = create_user("duplicates-grouping-rows")
+    members = _set_with(owner, "family_name", "Clarke", "Clarke", tag="-grouped")
+    ids = [[member.public_id for member in members]]
+
+    (grouped,) = Party.objects.preview_duplicates(
+        actor=owner, sets=ids, groupings=[["family_name", "birthday", "domain", "circle"]],
+    )
+    (plain,) = Party.objects.preview_duplicates(actor=owner, sets=ids)
+
+    assert _fields(grouped.grouping) == {"family_name": ("Clarke", "Clarke")}
+    assert (grouped.disagreements, grouped.fills, plain.grouping) == ((), (), ())
+    assert grouped.digest != plain.digest
+
+
+def test_the_merge_judges_a_grouped_set_with_the_previews_groupings(db: None) -> None:
+    del db
+    owner = create_user("duplicates-grouping-merge")
+    members = _set_with(owner, "family_name", "Clarke", "Clarke", tag="-merged")
+    ids = [[member.public_id for member in members]]
+    groupings = [["family_name"]]
+    (preview,) = Party.objects.preview_duplicates(actor=owner, sets=ids, groupings=groupings)
+
+    with pytest.raises(ValidationError, match="grouping fields"):
+        Party.objects.merge_duplicates(actor=owner, sets=ids, digests=[preview.digest], groupings=[])
+    (outcome,) = Party.objects.merge_duplicates(actor=owner, sets=ids, digests=[preview.digest], groupings=groupings)
+
+    assert str(outcome.outcome) == "merged"
+
+
+def _sent_parties(sent: list[dict[str, Any]]) -> list[tuple[str, str]]:
+    return sorted((event["model"], event["id"]) for event in sent)
+
+
+def test_a_batch_publishes_each_merged_record_once_after_its_sets(
+    db: None, django_capture_on_commit_callbacks: Any,
+) -> None:
+    """Changes are muted while the request's sets merge; then each record of a merged set is published once."""
+
+    del db
+    from angee.graphql.testing import capture_broadcasts
+
+    owner = create_user("duplicates-batch-broadcast")
+    sets = [_people(owner, f"Zoe Example {i}", f"Zoe Example {i}", value=f"cast{i}@example.com") for i in range(3)]
+
+    with capture_broadcasts() as sent, django_capture_on_commit_callbacks(execute=True):
+        outcomes = _merge(owner, *sets)
+
+    assert [outcome for outcome, _survivor, _reason in outcomes] == ["merged"] * 3
+    assert _sent_parties(sent) == sorted(("parties.Party", person.public_id) for members in sets for person in members)
+
+
+def _loser_with_many_rows(owner: Any, count: int) -> list[Any]:
+    """A pair whose newer record holds ``count`` handles, circle memberships and relationships of its own."""
+
+    pair = _people(owner, "Zoe Many", "Zoe Many", value="many@example.com")
+    with system_context(reason="duplicates many rows"):
+        kind = RelationshipKind._base_manager.create(slug="duplicates-sibling", name="Sibling")
+        for index in range(count):
+            Party.objects.assert_handle(pair[1], _address(owner, f"many-{index}@example.com"), asserted_by=owner)
+            circle = Circle._base_manager.create(name=f"Many {index}", created_by=owner)
+            CircleMember._base_manager.create(circle=circle, party=pair[1], created_by=owner)
+            other = Party._base_manager.create(display_name=f"Other {index}", created_by=owner)
+            Relationship._base_manager.create(party=pair[1], other_party=other, kind=kind, created_by=owner)
+    return pair
+
+
+def test_a_batch_publishes_each_row_its_merge_wrote_once_through_its_own_gate(
+    db: None, django_capture_on_commit_callbacks: Any,
+) -> None:
+    """The re-pointed handles reach a handles viewer once each, after the request's sets, each through its read gate.
+
+    Measured on SQLite with a newer record holding N handles, circle memberships and
+    relationships: the batch broadcasts each row once (N handles and the 2 parties),
+    where the same merge by hand broadcasts 92 changes at N=30, one party up to 32
+    times. The publish after the sets costs 117, 197 and 317 statements, about 0.05,
+    0.15 and 0.24 s, at N = 10, 30 and 60: about 4 statements a handle. The circle
+    memberships and relationships are re-pointed by the base merge's bulk update
+    (``Reference.move``), which no observer sees, by hand or in a batch.
+    """
+
+    del db
+    from angee.graphql.access import ChangeReadGate
+    from angee.graphql.testing import capture_broadcasts
+
+    owner, stranger = create_user("duplicates-many-rows"), create_user("duplicates-many-rows-stranger")
+    pair = _loser_with_many_rows(owner, 30)
+    handles = sorted(handle.public_id for handle in Handle._base_manager.filter(party=pair[1]))
+
+    with capture_broadcasts() as sent, django_capture_on_commit_callbacks(execute=True):
+        outcomes = _merge(owner, pair)
+
+    assert [outcome for outcome, _survivor, _reason in outcomes] == ["merged"]
+    assert sorted(_sent_parties(sent)) == sorted(
+        [("parties.Handle", public_id) for public_id in handles]
+        + [("parties.Party", party.public_id) for party in pair]
+    )
+    readable, hidden = ChangeReadGate(Handle, to_subject_ref(owner)), ChangeReadGate(Handle, to_subject_ref(stranger))
+    changes = [event for event in sent if event["model"] == "parties.Handle"]
+    assert all(readable.filter(event) is not None for event in changes)
+    assert all(hidden.filter(event) is None for event in changes)
+
+
+def test_a_partly_failed_batch_still_publishes_what_merged(db: None, django_capture_on_commit_callbacks: Any) -> None:
+    del db
+    from angee.graphql.testing import capture_broadcasts
+
+    owner = create_user("duplicates-partial-broadcast")
+    first = _people(owner, "Zoë Example", "Zoe Example", value="partial-a@example.com")
+    second = _people(owner, "Yan Example", "yan example", value="partial-b@example.com")
+    failed: list[str] = []
+
+    def time_out_once(execute: Any, sql: str, params: Any, many: bool, context: Any) -> Any:
+        if not failed and sql.lstrip().upper().startswith("UPDATE") and '"merged_into_id"' in sql:
+            failed.append(sql)
+            raise _lock_conflict("57014")
+        return execute(sql, params, many, context)
+
+    with capture_broadcasts() as sent, django_capture_on_commit_callbacks(execute=True):
+        with connection.execute_wrapper(time_out_once):
+            outcomes = _merge(owner, first, second)
+
+    assert [outcome for outcome, _survivor, _reason in outcomes] == ["failed", "merged"]
+    assert _sent_parties(sent) == sorted(("parties.Party", person.public_id) for person in second)
+
+
+def test_a_batch_mutes_only_its_own_writes(db: None, django_capture_on_commit_callbacks: Any) -> None:
+    """The mute is context-local and ends with the request: another context and a later write still publish."""
+
+    del db
+    import contextvars
+
+    from angee.base.signals import changes_muted, mute_changes
+    from angee.graphql.testing import capture_broadcasts
+
+    with mute_changes():
+        assert changes_muted() and not contextvars.Context().run(changes_muted)
+    owner = create_user("duplicates-mute-scope")
+    members = _people(owner, "Zoe Example", "Zoe Example", value="scope@example.com")
+    _merge(owner, members)
+    assert not changes_muted()
+
+    with capture_broadcasts() as sent, django_capture_on_commit_callbacks(execute=True):
+        with system_context(reason="duplicates later write"):
+            survivor = Party._base_manager.get(pk=members[0].pk)
+            survivor.display_name = "Zoe Renamed"
+            survivor.save(update_fields=["display_name"])
+
+    assert ("parties.Party", members[0].public_id) in _sent_parties(sent)
+
+
+def test_a_hand_merge_publishes_its_own_changes_as_before(db: None, django_capture_on_commit_callbacks: Any) -> None:
+    del db
+    from angee.graphql.testing import capture_broadcasts
+
+    owner = create_user("duplicates-hand-broadcast")
+    survivor, merged = _people(owner, "Zoe Example", "Zoe Example", value="hand@example.com")
+
+    with capture_broadcasts() as sent, django_capture_on_commit_callbacks(execute=True):
+        with actor_context(owner):
+            Party.objects.get(pk=survivor.pk).merge(records=[merged.public_id])
+
+    # The record merge's own writes publish row by row, as they always have: the merged record's trash and redirect.
+    assert _sent_parties(sent) == [("parties.Party", merged.public_id)] * 2
+
+
+def _merge_statements(actor: Any, *sets: list[Any]) -> tuple[int, int]:
+    """Statements and actor-scoped statements a batch merge issues."""
+
+    with CaptureQueriesContext(connection) as queries:
+        Party.objects.merge_duplicates(actor=actor, sets=[[party.public_id for party in members] for members in sets])
+    statements = [query["sql"] for query in queries.captured_queries]
+    return len(statements), sum("rebac_ids" in sql for sql in statements)
+
+
+def test_a_sets_merge_costs_a_counted_number_of_statements(db: None) -> None:
+    """Each set's own reads, as the batch asks them: the batch permission and the members once for the batch.
+
+    Per set, under its lock: the lock pass, the judgement (members, statements and handles through the actor,
+    party kinds, keep-apart decisions, field values) and the record merge itself (``Party.merge``). The rows the
+    sets wrote are published once for the request, on commit, outside this count
+    (:func:`test_a_batch_publishes_each_row_its_merge_wrote_once_through_its_own_gate` measures that).
+
+    The record merge also probes, once each, every reference it would move (``Party.moved_references()``, one
+    ``exists()`` per merged record) and every merge blocker (``Party.merge_blockers()``, one ``exists()`` per set).
+    Those lists grow with the models a run registers: collecting ``tests/test_task_create_access.py`` and
+    ``tests/test_task_relation_freshness.py`` adds ``ProjectAccessTask`` and ``FreshnessTask``, whose subject
+    references are two more probes (``scopedemo_projectaccesstask``, ``scopedemo_freshnesstask``), so the same set
+    costs 356 statements with this file alone and 358 with every file collected. The pin counts the rest: 317
+    statements, 18 of them actor-scoped, plus one probe for each entry of those two lists.
+    """
+
+    del db
+    owner = create_user("duplicates-statement-count")
+    sets = [_people(owner, f"Zoe Example {i}", f"Zoe Example {i}", value=f"count{i}@example.com") for i in range(3)]
+
+    one = _merge_statements(owner, sets[0])
+    two = _merge_statements(owner, *sets[1:])
+    probes = len(Party.moved_references()) + len(Party.merge_blockers())
+
+    assert (two[0] - one[0] - probes, two[1] - one[1]) == (317, 18)
+
+
+def _singles(owner: Any, count: int, tag: str) -> list[Any]:
+    with system_context(reason="duplicates singles"):
+        return [
+            Person._base_manager.create(display_name=f"Single {tag} {index}", created_by=owner)
+            for index in range(count)
+        ]
+
+
+def _derived(actor: Any, selected: list[Any]) -> Any:
+    return Party.objects.selection_duplicate_sets(actor=actor, ids=[party.public_id for party in selected])
+
+
+def _as_sets(found: Any) -> list[frozenset[str]]:
+    return sorted((frozenset(members) for members in found.sets), key=sorted)
+
+
+def test_fifty_selected_give_one_set_per_pair_among_them_and_the_rest_left_out(db: None) -> None:
+    del db
+    owner = create_user("selection-fifty")
+    pairs = [_people(owner, f"Zoe Example {i}", f"Zoe Example {i}", value=f"sel{i}@example.com") for i in range(3)]
+    _reconcile()
+    singles = _singles(owner, 44, "fifty")
+
+    found = _derived(owner, [party for pair in pairs for party in pair] + singles)
+
+    assert _as_sets(found) == sorted((frozenset(party.public_id for party in pair) for pair in pairs), key=sorted)
+    assert (found.left_out, found.explicit) == (44, False)
+
+
+def test_a_chain_of_pairs_all_selected_is_one_set(db: None) -> None:
+    del db
+    owner = create_user("selection-chain")
+    with system_context(reason="selection chain"):
+        a, b, c = (Person._base_manager.create(display_name="Zoe Example", created_by=owner) for _ in range(3))
+    for holder, claimant, value in ((a, b, "chain-ab@example.com"), (c, b, "chain-bc@example.com")):
+        handle = _address(owner, value)
+        with system_context(reason="selection chain"):
+            Party.objects.assert_handle(holder, handle, asserted_by=owner)
+            Party.objects.propose_claimed_handle_as_system(claimant, handle, evidence=handle, reason="tests.claim")
+    _reconcile()
+
+    found = _derived(owner, [a, b, c] + _singles(owner, 9, "chain"))
+
+    assert _as_sets(found) == [frozenset({a.public_id, b.public_id, c.public_id})]
+
+
+def test_a_pair_outside_the_selection_kept_apart_or_unreviewable_gives_no_set(db: None) -> None:
+    del db
+    owner, other = create_user("selection-excluded"), create_user("selection-excluded-other")
+    kept = _people(owner, "Zoe Kept", "Zoe Kept", value="kept@example.com")
+    outside = _people(owner, "Zoe Outside", "Zoe Outside", value="outside@example.com")
+    hidden_handle = _address(other, "hidden@example.com")
+    with system_context(reason="selection hidden pair"):
+        hidden = [Person._base_manager.create(display_name="Zoe Hidden", created_by=owner) for _ in range(2)]
+        Party.objects.assert_handle(hidden[0], hidden_handle, asserted_by=owner)
+        Party.objects.propose_claimed_handle_as_system(
+            hidden[1], hidden_handle, evidence=hidden_handle, reason="tests.claim",
+        )
+    reviewable = _people(owner, "Zoe Fine", "Zoe Fine", value="fine@example.com")
+    _reconcile()
+    _kept_separate(owner, kept[0], kept[1])
+
+    found = _derived(owner, [*kept, outside[0], *hidden, *reviewable] + _singles(owner, 6, "excluded"))
+
+    assert _as_sets(found) == [frozenset(party.public_id for party in reviewable)]
+
+
+def test_three_to_ten_with_no_pair_are_one_explicit_set_and_eleven_are_none(db: None) -> None:
+    del db
+    owner = create_user("selection-explicit")
+    three, eleven = _singles(owner, 3, "three"), _singles(owner, 11, "eleven")
+
+    explicit, none = _derived(owner, three), _derived(owner, eleven)
+
+    assert (explicit.sets, explicit.left_out, explicit.explicit) == (
+        (tuple(party.public_id for party in three),), 0, True,
+    )
+    assert (none.sets, none.left_out, none.explicit) == ((), 11, False)
+
+
+def test_a_selection_over_the_bound_is_refused_with_its_count(db: None) -> None:
+    del db
+    owner = create_user("selection-bound")
+    ids = [f"pty_{index}" for index in range(Party.objects.SELECTION_LIMIT + 1)]
+
+    with pytest.raises(ValidationError, match="1,001 are selected"):
+        Party.objects.selection_duplicate_sets(actor=owner, ids=ids)
+
+
+def test_a_batch_keeps_its_source_oldest_member_with_the_earliest_time_and_publishes_each_record_once(
+    db: None, django_capture_on_commit_callbacks: Any,
+) -> None:
+    """The batch survivor is the earliest by its sources and keeps the set's minimum, published once."""
+
+    del db
+    from angee.graphql.testing import capture_broadcasts
+
+    owner = create_user("duplicates-batch-source-dates")
+    imported_first, imported_middle, imported_last = _people(
+        owner, "Zoe Dated", "Zoe Dated", "Zoe Dated", value="dated@example.com",
+    )
+    with system_context(reason="duplicates sources' creation times"):
+        Party._base_manager.get(pk=imported_last.pk).backdate_creation(SOURCE_CREATED)
+        Party._base_manager.get(pk=imported_middle.pk).backdate_creation(SOURCE_CREATED + timedelta(days=200))
+    members = [imported_first, imported_middle, imported_last]
+    earliest = min(_created_at(member) for member in members)
+
+    with capture_broadcasts() as sent, django_capture_on_commit_callbacks(execute=True):
+        outcomes = _merge(owner, members)
+
+    assert outcomes == [("merged", imported_last.pk, "")]
+    assert _merged_into(imported_first, imported_middle) == [imported_last.pk, imported_last.pk]
+    assert _created_at(imported_last) == earliest == SOURCE_CREATED
+    parties = [pair for pair in _sent_parties(sent) if pair[0] == "parties.Party"]
+    assert parties == sorted(("parties.Party", member.public_id) for member in members)
+
+
+def test_a_hand_merge_into_the_youngest_is_published_with_the_earliest_time(
+    db: None, django_capture_on_commit_callbacks: Any,
+) -> None:
+    """A survivor a person chose takes the earliest time of what it folds in, and its readers hear of it."""
+
+    del db
+    from angee.graphql.testing import capture_broadcasts
+
+    owner = create_user("duplicates-hand-source-dates")
+    older, younger = _people(owner, "Ada Dated", "Ada Dated", value="ada.dated@example.com")
+    with system_context(reason="duplicates a source's creation time"):
+        Party._base_manager.get(pk=older.pk).backdate_creation(SOURCE_CREATED)
+
+    with capture_broadcasts() as sent, django_capture_on_commit_callbacks(execute=True), actor_context(owner):
+        Party.objects.get(pk=younger.pk).with_actor(owner).merge(records=[older.public_id])
+
+    assert _created_at(younger) == SOURCE_CREATED
+    assert ("parties.Party", younger.public_id) in _sent_parties(sent)

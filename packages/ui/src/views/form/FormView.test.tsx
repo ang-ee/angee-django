@@ -1299,6 +1299,98 @@ describe("FormView", () => {
     expect(within(await screen.findByRole("complementary")).getByText("Private summary")).toBeTruthy();
   });
 
+  test("a rail field shows exactly when the sheet's visibility rule shows it for the form's values", async () => {
+    const scalar = (name: string) => ({ name, kind: "scalar" as const, scalar: "String", readable: true,
+      aggregatable: false, creatable: true, updatable: true, requiredOnCreate: false });
+    const metadataFields = ["kind", "priority", "estimate", "owner"].map(scalar);
+    const resource = testDataResource("notes.Note", { fields: metadataFields });
+    const record = { id: "note-1", title: "First", kind: "note", priority: "High", estimate: "3", owner: "Ada",
+      permissions: ["read", "write"] };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1"
+      fields={[{ name: "title", title: true }, { name: "kind", label: "Kind" }]}
+      acknowledgedSource={{ record, values: record }} />,
+    { types: { NoteType: { resource, fields: Object.fromEntries(metadataFields.map((field) => [field.name, field])) } } },
+    undefined,
+    formChildren({ "notes.Note#rail": { "notes.properties": {
+      content: <FormView.RailGroup id="properties" label="Properties" fields={[
+        { field: { name: "priority", showWhen: (values) => values.kind === "task" } },
+        { field: { name: "estimate", hidden: true } },
+        { field: { name: "owner" } },
+      ]} /> } } }));
+    const rail = await screen.findByRole("complementary");
+    const railControl = (name: string) => within(rail).queryByRole("textbox", { name });
+    const kind = screen.getByRole("textbox", { name: "Kind" });
+    // A body value that fails the condition hides the field; a hidden field never shows; the rest stays.
+    expect(railControl("Owner")).toBeTruthy();
+    expect(railControl("Priority")).toBeNull();
+    expect(railControl("Estimate")).toBeNull();
+
+    fireEvent.change(kind, { target: { value: "task" } });
+    expect((await within(rail).findByRole("textbox", { name: "Priority" }) as HTMLInputElement).value).toBe("High");
+    expect(railControl("Estimate")).toBeNull();
+    expect(railControl("Owner")).toBeTruthy();
+
+    fireEvent.change(kind, { target: { value: "note" } });
+    await waitFor(() => expect(railControl("Priority")).toBeNull());
+    expect(railControl("Estimate")).toBeNull();
+    expect(railControl("Owner")).toBeTruthy();
+  });
+
+  test("a rail field the sheet also declares shows by the sheet's visibility rule, presented as the rail declares it", async () => {
+    const scalar = (name: string) => ({ name, kind: "scalar" as const, scalar: "String", readable: true,
+      aggregatable: false, creatable: true, updatable: true, requiredOnCreate: false });
+    const metadataFields = ["kind", "priority", "owner"].map(scalar);
+    const resource = testDataResource("notes.Note", { fields: metadataFields });
+    const record = { id: "note-1", title: "First", kind: "note", priority: "High", owner: "Ada", permissions: ["read", "write"] };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1"
+      fields={[
+        { name: "title", title: true }, { name: "kind", label: "Kind" },
+        { name: "priority", label: "Priority level", showWhen: (values) => values.kind === "task" },
+      ]}
+      acknowledgedSource={{ record, values: record }} />,
+    { types: { NoteType: { resource, fields: Object.fromEntries(metadataFields.map((field) => [field.name, field])) } } },
+    undefined,
+    formChildren({ "notes.Note#rail": { "notes.properties": {
+      content: <FormView.RailGroup id="properties" label="Properties" fields={[
+        { field: { name: "priority", label: "Priority" } },
+        { field: { name: "owner" } },
+      ]} /> } } }));
+    const rail = await screen.findByRole("complementary");
+    const railControl = (name: string) => within(rail).queryByRole("textbox", { name });
+    const kind = screen.getByRole("textbox", { name: "Kind" });
+    // The sheet hides its priority for a note, so the rail does too; a field only the rail declares stays.
+    expect(railControl("Priority")).toBeNull();
+    expect(railControl("Owner")).toBeTruthy();
+
+    fireEvent.change(kind, { target: { value: "task" } });
+    expect((await within(rail).findByRole("textbox", { name: "Priority" }) as HTMLInputElement).value).toBe("High");
+    expect(railControl("Owner")).toBeTruthy();
+
+    fireEvent.change(kind, { target: { value: "note" } });
+    await waitFor(() => expect(railControl("Priority")).toBeNull());
+    expect(railControl("Owner")).toBeTruthy();
+  });
+
+  test("a field two rail groups name shows by each row's own rule, never by the other row's", async () => {
+    const priority = { name: "priority", kind: "scalar" as const, scalar: "String", readable: true,
+      aggregatable: false, creatable: true, updatable: true, requiredOnCreate: false };
+    const resource = testDataResource("notes.Note", { fields: [priority] });
+    const record = { id: "note-1", title: "First", priority: "High", permissions: ["read", "write"] };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={[{ name: "title", title: true }]}
+      acknowledgedSource={{ record, values: record }} />,
+    { types: { NoteType: { resource, fields: { priority } } } }, undefined,
+    formChildren({ "notes.Note#rail": {
+      "notes.hidden": { content: <FormView.RailGroup id="hidden" label="Hidden"
+        fields={[{ field: { name: "priority", label: "Priority", showWhen: () => false } }]} /> },
+      "notes.shown": { content: <FormView.RailGroup id="shown" label="Shown"
+        fields={[{ field: { name: "priority", label: "Priority" } }]} /> },
+    } }));
+    const rail = await screen.findByRole("complementary");
+    expect(within(rail).queryByText("Hidden")).toBeNull();
+    expect(within(rail).getByText("Shown")).toBeTruthy();
+    expect((within(rail).getByRole("textbox", { name: "Priority" }) as HTMLInputElement).value).toBe("High");
+  });
+
   test("derives a slug from the header title field while creating", async () => {
     sdkMocks.record = null;
     renderWithProviders(

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Field, Form, Group, registerForm, type RegisteredFormProps } from "@angee/ui";
+import { Field, Form, registerForm, type RegisteredFormProps } from "@angee/ui";
 import { IntegrationSyncFields, useIntegrationSyncAction } from "@angee/integrate";
 
 import { CHANNEL_MODEL } from "./documents";
@@ -18,14 +18,6 @@ function ChannelForm({ resource: _resource, ...props }: RegisteredFormProps): Re
       <Field name="runtime_status" readOnly />
       <Field name="backend_class" readOnly />
       <Field name="config" readOnly />
-      <Group label={t("channel.group.webform")} columns={2}>
-        <Field name="slug" widget="slug" showWhen={isWebformChannel} />
-        <Field name="is_published" showWhen={isWebformChannel} />
-        <Field name="form_schema_version" showWhen={isWebformChannel} />
-        <Field name="max_body_bytes" showWhen={isWebformChannel} />
-        <Field name="max_field_bytes" showWhen={isWebformChannel} />
-        <Field name="form_schema" widget="json" showWhen={isWebformChannel} />
-      </Group>
       {IntegrationSyncFields({ label: t("channel.group.lastSync") })}
       {syncAction}
     </Form>
@@ -33,7 +25,3 @@ function ChannelForm({ resource: _resource, ...props }: RegisteredFormProps): Re
 }
 
 export const channelForm = registerForm(CHANNEL_MODEL, ChannelForm);
-
-function isWebformChannel(values: Record<string, unknown>): boolean {
-  return String(values.backend_class ?? "").toLowerCase() === "webform";
-}

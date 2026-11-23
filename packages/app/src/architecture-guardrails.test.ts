@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { isBuiltin } from "node:module";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -9,7 +10,7 @@ import { FILTER_OPERATORS } from "@angee/metadata";
 
 import {
   UX_GUARD_ALLOWANCES, formatUxGuardViolation, uxGuardViolations, uxGuardViolationsInFile, type UxGuardRule,
-} from "./ux-ontology-guard";
+} from "./ux-ontology-guard.test-support";
 
 const MONOREPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const PACKAGES_ROOT = join(MONOREPO_ROOT, "packages");
@@ -314,6 +315,27 @@ describe("React architecture guardrails", () => {
     }
   });
 
+  test("a runtime import resolves through dependencies or peerDependencies, a test's also through devDependencies", () => {
+    const scratch = join(PACKAGES_ROOT, "app", "test-results");
+    mkdirSync(scratch, { recursive: true });
+    const root = mkdtempSync(join(scratch, "guardrail-"));
+    const view = join(root, "src", "view.ts");
+    try {
+      mkdirSync(join(root, "src"));
+      writeFileSync(join(root, "package.json"), JSON.stringify({
+        name: "@angee/fixture", devDependencies: { "dev-only": "1.0.0" },
+      }));
+      writeFileSync(view, 'import { run } from "dev-only";\nexport const value = run;\n');
+      writeFileSync(join(root, "src", "view.test.ts"), 'import { run } from "dev-only";\nexport const value = run;\n');
+      writeFileSync(join(root, "src", "types.ts"), 'import type { Run } from "dev-only";\nexport type Value = Run;\n');
+      expect(importViolations([{ name: "@angee/fixture", root }])).toEqual([
+        `${workspaceRelative(view)} (@angee/fixture) imports dev-only at runtime without declaring it in dependencies or peerDependencies`,
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("critical export consumers exclude imports, barrel exports, and comments", () => {
     const source = ts.createSourceFile("fixture.ts", `
       import { Unused, Renamed as Local } from "./owner";
@@ -424,6 +446,20 @@ describe("React architecture guardrails", () => {
       .toEqual([]);
   });
 
+  test("a list surface calls a page's bulkActions only through renderBulkActions, which states the split and the all-matching mode", () => {
+    const files = sourceFiles(join(PACKAGES_ROOT, "ui/src/views")).filter((file) => !isTestFile(file) && !isStoryFile(file));
+    expect(files.flatMap((file) => bulkActionsCallViolations(file, readFileSync(file, "utf8")))).toEqual([]);
+  });
+
+  test("the bulkActions guard reports a call outside the owner's renderBulkActions", () => {
+    const owner = join(PACKAGES_ROOT, BULK_ACTIONS_OWNER);
+    expect(bulkActionsCallViolations("seed.tsx", "bulkActions?.(ids, clear, { filter, selectedRows });")).toHaveLength(1);
+    expect(bulkActionsCallViolations("seed.tsx", "const node = props.bulkActions(ids, clear, collection);")).toHaveLength(1);
+    expect(bulkActionsCallViolations("seed.tsx", "function renderBulkActions() { return bulkActions?.(ids, clear, placed); }")).toHaveLength(1);
+    expect(bulkActionsCallViolations(owner, "function renderBulkActions() { return bulkActions?.(ids, clear, placed); }")).toEqual([]);
+    expect(bulkActionsCallViolations(owner, "function other() { return bulkActions?.(ids, clear, placed); }")).toHaveLength(1);
+  });
+
   test("framework-owned dynamic i18n families contain only UI vocabulary", () => {
     expect([...new Set(UI_DYNAMIC_I18N_KEY_FAMILIES.map((family) => family.namespace))])
       .toEqual(["ui"]);
@@ -437,7 +473,7 @@ describe("React architecture guardrails", () => {
       const edges = new Map(
         addons.map((pkg) => [
           pkg.name,
-          [...packageDependencies(pkg.root)].filter((dependency) => addonNames.has(dependency)),
+          [...packageDependencies(pkg.root).all].filter((dependency) => addonNames.has(dependency)),
         ]),
       );
 
@@ -831,9 +867,12 @@ function uxGuardPackageRoots(): PackageRoot[] {
 
 function importViolations(packages: readonly PackageRoot[]): string[] {
   const violations = publishedVitestViolations(packages);
+  const tooling = new Set(toolingPackageRoots().map((pkg) => pkg.root));
   for (const pkg of packages) {
     const dependencies = packageDependencies(pkg.root);
     for (const file of sourceFiles(pkg.root)) {
+      // Tooling packages, tests, stories and test support never ship: they may import devDependencies too.
+      const runtime = tooling.has(pkg.root) || isTestOnlyFile(file) ? [] : sourceAnalysis(file).runtimeSpecifiers;
       for (const specifier of importSpecifiers(file)) {
         const rel = workspaceRelative(file);
         if (
@@ -843,6 +882,14 @@ function importViolations(packages: readonly PackageRoot[]): string[] {
         ) {
           violations.push(`${rel} imports ${specifier}, outside package root ${workspaceRelative(pkg.root)}`);
           continue;
+        }
+        // A runtime import must survive an install without devDependencies (generated schemas are injected).
+        const dependency = externalPackageName(specifier);
+        if (
+          dependency && dependency !== pkg.name && dependency !== "@angee/gql"
+          && runtime.includes(specifier) && !dependencies.runtime.has(dependency)
+        ) {
+          violations.push(`${rel} (${pkg.name}) imports ${dependency} at runtime without declaring it in dependencies or peerDependencies`);
         }
         const importedPackage = angeePackageName(specifier);
         if (!importedPackage) continue;
@@ -859,7 +906,7 @@ function importViolations(packages: readonly PackageRoot[]): string[] {
         if (
           importedPackage !== pkg.name
           && importedPackage !== "@angee/gql"
-          && !dependencies.has(importedPackage)
+          && !dependencies.all.has(importedPackage)
         ) {
           violations.push(`${rel} imports ${importedPackage} without declaring it in package.json`);
         }
@@ -1006,13 +1053,22 @@ function visitDirectories(
   }
 }
 
-function packageDependencies(root: string): ReadonlySet<string> {
+/** A package's declared dependencies: what an install without devDependencies still provides, and all. */
+function packageDependencies(root: string): { runtime: ReadonlySet<string>; all: ReadonlySet<string> } {
   const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-  return new Set([
-    ...Object.keys(manifest.dependencies ?? {}),
-    ...Object.keys(manifest.devDependencies ?? {}),
-    ...Object.keys(manifest.peerDependencies ?? {}),
-  ]);
+  const runtime = [...Object.keys(manifest.dependencies ?? {}), ...Object.keys(manifest.peerDependencies ?? {})];
+  return {
+    runtime: new Set(runtime),
+    all: new Set([...runtime, ...Object.keys(manifest.devDependencies ?? {})]),
+  };
+}
+
+/** The package a bare specifier resolves through (`@scope/name` or `name`); null for paths and Node builtins. */
+function externalPackageName(specifier: string): string | null {
+  if (/^(?:[./]|node:|virtual:)/.test(specifier) || isBuiltin(specifier)) return null;
+  const [first, second] = specifier.split("/");
+  if (!first) return null;
+  return first.startsWith("@") ? (second ? `${first}/${second}` : null) : first;
 }
 
 function sourceFiles(root: string): string[] {
@@ -1022,7 +1078,7 @@ function sourceFiles(root: string): string[] {
     if (["node_modules", "runtime", "dist", "coverage"].includes(basename(entry))) return;
     const stat = statSync(entry);
     if (stat.isDirectory()) {
-      for (const child of readdirSync(entry)) visit(join(entry, child));
+      for (const child of readdirSync(entry).sort()) visit(join(entry, child));
       return;
     }
     const extension = entry.slice(entry.lastIndexOf("."));
@@ -1596,6 +1652,11 @@ function isStoryFile(file: string): boolean {
   return /\.stories\.[^.]+$/.test(file);
 }
 
+/** Tests, stories and the test support they share (`*.test-support.*`): code no install runs. */
+function isTestOnlyFile(file: string): boolean {
+  return isTestFile(file) || isStoryFile(file) || /\.test-support\.[^.]+$/.test(file);
+}
+
 /** `<Refine>` elements whose `options` literal does not set `disableTelemetry: true`, as `file:line`. */
 function refineTelemetryViolations(file: string, text: string): string[] {
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
@@ -1613,6 +1674,33 @@ function refineTelemetryViolations(file: string, text: string): string[] {
       if (!off) {
         violations.push(`${workspaceRelative(file)}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}`);
       }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return violations;
+}
+
+/** The module whose `renderBulkActions` is the one call of a page's `bulkActions`. */
+const BULK_ACTIONS_OWNER = "ui/src/views/resource/bulk-action.ts";
+
+/**
+ * Calls of a page's `bulkActions` outside the owner's `renderBulkActions`, as `file:line`.
+ * That one call states the selection's split and withholds a selected-ids-only collection
+ * while "all matching" is on; the internal holder types say the same, and this catches a
+ * holder typed with the public callback.
+ */
+function bulkActionsCallViolations(file: string, text: string): string[] {
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  const owner = file === join(PACKAGES_ROOT, BULK_ACTIONS_OWNER);
+  const violations: string[] = [];
+  const visit = (node: ts.Node): void => {
+    const callee = ts.isCallExpression(node)
+      ? ts.isPropertyAccessExpression(node.expression) ? node.expression.name : node.expression
+      : undefined;
+    if (callee && ts.isIdentifier(callee) && callee.text === "bulkActions"
+      && !(owner && ts.findAncestor(node, ts.isFunctionDeclaration)?.name?.text === "renderBulkActions")) {
+      violations.push(`${workspaceRelative(file)}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}`);
     }
     ts.forEachChild(node, visit);
   };

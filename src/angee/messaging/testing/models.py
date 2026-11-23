@@ -32,6 +32,7 @@ from angee.parties.models import Directory as AbstractDirectory
 from angee.parties.models import Folder as AbstractContactFolder
 from angee.parties.models import Handle as AbstractHandle
 from angee.parties.models import Organization as AbstractOrganization
+from angee.parties.models import PartiesRole as AbstractPartiesRole
 from angee.parties.models import Party as AbstractParty
 from angee.parties.models import Person as AbstractPerson
 from angee.parties.models import Relationship as AbstractRelationship
@@ -375,3 +376,20 @@ class Participant(AbstractParticipant):
         app_label = "messaging"
         db_table = "test_messaging_participant"
         rebac_resource_type = "messaging/participant"
+
+
+class PartiesRole(AbstractPartiesRole):
+    """Concrete table-less REBAC anchor for the ``parties/role`` namespace.
+
+    The composer emits this anchor in the runtime; the bare test env registers it
+    too so the const-backed role arms of ``parties/*`` resolve. ``managed = False``:
+    never a table, only a type anchor.
+    """
+
+    class Meta(AbstractPartiesRole.Meta):
+        """Django model options for the canonical test parties role anchor."""
+
+        abstract = False
+        managed = False
+        app_label = "parties"
+        rebac_resource_type = "parties/role"

@@ -10,6 +10,7 @@ failure fails the write; its delivery is queued robustly on commit.
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -23,7 +24,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from django.apps import AppConfig, apps
-from django.db import connections, router
+from django.db import connections, router, transaction
 from django.db.models import Model, QuerySet
 from django.db.models.signals import class_prepared, post_delete, post_save
 from django.dispatch import Signal
@@ -217,6 +218,60 @@ delivery with ``transaction.on_commit(..., robust=True)``.
 
 _mute_depth: ContextVar[int] = ContextVar("angee_change_mute_depth", default=0)
 
+_PUBLISH_CHUNK = 500
+"""How many collected rows of one model :meth:`MutedChanges.publish` reads back at a time."""
+
+
+class MutedChanges:
+    """The rows a collecting :func:`mute_changes` kept from observation, held as keys and observed once on request.
+
+    It holds ``(concrete model label, pk)`` keys per database, deduplicated, and
+    never an instance or a payload, so a large block keeps no rows in memory. A key
+    joins when its write's transaction commits (``transaction.on_commit``): a block,
+    or a savepoint inside it, that rolled back contributes nothing.
+    """
+
+    def __init__(self) -> None:
+        self._keys: defaultdict[str, set[tuple[str, Any]]] = defaultdict(set)
+        self._databases: set[str] = set()
+
+    def _suppressed(self, instance: Model) -> None:
+        """Keep the key of one muted write, once its transaction commits."""
+
+        using = instance._state.db or router.db_for_write(type(instance), instance=instance)
+        key = ((instance._meta.concrete_model or type(instance))._meta.label, instance.pk)
+        self._databases.add(using)
+        transaction.on_commit(partial(self._keys[using].add, key), using=using)
+
+    def publish(self) -> None:
+        """Observe each collected row once, as a full update, after the outermost transaction commits.
+
+        Registered through ``transaction.on_commit``: called inside a transaction it
+        waits for the outermost commit, and called outside one it runs at once,
+        after every write it collected has committed. Each database's rows are read
+        back by model, in ``(model label, pk)`` order and :data:`_PUBLISH_CHUNK` at a
+        time, and observed through :func:`publish_change`, so each passes every
+        adapter's own gate. A row deleted inside the block has no live row to gate
+        and is not observed.
+        """
+
+        for using in sorted(self._databases):
+            transaction.on_commit(partial(self._publish, using), using=using)
+
+    def _publish(self, using: str) -> None:
+        pks: defaultdict[str, list[Any]] = defaultdict(list)
+        for label, pk in self._keys.pop(using, set()):
+            pks[label].append(pk)
+        for label in sorted(pks):
+            manager = apps.get_model(label)._base_manager.db_manager(using)
+            ordered = sorted(pks[label])
+            for start in range(0, len(ordered), _PUBLISH_CHUNK):
+                for row in manager.filter(pk__in=ordered[start:start + _PUBLISH_CHUNK]).order_by("pk"):
+                    publish_change(row, action="update", update_fields=None)
+
+
+_collecting: ContextVar[MutedChanges | None] = ContextVar("angee_change_collecting", default=None)
+
 _IMMUTABLE_VALUE_TYPES = frozenset({date, datetime, time, timedelta, Decimal, UUID})
 """Immutable field value types a deep copy would rebuild; builtin scalars it already returns as they are."""
 
@@ -228,7 +283,7 @@ def changes_muted() -> bool:
 
 
 @contextmanager
-def mute_changes() -> Iterator[None]:
+def mute_changes(*, collect: MutedChanges | None = None) -> Iterator[None]:
     """Suppress per-row change observation for the duration of the block.
 
     A bulk teardown deleting thousands of rows would otherwise observe each one,
@@ -236,12 +291,21 @@ def mute_changes() -> Iterator[None]:
     context-local: it never touches the shared signal registry, so it is safe
     under concurrent requests. A coarse change the caller still wants observed
     (the purged root's own row) runs outside the block.
+
+    With ``collect`` the block also keeps the key of every row it suppressed, as
+    its transaction commits, and the caller observes each once later with
+    :meth:`MutedChanges.publish`; a write that asked for no transport
+    (``broadcast=False``) stays muted. The innermost mute decides: an ordinary mute
+    nested inside a collecting one collects nothing, since its caller publishes
+    its own summary.
     """
 
     token = _mute_depth.set(_mute_depth.get() + 1)
+    collecting = _collecting.set(collect)
     try:
         yield
     finally:
+        _collecting.reset(collecting)
         _mute_depth.reset(token)
 
 
@@ -251,6 +315,8 @@ def publish_change(
     """Observe one owner write: local observers first, then transport adapters."""
 
     if changes_muted():
+        if broadcast and (collector := _collecting.get()) is not None:
+            collector._suppressed(instance)
         return
     # models.identity declares models, which need a ready app registry; this
     # signals module stays importable before apps load.
@@ -293,7 +359,7 @@ def publish_bulk_update(
     observed as full updates.
     """
 
-    if changes_muted():
+    if changes_muted() and _collecting.get() is None:
         return
     # models.base declares models, which need a ready app registry; this
     # signals module stays importable before apps load.

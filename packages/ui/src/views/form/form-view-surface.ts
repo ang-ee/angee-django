@@ -681,10 +681,6 @@ export function useFormViewSurface({
     t,
     readOnly,
   });
-  const visibleRailGroups = React.useMemo(
-    () => visibleRecordRailGroups(railGroups, save.displayRecord, modelMetadata, railAdmits),
-    [railGroups, save.displayRecord, modelMetadata, railAdmits],
-  );
   const canonicalTabSelection = React.useMemo(
     () => refineFieldsFromPaths(["id", ...canonicalTabFields]),
     [canonicalTabFields],
@@ -729,17 +725,15 @@ export function useFormViewSurface({
     // Set during render, so React re-renders before painting and no fallback pane flashes first.
     setRuledRecordTab({ key: ruledRecordKey, tab: defaultRecordTab(tabRecord) });
   }
+  // The sheet's own declarations for this record, never a group it does not show.
+  const sheetFields = React.useMemo(
+    () => regularFormFieldsFor(save.displayRecord),
+    [regularFormFieldsFor, save.displayRecord],
+  );
   const fieldLayout = React.useMemo(
-    () =>
-      formViewFieldLayout(
-        // Title, status and body come from this record's own fields, never a group it does not show.
-        regularFormFieldsFor(save.displayRecord),
-        resolvedFields,
-        resolvedGroups,
-        modelMetadata,
-        isCreate,
-      ),
-    [isCreate, modelMetadata, regularFormFieldsFor, resolvedFields, resolvedGroups, save.displayRecord],
+    // Title, status and body come from the sheet's own fields.
+    () => formViewFieldLayout(sheetFields, resolvedFields, resolvedGroups, modelMetadata, isCreate),
+    [isCreate, modelMetadata, resolvedFields, resolvedGroups, sheetFields],
   );
   const declaredActions = React.useMemo(
     () => [
@@ -794,8 +788,14 @@ export function useFormViewSurface({
     },
     [declaredGroupSequences, gridFields, gridGroups, isCreate, save.displayRecord, save.linesActive, sectionAdmits],
   );
-  const sectionValues = useWatch({ control: save.form.control, disabled: !hasConditionalFields });
-  const shownSections = hasConditionalFields ? visibleSections(allSections, sectionValues) : allSections;
+  // The values the sheet's sections and the rail decide their conditional fields by, watched while
+  // any field is conditional (`formFields` holds the rail's, so they count) and read only by those.
+  const conditionValues = useWatch({ control: save.form.control, disabled: !hasConditionalFields });
+  const shownSections = hasConditionalFields ? visibleSections(allSections, conditionValues) : allSections;
+  const visibleRailGroups = React.useMemo(
+    () => visibleRecordRailGroups(railGroups, save.displayRecord, conditionValues, modelMetadata, railAdmits, sheetFields),
+    [railGroups, save.displayRecord, conditionValues, modelMetadata, railAdmits, sheetFields],
+  );
   // A `pane` group fills its own pane beneath the sheet; every other section is the sheet.
   const sections = React.useMemo(() => shownSections.filter((section) => section.pane === undefined), [shownSections]);
   const paneSections = React.useMemo(() => shownSections.filter((section) => section.pane !== undefined), [shownSections]);

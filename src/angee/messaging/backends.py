@@ -484,11 +484,3 @@ class ManualChannelBackend(ChannelBackend):
 
     key = "manual"
     label = "Manual"
-
-
-class WebformChannelBackend(ChannelBackend):
-    """Vendor-free public-form channel populated only by its curated HTTP view."""
-
-    key = "webform"
-    label = "Public Webform"
-    quote_edges = False

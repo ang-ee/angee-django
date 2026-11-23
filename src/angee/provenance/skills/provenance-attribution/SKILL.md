@@ -134,7 +134,9 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
 7. **Retain derivation evidence.** An evidence owner declares a `DerivedFrom` child (`DecisionRecord`,
    `src/angee/decisions/models.py`; `ExtractionSource`, `src/angee/extraction/models.py`) and admits sources
    with `readable_records(refs, actors)` (standing read for every participant); frozen values travel as `EvidenceFact`
-   with a `FactAuthority`. **Owner rule:** [Glossary: Derived-from evidence](../../../../../docs/glossary.md#workflows);
+   with a `FactAuthority`. Two references name the same record when their `EvidenceReference.named_record` is equal
+   (the label without case and the public id; a pointer names a part of it), never by comparing whole references.
+   **Owner rule:** [Glossary: Derived-from evidence](../../../../../docs/glossary.md#workflows);
    edges never grant access to their targets.
 
 8. **Serve nothing new.** `history(model, id)` and `revert_changeset` live in provenance's `console` schema, resource metadata

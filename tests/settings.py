@@ -74,6 +74,8 @@ INSTALLED_APPS = [
     "angee.spaces",
     "angee.work",
     "angee.intake",
+    "angee.webforms",
+    "angee.webforms_messaging",
     "angee.nexus",
     "angee.posts",
     "angee.platform",
@@ -106,6 +108,7 @@ INSTALLED_APPS = [
     "tests.hierdemo",
     "tests.recordrefdemo",
     "tests.checklistdemo",
+    "tests.webformsdemo",
     "tests",
 ]
 # Checkout-local and stable, so `--reuse-db` keeps it between runs; pytest-django

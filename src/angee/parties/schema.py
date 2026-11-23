@@ -415,11 +415,23 @@ class SameAsPairType:
 
 
 @strawberry.type
+class SelectionDuplicateSetsType:
+    """The duplicate sets among selected records: each set's member ids, and how many were left out."""
+
+    sets: list[list[strawberry.ID]]
+    left_out: int
+    explicit: bool
+    """No pair was found among three to ten selected records: the selection is one set, as selected."""
+
+
+@strawberry.type
 class SameAsPairCountsType:
     """How many pairs the reader may review, and how many of those are certain."""
 
     pairs: int
     certain: int
+    capped: bool
+    """The count stopped at its cap: there are more pairs than ``pairs``, and possibly more certain ones."""
 
 
 @strawberry.type
@@ -462,6 +474,8 @@ class DuplicateSetPreviewType:
     """Fields the members state at least two different values for: what a person must look at."""
     fills: list[MergeFieldValuesType]
     """Fields exactly one value is stated for, the rest empty: the merge gives the survivor that value."""
+    grouping: list[MergeFieldValuesType]
+    """For each field the set was grouped by that is a text merge field, its members' values, differing or not."""
 
 
 @strawberry.type
@@ -542,21 +556,39 @@ class PartiesReviewQuery:
         )
 
     @strawberry.field
+    def selection_duplicate_sets(self, info: strawberry.Info, ids: list[strawberry.ID]) -> SelectionDuplicateSetsType:
+        """Return the duplicate sets among records selected on an ungrouped list, under the signed-in reader."""
+
+        found = Party.objects.selection_duplicate_sets(actor=session_user(info), ids=[str(pk) for pk in ids])
+        return SelectionDuplicateSetsType(
+            sets=[[strawberry.ID(pk) for pk in members] for members in found.sets],
+            left_out=found.left_out,
+            explicit=found.explicit,
+        )
+
+    @strawberry.field
     def same_as_pair_counts(self, info: strawberry.Info) -> SameAsPairCountsType:
         """Return how many pairs the signed-in person may review, and how many of those are certain."""
 
         counts = Party.objects.same_as_review_counts(actor=session_user(info))
-        return SameAsPairCountsType(pairs=counts.pairs, certain=counts.certain)
+        return SameAsPairCountsType(pairs=counts.pairs, certain=counts.certain, capped=counts.capped)
 
     @strawberry.field
     def duplicate_set_previews(
-        self, info: strawberry.Info, sets: list[list[strawberry.ID]], certain: bool = False,
+        self,
+        info: strawberry.Info,
+        sets: list[list[strawberry.ID]],
+        certain: bool = False,
+        groupings: list[list[str]] | None = None,
     ) -> list[DuplicateSetPreviewType]:
-        """Return each set of records as the batch merge would merge it now, with what tells its members apart."""
+        """Return each set of records as the batch merge would merge it now, with what tells its members apart.
+
+        ``groupings`` names, per set, the fields a list grouped it by (names only, never values).
+        """
 
         actor = session_user(info)
         previews = Party.objects.preview_duplicates(
-            actor=actor, sets=[[str(pk) for pk in ids] for ids in sets], certain=certain,
+            actor=actor, sets=[[str(pk) for pk in ids] for ids in sets], certain=certain, groupings=groupings,
         )
         _prefetch_member_facts([member for preview in previews for member in preview.members], actor)
         return cast("list[DuplicateSetPreviewType]", previews)
@@ -705,19 +737,24 @@ class PartiesIdentityMutation:
 
     @strawberry.mutation
     def merge_duplicates(
-        self, info: strawberry.Info, sets: list[list[strawberry.ID]], digests: list[str], certain: bool = False,
+        self,
+        info: strawberry.Info,
+        sets: list[list[strawberry.ID]],
+        digests: list[str],
+        certain: bool = False,
+        groupings: list[list[str]] | None = None,
     ) -> list[DuplicateSetOutcomeType]:
         """Merge each confirmed set into its oldest member as the signed-in person; return every outcome.
 
-        ``digests`` are the sets' ``digest`` from ``duplicate_set_previews``, one per set: a set whose shown
-        facts changed since is refused, to be looked at again.
+        ``digests`` are the sets' ``digest`` from ``duplicate_set_previews``, one per set, judged with the
+        same ``groupings``: a set whose shown facts changed since is refused, to be looked at again.
         """
 
         return cast(
             "list[DuplicateSetOutcomeType]",
             Party.objects.merge_duplicates(
                 actor=session_user(info), sets=[[str(pk) for pk in ids] for ids in sets], certain=certain,
-                digests=digests,
+                digests=digests, groupings=groupings,
             ),
         )
 

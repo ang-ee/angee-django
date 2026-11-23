@@ -50,6 +50,18 @@ class EvidenceReference(BaseModel):
         pointer_model = generic_pointer_model(type(record))
         return cls(model=pointer_model._meta.label, id=public_id_for(pointer_model, record.pk), pointer=pointer)
 
+    @property
+    def named_record(self) -> tuple[str, str]:
+        """The record this reference names: its model's label without case, and its public id.
+
+        Two references name the same record when this is equal, however each
+        writer cased the label. A ``pointer`` picks a part of that record and
+        names no other, so it is left out. Ask whether references name the same
+        record through this, never field by field.
+        """
+
+        return self.model.lower(), self.id
+
 
 def _readable(
     refs: Sequence[EvidenceReference], actor: Any, *, permission: str, standing: bool

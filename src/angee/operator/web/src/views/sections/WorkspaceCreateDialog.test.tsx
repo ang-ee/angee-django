@@ -74,6 +74,33 @@ vi.mock("../../data/transport", () => ({
           ],
         },
         {
+          id: "workspaces/review",
+          ref: "workspaces/review",
+          kind: "workspace",
+          name: "review",
+          path: "/templates/workspaces/review",
+          inputs: [
+            {
+              name: "topic",
+              type: "str",
+              required: false,
+              immutable: false,
+              generated: false,
+              default: "triage",
+              question: true,
+            },
+            {
+              name: "draft",
+              type: "bool",
+              required: false,
+              immutable: false,
+              generated: false,
+              default: "yes",
+              question: true,
+            },
+          ],
+        },
+        {
           id: "services/claude-code",
           ref: "services/claude-code",
           kind: "service",
@@ -189,6 +216,70 @@ describe("WorkspaceCreateDialog", () => {
     expect(mocks.navigate).toHaveBeenCalledWith({
       to: "/operator/workspaces/slice-5",
     });
+  });
+
+  test("a template's preset replaces every input it names, typed ones too, and the dialog submits the seeds", async () => {
+    mocks.preflight.mockResolvedValue({
+      workspaceCreatePreflight: {
+        ok: false,
+        template: "workspaces/review",
+        resolvedTemplate: "workspaces/review",
+        effectiveInputs: [],
+        missingRequired: [],
+        invalidInputs: [],
+      },
+    });
+
+    renderDialog();
+    await chooseTemplate("dev");
+    // Each input of the chosen template takes its initial value, validated as it lands.
+    expect((screen.getByLabelText("topic") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("count") as HTMLInputElement).value).toBe("");
+    expect(await screen.findByText("This field is required.")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("topic"), { target: { value: "typed" } });
+    fireEvent.change(screen.getByLabelText("count"), { target: { value: "3" } });
+
+    await chooseTemplate("review");
+    expect((screen.getByLabelText("topic") as HTMLInputElement).value).toBe("triage");
+    expect(screen.getByRole("switch", { name: "draft" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.queryByLabelText("count")).toBeNull();
+
+    await chooseTemplate("dev");
+    expect((screen.getByLabelText("topic") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("count") as HTMLInputElement).value).toBe("");
+    expect(screen.queryByRole("switch", { name: "draft" })).toBeNull();
+    fireEvent.change(screen.getByLabelText("count"), { target: { value: "5" } });
+
+    await chooseTemplate("review");
+    const submit = screen.getByRole("button", { name: "Create workspace" }) as HTMLButtonElement;
+    await waitFor(() => expect(submit.disabled).toBe(false));
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(mocks.preflight).toHaveBeenCalledWith({
+        input: {
+          template: "workspaces/review",
+          inputs: [
+            { key: "topic", value: "triage" },
+            { key: "draft", value: "true" },
+          ],
+        },
+      }, { errorNotification: false }),
+    );
+    expect(mocks.create).not.toHaveBeenCalled();
+
+    // The chosen template's preset seeds its inputs afresh and only its inputs are submitted: this holds
+    // with and without the dialog unregistering what it hides, and pins the dialog across that change.
+    await chooseTemplate("dev");
+    expect((screen.getByLabelText("count") as HTMLInputElement).value).toBe("");
+    expect(screen.queryByRole("switch", { name: "draft" })).toBeNull();
+    fireEvent.change(screen.getByLabelText("topic"), { target: { value: "dev topic" } });
+    await waitFor(() => expect(submit.disabled).toBe(false));
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(mocks.preflight).toHaveBeenLastCalledWith({
+        input: { template: "workspaces/dev", inputs: [{ key: "topic", value: "dev topic" }] },
+      }, { errorNotification: false }),
+    );
   });
 });
 

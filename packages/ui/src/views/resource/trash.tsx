@@ -175,7 +175,7 @@ function TrashSelectionActions({ modelMetadata, selectedRows, unprocessedCount, 
   const [restoreRecord] = useAuthoredResourceMutation(RestoreRecord, options);
   return <>{selections.map(({ restore, ids }) => {
     if (!ids.length) return null;
-    return <SelectionBar.Action key={String(restore)} surface="brand" pending={bulk.pending} disabled={bulk.blocked}
+    return <SelectionBar.Action key={String(restore)} surface="brand" pending={bulk.pending} disabled={bulk.blocked} {...bulk.reason}
       onClick={() => {
         let reason = "";
         void bulk.run({
