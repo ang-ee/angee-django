@@ -10,6 +10,28 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: **Changed behaviour.** A person's and an organization's record
+  form follows what the reader may do on that record. Their types project
+  `permissions` (`delete`, `merge_away`, `share` and `write`), which the form
+  reads, and each changes one thing:
+  a reader without `write` (a contact reader, a directory's contact reader, a
+  person a record was shared with to read) sees the person and organization
+  forms read-only, where the form used to take edits the server then refused;
+  Trash and Restore show only to a reader with `delete`;
+  Share shows only to someone who may share the record;
+  the list of who reads the record now appears for someone who may share it
+  (it never did, since no person or organization read carried `share`);
+  and "Merge into…" shows only with `merge_away`, so a contact manager, who
+  writes a person but merges none away, no longer sees a verb the merge then
+  refused. A list's selection of one record still opens "Merge into…": its
+  rows carry no projection, and the compare page refuses whoever may not merge.
+  Who may write, delete, share or merge is unchanged. `parties/person` and
+  `parties/organization` gain `share`, their party's, delegated whole because
+  sharing one writes the grant on its party. Only reads that select
+  `permissions` pay for it, and no budgeted read does; the person read with
+  it selected takes the same statements and, on PostgreSQL, the same planner
+  memory as without it, for a reader in no contact role. Revision 42.
+  Upgrade: nothing by hand; the provision chain's `rebac sync` applies it.
 - `@angee/ui`: **Changed behaviour.** A dialog submits only the fields it shows:
   a field a `showWhen` hides, when the dialog opens or after a value was typed
   into it, is not submitted, and shows its initial value when it shows again,
