@@ -16,11 +16,14 @@ target_config:
   slug: enquiries
 ```
 
-- `channel` is a channel with the `webform` backend. Posting on a channel is
-  messaging's to allow, so someone may point a form at one only if they may
-  write on it ([`MessageTarget.permits`](targets.py) asks the channel's own
-  `write` check). An addon that declares the form as a resource row
-  ([a form an addon declares](../webforms/README.md#a-form-an-addon-declares))
+- `channel` is a channel with the `webform` backend. A form whose target or
+  configuration changes is refused, under `target_config`, a channel that is
+  gone or has another backend, whoever chooses it, system work included
+  ([`MessageTarget.clean`](targets.py)): no response could be posted on it.
+  Posting on a channel is messaging's to allow, so someone may point a form at
+  one only if they may also write on it ([`MessageTarget.permits`](targets.py)
+  asks the channel's own `write` check). An addon that declares the form as a
+  resource row ([a form an addon declares](../webforms/README.md#a-form-an-addon-declares))
   names a channel its resources declare by xref (`channel: acme.intake`):
   `MessageTargetConfig` declares `channel` a relation to `messaging.Channel`, so
   the load stores that channel's public id, and refuses an xref that names no

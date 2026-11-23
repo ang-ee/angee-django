@@ -203,10 +203,18 @@ class AngeeResource(resources.ModelResource):
                 row.pop(field.column_name, None)
         super().after_init_instance(instance, new, row, **kwargs)
 
+    def is_unchanged(self, row: Mapping[str, Any]) -> bool:
+        """Whether ``row`` matches its ledger hash, so this load leaves its target as it is.
+
+        Known once the native instance loader has resolved the row's target.
+        """
+
+        return row["_xref"] in self._hash_skips
+
     def import_instance(self, instance: models.Model, row: Mapping[str, Any], **kwargs: Any) -> None:
         """Keep hash-skipped instances intact, including operator-authored values."""
 
-        if row["_xref"] not in self._hash_skips:
+        if not self.is_unchanged(row):
             super().import_instance(instance, row, **kwargs)
 
     def skip_row(
@@ -214,7 +222,7 @@ class AngeeResource(resources.ModelResource):
     ) -> bool:
         """Let native import-export record hash skips and all other row outcomes."""
 
-        return row["_xref"] in self._hash_skips or super().skip_row(instance, original, row, import_validation_errors)
+        return self.is_unchanged(row) or super().skip_row(instance, original, row, import_validation_errors)
 
     def after_save_instance(
         self,

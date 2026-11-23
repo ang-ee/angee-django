@@ -70,6 +70,21 @@ class MessageTarget(FormTarget):
     label = "Post to a messaging channel"
     config_model = MessageTargetConfig
 
+    def clean(self) -> None:
+        """Refuse a channel that is gone or has another backend, whoever chooses it.
+
+        No response could be posted on it: delivery would refuse every one as
+        ``channel_missing``. Messaging judges it as it does for delivery, by the
+        channel's backend and public id alone, whoever asks
+        (``require_backend_target``); ``permits`` then asks whether an acting
+        user may write on it.
+        """
+
+        config = cast(MessageTargetConfig, self.config)
+        apps.get_model("messaging", "Channel").objects.require_backend_target(
+            config.channel, backend_class=WebformChannelBackend.key,
+        )
+
     def permits(self, actor: Any) -> bool:
         """Whether ``actor`` may post on the channel this configuration names.
 

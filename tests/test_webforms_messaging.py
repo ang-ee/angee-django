@@ -363,6 +363,24 @@ def test_only_someone_who_may_write_on_the_webform_channel_may_point_a_form_at_i
     assert permits(admin, "int_missing") is False
 
 
+def test_a_channel_no_response_could_be_posted_on_is_refused_even_to_system_work() -> None:
+    """System work is asked no ``permits``; the target's own check still refuses the channel, once, when chosen."""
+
+    mailbox = channel("manual", "Mailbox")
+    with system_context(reason="webforms messaging tests setup"):
+        for named in (mailbox.sqid, "int_missing"):
+            chosen = Form(name="Enquiry form", target_class="message", target_config={"channel": named, "slug": "e"})
+            with pytest.raises(ValidationError) as refused:
+                chosen.full_clean()
+            assert refused.value.message_dict == {"target_config": [f"No Public Webform channel {named!r}."]}
+        # A form whose configuration stays as stored is not judged again: renaming it is no new choice.
+        stored_before = Form.objects.create(
+            name="Enquiry form", target_class="message", target_config={"channel": mailbox.sqid, "slug": "e"},
+        )
+        stored_before.name = "Renamed form"
+        stored_before.full_clean()
+
+
 @pytest.mark.parametrize("config", [
     pytest.param({}, id="nothing"),
     pytest.param({"channel": "int_1"}, id="no-slug"),

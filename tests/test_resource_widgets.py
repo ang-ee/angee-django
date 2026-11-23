@@ -34,6 +34,9 @@ def test_config_resolution_uses_only_valid_relation_branches_and_preserves_the_s
         assert Resource.objects.resolve_config_references(value, schema=schema) == {
             "value": {"kind": "reference", "target": str(actor.sqid)},
         }
+        # One load's addon selection scopes a reference, as it scopes the load's relation columns.
+        with pytest.raises(ValueError, match="unresolved xref 'iam.config_reader'"):
+            Resource.objects.resolve_config_references(value, schema=schema, addon_aliases={"tags": "angee.tags"})
     assert value["value"]["target"] == "iam.config_reader"
 
 

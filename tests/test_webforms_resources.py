@@ -1,11 +1,12 @@
 """A web form declared as one resource row: the form, the version it serves and its addresses.
 
-An addon's resource file declares the form; the loader owns its identity (the
-ledger xref), its hash and its transaction, and the form's own verbs serve the
-version and add the addresses. The form posts on a webform channel the declaring
-addon knows by xref, as a consumer's intake form does. Staff edits are made under
-``system_context``, as the console's writes would land. Every name and address
-is invented.
+The declaring addon ships its vendor, its webform channel and the form, linked by
+``depends_on``, as the web forms README shows; the form names the channel by its
+xref. The loader owns the form's identity (the ledger xref), its hash and its
+transaction, and the form's own verbs serve the version and add the addresses.
+Staff edits run as a platform admin through the models' own saves and verbs;
+what code made before a declaration existed runs as system work. Every name and
+address is invented.
 """
 
 from __future__ import annotations
@@ -16,7 +17,8 @@ from typing import Any
 import pytest
 import yaml
 from django.apps import apps
-from rebac import system_context
+from rebac import actor_context, system_context
+from rebac.roles import grant as grant_role
 
 from angee.messaging.testing.models import Channel
 from angee.provenance.context import changeset_model_label, current_changeset
@@ -24,11 +26,13 @@ from angee.resources.exceptions import ResourceLoadError
 from angee.resources.testing.models import Resource
 from angee.webforms.models import FormStatus
 from angee.webforms.testing.models import Form, FormAlias, FormVersion, Response
-from tests.conftest import Vendor, create_user, make_addon
+from tests.conftest import Vendor, create_platform_admin, create_user, make_addon
 
 pytestmark = pytest.mark.django_db
 
-SOURCE = "030_webforms.form.yaml"
+VENDOR = "master/010_integrate.vendor.yaml"
+CHANNELS = "master/020_messaging.channel.yaml"
+FORM = "install/030_webforms.form.yaml"
 DEFINITION: dict[str, Any] = {
     "title": "Tell us",
     "elements": [
@@ -45,27 +49,13 @@ VERSION: dict[str, Any] = {
 }
 
 
-@pytest.fixture
-def intake() -> Any:
-    """A webform channel, ledgered as ``webformsdemo.intake`` the way a declaring addon's resources ledger it."""
-
-    with system_context(reason="webforms resources tests setup"):
-        Vendor.objects.get_or_create(slug="webform", defaults={"display_name": "Webform"})
-        owner = create_user("intake-owner")
-        channel = Channel.objects.create_disconnected(owner, name="Intake", backend_class="webform")
-        Resource.objects.bind_instance(
-            addon=apps.get_app_config("webformsdemo"), xref="intake", instance=channel, source="test",
-        )
-    return channel
-
-
 def declared(**changes: Any) -> dict[str, Any]:
     """The declared form's fields, with ``changes`` over them."""
 
     return {
         "name": "Intake",
         "target_class": "message",
-        "target_config": {"channel": "webformsdemo.intake", "slug": "intake"},
+        "target_config": {"channel": "webforms_seed.intake", "slug": "intake"},
         "aliases": ["intake"],
         "version": VERSION,
         **changes,
@@ -73,27 +63,54 @@ def declared(**changes: Any) -> dict[str, Any]:
 
 
 class Declaring:
-    """A declaring addon whose one install entry is the form's file, rewritten before each load."""
+    """The declaring addon: its vendor and channels in master, its form in install, rewritten before each load."""
 
-    def __init__(self, path: Path, *, create_only: tuple[str, ...] = ()) -> None:
-        (path / "resources").mkdir(exist_ok=True)
-        self.file = path / "resources" / SOURCE
-        entry: dict[str, Any] = {"path": SOURCE}
+    def __init__(self, path: Path, *, create_only: tuple[str, ...] = ("retention_days",)) -> None:
+        self.root = path / "resources"
+        self.write(VENDOR, [{"xref": "vendor", "fields": {"slug": "webform", "display_name": "Public webforms"}}])
+        self.write(CHANNELS, [
+            {"xref": "intake", "fields": {
+                "display_name": "Intake", "vendor": "webforms_seed.vendor", "backend_class": "webform",
+            }},
+            {"xref": "mailbox", "fields": {
+                "display_name": "Mailbox", "vendor": "webforms_seed.vendor", "backend_class": "manual",
+            }},
+        ])
+        form: dict[str, Any] = {"path": FORM, "depends_on": CHANNELS}
         if create_only:
-            entry["create_only"] = list(create_only)
+            form["create_only"] = list(create_only)
         self.addon = make_addon(name="tests.webforms_seed", label="webforms_seed", path=path, resources={
-            "install": [entry],
+            "master": [{"path": VENDOR, "adopt": "slug"}, {"path": CHANNELS, "depends_on": VENDOR}],
+            "install": [form],
         })
+
+    def write(self, name: str, rows: list[dict[str, Any]]) -> None:
+        target = self.root / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(yaml.safe_dump({"rows": rows}, sort_keys=False))
+
+    def declare(self, **changes: Any) -> None:
+        """Rewrite the form's row with ``changes`` over the declared fields."""
+
+        self.write(FORM, [{"xref": "intake_form", "fields": declared(**changes)}])
 
     def load(self, **changes: Any) -> Any:
         """Declare the form with ``changes`` over it and load the addon's resources."""
 
-        row = {"xref": "intake_form", "fields": declared(**changes)}
-        self.file.write_text(yaml.safe_dump({"rows": [row]}, sort_keys=False))
+        self.declare(**changes)
         return Resource.objects.load_addons((self.addon,), tiers=[Resource.Tier.INSTALL])
 
+    def load_channels(self) -> None:
+        Resource.objects.load_addons((self.addon,), tiers=[Resource.Tier.MASTER])
+
+    def channel(self, xref: str = "intake") -> Any:
+        with system_context(reason="webforms resources tests read"):
+            target = Resource.objects.get(source_addon=self.addon.name, xref=xref).target_instance()
+        assert isinstance(target, Channel)
+        return target
+
     def form(self) -> Any:
-        """The one form the declaration made, read through the ledger."""
+        """The one form there is, read through the ledger."""
 
         with system_context(reason="webforms resources tests read"):
             assert Form._base_manager.count() == 1
@@ -103,9 +120,15 @@ class Declaring:
 
 
 @pytest.fixture
-def declaring(tmp_path: Path, intake: Any) -> Declaring:
-    del intake
+def declaring(tmp_path: Path) -> Declaring:
     return Declaring(tmp_path)
+
+
+@pytest.fixture
+def staff() -> Any:
+    """A platform admin, who manages forms and may write on every channel."""
+
+    return create_platform_admin("webforms-staff")
 
 
 def versions(form: Any) -> list[tuple[int, dict[str, Any], bool]]:
@@ -128,14 +151,23 @@ def history(form: Any) -> int:
         return form.history.count()
 
 
-def test_a_load_makes_one_form_serving_its_published_version_at_its_address(declaring: Declaring, intake: Any) -> None:
+def nothing_made(declaring: Declaring) -> None:
+    with system_context(reason="webforms resources tests read"):
+        assert not Form._base_manager.exists()
+        assert not FormVersion._base_manager.exists()
+        assert not FormAlias._base_manager.exists()
+        assert not Resource.objects.filter(source_addon=declaring.addon.name, xref="intake_form").exists()
+
+
+def test_a_load_makes_one_form_serving_its_published_version_at_its_address(declaring: Declaring) -> None:
     result = declaring.load()
 
     form = declaring.form()
-    assert (result.created, result.updated, result.skipped) == (1, 0, 0)
+    # The vendor, two channels and the form.
+    assert (result.created, result.updated, result.skipped) == (4, 0, 0)
     assert (form.name, form.status, str(form.target_class)) == ("Intake", FormStatus.PUBLISHED, "message")
     # The channel's xref became its public id: what the target reads, and what one conversation per channel checks.
-    assert form.target_config == {"channel": intake.sqid, "slug": "intake"}
+    assert form.target_config == {"channel": declaring.channel().sqid, "slug": "intake"}
     with system_context(reason="webforms resources tests read"):
         served = FormVersion._base_manager.get(pk=form.published_version_id)
         assert FormAlias.objects.serving().get(slug="intake").form_id == form.pk
@@ -158,7 +190,7 @@ def test_an_unchanged_reload_writes_nothing(declaring: Declaring) -> None:
 
     result = declaring.load()
 
-    assert (result.created, result.updated, result.skipped) == (0, 0, 1)
+    assert (result.created, result.updated, result.skipped) == (0, 0, 4)
     assert history(declaring.form()) == written
     assert versions(form) == [(1, DEFINITION, True)]
     assert slugs(form) == {"intake"}
@@ -191,12 +223,12 @@ def test_a_changed_declaration_serves_new_content_as_a_new_version_and_a_return_
 
 @pytest.mark.parametrize("edit", ["rename", "delete"])
 def test_staff_renaming_or_deleting_the_alias_neither_fails_a_reload_nor_makes_a_second_form(
-    declaring: Declaring, edit: str,
+    declaring: Declaring, staff: Any, edit: str,
 ) -> None:
     declaring.load()
     form = declaring.form()
-    with system_context(reason="webforms resources tests staff edit"):
-        alias = FormAlias._base_manager.get(form=form)
+    with actor_context(staff):
+        alias = FormAlias.objects.get(form=form)
         if edit == "rename":
             alias.slug = "intake-desk"
             alias.save()
@@ -204,7 +236,7 @@ def test_staff_renaming_or_deleting_the_alias_neither_fails_a_reload_nor_makes_a
             alias.delete()
     left = {"intake-desk"} if edit == "rename" else set()
 
-    assert declaring.load().skipped == 1
+    assert declaring.load().skipped == 4
     assert declaring.form().pk == form.pk
     assert slugs(form) == left
 
@@ -215,13 +247,13 @@ def test_staff_renaming_or_deleting_the_alias_neither_fails_a_reload_nor_makes_a
 
 
 def test_staff_closing_the_form_survives_reloads_and_a_changed_declaration_serves_it_closed(
-    declaring: Declaring,
+    declaring: Declaring, staff: Any,
 ) -> None:
     declaring.load()
-    with system_context(reason="webforms resources tests staff edit"):
-        declaring.form().close()
+    with actor_context(staff):
+        Form.objects.get(pk=declaring.form().pk).close()
 
-    assert declaring.load().skipped == 1
+    assert declaring.load().skipped == 4
     assert declaring.form().status == FormStatus.CLOSED
 
     declaring.load(version={**VERSION, "definition": LONGER})
@@ -229,34 +261,72 @@ def test_staff_closing_the_form_survives_reloads_and_a_changed_declaration_serve
     assert (form.status, form.published_version.number) == (FormStatus.CLOSED, 2)
 
 
-def test_a_version_staff_published_survives_reloads_until_the_declaration_changes(declaring: Declaring) -> None:
+def test_a_version_staff_published_survives_reloads_and_any_changed_row_serves_the_declared_content_again(
+    declaring: Declaring, staff: Any,
+) -> None:
     declaring.load()
     form = declaring.form()
-    with system_context(reason="webforms resources tests staff edit"):
+    with actor_context(staff):
         FormVersion.objects.create(form=form, **{**VERSION, "definition": LONGER}).publish()
 
-    assert declaring.load().skipped == 1
+    assert declaring.load().skipped == 4
     assert declaring.form().published_version.number == 2
 
-    # The declaration's own content, now changed, is what a changed row serves.
-    changed = {**DEFINITION, "title": "Tell us more"}
-    declaring.load(version={**VERSION, "definition": changed})
-    assert versions(form) == [(1, DEFINITION, True), (2, LONGER, True), (3, changed, True)]
+    # A row that changes only the form's name still serves its declared content, over staff's version.
+    assert declaring.load(name="Intake form").updated == 1
+    assert versions(form) == [(1, DEFINITION, True), (2, LONGER, True), (3, DEFINITION, True)]
     assert declaring.form().published_version.number == 3
 
 
-def test_a_version_the_publication_refuses_leaves_nothing_behind(tmp_path: Path, intake: Any) -> None:
-    del intake
-    declaring = Declaring(tmp_path)
+def test_an_entry_that_leaves_the_questions_to_staff_lists_version_under_create_only(
+    tmp_path: Path, staff: Any,
+) -> None:
+    declaring = Declaring(tmp_path, create_only=("retention_days", "version"))
+    declaring.load()
+    form = declaring.form()
+    with actor_context(staff):
+        FormVersion.objects.create(form=form, **{**VERSION, "definition": LONGER}).publish()
 
+    ignored = {**VERSION, "definition": {**DEFINITION, "title": "Ignored"}}
+    assert declaring.load(name="Intake form", version=ignored).updated == 1
+
+    assert (declaring.form().name, declaring.form().published_version.number) == ("Intake form", 2)
+    assert versions(form) == [(1, DEFINITION, True), (2, LONGER, True)]
+
+
+def test_a_row_without_a_version_is_refused_whether_it_would_make_the_form_or_change_it(
+    declaring: Declaring,
+) -> None:
+    fields = declared()
+    del fields["version"]
+    declaring.write(FORM, [{"xref": "intake_form", "fields": fields}])
+
+    with pytest.raises(ResourceLoadError, match="Declare version"):
+        Resource.objects.load_addons((declaring.addon,), tiers=[Resource.Tier.INSTALL])
+    nothing_made(declaring)
+
+    declaring.load()
+    declaring.write(FORM, [{"xref": "intake_form", "fields": {**fields, "name": "Renamed"}}])
+    with pytest.raises(ResourceLoadError, match="Declare version"):
+        Resource.objects.load_addons((declaring.addon,), tiers=[Resource.Tier.INSTALL])
+    assert declaring.form().name == "Intake"
+
+
+def test_a_version_the_publication_refuses_leaves_nothing_behind(declaring: Declaring) -> None:
     with pytest.raises(ResourceLoadError, match="State which questions hold personal data"):
         declaring.load(version={**VERSION, "personal_questions": None})
 
-    with system_context(reason="webforms resources tests read"):
-        assert not Form._base_manager.exists()
-        assert not FormVersion._base_manager.exists()
-        assert not FormAlias._base_manager.exists()
-        assert not Resource.objects.filter(source_addon=declaring.addon.name).exists()
+    nothing_made(declaring)
+
+
+def test_a_version_field_its_column_cannot_hold_is_a_field_refusal(declaring: Declaring) -> None:
+    long = "e" * 65
+    content = {**VERSION, "contact_question": long, "personal_questions": ["name", "email", long]}
+
+    with pytest.raises(ResourceLoadError, match=r"contact_question.*at most 64 characters"):
+        declaring.load(version=content)
+
+    nothing_made(declaring)
 
 
 def test_a_changed_declaration_the_publication_refuses_leaves_the_served_version_and_the_ledger(
@@ -273,53 +343,68 @@ def test_a_changed_declaration_the_publication_refuses_leaves_the_served_version
     assert versions(form) == [(1, DEFINITION, True)]
     assert slugs(form) == {"intake"}
     # The ledger kept the declaration that applied, so the next load tries the change again.
-    assert declaring.load().skipped == 1
+    assert declaring.load().skipped == 4
+
+
+def test_a_channel_reference_is_resolved_among_the_loads_own_addons(declaring: Declaring) -> None:
+    """An installed addon outside the load is out of the row's scope, as it is for the row's relation columns."""
+
+    with system_context(reason="webforms resources tests setup"):
+        Vendor.objects.get_or_create(slug="webform", defaults={"display_name": "Webform"})
+        elsewhere = Channel.objects.create_disconnected(
+            create_user("channel-elsewhere"), name="Elsewhere", backend_class="webform",
+        )
+        Resource.objects.bind_instance(
+            addon=apps.get_app_config("webformsdemo"), xref="elsewhere", instance=elsewhere, source="test",
+        )
+
+    with pytest.raises(ResourceLoadError, match="target_config.*unresolved xref 'webformsdemo.elsewhere'"):
+        declaring.load(target_config={"channel": "webformsdemo.elsewhere", "slug": "intake"})
+
+    nothing_made(declaring)
 
 
 @pytest.mark.parametrize(("reference", "refusal"), [
-    pytest.param("webformsdemo.missing", "unresolved xref 'webformsdemo.missing'", id="an-unknown-xref"),
-    pytest.param("webformsdemo.owner", "targets .*, not messaging.Channel", id="an-xref-to-another-kind-of-record"),
+    pytest.param("webforms_seed.missing", "unresolved xref 'webforms_seed.missing'", id="an-unknown-xref"),
+    pytest.param("webforms_seed.vendor", "targets .*, not messaging.Channel", id="an-xref-to-another-kind-of-record"),
+    pytest.param("webforms_seed.mailbox", "No Public Webform channel", id="a-channel-of-another-backend"),
 ])
-def test_a_channel_reference_that_names_no_channel_is_refused_and_makes_nothing(
+def test_a_channel_reference_that_names_no_webform_channel_is_refused_and_makes_nothing(
     declaring: Declaring, reference: str, refusal: str,
 ) -> None:
-    with system_context(reason="webforms resources tests setup"):
-        Resource.objects.bind_instance(
-            addon=apps.get_app_config("webformsdemo"), xref="owner", instance=create_user("not-a-channel"),
-            source="test",
-        )
-
     with pytest.raises(ResourceLoadError, match=rf"target_config.*{refusal}"):
         declaring.load(target_config={"channel": reference, "slug": "intake"})
 
-    with system_context(reason="webforms resources tests read"):
-        assert not Form._base_manager.exists()
+    nothing_made(declaring)
 
 
-def test_a_channels_public_id_is_kept_as_it_is_declared(declaring: Declaring, intake: Any) -> None:
-    declaring.load(target_config={"channel": intake.sqid, "slug": "intake"})
+def test_a_channels_public_id_is_kept_as_it_is_declared(declaring: Declaring) -> None:
+    declaring.load_channels()
+    public_id = declaring.channel().sqid
 
-    assert declaring.form().target_config == {"channel": intake.sqid, "slug": "intake"}
+    declaring.load(target_config={"channel": public_id, "slug": "intake"})
+
+    assert declaring.form().target_config == {"channel": public_id, "slug": "intake"}
 
 
-def test_a_declared_retention_must_be_create_only(declaring: Declaring) -> None:
+def test_a_declared_retention_must_be_create_only(tmp_path: Path) -> None:
+    declaring = Declaring(tmp_path, create_only=())
+
     with pytest.raises(ResourceLoadError, match="retention_days is the deployment's once a form exists"):
         declaring.load(retention_days=30)
 
-    with system_context(reason="webforms resources tests read"):
-        assert not Form._base_manager.exists()
+    nothing_made(declaring)
 
 
 def test_a_create_only_retention_reaches_the_new_form_and_never_the_deployments_own(
-    tmp_path: Path, intake: Any,
+    declaring: Declaring, staff: Any,
 ) -> None:
-    del intake
-    declaring = Declaring(tmp_path, create_only=("retention_days",))
-
     declaring.load(retention_days=30)
     assert declaring.form().retention_days == 30
-    with system_context(reason="webforms resources tests staff edit"):
-        Form._base_manager.filter(pk=declaring.form().pk).update(retention_days=365)
+    with actor_context(staff):
+        edited = Form.objects.get(pk=declaring.form().pk)
+        edited.retention_days = 365
+        edited.save(update_fields=["retention_days", "updated_at"])
 
     assert declaring.load(name="Intake form", retention_days=7).updated == 1
     assert (declaring.form().name, declaring.form().retention_days) == ("Intake form", 365)
@@ -333,9 +418,9 @@ def test_a_create_only_retention_reaches_the_new_form_and_never_the_deployments_
     pytest.param({"aliases": ["taken"]}, "The address forms/taken belongs to another form", id="another-forms-alias"),
 ])
 def test_a_declared_version_or_alias_the_form_cannot_take_is_refused_and_makes_nothing(
-    declaring: Declaring, changes: dict[str, Any], refusal: str,
+    declaring: Declaring, staff: Any, changes: dict[str, Any], refusal: str,
 ) -> None:
-    with system_context(reason="webforms resources tests setup"):
+    with actor_context(staff):
         other = Form.objects.create(name="Staff form")
         FormAlias.objects.create(form=other, slug="taken")
 
@@ -345,6 +430,71 @@ def test_a_declared_version_or_alias_the_form_cannot_take_is_refused_and_makes_n
     with system_context(reason="webforms resources tests read"):
         assert list(Form._base_manager.values_list("name", flat=True)) == ["Staff form"]
         assert list(FormAlias._base_manager.values_list("slug", flat=True)) == ["taken"]
+
+
+def test_a_form_made_before_the_declaration_is_adopted_by_binding_it_to_the_rows_xref(
+    declaring: Declaring,
+) -> None:
+    """A form the move template or a consumer's own code made already posts on the channel under the slug."""
+
+    declaring.load_channels()
+    with system_context(reason="webforms resources tests: a form made before the declaration"):
+        earlier = Form.objects.create(
+            name="Painless intake", target_class="message", retention_days=90,
+            target_config={"channel": declaring.channel().sqid, "slug": "intake"},
+        )
+        FormVersion.objects.create(form=earlier, **{**VERSION, "definition": LONGER}).publish()
+        FormAlias.objects.create(form=earlier, slug="intake")
+        FormAlias.objects.create(form=earlier, slug="painless")
+
+    # One channel and slug take one form: the declared one is refused while the earlier one holds them.
+    with pytest.raises(ResourceLoadError, match="Another form already posts on this channel under this slug"):
+        declaring.load(retention_days=30)
+
+    with system_context(reason="webforms resources tests: adopt the earlier form"):
+        Resource.objects.bind_instance(
+            addon=declaring.addon, xref="intake_form", instance=earlier, source=f"resources/{FORM}",
+        )
+    assert declaring.load(retention_days=30).updated == 1
+
+    form = declaring.form()
+    assert form.pk == earlier.pk
+    # Declared fields apply, the retention stays the deployment's, the declared content is served, the aliases stay.
+    assert (form.name, form.retention_days, form.published_version.number) == ("Intake", 90, 2)
+    assert versions(form) == [(1, LONGER, True), (2, DEFINITION, True)]
+    assert slugs(form) == {"intake", "painless"}
+    assert declaring.load(retention_days=30).skipped == 4
+
+
+def test_a_row_loaded_for_a_named_actor_is_saved_as_that_actor(
+    declaring: Declaring, staff: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Managing forms is not posting on the channel: ``load_xref``'s actor is the one the target asks."""
+
+    manager = create_user("webforms-only-manager")
+    with system_context(reason="webforms resources tests setup"):
+        grant_role(actor=manager, role="webforms/role:webforms_admin")
+    declaring.load_channels()
+    declaring.declare()
+    addon = declaring.addon
+    addon.apps = apps
+    addon.models = {}
+    handle = f"{addon.name}.intake_form"
+    try:
+        monkeypatch.setitem(apps.app_configs, addon.label, addon)
+        apps.clear_cache()
+
+        with pytest.raises(ResourceLoadError, match="may not point a form at 'message'"):
+            Resource.objects.load_xref(handle, model=Form, actor=manager)
+        nothing_made(declaring)
+
+        form = Resource.objects.load_xref(handle, model=Form, actor=staff)
+    finally:
+        monkeypatch.delitem(apps.app_configs, addon.label)
+        apps.clear_cache()
+
+    assert form.pk == declaring.form().pk
+    assert versions(form) == [(1, DEFINITION, True)]
 
 
 @pytest.mark.entrypoint_boundaries

@@ -42,7 +42,7 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
-from django.db import models, transaction
+from django.db import IntegrityError, models, transaction
 from django.utils import timezone
 from rebac import PermissionDenied, system_context
 from rebac.actors import is_sudo
@@ -122,6 +122,12 @@ def _model(name: str) -> Any:
     """Return a composed web forms model through the app registry."""
 
     return apps.get_model("webforms", name)
+
+
+def _taken(slug: str) -> str:
+    """The refusal of an address another form holds."""
+
+    return f"The address forms/{slug} belongs to another form."
 
 
 class FormUnavailable(LookupError):
@@ -246,11 +252,17 @@ class Form(ResourceLoadMixin, HistoryMixin, ArchiveMixin, AngeeDataModel, concre
         return self.name
 
     def clean(self) -> None:
-        """Check the target's configuration against the target the form selects."""
+        """Check the target's configuration against the target the form selects.
+
+        A target or configuration being chosen is also held to the target's own
+        :meth:`FormTarget.clean`, whoever chooses it.
+        """
 
         super().clean()
         try:
-            self.target()
+            target = self.target()
+            if self._target_changed():
+                target.clean()
         except ValidationError as error:
             raise ValidationError({"target_config": error.messages}) from error
 
@@ -296,18 +308,23 @@ class Form(ResourceLoadMixin, HistoryMixin, ArchiveMixin, AngeeDataModel, concre
         acting user (demo data, a migration) is not asked.
         """
 
-        chosen = (str(self.target_class), self.target_config)
-        if not self._state.adding:
-            stored = type(self)._base_manager.filter(pk=self.pk).values_list("target_class", "target_config").first()
-            if stored is not None and (str(stored[0]), stored[1]) == chosen:
-                return
+        if not self._target_changed():
+            return
         actor = instance_actor(self)
         if actor is None:
             if self.is_sudo() or is_sudo():
                 return
             raise PermissionDenied("Denied: choosing a form's target requires an actor.")
         if not self.target().permits(actor):
-            raise PermissionDenied(f"Denied: the current actor may not point a form at {chosen[0]!r}.")
+            raise PermissionDenied(f"Denied: the current actor may not point a form at {str(self.target_class)!r}.")
+
+    def _target_changed(self) -> bool:
+        """Whether the target or its configuration is being chosen: a new form, or one that differs from the stored."""
+
+        if self._state.adding:
+            return True
+        stored = type(self)._base_manager.filter(pk=self.pk).values_list("target_class", "target_config").first()
+        return stored is None or (str(stored[0]), stored[1]) != (str(self.target_class), self.target_config)
 
     @transition(
         status, source=[FormStatus.DRAFT, FormStatus.CLOSED], target=FormStatus.PUBLISHED, on_success=save_state,
@@ -333,6 +350,8 @@ class Form(ResourceLoadMixin, HistoryMixin, ArchiveMixin, AngeeDataModel, concre
         decided by the version served now, never by an older one. A field
         ``content`` leaves out takes the version's default. Like ``publish``, it
         opens a draft form and leaves a published or closed one in its state.
+        The content is held to the version's fields and rules before anything
+        is written, each refusal under the field it is about.
         """
 
         self.require_access("write")
@@ -343,6 +362,8 @@ class Form(ResourceLoadMixin, HistoryMixin, ArchiveMixin, AngeeDataModel, concre
                 f"A version holds {', '.join(versions.CONTENT_FIELDS)}; it does not hold {', '.join(unknown)}."
             )})
         candidate = versions(form_id=self.pk, **content)
+        # The verb sets the form, the number and the publication; the content is the caller's.
+        candidate.full_clean(exclude=["form", "number", "published_at"])
         with transaction.atomic():
             # The form's lock first, as publish takes it: the version served is read as it stands.
             form = _model("Form").system_queryset(lock=("self",)).get(pk=self.pk)
@@ -359,7 +380,9 @@ class Form(ResourceLoadMixin, HistoryMixin, ArchiveMixin, AngeeDataModel, concre
 
         An alias the form already has, under a declared slug or another, stays
         as it is. A slug another form holds is refused under ``aliases``, before
-        any alias is made.
+        any alias is made; so is one another form takes while this call runs,
+        and the aliases this call made go with the refusal. A slug the same form
+        gains meanwhile is its own.
         """
 
         self.require_access("write")
@@ -368,12 +391,20 @@ class Form(ResourceLoadMixin, HistoryMixin, ArchiveMixin, AngeeDataModel, concre
         held = dict(aliases._base_manager.filter(slug__in=wanted).values_list("slug", "form_id"))
         taken = [slug for slug in wanted if held.get(slug, self.pk) != self.pk]
         if taken:
-            raise ValidationError({"aliases": [f"The address forms/{slug} belongs to another form." for slug in taken]})
-        for slug in wanted:
-            if slug not in held:
+            raise ValidationError({"aliases": [_taken(slug) for slug in taken]})
+        with transaction.atomic():
+            for slug in wanted:
+                if slug in held:
+                    continue
                 alias = aliases(form=self, slug=slug)
                 alias.clean_fields(exclude=["form"])
-                alias.save()
+                try:
+                    # The unique slug decides a concurrent insert; the savepoint keeps the transaction usable.
+                    with transaction.atomic():
+                        alias.save()
+                except IntegrityError as error:
+                    if not aliases._base_manager.filter(slug=slug, form_id=self.pk).exists():
+                        raise ValidationError({"aliases": [_taken(slug)]}) from error
 
 
 class FormVersionQuerySet(ClosedUpdateQuerySet[Any], AngeeQuerySet):
