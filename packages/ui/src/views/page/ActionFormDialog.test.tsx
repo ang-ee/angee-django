@@ -1169,6 +1169,39 @@ describe("an object argument's member messages", () => {
       expect(submit.mock.calls[0]![0]).toStrictEqual({ retry: { handle: "abcd" }, code: "abc" });
     },
   );
+
+  test("a schema definition: a member named `type` shows its message after a refused submit, keeps it through an edit that still fails, and correcting it lets the submit through", async () => {
+    const typeSpec = { type: "object", properties: {
+      retry: { type: "object", widget: "object", label: "Retry", properties: {
+        type: { type: "string", label: "Kind", minLength: 3 },
+      } },
+    } } as const;
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Tuned." });
+    renderDialog({ id: "tune", label: "Tune", submit, args: jsonSchemaActionArgs(typeSpec, defaultWidgets, { initialValues: { retry: { type: "abc" } } }) });
+    await screen.findByLabelText("Kind");
+    fireEvent.change(input("Kind"), { target: { value: "ab" } });
+    fireEvent.submit(tune().closest("form")!);
+    expect(await screen.findByText(rule)).toBeTruthy();
+    expect(messageUnder("Kind")).toContain(rule);
+    expect(input("Kind").getAttribute("aria-invalid")).toBe("true");
+    expect(submit).not.toHaveBeenCalled();
+
+    fireEvent.change(input("Kind"), { target: { value: "a" } });
+    await settle();
+    expect(messageUnder("Kind")).toContain(rule);
+    expect(input("Kind").getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getAllByText(rule)).toHaveLength(1);
+    fireEvent.submit(tune().closest("form")!);
+    await settle();
+    expect(submit).not.toHaveBeenCalled();
+
+    fireEvent.change(input("Kind"), { target: { value: "abcd" } });
+    await waitFor(() => expect(screen.queryByText(rule)).toBeNull());
+    await waitFor(() => expect(tune().disabled).toBe(false));
+    fireEvent.click(tune());
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(submit.mock.calls[0]![0]).toStrictEqual({ retry: { type: "abcd" } });
+  });
 });
 
 describe("a required field in a dialog without a resolver", () => {

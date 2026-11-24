@@ -16,7 +16,7 @@ import {
   submitMutationDialog,
 } from "./MutationDialog";
 import { deserializeFormSpec } from "./form-spec";
-import type { FormSubmitResult } from "./validation-errors";
+import { MEMBER_ERRORS, type FormSubmitResult } from "./validation-errors";
 import type { DescriptorField } from "./DescriptorFieldList";
 import { createUiTestProviders } from "../../testing";
 
@@ -937,20 +937,132 @@ describe("an object field's member messages", () => {
     expect(submit).not.toHaveBeenCalled();
   });
 
-  test.fails("defect: a member named `type` shows no message, since the message walk skips that key at every depth; it should show its message as any member does", async () => {
+  // An object field whose member is named as one of React Hook Form's own attributes of an error.
+  async function renderNamedMember(
+    member: "type" | "ref", initialValues: Record<string, unknown>, result: FormSubmitResult<unknown> = ok,
+  ) {
     const fields = deserializeFormSpec({ type: "object", properties: {
       retry: { type: "object", widget: "object", label: "Retry", properties: {
-        type: { type: "string", label: "Kind", minLength: 3 },
+        [member]: { type: "string", label: "Kind", minLength: 3 },
+        handle: { type: "string", label: "Handle", minLength: 3 },
       } },
     } }, defaultWidgets);
+    const submit = vi.fn().mockResolvedValue(result);
     render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-      <MutationDialog open onOpenChange={vi.fn()} title="Retry" fields={fields} initialValues={{ retry: { type: "abc" } }}
-        submitLabel="Save" parseValues={parseRawValues} onSubmit={vi.fn().mockResolvedValue(ok)} />
+      <MutationDialog open onOpenChange={vi.fn()} title="Retry" fields={fields} initialValues={initialValues}
+        submitLabel="Save" parseValues={parseRawValues} onSubmit={submit} />
     </AppRuntimeProvider>);
     await screen.findByLabelText("Kind");
+    const save = screen.getByRole<HTMLButtonElement>("button", { name: "Save" });
+    return { submit, save, form: save.closest("form")! };
+  }
+
+  async function namedMemberKeepsItsMessage(member: "type" | "ref") {
+    const { submit, save, form } = await renderNamedMember(member, { retry: { [member]: "abc", handle: "abc" } });
+    await waitFor(() => expect(save.disabled).toBe(false));
+
     fireEvent.change(input("Kind"), { target: { value: "ab" } });
-    await waitFor(() => expect(screen.getByRole<HTMLButtonElement>("button", { name: "Save" }).disabled).toBe(true));
     expect(await screen.findByText(handleRule)).toBeTruthy();
+    expect(messageUnder("Kind")).toContain(handleRule);
     expect(input("Kind").getAttribute("aria-invalid")).toBe("true");
+    expect(save.disabled).toBe(true);
+    fireEvent.submit(form);
+    await settle();
+    expect(submit).not.toHaveBeenCalled();
+
+    fireEvent.change(input("Kind"), { target: { value: "a" } });
+    await settle();
+    expect(messageUnder("Kind")).toContain(handleRule);
+    expect(input("Kind").getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getAllByText(handleRule)).toHaveLength(1);
+    expect(save.disabled).toBe(true);
+
+    fireEvent.change(input("Kind"), { target: { value: "abcd" } });
+    await waitFor(() => expect(screen.queryByText(handleRule)).toBeNull());
+    await waitFor(() => expect(save.disabled).toBe(false));
+    fireEvent.click(save);
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(submit.mock.calls[0]![0]).toStrictEqual({ retry: { [member]: "abcd", handle: "abc" } });
+  }
+
+  test("a member named `type` shows its message as any member does: a failing value shows it with Save disabled and nothing submitted, an edit that still fails keeps it, and correcting it removes it and enables Save", async () => {
+    await namedMemberKeepsItsMessage("type");
   });
+
+  test.fails("defect: a member named `ref` shows no message, since the message walk never walks `ref`, where React Hook Form keeps the registered control; it should show its message as any member does", async () => {
+    await namedMemberKeepsItsMessage("ref");
+  });
+
+  test("guard: a member named `type` holding a valid value beside a failing sibling leaves the sibling's message under the sibling, and the marker of the field's node never shows", async () => {
+    const { submit, save, form } = await renderNamedMember("type", { retry: { type: "abc", handle: "abc" } });
+    fireEvent.change(input("Handle"), { target: { value: "ab" } });
+    expect(await screen.findByText(handleRule)).toBeTruthy();
+    expect(messageUnder("Handle")).toContain(handleRule);
+    expect(messageUnder("Kind")).not.toContain(handleRule);
+    expect(input("Kind").getAttribute("aria-invalid")).toBeNull();
+    expect(screen.queryByText(new RegExp(MEMBER_ERRORS))).toBeNull();
+    expect(save.disabled).toBe(true);
+    fireEvent.submit(form);
+    await settle();
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  // The server refuses the object field and its member named `type` at once, the field's own error
+  // holding React Hook Form's attribute `type: "server"` at the key where the member's error sits.
+  async function refuseFieldAndTypeMember(fieldErrors: Record<string, readonly string[]>) {
+    const { submit, save } = await renderNamedMember("type", { retry: { type: "abc", handle: "abc" } },
+      { status: "invalid", issues: { fieldErrors, formErrors: [] } });
+    await waitFor(() => expect(save.disabled).toBe(false));
+    fireEvent.click(save);
+    const fieldMessage = await screen.findByText(/^Bad retry\./);
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    const kind = input("Kind").getAttribute("aria-describedby")?.split(" ").filter(Boolean)
+      .map((id) => document.getElementById(id)?.textContent) ?? [];
+    return { field: fieldMessage.textContent, kind };
+  }
+
+  test("a server refusal of an object field, then of its member named `type`: the field shows exactly its own message and the member exactly its own", async () => {
+    const shown = await refuseFieldAndTypeMember({ retry: ["Bad retry."], "retry.type": ["Bad kind."] });
+    expect(shown).toStrictEqual({ field: "Bad retry.", kind: ["Bad kind."] });
+    expect(screen.getAllByText(/Bad retry\./)).toHaveLength(1);
+  });
+
+  test("guard: a server refusal of the member named `type`, then of its object field: the field shows exactly its own message", async () => {
+    const shown = await refuseFieldAndTypeMember({ "retry.type": ["Bad kind."], retry: ["Bad retry."] });
+    expect(shown.field).toBe("Bad retry.");
+    expect(screen.getAllByText(/Bad retry\./)).toHaveLength(1);
+  });
+
+  test.fails("defect: a server refusal of the member named `type`, then of its object field, loses the member's message, since React Hook Form's setError gives the field's own `type` the key where the member's error sat; it should show it under the member", async () => {
+    const shown = await refuseFieldAndTypeMember({ "retry.type": ["Bad kind."], retry: ["Bad retry."] });
+    expect(shown.kind).toStrictEqual(["Bad kind."]);
+  });
+});
+
+test("guard: a server refusal of a registered top-level field shows exactly its message under it, whether its control attaches React Hook Form's ref or not", async () => {
+  const submit = vi.fn().mockResolvedValue({
+    status: "invalid", issues: { fieldErrors: { code: ["Taken."], source: ["Unknown source."] }, formErrors: [] },
+  });
+  render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+    <MutationDialog open onOpenChange={vi.fn()} title="Register a code" initialValues={{ code: "abc", source: "x" }}
+      submitLabel="Save" parseValues={parseRawValues} onSubmit={submit} fields={[
+        { name: "code", label: "Code" },
+        // A control of its own that never attaches the control ref it is given.
+        { name: "source", label: "Source", control: ({ id, value, describedBy, invalid, onChange }) => (
+          <input id={id} aria-describedby={describedBy} aria-invalid={invalid || undefined}
+            value={typeof value === "string" ? value : ""} onChange={(event) => onChange(event.target.value)} />
+        ) },
+      ]} />
+  </AppRuntimeProvider>);
+  const code = await screen.findByLabelText("Code");
+  const source = screen.getByLabelText("Source");
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(await screen.findByText("Taken.")).toBeTruthy();
+  const describedText = (control: HTMLElement) => (control.getAttribute("aria-describedby") ?? "").split(" ")
+    .map((id) => document.getElementById(id)?.textContent);
+  expect(describedText(code)).toEqual(["Taken."]);
+  expect(describedText(source)).toEqual(["Unknown source."]);
+  expect(code.getAttribute("aria-invalid")).toBe("true");
+  expect(source.getAttribute("aria-invalid")).toBe("true");
+  expect(submit).toHaveBeenCalledTimes(1);
 });

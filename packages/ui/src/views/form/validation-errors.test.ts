@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
-import { act, renderHook } from "@testing-library/react";
+import { act, cleanup, render, renderHook } from "@testing-library/react";
+import { createElement } from "react";
 import { describe, expect, test } from "vitest";
 import { useForm } from "react-hook-form";
 import { boundedGraphQLTransportError } from "@angee/refine";
@@ -21,6 +22,7 @@ import {
   markMemberErrors,
   MEMBER_ERRORS,
   messagesForDottedPath,
+  serverErrorsFromForm,
   useDottedPathFieldErrors,
   validationErrorMap,
   validationErrorMessages,
@@ -163,6 +165,105 @@ describe("dotted path message scoping", () => {
     expect(messagesForDottedPath(scoped, "documents.0.lines.0.label")).toEqual([
       "Enter a label",
     ]);
+  });
+});
+
+describe("React Hook Form's own `type` and `ref` beside a member so named", () => {
+  const rule = { type: "minLength", message: "Enter at least 3 characters." };
+  const deeper = { kind: { type: "required", message: "Choose a kind." } };
+  const noop = () => undefined;
+
+  test.each([
+    { row: "`type` a string", error: { ...rule }, messages: ["Enter at least 3 characters."] },
+    { row: "`type` a number", error: { type: 3, message: "Enter a code." }, messages: ["Enter a code."] },
+    {
+      row: "`type` the marker MEMBER_ERRORS", error: { type: MEMBER_ERRORS, handle: rule },
+      messages: ["retry.handle: Enter at least 3 characters."],
+    },
+    { row: "`type` an error node", error: { type: rule }, messages: ["retry.type: Enter at least 3 characters."] },
+    { row: "`type` deeper member errors", error: { type: deeper }, messages: ["retry.type.kind: Choose a kind."] },
+    {
+      // The field refused, then its member: React Hook Form's setError spreads the field's
+      // `type: "server"` into the member's error, a letter at each index key.
+      row: "`type` an error node with letter keys",
+      error: {
+        type: {
+          0: "s", 1: "e", 2: "r", 3: "v", 4: "e", 5: "r",
+          type: "server", message: "Bad kind.", types: { server: ["Bad kind."] },
+        },
+        message: "Bad retry.", types: { server: ["Bad retry."] },
+      },
+      messages: ["Bad retry.", "retry.type: Bad kind."],
+    },
+    { row: "`type` null", error: { type: null, message: "Enter a kind." }, messages: ["Enter a kind."] },
+    { row: "`type` true", error: { type: true, message: "Enter a kind." }, messages: ["Enter a kind."] },
+    { row: "a bare string given", error: "Enter a kind.", messages: ["Enter a kind."] },
+    {
+      row: "`types` beside a message",
+      error: { type: "required", message: "Enter a kind.", types: { required: "Enter a kind.", minLength: "Too short." } },
+      messages: ["Enter a kind."],
+    },
+    {
+      row: "`types` with no message",
+      error: { type: "required", types: { required: "Enter a kind.", minLength: ["Too short.", "Far too short."] } },
+      messages: ["Enter a kind.", "Too short.", "Far too short."],
+    },
+    {
+      row: "`types` holding a rule named `type`, whose text stays skipped",
+      error: { types: { type: "Enter a valid value.", required: "Enter a kind." } },
+      messages: ["Enter a kind."],
+    },
+    {
+      row: "`ref` a Controller proxy",
+      error: { type: "server", message: "Taken.", ref: { focus: noop, select: noop, setCustomValidity: noop, reportValidity: noop } },
+      messages: ["Taken."],
+    },
+    {
+      row: "`ref` { name }, no element attached",
+      error: { type: "server", message: "Taken.", ref: { name: "retry" } }, messages: ["Taken."],
+    },
+    {
+      row: "`ref` { type, name } of radios",
+      error: { type: "required", message: "Choose one.", ref: { type: "radio", name: "retry" } }, messages: ["Choose one."],
+    },
+  ])("$row: the field's messages are exactly the failing members' and its own", ({ error, messages }) => {
+    expect(fieldErrorMessages([error], "retry")).toEqual(messages);
+  });
+
+  test("`ref` a DOM element React rendered, which leads to the renderer's own objects: the field's message is exactly its own", () => {
+    const { container } = render(createElement("input"));
+    try {
+      const element = container.querySelector("input");
+      expect(element).toBeInstanceOf(HTMLInputElement);
+      expect(fieldErrorMessages([{ type: "server", message: "Taken.", ref: element }], "retry")).toEqual(["Taken."]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test.fails.each([
+    { row: "`ref` an error node", error: { ref: rule }, messages: ["retry.ref: Enter at least 3 characters."] },
+    { row: "`ref` deeper member errors", error: { ref: deeper }, messages: ["retry.ref.kind: Choose a kind."] },
+  ])("defect: $row gives no message, since `ref` is never walked; it should give the member's message", ({ error, messages }) => {
+    expect(fieldErrorMessages([error], "retry")).toEqual(messages);
+  });
+
+  // The form's errors as a render reads them, which subscribes the hook to them.
+  function refusedMember(member: string) {
+    const { result } = renderHook(() => {
+      const form = useForm<Record<string, unknown>>();
+      return { form, errors: form.formState.errors };
+    });
+    act(() => { applyFormErrors(result.current.form, invalidFormSubmit({ fieldErrors: { [`retry.${member}`]: ["Taken."] }, formErrors: [] })); });
+    return serverErrorsFromForm(result.current.errors);
+  }
+
+  test("serverErrorsFromForm keeps a server refusal of a member named `type` at its dotted path", () => {
+    expect(refusedMember("type")).toEqual({ "retry.type": ["Taken."] });
+  });
+
+  test.fails("defect: serverErrorsFromForm drops a server refusal of a member named `ref`, since it never walks `ref`; it should keep it at its dotted path", () => {
+    expect(refusedMember("ref")).toEqual({ "retry.ref": ["Taken."] });
   });
 });
 

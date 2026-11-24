@@ -47,7 +47,7 @@ function SchemaActionBranches() {
   const args = useMemo(() => jsonSchemaActionArgs(schema, widgets), [widgets]);
   return <div className="grid w-96 gap-3">
     <U.Button onClick={() => setOpen(true)}>Open the action</U.Button>
-    {submitted ? <pre className="rounded-6 bg-surface-inset p-3 text-12">{JSON.stringify(submitted, null, 2)}</pre> : null}
+    {submitted ? <pre className="rounded-6 bg-inset p-3 text-12">{JSON.stringify(submitted, null, 2)}</pre> : null}
     <U.ActionFormDialog open={open} onOpenChange={setOpen} context={{ record, selectedIds: [record.id] }}
       action={{ id: "deliver", label: "Deliver", args,
         submit: async (values) => { setSubmitted(values); return { ok: true, message: "Delivered" }; } }} />
