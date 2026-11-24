@@ -1,0 +1,22 @@
+# The default kit states the Angee brand. Its colours are angee.theme_angee's
+# customisation defaults and its fonts that theme's sans stack, so applying the
+# kit to the Angee theme changes nothing. The manifest declares every field
+# create_only: once the row exists, its values are the deployment's.
+- xref: angee
+  name: Angee
+  is_default: true
+  brand: "#e7b008"
+  accent: "#6366f1"
+  neutral: "#71717a"
+  canvas: "#fafaf9"
+  surface: "#ffffff"
+  rail: "#09090b"
+  success: "#22c55e"
+  warning: "#eab308"
+  danger: "#dc2626"
+  info: "#4f46e5"
+  font_heading: Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif
+  font_body: Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif
+  footer_organization: Angee
+  footer_address: ""
+  voice: Plain and short. Says what happened and what to do next. No exclamation marks.

@@ -63,6 +63,7 @@ INSTALLED_APPS = [
     "angee.scheduling",
     "angee.sequence",
     "angee.tags",
+    "angee.brandkit",
     "angee.checklists",
     "angee.uom",
     "angee.messaging",

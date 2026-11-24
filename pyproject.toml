@@ -18,6 +18,7 @@ dependencies = [
     "angee-appearance==3.0.0",
     "angee-appearance-integrate==3.0.0",
     "angee-base==3.0.0",
+    "angee-brandkit==3.0.0",
     "angee-calendar==3.0.0",
     "angee-calendar-integrate-google==3.0.0",
     "angee-calendar-integrate-ics==3.0.0",
@@ -141,6 +142,7 @@ angee-agents-runtime-pydantic = {workspace = true}
 angee-appearance = {workspace = true}
 angee-appearance-integrate = {workspace = true}
 angee-base = {workspace = true}
+angee-brandkit = {workspace = true}
 angee-calendar = {workspace = true}
 angee-calendar-integrate-google = {workspace = true}
 angee-calendar-integrate-ics = {workspace = true}
