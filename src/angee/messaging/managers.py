@@ -281,19 +281,21 @@ class ChannelQuerySet[ChannelT: Channel](IntegrationQuerySet[ChannelT]):
             raise OutboundEmailChannelMissing
         return channels
 
-    def require_backend_target(self, public_id: str, *, backend_class: str) -> ChannelT:
+    def require_backend_target(self, public_id: str, *, backend_class: str, actor: Any = None) -> ChannelT:
         """Resolve an explicit import target, refusing a missing or other-backend channel uniformly.
 
-        The caller already authorized the import; the target is read elevated and
-        only its backend and public id decide it.
+        Without ``actor`` the caller already authorized the import: the target is
+        read elevated and only its backend and public id decide it. With
+        ``actor`` it is read through that actor's access, so a channel the actor
+        cannot read is refused exactly as a missing one.
         """
 
         backend = self.model.backend_class.field.resolve_class(backend_class)
-        channel = (
-            self.system_context(reason="messaging.channel.confirm_target")
-            .for_backend(backend_class)
-            .from_public_id(public_id)
+        readable = (
+            self.with_actor(actor) if actor is not None
+            else self.system_context(reason="messaging.channel.confirm_target")
         )
+        channel = readable.for_backend(backend_class).from_public_id(public_id)
         if channel is None:
             raise ValidationError({"target": f"No {backend.label} channel {public_id!r}."})
         return channel

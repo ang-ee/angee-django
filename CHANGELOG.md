@@ -10,6 +10,502 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: **Changed behaviour.** A record form decides in one place which of
+  its declared groups it displays for a record, and its fields are its own and
+  those groups' fields. `formDisplaysGroup` (`form-view-model.ts`) holds the three
+  conditions: a `savedOnly` group is no part of a create form; a group carrying a
+  contribution's `permission` shows on a record that holds it, so never on a
+  create; a group of a row-decided container child shows on the records that
+  admit the child. The sheet's sections, its pane groups and the fields the form
+  checks and saves (`displayedFormFields`) read it; a contribution's tabs ask it
+  for their child's permission and admission, and its actions for their child's
+  admission alone, since a contribution's permission does not gate the actions it
+  contributes. The section filter that decided the permission and the admission a
+  second time and the save's own admission filter are deleted, and `formSections`
+  takes the predicate where it took `isCreate`. The record rail has its own,
+  `displayedRailGroups` (`form-view-rail.tsx`): the child's admission, the group's
+  and the child's permission and each row's permission, read by the rail's
+  display and by the save; a row whose field the metadata does not read stays a
+  display rule. The record's fields are the form's field list less the fields of
+  the page's own groups it does not display (a page's field list also lists its
+  groups' fields), then the fields of the groups it displays, the first
+  declaration of a name winning: where every group is displayed they are the
+  fields the form had, declaration for declaration, and a field the page declares
+  outside its own groups stays, with the page's declaration, whatever a
+  contribution re-declares. A field only undisplayed groups declare is no longer
+  one of them: a required one left empty no longer blocks the save with nothing
+  on screen, nothing is sent for it (no create seed, no `defaultValue`), and a
+  server refusal of it is still named in the banner with its own text but called
+  highlighted nowhere, and marked invalid only on a control a page renders for it
+  itself. Before, a required field left empty in a `savedOnly` group on a create,
+  in a contributed section whose permission the record lacked, or in a rail row
+  behind such a permission blocked the save silently, and a `savedOnly` group's
+  field was sent on a create. The ungrouped section holds the form's fields that
+  neither a page's own group nor a displayed contribution declares, so a page's
+  own field that only an undisplayed contribution re-declares now shows there,
+  with its message when it fails a rule; before, it showed nowhere unless it was
+  the title, status or body, though it was checked and saved, so a required one
+  left empty blocked the save silently. Every group's section keeps its key, order
+  and sequence, and where that field is the page's only ungrouped one the
+  ungrouped section now comes in front of them; the
+  title, status and body are chosen among the record's form fields, so a field
+  only an undisplayed group declares is no longer one on a create (a `savedOnly`
+  group), on a record lacking a section's permission, or on an edit while its
+  record loads. Limits: a control a page renders itself for a field only an
+  undisplayed group declares still takes typing that the save drops (before, it
+  was sent: a `savedOnly` group's field on a create, a permission-gated section's
+  field on a create or on a record lacking the permission); a rail row sharing
+  its name with a field only an undisplayed section declares decides its own
+  visibility. `formFields` still registers every candidate, so any record's
+  values load.
+- Addons require django-zed-rebac 0.38.0, a security release (advisory
+  GHSA-r4c4-cvfj-jgcf); versions before it are excluded. A queryset evaluated
+  under two decisions, evaluated again after its scope raised, or embedded in a
+  statement built under one actor and read under another, could read with a
+  permission scope other than the one in force, or with none; a prefetched
+  related manager streamed with `iterator()` read every row of the relation; and
+  a queryset could hold rows before their redaction and guards had run. Each
+  statement now carries the scope decided for that evaluation. A queryset built
+  and read under one decision sends the statements it sent before.
+  **Upgrade:** a consumer may meet three changes. Embedding a queryset that pins
+  no actor, with no actor and no `sudo()` block in force, raises
+  `MissingActorError` in strict mode, as reading it does. A queryset embedded
+  inside a `sudo()` block no longer carries the bypass outside it: make it eager
+  with `scoped()` inside the block, or give it its own `sudo(reason=...)`. A
+  prefetched related manager's `iterator()`, `aiterator()` and `aggregate()`
+  need an actor. The library's changelog lists all seven under 0.38.0.
+- `@angee/ui`: **Changed behaviour.** A form dialog opens with focus on its first
+  field. Before, every dialog built on `DialogForm`, every `MutationDialog` and
+  `ActionFormDialog` among them, opened with focus on its Close button: `DialogForm`
+  set no initial focus, so Base UI focused the first tabbable element in the popup,
+  the header's Close, and a person who opened a dialog and typed at once wrote
+  nothing. `DialogForm` now gives Base UI's `initialFocus` the first field in the
+  dialog's body that a person can change: a control that holds a value (a native
+  `input` other than a button, image or hidden one, a `textarea` or a `select`, an
+  element with one of ARIA's input roles, or an editing host, the element that
+  carries `contenteditable`), in the tab order and shown, and neither disabled
+  (natively or with a reason), read-only, hidden nor inert; of a named radio group,
+  the checked radio, else the first, as Base UI's own tabbable query picks. Whether
+  a field shows is Base UI's own test: its `visibility`, then `checkVisibility`
+  where the platform has it, else its `display`. A control that only performs an
+  action, a button, a link or a menu trigger, is never a field, so a dialog whose
+  body holds only text and buttons (a list of verbs, an error banner with Retry, a
+  person's Remove access) keeps focus on Close, as does a dialog with no field: with
+  none, `DialogForm` returns `null` and Base UI's own choice stands. A field whose
+  control is a plain button with no input role is passed over too: the `date` and
+  `datetime` widgets' pickers, the `statusbar` widget's stage buttons and an empty
+  `list` widget, whose only control adds an item. Opened by touch through its
+  trigger, the dialog focuses itself, as Base UI does for touch, so no on-screen
+  keyboard rises over it. Base UI learns how a dialog was opened only from its
+  trigger, so a dialog opened through its `open` prop cannot tell a touch, and the
+  platform answers instead: where the primary pointer is coarse
+  (`(pointer: coarse)`, read through `useMediaQuery`), every opening focuses the
+  dialog itself, one from the keyboard through its trigger included. A tablet with a
+  hardware keyboard therefore never gets the field at the opening, while on a touch
+  laptop, whose primary pointer is fine, a dialog gets its field unless a touch on
+  its trigger opened it. The choice is made once, as the dialog opens: a field whose
+  widget's code is still loading then is passed over, and focus stays where it went
+  once the field shows. With focus in a text field, Enter submits the form when its
+  submit is enabled, as it always did once a person had clicked into the field;
+  before, Enter at the opening pressed Close; it shows in a dialog whose submit is
+  enabled as it opens, such as one that asks only for an optional reference before
+  marking something done. A key that is already down when the dialog opens does
+  nothing in its form: until a fresh keydown (one that is not a repeat) reaches the
+  form, `DialogForm` stops each repeated keydown and each keyup in the form's
+  capture phase, before any control sees it, so the held Enter or the released Space
+  that opened the dialog neither submits it nor flips, checks or picks its first
+  field; from the first fresh keydown on, keys act as before, and each opening
+  starts over. Where focus is on the dialog itself (opened by touch, or with a
+  coarse pointer), keys do not pass through its form: a held Enter or Space does
+  nothing there, but a held Escape closes the dialog. Focusing a field shows no
+  message, since the dialogs that check their own rules check at a change, and opens
+  no picker. Where focus goes when the dialog closes (`finalFocus`,
+  `DialogReturnFocusContext`) is unchanged, and no caller passes anything new.
+- `@angee/ui`: **Changed behaviour.** A record form and a dialog decide which
+  rules a field fails through one owner, `fieldRuleErrors` beside
+  `structuredFieldErrors` in `field-values.ts`, and whether a plain field's value
+  is empty through one predicate there, `isEmptyFieldValue`; the record form's
+  private emptiness test and the dialog's `emptyDialogValue` are deleted, with the
+  per-field decision each surface wrote. Each surface keeps only its own facts:
+  which fields it asks (a record form the fields its save writes for the record,
+  `formFieldsFor`, whose descriptor is neither hidden, nor read-only as resolved
+  for its values, nor excluded by its condition; a dialog the fields shown, neither
+  `readOnly` nor `readOnlyWhen`), how it reads a value (a dotted path or one flat
+  key; both read a top-level key holding `undefined` as absent), which fields
+  count as required (a record form adds the model's required-on-create names on
+  a create), and whether constraints are checked (a dialog with a schema
+  resolver leaves them to it). Inside a structured field `required` means
+  presence, at every depth: a required field with a presence flag, a template or
+  a bound, and a required member, are now refused with "This field is required."
+  when left out (absent, or a `null` they do not allow) where only a
+  presence-required one was; a list item is always present, so no item's verdict
+  changes. A blank text, a text of blanks, an empty list and an empty object stay
+  values that the field's own bounds judge (an empty text under a minimum length
+  of one in a field neither omittable nor nullable still reads as required). The
+  backend's FormSpec projections mark every required property presence-required,
+  so forms built from them refuse nothing new; a hand-written FormSpec object
+  whose `required` names a member no longer lets a `MutationDialog` submit
+  without it. At the opening a `MutationDialog` keeps Save enabled while a
+  required member of an object field that is not itself required is left out,
+  and shows the message when Save is pressed; it disables Save silently while
+  such a member of a required object field, or a required `omittable` field, is
+  left out. An `ActionFormDialog` without a resolver disables its submit silently:
+  a missing member's message shows once another member of its object field is
+  edited, and a submission that reaches the form anyway shows each message; a
+  record form shows the message at the save. A plain field outside the
+  structured walk still fails `required` when empty, `null` included. The client
+  no longer checks values a person cannot see or change, and the server answers
+  for them with its own message: a record form skips a field whose descriptor is
+  hidden, a field read-only as resolved (its flag, its `resolve`, `createOnly` on
+  an edit, `editOnly` on a create), and a field outside the fields its save
+  writes (a section the record's implementation does not admit); where one held a
+  value the check refused, the save used to stop, with nothing on screen for a
+  hidden field or one outside those fields, though a structured field required
+  without a presence flag was not refused when left out or blank. Below the top
+  level, on every surface, a member or list item that is hidden or read-only is
+  not checked, nor anything under it, as the object and list widgets show no
+  control for a hidden member and a read-only control for a read-only one. A
+  dialog reads a top-level key holding `undefined` as absent; a member holding
+  one still fails `required` (a recorded defect). Where the record form still
+  checks, or no longer checks, a field against that rule: a redacted required
+  field left empty still blocks the save, with "This field is required." under
+  its lock and no control; a required field the
+  record cannot write keeps an editable control, blocks the save while empty,
+  and the save drops what is typed there; a field declared hidden whose control
+  the page renders itself (`BoundDescriptorField`) is no longer checked on the
+  client, and a server refusal of it shows under that control and in the banner;
+  and a control a page renders for a field outside the fields the save writes is
+  no longer checked, what is typed there being dropped by the save, as before.
+  The redacted and not-writable cases are recorded as expected failures. A
+  server refusal of a record-form field whose descriptor is hidden, that lies
+  outside the fields the save writes, or that its condition hides now shows in
+  the banner with its own text, as `name: message` under the field's raw name,
+  as an undeclared field's does: "Please fix the highlighted fields" now names
+  only the fields the save writes whose descriptor is neither hidden nor excluded
+  by its condition, while every refused field's error is still set at its path,
+  so a control the page renders itself shows it. What a form saves or sends, the
+  messages' texts,
+  `markMemberErrors` and how each submit gate is built are unchanged.
+  `structuredFieldErrors` returns `required` for a required field or member left
+  out that is not presence-required, returns nothing at or under a hidden or
+  read-only member or list item, and takes the field's own required verdict as a
+  new last parameter, `required`, which defaults to the field's flag.
+- `angee.webforms`, `angee.webforms_messaging`, `angee.messaging`, `angee.resources`,
+  `@angee/webforms`: **Changed behaviour.** **An addon declares a web form as
+  one resource row**, published or left for a person to publish, and a form
+  that names a channel no response could be posted on is refused when it is
+  validated. `webforms.Form` composes
+  `ResourceLoadMixin` with the adapter `FormResource`
+  (`angee.webforms.resources`), as `Workflow` does with its definitions. A row of
+  a `<NNN>_webforms.form.yaml` file names the form's fields, `version` (the
+  content of the version it serves: `definition`, `languages`,
+  `default_language`, `personal_questions`, `contact_question`), optionally
+  `publish: false`, and `aliases` (the slugs it answers at, each a slug or
+  `{slug, language}`). What a load does:
+  - The row's ledger xref is the form's identity, never an alias, so staff may
+    rename or delete an alias and the next load neither fails nor makes a second
+    form.
+  - Every row states its `version`; a row without one is refused, whether it
+    would make the form or change it.
+  - The first load makes the form, publishes its version through
+    `FormVersion.publish` (unless the row declares `publish: false`) and adds
+    its aliases. An unchanged row is skipped, so a form staff closed, a version
+    they published and an alias they renamed stand.
+  - A changed row that publishes applies the form fields it names and serves
+    its content with the new `Form.serve`: the version served now when it holds
+    exactly that content, otherwise the newest version when it is an unpublished
+    one holding it, otherwise a new version, held to the version's fields and
+    rules; either is published in the load's transaction. Content the form
+    served before is published again as a new version. Missing aliases are
+    added with the new `Form.ensure_aliases`, which takes each alias as a slug
+    or a mapping of `FormAlias.ADDRESS_FIELDS` (`slug`, `language`), never
+    removes or changes an alias the form has, reports every alias it refuses
+    under `aliases` naming it (a slug given twice among them), and refuses a
+    slug another form holds, also one it takes at the same moment. A closed
+    form stays closed.
+  - Any change of a row that publishes serves the declared content again: a row
+    that changes only `name` or `theme_id`, reorders `aliases`, or whose entry
+    gains a `create_only` field other than `version` replaces a version staff
+    published since. An entry that leaves the questions to staff once the form exists
+    lists `version` under `create_only`: the form is made serving it, and no
+    later load serves it again.
+  - A row that declares `publish: false` leaves the publication to a person:
+    `Form.serve(content, publish=False)` prepares the declared content as an
+    unpublished version, so the first load makes a draft form that answers no
+    one, and publishes and opens nothing. A changed row makes a new unpublished
+    version only when neither the version served nor the newest version holds
+    the declared content, so a version staff published, a form they closed and
+    a draft they prepared since stand. The publication judges the version when
+    a person publishes it. A row that turns `publish` back on publishes the
+    version it prepared, or serves its content as any published row does. A
+    file that declares the form's `status`, or an entry that lists `publish`
+    under `create_only`, is refused: the form's state follows its verbs, and
+    under `create_only` a changed row would drop `publish: false`.
+  - A version the publication refuses or its fields cannot hold, an alias
+    another form holds, or a `target_config` the target refuses fails the load
+    and leaves nothing; the ledger keeps the declaration that last applied.
+  - `retention_days` is the deployment's once the form exists, since a changed
+    retention removes responses: a file that declares it lists it under the
+    entry's `create_only`, and the load refuses one that does not.
+  - `target_config` names records by xref where the target's `config_model`
+    declares a relation, and the load stores each one's public id. The `message`
+    target already declares `channel` a relation to `messaging.Channel`, so a
+    consumer names the webform channel its resources declare
+    (`channel: acme.intake`); web forms reads only the target's schema.
+    `Resource.objects.resolve`, `resolve_config_references` and
+    `resolve_config_reference` take an optional `addon_aliases`, which the
+    adapter passes so a reference resolves among the load's own addons, as the
+    row's relation columns do. `AngeeResource.is_unchanged(row)` is the public
+    form of the loader's hash skip.
+  - `FormTarget.clean()` is new: a target refuses a configuration its owner will
+    never take. `Form.clean` asks it, under `target_config`, when the target or
+    its configuration changes and the form is validated (`full_clean`), as the
+    console and the resource loader do, for an acting user and for system work
+    alike; a plain `save()` does not ask it. The `message` target refuses a
+    channel that is gone or has another backend. Until now only `permits`
+    refused one, for an acting user, while system work saved such a form and
+    every response was then refused `channel_missing`. Staff who choose such a
+    channel in the console now get that `target_config` error instead of a
+    `permits` denial. For an acting user the channel is read through their own
+    access, so a channel they cannot read is refused exactly as a missing one;
+    system work reads it elevated. `Channel.objects.require_backend_target`
+    takes an optional `actor` for that read.
+  - The writes are the load's: one transaction and its seed changeset. A load
+    runs as system work; `Resource.objects.load_xref(…, actor=…)` saves the row as
+    its named actor, so choosing the target asks the target's `permits`.
+  `@angee/webforms` exports `publicAddress(slug)`, where a form answers, so a
+  consumer links to its form without spelling `/forms/<slug>`.
+  Upgrade: no migration (`ResourceLoadMixin` adds no column). A consumer that
+  installs a form through code of its own declares the row instead, with the
+  channel's file in `depends_on`, and deletes that code. A form that already
+  posts on the declared channel and slug, made by that code or by the
+  `webforms_messaging` migration template, refuses the declared one (one channel
+  and slug take one form) and is not adopted by itself: bind it to the row's
+  xref once, after it exists and before any load that carries the row, with
+  `Resource.objects.bind_instance(addon=<the addon's app config>, xref=<the row's
+  xref>, instance=<the form>, source="resources/<the entry's manifest path>")`
+  under `system_context`, in `manage.py shell`. `provision` runs
+  `resources load` right after `migrate`, so the bind needs a release boundary:
+  when the move template makes the earlier form, ship the template in one
+  release, bind once it has applied, and ship the row in a later release; a form
+  the addon's code made is bound before deploying the release that ships the
+  row. That load then applies the declared fields (not a create-only
+  `retention_days`), serves the declared content (unless the entry lists
+  `version` under `create_only`) and keeps the form's aliases. A form a staff
+  member made on another channel or slug needs nothing, unless it holds a
+  declared alias, which refuses the load until staff rename or delete it.
+- `@angee/ui`: a member of an object field (a FormSpec `object` widget) named
+  `type` shows its message. Before, a value that broke such a member's rule showed
+  nothing on screen: a `MutationDialog` disabled Save, and a record form and an
+  `ActionFormDialog` built with `jsonSchemaActionArgs` refused the submit, with no
+  message and the member not marked invalid. On an error React Hook Form keeps,
+  `type` is the library's own attribute, a string, and `fieldErrorMessages`
+  skipped that key at every depth, also where it held a member's error. It now
+  decides by the value: any value under `type` that is not an object
+  (`MEMBER_ERRORS` among them) is skipped, and an object is walked as any member's
+  error, so the message shows under the member, stays through an edit that still
+  fails, and goes when the value is corrected. A bare value is a message only
+  where the library puts message text: as an error given to `fieldErrorMessages`,
+  or inside a `types` subtree; anywhere else a child that is not an object is
+  skipped. `ref` is still never walked: the library keeps the registered control
+  there, as a DOM element, a `Controller`'s object of functions, a plain
+  `{ name }` for a control that attached no element, `{ type, name }` for a radio
+  or checkbox group, or `undefined` for a path that is not registered, so a
+  member named `ref` still shows no message, and `serverErrorsFromForm` still
+  drops a server refusal of a member named `ref`. When the server refuses the
+  object field and its member named `type` together, the field's own `type` and
+  the member's error meet at one key: applied member first, the library's
+  `setError` drops the member's error, so only the field's message shows; applied
+  field first, both messages show, but `serverErrorsFromForm` returns only the
+  member's. Which rules fail and what a form saves or sends are unchanged.
+- `@angee/ui`: **Changed behaviour.** An `ActionFormDialog` that checks its own
+  rules (its arguments are declared as `args`, or its definition brings no
+  resolver) shows a failing value's message as the value changes. Before, it
+  checked nothing before the first submit while its submit button was disabled as
+  soon as a rule failed, so a value too short, in a top-level field or in a member
+  of an object field, or a required argument typed and then cleared, disabled the
+  button with no message on screen, and a person could not submit to see one. Now
+  the form validates in React Hook Form's `onChange` mode, as a `MutationDialog`
+  does: the message shows under its field at the change, while the button is
+  disabled, and goes when the value is corrected. A value that already breaks a
+  rule when the dialog opens, a required field left empty or a prefilled text
+  shorter than its minimum, still disables the button with no message until the
+  person edits that field. Editing one member of an object field checks the whole
+  field, so it also shows the messages of the field's other members that break a
+  rule, though the person has not touched them, while a failing field outside it
+  that the person has not touched stays silent. A dialog whose definition brings a
+  resolver, such as the one `jsonSchemaActionArgs` returns, still checks from the
+  first submit, its gate counting presence only. `useActionForm` takes React Hook
+  Form's `mode` as the new `UseActionFormOptions.mode` and hands it to `useForm`
+  only when it is given, so a caller that passes none makes the call it made
+  before and keeps `onSubmit`; a mode changed while the form is open applies from
+  the next render, and a message shown under the old one stays.
+- `@angee/ui`: **Changed behaviour.** A member of an object field (a FormSpec
+  `object` widget) keeps its message. In a `MutationDialog`, which checks every
+  change, a value that broke a member's rule disabled Save with no message on
+  screen; in an `ActionFormDialog` and a record form, which check from the first
+  submit on, the member's message showed after a refused submit and went at the
+  next edit, though the value still failed. A list item's message stayed. Now, in
+  a record form, a `MutationDialog` and an `ActionFormDialog` (unless its
+  definition brings a resolver other than the one `jsonSchemaActionArgs` returns),
+  a member's message behaves as a top-level field's: a `MutationDialog` shows it
+  as soon as the value fails, and these forms keep it through an edit that still
+  fails and remove it when the value is corrected; correcting one of two failing
+  members removes only that member's message, and a member of an object inside the
+  object behaves the same. A form whose resolver is another one an action form
+  definition brings, or `createJsonSchemaResolver` used directly, still loses a
+  member's message at the next edit, and a member named `ref` shows no message in
+  any form, since `fieldErrorMessages` skips that key. Which rules
+  fail and what a form saves or sends are unchanged. React Hook Form keeps a
+  changed field's error only when it has a `type` or a `message`, or is a list's
+  array, and an object field is one registered control whose members' errors sit
+  under its own node, which had neither. `markMemberErrors`
+  (`@angee/ui/views/validation-errors`) gives that node the `type` `MEMBER_ERRORS`
+  (`"memberErrors"`), exported beside it, and no message, at the node of each
+  object field (a field with an `objectTemplate`) the form shows for the values
+  checked; a field without a template (a `json` field, a root of dotted fields, a
+  scalar) is never marked. The record form's, `MutationDialog`'s and
+  `ActionFormDialog`'s resolvers and the one `jsonSchemaActionArgs` returns run it
+  on the tree they return, with the fields they show; `createJsonSchemaResolver`,
+  which knows no fields, does not, and neither does any other resolver an action
+  form definition brings. Code that compares such an error tree deeply expects
+  that `type`.
+- `@angee/ui`: **Changed behaviour.** A value that breaks one of a field's rules now
+  says which, in a record form and in a dialog without a schema resolver: too short,
+  too long, out of range, too few or too many items, or the wrong type ("Enter no
+  more than 64 characters.", "Enter a valid whole number."). Before, each of them
+  said "This field is required.". A cleared number field that is `omittable`,
+  presence-required or bounded, and not nullable, now says "Enter a valid whole
+  number." ("Enter a valid number." where its type is `number`) where it said the
+  field was required; a required number field with no presence flag or bound still
+  says the field is required. A missing value, or a `null` the field does not allow,
+  still says the field is required, and so does an empty text under a minimum length
+  of one character (a cleared slug) in a field that is neither `omittable` nor
+  nullable; in a field that is either, it says "Enter at least 1 character.". A
+  dialog with a schema resolver says "Enter at least 1 character." in each case, and
+  for a text declared nullable with `anyOf` also "Enter a valid empty value. Enter a
+  valid value.". The messages are the ones a dialog with a schema resolver already
+  shows, and a count of one reads in the singular ("Keep no more than 1 item."): the
+  bundle's `form.validation.minLength`, `maxLength`, `minItems` and `maxItems` now
+  have `_one` and `_other` forms that interpolate `{count}`, not `{limit}`. The
+  error's `type` is the rule's keyword (`maxLength`, `minimum`, `type`, ...); a
+  missing value's stays `required`.
+  `structuredFieldErrorPaths` is renamed `structuredFieldErrors` and returns, for each
+  failing path, the rule it fails with its parameters (`FieldRuleError`,
+  `{ path, keyword, params }`, exported beside it) instead of the bare path.
+  `@angee/ui/views/validation-errors` newly exports `jsonSchemaErrorMessage`, the
+  message function that was private to `@angee/ui/views/json-schema`, with
+  `JsonSchemaRule`, the failed rule it takes, and `fieldErrorsFromRules`, which
+  turns failed rules into a form's errors; a record form and a dialog use them
+  without loading Ajv. `FormViewSurface.requiredMessage`, which nothing read, is
+  removed.
+- `@angee/ui`: **Changed behaviour.** Edits made in a record form's lines are now
+  undo steps of their own; before, they were not: after a title step and then a
+  cell edit, an undo reverted the cell edit together with the title, and a redo
+  brought both back. One user intention is one step: adding a line is one step,
+  typing in one of its cells another, and removing, duplicating or reordering a
+  line is one step each. A widget's row patch is written inside its cell's group
+  and ends it: a row patch sent after its cell's change in the same interaction
+  joins that change's step, and one sent first, or alone, is a step of its own (a
+  change sent after it starts another). Since a cell's group is named by its row's
+  position, the lines editor ends the cell groups it started when their control
+  commits, when a row patch for the cell is written, when the editor unmounts,
+  before its own row operations, and right after the rows change under it
+  otherwise (code that performs a row operation, or an undo, redo or discard); the
+  history itself records a cell's step when another field starts. After a row
+  operation by other code the steps are still one per intention and the interaction
+  callbacks stay paired, but that late commit's path names whichever row then sits
+  at that position, if any. `EditableLines` takes an optional `history` with the
+  form's `perform`, `start` and `commit`; the record form passes it, so its
+  `onFieldInteractionStart` and `onFieldInteractionCommit` now also receive a line
+  cell's path (`lines.2.label`), a row patch's included. Without it the lines
+  record nothing, as before.
+  `useFormHistory`'s `perform` now reads the form's values after its action, so a
+  change that sends no values notification, such as a field-array append, is still
+  recorded. `emptyLineRow` and `duplicateLineRow` now return the row with a client
+  key of its own (`duplicateLineRow` still drops the source row's id and key): a
+  line added by code is built with one of them and then performed, so each undo
+  back through it changes what the form shows. A row built by hand without a client
+  key and performed while another field is being edited is a step undo cannot get
+  past.
+- `@angee/ui`: **Changed behaviour.** A record form's `object`, `list` or `rows`
+  field showed its loading placeholder for good in a create form, and in an edit
+  form once the widget's code was loaded. Those widgets refuse the empty string
+  the form gave the field in a create form, in an edit form before the record's
+  values arrived, and for a record that lacks the field. The form now gives an
+  `object` field an empty object and a `list` or `rows` field an empty list, as
+  it gives a `json` field an empty object. An untouched `object`, `list` or
+  `rows` field is therefore sent as an empty container (`{}` or `[]`) when a
+  record is created, as untouched `json`, `tagInput` and `many2many` fields
+  already are. Before, such a field was left out of the create (or sent as an
+  empty string when the model's metadata does not describe it), so the server's
+  default or NULL applied: a form that declares one of these widgets on a
+  nullable or defaulted column now writes the empty container instead.
+- `@angee/ui`: a field's `resolve` no longer returns `name`, since the field
+  keeps its declared name whatever `resolve` returns. A field type's `resolve`
+  returns that type without `name` (`Omit<this, "name"> & { name?: never }` on
+  `FieldDescriptor`), so a dialog (`DescriptorField`) or FormSpec
+  (`FormSpecFieldDescriptor`) producer may return only its own members, and a
+  subtype's own required members are returned with it; a type derived from a
+  descriptor by `Omit` or `Pick`, the `<Field>` element's props among them,
+  returns the base descriptor's. A returned value whose type carries a string
+  `name` (a literal giving one, a spread of a whole descriptor, a value typed as
+  a descriptor) is a compile error; a value typed without `name` or loosely
+  (`Record`, `object`, `any`), a cast or JavaScript still reaches `resolveField`,
+  which keeps the declared name. The fields `useImplConfigFields` returns have a
+  `resolve` whose result no longer carries `name` (it carried the prefixed name
+  before); what a form resolves a field to (`resolveField`) is unchanged, and
+  nothing else changes at runtime. `resolveField` and `visibleFields`, internal
+  to the package, now return the caller's descriptor type, so the dialog
+  surfaces no longer cast their results. Upgrade: a TypeScript consumer deletes
+  `name` from what its `resolve` returns; takes it out of a whole field it
+  spreads there first (`const { name: _name, ...rest } = field`); annotates a
+  helper that returned a descriptor type with that type's own result,
+  `ReturnType<NonNullable<DescriptorField["resolve"]>>` for a dialog field's
+  (TS2741 or TS2353 otherwise); no longer casts a `resolve` result to a
+  descriptor type or passes one where a descriptor is expected (TS2352, TS2345,
+  TS2322 otherwise), and lays it over the field instead
+  (`{ ...field, ...field.resolve(values) }`); returns, from the `resolve` of a
+  descriptor subtype with required members of its own, those members too; and
+  reads a `useImplConfigFields` field's `name` from the field, not from its
+  `resolve`.
+- `angee.parties`: **Changed behaviour.** A person's and an organization's record
+  form follows what the reader may do on that record. Their types project
+  `permissions` (`delete`, `merge_away`, `share` and `write`), which the form
+  reads, and each changes one thing:
+  a reader without `write` (a contact reader, a directory's contact reader, a
+  person a record was shared with to read) sees the person and organization
+  forms read-only, where the form used to take edits the server then refused;
+  Trash and Restore show only to a reader with `delete`;
+  Share shows only to someone who may share the record;
+  the list of who reads the record now appears for someone who may share it
+  (it never did, since no person or organization read carried `share`);
+  and "Merge into…" shows only with `merge_away`, so a contact manager, who
+  writes a person but merges none away, no longer sees a verb the merge then
+  refused. A list's selection of one record still opens "Merge into…": its
+  rows carry no projection, and the compare page refuses whoever may not merge.
+  Who may write, delete, share or merge is unchanged. `parties/person` and
+  `parties/organization` gain `share`, their party's, delegated whole because
+  sharing one writes the grant on its party. Only reads that select
+  `permissions` pay for it, and no budgeted read does; the person read with
+  it selected takes the same statements and, on PostgreSQL, the same planner
+  memory as without it, for a reader in no contact role. Revision 42.
+  Upgrade: nothing by hand; the provision chain's `rebac sync` applies it.
+- `angee.parties_integrate_hubspot`: a HubSpot object record (a deal, a note)
+  follows the person its contact landed on. When that person is merged into
+  another, the merge moves the contact to the survivor, and the record is
+  stated again on the survivor at its next read: the stream's daily sweep, or
+  at once on a resync of the stream. Only the records of that contact are
+  stated again; HubSpot need not change them. Each record's link keeps a
+  dependency digest, the record's contacts, sorted, each with the key of the
+  party its link points at (none for a contact without one), read for a whole
+  page at once, and integrate's driver compares it as it compares a mapping's
+  version. A mapping writes nothing new, but its `apply_record` must be safe to
+  run again, as a version change already required. Upgrade: no migration. After
+  the upgrade every object record that names a contact is stated once more at
+  its next read, because no link holds a digest yet (a record naming none is
+  not); that covers merges made before the change, and replaces moving a
+  mapping's version by hand after a merge.
 - `@angee/ui`: **Changed behaviour.** A dialog submits only the fields it shows:
   a field a `showWhen` hides, when the dialog opens or after a value was typed
   into it, is not submitted, and shows its initial value when it shows again,
@@ -363,6 +859,11 @@ live in code docstrings.
       copy. A copy of the template taken before that mark existed lacks it and
       must be copied again: it fails safe, since `migrate` refuses it as a
       removal that is not the move.
+    - A copy taken before the template carried a date field (a `string` field
+      shown as `widget: date`) refuses every channel whose form holds one, at
+      `check_webform_channels` and at `migrate`, and applies nothing: copy the
+      template again. A copy that applied held no such channel and needs
+      nothing.
     - A host whose channels hold no form anywhere needs no template:
       `makemigrations messaging` removes the empty columns and nothing refuses
       that. `check_webform_channels` says which case a database is in: the
@@ -373,7 +874,8 @@ live in code docstrings.
       channel's slug as its address and as the slug of its `message` target, so
       its conversation continues. The FormSpec becomes the form's first version
       in the project's `LANGUAGE_CODE`; the email field becomes the contact
-      question; a field without a label shows its name. A published channel
+      question; a field shown as a date becomes a date question
+      (`inputType: date`); a field without a label shows its name. A published channel
       becomes a published form whose version states every question personal, to
       be narrowed in a new version, and is judged by the rule publishing applies
       (`validate_publishable`); an unpublished one becomes a draft that states

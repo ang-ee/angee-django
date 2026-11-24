@@ -24,7 +24,7 @@ import {
   type Fields,
   type HttpError,
 } from "@refinedev/core";
-import { get, set, useForm, type FieldErrors } from "react-hook-form";
+import { get, set, useForm } from "react-hook-form";
 import { replaceEqualDeep, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import type { UiTranslate } from "../../i18n";
@@ -46,19 +46,23 @@ import {
   dirtyArrayValues,
   emptyDraft,
   fieldValidationSummary,
+  formRuleErrors,
   hiddenDraftPaths,
   hiddenResetWrites,
+  isFieldControlVisible,
   missingDraftValues,
-  missingRequiredFieldNames,
   mutationData,
   recordToValues,
   resolveField,
   seedPreset,
+  visibleFields,
   type FormValues,
   type LinesSeed,
 } from "./form-view-model";
 import { useSaveOperation } from "../resource/resource-operations";
-import { applyFormErrors, formSubmitError, savedFormSubmitResult, serverErrorsFromForm, type FormSubmitResult } from "./validation-errors";
+import {
+  applyFormErrors, formSubmitError, markMemberErrors, savedFormSubmitResult, serverErrorsFromForm, type FormSubmitResult,
+} from "./validation-errors";
 import { useUnsavedChangesNavigationGuard } from "./use-unsaved-changes-navigation-guard";
 import { useFormHistory, type FormHistory } from "./use-form-history";
 import { useFieldValidation, type FieldValidationForm, type FieldValidationMethods } from "./use-field-validation";
@@ -133,9 +137,11 @@ export interface UseFormViewSaveProps {
   modelMetadata: ModelMetadata | null;
   formFields: readonly FieldDescriptor[];
   /**
-   * The fields one record's form saves, when they depend on the record: the
-   * groups of the container children it admits (an `impl` child, a variant in
-   * its original's place). `formFields` holds every candidate.
+   * The fields one record's form saves, when they depend on the record: its
+   * own, and those of the groups it displays and of its rail rows (a
+   * `savedOnly` group only on a saved record, a section or a rail row only with
+   * its permissions, a container child's only where the record admits it).
+   * `formFields` holds every candidate.
    */
   formFieldsFor?: (record: Row | null) => readonly FieldDescriptor[];
   fieldByName: ReadonlyMap<string, FieldDescriptor>;
@@ -299,7 +305,10 @@ export function useFormViewSave({
     ? acknowledgedSource.record
     : read.result ?? null;
   const displayRecord = record;
-  // The record's own fields: where an original and its variant both declare one, the admitted declaration saves.
+  // The record's own fields (`formFieldsFor`): the check, the member marks, the banner's claim, the
+  // payload and the preset writes read these, so a field only an undisplayed group declares is in
+  // none of them; where several displayed declarations name one, the first saves, the page's own
+  // before a contribution's.
   const saveFields = React.useMemo(
     () => formFieldsFor?.(displayRecord) ?? formFields,
     [displayRecord, formFields, formFieldsFor],
@@ -408,9 +417,10 @@ export function useFormViewSave({
     defaultValues: emptyValues,
     shouldUnregister: false,
     resolver: (formValues) => {
-      const missing = missingRequiredFieldNames(formValues, formFields, requiredFieldNames);
-      const errors = requiredErrors(missing, t("form.required"));
+      // The check asks the fields the save writes for this record.
+      const errors = formRuleErrors(formValues, saveFields, requiredFieldNames, t);
       validateFields(formValues, (name, error) => set(errors, name, error));
+      markMemberErrors(errors, visibleFields(saveFields, formValues));
       return Object.keys(errors).length
         ? { values: {}, errors }
         : { values: formValues, errors: {} };
@@ -570,12 +580,18 @@ export function useFormViewSave({
   );
   const readSubmitResult = React.useCallback((result: FormSubmitResult<Row | FormSubmitAcknowledgement>) => {
     if (!mounted.current) return null;
+    // Every refused field's message is set at its path, so a control a page renders itself shows
+    // it; the summary calls highlighted only the save's fields whose descriptor is neither hidden
+    // nor excluded by its condition, and gives any other its own message, one only a group the
+    // record does not display declares among them.
+    const values = form.getValues();
+    const shown = visibleFields(saveFields, values).filter((field) => isFieldControlVisible(field, values));
     return applyFormErrors(form, result, {
-      fieldNames: [...fieldByName.keys(), ...(linesField ? [linesField] : [])],
+      fieldNames: [...shown.map((field) => field.name), ...(linesField ? [linesField] : [])],
       fieldSummary: (errors) => fieldValidationSummary(errors, fieldByName, t),
       fallback: t("form.genericSaveError"),
     }) ? null : result;
-  }, [fieldByName, form, linesField, t]);
+  }, [fieldByName, form, linesField, saveFields, t]);
   const commitSavedRecord = React.useCallback(
     (saved: Row, options: {
       submitted?: FormValues;
@@ -929,10 +945,4 @@ export function useFormViewSave({
 
 function isFormSubmitAcknowledgement(value: Row | FormSubmitAcknowledgement): value is FormSubmitAcknowledgement {
   return value.kind === "form-submit-acknowledgement" && "record" in value && "values" in value;
-}
-
-function requiredErrors(names: readonly string[], message: string): FieldErrors<FormValues> {
-  const errors: FieldErrors<FormValues> = {};
-  for (const name of names) set(errors, name, { type: "required", message });
-  return errors;
 }

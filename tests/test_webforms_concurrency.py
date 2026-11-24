@@ -3,8 +3,10 @@
 A submission judges its answers before it locks its form and checks under the
 lock that the form still serves the version it judged; a delivery locks its
 response; a publication locks the form and then the version, and so does a
-version's own save. Whichever runs second waits on the other's lock and judges
-its committed state. Every name and address is invented.
+version's own save; serving declared content locks the form and then the
+newest version, the row a revision of that version locks. Whichever runs
+second waits on the other's lock and judges its committed state. Two forms
+taking one address wait on its unique slug. Every name and address is invented.
 """
 
 from concurrent.futures import ThreadPoolExecutor
@@ -17,7 +19,7 @@ from rebac import system_context
 
 from angee.tags.testing.models import Tag
 from angee.webforms.models import Delivery, FormChanged
-from angee.webforms.testing.models import Form, FormVersion, Response, ResponseRecord
+from angee.webforms.testing.models import Form, FormAlias, FormVersion, Response, ResponseRecord
 from tests.lock_waits import submit, wait_for_lock
 
 pytestmark = [
@@ -149,6 +151,32 @@ def test_an_edit_that_began_before_a_publication_waits_for_it_and_is_refused() -
     assert (kept.definition, kept.published_at is not None, served.published_version_id) == (DEFINITION, True, kept.pk)
 
 
+def test_a_serve_that_meets_a_revision_of_the_newest_draft_waits_and_judges_the_revision() -> None:
+    """serve locks the newest version as a revision does: it never publishes a draft whose content just changed."""
+
+    form, version = form_with()
+    content = {"definition": DEFINITION, "languages": ["en"], "default_language": "en",
+               "personal_questions": ["name", "email"]}
+
+    def serve() -> Any:
+        with system_context(reason="webforms concurrency test serve"):
+            return Form._base_manager.get(pk=form.pk).serve(content)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with transaction.atomic():
+            with system_context(reason="webforms concurrency test edit"):
+                editor = FormVersion.objects.get(pk=version.pk)
+                editor.definition = SHORTER
+                editor.save()
+            contender, pid = submit(pool, serve)
+            wait_for_lock(pid, contender)
+        served = contender.result(timeout=10)
+
+    revised = stored(version)
+    assert (revised.definition, revised.published_at) == (SHORTER, None)
+    assert (served.number, served.definition, stored(form).published_version_id) == (2, DEFINITION, served.pk)
+
+
 def test_an_edit_that_commits_before_a_publication_is_what_gets_judged_and_published() -> None:
     """The publication waits on the version's row and reads it again: what it publishes is what it checked."""
 
@@ -183,3 +211,29 @@ def test_an_answer_the_database_could_not_store_is_refused_before_it_reaches_it(
 
     assert "name" in refused.value.message_dict
     assert not Response._base_manager.filter(form=form).exists()
+
+
+@pytest.mark.parametrize("contender", ["another form", "the same form"])
+def test_an_address_two_forms_take_at_once_goes_to_the_first(contender: str) -> None:
+    """The second insert waits on the first's uncommitted slug; another form is refused, the same form keeps it."""
+
+    first, _version = form_with()
+    second = first if contender == "the same form" else form_with()[0]
+
+    def take(form: Any) -> None:
+        with system_context(reason="webforms concurrency test"):
+            Form._base_manager.get(pk=form.pk).ensure_aliases(["shared"])
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with transaction.atomic():
+            take(first)
+            contending, pid = submit(pool, lambda: take(second))
+            wait_for_lock(pid, contending)
+        if second is first:
+            contending.result(timeout=10)
+        else:
+            with pytest.raises(ValidationError) as refused:
+                contending.result(timeout=10)
+            assert refused.value.message_dict == {"aliases": ["The address forms/shared belongs to another form."]}
+
+    assert list(FormAlias._base_manager.values_list("slug", "form_id")) == [("shared", first.pk)]

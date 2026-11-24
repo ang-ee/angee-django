@@ -93,6 +93,7 @@ TEXT_QUESTIONS: dict[str, dict[str, Any]] = {
     "": {"type": "text"},
     "text": {"type": "text"},
     "email": {"type": "text", "inputType": "email"},
+    "date": {"type": "text", "inputType": "date"},
     "textarea": {"type": "comment"},
 }
 CHOICE_WIDGETS = frozenset({"", "select", "selection", "combobox"})
@@ -120,9 +121,9 @@ class Plan(NamedTuple):
 def definition_from_form_spec(schema: Any, *, title: str) -> tuple[dict[str, Any], list[str]]:
     """Return the definition that asks what a stored FormSpec asks, and what it leaves out.
 
-    What carries over: a ``string`` field as a text answer (``widget`` ``email``
-    or ``textarea`` makes it an email address or a long text), ``number`` and
-    ``boolean`` fields, a ``string`` field's ``enum`` or ``options`` as a
+    What carries over: a ``string`` field as a text answer (``widget`` ``email``,
+    ``date`` or ``textarea`` makes it an email address, a date or a long text),
+    ``number`` and ``boolean`` fields, a ``string`` field's ``enum`` or ``options`` as a
     dropdown, ``label`` or else ``title``, ``description``, ``placeholder``,
     ``maxLength``, ``minimum`` and ``maximum``, the root ``required`` and
     ``propertyOrder``, and the ``success`` copy as the form's thank-you text.

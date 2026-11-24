@@ -361,7 +361,10 @@ function FormViewLines({
   lineRelationFilters,
   lineFooter,
 }: FormViewLineProps & { surface: FormViewSurface }): React.ReactElement | null {
-  const { form, linesActive, linesResource, linesField, formReadOnly, lineRowErrors } = surface;
+  const {
+    form, linesActive, linesResource, linesField, formReadOnly, lineRowErrors,
+    history, startFieldInteraction, commitFieldInteraction,
+  } = surface;
   if (!linesActive || !linesResource || !linesField) return null;
   return (
     <FormEditableLines
@@ -377,6 +380,7 @@ function FormViewLines({
       supplementalColumns={lineSupplementalColumns}
       relationFilters={lineRelationFilters}
       footer={lineFooter}
+      history={{ perform: history.perform, start: startFieldInteraction, commit: commitFieldInteraction }}
     />
   );
 }

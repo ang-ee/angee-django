@@ -516,6 +516,16 @@ deletes, transfers or adopts them; pickers still show them. The person is the
 user's own, which adoption lends no directory either; `nil` there gives an
 account's person the same reach as any other. A
 directory's contact readers keep exactly what they read without the roles.
+
+A person's and an organization's record form follows what the reader may do on
+that record: their types project `permissions` (`delete`, `merge_away`, `share`
+and `write`), so the form is read-only without `write`, offers Trash and Restore
+with `delete`, Share (and who reads the record) with `share`, and "Merge into…"
+with `merge_away`. A person's or organization's `share` is its party's, delegated
+whole: sharing it writes the grant on the party, the grantable. A list's selection
+of one still opens "Merge into…"; its rows carry no projection, so the compare
+page refuses whoever may not merge.
+
 Adding an address or relationship to a party takes write on that party
 (`create` on `parties/address` and `parties/relationship` in [permissions.zed](permissions.zed)):
 the row changes the party's projection, which a two-way directory writes to its

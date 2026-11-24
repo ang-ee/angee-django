@@ -5,6 +5,9 @@ import { enWebformsMessages } from "./i18n";
 import { FORM_MODEL, RESPONSE_MODEL, VERSION_MODEL } from "./resources";
 import { webformForm } from "./views/WebformForm";
 
+/** Where a form answers for one of its slugs: a consumer links to a form through it, never by a hard-coded path. */
+export { publicAddress } from "./address";
+
 const WEBFORMS_ID = "webforms";
 
 const webformsRoutes: readonly BaseAddonRoute[] = [

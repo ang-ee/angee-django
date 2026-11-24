@@ -1199,7 +1199,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **Record rails reuse form fields.** Contribute a `FormView.RailGroup` as a
   `<model>#rail` child with standard field descriptors and optional
   group/row permissions. The form selects those fields and binds them to its
-  save state; unreadable rows stay absent. The rail sits beside the sheet and
+  save state; unreadable rows stay absent, and a row behind a permission the
+  record lacks, or of a child it does not admit, is neither checked nor saved.
+  The rail sits beside the sheet and
   stacks beneath it in a narrow container.
 - **Inline visibility controls bind a server verb.** Declare a
   `<Field name="visibility" widget="visibility" placement="title" visibilityAction={...} />`.
@@ -1273,6 +1275,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   provides `DialogReturnFocusContext` with the menu trigger. A dialog-opening
   item declares `aria-haspopup="dialog"` and lets the menu close normally; it
   does not hold the menu open with `closeOnClick={false}`.
+- A form dialog built on [DialogForm](../../packages/ui/src/fragments/DialogForm.tsx), as
+  `MutationDialog` and `ActionFormDialog` are, opens with focus on its first field, else on
+  its Close, and on the dialog itself when opened by touch on its trigger or where the
+  primary pointer is coarse; its callers pass nothing for it.
 - Toolbar dialogs compose [MutationDialog](../../packages/ui/src/views/form/MutationDialog.tsx).
   Declare `DescriptorField`s; the shared [DescriptorFieldList](../../packages/ui/src/views/form/DescriptorFieldList.tsx)
   owns controls and requires an `ActionFormProvider` over the form (a host with its
@@ -1324,6 +1330,21 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   required/presence gates must let that resolver report value constraints and
   their specific messages; a short value must not silently disable submission.
   Keep this opt-in adapter out of the UI main entry so other forms do not load Ajv.
+  A dialog that checks its rules itself (a `MutationDialog`, an `ActionFormDialog`
+  without a resolver) validates in RHF's `onChange` mode, so a value a person enters
+  that breaks a rule shows its message while the gate disables submission.
+  Record forms and dialogs find a field's failed rules through one owner,
+  [fieldRuleErrors](../../packages/ui/src/views/form/field-values.ts); inside a
+  structured field `required` means presence and the field's own bounds judge a
+  blank. A record form asks the fields its save writes whose descriptor is
+  neither hidden, nor read-only, nor excluded by its condition; those are its
+  own fields, the fields of the groups it displays for the record
+  ([formDisplaysGroup](../../packages/ui/src/views/form/form-view-model.ts)) and
+  those of the rail rows whose permissions and child the record holds and admits
+  ([displayedRailGroups](../../packages/ui/src/views/form/form-view-rail.tsx)), so
+  a field only a group it does not display declares is neither asked nor sent.
+  No form asks a hidden or read-only member or list item: the server answers for
+  what the client does not check.
 - A widget that consumes a fixed array of object fields declares
   `acceptsRowTemplate: true` in its widget definition. The FormSpec projector
   passes the parsed `rowTemplate` only through that seam and rejects a selected
@@ -1334,8 +1355,14 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   consumers own connection policy, selection and persisted layout.
 - Filter entry composes [FilterClauseEditor](../../packages/ui/src/toolbars/FilterClauseEditor.tsx);
   custom pickers retain their own keyboard interaction.
-- Form undo composes [useFormHistory](../../packages/ui/src/views/form/use-form-history.ts);
-  group field interactions and reset history when accepting a saved or reloaded baseline.
+- Form undo composes [useFormHistory](../../packages/ui/src/views/form/use-form-history.ts):
+  one user intention is one step. Group a field's typing, run every other change (adding,
+  removing, duplicating or reordering a line) through `perform`, and reset history when
+  accepting a saved or reloaded baseline; `EditableLines` takes the form's verbs as `history`.
+  A line added by code is built with `emptyLineRow` or `duplicateLineRow` and then performed.
+  While a line's cell is being edited that is still one step per intention, but `EditableLines`
+  ends the cell's group only after the rows changed, under a path that then names whichever
+  row sits at that position, if any; before its own row operations it ends the group first.
 - Editable named entries use the [keyed collection](../../packages/ui/src/views/form/keyed-collection.ts)
   in authored order; client identities survive renaming and own duplicate-key issues.
 - Schema path selection composes [SchemaPathPicker](../../packages/ui/src/views/SchemaPathPicker.tsx)
@@ -2375,7 +2402,8 @@ seed even for a `readOnly`/`createOnly` field — whether the seed is the field'
 no longer silently dropped from the create payload. Prefer `createOnly` (editable on
 create carrying the seed, locked on edit) when the value should stay visible-but-fixed;
 `readOnly` + `createDefaults` also works for a value the form never renders editable.
-(`editOnly` fields stay excluded on create.)
+(`editOnly` fields stay excluded on create, and so does a field only a group the create does
+not display declares: a `savedOnly` group, or a section behind a permission.)
 
 ## Pitfalls
 

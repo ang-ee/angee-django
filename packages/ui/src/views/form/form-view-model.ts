@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
-import { get, set } from "react-hook-form";
+import { get, set, type FieldErrors } from "react-hook-form";
 import { replaceEqualDeep } from "@tanstack/react-query";
 import {
+  holdsPermission,
   publicIdLabel,
   relationModelLabelForField,
   rowPublicId,
@@ -25,7 +26,8 @@ import {
   type GroupDescriptor,
 } from "../page";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
-import { isStructuredPresenceField, structuredFieldErrorPaths, textValue } from "./field-values";
+import { fieldRuleErrors, textValue } from "./field-values";
+import { fieldErrorsFromRules } from "./validation-errors";
 
 export type FormValues = Record<string, unknown>;
 const MISSING_DOTTED_VALUE = Symbol("missing-dotted-value");
@@ -65,10 +67,6 @@ export interface FormSectionModel {
   defaultOpen?: boolean;
   fields: readonly FieldDescriptor[];
   render?: () => ReactNode;
-  /** Projected record permission required to show this section. */
-  permission?: string;
-  /** The container child behind it, shown only on records that admit that child. */
-  containerChild?: string;
   /** The pane this section fills instead of the sheet. */
   pane?: string;
   sequence?: number;
@@ -87,11 +85,45 @@ export interface FormViewFieldLayout {
 /** The section key of a form's editable lines, declared by a `lines` group or trailing the form. */
 export const EDITABLE_LINES_SECTION = "editable-lines";
 
+/**
+ * Whether a record's form displays a declared group: the one place its conditions are decided. A
+ * `savedOnly` group is no part of a create form; a group carrying a `permission` shows on a record
+ * that holds it (`holdsPermission`), so never without a record; a group a row-decided container
+ * child contributed (`containerChild`) shows where `admits`, the form's container admission, admits
+ * that child for the record. The sheet, its panes and the fields the form checks and saves
+ * (`displayedFormFields`) all read it: a field only groups it does not display declare is not that
+ * record's form field. A contribution's tabs ask it for their child's permission and admission, its
+ * actions for their child's admission alone: a contribution's permission does not gate the actions
+ * it contributes.
+ */
+export function formDisplaysGroup(
+  group: Pick<GroupDescriptor, "savedOnly" | "permission" | "containerChild">,
+  record: Row | null,
+  { isCreate, admits }: { isCreate: boolean; admits: (child: string, record: Row | null) => boolean },
+): boolean {
+  return !(isCreate && group.savedOnly)
+    && (group.permission === undefined || holdsPermission(record, group.permission))
+    && (group.containerChild === undefined || admits(group.containerChild, record));
+}
+
+/** The names of the fields `groups` declare: none of them is one of a form's ungrouped fields. */
+function groupFieldNames(groups: readonly GroupDescriptor[]): ReadonlySet<string> {
+  return new Set(groups.flatMap((group) => group.fields.map((field) => field.name)));
+}
+
+/**
+ * A form's sections: its ungrouped fields, then one per declared group it `displays` (see
+ * `formDisplaysGroup`), keyed by the group's index among all `groups`, so a group left out
+ * renumbers no other. The first `pageGroupCount` of `groups` are the page's own, the rest
+ * contributed. The ungrouped section holds the `fields` that neither one of the page's own groups,
+ * displayed or not, nor a displayed contributed group declares.
+ */
 export function formSections(
   fields: readonly FieldDescriptor[],
   groups: readonly GroupDescriptor[],
   sequences: readonly (number | undefined)[] = [],
-  isCreate = false,
+  displays: (group: GroupDescriptor) => boolean = () => true,
+  pageGroupCount = groups.length,
 ): readonly FormSectionModel[] {
   if (groups.length === 0) return [{ key: "fields", fields }];
   if (groups.filter((group) => group.lines).length > 1) {
@@ -100,11 +132,8 @@ export function formSections(
   if (groups.some((group) => group.lines && group.pane !== undefined)) {
     throw new Error("A form's editable lines group cannot also be a pane.");
   }
-  const groupedNames = new Set<string>();
   const sections: FormSectionModel[] = groups.flatMap((group, index) => {
-    // A saved-only group's fields stay out of a create form, never falling back to the ungrouped section.
-    for (const field of group.fields) groupedNames.add(field.name);
-    if (isCreate && group.savedOnly) return [];
+    if (!displays(group)) return [];
     if (group.fields.length === 0 && group.content === undefined && !group.lines) return [];
     return [
       {
@@ -117,15 +146,16 @@ export function formSections(
         defaultOpen: group.defaultOpen,
         fields: group.fields,
         ...(group.content !== undefined ? { render: () => group.content } : {}),
-        ...(group.permission !== undefined ? { permission: group.permission } : {}),
-        ...(group.containerChild !== undefined ? { containerChild: group.containerChild } : {}),
         ...(group.pane !== undefined ? { pane: group.pane } : {}),
         sequence: sequences[index],
         order: index,
       },
     ];
   });
-  const ungrouped = fields.filter((field) => !groupedNames.has(field.name));
+  // A field of the page's own undisplayed group stays out of the form, never falling back to the
+  // ungrouped section; a page's own field only an undisplayed contribution re-declares shows there.
+  const grouped = groupFieldNames(groups.filter((group, index) => index < pageGroupCount || displays(group)));
+  const ungrouped = fields.filter((field) => !grouped.has(field.name));
   if (ungrouped.length > 0) sections.unshift({ key: "fields", fields: ungrouped });
   return sections;
 }
@@ -281,6 +311,25 @@ export function flattenedFormFields(
   return flattened;
 }
 
+/**
+ * One record's form fields: `flattenedFormFields` over the declarations its form displays, the
+ * first declaration of a name winning. They are the form's field list `fields`, less the fields of
+ * the page's own groups that `displays` (see `formDisplaysGroup`) rejects, which a page's field list
+ * also lists; then the fields of the `groups` it displays, in their order. The first
+ * `pageGroupCount` of `groups` are the page's own, the rest contributed. A field the page declares
+ * outside its own groups keeps the page's declaration whatever a contribution re-declares, and with
+ * every group displayed this is `flattenedFormFields(fields, groups)`, declaration for declaration.
+ */
+export function displayedFormFields(
+  fields: readonly FieldDescriptor[],
+  groups: readonly GroupDescriptor[],
+  displays: (group: GroupDescriptor) => boolean,
+  pageGroupCount: number,
+): readonly FieldDescriptor[] {
+  const undisplayed = groupFieldNames(groups.filter((group, index) => index < pageGroupCount && !displays(group)));
+  return flattenedFormFields(fields.filter((field) => !undisplayed.has(field.name)), groups.filter(displays));
+}
+
 function addFormField(
   fields: FieldDescriptor[],
   seen: Set<string>,
@@ -309,7 +358,7 @@ export function emptyDraft(
 }
 
 /** The fields a draft for `values` holds: those visible for them, resolved against them. */
-export function visibleFields(fields: readonly FieldDescriptor[], values: FormValues): FieldDescriptor[] {
+export function visibleFields<T extends FieldDescriptor>(fields: readonly T[], values: FormValues): T[] {
   return fields.map((field) => resolveField(field, values)).filter((field) => isFieldVisible(field, values));
 }
 
@@ -529,20 +578,35 @@ export function isFieldControlVisible(field: FieldDescriptor, values: FormValues
   return !field.hidden && isFieldVisible(field, values);
 }
 
-export function missingRequiredFieldNames(
+/**
+ * A record form's errors for the rules its `fields` fail (the fields its save writes: those the
+ * form displays for the record, `displayedFormFields`, and the rail rows `displayedRailGroups`
+ * holds), each field's found by `fieldRuleErrors` and worded by `fieldErrorsFromRules`. As a
+ * dialog's check (`dialogRuleErrors`) does, it asks only the fields whose descriptor is shown for
+ * `values` (`isFieldControlVisible`: neither hidden nor conditionally excluded) and not read-only,
+ * and leaves the others to the server; a field only a group the record does not display declares
+ * is not among `fields`, so it is not asked.
+ * It differs from a dialog's check in four facts only: it reads read-only from the field as
+ * resolved for `values` (its own flag, its `resolve`, its mode on a create or an edit), where a
+ * dialog also reads `readOnlyWhen`; it reads each value at its dotted path, where a dialog reads
+ * one flat key (both read an own key holding `undefined` as absent); it counts a field as required
+ * by its own flag or by `requiredFieldNames`, the model's required-on-create names, where a dialog
+ * counts the flag alone; and it always checks constraints, which a dialog may leave to a schema
+ * resolver.
+ */
+export function formRuleErrors(
   values: FormValues,
   fields: readonly FieldDescriptor[],
   requiredFieldNames: ReadonlySet<string>,
-): readonly string[] {
-  return visibleFields(fields, values).flatMap((field) => {
-    const value = dottedValue(values, field.name);
-    if (isStructuredPresenceField(field)) {
-      return structuredFieldErrorPaths(field, value, hasDottedValue(values, field.name));
-    }
-    return (field.required || requiredFieldNames.has(field.name)) && isEmptyFieldValue(value)
-      ? [field.name]
-      : [];
-  });
+  t: UiTranslate,
+): FieldErrors<FormValues> {
+  return fieldErrorsFromRules(visibleFields(fields, values)
+    .filter((field) => isFieldControlVisible(field, values) && !field.readOnly)
+    .flatMap((field) => fieldRuleErrors(
+      field,
+      { value: dottedValue(values, field.name), present: hasDottedValue(values, field.name) },
+      { required: Boolean(field.required) || requiredFieldNames.has(field.name), validateConstraints: true },
+    )), t);
 }
 
 export function visibleSections(
@@ -621,11 +685,12 @@ export function mutationData(
 }
 
 /**
- * `field` as it presents for `values`: what its `resolve` returns over its declaration, read-only
- * when either is. A `resolve` never renames the value: the field keeps reading and writing its
- * declared `name`, whatever name the resolved descriptor carries.
+ * `field` as it presents for `values`, as the caller's descriptor type: what its `resolve` returns
+ * over its declaration, read-only when either is, so a subtype's own members are kept from the
+ * declaration or laid over by `resolve`. A `resolve` never renames the value: the field keeps
+ * reading and writing its declared `name`, whatever name arrives.
  */
-export function resolveField(field: FieldDescriptor, values: FormValues): FieldDescriptor {
+export function resolveField<T extends FieldDescriptor>(field: T, values: FormValues): T {
   const resolved = field.resolve?.(values);
   return resolved
     ? { ...field, ...resolved, name: field.name, readOnly: Boolean(field.readOnly || resolved.readOnly) }
@@ -689,15 +754,12 @@ function emptyValue(field: FieldDescriptor): unknown {
   if (isNullableScalarWidget(field)) return null;
   if (field.widget === "tagInput" || isRelationListField(field)) return [];
   if (field.kind === "switch" || field.widget === "switch") return false;
-  if (fieldWidgetId(field) === "json") return {};
+  // The `json` and `object` widgets get an empty object, the `list` and `rows` widgets an empty
+  // list; `object`, `list` and `rows` throw on a string.
+  const widget = fieldWidgetId(field);
+  if (widget === "json" || widget === "object") return {};
+  if (widget === "list" || widget === "rows") return [];
   return "";
-}
-
-function isEmptyFieldValue(value: unknown): boolean {
-  if (value == null) return true;
-  if (typeof value === "string") return value.trim() === "";
-  if (Array.isArray(value)) return value.length === 0;
-  return false;
 }
 
 function isNullableScalarWidget(field: FieldDescriptor): boolean {
@@ -773,7 +835,13 @@ export function isCompositeFieldDescriptor(field: FieldDescriptor): boolean {
 /**
  * Exact-field messages stay bare. With a root path, descendants keep their full
  * dotted paths for nested routing; an empty root produces relative paths.
- * Omit the root to leave every message unprefixed.
+ * Omit the root to leave every message unprefixed. A bare value is a message only
+ * where React Hook Form puts message text: as an error given here, or inside a
+ * `types` subtree; anywhere else a child that is not an object is skipped. Under
+ * `type`, any value that is not an object is the library's own attribute (or
+ * `MEMBER_ERRORS`) and is skipped while an object is the error of a member named
+ * `type` and is walked as any member's, and `ref`, where the library keeps the
+ * registered control, is never walked, so a member named `ref` shows no message.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
@@ -781,7 +849,8 @@ export function fieldErrorMessages(errors: readonly unknown[], path?: string): s
   return errors.flatMap((error) => nestedFieldErrorMessages(error, path, path));
 }
 
-function nestedFieldErrorMessages(error: unknown, path?: string, rootPath?: string): string[] {
+/** `inTypes`: the error sits inside a `types` subtree, where a bare value is message text. */
+function nestedFieldErrorMessages(error: unknown, path?: string, rootPath?: string, inTypes = false): string[] {
   if (error == null) return [];
   if (typeof error !== "object") return [String(error)];
   const messages: string[] = [];
@@ -792,10 +861,12 @@ function nestedFieldErrorMessages(error: unknown, path?: string, rootPath?: stri
     messages.push(path && path !== rootPath ? `${path}: ${message}` : message);
   }
   return messages.concat(Object.entries(error).flatMap(([name, child]) => {
-    if (name === "ref" || name === "type" || child === undefined
+    const childInTypes = inTypes || name === "types";
+    if (name === "ref" || child === undefined || (name === "type" && typeof child !== "object")
+      || (typeof child !== "object" && !childInTypes)
       || (hasMessage && (name === "message" || name === "types"))) return [];
     const childPath = path === undefined ? undefined : path ? `${path}.${name}` : name;
-    return nestedFieldErrorMessages(child, childPath, rootPath);
+    return nestedFieldErrorMessages(child, childPath, rootPath, childInTypes);
   }));
 }
 

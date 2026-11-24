@@ -18,6 +18,7 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from angee.base.permissions import instance_actor
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedThread
 from angee.webforms.models import SLUG
 from angee.webforms.targets import DeliveryRefused, FormTarget
@@ -69,6 +70,22 @@ class MessageTarget(FormTarget):
     key = "message"
     label = "Post to a messaging channel"
     config_model = MessageTargetConfig
+
+    def clean(self) -> None:
+        """Refuse a channel that is gone or has another backend when the form is validated.
+
+        No response could be posted on it: delivery would refuse every one as
+        ``channel_missing``. Messaging judges it (``require_backend_target``):
+        through the form's acting user's access when it has one, so a channel
+        they cannot read is refused as a missing one, and elevated for system
+        work, as delivery reads it. ``permits`` then asks whether an acting user
+        may write on it.
+        """
+
+        config = cast(MessageTargetConfig, self.config)
+        apps.get_model("messaging", "Channel").objects.require_backend_target(
+            config.channel, backend_class=WebformChannelBackend.key, actor=instance_actor(self.form),
+        )
 
     def permits(self, actor: Any) -> bool:
         """Whether ``actor`` may post on the channel this configuration names.

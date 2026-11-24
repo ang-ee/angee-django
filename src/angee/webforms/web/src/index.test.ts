@@ -1,9 +1,14 @@
 import { expectValidBaseAddon } from "@angee/app/testing";
 import { describe, expect, test } from "vitest";
 
-import webforms from "./index";
+import { publicAddress as ownedAddress } from "./address";
+import webforms, { publicAddress } from "./index";
 
 describe("angee.webforms addon manifest", () => {
+  test("exports the one owner of a form's public address, for consumers that link to a form", () => {
+    expect(publicAddress).toBe(ownedAddress);
+  });
+
   test("satisfies the rendered-addon invariants", () => {
     expect(() => expectValidBaseAddon(webforms)).not.toThrow();
   });

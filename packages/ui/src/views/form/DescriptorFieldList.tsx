@@ -128,8 +128,7 @@ export function DescriptorFieldList({ fields, readOnly = false, unregisterHidden
   if (!memory) throw new Error("DescriptorFieldList requires an ActionFormProvider.");
   const values = useWatch({ control: form.control });
   const { i18n } = useAppRuntime();
-  // Resolving lays `resolve`'s descriptor over each declared one, so its DescriptorField members stay.
-  const renderedFields = resolveFieldLabels(visibleFields(fields, values) as DescriptorField[], i18n);
+  const renderedFields = resolveFieldLabels(visibleFields(fields, values), i18n);
   const { unregister } = form;
   const declaredKey = JSON.stringify(fields.map((field) => field.name));
   const shownKey = JSON.stringify(renderedFields.map((field) => field.name));

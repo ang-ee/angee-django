@@ -7,14 +7,14 @@ import { ErrorBanner } from "../../fragments/ErrorBanner";
 import { Button } from "../../ui/button";
 import type { DialogPlacement, DialogSize } from "../../ui/dialog";
 import { useToast } from "../../feedback";
-import { useUiT } from "../../i18n";
+import { useUiT, type UiTranslate } from "../../i18n";
 import { dateFromUnknown, formatDateTimeStorage } from "../../widgets/date-format";
-import { emptyValueForField, isStructuredPresenceField, structuredFieldErrorPaths } from "./field-values";
+import { emptyValueForField, fieldRuleErrors } from "./field-values";
 import { isFieldControlVisible, visibleFields } from "./form-view-model";
 import { DescriptorFieldList, type DescriptorField } from "./DescriptorFieldList";
 import {
-  SURFACE_RENDERS_FAILURE, applyFormErrors, formSubmitError, invalidFormSubmit, savedFormSubmitResult,
-  type FormSubmitResult, type ValidationErrors,
+  SURFACE_RENDERS_FAILURE, applyFormErrors, fieldErrorsFromRules, formSubmitError, invalidFormSubmit,
+  markMemberErrors, savedFormSubmitResult, type FormSubmitResult, type ValidationErrors,
 } from "./validation-errors";
 import { useFieldValidation } from "./use-field-validation";
 import { ActionFormProvider } from "./ActionFormProvider";
@@ -260,8 +260,9 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
     defaultValues: initialDialogValues(fields, initialValues),
     mode: "onChange",
     resolver: (formValues) => {
-      const errors = requiredDialogErrors(fields, formValues, t("form.required"));
+      const errors = dialogRuleErrors(fields, formValues, t);
       validateFields(formValues, (name, error) => set(errors, name, error));
+      markMemberErrors(errors, visibleFields(fields, formValues));
       return Object.keys(errors).length ? { values: {}, errors } : { values: formValues, errors: {} };
     },
   });
@@ -278,8 +279,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
     }
   }, [fields, form, initialValues, open]);
   const values = useWatch({ control: form.control });
-  // Resolving lays `resolve`'s descriptor over each declared one, so its DescriptorField members stay.
-  const shownFields = visibleFields(fields, values) as DescriptorField[];
+  const shownFields = visibleFields(fields, values);
   const renderedFieldNames = shownFields.filter((field) => !field.hidden).map((field) => field.name);
   const submitting = form.formState.isSubmitting;
   const error = form.formState.errors.root?.server?.message ?? null;
@@ -386,31 +386,35 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   );
 }
 
-/** Validate the visible, editable descriptor fields through one required/presence rule.
- * Schema-resolved forms leave value constraints and their messages to that resolver.
+/** A dialog's errors for the rules its fields fail, each field's found by `fieldRuleErrors` and
+ * worded by `fieldErrorsFromRules`. As the record form's check (`formRuleErrors`) does, it asks
+ * only the fields shown for `values` (`isFieldControlVisible`) that the person can change. It
+ * differs from the record form's check in four facts only: it decides read-only by the field's
+ * `readOnly` and `readOnlyWhen`, where the record form reads the resolved field's `readOnly`
+ * alone; it reads each name as one flat key, where the record form reads dotted paths (both read
+ * an own key holding `undefined` as absent); it counts the field's own `required` flag alone,
+ * where the record form adds the model's required-on-create names; and it checks constraints only
+ * with `validateConstraints` (a schema-resolved form leaves them and their messages to that
+ * resolver), where the record form always does.
  * @kind null
  * @reason Descriptor validation shared by form surfaces.
  */
-export function requiredDialogErrors(
+export function dialogRuleErrors(
   fields: readonly DescriptorField[] | ((values: Record<string, unknown>) => readonly DescriptorField[]),
   values: Record<string, unknown>,
-  message: string,
+  t: UiTranslate,
   validateConstraints = true,
 ): FieldErrors<Record<string, unknown>> {
-  // Resolving lays `resolve`'s descriptor over each declared one, so its DescriptorField members stay.
-  const resolved = visibleFields(typeof fields === "function" ? fields(values) : fields, values) as DescriptorField[];
+  const resolved = visibleFields(typeof fields === "function" ? fields(values) : fields, values);
   const editable = resolved.filter((field) => isFieldControlVisible(field, values) && !field.readOnly && !field.readOnlyWhen?.(values));
-  const missing = editable.flatMap((field) => {
-    if (isStructuredPresenceField(field)) {
-      const value = values[field.name];
-      const present = Object.hasOwn(values, field.name) && !(field.omittable && value === undefined);
-      return structuredFieldErrorPaths(field, value, present, field.name, validateConstraints);
-    }
-    return field.required && emptyDialogValue(values[field.name]) ? [field.name] : [];
-  });
-  const errors: FieldErrors<Record<string, unknown>> = {};
-  for (const name of missing) set(errors, name, { type: "required", message });
-  return errors;
+  return fieldErrorsFromRules(editable.flatMap((field) => {
+    const value = values[field.name];
+    return fieldRuleErrors(
+      field,
+      { value, present: Object.hasOwn(values, field.name) && value !== undefined },
+      { required: Boolean(field.required), validateConstraints },
+    );
+  }), t);
 }
 
 function initialDialogValues(
@@ -428,12 +432,4 @@ function initialDialogValues(
     }
   }
   return values;
-}
-
-/** Whether a dialog value counts as unfilled for the required-submit gate. */
-export function emptyDialogValue(value: unknown): boolean {
-  if (value == null) return true;
-  if (typeof value === "string") return value.trim() === "";
-  if (Array.isArray(value)) return value.length === 0;
-  return false;
 }

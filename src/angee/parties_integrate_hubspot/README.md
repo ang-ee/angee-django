@@ -269,8 +269,15 @@ Whatever the mapping states, it states through `link` as the integration
 refuses that record alone, naming the mapping and never the value, while its
 page lands; any other error fails the page. A record whose kept values or
 contacts changed applies again; a change of a property the mapping does not name,
-or one its projection hides, applies nothing. Raising or lowering `version`
-replays every record once. When HubSpot says the record is gone, on a read of it
+or one its projection hides, applies nothing. A record whose contact now lands
+on another person applies again too: a merge moves the contact to the survivor,
+and each record of that contact applies again at its next read (the daily sweep,
+or the baseline a resync of the stream runs), unchanged at HubSpot, while the
+others apply nothing. A contact that has not landed yet counts as no one, and
+as its person once it lands, so a record waiting for its contact follows it when
+it lands. `apply_record` must therefore be safe to run again, and a merge needs
+no change of `version`. Raising or lowering `version` replays every
+record once. When HubSpot says the record is gone, on a read of it
 or after two absence sweeps, `withdraw_record(link)` runs. A service key reads
 deals with `crm.objects.deals.read`.
 

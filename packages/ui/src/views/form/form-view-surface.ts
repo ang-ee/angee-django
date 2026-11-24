@@ -14,7 +14,6 @@ import {
   type DataResourceMetadata,
   type ModelMetadata,
   type Row,
-  holdsPermission,
 } from "@angee/metadata";
 import { refineFieldsFromPaths } from "@angee/refine";
 import { useOne } from "@refinedev/core";
@@ -47,14 +46,16 @@ import {
 import type { RecordActionDescriptor, RecordDeleteAction } from "./RecordActionBar";
 import { useArchiveActions } from "../resource/archive";
 import { useTrashActions } from "../resource/trash";
-import { recordRailGroups, visibleRecordRailGroups, type RecordRailGroupProps } from "./form-view-rail";
+import { displayedRailGroups, recordRailGroups, visibleRecordRailGroups, type RecordRailGroupProps } from "./form-view-rail";
 import { rowDependentChildren, useContainerAdmission } from "./container-admission";
 import { resolveFieldLabels, resolveGroupLabels } from "./field-labels";
 import {
   addFieldSelection,
+  displayedFormFields,
   EDITABLE_LINES_SECTION,
   fieldErrorMessages,
   flattenedFormFields,
+  formDisplaysGroup,
   formSections,
   formViewFieldLayout,
   recordRepresentationValue,
@@ -207,7 +208,6 @@ export interface FormViewSurface
   relationByField: ReadonlyMap<string, RelationFieldInfo>;
   /** Fields rendered by the relation multi-select, with the related model it lists. */
   relationListByField: ReadonlyMap<string, RelationFieldInfo>;
-  requiredMessage: string;
   titleField: FieldDescriptor | undefined;
   titlePlacementField: FieldDescriptor | undefined;
   titleFieldMessages: readonly string[];
@@ -319,14 +319,22 @@ export function useFormViewSurface({
   const sectionAdmits = useContainerAdmission("form#sections", models, dataResource?.implFields);
   const railAdmits = useContainerAdmission("form#rail", models, dataResource?.implFields);
   const rowDependentSections = React.useMemo(() => rowDependentChildren(sectionEntries), [sectionEntries]);
-  // A create form knows no implementation: originals stand and the row-decided children that
-  // need one leave the form, fields and all, so their required fields and defaults stay out too.
-  const creating = id == null;
+  const isCreate = id == null;
+  // Whether this form displays a declared group for a record: its sections, its panes and its fields
+  // ask this, a contribution's tabs for their child's permission and admission, and its actions for
+  // their child's admission alone.
+  const displaysGroup = React.useCallback(
+    (group: Pick<GroupDescriptor, "savedOnly" | "permission" | "containerChild">, record: Row | null) =>
+      formDisplaysGroup(group, record, { isCreate, admits: sectionAdmits }),
+    [isCreate, sectionAdmits],
+  );
+  // A create form knows no implementation: originals stand and the row-decided children that need
+  // one are no part of it, so they neither number its groups nor raise its sequences.
   const formSectionEntries = React.useMemo(
-    () => creating
-      ? sectionEntries.filter((entry) => !rowDependentSections.has(entry.id) || sectionAdmits(entry.id, null))
+    () => isCreate
+      ? sectionEntries.filter((entry) => displaysGroup(rowDependentSections.has(entry.id) ? { containerChild: entry.id } : {}, null))
       : sectionEntries,
-    [creating, rowDependentSections, sectionAdmits, sectionEntries],
+    [displaysGroup, isCreate, rowDependentSections, sectionEntries],
   );
   React.useEffect(() => {
     if (!developmentMode()) return;
@@ -354,16 +362,16 @@ export function useFormViewSurface({
         const sequence = Math.max(floor, entry.sequence ?? 0);
         // A child the row decides (an `impl` child, a variant or its original) shows on the records that admit it.
         const rowDependent = rowDependentSections.has(entry.id);
+        // A contribution's permission gates every group and tab it declares.
+        const gate = {
+          ...(entry.permission !== undefined ? { permission: entry.permission } : {}),
+          ...(rowDependent ? { containerChild: entry.id } : {}),
+        };
         return { floor: sequence, declarations: [...declarations,
           ...parsePageGroups(entry.content as React.ReactNode).map(
             (group, childOrder) => ({
               kind: "group" as const,
-              // A contribution's permission gates every group and tab it declares.
-              group: {
-                ...group,
-                ...(entry.permission !== undefined ? { permission: entry.permission } : {}),
-                ...(rowDependent ? { containerChild: entry.id } : {}),
-              },
+              group: { ...group, ...gate },
               sequence,
               order: entryOrder * 1000 + childOrder,
             }),
@@ -372,16 +380,14 @@ export function useFormViewSurface({
             (tab, childOrder) => ({
               kind: "tab" as const,
               tab: entry.permission === undefined && !rowDependent ? tab : { ...tab, visibleWhen: (record: Row, resource: DataResourceMetadata | null) =>
-                (entry.permission === undefined || holdsPermission(record, entry.permission))
-                && (!rowDependent || sectionAdmits(entry.id, record))
-                && (tab.visibleWhen?.(record, resource) ?? true) },
+                displaysGroup(gate, record) && (tab.visibleWhen?.(record, resource) ?? true) },
               sequence,
               order: entryOrder * 1000 + childOrder,
             }),
           ),
         ] };
       }, { floor: Number.NEGATIVE_INFINITY, declarations: [] }).declarations,
-    [formSectionEntries, rowDependentSections, sectionAdmits],
+    [displaysGroup, formSectionEntries, rowDependentSections],
   );
   const contributedGroups = React.useMemo(
     () =>
@@ -429,7 +435,6 @@ export function useFormViewSurface({
             && Boolean(canonicalMetadata?.fields[head]);
         }),
   )], [canonicalMetadata, canonicalResource, contributionFields, modelLabel, modelMetadata]);
-  const isCreate = id == null;
   const { containers = EMPTY_CONTAINERS, i18n } = useAppRuntime();
   // A declared label may be an addon message key; it reads as text from here on.
   const declaredFields = React.useMemo(
@@ -437,6 +442,9 @@ export function useFormViewSurface({
     [childFields, fields, i18n],
   );
   const baseGroups = groups ?? childGroups;
+  // The form's groups are the page's own, then the contributed ones: their sequences, their sections
+  // and the record's fields read that order.
+  const pageGroupCount = baseGroups.length;
   const declaredGroups = React.useMemo(
     () => resolveGroupLabels([...baseGroups, ...contributedGroups], i18n),
     [baseGroups, contributedGroups, i18n],
@@ -513,17 +521,18 @@ export function useFormViewSurface({
     modelMetadata,
     schemaMetadata,
   ), [modelMetadata, schemaMetadata]);
-  // `formFields` registers every candidate so any record's values load; one record's form is the
-  // groups no row decides plus the row-decided children it admits. Its layout and its save read these.
+  // `formFields` registers every candidate so any record's values load; one record's form is its own
+  // fields and those of the groups it displays and of its rail rows. Its layout and its save read these.
   const regularFormFieldsFor = React.useCallback(
-    (record: Row | null) => flattenedFormFields(resolvedFields, resolvedGroups.filter((group) =>
-      group.containerChild === undefined || sectionAdmits(group.containerChild, record))),
-    [resolvedFields, resolvedGroups, sectionAdmits],
+    (record: Row | null) =>
+      displayedFormFields(resolvedFields, resolvedGroups, (group) => displaysGroup(group, record), pageGroupCount),
+    [displaysGroup, pageGroupCount, resolvedFields, resolvedGroups],
   );
+  // Without a record no rail row is the form's: a create has no rail, and an edit's record is loading.
   const formFieldsFor = React.useCallback(
-    (record: Row | null) => flattenedFormFields(regularFormFieldsFor(record), railGroups
-      .filter((group) => group.containerChild === undefined || (record != null && railAdmits(group.containerChild, record)))
-      .map((group) => ({ fields: (group.fields ?? []).map((row) => row.field), actions: [] }))),
+    (record: Row | null) => flattenedFormFields(regularFormFieldsFor(record),
+      (record ? displayedRailGroups(railGroups, record, railAdmits) : [])
+        .map((group) => ({ fields: (group.fields ?? []).map((row) => row.field), actions: [] }))),
     [railAdmits, railGroups, regularFormFieldsFor],
   );
   const defaultSlugSource = React.useMemo(
@@ -739,11 +748,11 @@ export function useFormViewSurface({
     () => [
       ...pageActions,
       // Section contributions belong to the subject's menu unless explicitly placed.
-      ...contributedActions.flatMap<RecordActionDescriptor>(({ action, containerChild }) =>
-        containerChild === undefined || sectionAdmits(containerChild, save.displayRecord)
-          ? [{ ...action, placement: action.placement ?? "menu" }] : []),
+      ...contributedActions.flatMap<RecordActionDescriptor>((contributed) =>
+        displaysGroup(contributed, save.displayRecord)
+          ? [{ ...contributed.action, placement: contributed.action.placement ?? "menu" }] : []),
     ],
-    [contributedActions, pageActions, save.displayRecord, sectionAdmits],
+    [contributedActions, displaysGroup, pageActions, save.displayRecord],
   );
   const { titleField, titlePlacementField, statusField, bodyField, gridFields, gridGroups } =
     fieldLayout;
@@ -772,21 +781,18 @@ export function useFormViewSurface({
         gridFields,
         gridGroups,
         declaredGroupSequences,
-        isCreate,
+        (group) => displaysGroup(group, save.displayRecord),
+        pageGroupCount,
       );
-      const permitted = groupSections.filter((section) =>
-        (section.permission === undefined
-          || (save.displayRecord != null && holdsPermission(save.displayRecord, section.permission)))
-        && (section.containerChild === undefined || sectionAdmits(section.containerChild, save.displayRecord))
-        // A declared lines section shows only where the form edits its lines.
-        && (section.key !== EDITABLE_LINES_SECTION || save.linesActive));
-      const unlabelled = permitted.filter((section) => section.label == null);
-      const labelled = permitted
+      // A declared lines section shows only where the form edits its lines.
+      const shown = groupSections.filter((section) => section.key !== EDITABLE_LINES_SECTION || save.linesActive);
+      const unlabelled = shown.filter((section) => section.label == null);
+      const labelled = shown
         .filter((section) => section.label != null)
         .sort(compareFormSections);
       return [...unlabelled, ...labelled];
     },
-    [declaredGroupSequences, gridFields, gridGroups, isCreate, save.displayRecord, save.linesActive, sectionAdmits],
+    [declaredGroupSequences, displaysGroup, gridFields, gridGroups, pageGroupCount, save.displayRecord, save.linesActive],
   );
   // The values the sheet's sections and the rail decide their conditional fields by, watched while
   // any field is conditional (`formFields` holds the rail's, so they count) and read only by those.
@@ -917,7 +923,6 @@ export function useFormViewSurface({
     attributionFields,
     relationByField,
     relationListByField,
-    requiredMessage: t("form.required"),
     titleField,
     titlePlacementField,
     titleFieldMessages,

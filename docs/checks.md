@@ -50,6 +50,8 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 |---|---|
 | Focused Python test | `uv run --locked python -m pytest -q tests/<test_file>.py` |
 | Changed-path selection: the test files a change reaches, as a pull request's CI picks them | `git diff --name-only <base> \| uv run --locked python scripts/changed_path_selection.py` |
+| PostgreSQL selection: the lane's entries the changed paths reach, as a pull request's CI picks them | `git diff --name-only <base> \| uv run --locked python scripts/changed_path_selection.py \| uv run --locked python scripts/postgres_selection.py` |
+| PostgreSQL timing map refresh: merge a green main push run's measured durations (needs `gh` signed in) | `uv run --locked python scripts/postgres_durations.py <run-id>` |
 | Python/addon/template handoff: full SQLite suite; required for shared foundation/composition changes | `env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
 | Randomized parallel isolation proof | `uv run --locked python -m pytest -q -n auto --dist loadfile -p randomly --randomly-seed=137 --durations=25` |
 | Python lint | `uv run --locked python -m ruff check . --no-cache` |
@@ -134,14 +136,13 @@ messaging inbox's [explorer](../tests/test_inbox_explorer.py),
 its tail through the saving connection. Authorization that rebac compiles per
 backend is proven on the backend that decides it in production, so the lane also
 runs, whole, the authorization contracts that hold on every backend; the files it
-covers are those the `uv-postgres` job's selection lists in
-[reusable checks](../.github/workflows/reusable-checks.yml).
+covers are those [the selection](../.github/postgres-selection.txt) lists.
 `test_connections.py`, `test_system_queryset.py`, `test_integrate_scheduler.py` and
 `test_transitions.py` contribute only their PostgreSQL test nodes because each also has
 SQLite-only tests, and `test_parties_directory_backend.py` its lock nodes because its strict
 expected failure would read as a skip;
-the PostgreSQL branches in `test_extraction_models.py` and
-`test_knowledge_access_campaign.py`, the [resource ledger's](../tests/test_resource_ledger.py)
+the PostgreSQL branches in `test_extraction_models.py`, the
+[resource ledger's](../tests/test_resource_ledger.py)
 concurrent upsert, a form's submission, delivery and publication
 [races](../tests/test_webforms_concurrency.py), and the composed profiles that carry PostgreSQL contracts also run by
 node. The selection also runs the
@@ -531,11 +532,18 @@ database, and these commands do not create one.
 [CI](../.github/workflows/ci.yml) calls
 [reusable checks](../.github/workflows/reusable-checks.yml) on pull requests and
 pushes to `main`. A pull request's merge gate is the static tier, the SQLite tests
-its changed paths reach, the examples profile's PostgreSQL planner gate, the
-packages and the composed stack with its smoke.
-Pushes to `main` and releases run the whole SQLite suite and the PostgreSQL lane,
-so whole suites report after a merge instead of gating it. A new push to a pull
-request cancels the run it supersedes; every push to `main` runs to completion.
+its changed paths reach, the PostgreSQL contracts they reach with the examples
+profile's planner gate, the packages and the composed stack with its smoke. A
+pull request's run tests its merge commit, the tree `main` gets, so a push to
+`main` runs only the static tier and the whole PostgreSQL lane; merge while `main`
+has not moved since the pull request's run started, or run it again. Both events
+also run CI's `guards` job: gitleaks over the whole history, and no tracked
+`.work/` path. A new push to a pull request cancels the run it supersedes; every
+push to `main` runs to completion. Every job runs where the reusable workflow's
+`runs-on` input says: CI passes the `CI_RUNS_ON` repository or organization
+variable, a JSON `runs-on` value such as `["self-hosted", "angee-local"]`, and
+GitHub-hosted `ubuntu-latest` while it is unset; a pull request from a fork always
+runs on GitHub-hosted runners.
 The current tiers are:
 
 - **Static** (the `python-quality` job): Ruff over the source tree, mypy over
@@ -558,23 +566,33 @@ The current tiers are:
   render or read them. A change to an input every test reads without importing it
   (dependencies, conftests and the shared test plugins, settings and autoconfig,
   `*.zed` schemas, resource YAML, the workflows, `scripts/`) selects the whole
-  suite; docs and web code select no Python test. What the app
-  registry, signals or composition connect without an import surfaces in the whole
-  suite on `main`.
-- **PostgreSQL:** on `main` and releases, in six groups of its own beside the
+  suite; docs and web code select no Python test, and the shards do not start.
+  The `select` job computes the selection once for both lanes. What the app
+  registry, signals or composition connect without an import surfaces only in a
+  run that selects the whole suite.
+- **PostgreSQL:** on `main`, in six groups of its own beside the
   SQLite shards, assigned by pytest-split's `least_duration` algorithm over the
   [PostgreSQL timings](../.test_durations_postgres) and with the shards' 60-minute
-  limit, the named PostgreSQL contract selection runs with
+  limit, the named PostgreSQL contract [selection](../.github/postgres-selection.txt) runs with
   `-n 4 --dist loadfile --nomigrations` and prints its 25
   slowest test durations; each group writes JUnit output and checks that it did
-  not skip tests. Its PostgreSQL 17 service includes pgvector and enables `vector`
+  not skip tests. On a push to `main` each group splits by its own copy of the
+  map, which pytest-split's store then overwrites with the durations of exactly
+  the tests the group ran, and a green group keeps that file and its JUnit report
+  as its `postgres-durations-<group>` artifact for 14 days; CI never writes the
+  committed map. Its PostgreSQL 17 service includes pgvector and enables `vector`
   in `template1` before any test database is created. Its server runs with
   `max_locks_per_transaction = 256`, since
   each worker creates every table in one transaction. A pull request runs the same
-  job as one group over [`test_composed_examples.py`](../tests/test_composed_examples.py)
-  alone, so the member planner-memory gate catches a permission change's planning
-  cost before merge. The `uv` job passes only when the static tier, every SQLite
-  shard and every PostgreSQL group pass, so callers keep one check name.
+  job over the selection's entries its changed paths reach and
+  [`test_composed_examples.py`](../tests/test_composed_examples.py), in as many
+  groups as their stored time needs
+  ([`postgres_selection.py`](../scripts/postgres_selection.py)), so a PostgreSQL-only
+  contract the change can break fails before merge and the member planner-memory
+  gate catches a permission change's planning cost. A PostgreSQL-only test runs in
+  CI only once the selection lists it. The `uv` job passes only when the static
+  tier, the selection, every SQLite shard that started and every PostgreSQL group
+  pass, so callers keep one check name.
 - **Packages:** framework package typecheck/test/build and export/distribution
   checks.
 - **Composed stack:** compose the host, check generated documents
@@ -602,40 +620,44 @@ duration and places it in exactly one shard. Ties in the assignment fall back
 to collection order, so an opt-in `-p randomly` run must give every shard one
 shared `--randomly-seed`. Refresh both maps after a change that moves test cost,
 after changing the PostgreSQL selection, or when a shard nears its limit or its
-balance drifts (the shards' printed estimates against their wall times). Record
-each map with its CI invocation and pytest-split's store, which sums setup, call
-and teardown per test; `--clean-durations` drops the entries of tests the run no
-longer collects, which pytest-split would otherwise keep when it merges into the
-existing map. For the SQLite suite:
+balance drifts (the shards' printed estimates against their wall times). Both
+maps are pytest-split's store, which sums setup, call and teardown per test.
+
+Record the SQLite map with its CI invocation; `--clean-durations` drops the
+entries of tests the run no longer collects, which pytest-split would otherwise
+keep when it merges into the existing map:
 
 ```bash
 env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --store-durations --clean-durations
 ```
 
-For the PostgreSQL selection, on a server prepared as in
+Refresh the PostgreSQL map from a green push run on `main`, never from a local
+run, whose host load would become the map's. The
+[refresh](../scripts/postgres_durations.py) fetches the run's six
+`postgres-durations-<group>` artifacts with `gh run download`, or reads a
+directory of them, and merges their measured entries into the map: a measured
+entry replaces the map's, and an entry no group ran is kept. Review the result
+and commit it:
+
+```bash
+uv run --locked python scripts/postgres_durations.py <run-id>
+```
+
+To run the PostgreSQL selection locally, on a server prepared as in
 [Local PostgreSQL Prerequisites](#local-postgresql-prerequisites):
 
 ```bash
 export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/angee
-pg_tests=$(uv run --locked python - <<'PY'
-import shlex
-from pathlib import Path
-
-import yaml
-
-steps = yaml.safe_load(Path('.github/workflows/reusable-checks.yml').read_text())['jobs']['uv-postgres']['steps']
-run = next(step['run'] for step in steps if step.get('name') == 'Verify PostgreSQL contracts execute without skips')
-print(' '.join(arg for arg in shlex.split(run.split('uv run --locked python -c', 1)[0]) if arg.startswith('tests/')))
-PY
-)
-test -n "$pg_tests"
-uv run --locked python -m pytest -q -n 4 --dist loadfile --nomigrations --store-durations --clean-durations --durations-path .test_durations_postgres $pg_tests
+pg_tests=$(uv run --locked python scripts/postgres_selection.py --all)
+uv run --locked python -m pytest -q -n 4 --dist loadfile --nomigrations $pg_tests
 ```
 
-Both maps came from local macOS arm64 runs of these commands (SQLite with
-`-n 6`) on a loaded host, the PostgreSQL one against `pgvector/pgvector:pg17`
-(PostgreSQL 17.10) with `max_locks_per_transaction = 256`. Use them for relative
-balance and check actual CI wall times against the 60-minute limit.
+The SQLite map came from a local macOS arm64 run of its command (with `-n 6`) on
+a loaded host. The PostgreSQL map holds local measurements, against
+`pgvector/pgvector:pg17` (PostgreSQL 17.10) with `max_locks_per_transaction = 256`
+and on a local PostgreSQL 18 server, until a refresh from a main run replaces
+them. Use them for relative balance and check actual CI wall times against the
+60-minute limit.
 
 The [staging smoke](../.github/workflows/staging-smoke.yml) deploys a staging host on
 the runner's Docker the way a host does: `angee init -t staging` and `angee up` with

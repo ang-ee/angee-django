@@ -6,6 +6,7 @@ import type {
 } from "@angee/metadata";
 
 import {
+  CLIENT_LINE_KEY,
   diffLines,
   duplicateLineRow,
   emptyLineRow,
@@ -236,29 +237,42 @@ describe("recordLinesToRows", () => {
 });
 
 describe("emptyLineRow / duplicateLineRow", () => {
-  test("a blank row nulls relations, blanks scalars, and tails the position", () => {
+  const clientKey = { [CLIENT_LINE_KEY]: expect.any(String) };
+
+  test("a blank row nulls relations, blanks scalars, tails the position and has its own client key", () => {
     expect(emptyLineRow(2, config)).toEqual({
       product: null,
       label: "",
       quantity: "",
       position: 2,
+      ...clientKey,
     });
+    expect(emptyLineRow(2, config)[CLIENT_LINE_KEY]).not.toBe(emptyLineRow(2, config)[CLIENT_LINE_KEY]);
   });
 
   test("an authored line default seeds a new row and is submitted", () => {
     const defaulted = lineDiffConfig({ ...LINES, defaults: { quantity: "1" } });
     const row = emptyLineRow(2, defaulted);
-    expect(row).toEqual({ product: null, label: "", quantity: "1", position: 2 });
+    expect(row).toEqual({ product: null, label: "", quantity: "1", position: 2, ...clientKey });
     expect(lineToInput(row, 2, defaulted)).toEqual({ label: "", quantity: "1", position: 2 });
   });
 
-  test("a duplicate drops the identity so it saves as a create", () => {
+  test("a duplicate drops the identity so it saves as a create, and has its own client key", () => {
     const duplicate = duplicateLineRow(
       { id: "ln_a", product: "p1", label: "A", quantity: 1, position: 0 },
       config,
     );
     expect(duplicate.id).toBeUndefined();
-    expect(duplicate).toEqual({ product: "p1", label: "A", quantity: 1, position: 0 });
+    expect(duplicate).toEqual({ product: "p1", label: "A", quantity: 1, position: 0, ...clientKey });
+    expect(lineToInput(duplicate, 1, config)).toEqual({ product: "p1", label: "A", quantity: 1, position: 1 });
+  });
+
+  test("duplicating a row that already has a client key gives the copy a distinct one", () => {
+    const source: Row = { ...emptyLineRow(0, config), label: "A" };
+    const duplicate = duplicateLineRow(source, config);
+    expect(duplicate).toEqual({ ...source, ...clientKey });
+    expect([typeof source[CLIENT_LINE_KEY], typeof duplicate[CLIENT_LINE_KEY]]).toEqual(["string", "string"]);
+    expect(duplicate[CLIENT_LINE_KEY]).not.toBe(source[CLIENT_LINE_KEY]);
   });
 });
 
@@ -335,6 +349,7 @@ describe("lineToInput — M2M + enum normalization", () => {
       kind: "",
       labels: "",
       position: 1,
+      [CLIENT_LINE_KEY]: expect.any(String),
     });
   });
 

@@ -19,6 +19,172 @@ the addon that owns it.
 - A `FormAlias` is a public address of a form (a unique lower-case slug),
   optionally in one language.
 
+## A form an addon declares
+
+An addon that ships a form declares it as one row of its resources, in a
+`<NNN>_webforms.form.yaml` file its `[tool.angee.resources]` lists. The row names
+the form's fields, the content of the version it serves (`version`, the fields of
+`FormVersion.CONTENT_FIELDS`), whether the load publishes it (`publish`, true
+unless declared) and the slugs it answers at (`aliases`). Here the
+addon `acme` ships the webform channel its form posts on as well, and names it by
+xref:
+
+```yaml
+# acme/resources/master/010_integrate.vendor.yaml
+rows:
+  - xref: vendor
+    fields: {slug: webform, display_name: Public webforms}
+```
+
+```yaml
+# acme/resources/master/020_messaging.channel.yaml
+rows:
+  - xref: intake
+    fields: {display_name: Intake, vendor: acme.vendor, backend_class: webform}
+```
+
+```yaml
+# acme/resources/install/030_webforms.form.yaml
+rows:
+  - xref: intake_form
+    fields:
+      name: Intake
+      target_class: message
+      target_config:
+        channel: acme.intake        # the channel's xref; stored as its public id
+        slug: intake
+      theme_id: acme.paper          # optional
+      retention_days: 365           # optional, and create_only
+      aliases: [intake]
+      version:
+        definition:
+          elements:
+            - {type: text, name: name, isRequired: true, title: Your name}
+            - {type: text, name: email, inputType: email}
+        languages: [en]
+        default_language: en
+        personal_questions: [name, email]
+        contact_question: email
+```
+
+```toml
+[tool.angee.resources]
+master = [
+  { path = "master/010_integrate.vendor.yaml", adopt = "slug" },
+  { path = "master/020_messaging.channel.yaml", depends_on = "master/010_integrate.vendor.yaml" },
+]
+install = [
+  { path = "install/030_webforms.form.yaml", depends_on = "master/020_messaging.channel.yaml",
+    create_only = ["retention_days"] },
+]
+```
+
+[`FormResource`](resources.py) saves the form and hands the rest to the form's
+verbs, inside the load's one transaction and its seed changeset. A load runs as
+system work; `Resource.objects.load_xref(…, actor=…)` saves the row as its named
+actor, so the form's own checks ask that actor, and choosing the target asks the
+target's `permits`:
+
+- **Identity** is the row's xref in the resource ledger, never an alias. Staff
+  may rename or delete an alias; the next load neither fails nor makes a second
+  form.
+- **Every row states its `version`.** A row without one is refused under
+  `version`, whether it would make the form or change it.
+- **An unchanged row is skipped**, by the ledger's content hash, so what staff
+  changed since stands: a closed form, a version they published, an alias they
+  renamed or deleted.
+- **A changed row** applies the form fields it names (`name`, `target_class`,
+  `target_config`, `theme_id`) and serves its `version` (`Form.serve`), unless it
+  declares `publish: false` (below). The version served now stays when it holds
+  exactly that content; otherwise the newest version is published when it is an
+  unpublished one holding it, and a new version holding it is made and published
+  when it is not (`FormVersion.publish`). Content the form served before, such
+  as a declaration returned to its earlier questions, is published again as a new
+  version: the declaration, not an older version, says what is served.
+  Publishing opens a draft form; a closed form stays closed. A version the
+  publication refuses, or one its fields cannot hold, fails the load and leaves
+  nothing: the ledger keeps the declaration that last applied, so the next load
+  tries again.
+- **Any change of a row that publishes serves its declared content again.** A
+  row that changes only `name` or `theme_id`, reorders `aliases`, or whose entry
+  gains a `create_only` field other than `version`, still serves its `version`: a
+  version staff published since is replaced by the declared one. An entry that
+  leaves the questions to staff once the form exists lists `version` under
+  `create_only`; the row still states it, the form is made serving it, and no
+  later load serves it again.
+- **`publish: false` leaves the publication to a person.** The load prepares the
+  declared content as an unpublished version (`Form.serve(content, publish=False)`)
+  and publishes and opens nothing, so the form is made a draft and answers no one
+  until a person publishes a version in the console. A changed row makes a new
+  unpublished version only when neither the version served nor the newest version
+  holds the declared content: a version staff published, a form they closed and a
+  draft they prepared since stand. The publication judges the version when a
+  person publishes it. A row that turns `publish` back on publishes the version it
+  prepared, or serves its content as any published row does.
+- **The form's `status` is its verbs'.** A file that declares `status` is refused:
+  the declaration's `publish` decides whether the load publishes, and staff open
+  and close the form. `publish` applies on every changed row, so an entry that
+  lists it under `create_only` is refused too; an entry that leaves the questions
+  to staff lists `version` there.
+- **`aliases`** are slugs, or `{slug: entrada, language: es}` for an address that
+  opens the form in one language. They are added when the form lacks them
+  (`Form.ensure_aliases`), when the form is made and on every changed row; staff's
+  own aliases stay, an alias the form has keeps its language, and the declaration
+  never removes one. Each alias is held to its fields before any is made, and
+  every refusal is reported under `aliases`, naming its alias: a slug that is not
+  one, a language that is no tag, a slug declared twice. A slug another form holds
+  refuses the load, also when the other form takes it at the same moment.
+- **`retention_days` is create-only.** A form's retention is what it tells its
+  respondents and removes responses when it passes, so once the form exists it is
+  the deployment's: a file that declares it lists it under the entry's
+  `create_only`, and the load refuses one that does not. Every other form field is
+  applied on every changed row; an entry may list it under `create_only` too.
+- **`target_config`** names records by xref where its target's `config_model`
+  declares a relation (`json_schema_extra={"relation": {"resource": "<app.Model>"}}`):
+  each resolves to its record's public id when the row applies, through the
+  resource ledger and among the load's own addons, as the row's relation columns
+  do (`Resource.objects.resolve_config_references`). A public id stays as
+  written. An xref that names nothing, or a record of another kind, refuses the
+  load under `target_config`, and so does a configuration the target refuses
+  (`FormTarget.clean`): the `message` target takes only a webform channel. Web
+  forms reads only the target's schema; what the record is stays the target's.
+
+**A form that exists before its declaration** (made by the
+`webforms_messaging` migration template, or by the addon's own code) is not
+adopted by itself: a form has no adoptable key, and the declared form is refused
+while the earlier one posts on the same channel and slug. Bind the earlier form
+to the row's xref once, after it exists and before any load that carries the
+row. The `source` is the entry's ledger path, its manifest path under
+`resources/`:
+
+```python
+# manage.py shell
+from django.apps import apps
+from rebac import system_context
+
+with system_context(reason="acme: adopt the intake form"):
+    apps.get_model("resources", "Resource").objects.bind_instance(
+        addon=apps.get_app_config("acme"), xref="intake_form", instance=earlier_form,
+        source="resources/install/030_webforms.form.yaml",
+    )
+```
+
+Sequence the releases so the bind falls between them: `provision` runs
+`resources load` right after `migrate`, so a release that ships the row loads it
+before anyone could bind. When the move template makes the earlier form, ship
+the template in one release, bind once it has applied, and ship the row in a
+later release. A form the addon's own code made exists already: bind it before
+deploying the release that ships the row.
+
+The next load then treats the row as changed: it applies the declared fields
+(not a create-only `retention_days`), serves the declared content as a new
+version unless the form serves it already (or the entry lists `version` under
+`create_only`, which leaves the earlier form's version served), and adds the
+declared aliases beside the form's own.
+
+A consumer links to the form through `publicAddress(slug)`, which `@angee/webforms`
+exports: the one place the web side names where a form answers.
+
 ## The stored definition
 
 A version's `definition` is a checked subset of a
@@ -199,9 +365,13 @@ class EnquiryTarget(FormTarget):
 makes its owner's records as system work, for anyone who submits the form, so
 managing forms is not enough to choose one: the owner answers with its own
 access check. It is asked when a form's target or its configuration changes
-under an acting user, and every target states it. A collection edit
-(`Form.objects.filter(…).update(target_class=…)`) is refused: the owner is asked
-one form at a time. What `deliver` returns must be a record of a type the
+under an acting user, and every target states it. A target may also refuse a
+configuration its owner will never take (`clean`, raising `ValidationError`):
+`Form.clean` asks it when the target or its configuration changes and the form
+is validated (`full_clean`), as the console and the resource loader do, for an
+acting user and for system work alike. A plain `save()` does not ask it. A
+collection edit (`Form.objects.filter(…).update(target_class=…)`) is refused:
+the owner is asked one form at a time. What `deliver` returns must be a record of a type the
 target's addon declared on `webforms/response_record`; anything else fails the
 delivery, since nothing would erase the answers when it goes. Only declared
 types carry the link in their metadata and pay for it when they are deleted or

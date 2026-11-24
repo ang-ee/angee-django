@@ -1,10 +1,13 @@
 // @vitest-environment happy-dom
 
-import { act, renderHook } from "@testing-library/react";
+import { act, cleanup, render, renderHook } from "@testing-library/react";
+import { createElement } from "react";
 import { describe, expect, test } from "vitest";
 import { useForm } from "react-hook-form";
 import { boundedGraphQLTransportError } from "@angee/refine";
 import { errorFromUnknown } from "../../data/errors";
+import { enUiBundle } from "../../i18n";
+import { createAngeeI18nInstance } from "../../runtime/i18n";
 import { fieldErrorMessages } from "./form-view-model";
 
 import {
@@ -14,13 +17,86 @@ import {
   formSubmitError,
   applyFormErrors,
   directDottedPathMessages,
+  jsonSchemaErrorMessage,
   lineRowErrorsFromDottedPaths,
+  markMemberErrors,
+  MEMBER_ERRORS,
   messagesForDottedPath,
+  serverErrorsFromForm,
   useDottedPathFieldErrors,
   validationErrorMap,
   validationErrorMessages,
   validationErrorsFromError,
 } from "./validation-errors";
+
+const t = createAngeeI18nInstance(enUiBundle).getFixedT(null, "ui");
+
+test.each([
+  { keyword: "minLength", limit: 1, message: "Enter at least 1 character." },
+  { keyword: "minLength", limit: 3, message: "Enter at least 3 characters." },
+  { keyword: "maxLength", limit: 1, message: "Enter no more than 1 character." },
+  { keyword: "maxLength", limit: 64, message: "Enter no more than 64 characters." },
+  { keyword: "minItems", limit: 1, message: "Add at least 1 item." },
+  { keyword: "minItems", limit: 2, message: "Add at least 2 items." },
+  { keyword: "maxItems", limit: 1, message: "Keep no more than 1 item." },
+  { keyword: "maxItems", limit: 3, message: "Keep no more than 3 items." },
+  { keyword: "minimum", limit: 1, message: "Enter a value of at least 1." },
+  { keyword: "maximum", limit: 1, message: "Enter a value of at most 1." },
+  { keyword: "exclusiveMinimum", limit: 1, message: "Enter a value greater than 1." },
+  { keyword: "exclusiveMaximum", limit: 1, message: "Enter a value less than 1." },
+])("a failed $keyword with a limit of $limit says: $message", ({ keyword, limit, message }) => {
+  expect(jsonSchemaErrorMessage({ keyword, params: { limit } }, t)).toBe(message);
+});
+
+describe("markMemberErrors", () => {
+  const leaf = (type: string) => ({ type, message: `Fails ${type}.` });
+  // An object field owns a template of its members; any other field does not.
+  const objectField = (name: string) => ({ name, objectTemplate: [{ name: "handle" }, { name: "delay" }] });
+
+  test("an object field's node of member errors gets the members' type and no message; the tree is the one given", () => {
+    const errors = { retry: { handle: leaf("minLength"), delay: leaf("maximum") } };
+    expect(markMemberErrors(errors, [objectField("retry")])).toBe(errors);
+    expect(errors).toStrictEqual({ retry: { type: MEMBER_ERRORS, handle: leaf("minLength"), delay: leaf("maximum") } });
+  });
+
+  test("an object field inside a dotted root is marked at its own path; the root above it and the object below it are not", () => {
+    const errors = { config: { retry: { handle: leaf("minLength"), backoff: { factor: leaf("minimum") } } } };
+    markMemberErrors(errors, [objectField("config.retry")]);
+    expect(errors).toStrictEqual({
+      config: { retry: { type: MEMBER_ERRORS, handle: leaf("minLength"), backoff: { factor: leaf("minimum") } } },
+    });
+  });
+
+  test.each([
+    {
+      node: "the node of a field without a template, though a bare object of errors sits there",
+      errors: () => ({ config: { timeout: leaf("type") } }), fields: [{ name: "config" }, { name: "config.timeout" }],
+    },
+    { node: "a scalar field's leaf error", errors: () => ({ title: leaf("required") }), fields: [{ name: "title" }] },
+    { node: "an object field's own leaf error", errors: () => ({ retry: leaf("required") }), fields: [objectField("retry")] },
+    {
+      node: "an object field's leaf error with a message and no type",
+      errors: () => ({ retry: { message: "Enter a retry." } }), fields: [objectField("retry")],
+    },
+    {
+      node: "an object field's node that has a type of its own",
+      errors: () => ({ retry: { ...leaf("server"), handle: leaf("required") } }), fields: [objectField("retry")],
+    },
+    {
+      node: "an object field's array node (a member named with a number)",
+      errors: () => ({ retry: [leaf("required")] }), fields: [{ name: "retry", objectTemplate: [{ name: "0" }] }],
+    },
+    {
+      node: "an unregistered root of member errors",
+      errors: () => ({ config: { token: leaf("required") } }), fields: [{ name: "config.token" }],
+    },
+    { node: "an object field with no error", errors: () => ({ title: leaf("required") }), fields: [objectField("retry")] },
+  ])("$node is left as it is", ({ errors, fields }) => {
+    const given = errors();
+    expect(markMemberErrors(given, fields)).toBe(given);
+    expect(given).toStrictEqual(errors());
+  });
+});
 
 describe("lineRowErrorsFromDottedPaths", () => {
   test("projects indexed child paths and ignores unrelated or malformed paths", () => {
@@ -89,6 +165,105 @@ describe("dotted path message scoping", () => {
     expect(messagesForDottedPath(scoped, "documents.0.lines.0.label")).toEqual([
       "Enter a label",
     ]);
+  });
+});
+
+describe("React Hook Form's own `type` and `ref` beside a member so named", () => {
+  const rule = { type: "minLength", message: "Enter at least 3 characters." };
+  const deeper = { kind: { type: "required", message: "Choose a kind." } };
+  const noop = () => undefined;
+
+  test.each([
+    { row: "`type` a string", error: { ...rule }, messages: ["Enter at least 3 characters."] },
+    { row: "`type` a number", error: { type: 3, message: "Enter a code." }, messages: ["Enter a code."] },
+    {
+      row: "`type` the marker MEMBER_ERRORS", error: { type: MEMBER_ERRORS, handle: rule },
+      messages: ["retry.handle: Enter at least 3 characters."],
+    },
+    { row: "`type` an error node", error: { type: rule }, messages: ["retry.type: Enter at least 3 characters."] },
+    { row: "`type` deeper member errors", error: { type: deeper }, messages: ["retry.type.kind: Choose a kind."] },
+    {
+      // The field refused, then its member: React Hook Form's setError spreads the field's
+      // `type: "server"` into the member's error, a letter at each index key.
+      row: "`type` an error node with letter keys",
+      error: {
+        type: {
+          0: "s", 1: "e", 2: "r", 3: "v", 4: "e", 5: "r",
+          type: "server", message: "Bad kind.", types: { server: ["Bad kind."] },
+        },
+        message: "Bad retry.", types: { server: ["Bad retry."] },
+      },
+      messages: ["Bad retry.", "retry.type: Bad kind."],
+    },
+    { row: "`type` null", error: { type: null, message: "Enter a kind." }, messages: ["Enter a kind."] },
+    { row: "`type` true", error: { type: true, message: "Enter a kind." }, messages: ["Enter a kind."] },
+    { row: "a bare string given", error: "Enter a kind.", messages: ["Enter a kind."] },
+    {
+      row: "`types` beside a message",
+      error: { type: "required", message: "Enter a kind.", types: { required: "Enter a kind.", minLength: "Too short." } },
+      messages: ["Enter a kind."],
+    },
+    {
+      row: "`types` with no message",
+      error: { type: "required", types: { required: "Enter a kind.", minLength: ["Too short.", "Far too short."] } },
+      messages: ["Enter a kind.", "Too short.", "Far too short."],
+    },
+    {
+      row: "`types` holding a rule named `type`, whose text stays skipped",
+      error: { types: { type: "Enter a valid value.", required: "Enter a kind." } },
+      messages: ["Enter a kind."],
+    },
+    {
+      row: "`ref` a Controller proxy",
+      error: { type: "server", message: "Taken.", ref: { focus: noop, select: noop, setCustomValidity: noop, reportValidity: noop } },
+      messages: ["Taken."],
+    },
+    {
+      row: "`ref` { name }, no element attached",
+      error: { type: "server", message: "Taken.", ref: { name: "retry" } }, messages: ["Taken."],
+    },
+    {
+      row: "`ref` { type, name } of radios",
+      error: { type: "required", message: "Choose one.", ref: { type: "radio", name: "retry" } }, messages: ["Choose one."],
+    },
+  ])("$row: the field's messages are exactly the failing members' and its own", ({ error, messages }) => {
+    expect(fieldErrorMessages([error], "retry")).toEqual(messages);
+  });
+
+  test("`ref` a DOM element React rendered, which leads to the renderer's own objects: the field's message is exactly its own", () => {
+    const { container } = render(createElement("input"));
+    try {
+      const element = container.querySelector("input");
+      expect(element).toBeInstanceOf(HTMLInputElement);
+      expect(fieldErrorMessages([{ type: "server", message: "Taken.", ref: element }], "retry")).toEqual(["Taken."]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test.fails.each([
+    { row: "`ref` an error node", error: { ref: rule }, messages: ["retry.ref: Enter at least 3 characters."] },
+    { row: "`ref` deeper member errors", error: { ref: deeper }, messages: ["retry.ref.kind: Choose a kind."] },
+  ])("defect: $row gives no message, since `ref` is never walked; it should give the member's message", ({ error, messages }) => {
+    expect(fieldErrorMessages([error], "retry")).toEqual(messages);
+  });
+
+  // The form's errors as a render reads them, which subscribes the hook to them.
+  function refusedMember(member: string) {
+    const { result } = renderHook(() => {
+      const form = useForm<Record<string, unknown>>();
+      return { form, errors: form.formState.errors };
+    });
+    act(() => { applyFormErrors(result.current.form, invalidFormSubmit({ fieldErrors: { [`retry.${member}`]: ["Taken."] }, formErrors: [] })); });
+    return serverErrorsFromForm(result.current.errors);
+  }
+
+  test("serverErrorsFromForm keeps a server refusal of a member named `type` at its dotted path", () => {
+    expect(refusedMember("type")).toEqual({ "retry.type": ["Taken."] });
+  });
+
+  test.fails("defect: serverErrorsFromForm drops a server refusal of a member named `ref`, since it never walks `ref`; it should keep it at its dotted path", () => {
+    expect(refusedMember("ref")).toEqual({ "retry.ref": ["Taken."] });
   });
 });
 

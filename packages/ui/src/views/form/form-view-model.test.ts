@@ -1,17 +1,25 @@
 import { get, set } from "react-hook-form";
-import { describe, expect, test } from "vitest";
+import { describe, expect, expectTypeOf, test } from "vitest";
 
-import type { FieldDescriptor } from "../page";
+import { enUiBundle } from "../../i18n";
+import { createAngeeI18nInstance } from "../../runtime/i18n";
+import type { Row } from "@angee/metadata";
+
+import type { FieldDescriptor, GroupDescriptor } from "../page";
+import type { DescriptorField } from "./DescriptorFieldList";
 import type { FormSpecFieldDescriptor } from "./form-spec";
 import {
   EDITABLE_LINES_SECTION,
   emptyDraft,
   addFieldSelection,
+  displayedFormFields,
   fieldErrorMessages,
+  flattenedFormFields,
+  formDisplaysGroup,
+  formRuleErrors,
   formSections,
   formViewFieldLayout,
   isCompositeFieldDescriptor,
-  missingRequiredFieldNames,
   mutationData,
   createPresetMemory,
   recordToValues,
@@ -19,8 +27,14 @@ import {
   resolveField,
   seedPreset,
   titleText,
+  visibleFields,
+  withModeLockedFields,
   type PresetMemory,
 } from "./form-view-model";
+import { dialogRuleErrors } from "./MutationDialog";
+
+const t = createAngeeI18nInstance(enUiBundle).getFixedT(null, "ui");
+const required = { type: "required", message: "This field is required." };
 
 const fields: readonly FieldDescriptor[] = [
   { name: "config.local_root", widget: "text" },
@@ -118,12 +132,49 @@ test("dynamic resolution cannot unlock a field already locked by form mode", () 
   const locked: FieldDescriptor = {
     name: "collection",
     readOnly: true,
-    resolve: () => ({ name: "collection", readOnly: false }),
+    resolve: () => ({ readOnly: false }),
   };
   expect(resolveField(locked, {})).toMatchObject({ name: "collection", readOnly: true });
   expect(resolveField({ ...locked, readOnly: false }, {})).toMatchObject({
     name: "collection", readOnly: false,
   });
+});
+
+test("a resolve that returns a name does not compile, and the field keeps its declared name", () => {
+  const field: FieldDescriptor = {
+    name: "collection",
+    // @ts-expect-error A `resolve` cannot rename its field, so the compiler refuses a returned `name`.
+    resolve: () => ({ name: "elsewhere", readOnly: true }),
+  };
+  expect(resolveField(field, {})).toMatchObject({ name: "collection", readOnly: true });
+});
+
+test("a dialog field's resolve may return only dialog members, and never a name", () => {
+  const relationOnly: DescriptorField = { name: "account", resolve: () => ({ relation: { resource: "Account" } }) };
+  const renamed: DescriptorField = {
+    name: "account",
+    // @ts-expect-error A `resolve` cannot rename its field, so the compiler refuses a returned `name`.
+    resolve: () => ({ name: "elsewhere", relation: { resource: "Account" } }),
+  };
+  expect(resolveField(relationOnly, {})).toMatchObject({ name: "account", relation: { resource: "Account" } });
+  expect(resolveField(renamed, {})).toMatchObject({ name: "account", relation: { resource: "Account" } });
+});
+
+test("a FormSpec field's resolve may return only FormSpec members", () => {
+  const listOnly: FormSpecFieldDescriptor = { name: "lines", resolve: () => ({ addLabel: "Add line", layout: "input" }) };
+  expect(resolveField(listOnly, {})).toMatchObject({ name: "lines", addLabel: "Add line", layout: "input" });
+});
+
+test("resolveField and visibleFields return the caller's descriptor type", () => {
+  const dialog: DescriptorField = { name: "account", relation: { resource: "Account" }, resolve: () => ({ readOnly: true }) };
+  const spec: FormSpecFieldDescriptor = { name: "lines", addLabel: "Add line", resolve: () => ({ layout: "input" }) };
+  const resolvedDialog: DescriptorField = resolveField(dialog, {});
+  const resolvedSpec: FormSpecFieldDescriptor = resolveField(spec, {});
+  expectTypeOf(resolveField(dialog, {})).toEqualTypeOf<DescriptorField>();
+  expectTypeOf(resolveField(spec, {})).toEqualTypeOf<FormSpecFieldDescriptor>();
+  expectTypeOf(visibleFields([dialog], {})).toEqualTypeOf<DescriptorField[]>();
+  expect(resolvedDialog).toMatchObject({ name: "account", relation: { resource: "Account" }, readOnly: true });
+  expect(resolvedSpec).toMatchObject({ name: "lines", addLabel: "Add line", layout: "input" });
 });
 
 test("explicit panes retain their long text and status fields instead of hoisting them into the hero", () => {
@@ -223,6 +274,115 @@ test("an empty date or time field drafts as null, never a blank wire string", ()
   ])).toEqual({ due: null, at: null, starts: null });
 });
 
+test("an empty object or json field drafts as an empty object and an empty list or rows field as an empty list", () => {
+  const structured: FormSpecFieldDescriptor[] = [
+    { name: "layout", widget: "object", objectTemplate: [{ name: "heading" }] },
+    { name: "steps", widget: "list", itemTemplate: { name: "step" } },
+    { name: "mappings", widget: "rows", rowTemplate: [{ name: "source" }] },
+    { name: "config", widget: "json" },
+  ];
+  const empty = { layout: {}, steps: [], mappings: [], config: {} };
+  expect(emptyDraft(structured)).toStrictEqual(empty);
+  expect(recordToValues({ id: "row-1" }, structured)).toStrictEqual(empty);
+  expect(recordToValues({ id: "row-1", layout: null, steps: null, mappings: null, config: null }, structured))
+    .toStrictEqual({ layout: null, steps: null, mappings: null, config: null });
+});
+
+test("a required json field holding an empty object is not missing, in a record form as in a dialog", () => {
+  const config: FieldDescriptor = { name: "config", widget: "json", required: true };
+  expect(formRuleErrors({ config: {} }, [config], new Set(), t)).toEqual({});
+  expect(dialogRuleErrors([config], { config: {} }, t)).toEqual({});
+});
+
+test("a field's failed rule says the same thing in a record form as in a dialog", () => {
+  const ruleFields: FieldDescriptor[] = [
+    { name: "slug", required: true, minLength: 1, maxLength: 64 },
+    { name: "cleared", minLength: 1 },
+    { name: "nick", minLength: 1, omittable: true },
+    { name: "caption", minLength: 1, nullable: true },
+    { name: "handle", minLength: 3 },
+    { name: "low", kind: "integer", minimum: 5 },
+    { name: "high", kind: "number", maximum: 10 },
+    { name: "count", kind: "integer", omittable: true },
+    { name: "tags", kind: "array", minItems: 2 },
+    { name: "limits", kind: "array", maxItems: 1 },
+    { name: "token", presenceRequired: true },
+    { name: "remark", presenceRequired: true },
+    { name: "title", required: true },
+    { name: "label", required: true, maxLength: 10 },
+    { name: "auth", kind: "object", objectTemplate: [{ name: "secret", required: true }] },
+  ];
+  const values = {
+    slug: "a".repeat(65), cleared: "", nick: "", caption: "", handle: "", low: 2, high: 11, count: "",
+    tags: ["a"], limits: ["a", "b"], remark: null, title: " ", auth: {},
+  };
+  const expected = {
+    slug: { type: "maxLength", message: "Enter no more than 64 characters." },
+    cleared: required,
+    nick: { type: "minLength", message: "Enter at least 1 character." },
+    caption: { type: "minLength", message: "Enter at least 1 character." },
+    handle: { type: "minLength", message: "Enter at least 3 characters." },
+    low: { type: "minimum", message: "Enter a value of at least 5." },
+    high: { type: "maximum", message: "Enter a value of at most 10." },
+    count: { type: "type", message: "Enter a valid whole number." },
+    tags: { type: "minItems", message: "Add at least 2 items." },
+    limits: { type: "maxItems", message: "Keep no more than 1 item." },
+    token: required,
+    remark: required,
+    title: required,
+    label: required,
+    auth: { secret: required },
+  };
+  expect(formRuleErrors(values, ruleFields, new Set(), t)).toEqual(expected);
+  expect(dialogRuleErrors(ruleFields, values, t)).toEqual(expected);
+});
+
+test.each<[string, {
+  field: FieldDescriptor; values: Record<string, unknown>;
+  requiredFieldNames?: readonly string[]; validateConstraints?: boolean; recordForm: object; dialog: object;
+}]>([
+  [
+    "a hidden required field: neither a record form nor a dialog checks it, since the person cannot see it",
+    { field: { name: "token", required: true, hidden: true }, values: { token: "" }, recordForm: {}, dialog: {} },
+  ],
+  [
+    "a read-only required field: neither a record form nor a dialog checks it, since the person cannot change it",
+    { field: { name: "code", required: true, readOnly: true }, values: { code: "" }, recordForm: {}, dialog: {} },
+  ],
+  [
+    "a structured field the model requires on create: a record form counts it as required, and a dialog does not",
+    {
+      field: { name: "secret", maxLength: 64 }, values: {}, requiredFieldNames: ["secret"],
+      recordForm: { secret: required }, dialog: {},
+    },
+  ],
+  [
+    "guard: a value breaking a bound: a record form refuses it, and a dialog with a schema resolver leaves it to that resolver",
+    {
+      field: { name: "code", maxLength: 2 }, values: { code: "abc" }, validateConstraints: false,
+      recordForm: { code: { type: "maxLength", message: "Enter no more than 2 characters." } }, dialog: {},
+    },
+  ],
+])("%s", (_label, { field, values, requiredFieldNames = [], validateConstraints, recordForm, dialog }) => {
+  expect(formRuleErrors(values, [field], new Set(requiredFieldNames), t)).toStrictEqual(recordForm);
+  expect(dialogRuleErrors([field], values, t, validateConstraints)).toStrictEqual(dialog);
+});
+
+test("a dialog reads an own key holding undefined as absent, as a record form does: a bounded optional field holding one fails no rule", () => {
+  expect(dialogRuleErrors([{ name: "nickname", maxLength: 64 }], { nickname: undefined }, t)).toStrictEqual({});
+  expect(formRuleErrors({ nickname: undefined }, [{ name: "nickname", maxLength: 64 }], new Set(), t)).toStrictEqual({});
+});
+
+test("guard: a record form leaves out a field read-only as resolved for its values: by its own flag, its resolve, or its mode", () => {
+  const fields = withModeLockedFields([
+    { name: "title", required: true },
+    { name: "code", required: true, readOnly: true },
+    { name: "slug", required: true, resolve: () => ({ readOnly: true }) },
+    { name: "kind", required: true, createOnly: true },
+  ], false);
+  expect(formRuleErrors({ title: "", code: "", slug: "", kind: "" }, fields, new Set(), t)).toStrictEqual({ title: required });
+});
+
 describe("dotted form fields", () => {
   test("seed and read nested record values through native RHF-shaped data", () => {
     expect(emptyDraft(fields, { config: { local_root: "/srv/repo" } })).toEqual({
@@ -285,25 +445,24 @@ describe("dotted form fields", () => {
     const dynamic: FieldDescriptor = {
       name: "config.shared",
       resolve: (values) => ({
-        name: "config.shared",
         required: values.backend_class === "strict",
       }),
     };
-    expect(missingRequiredFieldNames(
-      { backend_class: "strict", config: { shared: "" } }, [dynamic], new Set(),
-    )).toEqual(["config.shared"]);
-    expect(missingRequiredFieldNames(
-      { backend_class: "loose", config: { shared: "" } }, [dynamic], new Set(),
-    )).toEqual([]);
+    expect(formRuleErrors(
+      { backend_class: "strict", config: { shared: "" } }, [dynamic], new Set(), t,
+    )).toEqual({ config: { shared: required } });
+    expect(formRuleErrors(
+      { backend_class: "loose", config: { shared: "" } }, [dynamic], new Set(), t,
+    )).toEqual({});
   });
 
   test("accepts explicit null only for a nullable required descriptor", () => {
-    expect(missingRequiredFieldNames(
-      { note: null }, [{ name: "note", required: true, nullable: true, presenceRequired: true }], new Set(),
-    )).toEqual([]);
-    expect(missingRequiredFieldNames(
-      { note: null }, [{ name: "note", required: true }], new Set(),
-    )).toEqual(["note"]);
+    expect(formRuleErrors(
+      { note: null }, [{ name: "note", required: true, nullable: true, presenceRequired: true }], new Set(), t,
+    )).toEqual({});
+    expect(formRuleErrors(
+      { note: null }, [{ name: "note", required: true }], new Set(), t,
+    )).toEqual({ note: required });
   });
 
   test("hydrates explicit null and omission without changing their presence", () => {
@@ -324,17 +483,26 @@ describe("dotted form fields", () => {
       { name: "title", required: true, presenceRequired: true },
       { name: "items", required: true, presenceRequired: true, kind: "array" },
     ];
-    expect(missingRequiredFieldNames({ title: "", items: [] }, presenceFields, new Set())).toEqual([]);
-    expect(missingRequiredFieldNames({ title: "" }, presenceFields, new Set())).toEqual(["items"]);
-    expect(missingRequiredFieldNames(
-      { title: "", items: [] }, [{ ...presenceFields[0]!, minLength: 1 }, { ...presenceFields[1]!, minItems: 1 }], new Set(),
-    )).toEqual(["title", "items"]);
-    expect(missingRequiredFieldNames(
-      { title: "" }, [{ name: "title", required: true }], new Set(),
-    )).toEqual(["title"]);
+    expect(formRuleErrors({ title: "", items: [] }, presenceFields, new Set(), t)).toEqual({});
+    expect(formRuleErrors({ title: "" }, presenceFields, new Set(), t)).toEqual({ items: required });
+    expect(formRuleErrors(
+      { title: "", items: [] }, [{ ...presenceFields[0]!, minLength: 1 }, { ...presenceFields[1]!, minItems: 1 }], new Set(), t,
+    )).toEqual({
+      title: required,
+      items: { type: "minItems", message: "Add at least 1 item." },
+    });
+    expect(formRuleErrors(
+      { title: "" }, [{ name: "title", required: true }], new Set(), t,
+    )).toEqual({ title: required });
     const optional = { name: "summary", omittable: true, minLength: 2 };
-    expect(missingRequiredFieldNames({}, [optional], new Set())).toEqual([]);
-    expect(missingRequiredFieldNames({ summary: "" }, [optional], new Set())).toEqual(["summary"]);
+    expect(formRuleErrors({}, [optional], new Set(), t)).toEqual({});
+    expect(formRuleErrors({ summary: "" }, [optional], new Set(), t)).toEqual({
+      summary: { type: "minLength", message: "Enter at least 2 characters." },
+    });
+    // A field that is presence-required without `required` holds the same rule.
+    const presenceOnly = presenceFields.map(({ required: _required, ...field }) => field);
+    expect(formRuleErrors({ title: " ", items: [] }, presenceOnly, new Set(), t)).toEqual({});
+    expect(formRuleErrors({ title: "" }, presenceOnly, new Set(), t)).toEqual({ items: required });
   });
 
   test("submits nested config through its writable root and nested dirty state", () => {
@@ -431,8 +599,114 @@ test("a saved-only group's fields stay off a create form instead of falling back
   const name = { name: "name" };
   const archived = { name: "is_archived" };
   const groups = [{ fields: [archived], actions: [], savedOnly: true }];
-  expect(formSections([name, archived], groups, [], true)).toEqual([{ key: "fields", fields: [name] }]);
-  expect(formSections([name, archived], groups, [], false).map((section) => section.fields)).toEqual([[name], [archived]]);
+  const displays = (isCreate: boolean) => (group: GroupDescriptor) =>
+    formDisplaysGroup(group, isCreate ? null : { id: "row-1" }, { isCreate, admits: () => true });
+  expect(formSections([name, archived], groups, [], displays(true))).toEqual([{ key: "fields", fields: [name] }]);
+  expect(formSections([name, archived], groups, [], displays(false)).map((section) => section.fields)).toEqual([[name], [archived]]);
+});
+
+describe("formDisplaysGroup", () => {
+  // `imap.settings` is admitted for a row whose kind is imap, never without a row.
+  const admits = (child: string, record: Row | null) => child === "imap.settings" && record?.kind === "imap";
+  const managed = { id: "row-1", kind: "imap", permissions: ["read", "manage"] };
+  const unmanaged = { id: "row-2", kind: "mail", permissions: ["read"] };
+  test.each<[string, Pick<GroupDescriptor, "savedOnly" | "permission" | "containerChild">, Row | null, boolean, boolean]>([
+    ["a plain group, on a create", {}, null, true, true],
+    ["a plain group, on an edit", {}, unmanaged, false, true],
+    ["a plain group, on an edit whose record has not loaded", {}, null, false, true],
+    ["a saved-only group, on a create", { savedOnly: true }, null, true, false],
+    ["a saved-only group, on an edit", { savedOnly: true }, unmanaged, false, true],
+    ["a saved-only group, on an edit whose record has not loaded", { savedOnly: true }, null, false, true],
+    ["a group whose permission the record holds", { permission: "manage" }, managed, false, true],
+    ["a group whose permission the record lacks", { permission: "manage" }, unmanaged, false, false],
+    ["a group with a permission, on a create", { permission: "manage" }, null, true, false],
+    ["a group with a permission, on an edit whose record has not loaded", { permission: "manage" }, null, false, false],
+    ["a group whose child the record admits", { containerChild: "imap.settings" }, managed, false, true],
+    ["a group whose child the record does not admit", { containerChild: "imap.settings" }, unmanaged, false, false],
+    ["a group whose child no record is admitted for, on a create", { containerChild: "imap.settings" }, null, true, false],
+    ["a saved-only group with a held permission and an admitted child, on an edit", { savedOnly: true, permission: "manage", containerChild: "imap.settings" }, managed, false, true],
+    ["a saved-only group with a held permission and an admitted child, on a create", { savedOnly: true, permission: "manage", containerChild: "imap.settings" }, managed, true, false],
+    ["a group with an admitted child whose permission the record lacks", { permission: "admin", containerChild: "imap.settings" }, managed, false, false],
+  ])("%s", (_case, group, record, isCreate, displayed) => {
+    expect(formDisplaysGroup(group, record, { isCreate, admits })).toBe(displayed);
+  });
+});
+
+describe("displayedFormFields", () => {
+  const title = { name: "title" };
+  const code = { name: "code", required: true };
+  test("a field only an undisplayed group declares is left out, also where the page's own field list holds it", () => {
+    const saved = { fields: [code], actions: [], savedOnly: true };
+    // A page's own groups' fields are in its field list too (`parsePageFields`).
+    expect(displayedFormFields([title, code], [saved], () => false, 1)).toEqual([title]);
+    expect(displayedFormFields([title, code], [saved], () => true, 1)).toEqual([title, code]);
+  });
+
+  // Each row: the field list, the groups (the page's own first, `pageGroups` of them), whether the
+  // record leaves the first group undisplayed, and the record's fields, each by its declaration.
+  const plainCode = { name: "code" };
+  const note = { name: "note" };
+  const otherNote = { name: "note", readOnly: true };
+  const pageGroup = { fields: [code], actions: [] };
+  test.each<[string, FieldDescriptor[], GroupDescriptor[], number, boolean, FieldDescriptor[]]>([
+    ["a field the page declares outside its groups keeps the page's declaration where a displayed contribution re-declares it",
+      [title, code], [{ fields: [plainCode], actions: [] }], 0, false, [title, code]],
+    ["a field the page declares outside its groups stays, with the page's declaration, where only an undisplayed contribution re-declares it",
+      [title, code], [{ fields: [plainCode], actions: [], permission: "manage" }], 0, true, [title, code]],
+    ["a field of a displayed page group keeps the field list's declaration",
+      [title, code], [{ fields: [plainCode], actions: [] }], 1, false, [title, code]],
+    ["a field only contributed groups declare comes with the first displayed one's declaration, at its place",
+      [title], [{ fields: [otherNote], actions: [], permission: "manage" }, { fields: [plainCode, note], actions: [] }], 0, true, [title, plainCode, note]],
+    ["a field of an undisplayed page group that a displayed contribution also declares comes with the contribution's declaration",
+      [title, code], [{ ...pageGroup, savedOnly: true }, { fields: [plainCode], actions: [] }], 1, true, [title, plainCode]],
+  ])("%s", (_case, fields, groups, pageGroups, firstUndisplayed, expected) => {
+    const displays = (group: GroupDescriptor) => !(firstUndisplayed && group === groups[0]);
+    const displayed = displayedFormFields(fields, groups, displays, pageGroups);
+    expect(displayed).toEqual(expected);
+    displayed.forEach((field, index) => expect(field).toBe(expected[index]));
+  });
+
+  // Forms where no page group is left out, as the form's own field list and groups shape them.
+  const t = { name: "title", title: true };
+  const a = { name: "a" };
+  const b = { name: "b" };
+  const original = { fields: [{ name: "z" }, { name: "x" }], actions: [], containerChild: "notes.base" };
+  const variant = { fields: [{ name: "y" }, { name: "x", required: true }], actions: [], containerChild: "imap.base" };
+  const gated = { fields: [a], actions: [], permission: "manage" };
+  test.each<[string, FieldDescriptor[], GroupDescriptor[], number, (group: GroupDescriptor) => boolean]>([
+    ["page fields, no groups", [t, a, b], [], 0, () => true],
+    ["page fields and the page's groups of the same declarations", [t, a, b], [{ fields: [a], actions: [] }, { fields: [b], actions: [] }], 2, () => true],
+    ["page fields and the page's groups of equal copies", [t, a, b], [{ fields: [{ name: "a" }], actions: [] }, { fields: [{ name: "b" }], actions: [] }], 2, () => true],
+    ["a contributed group adding a field", [t, a], [{ fields: [a], actions: [] }, { fields: [{ name: "c" }], actions: [] }], 1, () => true],
+    ["a top-level field a contributed group re-declares otherwise", [t, { name: "state", widget: "statusbar" }], [{ fields: [{ name: "state" }], actions: [] }], 0, () => true],
+    ["`fields` and `groups` declaring one name otherwise (required)", [t, { name: "code", required: true }], [{ fields: [{ name: "code" }], actions: [] }], 1, () => true],
+    ["`fields` and `groups` declaring one name otherwise (read-only)", [t, { name: "code", readOnly: true }], [{ fields: [{ name: "code" }], actions: [] }], 1, () => true],
+    ["an original and its variant, both displayed", [t], [original, variant], 0, () => true],
+    ["an original and the variant the record admits", [t], [original, variant], 0, (group) => group !== original],
+    ["two contributed groups, the first gated, one field in both with another between", [t], [gated, { fields: [b, a], actions: [] }], 0, (group) => group !== gated],
+  ])("guard: %s: the record's fields are the field list then the displayed groups' fields, first declaration first", (_case, fields, groups, pageGroups, displays) => {
+    const parent = flattenedFormFields(fields, groups.filter(displays));
+    const displayed = displayedFormFields(fields, groups, displays, pageGroups);
+    expect(displayed).toHaveLength(parent.length);
+    displayed.forEach((field, index) => expect(field).toBe(parent[index]));
+  });
+});
+
+describe("formSections' ungrouped section", () => {
+  const top = { name: "code" };
+  const keys = (sections: readonly { key: string; fields: readonly FieldDescriptor[] }[]) =>
+    sections.map((section) => [section.key, section.fields.map((field) => field.name)]);
+  test("holds a page's own field that only a contributed group the record does not display re-declares", () => {
+    const contributed = { label: "Private", fields: [{ name: "code" }], actions: [], permission: "manage" };
+    expect(keys(formSections([top], [contributed], [], () => false, 0))).toEqual([["fields", ["code"]]]);
+    expect(keys(formSections([top], [contributed], [], () => true, 0))).toEqual([["group:0:Private", ["code"]]]);
+  });
+
+  test("guard: never holds a field of the page's own group, displayed or not", () => {
+    const saved = { label: "Saved", fields: [top], actions: [], savedOnly: true };
+    expect(keys(formSections([top], [saved], [], () => false, 1))).toEqual([]);
+    expect(keys(formSections([top], [saved], [], () => true, 1))).toEqual([["group:0:Saved", ["code"]]]);
+  });
 });
 
 describe("seedPreset and PresetMemory", () => {
