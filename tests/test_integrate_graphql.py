@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import importlib
 import logging
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import httpx2
 import pytest
@@ -28,7 +30,7 @@ from django.test import TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from openai import DefaultHttpxClient, OpenAI
-from rebac import actor_context, system_context
+from rebac import PermissionDenied, actor_context, system_context
 
 from angee.base.models.identity import public_id_for
 from angee.graphql.actions import ActionResult, action_guard
@@ -52,6 +54,7 @@ from tests.conftest import (
     Credential,
     ExternalAccount,
     Integration,
+    NotionConnection,
     OAuthClient,
     SchemaAddon,
     VcsBridge,
@@ -2329,3 +2332,28 @@ def test_the_shared_action_guard_leaves_an_integration_error_to_its_caller() -> 
 
     with pytest.raises(IntegrationError):
         act()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("caller", ("anonymous", "member"))
+def test_integration_insert_refuses_before_the_capability_is_validated(
+    caller: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A caller the integration create gate refuses gets the save's own refusal; no validator runs."""
+
+    with system_context(reason="test.integration_insert.vendor"):
+        Vendor.objects.create(slug="notion", display_name="Notion")
+    user = AnonymousUser() if caller == "anonymous" else User.objects.create_user(username="integration-member")
+    spy = Mock(side_effect=ValidationError("Not a label.", code="invalid"))
+    monkeypatch.setattr(NotionConnection._meta.get_field("display_name"), "validators", [spy])
+    backend = integrate_schema.IntegrationWriteBackend(NotionConnection, public_id_fields=("credential", "owner"))
+
+    with actor_context(user):
+        with pytest.raises(PermissionDenied) as refused:
+            backend.create(SimpleNamespace(), {"display_name": "Refused"})
+        with pytest.raises(PermissionDenied) as saved:
+            NotionConnection.objects.build(display_name="Refused").save()
+
+    assert str(refused.value) == str(saved.value)
+    spy.assert_not_called()
+    assert not NotionConnection._base_manager.exists()

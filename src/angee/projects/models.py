@@ -45,7 +45,7 @@ from angee.base.models.merge_references import MergePolicy
 from angee.base.models.ownership import ItemOwnershipMixin, OwnerMixin, OwnerQuerySet
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.trash import TrashMixin, TrashQuerySet
-from angee.base.permissions import actor_user_id, candidate_relationships
+from angee.base.permissions import actor_user_id, candidate_relationships, require_save_allowed
 from angee.base.querysets import MergeableQuerySet
 from angee.base.serialization import strip_null_bytes
 from angee.base.validators import validate_value
@@ -898,6 +898,8 @@ class TaskManager[TaskT: Task](_TaskManagerBase[TaskT]):
                 **generic_target(record).lookups(self.model, "subject"),
                 activity_type_id=strip_null_bytes(activity_type or kinds.DEFAULT_KEY),
             )
+            # Decided before it is validated: a caller who may not write the record runs no validator.
+            require_save_allowed(task)
             task.full_clean(validate_unique=False, validate_constraints=False)
             task.save()
         return task

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from asgiref.sync import async_to_sync
@@ -525,3 +526,30 @@ def test_markdown_save_rejects_a_concurrent_title_edit_with_native_page_revision
         )
         assert saved.revision == stored.revision + 1
         assert (saved.title, saved.body) == ("Accepted title", "Accepted body")
+
+
+def test_write_body_refuses_a_reader_before_the_title_is_validated(db: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A caller who may not write the page gets the save's own refusal, and the title's validators never run."""
+
+    alice = create_user("alice")
+    bob = create_user("bob")
+    vault = vault_for(alice)
+    with actor_context(alice):
+        page = Page.objects.create_in(vault, title="Draft")
+        MarkdownPage.objects.write_body(page, "Original")
+    _grant(vault, "viewer", bob)
+    spy = Mock(side_effect=ValidationError("Not a title.", code="invalid"))
+    monkeypatch.setattr(MarkdownPage._meta.get_field("title"), "validators", [spy])
+
+    with actor_context(bob):
+        with pytest.raises(PermissionDenied) as refused:
+            MarkdownPage.objects.write_body(page, "Vandalised", title="Renamed")
+        row = MarkdownPage.objects.get(pk=page.pk)
+        row.body, row.title = "Vandalised", "Renamed"
+        with pytest.raises(PermissionDenied) as saved:
+            row.save(update_fields={"body", "title"})
+
+    assert str(refused.value) == str(saved.value)
+    spy.assert_not_called()
+    stored = MarkdownPage._base_manager.get(pk=page.pk)
+    assert (stored.title, stored.body) == ("Draft", "Original")

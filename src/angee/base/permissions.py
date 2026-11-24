@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from os import PathLike
 from pathlib import Path
@@ -13,7 +13,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from django.db.models.query import EmptyQuerySet
-from rebac import SubjectRef, check_new, current_actor, proposed_forward_relationships, to_subject_ref
+from rebac import PermissionDenied, SubjectRef, check_new, current_actor, proposed_forward_relationships, to_subject_ref
 from rebac import user_subject_type as _user_subject_type
 from rebac.backends import backend
 from rebac.managers import RebacQuerySet
@@ -441,3 +441,24 @@ def candidate_relationships(instance: models.Model, action: str) -> CandidateRel
     required = frozenset(relation_dependencies(schema, resource_type, action))
     relationships = proposed_forward_relationships(instance, definition, required_relations=required)
     return CandidateRelationships(resource_type, definition, required, relationships)
+
+
+def require_save_allowed(instance: models.Model, *, update_fields: Iterable[str] | None = None) -> None:
+    """Refuse, as ``instance.save(update_fields=...)`` would, a save its REBAC gates deny, without writing.
+
+    REBAC's ``check_save`` rehearses the save (the model's own ``save()``
+    preparation, then its gates) in a transaction it rolls back; this raises
+    the save's own ``PermissionDenied`` when that verdict refuses. A verb calls
+    it before it validates the row, so a caller the save would refuse runs none
+    of the row's validators. A ``ValidationError`` the model's ``save()`` raises
+    before its gates propagates, as it would from the save. A model without
+    REBAC write gates has no save to refuse.
+    """
+
+    from rebac import RebacTrackedMixin
+
+    if not isinstance(instance, RebacTrackedMixin):
+        return
+    verdict = instance.check_save(update_fields=update_fields)
+    if not verdict.allowed:
+        raise PermissionDenied(verdict.reason)

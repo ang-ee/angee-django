@@ -82,7 +82,7 @@ from angee.base.models.merge_references import ForeignKeyReference, MergePolicy,
 from angee.base.models.ownership import OwnerMixin, OwnerQuerySet
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.transitions import StateTransitions, save_state, transition
-from angee.base.permissions import actor_user_id, instance_actor
+from angee.base.permissions import actor_user_id, instance_actor, require_save_allowed
 from angee.base.querysets import row_lock_queryset
 from angee.base.refs import generic_pointer_model, generic_pointer_target
 from angee.base.serialization import canonical_json, canonical_json_sha256, json_equal
@@ -2417,10 +2417,18 @@ class IntegrationManager[IntegrationT: Integration](_IntegrationManagerBase[Inte
         return instance
 
     def create_capability(self, **fields: Any) -> IntegrationT:
-        """Insert the row :meth:`build` prepares, after native validation; an actor (or sudo) is required."""
+        """Insert the row :meth:`build` prepares once its create is allowed, after native validation.
 
-        self.effective_actor(strict=True)
+        An actor (or sudo) is required. The create is decided before the row is
+        validated, so a caller the create gate refuses runs none of its
+        validators; :meth:`build` carries this manager's actor, the one the
+        insert authorizes. An unscoped insert has no create gate to ask.
+        """
+
+        _actor, unscoped = self.effective_actor(strict=True)
         instance = self.build(**fields)
+        if not unscoped:
+            require_save_allowed(instance)
         instance.full_clean()
         return self.get_queryset().insert(instance)
 

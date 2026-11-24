@@ -961,7 +961,10 @@ data through REBAC, never a queryset bypass.
   [`AgentSessionManager.start`](../../src/angee/agents/models.py) does.
   Manual factories needing an explicit relationship preflight call native
   `rebac.check_new`; prepared rows use the manager's native `insert` path and
-  retain the verified actor on the instance.
+  retain the verified actor on the instance. A factory or verb that validates
+  a row before saving it decides that save first with
+  [`require_save_allowed`](../../src/angee/base/permissions.py) (REBAC's
+  `check_save`), so a caller the save would refuse runs none of its validators.
 - Model universal-admin reach as a const-backed relation
   (`relation admin: angee/role // rebac:const=admin`, no tuple or FK) resolving
   membership in `angee/role:admin`. Admin-gate a table-less/synthetic resource

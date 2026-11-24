@@ -22,7 +22,7 @@ from django.db.models.expressions import BaseExpression, Combinable, CombinedExp
 from django.db.models.fields.reverse_related import ForeignObjectRel
 from django.db.models.functions import Cast, Concat
 from django.db.models.lookups import Exact, In
-from rebac import PermissionDenied, RebacMixin, RebacTrackedMixin
+from rebac import PermissionDenied, RebacMixin
 from rebac.graphql.strawberry_django import optimize
 from rebac.managers import RebacQuerySet
 from strawberry.extensions import FieldExtension
@@ -64,7 +64,7 @@ from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.trash import ARCHIVE_FLAG_FIELD, TRASH_FLAG_FIELD, ArchiveMixin, TrashMixin
 from angee.base.pagination import MAX_PAGE_SIZE, valid_page_size
-from angee.base.permissions import declared_rebac_definition, relation_read_queryset
+from angee.base.permissions import declared_rebac_definition, relation_read_queryset, require_save_allowed
 from angee.base.querysets import AngeeQuerySet, row_lock_paths
 from angee.graphql.access import assert_no_gated_read_fields
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
@@ -360,11 +360,10 @@ class AngeeHasuraWriteBackend:
         reaches REBAC's create gate in ``save()``, so the create is decided
         first: the row the manager would build from the resolver's prepared
         values is rehearsed through its own ``save()`` and gates
-        (``check_save``), which sees what that save sets (an owner, a scope, a
-        user it defaults). A caller the gate refuses gets the save's own
-        refusal, and none of the row's validators runs. A ``ValidationError``
-        the model's ``save()`` raises before its gates is the save's own answer
-        and propagates, as it would from the save.
+        (:func:`~angee.base.permissions.require_save_allowed`), which sees what
+        that save sets (an owner, a scope, a user it defaults). A caller the
+        gate refuses gets the save's own refusal, and none of the row's
+        validators runs.
         """
 
         decoded_data = self._decode_public_id_fields(data)
@@ -374,11 +373,7 @@ class AngeeHasuraWriteBackend:
             data=decoded_data,
             key_attr=PUBLIC_ID_FIELD_NAME,
         )
-        candidate = self.model(**values)
-        if isinstance(candidate, RebacTrackedMixin):
-            verdict = candidate.check_save()
-            if not verdict.allowed:
-                raise PermissionDenied(verdict.reason)
+        require_save_allowed(self.model(**values))
         return mutation_resolvers.create(
             info,
             self.model,
