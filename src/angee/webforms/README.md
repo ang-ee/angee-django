@@ -24,7 +24,8 @@ the addon that owns it.
 An addon that ships a form declares it as one row of its resources, in a
 `<NNN>_webforms.form.yaml` file its `[tool.angee.resources]` lists. The row names
 the form's fields, the content of the version it serves (`version`, the fields of
-`FormVersion.CONTENT_FIELDS`) and the slugs it answers at (`aliases`). Here the
+`FormVersion.CONTENT_FIELDS`), whether the load publishes it (`publish`, true
+unless declared) and the slugs it answers at (`aliases`). Here the
 addon `acme` ships the webform channel its form posts on as well, and names it by
 xref:
 
@@ -93,26 +94,46 @@ target's `permits`:
   changed since stands: a closed form, a version they published, an alias they
   renamed or deleted.
 - **A changed row** applies the form fields it names (`name`, `target_class`,
-  `target_config`, `theme_id`) and serves its `version` (`Form.serve`). The
-  version served now stays when it holds exactly that content; otherwise a new
-  version holding it is made and published (`FormVersion.publish`). Content the
-  form served before, such as a declaration returned to its earlier questions, is
-  published again as a new version: the declaration, not an older version, says
-  what is served. Publishing opens a draft form; a closed form stays closed. A
-  version the publication refuses, or one its fields cannot hold, fails the load
-  and leaves nothing: the ledger keeps the declaration that last applied, so the
-  next load tries again.
-- **Any change of the row serves its declared content again.** A row that
-  changes only `name` or `theme_id`, reorders `aliases`, or whose entry gains a
-  `create_only` field other than `version`, still serves its `version`: a
+  `target_config`, `theme_id`) and serves its `version` (`Form.serve`), unless it
+  declares `publish: false` (below). The version served now stays when it holds
+  exactly that content; otherwise the newest version is published when it is an
+  unpublished one holding it, and a new version holding it is made and published
+  when it is not (`FormVersion.publish`). Content the form served before, such
+  as a declaration returned to its earlier questions, is published again as a new
+  version: the declaration, not an older version, says what is served.
+  Publishing opens a draft form; a closed form stays closed. A version the
+  publication refuses, or one its fields cannot hold, fails the load and leaves
+  nothing: the ledger keeps the declaration that last applied, so the next load
+  tries again.
+- **Any change of a row that publishes serves its declared content again.** A
+  row that changes only `name` or `theme_id`, reorders `aliases`, or whose entry
+  gains a `create_only` field other than `version`, still serves its `version`: a
   version staff published since is replaced by the declared one. An entry that
   leaves the questions to staff once the form exists lists `version` under
   `create_only`; the row still states it, the form is made serving it, and no
   later load serves it again.
-- **`aliases`** are added when the form lacks them (`Form.ensure_aliases`), when
-  the form is made and on every changed row; staff's own aliases stay, and the
-  declaration never removes one. A slug another form holds refuses the load,
-  also when the other form takes it at the same moment.
+- **`publish: false` leaves the publication to a person.** The load prepares the
+  declared content as an unpublished version (`Form.serve(content, publish=False)`)
+  and publishes and opens nothing, so the form is made a draft and answers no one
+  until a person publishes a version in the console. A changed row makes a new
+  unpublished version only when neither the version served nor the newest version
+  holds the declared content: a version staff published, a form they closed and a
+  draft they prepared since stand. The publication judges the version when a
+  person publishes it. A row that turns `publish` back on publishes the version it
+  prepared, or serves its content as any published row does.
+- **The form's `status` is its verbs'.** A file that declares `status` is refused:
+  the declaration's `publish` decides whether the load publishes, and staff open
+  and close the form. `publish` applies on every changed row, so an entry that
+  lists it under `create_only` is refused too; an entry that leaves the questions
+  to staff lists `version` there.
+- **`aliases`** are slugs, or `{slug: entrada, language: es}` for an address that
+  opens the form in one language. They are added when the form lacks them
+  (`Form.ensure_aliases`), when the form is made and on every changed row; staff's
+  own aliases stay, an alias the form has keeps its language, and the declaration
+  never removes one. Each alias is held to its fields before any is made, and
+  every refusal is reported under `aliases`, naming its alias: a slug that is not
+  one, a language that is no tag, a slug declared twice. A slug another form holds
+  refuses the load, also when the other form takes it at the same moment.
 - **`retention_days` is create-only.** A form's retention is what it tells its
   respondents and removes responses when it passes, so once the form exists it is
   the deployment's: a file that declares it lists it under the entry's

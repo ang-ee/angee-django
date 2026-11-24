@@ -11,36 +11,56 @@ live in code docstrings.
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
 - `angee.webforms`, `angee.webforms_messaging`, `angee.messaging`, `angee.resources`,
-  `@angee/webforms`: **Changed behaviour.** **An addon declares a published web
-  form as one resource row**, and a form that names a channel no response could
-  be posted on is refused when it is validated. `webforms.Form` composes
+  `@angee/webforms`: **Changed behaviour.** **An addon declares a web form as
+  one resource row**, published or left for a person to publish, and a form
+  that names a channel no response could be posted on is refused when it is
+  validated. `webforms.Form` composes
   `ResourceLoadMixin` with the adapter `FormResource`
   (`angee.webforms.resources`), as `Workflow` does with its definitions. A row of
   a `<NNN>_webforms.form.yaml` file names the form's fields, `version` (the
   content of the version it serves: `definition`, `languages`,
-  `default_language`, `personal_questions`, `contact_question`) and `aliases`
-  (the slugs it answers at). What a load does:
+  `default_language`, `personal_questions`, `contact_question`), optionally
+  `publish: false`, and `aliases` (the slugs it answers at, each a slug or
+  `{slug, language}`). What a load does:
   - The row's ledger xref is the form's identity, never an alias, so staff may
     rename or delete an alias and the next load neither fails nor makes a second
     form.
   - Every row states its `version`; a row without one is refused, whether it
     would make the form or change it.
   - The first load makes the form, publishes its version through
-    `FormVersion.publish` and adds its aliases. An unchanged row is skipped, so a
-    form staff closed, a version they published and an alias they renamed stand.
-  - A changed row applies the form fields it names and serves its content with
-    the new `Form.serve`: the version served now when it holds exactly that
-    content, otherwise a new version, held to the version's fields and rules and
-    published in the load's transaction; content the form served before is
-    published again as a new version. Missing aliases are added with the new
-    `Form.ensure_aliases`, which never removes one and refuses a slug another
-    form holds, also one it takes at the same moment. A closed form stays closed.
-  - Any change of the row serves the declared content again: a row that changes
-    only `name` or `theme_id`, reorders `aliases`, or whose entry gains a
-    `create_only` field other than `version` replaces a version staff published
-    since. An entry that leaves the questions to staff once the form exists
+    `FormVersion.publish` (unless the row declares `publish: false`) and adds
+    its aliases. An unchanged row is skipped, so a form staff closed, a version
+    they published and an alias they renamed stand.
+  - A changed row that publishes applies the form fields it names and serves
+    its content with the new `Form.serve`: the version served now when it holds
+    exactly that content, otherwise the newest version when it is an unpublished
+    one holding it, otherwise a new version, held to the version's fields and
+    rules; either is published in the load's transaction. Content the form
+    served before is published again as a new version. Missing aliases are
+    added with the new `Form.ensure_aliases`, which takes each alias as a slug
+    or a mapping of `FormAlias.ADDRESS_FIELDS` (`slug`, `language`), never
+    removes or changes an alias the form has, reports every alias it refuses
+    under `aliases` naming it (a slug given twice among them), and refuses a
+    slug another form holds, also one it takes at the same moment. A closed
+    form stays closed.
+  - Any change of a row that publishes serves the declared content again: a row
+    that changes only `name` or `theme_id`, reorders `aliases`, or whose entry
+    gains a `create_only` field other than `version` replaces a version staff
+    published since. An entry that leaves the questions to staff once the form exists
     lists `version` under `create_only`: the form is made serving it, and no
     later load serves it again.
+  - A row that declares `publish: false` leaves the publication to a person:
+    `Form.serve(content, publish=False)` prepares the declared content as an
+    unpublished version, so the first load makes a draft form that answers no
+    one, and publishes and opens nothing. A changed row makes a new unpublished
+    version only when neither the version served nor the newest version holds
+    the declared content, so a version staff published, a form they closed and
+    a draft they prepared since stand. The publication judges the version when
+    a person publishes it. A row that turns `publish` back on publishes the
+    version it prepared, or serves its content as any published row does. A
+    file that declares the form's `status`, or an entry that lists `publish`
+    under `create_only`, is refused: the form's state follows its verbs, and
+    under `create_only` a changed row would drop `publish: false`.
   - A version the publication refuses or its fields cannot hold, an alias
     another form holds, or a `target_config` the target refuses fails the load
     and leaves nothing; the ledger keeps the declaration that last applied.

@@ -3,9 +3,10 @@
 A submission judges its answers before it locks its form and checks under the
 lock that the form still serves the version it judged; a delivery locks its
 response; a publication locks the form and then the version, and so does a
-version's own save. Whichever runs second waits on the other's lock and judges
-its committed state. Two forms taking one address wait on its unique slug.
-Every name and address is invented.
+version's own save; serving declared content locks the form and then the
+newest version, the row a revision of that version locks. Whichever runs
+second waits on the other's lock and judges its committed state. Two forms
+taking one address wait on its unique slug. Every name and address is invented.
 """
 
 from concurrent.futures import ThreadPoolExecutor
@@ -148,6 +149,32 @@ def test_an_edit_that_began_before_a_publication_waits_for_it_and_is_refused() -
 
     kept, served = stored(version), stored(form)
     assert (kept.definition, kept.published_at is not None, served.published_version_id) == (DEFINITION, True, kept.pk)
+
+
+def test_a_serve_that_meets_a_revision_of_the_newest_draft_waits_and_judges_the_revision() -> None:
+    """serve locks the newest version as a revision does: it never publishes a draft whose content just changed."""
+
+    form, version = form_with()
+    content = {"definition": DEFINITION, "languages": ["en"], "default_language": "en",
+               "personal_questions": ["name", "email"]}
+
+    def serve() -> Any:
+        with system_context(reason="webforms concurrency test serve"):
+            return Form._base_manager.get(pk=form.pk).serve(content)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with transaction.atomic():
+            with system_context(reason="webforms concurrency test edit"):
+                editor = FormVersion.objects.get(pk=version.pk)
+                editor.definition = SHORTER
+                editor.save()
+            contender, pid = submit(pool, serve)
+            wait_for_lock(pid, contender)
+        served = contender.result(timeout=10)
+
+    revised = stored(version)
+    assert (revised.definition, revised.published_at) == (SHORTER, None)
+    assert (served.number, served.definition, stored(form).published_version_id) == (2, DEFINITION, served.pk)
 
 
 def test_an_edit_that_commits_before_a_publication_is_what_gets_judged_and_published() -> None:

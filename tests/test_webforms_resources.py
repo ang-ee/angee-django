@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 import yaml
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from rebac import actor_context, system_context
 from rebac.roles import grant as grant_role
 
@@ -24,7 +25,7 @@ from angee.messaging.testing.models import Channel
 from angee.provenance.context import changeset_model_label, current_changeset
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.testing.models import Resource
-from angee.webforms.models import FormStatus
+from angee.webforms.models import FormStatus, FormUnavailable
 from angee.webforms.testing.models import Form, FormAlias, FormVersion, Response
 from tests.conftest import Vendor, create_platform_admin, create_user, make_addon
 
@@ -144,6 +145,13 @@ def versions(form: Any) -> list[tuple[int, dict[str, Any], bool]]:
 def slugs(form: Any) -> set[str]:
     with system_context(reason="webforms resources tests read"):
         return set(FormAlias._base_manager.filter(form=form).values_list("slug", flat=True))
+
+
+def addresses(form: Any) -> dict[str, str]:
+    """Each alias of ``form``: its slug and the language it opens the form in."""
+
+    with system_context(reason="webforms resources tests read"):
+        return dict(FormAlias._base_manager.filter(form=form).values_list("slug", "language"))
 
 
 def history(form: Any) -> int:
@@ -294,6 +302,158 @@ def test_an_entry_that_leaves_the_questions_to_staff_lists_version_under_create_
     assert versions(form) == [(1, DEFINITION, True), (2, LONGER, True)]
 
 
+def test_a_draft_declared_form_is_made_and_kept_a_draft_its_declared_content_prepared_once(
+    declaring: Declaring,
+) -> None:
+    """``publish: false``: the load prepares the version and a person publishes it; the form is public only then."""
+
+    assert declaring.load(publish=False).created == 4
+    form = declaring.form()
+    assert (form.status, form.published_version_id) == (FormStatus.DRAFT, None)
+    assert versions(form) == [(1, DEFINITION, False)]
+    assert slugs(form) == {"intake"}
+    with system_context(reason="webforms resources tests read"):
+        assert not FormAlias.objects.serving().exists()
+    with pytest.raises(FormUnavailable):
+        Response.objects.receive(form, version=1, submission_id="r-1", language="en", answers={"name": "Ada"})
+
+    assert declaring.load(publish=False).skipped == 4
+    # A changed row whose content the newest version holds makes nothing; new content is a new draft beside it.
+    assert declaring.load(publish=False, name="Intake form").updated == 1
+    assert versions(form) == [(1, DEFINITION, False)]
+    assert declaring.load(publish=False, version={**VERSION, "definition": LONGER}).updated == 1
+    form = declaring.form()
+    assert (form.status, form.published_version_id) == (FormStatus.DRAFT, None)
+    assert versions(form) == [(1, DEFINITION, False), (2, LONGER, False)]
+
+
+def test_a_draft_declared_form_staff_published_keeps_their_state_through_reloads_and_changed_rows(
+    declaring: Declaring, staff: Any,
+) -> None:
+    declaring.load(publish=False)
+    form = declaring.form()
+    with actor_context(staff):
+        FormVersion.objects.get(form=form, number=1).publish()
+        # Staff go on to prepare questions of their own.
+        FormVersion.objects.create(form=form, **{**VERSION, "definition": {**DEFINITION, "title": "Staff's"}})
+
+    assert declaring.load(publish=False).skipped == 4
+    # The version staff serve holds the declared content: a changed row makes nothing and publishes nothing.
+    assert declaring.load(publish=False, name="Intake form").updated == 1
+    form = declaring.form()
+    assert (form.status, form.published_version.number, len(versions(form))) == (FormStatus.PUBLISHED, 1, 2)
+
+    # New declared content is prepared beside staff's work; what the public answers stays theirs, closed or not.
+    with actor_context(staff):
+        Form.objects.get(pk=form.pk).close()
+    assert declaring.load(publish=False, version={**VERSION, "definition": LONGER}).updated == 1
+    form = declaring.form()
+    assert (form.status, form.published_version.number) == (FormStatus.CLOSED, 1)
+    assert [(number, published) for number, _definition, published in versions(form)] == [
+        (1, True), (2, False), (3, False),
+    ]
+    assert versions(form)[2][1] == LONGER
+
+
+def test_a_row_that_turns_publish_on_publishes_the_version_it_prepared(declaring: Declaring) -> None:
+    declaring.load(publish=False)
+
+    assert declaring.load(publish=True).updated == 1
+
+    form = declaring.form()
+    assert (form.status, form.published_version.number) == (FormStatus.PUBLISHED, 1)
+    assert versions(form) == [(1, DEFINITION, True)]
+
+
+def test_a_row_that_turns_publish_off_leaves_the_form_served_and_prepares_new_content_beside_it(
+    declaring: Declaring,
+) -> None:
+    declaring.load()
+
+    assert declaring.load(publish=False).updated == 1
+    assert versions(declaring.form()) == [(1, DEFINITION, True)]
+    declaring.load(publish=False, version={**VERSION, "definition": LONGER})
+
+    form = declaring.form()
+    assert (form.status, form.published_version.number) == (FormStatus.PUBLISHED, 1)
+    assert versions(form) == [(1, DEFINITION, True), (2, LONGER, False)]
+
+
+def test_a_draft_declared_version_is_judged_for_publication_when_a_person_publishes_it(
+    declaring: Declaring, staff: Any,
+) -> None:
+    declaring.load(publish=False, version={**VERSION, "personal_questions": None})
+    form = declaring.form()
+
+    with actor_context(staff), pytest.raises(ValidationError, match="State which questions hold personal data"):
+        FormVersion.objects.get(form=form, number=1).publish()
+
+    assert (declaring.form().status, versions(form)) == (FormStatus.DRAFT, [(1, DEFINITION, False)])
+
+
+@pytest.mark.parametrize(("create_only", "fields", "refusal"), [
+    pytest.param(
+        ("retention_days", "publish"), {"publish": False}, "publish applies on every changed row",
+        id="publish-under-create-only",
+    ),
+    pytest.param(
+        ("retention_days",), {"status": "published", "publish": False}, "a declared form's status follows",
+        id="a-declared-status",
+    ),
+])
+def test_a_file_that_would_set_the_forms_state_behind_its_verbs_is_refused(
+    tmp_path: Path, create_only: tuple[str, ...], fields: dict[str, Any], refusal: str,
+) -> None:
+    """Under create_only a changed row would drop publish and publish the form; a status would skip open()."""
+
+    declaring = Declaring(tmp_path, create_only=create_only)
+
+    with pytest.raises(ResourceLoadError, match=refusal):
+        declaring.load(**fields)
+
+    nothing_made(declaring)
+
+
+def test_an_alias_may_name_the_language_its_address_opens_the_form_in_and_staffs_choice_stays(
+    declaring: Declaring, staff: Any,
+) -> None:
+    declared_aliases = ["intake", {"slug": "entrada", "language": "es"}, {"slug": "intake-en", "language": "en"}]
+    declaring.load(aliases=declared_aliases)
+    form = declaring.form()
+    assert addresses(form) == {"intake": "", "entrada": "es", "intake-en": "en"}
+
+    with actor_context(staff):
+        alias = FormAlias.objects.get(slug="entrada")
+        alias.language = "pt-BR"
+        alias.save()
+    # A changed row adds what the form lacks and leaves every alias it has as it is.
+    changed = declaring.load(name="Intake form", aliases=[*declared_aliases, {"slug": "seed", "language": "en"}])
+    assert changed.updated == 1
+    assert addresses(form) == {"intake": "", "entrada": "pt-BR", "intake-en": "en", "seed": "en"}
+
+
+def test_every_alias_the_form_cannot_take_is_reported_under_aliases_naming_it(declaring: Declaring) -> None:
+    aliases = [{"slug": "entrada", "language": "Spanish!"}, "Bad Slug", "intake"]
+
+    with pytest.raises(ResourceLoadError) as refused:
+        declaring.load(aliases=aliases)
+
+    assert "entrada: Enter a language tag" in str(refused.value)
+    assert "Bad Slug: Use lower-case letters and numbers" in str(refused.value)
+    nothing_made(declaring)
+
+
+def test_aliases_given_as_one_slug_rather_than_a_collection_are_refused_whole(staff: Any) -> None:
+    with actor_context(staff):
+        form = Form.objects.create(name="Staff form")
+        with pytest.raises(ValidationError, match="Give a collection of aliases, not one alias"):
+            form.ensure_aliases("desk")
+        with pytest.raises(ValidationError, match="Give a collection of aliases, not one alias"):
+            form.ensure_aliases({"slug": "desk"})
+
+    assert slugs(form) == set()
+
+
 def test_a_row_without_a_version_is_refused_whether_it_would_make_the_form_or_change_it(
     declaring: Declaring,
 ) -> None:
@@ -415,8 +575,29 @@ def test_a_create_only_retention_reaches_the_new_form_and_never_the_deployments_
 @pytest.mark.parametrize(("changes", "refusal"), [
     pytest.param({"version": {**VERSION, "number": 4}}, "it does not hold number", id="a-field-no-version-holds"),
     pytest.param({"version": ["not", "a", "mapping"]}, "Declare version as a mapping", id="a-version-no-mapping"),
-    pytest.param({"aliases": "intake"}, "Declare aliases as a list of slugs", id="aliases-that-are-no-list"),
+    pytest.param({"publish": "maybe"}, "Declare publish as true or false", id="a-publish-that-is-a-string"),
+    pytest.param({"aliases": "intake"}, "Declare aliases as a list", id="aliases-that-are-no-list"),
     pytest.param({"aliases": ["Intake Desk"]}, "Use lower-case letters and numbers", id="an-alias-that-is-no-slug"),
+    pytest.param(
+        {"aliases": [{"slug": "entrada", "lang": "es"}]}, "Give an alias as a slug, or as a mapping of slug, language",
+        id="an-alias-with-a-key-of-its-own",
+    ),
+    pytest.param(
+        {"aliases": [{"language": "es"}]}, "Give an alias as a slug, or as a mapping of slug, language",
+        id="an-alias-without-a-slug",
+    ),
+    pytest.param(
+        {"aliases": ["intake", {"slug": "intake", "language": "es"}]}, "intake: given twice",
+        id="an-alias-declared-twice",
+    ),
+    pytest.param(
+        {"aliases": ["intake", {"slug": "entrada", "language": "Spanish!"}]}, "entrada: Enter a language tag",
+        id="an-alias-language-that-is-no-tag",
+    ),
+    pytest.param(
+        {"aliases": [{"slug": "entrada", "language": None}]}, "entrada: Give an alias as a slug",
+        id="an-alias-language-left-empty",
+    ),
     pytest.param({"aliases": ["taken"]}, "The address forms/taken belongs to another form", id="another-forms-alias"),
 ])
 def test_a_declared_version_or_alias_the_form_cannot_take_is_refused_and_makes_nothing(

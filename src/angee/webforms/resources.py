@@ -1,8 +1,10 @@
-"""Native import-export adapter that declares a published web form as one resource row.
+"""Native import-export adapter that declares a web form as one resource row.
 
 A row in a ``<NNN>_webforms.form.yaml`` resource file names the form's own fields
-and two columns of its own: ``version``, the content of the version the form
-serves (``FormVersion.CONTENT_FIELDS``), and ``aliases``, the slugs it answers at.
+and three columns of its own: ``version``, the content of the version the form
+serves (``FormVersion.CONTENT_FIELDS``); ``publish``, false to leave that version
+for a person to publish; and ``aliases``, the slugs it answers at, each
+optionally in a language.
 The loader owns the row's identity (its ledger xref), its content hash and its
 one transaction; this adapter saves the form natively and hands the version and
 the addresses to the form's own verbs (:meth:`~angee.webforms.models.Form.serve`,
@@ -28,7 +30,11 @@ from angee.resources.widgets import NativeJSONWidget
 class FormResource(AngeeResource):
     """Install a declared form: its fields natively, then the version it serves and its addresses.
 
-    Every row states its ``version``. ``target_config`` names records by xref
+    Every row states its ``version``, which the load publishes unless the row
+    declares ``publish: false``. The form's ``status`` is its verbs' to change,
+    never a column, and ``publish`` applies on every changed row, never under
+    ``create_only``. An alias is a slug, or ``{slug, language}`` for an address
+    that opens the form in that language. ``target_config`` names records by xref
     where its target's ``config_model`` declares a relation
     (``json_schema_extra={"relation": {"resource": …}}``); each resolves to its
     record's public id when the row is applied, so the form never learns what a
@@ -37,16 +43,28 @@ class FormResource(AngeeResource):
     """
 
     version = fields.Field(column_name="version", readonly=True, widget=NativeJSONWidget())
+    publish = fields.Field(column_name="publish", readonly=True, widget=NativeJSONWidget())
     aliases = fields.Field(column_name="aliases", readonly=True, widget=NativeJSONWidget())
 
     def before_import(self, dataset: Any, **kwargs: Any) -> None:
-        """Refuse a declared retention that a changed row would apply again over the deployment's own."""
+        """Refuse a file whose rows would set the form's state, or change what staff own, behind its verbs."""
 
         super().before_import(dataset, **kwargs)
-        if "retention_days" in (dataset.headers or ()) and "retention_days" not in self.entry.create_only:
+        headers = dataset.headers or ()
+        if "retention_days" in headers and "retention_days" not in self.entry.create_only:
             raise ResourceLoadError(
                 f"{self.entry.display}: retention_days is the deployment's once a form exists, since a changed "
                 "retention removes responses; list it under the entry's create_only."
+            )
+        if "status" in headers:
+            raise ResourceLoadError(
+                f"{self.entry.display}: a declared form's status follows its version's publication; declare "
+                "publish: false for a form a person publishes, and leave opening and closing it to staff."
+            )
+        if "publish" in self.entry.create_only:
+            raise ResourceLoadError(
+                f"{self.entry.display}: publish applies on every changed row, so it is never create_only; list "
+                "version under create_only to leave the questions to staff once the form exists."
             )
 
     def before_import_row(self, row: dict[str, Any], **kwargs: Any) -> None:
@@ -97,16 +115,15 @@ class FormResource(AngeeResource):
         """
 
         version = self._declared(row, "version", dict, "a mapping of a version's content")
-        aliases = self._declared(row, "aliases", list, "a list of slugs")
-        if aliases is not None and not all(isinstance(slug, str) for slug in aliases):
-            raise ValidationError({"aliases": "Declare aliases as a list of slugs."})
+        publish = self._declared(row, "publish", bool, "true or false")
+        aliases = self._declared(row, "aliases", list, "a list")
         actor = kwargs.get("actor")
         self.before_save_instance(instance, row, **kwargs)
         with actor_context(actor) if actor is not None else nullcontext():
             self.do_instance_save(instance, is_create)
             # Absent only when the entry lists it under create_only and the form already exists.
             if version is not None:
-                instance.serve(version)
+                instance.serve(version, **({} if publish is None else {"publish": publish}))
             if aliases is not None:
                 instance.ensure_aliases(aliases)
         self.after_save_instance(instance, row, **kwargs)
@@ -123,3 +140,4 @@ class FormResource(AngeeResource):
         if not isinstance(value, kind):
             raise ValidationError({column: f"Declare {column} as {shape}."})
         return value
+
