@@ -204,6 +204,12 @@ def test_a_font_stack_of_named_families_ending_in_a_generic_family_is_admitted(s
         pytest.param("3M Sans, sans-serif", id="bare-family-starting-with-a-digit"),
         pytest.param("inherit, sans-serif", id="css-wide-keyword"),
         pytest.param("Inter, revert-layer, serif", id="css-wide-keyword-among-families"),
+        pytest.param("Goudy Bookletter 1911, sans-serif", id="a-later-word-starting-with-a-digit"),
+        pytest.param("Hawaii 5-0, sans-serif", id="a-later-word-starting-with-a-digit-and-hyphen"),
+        pytest.param("Font Awesome 5 Free, sans-serif", id="a-middle-word-that-is-a-digit"),
+        pytest.param("Foo inherit, serif", id="a-later-word-that-is-a-css-wide-keyword"),
+        pytest.param("-1abc, serif", id="a-word-starting-with-a-hyphen-and-a-digit"),
+        pytest.param("Foo - Bar, serif", id="a-lone-hyphen"),
         pytest.param("", id="empty"),
     ],
 )
@@ -265,6 +271,25 @@ def test_a_logo_must_be_an_image_on_the_image_drive(drive: Any) -> None:  # noqa
         assert refused.value.message_dict == {"logo_dark": [LOGO_MESSAGE]}
         kit.logo_dark = image
         kit.full_clean()
+
+
+@pytest.mark.usefixtures("image_drive")
+def test_a_logo_trashed_after_it_was_set_blocks_no_other_edit(db: None) -> None:
+    """Only a logo that changes is judged: the kit stays editable, and a new kit cannot take the trashed file."""
+
+    del db
+    with system_context(reason="tests.brandkit.logos"):
+        image = File.objects.ingest_image(PNG_BYTES)
+    kit = _kit("Logos", logo=image)
+    with system_context(reason="tests.brandkit.logos"):
+        image.delete()  # trashes the file; the kit still points at it
+        stored = BrandKit.objects.get(pk=kit.pk)
+        stored.accent = "#0e7490"
+        stored.full_clean()
+        stored.save()
+        with pytest.raises(ValidationError) as refused:
+            BrandKit(**{**ANGEE, "name": "Another", "logo": image}).full_clean()
+    assert refused.value.message_dict == {"logo": [LOGO_MESSAGE]}
 
 
 # ---------- exactly one default kit ----------
@@ -449,6 +474,20 @@ def test_a_seed_the_palette_moves_far_is_a_warning(seeds: dict[str, str], warnin
     assert warning in BrandKit(**{**ANGEE, **seeds}).contrast_warnings()
 
 
+def test_a_seed_stored_past_validation_raises_instead_of_coming_back_as_written(db: None) -> None:
+    """The palette parses every seed it reads: trailing markup or a signed channel never reaches mail."""
+
+    del db
+    kit = _kit("Bypassed")
+    with system_context(reason="tests.brandkit.orm"):
+        BrandKit.objects.filter(pk=kit.pk).update(brand="#e7b<b>")  # ColorField checks only in full_clean
+        stored = BrandKit.objects.get(pk=kit.pk)
+    with pytest.raises(ValidationError):
+        stored.mail_palette()
+    with pytest.raises(ValidationError):
+        BrandKit(**{**ANGEE, "neutral": "#-7-7-7"}).mail_palette()
+
+
 def test_a_brand_colour_no_ink_reads_on_takes_black_text_and_no_warning() -> None:
     """The theme's two inks fail on a mid grey; black reads wherever white does not."""
 
@@ -528,6 +567,7 @@ def test_an_admin_writes_a_kit_a_member_and_an_anonymous_caller_cannot(db: None)
     for refused in (member, AnonymousUser()):
         result = execute_schema(_schema(), _INSERT_KIT, {"object": kit}, user=refused)
         assert result.errors
+        assert result.errors[0].extensions["code"] == "PERMISSION_DENIED"  # a valid kit: refused for who, not what
         assert result.data is None or result.data["insert_brand_kits_one"] is None
     assert _default_names() == ["Angee"]
 
@@ -644,3 +684,15 @@ def test_a_deleted_shipped_kit_comes_back_as_an_ordinary_kit_and_the_chosen_defa
     with system_context(reason="tests.brandkit.read"):
         assert BrandKit.objects.get(name="Angee").is_default is False
         assert BrandKit.objects.default() == chosen
+        before = list(BrandKit.objects.order_by("pk").values_list("pk", "name", "is_default", "updated_at"))
+
+    table = BrandKit._meta.db_table
+    with CaptureQueriesContext(connection) as captured:
+        Resource.objects.load_addons((addon,), tiers=[Resource.Tier.INSTALL])
+    writes = [
+        query["sql"] for query in captured.captured_queries
+        if table in query["sql"] and query["sql"].lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))
+    ]
+    assert writes == []  # the second reload finds the recreated row unchanged and writes no kit row
+    with system_context(reason="tests.brandkit.read"):
+        assert list(BrandKit.objects.order_by("pk").values_list("pk", "name", "is_default", "updated_at")) == before

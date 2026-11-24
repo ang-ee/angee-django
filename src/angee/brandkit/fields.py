@@ -18,14 +18,17 @@ GENERIC_FONT_FAMILIES = frozenset({
 """The CSS Fonts 4 generic families; a font stack ends in one, so text always finds a face."""
 
 CSS_WIDE_KEYWORDS = frozenset({"inherit", "initial", "unset", "default", "revert", "revert-layer"})
-"""Keywords that void a whole ``font-family`` declaration when they stand unquoted among its families."""
+"""Keywords that void a whole ``font-family`` declaration when they stand unquoted in one of its families."""
 
 # Possessive quantifiers: a run of spaces or hyphens is matched once and never
 # re-tried, so a family is judged in time linear in its length.
 _FAMILY_NAME = r"[ -]*+[^\W_](?:[^\W_]|[ -])*+"
 _FONT_FAMILY = re.compile(rf" *+(?:(?P<bare>{_FAMILY_NAME})|'{_FAMILY_NAME}') *+")
 _NAMES = "Name each font family with letters, digits, spaces and hyphens, separated by commas."
-_QUOTE = "Quote a family name that starts with a digit or is a CSS keyword, such as 'inherit'."
+_QUOTE = (
+    "Quote a family name with a word that starts with a digit, a lone hyphen or a hyphen and a digit, "
+    "or a CSS keyword, such as 'Font Awesome 5 Free'."
+)
 _GENERIC = "End the font stack with a generic family, such as sans-serif."
 
 
@@ -35,15 +38,24 @@ def normalize_font_stack(value: str) -> str:
     return value.replace('"', "'")
 
 
+def _identifier(word: str) -> bool:
+    """Whether a word of an unquoted family is a CSS identifier that leaves the declaration valid."""
+
+    starts_badly = word[0].isdigit() or word == "-" or (word[0] == "-" and word[1].isdigit())
+    return not starts_badly and word.lower() not in CSS_WIDE_KEYWORDS
+
+
 def validate_font_stack(value: str) -> None:
     """Admit a normalised CSS font stack that is safe to write into a style.
 
     Each comma-separated family is letters, digits, spaces and hyphens, bare or
     wholly inside one pair of single quotes (:func:`normalize_font_stack` turns
-    double quotes into single ones first). A bare family may not start with a
-    digit or be a :data:`CSS_WIDE_KEYWORDS` keyword; the last family is an unquoted
-    :data:`GENERIC_FONT_FAMILIES` family. Nothing else can reach the CSS, and the
-    check takes time linear in the value's length.
+    double quotes into single ones first). An unquoted family is a sequence of CSS
+    identifiers, and one invalid word voids the whole declaration, so no word of a
+    bare family may start with a digit, be a lone hyphen or start with a hyphen and
+    a digit, or be a :data:`CSS_WIDE_KEYWORDS` keyword. The last family is an
+    unquoted :data:`GENERIC_FONT_FAMILIES` family. Nothing else can reach the CSS,
+    and the check takes time linear in the value's length.
     """
 
     families: Sequence[str] = value.split(",")
@@ -53,7 +65,7 @@ def validate_font_stack(value: str) -> None:
         if match is None:
             raise ValidationError(_NAMES, code="font_stack")
         bare = match["bare"].strip() if match["bare"] is not None else None
-        if bare is not None and (bare[0].isdigit() or bare.lower() in CSS_WIDE_KEYWORDS):
+        if bare is not None and not all(_identifier(word) for word in bare.split()):
             raise ValidationError(_QUOTE, code="font_stack")
         bare_names.append(bare)
     if bare_names[-1] is None or bare_names[-1].lower() not in GENERIC_FONT_FAMILIES:

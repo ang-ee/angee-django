@@ -27,31 +27,39 @@ table to dress a theme. A fixed theme takes no options.
 Each colour is a `#rrggbb` `ColorField`. A font stack is written into CSS, where
 HTML autoescaping protects nothing, so `FontStackField` admits only family names
 of letters, digits, spaces and hyphens, each bare or wholly quoted, separated by
-commas and closed by an unquoted CSS generic family such as `sans-serif`. A bare
-family may not start with a digit or be a CSS-wide keyword (`inherit`,
-`initial`, `unset`, `default`, `revert`, `revert-layer`); quote it instead. Double
-quotes are stored as single quotes. The field checks every write that reaches the
+commas and closed by an unquoted CSS generic family such as `sans-serif`. An
+unquoted family is a sequence of CSS identifiers, and one invalid word voids the
+whole declaration, so no word of a bare family may start with a digit, be a lone
+hyphen or start with a hyphen and a digit, or be a CSS-wide keyword (`inherit`,
+`initial`, `unset`, `default`, `revert`, `revert-layer`); quote such a family
+instead, as in `'Font Awesome 5 Free'`. Double quotes are stored as single quotes. The field checks every write that reaches the
 database, not only a full clean, and its check takes time linear in the value's
 length.
 
 A logo must be an image storage's `FileManager.ingest_image` put on its image
-drive, which every signed-in user reads; `BrandKit.clean` refuses any other file.
+drive, which every signed-in user reads; `BrandKit.clean` refuses any other file
+when a logo is set or changed, so a logo trashed later never blocks an unrelated
+edit.
 No console root writes the logos yet: they wait for an image upload storage owns.
 
 ## The default kit
 
-Once any kit exists, exactly one is the default:
+Once any kit exists, writes through `BrandKit.save` and `BrandKit.clean` (the
+console and the resource loader) keep exactly one default:
 
 - the first kit saved while no kit is the default becomes the default;
 - saving another kit as the default takes the flag from the previous one in the
   same transaction (`BrandKitManager.demote_defaults`), and a conditional unique
   constraint refuses a second default written any other way;
-- the default kit cannot be deleted (`BrandKit.delete_blocker`, enforced on every
-  delete path) or unticked (`BrandKit.clean`): make another kit the default first.
+- the default kit cannot be unticked (`BrandKit.clean`) or deleted
+  (`BrandKit.delete_blocker`, enforced on every delete path, which locks the row
+  first): make another kit the default first.
 
-`BrandKit.objects.default()` returns the default kit the actor reads; it is
-`None` only before any kit exists, as in a database before its first resource
-load. The console's `default_brand_kit` query returns it.
+`BrandKit.objects.default()` returns the default kit the actor reads, or `None`:
+before any kit exists, as in a database before its first resource load; after a
+write that goes past `save` and `clean`, such as `bulk_create` into an empty table
+or `update(is_default=False)`; and for an actor that reads no kit. A caller keeps
+a stated behaviour for `None`. The console's `default_brand_kit` query returns it.
 
 The install tier ships one kit stating the Angee brand. It states no default, so
 on a fresh install it becomes the default by being the first kit saved. Its
@@ -66,7 +74,8 @@ row, and it comes back as an ordinary kit, because a default already exists.
 Mail works its colours out from the seeds; the kit stores no dark value and no
 mail colour. `BrandKit.mail_palette()` returns plain values, keyed `light` and
 `dark`, then by role: `canvas`, `surface`, `text`, `muted`, `border`, `primary`,
-`on_primary` and `link`, each a lower-case `#rrggbb`. The light canvas, surface
+`on_primary` and `link`, each a lower-case `#rrggbb`; a seed stored past
+validation raises instead of coming back as written. The light canvas, surface
 and primary are the kit's seeds as stated; every other role follows the theme
 runtime's derivation for a customised theme (text, muted and border from the
 neutral, each dark value from its seed). `on_primary` is the theme ink that reads

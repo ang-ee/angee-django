@@ -5,10 +5,12 @@ takes as inputs, a heading and a body font stack, a logo for light and one for
 dark backgrounds, the organization and postal address a mail footer shows, and a
 voice note for people and AI drafts.
 
-**One default kit.** Once any kit exists, exactly one is the deployment's default
-(:meth:`BrandKitQuerySet.default`): the first kit saved while none is the default
-takes the flag, saving another kit as the default takes it from the previous one,
-and the default can neither be deleted nor unticked.
+**One default kit.** Once any kit exists, writes through :meth:`BrandKit.save`
+and :meth:`BrandKit.clean` keep exactly one default (:meth:`BrandKitQuerySet.default`):
+the first kit saved while none is the default takes the flag, saving another kit
+as the default takes it from the previous one, and the default can neither be
+unticked nor, on any delete path, deleted. A write past ``save`` and ``clean``
+can leave none.
 
 **Colours are theme inputs.** Each colour column is named exactly as the theme
 runtime names a hex customisation input (``parseThemeCustomization`` in
@@ -44,6 +46,7 @@ from rebac import PermissionDenied
 
 from angee.base.fields.text import ColorField
 from angee.base.models.base import AngeeDataModel
+from angee.base.validators import HEX_COLOR_VALIDATOR
 from angee.brandkit.fields import FontStackField
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
@@ -113,6 +116,13 @@ def readable_color(color: str, *, on: Sequence[str], ink: str) -> tuple[str, flo
         if all(contrast_ratio(candidate, background) >= WCAG_TEXT_CONTRAST for background in on):
             return candidate, shift
     raise ValueError(f"The ink {ink} does not read on {', '.join(on)}.")
+
+
+def _parsed_seed(color: str) -> str:
+    """Return a seed as lower-case ``#rrggbb``, or raise ``ValidationError`` for one stored past validation."""
+
+    HEX_COLOR_VALIDATOR(color)
+    return color.lower()
 
 
 def ink_on(color: str) -> str:
@@ -216,11 +226,14 @@ class BrandKitQuerySet[KitT: BrandKit](AngeeHistoryQuerySet[KitT]):
     """Read scopes over brand kits."""
 
     def default(self) -> KitT | None:
-        """Return the default kit among the rows this queryset reads.
+        """Return the default kit among the rows this queryset reads, or ``None``.
 
-        ``None`` only before any kit exists (a database before its first resource
-        load), or for an actor that reads no kit: once any kit exists, exactly one
-        is the default.
+        ``None`` before any kit exists (a database before its first resource
+        load); after a write that goes past :meth:`BrandKit.save` and
+        :meth:`BrandKit.clean`, such as ``bulk_create`` into an empty table or
+        ``update(is_default=False)``; and for an actor that reads no kit. Writes
+        through ``save`` and ``clean`` keep exactly one default once any kit
+        exists, so a caller keeps a stated behaviour for ``None``.
         """
 
         return self.filter(is_default=True).first()
@@ -345,21 +358,25 @@ class BrandKit(HistoryMixin, AngeeDataModel, concrete=True):
         super().validate_constraints({*(exclude or ()), "is_default"})
 
     def clean(self) -> None:
-        """Refuse unticking the default kit, and a logo that is not an image on storage's image drive."""
+        """Refuse unticking the default kit, and a new logo that is not an image on storage's image drive.
+
+        A logo is judged only when it differs from the stored row's, so a logo
+        trashed after it was set never refuses an unrelated edit of the kit.
+        """
 
         super().clean()
         errors: dict[str, str] = {}
-        stored_default = (
-            not self._state.adding
-            and not self.is_default
-            and type(self).system_queryset().filter(pk=self.pk, is_default=True).exists()
+        stored = None if self._state.adding else (
+            type(self).system_queryset().filter(pk=self.pk).values("is_default", "logo_id", "logo_dark_id").first()
         )
-        if stored_default:
+        if stored is not None and stored["is_default"] and not self.is_default:
             errors["is_default"] = DEFAULT_UNTICK_MESSAGE
         images = apps.get_model("storage", "File").system_queryset().images()
+        stored_logos = {} if stored is None else {"logo": stored["logo_id"], "logo_dark": stored["logo_dark_id"]}
         for field in ("logo", "logo_dark"):
             file_id = getattr(self, f"{field}_id")
-            if file_id is not None and not images.filter(pk=file_id).exists():
+            changed = field not in stored_logos or file_id != stored_logos[field]
+            if file_id is not None and changed and not images.filter(pk=file_id).exists():
                 errors[field] = LOGO_MESSAGE
         if errors:
             raise ValidationError(errors)
@@ -407,7 +424,9 @@ class BrandKit(HistoryMixin, AngeeDataModel, concrete=True):
         is lightened first, then a text colour that would read less moves the least
         toward the scheme's ink that reads. Plain values, keyed ``"light"`` and
         ``"dark"``, then by role, every colour ``#rrggbb`` in lower case: nothing
-        depends on a request.
+        depends on a request. A seed stored past validation (an ORM write that
+        skips ``full_clean``) raises ``ValidationError``; it never comes back as
+        written.
         """
 
         return {
@@ -441,8 +460,9 @@ class BrandKit(HistoryMixin, AngeeDataModel, concrete=True):
 
         dark_ink, light_ink = TEXT_INKS
         black, white = "#000000", "#ffffff"
-        brand, neutral = self.brand.lower(), self.neutral.lower()
-        canvas, surface = self.canvas.lower(), self.surface.lower()
+        brand, neutral, canvas, surface = (
+            _parsed_seed(seed) for seed in (self.brand, self.neutral, self.canvas, self.surface)
+        )
         return {
             MailScheme.LIGHT: _scheme_colors(
                 canvas=canvas,

@@ -23,9 +23,13 @@ def connect() -> None:
 
 
 def refuse_default_delete(sender: Any, instance: BrandKit, *, origin: Any, **kwargs: Any) -> None:
-    """Refuse a delete :meth:`BrandKit.delete_blocker` refuses; a direct delete rereads its possibly stale row."""
+    """Refuse a delete :meth:`BrandKit.delete_blocker` refuses, judging the row as locked for the delete.
 
-    current = type(instance)._base_manager.filter(pk=instance.pk).first() if origin is instance else instance
+    Every origin rereads through :meth:`~angee.base.models.base.AngeeModel.lock_for_delete`,
+    so a delete racing a change of default waits for it and judges the committed flag.
+    """
+
+    current = instance.lock_for_delete()
     if current is None:
         return
     if blocker := current.delete_blocker(cascaded=not starts_delete(instance, origin)):
