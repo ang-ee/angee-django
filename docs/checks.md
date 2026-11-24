@@ -309,7 +309,18 @@ that loses rows cannot pass. The
 [console document ceilings](../tests/native_graphql_document_budgets.py) pin the
 console app's inbox, transcript, person, projects and current-user reads for a
 platform admin and a member, each after one warm execution, in the
-[composed examples host](../tests/test_composed_examples.py) on SQLite.
+[composed examples host](../tests/test_composed_examples.py) on SQLite. The same
+profile requires the same statements for more rows, and, under
+[`ANGEE_REBAC_READ_THROUGH_PARENT`](backend/guidelines.md#reading-through-the-parent),
+the same data in no more statements, with exactly the children `READ_WITH_PARENT`
+names read with their parent rows and still no statement per row; the
+[read-through edges](../tests/native_read_through_parent.py) pin every edge along which
+REBAC delivers a child's `read` on the composed policy, as `rebac.structural.edges` lists
+them (in the library release that carries it), and the fields that read one,
+and compare, off and on, each pinned field whose type a root lists and each pinned
+resolver, require the deliveries they pin, keep withheld children withheld along the
+edges REBAC refuses, and fail any switch-on test in which REBAC delivers along an edge
+no pinned field reads.
 
 PostgreSQL 17 planner gates use the same shared query-support owner's
 `capture_planner_memory`, preserving SQL parameters for `EXPLAIN (MEMORY)` without

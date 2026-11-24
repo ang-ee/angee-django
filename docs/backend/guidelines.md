@@ -1051,6 +1051,74 @@ data through REBAC, never a queryset bypass.
   packages whose last `permissions.zed` disappeared. `--force-overwrite` remains
   a separate explicit choice for replacing locally managed live policy.
 
+### Reading through the parent
+
+`ANGEE_REBAC_READ_THROUGH_PARENT` (default `False`) reads a relation field's children
+with their admitted parent rows instead of by their own permission statement.
+[Base autoconfig](../../src/angee/base/autoconfig.py) derives REBAC's
+`REBAC_STRUCTURAL_PREFETCH` from it, as the boolean `True`, unless the project sets that
+itself; the environment variable of the same name (`true`, `1`) overrides the project
+setting. It derives nothing else: off, every statement is what it is without it.
+
+- **What is read with the parent.** A prefetch's children are read by the foreign key
+  that names their admitted parents, with no permission statement, where REBAC proves
+  that holding the action the parents were admitted under grants the children's `read`
+  (`rebac.structural`): a message admitted under `read_inbox` delivers its parts, whose
+  `read` is `message->read`. The rows are the ones the statement would return and keep
+  their actor, so field gates apply. Nobody sees more.
+- **The edges.** [`tests/native_read_through_parent.py`](../../tests/native_read_through_parent.py)
+  pins the 80 foreign keys and one-to-one fields, parent links included, along which REBAC
+  delivers a child's `read`, the action relation fields read children under, on the
+  composed policy, each with the parent permissions that deliver it, as REBAC lists them
+  (`rebac.structural.edges`, in the library release that carries it), and the fields that
+  read those children from a parent row: on the schema, or in a resolver's own prefetch
+  (`RESOLVER_PREFETCHES`, found by reading every prefetch over a pinned relation). 22 edges
+  are read by a field, 58 by none. A policy, REBAC or schema change that moves either fails
+  there until someone has looked.
+- **What the composed tests compare.** The differential reads the 56 pinned fields whose
+  type a root lists, and the pinned resolvers (the other 7 fields are on types read only
+  through other types; 9 of the 56 read no parent, each named with why), as a platform
+  admin, a member who owns the rows and an actor granted one parent of each kind alone
+  (no administrator, and fewer conversations than their owner), with the switch off and
+  on. It requires the same data; the 16 edges `GRAPHQL_DELIVERED` names delivered to every
+  actor, their children read with no permission statement with the switch on and by it
+  off; and the other 6 a field reads named with why they are never delivered. Along the
+  three edges REBAC refuses because a child can be withheld from its parent's reader (a
+  trashed message under its thread, an extraction part whose source the reader may not
+  read, a relationship naming the party as its other side), a seeded withheld child stays
+  withheld with the switch on and no statement changes; a stored override stops every
+  delivery. Of the console documents, the transcript reads a message's parts and
+  reactions with it and the selected message its parts, stars and participants
+  ([`READ_WITH_PARENT`](../../tests/native_graphql_document_budgets.py)).
+- **Adding a prefetch.** A `prefetch_related` over one of the pinned edges on an
+  actor-scoped queryset is delivered with the switch on whether or not a test compares
+  it. Pin the field that runs it (`EDGE_FIELDS`, or `RESOLVER_PREFETCHES` for a
+  resolver's own) and seed its children so the differential reads it. Every composed test
+  that turns the switch on fails when REBAC delivers along an edge no pinned field reads,
+  but only for the documents those tests read.
+- **What it needs from REBAC.** Structural prefetch exists since REBAC 0.36.0. Releases
+  0.36.0 to 0.37.0 deliver children their own statement withholds: below a parent
+  admitted at the depth limit of a recursion (on the composed policy, a folder's
+  subfolders, `storage.Folder.parent`), on another database than the parents were read
+  from, and while a recaveat override is stored. Never turn the switch on with them.
+  With those fixed and nothing more, REBAC delivers a child only below a parent admitted
+  under exactly the action its arm names, and the console admits messages under
+  `read_inbox`: no console document reads a child with its parent. That needs a REBAC
+  that proves one action implies another (`rebac.structural.implies`).
+- **What keeps its statement.** A child whose `read` does not follow the parent's action:
+  a party's handles, addresses, relationships and circle memberships follow
+  `party->role_read`, which `read` does not imply, and are read below a person row while
+  their foreign key names the party; tag assignments are an intersection over a generic
+  key. So does a child read outside a prefetch of admitted parents (a resolver's own
+  lookup, keyset pages, a system queryset such as a round's roster), a sliced or combined
+  child query, and every child while the policy carries an override.
+  `rebac.structural.explain(...)`, where REBAC has it, says why an edge is refused.
+- **Consistency.** Delivered children are read by their own statement moments after
+  their parents, in the same request. Under READ COMMITTED a parent whose grant is
+  revoked between the two statements still delivers them; inside one repeatable-read
+  snapshot both read the same data, each at its own instant, so a deadline (a grant's
+  expiry, a caveat that reads the time) can fall between them.
+
 ## Pitfalls
 
 Recurring failure modes, grouped by the owner to inspect. Follow the code links

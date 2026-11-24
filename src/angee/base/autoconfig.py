@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
+import environ
+
 from angee.base.origins import public_origin
 from angee.base.paths import resolve_path
 
@@ -30,6 +32,7 @@ _Settings = TypedDict(
         "REBAC_FIELD_READ_MODE": str,
         "REBAC_ALLOW_SUDO": bool,
         "REBAC_SUPERUSER_BYPASS": bool,
+        "ANGEE_REBAC_READ_THROUGH_PARENT": bool,
         "ANGEE_PUBLIC_ORIGIN": str,
     },
 )
@@ -60,6 +63,9 @@ SETTINGS: _Settings = {
     "REBAC_ALLOW_SUDO": True,
     # Administrator reach is expressed in schema relations, so every actor uses grants.
     "REBAC_SUPERUSER_BYPASS": False,
+    # Children read with their admitted parent rows, by REBAC's structural prefetch
+    # (`settings` below): off, every relation a read loads keeps its permission statement.
+    "ANGEE_REBAC_READ_THROUGH_PARENT": False,
     # The deployment's public browser origin (`https://host`, no path), fed by the
     # ANGEE_PUBLIC_ORIGIN environment variable the stack sets. A valid one joins
     # the CSRF trusted origins, and owners that build links without a request
@@ -72,6 +78,7 @@ _DerivedSettings = TypedDict(
     "_DerivedSettings",
     {
         "REBAC_DEPTH_LIMIT": int,
+        "REBAC_STRUCTURAL_PREFETCH": bool,
         "ALLOWED_HOSTS": list[str],
         "ANGEE_DATA_DIR": Path,
         "STATIC_ROOT": Path,
@@ -89,6 +96,17 @@ def settings(namespace: Mapping[str, Any]) -> _DerivedSettings:
     joins ``CSRF_TRUSTED_ORIGINS`` when it is a valid public origin
     (:func:`angee.base.origins.public_origin`); ``angee.E051`` reports one that
     is not.
+
+    ``ANGEE_REBAC_READ_THROUGH_PARENT``, authored or from the environment (``true``,
+    ``1``), turns on REBAC's ``REBAC_STRUCTURAL_PREFETCH`` as the boolean ``True``
+    unless the project sets that itself; nothing else follows from it. REBAC 0.36.0
+    to 0.37.0 deliver children their own statement withholds (below a parent
+    admitted at a recursion's depth limit, on another database, under a recaveat
+    override): never turn the switch on with them. A REBAC with those fixes alone
+    delivers no child to the console's documents, which admit messages under
+    ``read_inbox``; that needs one that proves one action implies another
+    (``rebac.structural.implies``). The backend guidelines' "Reading through the
+    parent" says what is delivered.
     """
 
     data = resolve_path(namespace.get("ANGEE_DATA_DIR", resolve_path(namespace["BASE_DIR"]) / ".angee" / "data"))
@@ -104,6 +122,8 @@ def settings(namespace: Mapping[str, Any]) -> _DerivedSettings:
         },
     })
     engine = databases.get("default", {}).get("ENGINE")
+    # Unset or None reads as off, as ``DEBUG`` does; a string is the environment's spelling.
+    through_parent = bool(environ.Env.parse_value(namespace.get("ANGEE_REBAC_READ_THROUGH_PARENT") or False, bool))
     derived: _DerivedSettings = {
         "ALLOWED_HOSTS": namespace.get("ALLOWED_HOSTS", ["*"] if namespace.get("DEBUG", False) else []),
         "ANGEE_DATA_DIR": data,
@@ -113,6 +133,7 @@ def settings(namespace: Mapping[str, Any]) -> _DerivedSettings:
         "REBAC_DEPTH_LIMIT": int(namespace.get(
             "REBAC_DEPTH_LIMIT", 8 if engine == "django.db.backends.sqlite3" else 16,
         )),
+        "REBAC_STRUCTURAL_PREFETCH": namespace.get("REBAC_STRUCTURAL_PREFETCH", through_parent),
     }
     origin = public_origin(namespace.get("ANGEE_PUBLIC_ORIGIN"), debug=bool(namespace.get("DEBUG", False)))
     if origin and origin not in namespace.get("CSRF_TRUSTED_ORIGINS", ()):

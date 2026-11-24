@@ -1,4 +1,4 @@
-"""The example consumer's own tests, notes ownership and console budgets on a host composing every addon."""
+"""The example consumer's tests, notes ownership, console budgets and read-through edges on a host of every addon."""
 
 from pathlib import Path
 
@@ -17,6 +17,13 @@ def test_composed_examples(tmp_path: Path, subtests: pytest.Subtests) -> None:
             "tests.native_notes_owner_campaign.NotesOwnerCampaign",
             "tests.native_graphql_document_budgets.ConsoleDocumentBudgetTests"
             ".test_console_reads_stay_within_their_fixed_ceilings",
+            "tests.native_graphql_document_budgets.ConsoleDocumentBudgetTests"
+            ".test_console_reads_issue_no_statement_per_row",
+            "tests.native_graphql_document_budgets.ConsoleDocumentBudgetTests"
+            ".test_console_reads_through_parent_issue_no_statement_per_row",
+            "tests.native_graphql_document_budgets.ConsoleDocumentBudgetTests"
+            ".test_console_reads_through_parent_return_the_same_data",
+            "tests.native_read_through_parent",
         ),
         postgresql=(
             "example.notes.tests.test_workflow_steps",

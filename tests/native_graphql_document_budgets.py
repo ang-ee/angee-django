@@ -8,18 +8,27 @@ seeded shape. Each read is measured after one warm execution, so process-wide
 caches filled by earlier test modules do not move the count.
 """
 
+import re
+from collections import Counter
 from datetime import UTC, date, datetime, timedelta
+from unittest.mock import patch
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
-from django.test import TransactionTestCase
+from django.test import TransactionTestCase, override_settings
 from rebac import actor_context, system_context
 
-from angee.base.testing.queries import capture_planner_memory, statement_startswith, supports_planner_memory
+from angee.base.testing.queries import (
+    capture_planner_memory,
+    statement_body,
+    statement_startswith,
+    supports_planner_memory,
+)
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import measure_graphql_document
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedRecipient
+from angee.storage.uploads import DownloadTokenSigner
 
 T0 = datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
 
@@ -382,6 +391,34 @@ ROW_DOCUMENTS = ("inbox", "transcript", "person", "projects", "selected", "conne
 ROW_SIZES = (2, 6)
 
 
+# ANGEE_REBAC_READ_THROUGH_PARENT with the library setting base autoconfig derives from it.
+READ_THROUGH_PARENT = {"ANGEE_REBAC_READ_THROUGH_PARENT": True, "REBAC_STRUCTURAL_PREFETCH": True}
+
+# document: the tables it reads with their parent rows under READ_THROUGH_PARENT, with no
+# permission statement, and no others: a message's parts, reactions, stars and participants are
+# its children through ``message->read``, which the inbox's ``read_inbox`` implies. The composed
+# policy's other deliverable edges are ``tests.native_read_through_parent``'s.
+READ_WITH_PARENT = {
+    "transcript": ("messaging_part", "messaging_reaction"),
+    "selected": ("messaging_part", "messaging_messagestar", "messaging_participant"),
+}
+
+
+SELECTED_TABLE = re.compile(r'SELECT (?:DISTINCT )?"(\w+)"\.')
+
+
+def table_reads(statements, *, scoped):
+    """The table each statement selects rows of, for the statements that carry permission SQL or for those that do not.
+
+    A field gate's probe (``... AS "pk", CASE WHEN ...``) selects no rows to return and is left out.
+    """
+
+    for sql in statements:
+        match = SELECTED_TABLE.match(statement_body(sql))
+        if match and ' AS "pk", CASE WHEN ' not in sql and ("rebac_" in sql) is scoped:
+            yield match.group(1)
+
+
 # SELECT count and total planner allocation rounded up to MiB, measured on PostgreSQL 17,
 # the CI server, with django-zed-rebac 0.37.0. Person's two audit
 # INSERTs keep its 21-statement document ceiling. PostgreSQL 18 allocates slightly less and
@@ -696,6 +733,52 @@ class ConsoleDocumentBudgetTests(TransactionTestCase):
         the same statements.
         """
 
+        self.assert_no_statement_per_row()
+
+    @override_settings(**READ_THROUGH_PARENT)
+    def test_console_reads_through_parent_issue_no_statement_per_row(self):
+        """Rows read with the rows that refer to them cost no statement per row either."""
+
+        from tests.native_read_through_parent import assert_read_by_pinned_fields, observed_deliveries
+
+        with observed_deliveries() as delivered:
+            self.assert_no_statement_per_row()
+        assert_read_by_pinned_fields(delivered)
+
+    def test_console_reads_through_parent_return_the_same_data(self):
+        """Under ANGEE_REBAC_READ_THROUGH_PARENT each read returns what it returns without it, in no more statements.
+
+        The children ``READ_WITH_PARENT`` names, and only those, lose their permission statement.
+        """
+
+        from tests.native_read_through_parent import assert_read_by_pinned_fields, observed_deliveries
+
+        actors = {"admin": self.admin, "member": self.member}
+        ids = {role: self.seed(actor, role) for role, actor in actors.items()}
+        schema = GraphQLSchemas.from_discovery().build("console")
+        # A file's download URL is signed for its five-minute window: both reads sign in one.
+        window = DownloadTokenSigner().timestamp()
+        for role, actor in actors.items():
+            for name, (document, variables) in self.documents(ids[role]).items():
+                with self.subTest(actor=role, document=name), patch.object(
+                    DownloadTokenSigner, "timestamp", return_value=window,
+                ):
+                    measure_graphql_document(schema, document, variables, actor=actor)
+                    off = measure_graphql_document(schema, document, variables, actor=actor)
+                    with override_settings(**READ_THROUGH_PARENT), observed_deliveries() as delivered:
+                        measure_graphql_document(schema, document, variables, actor=actor)
+                        on = measure_graphql_document(schema, document, variables, actor=actor)
+                    assert_read_by_pinned_fields(delivered)
+                    self.assertEqual(on.data, off.data)
+                    self.assertLessEqual(on.statements, off.statements)
+                    scoped = [Counter(table_reads(read.sql, scoped=True)) for read in (off, on)]
+                    plain = [Counter(table_reads(read.sql, scoped=False)) for read in (off, on)]
+                    delivered = {table for table in scoped[0] if scoped[1][table] < scoped[0][table]}
+                    self.assertEqual(delivered, set(READ_WITH_PARENT.get(name, ())))
+                    for table in delivered:
+                        self.assertGreater(plain[1][table], plain[0][table], table)
+
+    def assert_no_statement_per_row(self):
         users = get_user_model().objects
         schema = GraphQLSchemas.from_discovery().build("console")
         reads = {}

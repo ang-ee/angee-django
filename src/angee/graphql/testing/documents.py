@@ -97,12 +97,15 @@ class GraphQLDocumentRead:
     ``repeated`` counts the statements beyond the first of each statement text,
     bound values apart: a lookup issued once per row and a read asked twice both
     repeat a text, which a statement ceiling alone cannot tell from a new read.
+    ``sql`` keeps each statement's text, bound values apart, in execution order,
+    for classifying them (:mod:`angee.base.testing.queries`).
     """
 
     data: dict[str, Any] = field(repr=False)
     statements: int
     sql_bytes: int
     repeated: int = 0
+    sql: tuple[str, ...] = field(default=(), repr=False)
 
     def assert_ceiling(self, *, statements: int, repeated: int | None = None) -> None:
         """Fail when the read exceeds its fixed statement ceiling, or its repeated-text ceiling when given.
@@ -143,5 +146,5 @@ def measure_graphql_document(
         data = result_data(execute_schema(schema, document, variables, user=actor))
     sizes = [len(query["sql"].encode("utf-8")) for capture in captures for query in capture]
     return GraphQLDocumentRead(
-        data=data, statements=len(sizes), sql_bytes=sum(sizes), repeated=len(texts) - len(set(texts))
+        data=data, statements=len(sizes), sql_bytes=sum(sizes), repeated=len(texts) - len(set(texts)), sql=tuple(texts)
     )

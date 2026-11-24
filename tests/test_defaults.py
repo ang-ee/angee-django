@@ -77,3 +77,40 @@ def test_plain_native_composer_preserves_host_choices_without_capability_default
     assert namespace["ASGI_APPLICATION"] == "project.asgi.application"
     for name in ("MIDDLEWARE", "COMPOSE_INTEGRATIONS", "REBAC_STRICT_MODE", "ANGEE_CHANGESET_MODEL"):
         assert name not in namespace
+
+
+@pytest.mark.parametrize(
+    ("authored", "environment", "explicit", "structural"),
+    [
+        (None, None, {}, False),
+        ("unset", None, {}, False),
+        (True, None, {}, True),
+        (False, None, {}, False),
+        (None, "true", {}, True),
+        (None, "1", {}, True),
+        (True, "false", {}, False),
+        (True, "0", {}, False),
+        (True, None, {"REBAC_STRUCTURAL_PREFETCH": False}, False),
+        (None, None, {"REBAC_STRUCTURAL_PREFETCH": True}, True),
+    ],
+)
+def test_read_through_parent_derives_structural_prefetch_unless_the_project_sets_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    authored: bool | str | None, environment: str | None, explicit: dict[str, object], structural: bool,
+) -> None:
+    monkeypatch.setenv("DJANGO_COMPOSE_MODE", "write")
+    monkeypatch.delenv("ANGEE_REBAC_READ_THROUGH_PARENT", raising=False)
+    if environment is not None:
+        monkeypatch.setenv("ANGEE_REBAC_READ_THROUGH_PARENT", environment)
+    namespace = {
+        "__file__": str(tmp_path / "settings.py"), "INSTALLED_APPS": ["angee.base"],
+        "COMPOSE_OUTPUT_DIR": tmp_path / "runtime", **explicit,
+    }
+    if authored is not None:
+        # "unset" authors None, which reads as off.
+        namespace["ANGEE_REBAC_READ_THROUGH_PARENT"] = None if authored == "unset" else authored
+    configure(namespace)
+    # REBAC turns structural prefetch on for the boolean True alone.
+    assert namespace["REBAC_STRUCTURAL_PREFETCH"] is structural
+    # The switch derives nothing else: display rows stay REBAC's own default.
+    assert "REBAC_DISPLAY_FIELDS" not in namespace
