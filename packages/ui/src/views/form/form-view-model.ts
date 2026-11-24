@@ -25,9 +25,7 @@ import {
   type GroupDescriptor,
 } from "../page";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
-import {
-  REQUIRED_RULE, isStructuredPresenceField, structuredFieldErrors, textValue, type FieldRuleError,
-} from "./field-values";
+import { fieldRuleErrors, textValue } from "./field-values";
 import { fieldErrorsFromRules } from "./validation-errors";
 
 export type FormValues = Record<string, unknown>;
@@ -533,16 +531,18 @@ export function isFieldControlVisible(field: FieldDescriptor, values: FormValues
 }
 
 /**
- * A record form's errors for the rules its fields fail. A structured field, one with a presence
- * flag, a template or a bound (`isStructuredPresenceField`), answers to presence, nullability and
- * its constraints (a number's type, its bounds), and its `required` flag is not read; any other
- * field fails `required` when it is required and empty. It shares with a dialog's check
- * (`dialogRuleErrors`) how a structured field's failed rule is found (`structuredFieldErrors`)
- * and how a failed rule becomes an error with its message (`fieldErrorsFromRules`). They differ
- * in which fields they ask and how they read values: this one asks every field visible for
- * `values`, hidden and read-only ones included, counts `requiredFieldNames` as required outside
- * the structured branch, always checks a structured field's constraints, and reads dotted paths,
- * where an own key holding `undefined` is absent.
+ * A record form's errors for the rules its `fields` fail (the fields its save writes), each
+ * field's found by `fieldRuleErrors` and worded by `fieldErrorsFromRules`. As a dialog's check
+ * (`dialogRuleErrors`) does, it asks only the fields whose descriptor is shown for `values`
+ * (`isFieldControlVisible`: neither hidden nor conditionally excluded) and not read-only, and
+ * leaves the others to the server; a field in a section the form does not display is still asked.
+ * It differs from a dialog's check in four facts only: it reads read-only from the field as
+ * resolved for `values` (its own flag, its `resolve`, its mode on a create or an edit), where a
+ * dialog also reads `readOnlyWhen`; it reads each value at its dotted path, where a dialog reads
+ * one flat key (both read an own key holding `undefined` as absent); it counts a field as required
+ * by its own flag or by `requiredFieldNames`, the model's required-on-create names, where a dialog
+ * counts the flag alone; and it always checks constraints, which a dialog may leave to a schema
+ * resolver.
  */
 export function formRuleErrors(
   values: FormValues,
@@ -550,15 +550,13 @@ export function formRuleErrors(
   requiredFieldNames: ReadonlySet<string>,
   t: UiTranslate,
 ): FieldErrors<FormValues> {
-  return fieldErrorsFromRules(visibleFields(fields, values).flatMap((field): readonly FieldRuleError[] => {
-    const value = dottedValue(values, field.name);
-    if (isStructuredPresenceField(field)) {
-      return structuredFieldErrors(field, value, hasDottedValue(values, field.name));
-    }
-    return (field.required || requiredFieldNames.has(field.name)) && isEmptyFieldValue(value)
-      ? [{ path: field.name, ...REQUIRED_RULE }]
-      : [];
-  }), t);
+  return fieldErrorsFromRules(visibleFields(fields, values)
+    .filter((field) => isFieldControlVisible(field, values) && !field.readOnly)
+    .flatMap((field) => fieldRuleErrors(
+      field,
+      { value: dottedValue(values, field.name), present: hasDottedValue(values, field.name) },
+      { required: Boolean(field.required) || requiredFieldNames.has(field.name), validateConstraints: true },
+    )), t);
 }
 
 export function visibleSections(
@@ -712,13 +710,6 @@ function emptyValue(field: FieldDescriptor): unknown {
   if (widget === "json" || widget === "object") return {};
   if (widget === "list" || widget === "rows") return [];
   return "";
-}
-
-function isEmptyFieldValue(value: unknown): boolean {
-  if (value == null) return true;
-  if (typeof value === "string") return value.trim() === "";
-  if (Array.isArray(value)) return value.length === 0;
-  return false;
 }
 
 function isNullableScalarWidget(field: FieldDescriptor): boolean {

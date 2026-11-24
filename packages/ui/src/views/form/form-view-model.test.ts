@@ -23,6 +23,7 @@ import {
   seedPreset,
   titleText,
   visibleFields,
+  withModeLockedFields,
   type PresetMemory,
 } from "./form-view-model";
 import { dialogRuleErrors } from "./MutationDialog";
@@ -303,10 +304,12 @@ test("a field's failed rule says the same thing in a record form as in a dialog"
     { name: "token", presenceRequired: true },
     { name: "remark", presenceRequired: true },
     { name: "title", required: true },
+    { name: "label", required: true, maxLength: 10 },
+    { name: "auth", kind: "object", objectTemplate: [{ name: "secret", required: true }] },
   ];
   const values = {
     slug: "a".repeat(65), cleared: "", nick: "", caption: "", handle: "", low: 2, high: 11, count: "",
-    tags: ["a"], limits: ["a", "b"], remark: null, title: " ",
+    tags: ["a"], limits: ["a", "b"], remark: null, title: " ", auth: {},
   };
   const expected = {
     slug: { type: "maxLength", message: "Enter no more than 64 characters." },
@@ -322,27 +325,57 @@ test("a field's failed rule says the same thing in a record form as in a dialog"
     token: required,
     remark: required,
     title: required,
+    label: required,
+    auth: { secret: required },
   };
   expect(formRuleErrors(values, ruleFields, new Set(), t)).toEqual(expected);
   expect(dialogRuleErrors(ruleFields, values, t)).toEqual(expected);
 });
 
-test.each<{ label: string; field: FieldDescriptor; values: Record<string, unknown>; recordForm: object; dialog: object }>([
-  {
-    label: "a hidden required field", field: { name: "token", required: true, hidden: true }, values: { token: "" },
-    recordForm: { token: required }, dialog: {},
-  },
-  {
-    label: "a read-only required field", field: { name: "code", required: true, readOnly: true }, values: { code: "" },
-    recordForm: { code: required }, dialog: {},
-  },
-])("$label is an expected difference between a record form and a dialog", ({ field, values, recordForm, dialog }) => {
-  expect(formRuleErrors(values, [field], new Set(), t)).toStrictEqual(recordForm);
-  expect(dialogRuleErrors([field], values, t)).toStrictEqual(dialog);
+test.each<[string, {
+  field: FieldDescriptor; values: Record<string, unknown>;
+  requiredFieldNames?: readonly string[]; validateConstraints?: boolean; recordForm: object; dialog: object;
+}]>([
+  [
+    "a hidden required field: neither a record form nor a dialog checks it, since the person cannot see it",
+    { field: { name: "token", required: true, hidden: true }, values: { token: "" }, recordForm: {}, dialog: {} },
+  ],
+  [
+    "a read-only required field: neither a record form nor a dialog checks it, since the person cannot change it",
+    { field: { name: "code", required: true, readOnly: true }, values: { code: "" }, recordForm: {}, dialog: {} },
+  ],
+  [
+    "a structured field the model requires on create: a record form counts it as required, and a dialog does not",
+    {
+      field: { name: "secret", maxLength: 64 }, values: {}, requiredFieldNames: ["secret"],
+      recordForm: { secret: required }, dialog: {},
+    },
+  ],
+  [
+    "guard: a value breaking a bound: a record form refuses it, and a dialog with a schema resolver leaves it to that resolver",
+    {
+      field: { name: "code", maxLength: 2 }, values: { code: "abc" }, validateConstraints: false,
+      recordForm: { code: { type: "maxLength", message: "Enter no more than 2 characters." } }, dialog: {},
+    },
+  ],
+])("%s", (_label, { field, values, requiredFieldNames = [], validateConstraints, recordForm, dialog }) => {
+  expect(formRuleErrors(values, [field], new Set(requiredFieldNames), t)).toStrictEqual(recordForm);
+  expect(dialogRuleErrors([field], values, t, validateConstraints)).toStrictEqual(dialog);
 });
 
-test.fails("defect: a dialog says a bounded optional field is required when its value is an own key holding undefined; it should say nothing", () => {
+test("a dialog reads an own key holding undefined as absent, as a record form does: a bounded optional field holding one fails no rule", () => {
   expect(dialogRuleErrors([{ name: "nickname", maxLength: 64 }], { nickname: undefined }, t)).toStrictEqual({});
+  expect(formRuleErrors({ nickname: undefined }, [{ name: "nickname", maxLength: 64 }], new Set(), t)).toStrictEqual({});
+});
+
+test("guard: a record form leaves out a field read-only as resolved for its values: by its own flag, its resolve, or its mode", () => {
+  const fields = withModeLockedFields([
+    { name: "title", required: true },
+    { name: "code", required: true, readOnly: true },
+    { name: "slug", required: true, resolve: () => ({ readOnly: true }) },
+    { name: "kind", required: true, createOnly: true },
+  ], false);
+  expect(formRuleErrors({ title: "", code: "", slug: "", kind: "" }, fields, new Set(), t)).toStrictEqual({ title: required });
 });
 
 describe("dotted form fields", () => {
@@ -461,6 +494,10 @@ describe("dotted form fields", () => {
     expect(formRuleErrors({ summary: "" }, [optional], new Set(), t)).toEqual({
       summary: { type: "minLength", message: "Enter at least 2 characters." },
     });
+    // A field that is presence-required without `required` holds the same rule.
+    const presenceOnly = presenceFields.map(({ required: _required, ...field }) => field);
+    expect(formRuleErrors({ title: " ", items: [] }, presenceOnly, new Set(), t)).toEqual({});
+    expect(formRuleErrors({ title: "" }, presenceOnly, new Set(), t)).toEqual({ items: required });
   });
 
   test("submits nested config through its writable root and nested dirty state", () => {

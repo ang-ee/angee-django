@@ -49,6 +49,7 @@ import {
   formRuleErrors,
   hiddenDraftPaths,
   hiddenResetWrites,
+  isFieldControlVisible,
   missingDraftValues,
   mutationData,
   recordToValues,
@@ -411,9 +412,10 @@ export function useFormViewSave({
     defaultValues: emptyValues,
     shouldUnregister: false,
     resolver: (formValues) => {
-      const errors = formRuleErrors(formValues, formFields, requiredFieldNames, t);
+      // The check asks the fields the save writes for this record.
+      const errors = formRuleErrors(formValues, saveFields, requiredFieldNames, t);
       validateFields(formValues, (name, error) => set(errors, name, error));
-      markMemberErrors(errors, visibleFields(formFields, formValues));
+      markMemberErrors(errors, visibleFields(saveFields, formValues));
       return Object.keys(errors).length
         ? { values: {}, errors }
         : { values: formValues, errors: {} };
@@ -573,12 +575,18 @@ export function useFormViewSave({
   );
   const readSubmitResult = React.useCallback((result: FormSubmitResult<Row | FormSubmitAcknowledgement>) => {
     if (!mounted.current) return null;
+    // Every refused field's message is set at its path, so a control a page renders itself shows
+    // it; the summary calls highlighted only the save's fields whose descriptor is neither hidden
+    // nor excluded by its condition (one in a section the form does not display among them), and
+    // gives any other its own message.
+    const values = form.getValues();
+    const shown = visibleFields(saveFields, values).filter((field) => isFieldControlVisible(field, values));
     return applyFormErrors(form, result, {
-      fieldNames: [...fieldByName.keys(), ...(linesField ? [linesField] : [])],
+      fieldNames: [...shown.map((field) => field.name), ...(linesField ? [linesField] : [])],
       fieldSummary: (errors) => fieldValidationSummary(errors, fieldByName, t),
       fallback: t("form.genericSaveError"),
     }) ? null : result;
-  }, [fieldByName, form, linesField, t]);
+  }, [fieldByName, form, linesField, saveFields, t]);
   const commitSavedRecord = React.useCallback(
     (saved: Row, options: {
       submitted?: FormValues;
