@@ -2195,7 +2195,9 @@ def test_channel_sync_lands_threads_parts_and_attachments(
     assert attachment.file.filename == attachment.name
     assert attachment.file.size_bytes == len(b"AGREED TERMS")
 
-    assert Participant._base_manager.filter(message=reply).count() == 2  # from + to
+    # The sender is the message's own; its one participant is the recipient.
+    assert list(Participant._base_manager.filter(message=reply).values_list("role", flat=True)) == ["to"]
+    assert Handle._base_manager.get(pk=reply.sender_id).value == "bob@example.com"
 
     channel.refresh_from_db()
     assert current_stream(channel, "messages", "INBOX").cursor == {"uidvalidity": 100, "last_uid": 3}

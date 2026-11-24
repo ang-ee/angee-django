@@ -645,6 +645,60 @@ def test_related_relations_authorize_both_endpoints_and_keep_reply_provenance():
         assert inbox.relation_kinds() == ["quote", "reply"]
 
 
+@pytest.mark.parametrize("from_row", [False, True], ids=["sender", "sender-and-from-row"])
+def test_related_participants_list_the_message_sender_then_its_recipients_once(from_row):
+    owner = User.objects.create_user(username="explorer-participants")
+    other = User.objects.create_user(username="explorer-participants-hidden")
+    channel = make_integration(owner.username, model=Channel, owner=owner)
+    with system_context(reason="seed message envelopes"):
+        ada, bob = (
+            Handle._base_manager.create(created_by=owner, platform="email", value=f"{name}@example.com",
+                                        display_name=name.title())
+            for name in ("ada", "bob")
+        )
+        hidden = Handle._base_manager.create(created_by=other, platform="email", value="hidden@example.com")
+        message, unattributed = (
+            Message._base_manager.create(
+                channel=channel, created_by=owner, sender=sender, status="synced", direction="inbound", sent_at=T0,
+            )
+            for sender in (ada, hidden)
+        )
+        to, cc = (
+            Participant._base_manager.create(created_by=owner, message=message, handle=handle, role=role)
+            for handle, role in ((bob, "to"), (hidden, "cc"))
+        )
+        for minutes, row in enumerate((to, cc)):
+            Participant._base_manager.filter(pk=row.pk).update(created_at=T0 + timedelta(minutes=minutes))
+        if from_row:
+            for row in (message, unattributed):
+                Participant._base_manager.create(created_by=owner, message=row, handle=row.sender, role="from")
+    with actor_context(owner):
+        inbox = Message.objects.all().explorer()
+        related = InboxRelated(inbox, f"participants:{message.sqid}")
+        assert (related.summary().label, related.summary().count) == ("Participants", 3)
+        page = related.page(oldest=True)
+        assert [(row.id, row.label, row.role, row.handle) for row in page.rows] == [
+            (f"sender:{message.sqid}", "Ada", "from", ada),
+            (str(to.sqid), "Bob", "to", bob),
+            (str(cc.sqid), "Unavailable identity", "cc", None),
+        ]
+        assert (page.count, page.message_count) == (3, 3)
+        # The sender leads either order; the recipients' window shifts past it.
+        assert [row.id for row in related.page().rows] == [f"sender:{message.sqid}", str(cc.sqid), str(to.sqid)]
+        assert [[row.id for row in related.page(page=number, size=1).rows] for number in (1, 2, 3, 4)] == [
+            [f"sender:{message.sqid}"], [str(cc.sqid)], [str(to.sqid)], [],
+        ]
+        for text, expected in (("ada", f"sender:{message.sqid}"), ("bob", str(to.sqid))):
+            searched = related.page(text=text)
+            assert ([row.id for row in searched.rows], searched.count, searched.message_count) == ([expected], 1, 3)
+        # An unreadable sender is listed without its identity and never matches a search.
+        hidden_sender = InboxRelated(inbox, f"participants:{unattributed.sqid}")
+        assert [(row.id, row.label, row.handle) for row in hidden_sender.page().rows] == [
+            (f"sender:{unattributed.sqid}", "Unavailable identity", None),
+        ]
+        assert hidden_sender.page(text="hidden").count == 0
+
+
 def test_unreadable_thread_is_not_exposed_as_a_group():
     owner = User.objects.create_user(username="explorer-readable")
     other = User.objects.create_user(username="explorer-hidden-thread")

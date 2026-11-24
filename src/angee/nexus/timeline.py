@@ -79,7 +79,10 @@ class CorrespondenceKind(TimelineKind):
         ))), message.authorship()[1]) for message in rows}
 
     def records(self, row: Any) -> Iterable[RecordIdentity]:
-        """Find concerned records with SQL membership, without hydrating a message fan-out."""
+        """Find concerned records with SQL membership, without hydrating a message fan-out.
+
+        A message concerns the parties of its ``Message.sender`` and of its recipients.
+        """
         message = apps.get_model("messaging", "Message")
         party = apps.get_model("parties", "Party")
         label = row._meta.concrete_model._meta.label
@@ -102,8 +105,11 @@ class CorrespondenceKind(TimelineKind):
                 parties = party.objects.filter(pk__in=(row.pk, row.canonical().pk))
             return self._records(parties)
         involved = messages.order_by().values("pk")
+        senders = messages.order_by().values("sender_id")
         return self._records(party.objects.canonical().filter(
-            models.Q(handles__participations__message__in=involved)
+            models.Q(handles__in=senders)
+            | models.Q(handles__merged_from__in=senders)
+            | models.Q(handles__participations__message__in=involved)
             | models.Q(handles__merged_from__participations__message__in=involved),
         ).distinct())
 
