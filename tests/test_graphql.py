@@ -23,6 +23,7 @@ from django.test.utils import isolate_apps
 from django_choices_field import IntegerChoicesField
 from graphql import GraphQLEnumType, GraphQLError, GraphQLObjectType, get_named_type
 from rebac import (
+    CheckResult,
     MissingActorError,
     PermissionDenied,
     RebacMixin,
@@ -305,10 +306,17 @@ def test_hasura_write_backend_decodes_public_relations_through_write_owner(
 def test_hasura_write_backend_create_delegates_prepared_insertion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Hasura only decodes public IDs before native preparation and insertion, in one transaction."""
+    """Hasura decodes public IDs and decides the create before native preparation and insertion, in one transaction."""
 
     related = SimpleNamespace(pk=7)
     created: dict[str, Any] = {}
+    decided: list[tuple[Any, str]] = []
+
+    def fake_check_save(self: GatedWriteThing, **kwargs: Any) -> CheckResult:
+        del kwargs
+        assert not created, "the create is decided before the resolver validates and inserts"
+        decided.append((self.owner_id, self.name))
+        return CheckResult.has()
 
     def fake_require_instance_for_id(
         model: type[models.Model],
@@ -335,11 +343,13 @@ def test_hasura_write_backend_create_delegates_prepared_insertion(
 
     monkeypatch.setattr(hasura_data, "require_instance_for_id", fake_require_instance_for_id)
     monkeypatch.setattr(hasura_data.mutation_resolvers, "create", fake_create)
+    monkeypatch.setattr(GatedWriteThing, "check_save", fake_check_save)
 
     backend = AngeeHasuraWriteBackend(GatedWriteThing, public_id_fields=("owner",))
 
     result = backend.create(cast(Any, SimpleNamespace()), {"owner": "pub-owner", "name": "Row"})
 
+    assert decided == [(related.pk, "Row")]
     assert result is created["row"]
     assert not result.is_sudo()
 

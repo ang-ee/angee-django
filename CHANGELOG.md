@@ -10,6 +10,23 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.graphql`: **Changed behaviour.** A generic insert
+  (`insert_<resource>_one`, and the insert a resource's form submits) decides the
+  create permission before it validates the row. `AngeeHasuraWriteBackend`
+  prepares the candidate as strawberry-django's resolver does and asks REBAC for
+  the verdict the row's save would reach (`check_save`), which sees what the
+  model's `save()` sets, such as a defaulted owner or scope. A caller that verdict
+  refuses gets the save's own `PermissionDenied`, and no field validator,
+  `clean()`, uniqueness check or constraint check runs for them; before, the row
+  was validated first. A caller who may create gets the same validation errors as
+  before, and the row still persists through its manager's `create()` and its
+  queryset's `insert()`. A `ValidationError` a model's `save()` raises before its
+  gates now comes ahead of the field validation errors. A default the create
+  permission reads must be set in `save()`: the decision rehearses `save()`, not
+  `clean()`. An admitted insert rehearses its save once more than before. Inserts
+  whose write backend overrides `_create_row` with a model factory keep that
+  factory's own order.
+
 - `@angee/ui`: **Changed behaviour.** A record form decides in one place which of
   its declared groups it displays for a record, and its fields are its own and
   those groups' fields. `formDisplaysGroup` (`form-view-model.ts`) holds the three

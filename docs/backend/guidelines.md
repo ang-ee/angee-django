@@ -1836,15 +1836,20 @@ open fresh evaluator scopes for authorization and change-feed reads.
   `extensions.validationErrors` (keys follow the schema naming, snake_case on Hasura resources), but GraphQL input-coercion errors
   fire before resolvers and never reach it, so guard required inputs client-side
   from `rootFields.requiredCreateFields`.
-- **Create writes validate the final input contract.** `hasura_model_resource`
-  creation prepares one instance and `full_clean`s it before persistence; the
-  locked Strawberry version then persists through `manager.create(**kwargs)`, so
-  the prepared instance is not the saved instance. Model and input defaults must
-  agree: required fields and defaults come from the final input contract, never
-  a second list in a consumer form; model-owned defaults belong in `clean()` and
-  `save()` ([`Cadence`](../../src/angee/nexus/models.py)); a required field
-  that `clean()` defaults declares `blank=True` so field validation defers to
-  that owner while the column stays non-null; and an optional create-input field
+- **Create writes are decided, then validate the final input contract.**
+  `hasura_model_resource` creation prepares one instance, decides it by
+  rehearsing its `save()` through REBAC's gates (`check_save`), and only then
+  `full_clean`s it before persistence: a caller who may not create the row gets
+  the save's refusal, and no validator runs or answers for them. A default the
+  create permission reads is set by `save()`, which the decision sees, not only
+  by `clean()`, which it does not. The locked Strawberry version then persists
+  through `manager.create(**kwargs)`, so the prepared instance is not the saved
+  instance. Model and input defaults must agree: required fields and defaults
+  come from the final input contract, never a second list in a consumer form;
+  model-owned defaults belong in `clean()` and `save()`
+  ([`Cadence`](../../src/angee/nexus/models.py)); a required field that
+  `clean()` defaults declares `blank=True` so field validation defers to that
+  owner while the column stays non-null; and an optional create-input field
   over a non-null column defaults to `strawberry.UNSET`, never `None`. Factory
   invariants shared by ORM and GraphQL creation belong on the queryset's
   cooperative `insert()`, which ordinary `create()` composes; creation that needs

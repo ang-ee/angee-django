@@ -22,7 +22,7 @@ from django.db.models.expressions import BaseExpression, Combinable, CombinedExp
 from django.db.models.fields.reverse_related import ForeignObjectRel
 from django.db.models.functions import Cast, Concat
 from django.db.models.lookups import Exact, In
-from rebac import PermissionDenied, RebacMixin
+from rebac import PermissionDenied, RebacMixin, RebacTrackedMixin
 from rebac.graphql.strawberry_django import optimize
 from rebac.managers import RebacQuerySet
 from strawberry.extensions import FieldExtension
@@ -212,7 +212,9 @@ class AngeeHasuraWriteBackend:
     ``strawberry-django-hasura`` owns the Hasura mutation envelope. This class
     owns the Angee write semantics inside that envelope: Django validation,
     REBAC row-scoped write targets, model save/delete signals, and returning a
-    deleted instance in Hasura's ``delete_<res>_by_pk`` shape.
+    deleted instance in Hasura's ``delete_<res>_by_pk`` shape. Every write is
+    decided before it is validated: an update, a save and a delete on the
+    target's own permission, an insert on the verdict its save would reach.
 
     Values for input-extension fields that are not model fields never reach
     strawberry-django, which would ignore them: each write persists the row,
@@ -352,9 +354,31 @@ class AngeeHasuraWriteBackend:
             return instance
 
     def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
-        """Create one row through strawberry-django's resolver and native manager."""
+        """Create one row through strawberry-django's resolver and native manager, once its save is admitted.
+
+        The resolver validates (``full_clean``) before the manager's ``insert``
+        reaches REBAC's create gate in ``save()``, so the create is decided
+        first: the row the manager would build from the resolver's prepared
+        values is rehearsed through its own ``save()`` and gates
+        (``check_save``), which sees what that save sets (an owner, a scope, a
+        user it defaults). A caller the gate refuses gets the save's own
+        refusal, and none of the row's validators runs. A ``ValidationError``
+        the model's ``save()`` raises before its gates is the save's own answer
+        and propagates, as it would from the save.
+        """
 
         decoded_data = self._decode_public_id_fields(data)
+        _prepared, values, _m2m = mutation_resolvers.prepare_create_update(
+            info=info,
+            instance=self.model(),
+            data=decoded_data,
+            key_attr=PUBLIC_ID_FIELD_NAME,
+        )
+        candidate = self.model(**values)
+        if isinstance(candidate, RebacTrackedMixin):
+            verdict = candidate.check_save()
+            if not verdict.allowed:
+                raise PermissionDenied(verdict.reason)
         return mutation_resolvers.create(
             info,
             self.model,

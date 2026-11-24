@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 import strawberry
 import strawberry_django
+from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from rebac import (
     PermissionDenied,
     RelationshipTuple,
+    actor_context,
     system_context,
     to_object_ref,
     to_subject_ref,
@@ -23,7 +27,7 @@ from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_reso
 from angee.graphql.node import AngeeNode
 from angee.graphql.testing.documents import execute_schema, result_data
 from tests.conftest import create_platform_admin, create_user
-from tests.scopedemo.models import FactoryCompanion, FactoryDoc, ProjectionDoc, Scope, SharedDoc
+from tests.scopedemo.models import FactoryCompanion, FactoryDoc, ProjectionDoc, Scope, SharedDoc, ValidatedDoc
 
 
 @strawberry_django.type(FactoryDoc)
@@ -94,6 +98,33 @@ _SHARED_RESOURCE = hasura_model_resource(
     delete=False,
 )
 _SHARED_SCHEMA = strawberry.Schema(query=_SHARED_RESOURCE.query, mutation=_SHARED_RESOURCE.mutation)
+
+
+@strawberry_django.type(ValidatedDoc)
+class ValidatedDocType(AngeeNode):
+    """Public projection for a row whose validation waits for its create decision."""
+
+    title: strawberry.auto
+
+
+_VALIDATED_RESOURCE = hasura_model_resource(
+    ValidatedDocType,
+    model=ValidatedDoc,
+    name="validated_docs",
+    filterable=["id", "title"],
+    sortable=["title"],
+    aggregatable=["id"],
+    insertable=["title", "code"],
+    update=False,
+    delete=False,
+)
+_VALIDATED_SCHEMA = strawberry.Schema(query=_VALIDATED_RESOURCE.query, mutation=_VALIDATED_RESOURCE.mutation)
+_VALIDATED_INSERT = """
+mutation($title: String!, $code: String!) {
+  insert_validated_docs_one(object: {title: $title, code: $code}) { id }
+}
+"""
+_REFUSED_CALLERS = ("anonymous", "member")
 
 
 @pytest.mark.django_db
@@ -220,3 +251,101 @@ def test_hasura_create_uses_filtered_constant(eligible: bool) -> None:
         assert isinstance(result.errors[0].original_error, PermissionDenied)
         assert SharedDoc._base_manager.count() == 0
         assert not relationships.exists()
+
+
+def _refused_caller(caller: str) -> Any | None:
+    """Return the signed-in member without create, or ``None`` for an anonymous request."""
+
+    return None if caller == "anonymous" else create_user(f"validated-{caller}")
+
+
+def _insert_validated(user: Any | None, *, title: str, code: str) -> Any:
+    """Insert one validated document through the generic Hasura root as ``user``."""
+
+    return execute_schema(_VALIDATED_SCHEMA, _VALIDATED_INSERT, {"title": title, "code": code}, user=user)
+
+
+def _save_refusal(user: Any | None) -> str:
+    """The refusal the row's own save gives ``user``: the answer the insert has always ended with."""
+
+    with actor_context(user or AnonymousUser()), pytest.raises(PermissionDenied) as refused:
+        ValidatedDoc.objects.create(title="aaa", code="through-save")
+    return str(refused.value)
+
+
+def _refusal(result: Any) -> str:
+    """Return the insert's one error, asserting it is a REBAC refusal rather than a validation answer."""
+
+    assert result.errors is not None and len(result.errors) == 1, result.errors
+    error = result.errors[0].original_error
+    assert isinstance(error, PermissionDenied), repr(error)
+    return str(error)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("caller", _REFUSED_CALLERS)
+def test_hasura_create_refuses_before_any_validator_runs(caller: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A caller who may not create gets the save's refusal, and the row's validators never run."""
+
+    user = _refused_caller(caller)
+    spy = Mock(side_effect=ValidationError("Not a run of a.", code="invalid"))
+    monkeypatch.setattr(ValidatedDoc._meta.get_field("title"), "validators", [spy])
+
+    result = _insert_validated(user, title="refused", code="refused")
+
+    assert _refusal(result) == _save_refusal(user)
+    spy.assert_not_called()
+    assert ValidatedDoc._base_manager.count() == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("caller", _REFUSED_CALLERS)
+def test_hasura_create_refuses_a_pathological_value_without_matching_it(caller: str) -> None:
+    """A value that backtracks catastrophically in the row's validator is refused at once."""
+
+    user = _refused_caller(caller)
+
+    started = time.perf_counter()
+    result = _insert_validated(user, title="a" * 28 + "!", code="slow")
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 2.0, f"the refused insert ran for {elapsed:.1f}s"
+    assert _refusal(result) == _save_refusal(user)
+    assert ValidatedDoc._base_manager.count() == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("caller", _REFUSED_CALLERS)
+def test_hasura_create_refuses_before_uniqueness_and_constraints_answer(caller: str) -> None:
+    """A stored code and a broken check constraint give a refused caller no message, only the refusal."""
+
+    user = _refused_caller(caller)
+    with system_context(reason="test.validated_doc.stored_code"):
+        ValidatedDoc.objects.create(title="a", code="aaa")
+
+    result = _insert_validated(user, title="aaa", code="aaa")
+
+    assert _refusal(result) == _save_refusal(user)
+    assert list(ValidatedDoc._base_manager.values_list("code", flat=True)) == ["aaa"]
+
+
+@pytest.mark.django_db
+def test_hasura_create_validates_an_admitted_row_as_before(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A caller who may create still gets each field's own validation messages, then creates."""
+
+    admin = create_platform_admin("validated-admin")
+    with system_context(reason="test.validated_doc.stored_code"):
+        ValidatedDoc.objects.create(title="a", code="aaa")
+    title = ValidatedDoc._meta.get_field("title")
+    spy = Mock(wraps=title.validators[0])
+    monkeypatch.setattr(title, "validators", [spy])
+
+    result = _insert_validated(admin, title="b", code="aaa")
+
+    assert result.errors is not None and len(result.errors) == 1, result.errors
+    error = result.errors[0].original_error
+    assert isinstance(error, ValidationError)
+    assert sorted(error.message_dict) == ["code", "title"]
+    spy.assert_called_once_with("b")
+    created = result_data(_insert_validated(admin, title="aa", code="fresh"))["insert_validated_docs_one"]
+    assert ValidatedDoc._base_manager.get(sqid=created["id"]).title == "aa"
