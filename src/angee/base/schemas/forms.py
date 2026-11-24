@@ -139,16 +139,17 @@ class _ConfigFormSpecProjector:
 
         schema_type = schema.get("type")
         if schema_type in {"string", "integer", "number", "boolean"}:
-            constraints = (
-                {"minLength", "maxLength"}
+            # A tuple, not a set: the projection keeps the constraints in this order in every process.
+            constraints: tuple[str, ...] = (
+                ("minLength", "maxLength")
                 if schema_type == "string"
-                else {"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"}
+                else ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum")
                 if schema_type in {"integer", "number"}
-                else set()
+                else ()
             )
             self._reject_keywords(
                 schema,
-                _SCHEMA_COMMON_KEYS | {"type", "enum", "const", "format"} | constraints,
+                _SCHEMA_COMMON_KEYS | {"type", "enum", "const", "format"} | set(constraints),
                 path,
             )
             scalar_projection: dict[str, Any] = {"type": schema_type}
