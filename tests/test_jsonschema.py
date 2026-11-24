@@ -1,6 +1,9 @@
 """Shared declaration, validation and bounded JSON Schema algebra contracts."""
 
 import copy
+import os
+import subprocess
+import sys
 from typing import Any
 
 import pytest
@@ -466,3 +469,24 @@ def test_union_reuses_equal_contracts_and_checks_single_or_empty_alternatives():
     assert not validator(union_schema()).is_valid(None)
     with pytest.raises(ValidationError, match="reference"):
         union_schema({"$ref": "#/$defs/missing"})
+
+
+def test_a_form_spec_is_the_same_bytes_whatever_the_hash_seed():
+    """A field's constraints keep one order, so the spec a process emits never depends on its string hashing."""
+    program = (
+        "import json\n"
+        "from angee.base.schemas.forms import config_form_spec\n"
+        "schema = {'type': 'object', 'required': ['name'], 'properties': {\n"
+        "    'name': {'type': 'string', 'minLength': 1, 'maxLength': 64},\n"
+        "    'count': {'type': 'integer', 'minimum': 0, 'maximum': 9},\n"
+        "    'share': {'type': 'number', 'minimum': 0, 'maximum': 1}}}\n"
+        "print(json.dumps(config_form_spec(schema, owner='Probe')))\n"
+    )
+    specs = {
+        subprocess.run(
+            [sys.executable, "-c", program], env={**os.environ, "PYTHONHASHSEED": str(seed)},
+            capture_output=True, text=True, check=True,
+        ).stdout
+        for seed in range(8)
+    }
+    assert len(specs) == 1
