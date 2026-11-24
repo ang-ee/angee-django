@@ -402,20 +402,27 @@ def test_a_webform_channel_the_acting_user_cannot_read_is_refused_as_a_missing_o
     assert refusal(target.owner, target.sqid) is None
 
 
-@pytest.mark.parametrize("config", [
-    pytest.param({}, id="nothing"),
-    pytest.param({"channel": "int_1"}, id="no-slug"),
-    pytest.param({"slug": "enquiries"}, id="no-channel"),
-    pytest.param({"channel": "int_1", "slug": "Not A Slug"}, id="a-slug-that-is-no-slug"),
-    pytest.param({"channel": "int_1", "slug": "enquiries", "thread": "other"}, id="a-key-it-does-not-have"),
+@pytest.mark.parametrize(("config", "refused_at"), [
+    pytest.param({}, ["target_config.channel", "target_config.slug"], id="nothing"),
+    pytest.param({"channel": "int_1"}, ["target_config.slug"], id="no-slug"),
+    pytest.param({"slug": "enquiries"}, ["target_config.channel"], id="no-channel"),
+    pytest.param({"channel": "int_1", "slug": "Not A Slug"}, ["target_config.slug"], id="a-slug-that-is-no-slug"),
+    pytest.param(
+        {"channel": "int_1", "slug": "enquiries", "thread": "other"}, ["target_config.thread"],
+        id="a-key-it-does-not-have",
+    ),
 ])
-def test_a_form_is_refused_a_message_target_that_does_not_name_its_channel_and_slug(config: dict[str, Any]) -> None:
+def test_a_form_is_refused_a_message_target_that_does_not_name_its_channel_and_slug(
+    config: dict[str, Any], refused_at: list[str],
+) -> None:
+    """Each refusal is reported under the configuration's member, below ``target_config``."""
+
     form = Form(name="Enquiry form", target_class="message", target_config=config)
 
     with pytest.raises(ValidationError) as refused:
         form.clean()
 
-    assert "target_config" in refused.value.message_dict
+    assert sorted(refused.value.message_dict) == refused_at
 
 
 def test_the_bridge_registers_the_webform_backend_and_messaging_says_so_to_a_host_without_it() -> None:
