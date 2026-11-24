@@ -54,11 +54,14 @@ import {
   recordToValues,
   resolveField,
   seedPreset,
+  visibleFields,
   type FormValues,
   type LinesSeed,
 } from "./form-view-model";
 import { useSaveOperation } from "../resource/resource-operations";
-import { applyFormErrors, formSubmitError, savedFormSubmitResult, serverErrorsFromForm, type FormSubmitResult } from "./validation-errors";
+import {
+  applyFormErrors, formSubmitError, markMemberErrors, savedFormSubmitResult, serverErrorsFromForm, type FormSubmitResult,
+} from "./validation-errors";
 import { useUnsavedChangesNavigationGuard } from "./use-unsaved-changes-navigation-guard";
 import { useFormHistory, type FormHistory } from "./use-form-history";
 import { useFieldValidation, type FieldValidationForm, type FieldValidationMethods } from "./use-field-validation";
@@ -410,6 +413,7 @@ export function useFormViewSave({
     resolver: (formValues) => {
       const errors = formRuleErrors(formValues, formFields, requiredFieldNames, t);
       validateFields(formValues, (name, error) => set(errors, name, error));
+      markMemberErrors(errors, visibleFields(formFields, formValues));
       return Object.keys(errors).length
         ? { values: {}, errors }
         : { values: formValues, errors: {} };

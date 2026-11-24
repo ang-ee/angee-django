@@ -794,7 +794,13 @@ export function isCompositeFieldDescriptor(field: FieldDescriptor): boolean {
 /**
  * Exact-field messages stay bare. With a root path, descendants keep their full
  * dotted paths for nested routing; an empty root produces relative paths.
- * Omit the root to leave every message unprefixed.
+ * Omit the root to leave every message unprefixed. A bare value is a message only
+ * where React Hook Form puts message text: as an error given here, or inside a
+ * `types` subtree; anywhere else a child that is not an object is skipped. Under
+ * `type`, any value that is not an object is the library's own attribute (or
+ * `MEMBER_ERRORS`) and is skipped while an object is the error of a member named
+ * `type` and is walked as any member's, and `ref`, where the library keeps the
+ * registered control, is never walked, so a member named `ref` shows no message.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
@@ -802,7 +808,8 @@ export function fieldErrorMessages(errors: readonly unknown[], path?: string): s
   return errors.flatMap((error) => nestedFieldErrorMessages(error, path, path));
 }
 
-function nestedFieldErrorMessages(error: unknown, path?: string, rootPath?: string): string[] {
+/** `inTypes`: the error sits inside a `types` subtree, where a bare value is message text. */
+function nestedFieldErrorMessages(error: unknown, path?: string, rootPath?: string, inTypes = false): string[] {
   if (error == null) return [];
   if (typeof error !== "object") return [String(error)];
   const messages: string[] = [];
@@ -813,10 +820,12 @@ function nestedFieldErrorMessages(error: unknown, path?: string, rootPath?: stri
     messages.push(path && path !== rootPath ? `${path}: ${message}` : message);
   }
   return messages.concat(Object.entries(error).flatMap(([name, child]) => {
-    if (name === "ref" || name === "type" || child === undefined
+    const childInTypes = inTypes || name === "types";
+    if (name === "ref" || child === undefined || (name === "type" && typeof child !== "object")
+      || (typeof child !== "object" && !childInTypes)
       || (hasMessage && (name === "message" || name === "types"))) return [];
     const childPath = path === undefined ? undefined : path ? `${path}.${name}` : name;
-    return nestedFieldErrorMessages(child, childPath, rootPath);
+    return nestedFieldErrorMessages(child, childPath, rootPath, childInTypes);
   }));
 }
 

@@ -1034,3 +1034,244 @@ describe("ActionFormDialog", () => {
     expect(submit.mock.calls[0]?.[0]).toMatchObject({ documentIds: ["doc-2"] });
   });
 });
+
+describe("an object argument's member messages", () => {
+  // An object argument with a constrained member, beside a top-level text with the same rule.
+  const memberSpec = { type: "object", properties: {
+    retry: { type: "object", widget: "object", label: "Retry", properties: {
+      handle: { type: "string", label: "Handle", minLength: 3 },
+    } },
+    code: { type: "string", label: "Code", minLength: 3 },
+  } } as const;
+  const valid = { retry: { handle: "abc" }, code: "abc" };
+  const rule = "Enter at least 3 characters.";
+  const input = (label: string) => screen.getByLabelText(label) as HTMLInputElement;
+  const messageUnder = (label: string) => screen.getByText(label).closest('[data-layout="stack"]')?.textContent ?? "";
+  const tune = () => screen.getByRole<HTMLButtonElement>("button", { name: "Tune" });
+  // The change's validation runs after the event; a macrotask lets it settle before asserting what stays.
+  const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+  const definitions = {
+    "a definition without a resolver": () => ({ fields: deserializeFormSpec(memberSpec, defaultWidgets), defaultValues: valid }),
+    "a schema definition": () => jsonSchemaActionArgs(memberSpec, defaultWidgets, { initialValues: valid }),
+  };
+
+  test.each([["a top-level field", "Code"], ["a member", "Handle"]])(
+    "a definition without a resolver checks every change: %s edited to break its rule shows its message under it before any submit, the submit disabled, and corrected, the message goes and the submit is enabled",
+    async (_shape, label) => {
+      const submit = vi.fn().mockResolvedValue({ ok: true, message: "Tuned." });
+      renderDialog({ id: "tune", label: "Tune", submit, args: definitions["a definition without a resolver"]() });
+      await screen.findByLabelText("Handle");
+      await waitFor(() => expect(tune().disabled).toBe(false));
+
+      fireEvent.change(input(label), { target: { value: "ab" } });
+      await waitFor(() => expect(tune().disabled).toBe(true));
+      expect(await screen.findByText(rule)).toBeTruthy();
+      expect(messageUnder(label)).toContain(rule);
+      expect(input(label).getAttribute("aria-invalid")).toBe("true");
+      expect(submit).not.toHaveBeenCalled();
+
+      fireEvent.change(input(label), { target: { value: "abc" } });
+      await waitFor(() => expect(screen.queryByText(rule)).toBeNull());
+      expect(input(label).getAttribute("aria-invalid")).toBeNull();
+      await waitFor(() => expect(tune().disabled).toBe(false));
+      expect(submit).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each([["a top-level field", "Code"], ["a member", "Handle"]])(
+    "guard: a schema definition checks from the first submit: before it, %s that breaks only its rule shows no message and leaves the submit enabled",
+    async (_shape, label) => {
+      const submit = vi.fn();
+      renderDialog({ id: "tune", label: "Tune", submit, args: definitions["a schema definition"]() });
+      await screen.findByLabelText("Handle");
+
+      fireEvent.change(input(label), { target: { value: "ab" } });
+      await settle();
+      expect(screen.queryByText(rule)).toBeNull();
+      expect(input(label).getAttribute("aria-invalid")).toBeNull();
+      expect(tune().disabled).toBe(false);
+      expect(submit).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each<[string, string, Record<string, unknown>]>([
+    ["a top-level field", "Code", { ...valid, code: "ab" }],
+    ["a member", "Handle", { ...valid, retry: { handle: "ab" } }],
+  ])(
+    "a definition without a resolver opened with %s that already breaks its rule shows no message, its submit disabled, until the person edits that field",
+    async (_shape, label, defaultValues) => {
+      renderDialog({ id: "tune", label: "Tune", submit: vi.fn(), args: { fields: deserializeFormSpec(memberSpec, defaultWidgets), defaultValues } });
+      await screen.findByLabelText("Handle");
+      await settle();
+      expect(screen.queryByText(rule)).toBeNull();
+      expect(input(label).getAttribute("aria-invalid")).toBeNull();
+      expect(tune().disabled).toBe(true);
+
+      fireEvent.change(input(label), { target: { value: "a" } });
+      expect(await screen.findByText(rule)).toBeTruthy();
+      expect(messageUnder(label)).toContain(rule);
+      expect(input(label).getAttribute("aria-invalid")).toBe("true");
+      expect(tune().disabled).toBe(true);
+    },
+  );
+
+  test("a definition without a resolver checks an object field as one: editing one member shows a failing sibling member's message too, while a failing top-level field the person did not touch stays silent", async () => {
+    const pairSpec = { type: "object", properties: {
+      retry: { type: "object", widget: "object", label: "Retry", properties: {
+        handle: { type: "string", label: "Handle", minLength: 3 },
+        alias: { type: "string", label: "Alias", minLength: 3 },
+      } },
+      code: { type: "string", label: "Code", minLength: 3 },
+    } } as const;
+    renderDialog({ id: "tune", label: "Tune", submit: vi.fn(), args: {
+      fields: deserializeFormSpec(pairSpec, defaultWidgets), defaultValues: { retry: { handle: "abc", alias: "x" }, code: "ab" },
+    } });
+    await screen.findByLabelText("Alias");
+    await settle();
+    expect(screen.queryByText(rule)).toBeNull();
+    expect(tune().disabled).toBe(true);
+
+    fireEvent.change(input("Handle"), { target: { value: "abcd" } });
+    await waitFor(() => expect(messageUnder("Alias")).toContain(rule));
+    expect(input("Alias").getAttribute("aria-invalid")).toBe("true");
+    expect(messageUnder("Handle")).not.toContain(rule);
+    expect(input("Handle").getAttribute("aria-invalid")).toBeNull();
+    expect(messageUnder("Code")).not.toContain(rule);
+    expect(input("Code").getAttribute("aria-invalid")).toBeNull();
+    expect(screen.getAllByText(rule)).toHaveLength(1);
+    expect(tune().disabled).toBe(true);
+  });
+
+  test.each(Object.keys(definitions) as (keyof typeof definitions)[])(
+    "%s: after a blocked submit, an edit that still fails keeps the member's message, and correcting it lets the submit through",
+    async (kind) => {
+      const submit = vi.fn().mockResolvedValue({ ok: true, message: "Tuned." });
+      renderDialog({ id: "tune", label: "Tune", submit, args: definitions[kind]() });
+      await screen.findByLabelText("Handle");
+      fireEvent.change(input("Handle"), { target: { value: "ab" } });
+      fireEvent.submit(tune().closest("form")!);
+      expect(await screen.findByText(rule)).toBeTruthy();
+      expect(submit).not.toHaveBeenCalled();
+
+      fireEvent.change(input("Handle"), { target: { value: "a" } });
+      await settle();
+      expect(messageUnder("Handle")).toContain(rule);
+      expect(input("Handle").getAttribute("aria-invalid")).toBe("true");
+      fireEvent.submit(tune().closest("form")!);
+      await settle();
+      expect(submit).not.toHaveBeenCalled();
+
+      fireEvent.change(input("Handle"), { target: { value: "abcd" } });
+      await waitFor(() => expect(screen.queryByText(rule)).toBeNull());
+      await waitFor(() => expect(tune().disabled).toBe(false));
+      fireEvent.click(tune());
+      await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+      expect(submit.mock.calls[0]![0]).toStrictEqual({ retry: { handle: "abcd" }, code: "abc" });
+    },
+  );
+
+  test("a schema definition: a member named `type` shows its message after a refused submit, keeps it through an edit that still fails, and correcting it lets the submit through", async () => {
+    const typeSpec = { type: "object", properties: {
+      retry: { type: "object", widget: "object", label: "Retry", properties: {
+        type: { type: "string", label: "Kind", minLength: 3 },
+      } },
+    } } as const;
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Tuned." });
+    renderDialog({ id: "tune", label: "Tune", submit, args: jsonSchemaActionArgs(typeSpec, defaultWidgets, { initialValues: { retry: { type: "abc" } } }) });
+    await screen.findByLabelText("Kind");
+    fireEvent.change(input("Kind"), { target: { value: "ab" } });
+    fireEvent.submit(tune().closest("form")!);
+    expect(await screen.findByText(rule)).toBeTruthy();
+    expect(messageUnder("Kind")).toContain(rule);
+    expect(input("Kind").getAttribute("aria-invalid")).toBe("true");
+    expect(submit).not.toHaveBeenCalled();
+
+    fireEvent.change(input("Kind"), { target: { value: "a" } });
+    await settle();
+    expect(messageUnder("Kind")).toContain(rule);
+    expect(input("Kind").getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getAllByText(rule)).toHaveLength(1);
+    fireEvent.submit(tune().closest("form")!);
+    await settle();
+    expect(submit).not.toHaveBeenCalled();
+
+    fireEvent.change(input("Kind"), { target: { value: "abcd" } });
+    await waitFor(() => expect(screen.queryByText(rule)).toBeNull());
+    await waitFor(() => expect(tune().disabled).toBe(false));
+    fireEvent.click(tune());
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(submit.mock.calls[0]![0]).toStrictEqual({ retry: { type: "abcd" } });
+  });
+});
+
+describe("a required field in a dialog without a resolver", () => {
+  const required = "This field is required.";
+  const button = (name: string) => screen.getByRole<HTMLButtonElement>("button", { name });
+  const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+
+  test("an argument typed and then cleared says it is required while the submit is disabled", async () => {
+    const submit = vi.fn();
+    renderDialog({ id: "review", label: "Review", submit, args: [{ name: "reason", label: "Reason", widget: "text" }] });
+    const reason = await screen.findByLabelText("Reason");
+    fireEvent.change(reason, { target: { value: "Late" } });
+    await waitFor(() => expect(button("Review").disabled).toBe(false));
+    expect(screen.queryByText(required)).toBeNull();
+
+    fireEvent.change(reason, { target: { value: "" } });
+    await waitFor(() => expect(button("Review").disabled).toBe(true));
+    expect(await screen.findByText(required)).toBeTruthy();
+    expect(reason.getAttribute("aria-invalid")).toBe("true");
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  test("guard: opened empty, it shows no message, even while another field is typed in, and the submit stays disabled until it is filled", async () => {
+    const submit = vi.fn();
+    renderDialog({ id: "review", label: "Review", submit, args: { fields: [
+      { name: "reason", label: "Reason", widget: "text", required: true },
+      { name: "note", label: "Note", widget: "text" },
+    ], defaultValues: { reason: "", note: "" } } });
+    const reason = await screen.findByLabelText("Reason");
+    await settle();
+    expect(screen.queryByText(required)).toBeNull();
+    expect(reason.getAttribute("aria-invalid")).toBeNull();
+    expect(button("Review").disabled).toBe(true);
+
+    fireEvent.change(screen.getByLabelText("Note"), { target: { value: "Later" } });
+    await settle();
+    expect(screen.queryByText(required)).toBeNull();
+    expect(reason.getAttribute("aria-invalid")).toBeNull();
+    expect(button("Review").disabled).toBe(true);
+
+    fireEvent.change(reason, { target: { value: "Late" } });
+    await waitFor(() => expect(button("Review").disabled).toBe(false));
+    expect(screen.queryByText(required)).toBeNull();
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  test("guard: the form checks at a change, not at a blur: tabbing through an untouched empty required field and an untouched value that breaks a bound shows no message", async () => {
+    renderDialog({ id: "review", label: "Review", submit: vi.fn(), args: { fields: [
+      { name: "reason", label: "Reason", widget: "text", required: true },
+      { name: "code", label: "Code", widget: "text", minLength: 3 },
+    ], defaultValues: { reason: "", code: "ab" } } });
+    for (const label of ["Reason", "Code"]) {
+      const field = await screen.findByLabelText(label);
+      fireEvent.focus(field);
+      fireEvent.blur(field);
+    }
+    await settle();
+    expect(screen.queryByText(required)).toBeNull();
+    expect(screen.queryByText("Enter at least 3 characters.")).toBeNull();
+    expect(screen.getByLabelText("Reason").getAttribute("aria-invalid")).toBeNull();
+    expect(screen.getByLabelText("Code").getAttribute("aria-invalid")).toBeNull();
+    expect(button("Review").disabled).toBe(true);
+  });
+
+  test("guard: an argument dialog opened with an empty required relation beside prefilled ones shows no message and keeps the submit disabled", async () => {
+    renderDialog(registerReviewAction(vi.fn()));
+    await screen.findByText("DOC-1");
+    await screen.findByLabelText("Date");
+    await settle();
+    expect(screen.queryByText(required)).toBeNull();
+    expect(button("Register review").disabled).toBe(true);
+  });
+});

@@ -10,6 +10,82 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: a member of an object field (a FormSpec `object` widget) named
+  `type` shows its message. Before, a value that broke such a member's rule showed
+  nothing on screen: a `MutationDialog` disabled Save, and a record form and an
+  `ActionFormDialog` built with `jsonSchemaActionArgs` refused the submit, with no
+  message and the member not marked invalid. On an error React Hook Form keeps,
+  `type` is the library's own attribute, a string, and `fieldErrorMessages`
+  skipped that key at every depth, also where it held a member's error. It now
+  decides by the value: any value under `type` that is not an object
+  (`MEMBER_ERRORS` among them) is skipped, and an object is walked as any member's
+  error, so the message shows under the member, stays through an edit that still
+  fails, and goes when the value is corrected. A bare value is a message only
+  where the library puts message text: as an error given to `fieldErrorMessages`,
+  or inside a `types` subtree; anywhere else a child that is not an object is
+  skipped. `ref` is still never walked: the library keeps the registered control
+  there, as a DOM element, a `Controller`'s object of functions, a plain
+  `{ name }` for a control that attached no element, `{ type, name }` for a radio
+  or checkbox group, or `undefined` for a path that is not registered, so a
+  member named `ref` still shows no message, and `serverErrorsFromForm` still
+  drops a server refusal of a member named `ref`. When the server refuses the
+  object field and its member named `type` together, the field's own `type` and
+  the member's error meet at one key: applied member first, the library's
+  `setError` drops the member's error, so only the field's message shows; applied
+  field first, both messages show, but `serverErrorsFromForm` returns only the
+  member's. Which rules fail and what a form saves or sends are unchanged.
+- `@angee/ui`: **Changed behaviour.** An `ActionFormDialog` that checks its own
+  rules (its arguments are declared as `args`, or its definition brings no
+  resolver) shows a failing value's message as the value changes. Before, it
+  checked nothing before the first submit while its submit button was disabled as
+  soon as a rule failed, so a value too short, in a top-level field or in a member
+  of an object field, or a required argument typed and then cleared, disabled the
+  button with no message on screen, and a person could not submit to see one. Now
+  the form validates in React Hook Form's `onChange` mode, as a `MutationDialog`
+  does: the message shows under its field at the change, while the button is
+  disabled, and goes when the value is corrected. A value that already breaks a
+  rule when the dialog opens, a required field left empty or a prefilled text
+  shorter than its minimum, still disables the button with no message until the
+  person edits that field. Editing one member of an object field checks the whole
+  field, so it also shows the messages of the field's other members that break a
+  rule, though the person has not touched them, while a failing field outside it
+  that the person has not touched stays silent. A dialog whose definition brings a
+  resolver, such as the one `jsonSchemaActionArgs` returns, still checks from the
+  first submit, its gate counting presence only. `useActionForm` takes React Hook
+  Form's `mode` as the new `UseActionFormOptions.mode` and hands it to `useForm`
+  only when it is given, so a caller that passes none makes the call it made
+  before and keeps `onSubmit`; a mode changed while the form is open applies from
+  the next render, and a message shown under the old one stays.
+- `@angee/ui`: **Changed behaviour.** A member of an object field (a FormSpec
+  `object` widget) keeps its message. In a `MutationDialog`, which checks every
+  change, a value that broke a member's rule disabled Save with no message on
+  screen; in an `ActionFormDialog` and a record form, which check from the first
+  submit on, the member's message showed after a refused submit and went at the
+  next edit, though the value still failed. A list item's message stayed. Now, in
+  a record form, a `MutationDialog` and an `ActionFormDialog` (unless its
+  definition brings a resolver other than the one `jsonSchemaActionArgs` returns),
+  a member's message behaves as a top-level field's: a `MutationDialog` shows it
+  as soon as the value fails, and these forms keep it through an edit that still
+  fails and remove it when the value is corrected; correcting one of two failing
+  members removes only that member's message, and a member of an object inside the
+  object behaves the same. A form whose resolver is another one an action form
+  definition brings, or `createJsonSchemaResolver` used directly, still loses a
+  member's message at the next edit, and a member named `ref` shows no message in
+  any form, since `fieldErrorMessages` skips that key. Which rules
+  fail and what a form saves or sends are unchanged. React Hook Form keeps a
+  changed field's error only when it has a `type` or a `message`, or is a list's
+  array, and an object field is one registered control whose members' errors sit
+  under its own node, which had neither. `markMemberErrors`
+  (`@angee/ui/views/validation-errors`) gives that node the `type` `MEMBER_ERRORS`
+  (`"memberErrors"`), exported beside it, and no message, at the node of each
+  object field (a field with an `objectTemplate`) the form shows for the values
+  checked; a field without a template (a `json` field, a root of dotted fields, a
+  scalar) is never marked. The record form's, `MutationDialog`'s and
+  `ActionFormDialog`'s resolvers and the one `jsonSchemaActionArgs` returns run it
+  on the tree they return, with the fields they show; `createJsonSchemaResolver`,
+  which knows no fields, does not, and neither does any other resolver an action
+  form definition brings. Code that compares such an error tree deeply expects
+  that `type`.
 - `@angee/ui`: **Changed behaviour.** A value that breaks one of a field's rules now
   says which, in a record form and in a dialog without a schema resolver: too short,
   too long, out of range, too few or too many items, or the wrong type ("Enter no

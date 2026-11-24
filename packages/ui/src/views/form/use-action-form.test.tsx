@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { act, renderHook, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import type { ResolverResult } from "react-hook-form";
+import type { Mode, ResolverResult } from "react-hook-form";
 import { describe, expect, test, vi } from "vitest";
 
 import { ToastProvider } from "../../feedback";
@@ -267,6 +267,58 @@ test("submits the resolver's transformed type while preserving native input valu
   await act(async () => { expect(await result.current.run()).toBe(true); });
   expect(onSuccess).toHaveBeenCalledWith({ count: 12 }, 12);
   expect(result.current.form.getValues()).toEqual({ count: "12" });
+});
+
+describe("when the form checks a value before its first submit", () => {
+  const resolver = (values: { title: string }): ResolverResult<{ title: string }> => values.title.trim()
+    ? { values, errors: {} }
+    : { values: {}, errors: { title: { type: "required", message: "Enter a title." } } };
+  function TitleForm({ mode, withResolver = true }: { mode?: Mode; withResolver?: boolean }): React.ReactElement {
+    const action = useActionForm<{ title: string }>({
+      defaultValues: { title: "Draft" }, resolver: withResolver ? resolver : undefined, mode,
+      submit: () => ({ status: "ok", data: undefined }),
+    });
+    return <form onSubmit={(event) => { event.preventDefault(); void action.run(); }}>
+      <input aria-label="Title" {...action.form.register("title")} />
+      <output aria-label="Title message">{action.form.formState.errors.title?.message ?? ""}</output>
+      <button type="button" onClick={() => action.form.setError("title", { type: "server", message: "Choose another title." })}>
+        Show error
+      </button>
+      <button type="submit">Save</button>
+    </form>;
+  }
+  const message = () => screen.getByLabelText("Title message").textContent;
+  // The change's validation runs after the event; a macrotask lets it settle before asserting.
+  const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+
+  test("guard: a caller that passes no mode checks nothing before the first submit", async () => {
+    render(<TitleForm />, { wrapper });
+    fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "" } });
+    await settle();
+    expect(message()).toBe("");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(message()).toBe("Enter a title."));
+  });
+
+  test("guard: a caller that passes no mode and no resolver keeps an error it set through an edit until the first submit", async () => {
+    render(<TitleForm withResolver={false} />, { wrapper });
+    const title = await screen.findByLabelText("Title");
+    fireEvent.click(screen.getByRole("button", { name: "Show error" }));
+    await waitFor(() => expect(message()).toBe("Choose another title."));
+    fireEvent.change(title, { target: { value: "Other" } });
+    await settle();
+    expect(message()).toBe("Choose another title.");
+  });
+
+  test("a caller's react-hook-form mode decides it: with onChange, a failing value shows its message as it changes", async () => {
+    render(<TitleForm mode="onChange" />, { wrapper });
+    fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "" } });
+    await waitFor(() => expect(message()).toBe("Enter a title."));
+
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Ready" } });
+    await waitFor(() => expect(message()).toBe(""));
+  });
 });
 
 test("an outdated submit callback is a developer failure, not a retry banner", async () => {
