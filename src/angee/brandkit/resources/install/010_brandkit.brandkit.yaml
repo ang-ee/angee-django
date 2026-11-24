@@ -1,10 +1,10 @@
-# The default kit states the Angee brand. Its colours are angee.theme_angee's
-# customisation defaults and its fonts that theme's sans stack, so applying the
-# kit to the Angee theme changes nothing. The manifest declares every field
+# The Angee kit. Its colours are angee.theme_angee's customisation defaults and
+# its fonts that theme's sans stack, so applying the kit to the Angee theme
+# changes nothing. It states no default: the first kit saved becomes the default,
+# so on a fresh install it is this one. The manifest declares every field
 # create_only: once the row exists, its values are the deployment's.
 - xref: angee
   name: Angee
-  is_default: true
   brand: "#e7b008"
   accent: "#6366f1"
   neutral: "#71717a"

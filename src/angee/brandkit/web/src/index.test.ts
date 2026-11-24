@@ -15,6 +15,10 @@ describe("angee.brandkit addon manifest", () => {
 
   test("places the Brand kits page in Settings", () => {
     expect(brandkit.routes?.map((route) => route.name)).toEqual(expect.arrayContaining(["brandkit.kits"]));
-    expect(brandkit.menus?.brandkit).toMatchObject({ route: "brandkit.kits", group: "platform" });
+    expect(brandkit.menus?.brandkit).toMatchObject({
+      route: "brandkit.kits",
+      group: "platform",
+      requires: "brandkit.BrandKit#create",
+    });
   });
 });

@@ -10,13 +10,14 @@ dynamic = ["entry-points"]
 
 [tool.angee]
 
-# The default kit states the Angee brand. Every field it seeds is the
-# deployment's once the row exists: a reload neither overwrites an edit nor
-# takes the default back from a kit the deployment chose.
+# The Angee kit, the default on a fresh install because it is the first kit
+# saved. Every field it seeds is the deployment's once the row exists, and it
+# states no default: a reload neither overwrites an edit nor takes the default
+# from a kit the deployment chose.
 [[tool.angee.resources.install]]
 path = "install/010_brandkit.brandkit.yaml"
 create_only = [
-  "name", "is_default",
+  "name",
   "brand", "accent", "neutral", "canvas", "surface", "rail", "success", "warning", "danger", "info",
   "font_heading", "font_body", "footer_organization", "footer_address", "voice",
 ]

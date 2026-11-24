@@ -1,22 +1,25 @@
 """GraphQL schema contributions for brand kits.
 
 Exposed on the console. A kit is an ordinary resource (list, detail, insert,
-update, delete) whose logos are written by file public id; ``default_brand_kit``
-reads the deployment's default kit; a kit's ``contrast_warnings`` project
+update, delete); its logos are read here and written by no console root, since
+only storage's ``FileManager.ingest_image`` puts files on the image drive a logo
+must come from. ``default_brand_kit`` reads the deployment's default kit; a kit's
+``contrast_warnings`` project
 :meth:`~angee.brandkit.models.BrandKit.contrast_warnings` for the registered
 form's read widget.
 """
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import cast
 
 import strawberry
 import strawberry_django
 from django.apps import apps
 from strawberry import auto
 
-from angee.brandkit.models import MailRole, MailScheme
+from angee.brandkit.models import BrandKit as BrandKitModel
+from angee.brandkit.models import ContrastWarning, MailRole, MailScheme, MailSeed
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
@@ -26,15 +29,8 @@ BrandKit = apps.get_model("brandkit", "BrandKit")
 
 strawberry.enum(MailScheme)
 strawberry.enum(MailRole)
-
-
-@strawberry.type
-class ContrastWarningType:
-    """A mail role the kit's mail palette moved far from the colour it derives from, to keep it readable."""
-
-    seed: str = strawberry.field(description="The kit's colour field the role derives from.")
-    scheme: MailScheme
-    role: MailRole
+strawberry.enum(MailSeed)
+ContrastWarningType = strawberry.type(ContrastWarning, name="ContrastWarningType")
 
 
 @strawberry_django.type(BrandKit)
@@ -70,16 +66,16 @@ class BrandKitType(AngeeNode):
         only=["brand", "neutral", "canvas", "surface"],
         metadata={"angee_widget": "angee.brandkit.contrastWarnings"},
     )
-    def contrast_warnings(self) -> list[ContrastWarningType]:
+    def contrast_warnings(parent: strawberry.Parent[BrandKitModel]) -> list[ContrastWarning]:
         """Return the mail roles moved far from their seeds to stay readable: advice for the form, never a refusal."""
 
-        return cast(list[ContrastWarningType], cast(Any, self).contrast_warnings())
+        return parent.contrast_warnings()
 
 
 _BRAND_KIT_WRITABLE_FIELDS = (
     "name", "is_default",
     "brand", "accent", "neutral", "canvas", "surface", "rail", "success", "warning", "danger", "info",
-    "font_heading", "font_body", "logo", "logo_dark", "footer_organization", "footer_address", "voice",
+    "font_heading", "font_body", "footer_organization", "footer_address", "voice",
 )
 
 _BRAND_KIT_RESOURCE = hasura_model_resource(
@@ -91,7 +87,7 @@ _BRAND_KIT_RESOURCE = hasura_model_resource(
     aggregatable=["id"],
     groupable=["is_default"],
     writable=list(_BRAND_KIT_WRITABLE_FIELDS),
-    write_backend=AngeeHasuraWriteBackend(BrandKit, public_id_fields=("logo", "logo_dark")),
+    write_backend=AngeeHasuraWriteBackend(BrandKit),
     id_column="sqid",
 )
 

@@ -17,14 +17,22 @@ const brandkitRoutes: readonly BaseAddonRoute[] = resourcePageRoutes(
 );
 
 const brandkitMenu: MenuDeclarations = {
-  [BRANDKIT_ID]: { label: "Brand kits", icon: "brandkit", group: "platform", route: "brandkit.kits" },
+  // Every signed-in person reads kits; only those who manage them get the Settings entry.
+  [BRANDKIT_ID]: {
+    label: "Brand kits",
+    icon: "brandkit",
+    group: "platform",
+    route: "brandkit.kits",
+    requires: `${BRAND_KIT_MODEL}#create`,
+  },
 };
 
 /**
- * The `@angee/brandkit` rendered addon: the Brand kits page in Settings, the
- * registered kit form, and the `angee.brandkit.contrastWarnings` read widget
- * the backend's computed `contrast_warnings` field declares. Applying a kit to
- * the app's theme is not part of this manifest.
+ * The `@angee/brandkit` rendered addon: the Brand kits page in Settings for
+ * whoever may create kits, the registered kit form, and the
+ * `angee.brandkit.contrastWarnings` read widget the backend's computed
+ * `contrast_warnings` field declares. Applying a kit to the app's theme is not
+ * part of this manifest.
  */
 const brandkit = defineBaseAddon({
   id: BRANDKIT_ID,

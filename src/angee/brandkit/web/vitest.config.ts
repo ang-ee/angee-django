@@ -1,6 +1,4 @@
 import { defineAngeeWebVitestConfig } from "@angee/app/vitest";
+import { gqlAlias } from "../../vitest.shared";
 
-export default defineAngeeWebVitestConfig({
-  // The fragment authors no GraphQL documents: its page and form are metadata-driven.
-  gqlAlias: [],
-});
+export default defineAngeeWebVitestConfig({ gqlAlias });

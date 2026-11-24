@@ -3,8 +3,12 @@
 A :class:`BrandKit` states one brand: its name, the colours a customisable theme
 takes as inputs, a heading and a body font stack, a logo for light and one for
 dark backgrounds, the organization and postal address a mail footer shows, and a
-voice note for people and AI drafts. At most one kit is the deployment's default
-(:meth:`BrandKitQuerySet.default`).
+voice note for people and AI drafts.
+
+**One default kit.** Once any kit exists, exactly one is the deployment's default
+(:meth:`BrandKitQuerySet.default`): the first kit saved while none is the default
+takes the flag, saving another kit as the default takes it from the previous one,
+and the default can neither be deleted nor unticked.
 
 **Colours are theme inputs.** Each colour column is named exactly as the theme
 runtime names a hex customisation input (``parseThemeCustomization`` in
@@ -12,15 +16,15 @@ runtime names a hex customisation input (``parseThemeCustomization`` in
 options without a translation table. A kit states light values; a theme derives
 its dark values from them.
 
-**Fonts are written into CSS.** :func:`validate_font_stack` admits only family
-names and a closing generic family, because HTML autoescaping does not protect a
-style.
+**Fonts are written into CSS.** :class:`~angee.brandkit.fields.FontStackField`
+admits only family names and a closing generic family, on every write, because
+HTML autoescaping does not protect a style.
 
 **Mail works its colours out.** :meth:`BrandKit.mail_palette` derives the
 colours a mail layout paints with, for a light and a dark scheme, from the seeds,
 as the theme runtime derives the app's tokens, and keeps every text pair readable.
 :meth:`BrandKit.contrast_warnings` names the seeds it had to move far to do so;
-they are advice, and a save never refuses them.
+they are advice about mail, and a save never refuses them.
 
 **Access.** Every signed-in person reads kits; platform administrators manage
 them (``permissions.zed``).
@@ -28,49 +32,26 @@ them (``permissions.zed``).
 
 from __future__ import annotations
 
-import re
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from rebac import PermissionDenied
 
 from angee.base.fields.text import ColorField
 from angee.base.models.base import AngeeDataModel
+from angee.brandkit.fields import FontStackField
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 
-GENERIC_FONT_FAMILIES = frozenset({
-    "serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "ui-serif", "ui-sans-serif",
-    "ui-monospace", "ui-rounded", "math", "emoji", "fangsong",
-})
-"""The CSS Fonts 4 generic families; a font stack ends in one, so text always finds a face."""
-
-_FAMILY_NAME = r"[ -]*[^\W_](?:[^\W_]|[ -])*"
-_FONT_FAMILY = re.compile(rf" *(?:{_FAMILY_NAME}|'{_FAMILY_NAME}'|\"{_FAMILY_NAME}\") *")
-
-
-def validate_font_stack(value: str) -> None:
-    """Admit a CSS font stack that is safe to write into a style.
-
-    Each comma-separated family is letters, digits, spaces and hyphens, bare or
-    wholly inside one pair of single or double quotes; the last is an unquoted CSS
-    generic family (:data:`GENERIC_FONT_FAMILIES`). Nothing else can reach the CSS.
-    """
-
-    families = value.split(",")
-    if not all(_FONT_FAMILY.fullmatch(family) for family in families):
-        raise ValidationError(
-            "Name each font family with letters, digits, spaces and hyphens, separated by commas.",
-            code="font_stack",
-        )
-    if families[-1].strip().lower() not in GENERIC_FONT_FAMILIES:
-        raise ValidationError("End the font stack with a generic family, such as sans-serif.", code="font_stack")
-
+DEFAULT_DELETE_MESSAGE = "This is the default kit. Make another kit the default before deleting it."
+DEFAULT_UNTICK_MESSAGE = "This is the default kit: make another kit the default instead."
+LOGO_MESSAGE = "A logo must be an image on storage's image drive."
 
 WCAG_TEXT_CONTRAST = 4.5
 """The WCAG 2 AA minimum contrast ratio for body text (success criterion 1.4.3)."""
@@ -170,12 +151,20 @@ class MailRole(StrEnum):
     LINK = "link"
 
 
+class MailSeed(StrEnum):
+    """A kit colour the mail palette derives its roles from; each value is the kit's field name."""
+
+    BRAND = "brand"
+    NEUTRAL = "neutral"
+    CANVAS = "canvas"
+    SURFACE = "surface"
+
+
 @dataclass(frozen=True)
 class ContrastWarning:
     """A mail role :meth:`BrandKit.mail_palette` moved far from the kit colour it derives from, to keep it readable."""
 
-    seed: str
-    """The kit's colour field the role derives from."""
+    seed: MailSeed
     scheme: MailScheme
     role: MailRole
 
@@ -186,7 +175,7 @@ class _MailColor:
 
     value: str
     shift: float
-    seed: str
+    seed: MailSeed
     stated: bool = False
     """The role shows the seed as the kit states it, so any move changes the kit's own colour."""
 
@@ -204,22 +193,22 @@ def _scheme_colors(
 
     ``ink`` is the scheme's text ink. A ground it does not read on moves toward
     ``pole`` until it does, so every text colour can then move toward ``ink`` until
-    it reads on both grounds. ``stated`` marks the scheme whose canvas, surface and
-    muted text are the kit's seeds as stated.
+    it reads on both grounds. ``stated`` marks the scheme whose canvas and surface
+    are the kit's seeds as stated.
     """
 
-    canvas_color = _MailColor(*readable_color(canvas, on=(ink,), ink=pole), seed="canvas", stated=stated)
-    surface_color = _MailColor(*readable_color(surface, on=(ink,), ink=pole), seed="surface", stated=stated)
+    canvas_color = _MailColor(*readable_color(canvas, on=(ink,), ink=pole), seed=MailSeed.CANVAS, stated=stated)
+    surface_color = _MailColor(*readable_color(surface, on=(ink,), ink=pole), seed=MailSeed.SURFACE, stated=stated)
     grounds = (canvas_color.value, surface_color.value)
     return {
         MailRole.CANVAS: canvas_color,
         MailRole.SURFACE: surface_color,
-        MailRole.TEXT: _MailColor(*readable_color(text, on=grounds, ink=ink), seed="neutral"),
-        MailRole.MUTED: _MailColor(*readable_color(muted, on=grounds, ink=ink), seed="neutral", stated=stated),
-        MailRole.BORDER: _MailColor(border, 0.0, seed="neutral"),
-        MailRole.PRIMARY: _MailColor(primary, 0.0, seed="brand"),
-        MailRole.ON_PRIMARY: _MailColor(ink_on(primary), 0.0, seed="brand"),
-        MailRole.LINK: _MailColor(*readable_color(primary, on=grounds, ink=ink), seed="brand"),
+        MailRole.TEXT: _MailColor(*readable_color(text, on=grounds, ink=ink), seed=MailSeed.NEUTRAL),
+        MailRole.MUTED: _MailColor(*readable_color(muted, on=grounds, ink=ink), seed=MailSeed.NEUTRAL),
+        MailRole.BORDER: _MailColor(border, 0.0, seed=MailSeed.NEUTRAL),
+        MailRole.PRIMARY: _MailColor(primary, 0.0, seed=MailSeed.BRAND),
+        MailRole.ON_PRIMARY: _MailColor(ink_on(primary), 0.0, seed=MailSeed.BRAND),
+        MailRole.LINK: _MailColor(*readable_color(primary, on=grounds, ink=ink), seed=MailSeed.BRAND),
     }
 
 
@@ -227,7 +216,12 @@ class BrandKitQuerySet[KitT: BrandKit](AngeeHistoryQuerySet[KitT]):
     """Read scopes over brand kits."""
 
     def default(self) -> KitT | None:
-        """Return the default kit among the rows this queryset reads, or ``None``."""
+        """Return the default kit among the rows this queryset reads.
+
+        ``None`` only before any kit exists (a database before its first resource
+        load), or for an actor that reads no kit: once any kit exists, exactly one
+        is the default.
+        """
 
         return self.filter(is_default=True).first()
 
@@ -270,7 +264,7 @@ class BrandKit(HistoryMixin, AngeeDataModel, concrete=True):
     name = models.CharField(max_length=128)
     """The organization's brand name: the wordmark where no logo shows."""
     is_default = models.BooleanField(default=False)
-    """The deployment's kit; saving one as the default clears the previous (:meth:`BrandKitManager.demote_defaults`)."""
+    """The deployment's kit: exactly one once any kit exists (:meth:`save`, :meth:`clean`, :meth:`delete_blocker`)."""
 
     # The theme customisation's hex inputs, named as the theme runtime names them.
     brand = ColorField()
@@ -285,9 +279,9 @@ class BrandKit(HistoryMixin, AngeeDataModel, concrete=True):
     danger = ColorField()
     info = ColorField()
 
-    font_heading = models.CharField(max_length=255, validators=[validate_font_stack])
+    font_heading = FontStackField()
     """The CSS font stack headings and the wordmark are set in."""
-    font_body = models.CharField(max_length=255, validators=[validate_font_stack])
+    font_body = FontStackField()
     """The CSS font stack body text is set in."""
 
     logo = models.ForeignKey(
@@ -297,7 +291,12 @@ class BrandKit(HistoryMixin, AngeeDataModel, concrete=True):
         on_delete=models.SET_NULL,
         related_name="brand_kit_logos",
     )
-    """The logo for light backgrounds, a file on storage's image drive every signed-in user reads."""
+    """The logo for light backgrounds: an image storage's ``FileManager.ingest_image`` put on its image drive.
+
+    Every signed-in user reads the image drive, so every kit reader sees the logo.
+    :meth:`clean` refuses any other file. No console writer exists yet: the console
+    reads the logos and writes neither.
+    """
     logo_dark = models.ForeignKey(
         "storage.File",
         null=True,
@@ -305,7 +304,7 @@ class BrandKit(HistoryMixin, AngeeDataModel, concrete=True):
         on_delete=models.SET_NULL,
         related_name="brand_kit_dark_logos",
     )
-    """The logo for dark backgrounds."""
+    """The logo for dark backgrounds, held to the same rule as :attr:`logo`."""
 
     footer_organization = models.TextField(blank=True, default="")
     """The organization a mail footer names."""
@@ -345,31 +344,70 @@ class BrandKit(HistoryMixin, AngeeDataModel, concrete=True):
 
         super().validate_constraints({*(exclude or ()), "is_default"})
 
+    def clean(self) -> None:
+        """Refuse unticking the default kit, and a logo that is not an image on storage's image drive."""
+
+        super().clean()
+        errors: dict[str, str] = {}
+        stored_default = (
+            not self._state.adding
+            and not self.is_default
+            and type(self).system_queryset().filter(pk=self.pk, is_default=True).exists()
+        )
+        if stored_default:
+            errors["is_default"] = DEFAULT_UNTICK_MESSAGE
+        images = apps.get_model("storage", "File").system_queryset().images()
+        for field in ("logo", "logo_dark"):
+            file_id = getattr(self, f"{field}_id")
+            if file_id is not None and not images.filter(pk=file_id).exists():
+                errors[field] = LOGO_MESSAGE
+        if errors:
+            raise ValidationError(errors)
+
+    def delete_blocker(self, *, cascaded: bool = False) -> str | None:
+        """Refuse deleting the default kit, wherever the delete starts: exactly one kit stays the default.
+
+        Enforced on instance, queryset and cascade deletes by
+        :func:`angee.brandkit.signals.refuse_default_delete`.
+        """
+
+        del cascaded
+        return DEFAULT_DELETE_MESSAGE if self.is_default else None
+
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Save the kit; saved as the default, it becomes the only default."""
+        """Save the kit, keeping exactly one default.
+
+        The first kit saved while no kit is the default takes the flag; a kit saved
+        as the default takes it from the previous one
+        (:meth:`BrandKitManager.demote_defaults`).
+        """
 
         update_fields = kwargs.get("update_fields")
-        if not self.is_default or (update_fields is not None and "is_default" not in update_fields):
-            super().save(*args, **kwargs)
-            return
         with transaction.atomic():
-            type(self).objects.demote_defaults(self)
+            if self._state.adding and not self.is_default:
+                self.is_default = not type(self).system_queryset().filter(is_default=True).exists()
+            if self.is_default and (update_fields is None or "is_default" in update_fields):
+                type(self).objects.demote_defaults(self)
             super().save(*args, **kwargs)
 
     def mail_palette(self) -> dict[str, dict[str, str]]:
         """Return the colours a mail layout paints with: a ``#rrggbb`` per :class:`MailRole`, per :class:`MailScheme`.
 
-        Worked out from the seeds as the theme runtime works out the app's tokens
-        (``packages/ui/src/theme/runtime.mjs``): canvas and surface from their seeds,
-        text, muted and border from ``neutral`` (muted text is the neutral tint itself,
-        as every customisable theme authors it), primary from ``brand``, on_primary
-        the ink that reads on primary, and link the brand colour reading on the
-        grounds; each dark value comes from its seed. Each scheme guarantees
+        Worked out from the lower-cased seeds. The light canvas, surface and primary
+        are the kit's ``canvas``, ``surface`` and ``brand`` as stated. Every other
+        role follows the theme runtime's derivation for a customised theme
+        (``packages/ui/src/theme/runtime.mjs``): light text, muted and border from
+        ``neutral`` (``applyNeutralPalette``); every dark value from its seed
+        (``applyCanvasPalette``, ``applySurfacePalette``, ``applyNeutralPalette``,
+        ``applyBrandPalette``); on_primary the ink that reads on primary
+        (``readableText``, else black); link the primary colour made readable on the
+        grounds (as ``readableTintText`` does). Each scheme guarantees
         :data:`WCAG_TEXT_CONTRAST` for text, muted and link on canvas and surface and
         for on_primary on primary: a light canvas or surface too dark for the dark ink
         is lightened first, then a text colour that would read less moves the least
         toward the scheme's ink that reads. Plain values, keyed ``"light"`` and
-        ``"dark"``, then by role: nothing depends on a request.
+        ``"dark"``, then by role, every colour ``#rrggbb`` in lower case: nothing
+        depends on a request.
         """
 
         return {
@@ -380,11 +418,11 @@ class BrandKit(HistoryMixin, AngeeDataModel, concrete=True):
     def contrast_warnings(self) -> list[ContrastWarning]:
         """Return the mail roles :meth:`mail_palette` moved far from their seeds to keep them readable.
 
-        A role that shows a seed as the kit states it (the light canvas, surface and
-        muted text) is far once it moves at all; a role the palette derives is far
-        once it moves past :data:`FAR_SHIFT` toward its ink. The palette repairs every
-        pair, so a warning names a seed mail cannot wear as stated. Advice only: a
-        save never refuses one.
+        A role that shows a seed as the kit states it (the light canvas and surface)
+        is far once it moves at all; a role the palette derives is far once it moves
+        past :data:`FAR_SHIFT` toward its ink. The palette repairs every pair, so a
+        warning names a seed mail cannot wear as stated. It covers mail only, not the
+        app a theme dresses. Advice only: a save never refuses one.
         """
 
         return [
@@ -397,31 +435,33 @@ class BrandKit(HistoryMixin, AngeeDataModel, concrete=True):
     def _mail_colors(self) -> dict[MailScheme, dict[MailRole, _MailColor]]:
         """Work out both schemes' roles, each with the seed it derives from and how far it moved.
 
-        The dark bases are the theme runtime's: ``applyCanvasPalette``,
-        ``applySurfacePalette``, ``applyNeutralPalette`` and ``applyBrandPalette``.
+        The mix weights are the theme runtime's (``tests/test_brandkit.py`` reads
+        them from ``runtime.mjs`` and compares).
         """
 
         dark_ink, light_ink = TEXT_INKS
         black, white = "#000000", "#ffffff"
+        brand, neutral = self.brand.lower(), self.neutral.lower()
+        canvas, surface = self.canvas.lower(), self.surface.lower()
         return {
             MailScheme.LIGHT: _scheme_colors(
-                canvas=self.canvas,
-                surface=self.surface,
-                text=mix_colors(self.neutral, black, 0.78),
-                muted=self.neutral,
-                border=mix_colors(self.neutral, white, 0.78),
-                primary=self.brand,
+                canvas=canvas,
+                surface=surface,
+                text=mix_colors(neutral, black, 0.78),
+                muted=mix_colors(neutral, black, 0.30),
+                border=mix_colors(neutral, white, 0.78),
+                primary=brand,
                 ink=dark_ink,
                 pole=white,
                 stated=True,
             ),
             MailScheme.DARK: _scheme_colors(
-                canvas=mix_colors(self.canvas, black, 0.94),
-                surface=mix_colors(self.surface, black, 0.88),
-                text=mix_colors(self.neutral, white, 0.84),
-                muted=mix_colors(self.neutral, white, 0.46),
-                border=mix_colors(self.neutral, black, 0.60),
-                primary=mix_colors(self.brand, white, 0.16),
+                canvas=mix_colors(canvas, black, 0.94),
+                surface=mix_colors(surface, black, 0.88),
+                text=mix_colors(neutral, white, 0.84),
+                muted=mix_colors(neutral, white, 0.46),
+                border=mix_colors(neutral, black, 0.60),
+                primary=mix_colors(brand, white, 0.16),
                 ink=light_ink,
                 pole=black,
                 stated=False,

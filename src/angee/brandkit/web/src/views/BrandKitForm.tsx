@@ -7,10 +7,11 @@ import { useBrandkitT } from "../i18n";
 export const BRAND_KIT_MODEL = "brandkit.BrandKit";
 
 /**
- * The brand kit form: the name as its title; the default flag and the logos; the
- * colours in the theme customisation editor's sections and words, since each is
- * that editor's input of the same name; a saved kit's contrast warnings; the
- * fonts, the mail footer and the voice.
+ * The brand kit form: the name as its title; the default flag; the colours in the
+ * theme customisation editor's sections and words, since each is that editor's
+ * input of the same name; a saved kit's mail contrast warnings; the fonts, the
+ * mail footer and the voice. The logos are not edited here: only storage's image
+ * ingest may put a logo on the image drive.
  */
 function BrandKitForm({ resource: _resource, ...props }: RegisteredFormProps): React.ReactElement {
   const t = useBrandkitT();
@@ -18,10 +19,8 @@ function BrandKitForm({ resource: _resource, ...props }: RegisteredFormProps): R
   return (
     <Form {...props} resource={BRAND_KIT_MODEL}>
       <Field name="name" title />
-      <Group label={t("form.kit")} columns={3}>
-        <Field name="is_default" label={t("field.isDefault")} />
-        <Field name="logo" label={t("field.logo")} />
-        <Field name="logo_dark" label={t("field.logoDark")} />
+      <Group label={t("form.kit")}>
+        <Field name="is_default" label={t("field.isDefault")} description={t("field.isDefaultHint")} />
       </Group>
       <Group label={ui("theme.customization.section.identity")} hint={t("form.colorsHint")} columns={3}>
         <Field name="brand" label={ui("theme.customization.brand")} />
@@ -54,9 +53,7 @@ function BrandKitForm({ resource: _resource, ...props }: RegisteredFormProps): R
         <Field name="footer_organization" label={t("field.footerOrganization")} />
         <Field name="footer_address" label={t("field.footerAddress")} widget="textarea" />
       </Group>
-      <Group label={t("form.voice")} hint={t("form.voiceHint")}>
-        <Field name="voice" label={t("form.voice")} widget="textarea" />
-      </Group>
+      <Field name="voice" label={t("form.voice")} widget="textarea" description={t("form.voiceHint")} />
     </Form>
   );
 }
