@@ -20,7 +20,8 @@ import { useRecordChromeContextMaybe } from "../resource/record-chrome-context";
 import { useActionForm } from "./use-action-form";
 import { ActionFormProvider } from "./ActionFormProvider";
 import { DescriptorFieldList, type DescriptorField } from "./DescriptorFieldList";
-import { actionOutcomeSubmitResult } from "./validation-errors";
+import { visibleFields } from "./form-view-model";
+import { actionOutcomeSubmitResult, markMemberErrors } from "./validation-errors";
 import type { ActionArg, ActionArgs, ActionDescriptor, ActionFormContext, ActionFormDefinition } from "../page";
 
 export interface ActionFormDialogProps {
@@ -92,6 +93,10 @@ function ActionArgsDialog({
   const definition = isActionFormDefinition(declaredArgs) ? declaredArgs : undefined;
   const args = isActionFormDefinition(declaredArgs) ? EMPTY_ARGS : declaredArgs;
   const fields = React.useMemo(() => definition?.fields ?? args.map(actionArgField), [args, definition]);
+  // Without a resolver the form checks its own rules at each change: the changed field shows the
+  // messages of the rules it breaks under it (an object field under each failing member, edited
+  // or not), while a value that breaks a rule from the opening disables the submit silently until
+  // its field is edited. A resolver reports constraints at submit.
   const validateConstraints = !definition?.resolver;
   const argNames = React.useMemo(
     () => new Set(definition?.fieldNames ?? (definition && typeof definition.fields !== "function"
@@ -100,8 +105,10 @@ function ActionArgsDialog({
   );
   const actionForm = useActionForm<ArgValues, ActionOutcome>({
     defaultValues: definition?.defaultValues ?? argDefaultValues(args, context),
+    mode: validateConstraints ? "onChange" : "onSubmit",
     resolver: async (values, resolverContext, options) => {
-      const errors = dialogRuleErrors(fields, values, t, validateConstraints);
+      const declared = typeof fields === "function" ? fields(values) : fields;
+      const errors = markMemberErrors(dialogRuleErrors(declared, values, t, validateConstraints), visibleFields(declared, values));
       if (Object.keys(errors).length) return { values: {}, errors };
       return definition?.resolver
         ? definition.resolver(values, resolverContext, options)

@@ -16,7 +16,7 @@ import { isFieldControlVisible, visibleFields } from "./form-view-model";
 import { DescriptorFieldList, type DescriptorField } from "./DescriptorFieldList";
 import {
   SURFACE_RENDERS_FAILURE, applyFormErrors, fieldErrorsFromRules, formSubmitError, invalidFormSubmit,
-  savedFormSubmitResult, type FormSubmitResult, type ValidationErrors,
+  markMemberErrors, savedFormSubmitResult, type FormSubmitResult, type ValidationErrors,
 } from "./validation-errors";
 import { useFieldValidation } from "./use-field-validation";
 import { ActionFormProvider } from "./ActionFormProvider";
@@ -264,6 +264,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
     resolver: (formValues) => {
       const errors = dialogRuleErrors(fields, formValues, t);
       validateFields(formValues, (name, error) => set(errors, name, error));
+      markMemberErrors(errors, visibleFields(fields, formValues));
       return Object.keys(errors).length ? { values: {}, errors } : { values: formValues, errors: {} };
     },
   });

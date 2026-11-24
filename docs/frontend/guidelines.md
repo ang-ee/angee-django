@@ -1324,6 +1324,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   required/presence gates must let that resolver report value constraints and
   their specific messages; a short value must not silently disable submission.
   Keep this opt-in adapter out of the UI main entry so other forms do not load Ajv.
+  A dialog that checks its rules itself (a `MutationDialog`, an `ActionFormDialog`
+  without a resolver) validates in RHF's `onChange` mode, so a value a person enters
+  that breaks a rule shows its message while the gate disables submission.
 - A widget that consumes a fixed array of object fields declares
   `acceptsRowTemplate: true` in its widget definition. The FormSpec projector
   passes the parsed `rowTemplate` only through that seam and rejects a selected

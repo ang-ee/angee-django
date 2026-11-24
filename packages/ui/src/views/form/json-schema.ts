@@ -13,7 +13,7 @@ import { JsonValueSchema } from "../../widgets/json-value";
 import type { ActionFormDefinition } from "../page/Action";
 import { deserializeFormSpec, formSpecInitialValues, normalizeFormSpecValues, type FormSpecFieldDescriptor } from "./form-spec";
 import { parseFormSpec, parseFormSpecPayload } from "./form-spec-schema";
-import { applyFormErrors, invalidFormSubmit, jsonSchemaErrorMessage, type ValidationErrors } from "./validation-errors";
+import { applyFormErrors, invalidFormSubmit, jsonSchemaErrorMessage, markMemberErrors, type ValidationErrors } from "./validation-errors";
 
 // The bundled English, so a counted message picks its plural form natively.
 const translateDefault: UiTranslate = createAngeeI18nInstance(enUiBundle).getFixedT(null, "ui");
@@ -132,7 +132,12 @@ export function jsonSchemaActionArgs(
   return {
     fields,
     defaultValues: formSpecInitialValues(fields(initialValues), initialValues),
-    resolver: (values, context, settings) => validate(normalizeFormSpecValues(fields(values), values), context, settings),
+    resolver: async (values, context, settings) => {
+      const shown = fields(values);
+      const result = await validate(normalizeFormSpecValues(shown, values), context, settings);
+      markMemberErrors(result.errors, shown);
+      return result;
+    },
     fieldNames: [...new Set([...rootFields, ...[...branches.values()].flat()].map((field) => field.name))],
   };
 }

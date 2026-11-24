@@ -4,6 +4,7 @@ import type { ResolverOptions } from "react-hook-form";
 import { createAngeeI18nInstance } from "../../runtime/i18n";
 import { defaultWidgets } from "../../widgets";
 import { ajvValidationErrors, createJsonSchemaAjv, createJsonSchemaResolver, jsonSchemaActionArgs } from "./json-schema";
+import { MEMBER_ERRORS } from "./validation-errors";
 
 const resolverOptions: ResolverOptions<Record<string, unknown>> = {
   fields: {}, shouldUseNativeValidation: false,
@@ -45,6 +46,33 @@ describe("JSON Schema forms", () => {
       .toMatchObject({ acknowledge: { message: "Keep the supplied value." } });
     expect(await args.resolver!({ kind: "approve", acknowledge: true, count: 7 }, undefined, resolverOptions))
       .toEqual({ values: { kind: "approve", acknowledge: true }, errors: {} });
+  });
+
+  test("an action's schema resolver gives an object field's node of member errors the members' type; the schema resolver it wraps does not", async () => {
+    const schema = { type: "object", properties: {
+      retry: { type: "object", widget: "object", properties: { handle: { type: "string", minLength: 3 } } },
+      tags: { type: "array", widget: "list", items: { type: "string", maxLength: 1 } },
+    } };
+    const values = { retry: { handle: "a" }, tags: ["xy"] };
+    const { errors } = await jsonSchemaActionArgs(schema, defaultWidgets).resolver!(values, undefined, resolverOptions);
+    expect(errors.retry).toHaveProperty("type", MEMBER_ERRORS);
+    expect(errors.retry).toMatchObject({ handle: { message: "Enter at least 3 characters." } });
+    expect(errors.retry).not.toHaveProperty("message");
+    expect(Array.isArray(errors.tags)).toBe(true);
+    expect(errors.tags).not.toHaveProperty("type");
+    expect((await createJsonSchemaResolver(schema)(values, undefined, resolverOptions)).errors.retry).not.toHaveProperty("type");
+  });
+
+  test("an action's schema resolver leaves bare the node of an object field without a template: a json field's member errors keep the shape they had", async () => {
+    const args = jsonSchemaActionArgs({ type: "object", properties: {
+      meta: { type: "object", widget: "json", additionalProperties: { type: "string", maxLength: 2 } },
+    } }, defaultWidgets);
+    if (typeof args.fields !== "function") throw new Error("Expected dynamic fields");
+    expect(args.fields({})[0]).toMatchObject({ name: "meta", widget: "json" });
+    expect(args.fields({})[0]).not.toHaveProperty("objectTemplate");
+    const { errors } = await args.resolver!({ meta: { code: "abc" } }, undefined, resolverOptions);
+    expect(errors.meta).toMatchObject({ code: { message: "Enter no more than 2 characters." } });
+    expect(errors.meta).not.toHaveProperty("type");
   });
 
   test("retains schema defaults, nested values and readonly controls in action args", () => {

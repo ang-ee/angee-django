@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useForm, type FieldValues, type DefaultValues, type Path, type Resolver } from "react-hook-form";
+import { useForm, type FieldValues, type DefaultValues, type Mode, type Path, type Resolver } from "react-hook-form";
 import type { AuthoredMutateOptions } from "@angee/refine";
 
 import { useToast } from "../../feedback";
@@ -15,6 +15,12 @@ import { useFieldValidation, type FieldValidationForm } from "./use-field-valida
 export interface UseActionFormOptions<TValues extends FieldValues, TData = unknown, TSubmitValues extends FieldValues = TValues> {
   defaultValues?: DefaultValues<TValues>;
   resolver?: Resolver<TValues, unknown, TSubmitValues>;
+  /**
+   * React Hook Form's `mode`: when a value is checked before the first submit. Default `onSubmit`.
+   * Give a value that stays the same while the form is open: a changed mode applies from the next
+   * render, and a message shown under the old one stays, even once its value is corrected.
+   */
+  mode?: Mode;
   /**
    * Submit the collected values. The form renders a failure under its fields or in its
    * banner, so `options` turn refine's toast off: pass them on to the authored call.
@@ -51,7 +57,9 @@ export function useActionForm<TValues extends FieldValues, TData = unknown, TSub
   const t = useUiT();
   const toast = useToast();
   const { registerFieldValidation, validateFields } = useFieldValidation();
-  const form = useForm<TValues, unknown, TSubmitValues>({ defaultValues: options.defaultValues, resolver: options.resolver });
+  const form = useForm<TValues, unknown, TSubmitValues>({
+    defaultValues: options.defaultValues, resolver: options.resolver, ...(options.mode ? { mode: options.mode } : {}),
+  });
   const { handleSubmit, clearErrors } = form;
   // Publishers may retain this adapter. RHF updates formState on its stable
   // return object, so expose it live instead of capturing a render's proxy.
