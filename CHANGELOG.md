@@ -10,6 +10,22 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Addons require django-zed-rebac 0.38.0, a security release (advisory
+  GHSA-r4c4-cvfj-jgcf); versions before it are excluded. A queryset evaluated
+  under two decisions, evaluated again after its scope raised, or embedded in a
+  statement built under one actor and read under another, could read with a
+  permission scope other than the one in force, or with none; a prefetched
+  related manager streamed with `iterator()` read every row of the relation; and
+  a queryset could hold rows before their redaction and guards had run. Each
+  statement now carries the scope decided for that evaluation. A queryset built
+  and read under one decision sends the statements it sent before.
+  **Upgrade:** a consumer may meet three changes. Embedding a queryset that pins
+  no actor, with no actor and no `sudo()` block in force, raises
+  `MissingActorError` in strict mode, as reading it does. A queryset embedded
+  inside a `sudo()` block no longer carries the bypass outside it: make it eager
+  with `scoped()` inside the block, or give it its own `sudo(reason=...)`. A
+  prefetched related manager's `iterator()`, `aiterator()` and `aggregate()`
+  need an actor. The library's changelog lists all seven under 0.38.0.
 - `@angee/ui`: **Changed behaviour.** A form dialog opens with focus on its first
   field. Before, every dialog built on `DialogForm`, every `MutationDialog` and
   `ActionFormDialog` among them, opened with focus on its Close button: `DialogForm`
