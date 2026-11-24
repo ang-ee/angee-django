@@ -19,6 +19,7 @@ members = [
     "angee-appearance",
     "angee-appearance-integrate",
     "angee-base",
+    "angee-brandkit",
     "angee-calendar",
     "angee-calendar-integrate-google",
     "angee-calendar-integrate-ics",
@@ -146,6 +147,7 @@ dependencies = [
     { name = "angee-appearance" },
     { name = "angee-appearance-integrate" },
     { name = "angee-base" },
+    { name = "angee-brandkit" },
     { name = "angee-calendar" },
     { name = "angee-calendar-integrate-google" },
     { name = "angee-calendar-integrate-ics" },
@@ -260,6 +262,7 @@ requires-dist = [
     { name = "angee-appearance", editable = "src/angee/appearance" },
     { name = "angee-appearance-integrate", editable = "src/angee/appearance_integrate" },
     { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-brandkit", editable = "src/angee/brandkit" },
     { name = "angee-calendar", editable = "src/angee/calendar" },
     { name = "angee-calendar-integrate-google", editable = "src/angee/calendar_integrate_google" },
     { name = "angee-calendar-integrate-ics", editable = "src/angee/calendar_integrate_ics" },
@@ -571,6 +574,31 @@ requires-dist = [
     { name = "tomlkit", marker = "extra == 'testing'", specifier = ">=0.13" },
 ]
 provides-extras = ["testing"]
+
+[[package]]
+name = "angee-brandkit"
+version = "3.0.0"
+source = { editable = "src/angee/brandkit" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-graphql" },
+    { name = "angee-iam" },
+    { name = "angee-provenance" },
+    { name = "angee-resources" },
+    { name = "angee-storage" },
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-resources", editable = "src/angee/resources" },
+    { name = "angee-storage", editable = "src/angee/storage" },
+    { name = "angee-web", editable = "src/angee/web" },
+]
 
 [[package]]
 name = "angee-calendar"

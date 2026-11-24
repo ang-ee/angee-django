@@ -10,6 +10,58 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- **Brand kits: the new addon `angee.brandkit`.**
+  - **What it holds.** A brand kit (`BrandKit`) states one brand: its name; ten
+    colours, one per hex input of theme customisation and named as the theme
+    runtime names them (`brand`, `accent`, `neutral`, `canvas`, `surface`,
+    `rail`, `success`, `warning`, `danger`, `info`), as light values; a heading
+    and a body font stack (`font_heading`, `font_body`); a logo for light and one
+    for dark backgrounds; the organization and postal address a mail footer shows
+    (`footer_organization`, `footer_address`); and a voice note for people and AI
+    drafts. Every signed-in actor reads kits; platform admins create, edit and
+    delete them (`brandkit/brand_kit`).
+  - **Font stacks** are a field, `FontStackField`, that checks every write
+    reaching the database (`save`, `bulk_create`, `bulk_update`, `update()`):
+    family names of letters, digits, spaces and hyphens, bare or single-quoted,
+    closed by an unquoted generic family. A bare family with a word that starts
+    with a digit, a lone hyphen or a hyphen and a digit, or a CSS-wide keyword is
+    refused. Double quotes are stored as single quotes.
+  - **Logos** are images storage's `FileManager.ingest_image` put on its image
+    drive; `BrandKit.clean` refuses any other file when a logo changes. The
+    console reads the logos and writes neither.
+  - **Exactly one default kit.** Once any kit exists, writes through `save()` and
+    `clean()` keep one: the first kit saved becomes the default, saving another
+    kit as the default takes the flag from the previous one, and the default can
+    be neither unticked nor deleted, on any delete path. A conditional unique
+    constraint refuses a second default written past the save.
+    `BrandKit.objects.default()` and the console's `default_brand_kit` query
+    return it, or `None` before any kit exists, after a write past `save()` and
+    `clean()`, and for an actor who reads no kit.
+  - **The mail palette.** `BrandKit.mail_palette()` works out the colours a mail
+    layout paints with (`canvas`, `surface`, `text`, `muted`, `border`,
+    `primary`, `on_primary`, `link`) for a light and a dark scheme from the kit's
+    seeds, as the theme runtime derives the app's tokens, with at least 4.5:1 for
+    every text pair in both schemes; every colour is a lower-case `#rrggbb`.
+    `BrandKit.contrast_warnings()` names the roles it had to move far from their
+    seeds; they are advice about mail, shown on the kit form, and never refuse a
+    save. The derivation also lives in `packages/ui/src/theme/runtime.mjs`; tests
+    read the runtime's colour names, inks and mix weights and fail on drift.
+  - **The shipped kit.** The install tier ships one kit stating the Angee brand:
+    the Angee theme's customisation defaults and its sans stack. It states no
+    default, so on a fresh install it becomes the default by being the first kit
+    saved, and every seeded field is `create_only`. A shipped kit that is not the
+    default may be deleted; the next load recreates it as an ordinary kit.
+  - **Console.** Settings gains a Brand kits page, shown to those who may create
+    kits: the list of kits and the registered kit form, whose contrast warnings
+    focus the colour they name.
+  - **New projects.** A project rendered from the web project template with the
+    `full` addons profile lists `angee.brandkit` in its `settings.yaml`
+    `INSTALLED_APPS`; the default profile does not. The `angee` meta-distribution
+    requires `angee-brandkit`.
+  - **Upgrade.** An existing project adds `angee.brandkit` to its roster
+    (`INSTALLED_APPS` in `settings.yaml`), writes its migration with
+    `makemigrations brandkit`, and provisions, which migrates, synchronizes the
+    permission schema and loads the install tier with the Angee kit.
 - `@angee/ui`: **Changed behaviour.** A record form decides in one place which of
   its declared groups it displays for a record, and its fields are its own and
   those groups' fields. `formDisplaysGroup` (`form-view-model.ts`) holds the three

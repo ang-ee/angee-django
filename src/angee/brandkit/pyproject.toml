@@ -1,0 +1,26 @@
+build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-brandkit"
+version = "3.0.0"
+description = "Brand kits: a deployment's brand name, logos, colours, fonts, mail footer and voice."
+keywords = ["brand", "brand kit", "logo", "colours", "fonts"]
+dependencies = ["angee-base>=3,<4", "angee-provenance>=3,<4", "angee-iam>=3,<4", "angee-resources>=3,<4", "angee-graphql>=3,<4", "angee-storage>=3,<4", "angee-web>=3,<4"]
+dynamic = ["entry-points"]
+
+[tool.angee]
+
+# The Angee kit, the default on a fresh install because it is the first kit
+# saved. Every field it seeds is the deployment's once the row exists, and it
+# states no default: a reload neither overwrites an edit nor takes the default
+# from a kit the deployment chose.
+[[tool.angee.resources.install]]
+path = "install/010_brandkit.brandkit.yaml"
+create_only = [
+  "name",
+  "brand", "accent", "neutral", "canvas", "surface", "rail", "success", "warning", "danger", "info",
+  "font_heading", "font_body", "footer_organization", "footer_address", "voice",
+]
+
+[tool.angee.platform]
+category = "User interface"
