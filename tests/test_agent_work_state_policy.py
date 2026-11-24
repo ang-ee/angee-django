@@ -11,8 +11,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @pytest.mark.parametrize("kind", ["directory", "symlink", "public"])
 def test_private_path_ci_guard_matches_tracked_content(tmp_path: Path, kind: str) -> None:
-    workflow = yaml.safe_load((ROOT / ".github/workflows/no-private-paths.yml").read_text())
-    guard = next(step["run"] for step in workflow["jobs"]["guard"]["steps"] if "run" in step)
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    steps = workflow["jobs"]["guards"]["steps"]
+    guard = next(step["run"] for step in steps if step.get("name") == "Reject tracked .work/ paths")
     subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True, capture_output=True)
     if kind == "symlink":
         (tmp_path / ".work").symlink_to("../private-history")
