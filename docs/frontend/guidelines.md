@@ -1327,6 +1327,14 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   A dialog that checks its rules itself (a `MutationDialog`, an `ActionFormDialog`
   without a resolver) validates in RHF's `onChange` mode, so a value a person enters
   that breaks a rule shows its message while the gate disables submission.
+  Record forms and dialogs find a field's failed rules through one owner,
+  [fieldRuleErrors](../../packages/ui/src/views/form/field-values.ts); inside a
+  structured field `required` means presence and the field's own bounds judge a
+  blank. A record form asks the fields its save writes whose descriptor is
+  neither hidden, nor read-only, nor excluded by its condition (a field whose
+  section the form does not display is still asked), and no form asks a hidden or
+  read-only member or list item: the server answers for what the client does not
+  check.
 - A widget that consumes a fixed array of object fields declares
   `acceptsRowTemplate: true` in its widget definition. The FormSpec projector
   passes the parsed `rowTemplate` only through that seam and rejects a selected
