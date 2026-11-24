@@ -30,17 +30,33 @@ export const REQUIRED_RULE: Readonly<{ keyword: "required"; params: Readonly<Rec
   Object.freeze({ keyword: "required", params: Object.freeze({}) });
 
 /**
- * The first rule `value` fails: `required` when it is absent or a `null` the field does not
- * allow; then, unless `validateConstraints` is off and a schema resolver reports the rest, the
- * descriptor's constraints.
+ * Whether `value` holds nothing a person entered: `null` or `undefined`, a text of blanks only, or
+ * an empty list. Any other value is filled, `false`, `0` and an empty object included.
+ */
+export function isEmptyFieldValue(value: unknown): boolean {
+  if (value == null) return true;
+  if (typeof value === "string") return value.trim() === "";
+  if (Array.isArray(value)) return value.length === 0;
+  return false;
+}
+
+/**
+ * The first rule `value` fails. A value is missing when it is absent, `undefined`, or a `null` the
+ * field does not allow; a missing value fails `required` where the field is `required`,
+ * presence-required, or holds the key. Any other value is a value, a `null` the field allows, a
+ * blank text and an empty list included: whether it is acceptable is the descriptor's
+ * constraints' to say, unless `validateConstraints` is off and a schema resolver reports them.
  */
 function failedValueRule(
   field: FieldDescriptor,
   value: unknown,
   present: boolean,
+  required: boolean,
   validateConstraints: boolean,
 ): JsonSchemaRule | undefined {
-  if (!present || value === undefined || (value === null && !field.nullable)) return REQUIRED_RULE;
+  if (!present || value === undefined || (value === null && !field.nullable)) {
+    return required || field.presenceRequired || present ? REQUIRED_RULE : undefined;
+  }
   if (value === null || !validateConstraints) return undefined;
   return failedDescriptorConstraint(field, value);
 }
@@ -74,11 +90,19 @@ function failedDescriptorConstraint(field: FieldDescriptor, value: unknown): Jso
 
 /** The rules a structured FormSpec value fails, one per dotted path, the field's path before its
  * members' and its list items'. A path reports the first rule it fails, in this order: presence
- * (`required`: absent, or `null` where the field is not nullable), then an integer or number
- * field's `type`, then the lower bound before the upper (`minLength`, `maxLength`, `minimum`,
- * `maximum`, `minItems`, `maxItems`), each with its `limit`. One case reads as presence: an
- * empty text under a `minLength` of one is `required` when the field is neither omittable nor
- * nullable. With `validateConstraints=false`, only presence is checked, at every depth.
+ * and `required`, then an integer or number field's `type`, then the lower bound before the upper
+ * (`minLength`, `maxLength`, `minimum`, `maximum`, `minItems`, `maxItems`), each with its `limit`.
+ * `required` means presence here: a missing value (absent, `undefined`, or a `null` the field does
+ * not allow) fails `required` where the field is required, presence-required, or holds the key,
+ * while a `null` it allows, a blank text, an empty list and any object are values, which the
+ * descriptor's own constraints (`minLength`, `minItems`, …) judge. The field's own path is
+ * required when `required` says so (by default its own flag); each member answers to its own
+ * flag. One case reads as presence: an empty text under a `minLength` of one is `required` when
+ * the field is neither omittable nor nullable. With `validateConstraints=false`, only presence is
+ * checked, at every depth. Below the field's own path, a member or a list item that is `hidden` or
+ * `readOnly` is not asked, nor anything under it: the object and list widgets (`StructuredField`)
+ * render no control for a hidden member and a read-only control for a read-only one, so the person
+ * cannot change it and the server answers for it.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
@@ -88,15 +112,14 @@ export function structuredFieldErrors(
   present: boolean,
   path = field.name,
   validateConstraints = true,
+  required = Boolean(field.required),
 ): readonly FieldRuleError[] {
   const errors: FieldRuleError[] = [];
-  const failed = field.presenceRequired || present
-    ? failedValueRule(field, value, present, validateConstraints)
-    : undefined;
+  const failed = failedValueRule(field, value, present, required, validateConstraints);
   if (failed) errors.push({ path, ...failed });
   if (value && typeof value === "object" && !Array.isArray(value) && field.objectTemplate) {
     const record = value as Record<string, unknown>;
-    for (const child of field.objectTemplate) {
+    for (const child of field.objectTemplate.filter(personChanges)) {
       errors.push(...structuredFieldErrors(
         child,
         record[child.name],
@@ -106,7 +129,7 @@ export function structuredFieldErrors(
       ));
     }
   }
-  if (Array.isArray(value) && field.itemTemplate) {
+  if (Array.isArray(value) && field.itemTemplate && personChanges(field.itemTemplate)) {
     value.forEach((item, index) => {
       errors.push(...structuredFieldErrors(field.itemTemplate!, item, true, `${path}.${index}`, validateConstraints));
     });
@@ -114,8 +137,36 @@ export function structuredFieldErrors(
   return errors;
 }
 
+/** Whether a member or list item is one the person can change: neither hidden nor read-only. */
+function personChanges(child: FieldDescriptor): boolean {
+  return !child.hidden && !child.readOnly;
+}
+
+/**
+ * The rules one field fails, each at its dotted path, given how a form surface read it (its
+ * `value`, and whether it is `present` at all) and what the surface asks of it (whether it counts
+ * as `required`, and whether its constraints are checked). A structured field, one with a presence
+ * flag, a template or a bound, answers to its rules at every depth (`structuredFieldErrors`), where
+ * `required` means presence: the surface's `required` at its own path, below it each member's own
+ * flag, a hidden or read-only member or list item not asked. Any other field fails `required` when
+ * it is required and empty (`isEmptyFieldValue`), a `null` included even where the field allows
+ * one. The surface keeps its own facts: which fields it asks, how it reads them, which count as
+ * required, and whether constraints are checked; the record form's `formRuleErrors` and the
+ * dialogs' `dialogRuleErrors` call this for each field they ask.
+ */
+export function fieldRuleErrors(
+  field: FieldDescriptor,
+  { value, present }: { value: unknown; present: boolean },
+  { required, validateConstraints }: { required: boolean; validateConstraints: boolean },
+): readonly FieldRuleError[] {
+  if (isStructuredPresenceField(field)) {
+    return structuredFieldErrors(field, value, present, field.name, validateConstraints, required);
+  }
+  return required && isEmptyFieldValue(value) ? [{ path: field.name, ...REQUIRED_RULE }] : [];
+}
+
 /** Whether a descriptor opts into JSON presence/constraint validation. */
-export function isStructuredPresenceField(field: FieldDescriptor): boolean {
+function isStructuredPresenceField(field: FieldDescriptor): boolean {
   return Boolean(
     field.presenceRequired || field.omittable || field.objectTemplate || field.itemTemplate
     || field.minLength !== undefined || field.maxLength !== undefined

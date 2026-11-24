@@ -1275,3 +1275,203 @@ describe("a required field in a dialog without a resolver", () => {
     expect(button("Register review").disabled).toBe(true);
   });
 });
+
+describe("where focus is when the dialog opens", () => {
+  // A popup or a validation that a focus started runs after the event; a macrotask lets it settle before asserting.
+  const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+
+  test("an argument dialog puts focus on its first argument's input; no message shows and the submit stays disabled, as it opened", async () => {
+    renderDialog({ id: "rename", label: "Rename", submit: vi.fn(), args: [
+      { name: "name", widget: "text", label: "Name" },
+      { name: "note", widget: "text", label: "Note", optional: true },
+    ] });
+    const dialog = await screen.findByRole("dialog", { name: "Rename" });
+    const submit = screen.getByRole<HTMLButtonElement>("button", { name: "Rename" });
+    expect(submit.disabled).toBe(true);
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Name" })));
+    await settle();
+    expect(screen.queryByText("This field is required.")).toBeNull();
+    expect(dialog.querySelector("[aria-invalid='true']")).toBeNull();
+    expect(submit.disabled).toBe(true);
+  });
+
+  test("guard: an action whose arguments could not be resolved shows only its banner, and focus is where Base UI puts it: on Close", async () => {
+    renderDialog({ id: "review", label: "Review", submit: vi.fn(), args: () => {
+      throw new Error("The saved schema is invalid.");
+    } });
+    await screen.findByRole("dialog", { name: "Review" });
+    expect(screen.getByText("The saved schema is invalid.")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Close" })));
+  });
+
+  test.each<[string, ActionArg, () => HTMLElement]>([
+    ["a relation picker (many2one)", { name: "collection", argKind: "relation", resource: "Collection", label: "Collection" },
+      () => screen.getByRole("combobox", { name: "Collection" })],
+    ["a select (select)", { name: "kind", widget: "select", label: "Kind", options: [{ value: "a", label: "Alpha" }, { value: "b", label: "Beta" }] },
+      () => screen.getByRole("combobox", { name: "Kind" })],
+    ["a switch (switch)", { name: "flag", widget: "switch", label: "Flag" }, () => screen.getByRole("switch", { name: "Flag" })],
+  ])("%s first: its control has focus and no popup opens", async (_kind, arg, control) => {
+    renderDialog({ id: "pick", label: "Pick", submit: vi.fn(), args: [arg, { name: "note", widget: "text", label: "Note", optional: true }] });
+    await screen.findByRole("dialog", { name: "Pick" });
+    await waitFor(() => expect(document.activeElement).toBe(control()));
+    await settle();
+    expect(document.activeElement).toBe(control());
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(control().getAttribute("aria-expanded")).not.toBe("true");
+  });
+
+  test("a date field (date) first, whose control is a plain button with no input role, is passed over: the next field has focus and no popup opens", async () => {
+    renderDialog({ id: "pick", label: "Pick", submit: vi.fn(), args: [
+      { name: "day", widget: "date", label: "Day" },
+      { name: "note", widget: "text", label: "Note", optional: true },
+    ] });
+    await screen.findByRole("dialog", { name: "Pick" });
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Note" })));
+    await settle();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Day" }).getAttribute("aria-expanded")).toBe("false");
+  });
+
+  test("a prefilled many-to-many first field: its picker's own field has focus, not a chip's Remove button, and no popup opens", async () => {
+    renderDialog(registerReviewAction(vi.fn()));
+    await screen.findByRole("dialog", { name: "Register review" });
+    expect(await screen.findByRole("button", { name: "Remove DOC-1" })).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("combobox", { name: "Documents" })));
+    await settle();
+    expect(document.activeElement).toBe(screen.getByRole("combobox", { name: "Documents" }));
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  });
+});
+
+describe("a required member of an object argument", () => {
+  // A FormSpec object whose `required` names a member: the member is `required`, without a presence flag.
+  const authSpec = (token: Readonly<Record<string, unknown>>) => ({ type: "object", properties: {
+    auth: { type: "object", widget: "object", label: "Auth", required: ["token"], properties: {
+      token: { label: "Token", ...token }, note: { type: "string", label: "Note" },
+    } },
+  } });
+  const definitions = {
+    "a definition without a resolver": (token: Readonly<Record<string, unknown>>, auth: Record<string, unknown>) => (
+      { fields: deserializeFormSpec(authSpec(token), defaultWidgets), defaultValues: { auth } }),
+    "a schema definition": (token: Readonly<Record<string, unknown>>, auth: Record<string, unknown>) => (
+      jsonSchemaActionArgs(authSpec(token), defaultWidgets, { initialValues: { auth } })),
+  };
+  const requiredMessage = "This field is required.";
+  const connect = () => screen.getByRole<HTMLButtonElement>("button", { name: "Connect" });
+  const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+
+  test(
+    "a definition without a resolver, the member absent: the submit is disabled from the opening with no message, a submit is refused with the member's message under it, and filled, it submits with the member",
+    async () => {
+      const submit = vi.fn().mockResolvedValue({ ok: true, message: "Connected." });
+      renderDialog({ id: "connect", label: "Connect", submit, args: definitions["a definition without a resolver"]({ type: "string" }, {}) });
+      const token = await screen.findByLabelText("Token") as HTMLInputElement;
+      await settle();
+      // Measured: the submit's gate counts the member's `required` flag from the opening, silently.
+      expect(connect().disabled).toBe(true);
+      expect(screen.queryByText(requiredMessage)).toBeNull();
+
+      fireEvent.submit(connect().closest("form")!);
+      expect(await screen.findByText(requiredMessage)).toBeTruthy();
+      expect(screen.getByText("Token").closest('[data-layout="stack"]')?.textContent).toContain(requiredMessage);
+      expect(token.getAttribute("aria-invalid")).toBe("true");
+      await settle();
+      expect(submit).not.toHaveBeenCalled();
+
+      fireEvent.change(token, { target: { value: "abc" } });
+      await waitFor(() => expect(screen.queryByText(requiredMessage)).toBeNull());
+      await waitFor(() => expect(connect().disabled).toBe(false));
+      fireEvent.click(connect());
+      await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+      expect(submit.mock.calls[0]![0]).toStrictEqual({ auth: { token: "abc" } });
+    },
+  );
+
+  test("a definition without a resolver: a required member holding a blank text is a value: the submit is enabled and sends it as held", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Connected." });
+    renderDialog({ id: "connect", label: "Connect", submit, args: definitions["a definition without a resolver"]({ type: "string" }, { token: " " }) });
+    await screen.findByLabelText("Token");
+    await waitFor(() => expect(connect().disabled).toBe(false));
+    fireEvent.click(connect());
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(submit.mock.calls[0]![0]).toStrictEqual({ auth: { token: " " } });
+    expect(screen.queryByText(requiredMessage)).toBeNull();
+  });
+
+  test.each([
+    ["left out of its initial values, which it seeds with an empty text", {}, ""],
+    ["holding a blank text", { token: " " }, " "],
+  ] as const)(
+    "guard: a schema definition leaves a required member %s to its resolver, which accepts it: the submit is enabled and goes with the member as it is",
+    async (_shape, auth, token) => {
+      const submit = vi.fn().mockResolvedValue({ ok: true, message: "Connected." });
+      renderDialog({ id: "connect", label: "Connect", submit, args: definitions["a schema definition"]({ type: "string" }, { ...auth }) });
+      await screen.findByLabelText("Token");
+      await waitFor(() => expect(connect().disabled).toBe(false));
+      fireEvent.click(connect());
+      await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+      expect(submit.mock.calls[0]![0]).toStrictEqual({ auth: { token } });
+      expect(screen.queryByText(requiredMessage)).toBeNull();
+    },
+  );
+
+  test.each(Object.keys(definitions) as (keyof typeof definitions)[])(
+    "guard: %s accepts a member that is required and nullable, holding null",
+    async (kind) => {
+      const submit = vi.fn().mockResolvedValue({ ok: true, message: "Connected." });
+      renderDialog({ id: "connect", label: "Connect", submit,
+        args: definitions[kind]({ anyOf: [{ type: "string" }, { type: "null" }] }, { token: null, note: "n" }) });
+      await screen.findByLabelText("Note");
+      await waitFor(() => expect(connect().disabled).toBe(false));
+      fireEvent.click(connect());
+      await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+      expect(submit.mock.calls[0]![0]).toStrictEqual({ auth: { token: null, note: "n" } });
+      expect(screen.queryByText(requiredMessage)).toBeNull();
+    },
+  );
+});
+
+describe("a member of an object argument the person cannot see or change", () => {
+  // A hand-declared object field: `handle` holds a value, `secret` is required and left out.
+  const retry = (secret: Readonly<Record<string, unknown>>) => ({
+    fields: [{ name: "retry", label: "Retry", widget: "object", objectTemplate: [
+      { name: "handle", label: "Handle", required: true },
+      { name: "secret", label: "Secret", required: true, ...secret },
+    ] }],
+    defaultValues: { retry: { handle: "abc" } },
+  });
+  const requiredMessage = "This field is required.";
+  const tune = () => screen.getByRole<HTMLButtonElement>("button", { name: "Tune" });
+  const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+
+  test.each<[string, Readonly<Record<string, unknown>>]>([
+    ["hidden", { hidden: true }],
+    ["read-only", { readOnly: true }],
+  ])("a definition without a resolver: a %s required member left out does not block: after an edit of a sibling no message shows, the submit is enabled, and it sends exactly the values held", async (_state, secret) => {
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Tuned." });
+    renderDialog({ id: "tune", label: "Tune", submit, args: retry(secret) });
+    const handle = await screen.findByLabelText("Handle");
+    fireEvent.change(handle, { target: { value: "abcd" } });
+    await settle();
+    expect(screen.queryByText(requiredMessage)).toBeNull();
+    expect(document.querySelector('[aria-invalid="true"]')).toBeNull();
+    await waitFor(() => expect(tune().disabled).toBe(false));
+    fireEvent.click(tune());
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(submit.mock.calls[0]![0]).toStrictEqual({ retry: { handle: "abcd" } });
+  });
+
+  test("guard: a definition without a resolver: a visible, editable required member left out still blocks: after an edit of a sibling its message shows under it and the submit stays disabled", async () => {
+    const submit = vi.fn();
+    renderDialog({ id: "tune", label: "Tune", submit, args: retry({}) });
+    const handle = await screen.findByLabelText("Handle");
+    fireEvent.change(handle, { target: { value: "abcd" } });
+    expect(await screen.findByText(requiredMessage)).toBeTruthy();
+    expect(screen.getByText("Secret").closest('[data-layout="stack"]')?.textContent).toContain(requiredMessage);
+    expect(tune().disabled).toBe(true);
+    await settle();
+    expect(submit).not.toHaveBeenCalled();
+  });
+});

@@ -10,6 +10,128 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: **Changed behaviour.** A form dialog opens with focus on its first
+  field. Before, every dialog built on `DialogForm`, every `MutationDialog` and
+  `ActionFormDialog` among them, opened with focus on its Close button: `DialogForm`
+  set no initial focus, so Base UI focused the first tabbable element in the popup,
+  the header's Close, and a person who opened a dialog and typed at once wrote
+  nothing. `DialogForm` now gives Base UI's `initialFocus` the first field in the
+  dialog's body that a person can change: a control that holds a value (a native
+  `input` other than a button, image or hidden one, a `textarea` or a `select`, an
+  element with one of ARIA's input roles, or an editing host, the element that
+  carries `contenteditable`), in the tab order and shown, and neither disabled
+  (natively or with a reason), read-only, hidden nor inert; of a named radio group,
+  the checked radio, else the first, as Base UI's own tabbable query picks. Whether
+  a field shows is Base UI's own test: its `visibility`, then `checkVisibility`
+  where the platform has it, else its `display`. A control that only performs an
+  action, a button, a link or a menu trigger, is never a field, so a dialog whose
+  body holds only text and buttons (a list of verbs, an error banner with Retry, a
+  person's Remove access) keeps focus on Close, as does a dialog with no field: with
+  none, `DialogForm` returns `null` and Base UI's own choice stands. A field whose
+  control is a plain button with no input role is passed over too: the `date` and
+  `datetime` widgets' pickers, the `statusbar` widget's stage buttons and an empty
+  `list` widget, whose only control adds an item. Opened by touch through its
+  trigger, the dialog focuses itself, as Base UI does for touch, so no on-screen
+  keyboard rises over it. Base UI learns how a dialog was opened only from its
+  trigger, so a dialog opened through its `open` prop cannot tell a touch, and the
+  platform answers instead: where the primary pointer is coarse
+  (`(pointer: coarse)`, read through `useMediaQuery`), every opening focuses the
+  dialog itself, one from the keyboard through its trigger included. A tablet with a
+  hardware keyboard therefore never gets the field at the opening, while on a touch
+  laptop, whose primary pointer is fine, a dialog gets its field unless a touch on
+  its trigger opened it. The choice is made once, as the dialog opens: a field whose
+  widget's code is still loading then is passed over, and focus stays where it went
+  once the field shows. With focus in a text field, Enter submits the form when its
+  submit is enabled, as it always did once a person had clicked into the field;
+  before, Enter at the opening pressed Close; it shows in a dialog whose submit is
+  enabled as it opens, such as one that asks only for an optional reference before
+  marking something done. A key that is already down when the dialog opens does
+  nothing in its form: until a fresh keydown (one that is not a repeat) reaches the
+  form, `DialogForm` stops each repeated keydown and each keyup in the form's
+  capture phase, before any control sees it, so the held Enter or the released Space
+  that opened the dialog neither submits it nor flips, checks or picks its first
+  field; from the first fresh keydown on, keys act as before, and each opening
+  starts over. Where focus is on the dialog itself (opened by touch, or with a
+  coarse pointer), keys do not pass through its form: a held Enter or Space does
+  nothing there, but a held Escape closes the dialog. Focusing a field shows no
+  message, since the dialogs that check their own rules check at a change, and opens
+  no picker. Where focus goes when the dialog closes (`finalFocus`,
+  `DialogReturnFocusContext`) is unchanged, and no caller passes anything new.
+- `@angee/ui`: **Changed behaviour.** A record form and a dialog decide which
+  rules a field fails through one owner, `fieldRuleErrors` beside
+  `structuredFieldErrors` in `field-values.ts`, and whether a plain field's value
+  is empty through one predicate there, `isEmptyFieldValue`; the record form's
+  private emptiness test and the dialog's `emptyDialogValue` are deleted, with the
+  per-field decision each surface wrote. Each surface keeps only its own facts:
+  which fields it asks (a record form the fields its save writes for the record,
+  `formFieldsFor`, whose descriptor is neither hidden, nor read-only as resolved
+  for its values, nor excluded by its condition, so a field whose section the
+  form does not display is still asked; a dialog the fields shown, neither
+  `readOnly` nor `readOnlyWhen`), how it reads a value (a dotted path or one flat
+  key; both read a top-level key holding `undefined` as absent), which fields
+  count as required (a record form adds the model's required-on-create names on
+  a create), and whether constraints are checked (a dialog with a schema
+  resolver leaves them to it). Inside a structured field `required` means
+  presence, at every depth: a required field with a presence flag, a template or
+  a bound, and a required member, are now refused with "This field is required."
+  when left out (absent, or a `null` they do not allow) where only a
+  presence-required one was; a list item is always present, so no item's verdict
+  changes. A blank text, a text of blanks, an empty list and an empty object stay
+  values that the field's own bounds judge (an empty text under a minimum length
+  of one in a field neither omittable nor nullable still reads as required). The
+  backend's FormSpec projections mark every required property presence-required,
+  so forms built from them refuse nothing new; a hand-written FormSpec object
+  whose `required` names a member no longer lets a `MutationDialog` submit
+  without it. At the opening a `MutationDialog` keeps Save enabled while a
+  required member of an object field that is not itself required is left out,
+  and shows the message when Save is pressed; it disables Save silently while
+  such a member of a required object field, or a required `omittable` field, is
+  left out. An `ActionFormDialog` without a resolver disables its submit silently:
+  a missing member's message shows once another member of its object field is
+  edited, and a submission that reaches the form anyway shows each message; a
+  record form shows the message at the save. A plain field outside the
+  structured walk still fails `required` when empty, `null` included. The client
+  no longer checks values a person cannot see or change, and the server answers
+  for them with its own message: a record form skips a field whose descriptor is
+  hidden, a field read-only as resolved (its flag, its `resolve`, `createOnly` on
+  an edit, `editOnly` on a create), and a field outside the fields its save
+  writes (a section the record's implementation does not admit); where one held a
+  value the check refused, the save used to stop, with nothing on screen for a
+  hidden field or one outside those fields, though a structured field required
+  without a presence flag was not refused when left out or blank. Below the top
+  level, on every surface, a member or list item that is hidden or read-only is
+  not checked, nor anything under it, as the object and list widgets show no
+  control for a hidden member and a read-only control for a read-only one. A
+  dialog reads a top-level key holding `undefined` as absent; a member holding
+  one still fails `required` (a recorded defect). Where the record form still
+  checks, or no longer checks, a field against that rule: a required field left
+  empty in a contributed section whose permission the record lacks, or in a
+  saved-only group on a create, still blocks the save with nothing on screen,
+  since the form does not display the section while its fields stay among those
+  the save writes; a redacted required field left empty still blocks it, with
+  "This field is required." under its lock and no control; a required field the
+  record cannot write keeps an editable control, blocks the save while empty,
+  and the save drops what is typed there; a field declared hidden whose control
+  the page renders itself (`BoundDescriptorField`) is no longer checked on the
+  client, and a server refusal of it shows under that control and in the banner;
+  and a control a page renders for a field outside the fields the save writes is
+  no longer checked, what is typed there being dropped by the save, as before.
+  The permission, saved-only, redacted and not-writable cases are recorded as
+  expected failures, with a saved-only group's field still sent on a create. A
+  server refusal of a record-form field whose descriptor is hidden, that lies
+  outside the fields the save writes, or that its condition hides now shows in
+  the banner with its own text, as `name: message` under the field's raw name,
+  as an undeclared field's does: "Please fix the highlighted fields" now names
+  only the fields the save writes whose descriptor is neither hidden nor excluded
+  by its condition, while every refused field's error is still set at its path,
+  so a control the page renders itself shows it;
+  a field in a section the form does not display is still named among the
+  highlighted. What a form saves or sends, the messages' texts,
+  `markMemberErrors` and how each submit gate is built are unchanged.
+  `structuredFieldErrors` returns `required` for a required field or member left
+  out that is not presence-required, returns nothing at or under a hidden or
+  read-only member or list item, and takes the field's own required verdict as a
+  new last parameter, `required`, which defaults to the field's flag.
 - `angee.webforms`, `angee.webforms_messaging`, `angee.messaging`, `angee.resources`,
   `@angee/webforms`: **Changed behaviour.** **An addon declares a web form as
   one resource row**, published or left for a person to publish, and a form

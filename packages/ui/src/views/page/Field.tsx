@@ -35,11 +35,23 @@ export interface FieldDescriptor extends FieldPresentation {
     fromControl: (value: unknown) => unknown;
   };
   readOnly?: boolean;
-  /** Require a value independently of generated model create metadata. */
+  /**
+   * Require a value independently of generated model create metadata. A field with no presence
+   * flag, template or bound fails `required` when it is empty: `null`, `undefined`, a blank text or
+   * an empty list. Inside a structured field (one with a presence flag, a template or a bound) and
+   * for each of its members, `required` means the value must be present: absent, `undefined` or a
+   * `null` the field does not allow fails it, while a blank text or an empty list is a value the
+   * descriptor's own bounds judge.
+   */
   required?: boolean;
   /** A required structured value may explicitly be JSON null. */
   nullable?: boolean;
-  /** Treat required as JSON property presence; emitted only by structured FormSpec. */
+  /**
+   * The value must be present, as a JSON property is: absent, `undefined` or a `null` the field
+   * does not allow fails `required` even where the field is not `required`, and the flag makes the
+   * field structured, so a blank text or an empty list in it is a value, not a missing one.
+   * Emitted only by structured FormSpec, beside `required` for a required property.
+   */
   presenceRequired?: boolean;
   /**
    * The value may be left "Not set": the member is then absent from the saved object. Emitted only
