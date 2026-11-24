@@ -10,6 +10,28 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: **Changed behaviour.** An `ActionFormDialog` that checks its own
+  rules (its arguments are declared as `args`, or its definition brings no
+  resolver) shows a failing value's message as the value changes. Before, it
+  checked nothing before the first submit while its submit button was disabled as
+  soon as a rule failed, so a value too short, in a top-level field or in a member
+  of an object field, or a required argument typed and then cleared, disabled the
+  button with no message on screen, and a person could not submit to see one. Now
+  the form validates in React Hook Form's `onChange` mode, as a `MutationDialog`
+  does: the message shows under its field at the change, while the button is
+  disabled, and goes when the value is corrected. A value that already breaks a
+  rule when the dialog opens, a required field left empty or a prefilled text
+  shorter than its minimum, still disables the button with no message until the
+  person edits that field. Editing one member of an object field checks the whole
+  field, so it also shows the messages of the field's other members that break a
+  rule, though the person has not touched them, while a failing field outside it
+  that the person has not touched stays silent. A dialog whose definition brings a
+  resolver, such as the one `jsonSchemaActionArgs` returns, still checks from the
+  first submit, its gate counting presence only. `useActionForm` takes React Hook
+  Form's `mode` as the new `UseActionFormOptions.mode` and hands it to `useForm`
+  only when it is given, so a caller that passes none makes the call it made
+  before and keeps `onSubmit`; a mode changed while the form is open applies from
+  the next render, and a message shown under the old one stays.
 - `@angee/ui`: **Changed behaviour.** A member of an object field (a FormSpec
   `object` widget) keeps its message. In a `MutationDialog`, which checks every
   change, a value that broke a member's rule disabled Save with no message on
