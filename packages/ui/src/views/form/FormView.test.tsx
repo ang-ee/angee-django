@@ -2798,6 +2798,12 @@ describe("FormView", () => {
       shape: "a member of an object field in a JSON root", record: { config: { retry: { handle: "abc" } } },
       saved: { config: { retry: { handle: "abcd" } } }, fields: () => configFields(retryMember),
     },
+    {
+      shape: "a member named `type`", record: { retry: { type: "abc" } }, saved: { retry: { type: "abcd" } },
+      fields: () => deserializeFormSpec({ type: "object", properties: {
+        retry: { ...retryMember.retry, properties: { type: handleMember.handle } },
+      } }, defaultWidgets),
+    },
   ])("after a blocked save, $shape keeps its message through an edit that still fails, and saves once corrected", async ({ record, saved, fields }) => {
     sdkMocks.record = { id: "note-1", ...record };
     renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={fields()} />);

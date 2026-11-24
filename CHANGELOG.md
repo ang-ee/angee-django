@@ -10,6 +10,30 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: a member of an object field (a FormSpec `object` widget) named
+  `type` shows its message. Before, a value that broke such a member's rule showed
+  nothing on screen: a `MutationDialog` disabled Save, and a record form and an
+  `ActionFormDialog` built with `jsonSchemaActionArgs` refused the submit, with no
+  message and the member not marked invalid. On an error React Hook Form keeps,
+  `type` is the library's own attribute, a string, and `fieldErrorMessages`
+  skipped that key at every depth, also where it held a member's error. It now
+  decides by the value: any value under `type` that is not an object
+  (`MEMBER_ERRORS` among them) is skipped, and an object is walked as any member's
+  error, so the message shows under the member, stays through an edit that still
+  fails, and goes when the value is corrected. A bare value is a message only
+  where the library puts message text: as an error given to `fieldErrorMessages`,
+  or inside a `types` subtree; anywhere else a child that is not an object is
+  skipped. `ref` is still never walked: the library keeps the registered control
+  there, as a DOM element, a `Controller`'s object of functions, a plain
+  `{ name }` for a control that attached no element, `{ type, name }` for a radio
+  or checkbox group, or `undefined` for a path that is not registered, so a
+  member named `ref` still shows no message, and `serverErrorsFromForm` still
+  drops a server refusal of a member named `ref`. When the server refuses the
+  object field and its member named `type` together, the field's own `type` and
+  the member's error meet at one key: applied member first, the library's
+  `setError` drops the member's error, so only the field's message shows; applied
+  field first, both messages show, but `serverErrorsFromForm` returns only the
+  member's. Which rules fail and what a form saves or sends are unchanged.
 - `@angee/ui`: **Changed behaviour.** An `ActionFormDialog` that checks its own
   rules (its arguments are declared as `args`, or its definition brings no
   resolver) shows a failing value's message as the value changes. Before, it
@@ -46,8 +70,8 @@ live in code docstrings.
   members removes only that member's message, and a member of an object inside the
   object behaves the same. A form whose resolver is another one an action form
   definition brings, or `createJsonSchemaResolver` used directly, still loses a
-  member's message at the next edit, and a member named `type` or `ref` shows no
-  message in any form, since `fieldErrorMessages` skips those keys. Which rules
+  member's message at the next edit, and a member named `ref` shows no message in
+  any form, since `fieldErrorMessages` skips that key. Which rules
   fail and what a form saves or sends are unchanged. React Hook Form keeps a
   changed field's error only when it has a `type` or a `message`, or is a list's
   array, and an object field is one registered control whose members' errors sit
