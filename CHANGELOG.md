@@ -10,6 +10,13 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.base`: a model composing `ImplDefaultsMixin` names its configuration
+  column in `impl_config_field` (default `config`). Every save stores the
+  selected implementation's validated configuration in that column, system work
+  included; a refusal is reported under the column's name, with the same path
+  below it (`settings.retries` for a column named `settings`); the configuration
+  defaults seed that column; the model check (`angee.E046`) looks for it. Models
+  that name none keep `config` and behave as before. Upgrade: nothing.
 - `@angee/ui`: **Changed behaviour.** A record form decides in one place which of
   its declared groups it displays for a record, and its fields are its own and
   those groups' fields. `formDisplaysGroup` (`form-view-model.ts`) holds the three

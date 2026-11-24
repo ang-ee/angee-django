@@ -403,6 +403,75 @@ def test_impl_save_leaves_untouched_config_and_selector_deferred(django_assert_n
         assert stored.adapter == "typed"
 
 
+@pytest.mark.django_db(transaction=True)
+@override_settings(ANGEE_TEST_IMPLS={"typed": "tests.test_impl._TypedConfigImpl"})
+@isolate_apps()
+def test_a_model_naming_its_configuration_column_stores_it_validated_and_refuses_under_that_name() -> None:
+    """``impl_config_field`` names the column: every save stores the validated value there, system work included."""
+
+    class NamedConfigRecord(ImplDefaultsMixin):
+        impl_config_field = "settings"
+        adapter = ImplClassField(_BaseImpl)
+        settings = models.JSONField(default=dict)
+        label = models.CharField(max_length=50, default="")
+
+        class Meta:
+            app_label = "tests"
+
+    assert NamedConfigRecord.check() == []
+    with model_tables((NamedConfigRecord,)):
+        record = NamedConfigRecord.objects.create(adapter="typed", settings={"retries": "2"})
+        stored = NamedConfigRecord.objects.get(pk=record.pk)
+        assert stored.settings == {"endpoint": "https://example.test", "retries": 2}
+
+        record.settings = {"retries": "many"}
+        with pytest.raises(ValidationError) as refused:
+            record.save()
+        assert list(refused.value.message_dict) == ["settings.retries"]
+        assert NamedConfigRecord.objects.get(pk=record.pk).settings["retries"] == 2
+
+        untouched = NamedConfigRecord.objects.only("label").get(pk=record.pk)
+        untouched.label = "renamed"
+        untouched.save(update_fields=["label"])
+        assert "settings" not in untouched.__dict__
+
+        assert record.apply_config_patch({"retries": 5}) == {"settings"}
+        with pytest.raises(ValidationError) as patched:
+            record.apply_config_patch(["retries"])
+        assert list(patched.value.message_dict) == ["settings"]
+
+        seeded = NamedConfigRecord(adapter="typed")
+        assert seeded.materialize_impl_defaults(_TypedConfigImpl) == {"settings"}
+        assert seeded.settings == {"endpoint": "https://example.test"}
+
+
+@override_settings(ANGEE_TEST_IMPLS={"typed": "tests.test_impl._TypedConfigImpl"})
+@isolate_apps()
+def test_a_model_without_the_column_it_names_fails_the_typed_config_check() -> None:
+    class MissingConfigRecord(ImplDefaultsMixin):
+        impl_config_field = "settings"
+        adapter = ImplClassField(_BaseImpl)
+        config = models.JSONField(default=dict)
+
+        class Meta:
+            app_label = "tests"
+
+    (error,) = MissingConfigRecord.check()
+
+    assert (error.id, error.msg) == ("angee.E046", "MissingConfigRecord has no field named 'settings'")
+
+
+def test_the_configuration_column_stays_config_for_every_composer_that_names_none() -> None:
+    from angee.agents.testing.models import InferenceProvider
+    from angee.integrate.testing.integration import Integration
+
+    assert ImplDefaultsMixin.impl_config_field == "config"
+    for model in (Integration, OAuthClient, InferenceProvider, VcsBridge):
+        assert model.impl_config_field == "config"
+        assert [error.id for error in model.check() if error.id in {"angee.E046", "angee.E047"}] == []
+    assert VcsBridge._config_field().name == "config"
+
+
 def test_effective_defaults_merges_along_mro() -> None:
     """A refinement inherits its base's defaults and overrides only what it restates."""
 
