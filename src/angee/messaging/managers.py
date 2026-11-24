@@ -790,12 +790,13 @@ class ThreadQuerySet[ThreadT: Thread](
         Status feeds use their category, never a title inferred from authors.
         An untitled direct thread names its counterpart; an untitled group names
         up to two people and counts the rest ("Anna, Tim +4"). People are the
-        ``Message.sender`` handles of the actor-readable inbound messages, other
-        than the actor's own identity, most active first: outbound messages are
-        the account holder's, whichever handle sent them. A thread with no known
-        people labels as ``""`` so clients apply their own translated fallback.
-        Evaluate on a bounded page of threads; each call costs a fixed number of
-        queries.
+        ``Message.sender`` handles of the actor-readable, untrashed inbound
+        messages, other than the actor's own identity, most active first. A
+        trashed message names no one, even to a reader who may still read it, so
+        every reader sees one label; outbound messages are the account holder's,
+        whichever handle sent them. A thread with no known people labels as ``""``
+        so clients apply their own translated fallback. Evaluate on a bounded page
+        of threads; each call costs a fixed number of queries.
         """
 
         rows = list(self.order_by().select_related("title").only("pk", "modality", "title__text"))
@@ -815,6 +816,7 @@ class ThreadQuerySet[ThreadT: Thread](
                 message_model.objects.with_actor(actor)
                 .scoped_for_aggregate()
                 .filter(
+                    TrashQuerySet.untrashed_q(),
                     thread_id__in=list(untitled),
                     direction=message_model.Direction.INBOUND,
                     sender_id__in=models.Subquery(handles.values("pk")),
@@ -2675,46 +2677,53 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         digests = [hashlib.md5(value.encode("utf-8")).hexdigest() for value in values]
         return _external_id_annotated(self).filter(_eid_digest__in=digests, external_id__in=values)
 
-    def involving_parties(self, parties: Any) -> Self:
-        """Return messages any of ``parties``' resolved handles sent or received.
+    @staticmethod
+    def involving_handles_filter(
+        handle_ids: Any, *, messages: models.QuerySet, participants: models.QuerySet,
+    ) -> models.Q:
+        """Select the messages ``handle_ids`` sent (``Message.sender``) or received (a participant row).
 
-        Inbox scopes and correspondence reads pass either a lazy Party
-        queryset (a circle subtree) or a concrete iterable. Senders and recipients
-        are Handle-keyed and ``Handle.party`` is the resolution-materialised owner,
-        so one membership answers "every message exchanged with these parties across
-        channels". The membership subquery preserves one row per message even when
-        several handles match.
+        Both arms read inside ``messages``, the caller's authorized or structural
+        message population, and ``participants`` supplies the recipient rows. Keep the
+        two indexed access paths separate: a correlated recipient ``EXISTS`` inside an
+        ``OR`` makes PostgreSQL estimate almost every message as a match. Pass the
+        population, never the narrowed rows being filtered, or each arm repeats their
+        predicates. ``pk IN`` reads a message once, so a ``from`` row repeating its
+        sender changes nothing.
         """
 
-        handle_model = apps.get_model("parties", "Handle")
-        participant_model = apps.get_model("messaging", "Participant")
-        return self.filter(self.involving_parties_filter(
-            parties,
-            handles=handle_model.objects.all().scoped_for_aggregate(),
-            participants=participant_model.objects.all().scoped_for_aggregate(),
-        ))
+        sent = messages.filter(sender_id__in=handle_ids).order_by().values("pk")
+        received = messages.filter(
+            pk__in=participants.filter(handle_id__in=handle_ids).order_by().values("message_id"),
+        ).order_by().values("pk")
+        return models.Q(pk__in=sent.union(received, all=True))
+
+    @staticmethod
+    def involved_handle_ids(messages: models.QuerySet, *, participants: models.QuerySet) -> models.QuerySet:
+        """The ids of the handles that sent or received ``messages``, for an ``__in`` lookup.
+
+        The sender is ``Message.sender``; ``participants`` supplies the recipient rows.
+        Repeats are kept (``union(all=True)``) and a message without a sender adds a
+        null, which matches nothing.
+        """
+
+        recipients = participants.filter(message_id__in=messages.order_by().values("pk"))
+        return messages.order_by().values("sender_id").union(recipients.order_by().values("handle_id"), all=True)
 
     @staticmethod
     def involving_parties_filter(
-        parties: Any, *, handles: models.QuerySet, participants: models.QuerySet,
+        parties: Any, *, handles: models.QuerySet, messages: models.QuerySet, participants: models.QuerySet,
     ) -> models.Q:
-        """Sender or recipient membership within the caller's authorized or structural populations.
+        """Select the messages ``parties``' resolved handles sent or received, within the given populations.
 
-        The sender is ``Message.sender``, a column of the message this filter selects,
-        so that message's own scope authorizes it; ``participants`` supplies the
-        recipients. The id union counts a message once, also where a ``from`` row
-        repeats its sender. A handle merge keeps senders and participants on the
-        retired handle, so each matching handle selects its redirect group.
+        ``parties`` is a lazy Party queryset (a circle subtree) or a concrete iterable;
+        ``Handle.party`` is the resolution-materialised owner. A handle merge keeps
+        senders and participants on the retired handle, so each matching handle
+        selects its redirect group (:meth:`involving_handles_filter`).
         """
         survivors = handles.filter(party__in=parties, merged_into__isnull=True).order_by().values("pk")
         handle_ids = handles.model._base_manager.redirect_groups(models.Subquery(survivors)).values("pk")
-        sent = apps.get_model("messaging", "Message")._base_manager.filter(
-            sender_id__in=models.Subquery(handle_ids),
-        ).order_by().values("pk")
-        received = participants.filter(
-            handle_id__in=models.Subquery(handle_ids), message_id__isnull=False,
-        ).order_by().values("message_id")
-        return models.Q(pk__in=models.Subquery(sent.union(received)))
+        return MessageQuerySet.involving_handles_filter(handle_ids, messages=messages, participants=participants)
 
     def for_feed(self, search: str = "", *, all_copies: bool = False, anchor: str = "") -> Self:
         """Apply read/search scope and tuple order, retaining an explicitly addressed occurrence.

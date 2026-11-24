@@ -3282,6 +3282,40 @@ def test_conversation_labels_name_untitled_threads_by_their_people(channel: Any,
     }
 
 
+@pytest.mark.parametrize("viewer", ["thread-reader", "channel-owner"])
+def test_conversation_labels_never_name_the_sender_of_a_trashed_message(channel: Any, viewer: str) -> None:
+    """A trashed inbound message names no one, whether or not its reader may still read it."""
+
+    room = ParsedThread(external_id="room-trash", modality="group")
+    _ingest(
+        [
+            replace(
+                _parsed(external_id, subject=""),
+                thread=room,
+                sender=ParsedHandle(platform="email", value=f"{name.lower()}@example.com", display_name=name),
+                recipients=(),
+            )
+            for external_id, name in (("trash-1", "Tim"), ("trash-2", "Anna"))
+        ],
+        channel=channel,
+    )
+    reader = get_user_model().objects.create_user(username="label-thread-reader")
+    with system_context(reason="test conversation label grants"):
+        thread = Thread._base_manager.get(external_id=f"chat:{channel.pk}:room-trash")
+        trashed = Message._base_manager.filter(channel=channel, external_id="trash-2")
+        # A thread reader reads the conversation and, through their own grants, its senders.
+        write_relationships([
+            RelationshipTuple(resource=to_object_ref(row), relation="reader", subject=to_subject_ref(reader))
+            for row in (thread, *Handle._base_manager.filter(sent_messages__thread=thread))
+        ])
+    actor = reader if viewer == "thread-reader" else channel.owner
+    for is_trashed, label in ((True, "Tim"), (False, "Tim, Anna")):
+        with system_context(reason="test conversation label trash"):
+            trashed.update(is_trashed=is_trashed)
+        with actor_context(actor):
+            assert Thread.objects.filter(pk=thread.pk).conversation_labels() == {thread.pk: label}
+
+
 def test_integration_reader_reads_channel_messages_and_parts_without_write(channel: Any) -> None:
     """A standing integration ``reader`` reads what the channel carries, never writes it."""
 

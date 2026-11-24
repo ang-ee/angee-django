@@ -259,18 +259,12 @@ class MessageInbox:
         """
 
         ids = handles.model._base_manager.redirect_groups(Subquery(handles.survivor_ids())).values("pk")
-        recipients = self.participants.filter(handle_id__in=Subquery(ids), role__in=("to", "cc", "bcc"))
-        # Keep the two indexed access paths separate. A correlated recipient
-        # EXISTS inside an OR makes PostgreSQL estimate almost every message as
-        # a match, then evaluate shared-content predicates across the corpus.
-        # Build membership from the authorized corpus, then intersect the caller's
-        # scope once. Reusing rows inside each branch recursively duplicates its
-        # earlier sender/circle predicates when an exact-handle filter is added.
-        authored = self.messages.filter(sender_id__in=Subquery(ids)).order_by().values("pk")
-        addressed = (
-            self.messages.filter(pk__in=Subquery(recipients.order_by().values("message_id"))).order_by().values("pk")
-        )
-        return rows.filter(pk__in=Subquery(authored.union(addressed)))
+        # Membership is built from the authorized corpus, then intersects the
+        # caller's scope once: reusing rows inside each arm recursively duplicates
+        # its earlier sender/circle predicates when an exact-handle filter is added.
+        return rows.filter(MessageQuerySet.involving_handles_filter(
+            ids, messages=self.messages, participants=self.participants,
+        ))
 
     def selection(self, *, sender: str = "", circle: str = "") -> InboxSelection | None:
         """Resolve selection labels and commands through the authorized record owner."""

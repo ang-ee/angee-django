@@ -74,19 +74,19 @@ class InboxRelated:
 
         return self.inbox.handles.filter(party=self.party, party_link_confirmed=True)
 
-    def participants(self) -> Any:
-        """Recipient roles, including unavailable handles without leaking their identity.
+    def recipients(self) -> Any:
+        """The message's recipient rows, including unavailable handles without leaking their identity.
 
-        The pane lists the sender first, from ``Message.sender``; a ``from`` row
-        repeats it and is never listed.
+        The Participants pane lists the sender first, from ``Message.sender``; a
+        ``from`` row repeats it and is never listed.
         """
 
         return self.inbox.participants.filter(message=self.message, role__in=("to", "cc", "bcc"))
 
     def participant_count(self) -> int:
-        """The sender, when the message has one, and its recipients."""
+        """The pane's participants: the sender, when the message has one, and its recipients."""
 
-        return int(cast(Any, self.message).sender_id is not None) + self.participants().count()
+        return int(cast(Any, self.message).sender_id is not None) + self.recipients().count()
 
     def relations(self, text: str = "") -> Any:
         """Union produced edges with reply pointers before ordering and server paging."""
@@ -254,22 +254,22 @@ class InboxRelated:
                 self.inbox.messages.none(),
             )
         message = cast(Any, self.message)
-        participants = self.participants()
+        recipients = self.recipients()
         handles = self.inbox.handles
         sender_id = message.sender_id
         if text.strip():
             found = handles.filter(Q(_sender_name__icontains=text.strip()) | Q(value__icontains=text.strip()))
-            participants = participants.filter(handle_id__in=Subquery(found.values("pk")))
+            recipients = recipients.filter(handle_id__in=Subquery(found.values("pk")))
             if sender_id is not None and not found.filter(pk=sender_id).exists():
                 sender_id = None
         # The sender leads the recipients in either order; the recipients' window shifts past it.
         lead = int(sender_id is not None)
-        recipients = participants.order_by("created_at" if oldest else "-created_at", "pk")
+        ordered = recipients.order_by("created_at" if oldest else "-created_at", "pk")
         selected = [
-            *([(f"sender:{message.sqid}", sender_id, participants.model.ParticipantRole.FROM.value)]
+            *([(f"sender:{message.sqid}", sender_id, recipients.model.ParticipantRole.FROM.value)]
               if lead and window.start == 0 else []),
             *((str(row.sqid), row.handle_id, row.role)
-              for row in recipients[max(window.start - lead, 0):window.stop - lead]),
+              for row in ordered[max(window.start - lead, 0):window.stop - lead]),
         ]
         readable = {handle.pk: handle for handle in handles.filter(pk__in=[handle_id for _, handle_id, _ in selected])}
         return InboxPage(
@@ -282,7 +282,7 @@ class InboxRelated:
                 )
                 for key, handle_id, role in selected
             ],
-            lead + participants.count(),
+            lead + recipients.count(),
             self.participant_count(),
             self.inbox.messages.none(),
         )

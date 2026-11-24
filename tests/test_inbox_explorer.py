@@ -647,6 +647,7 @@ def test_related_relations_authorize_both_endpoints_and_keep_reply_provenance():
 
 @pytest.mark.parametrize("from_row", [False, True], ids=["sender", "sender-and-from-row"])
 def test_related_participants_list_the_message_sender_then_its_recipients_once(from_row):
+    """The pane lists rows, so a read ``from`` row would show the sender a second time; it never does."""
     owner = User.objects.create_user(username="explorer-participants")
     other = User.objects.create_user(username="explorer-participants-hidden")
     channel = make_integration(owner.username, model=Channel, owner=owner)
@@ -657,15 +658,15 @@ def test_related_participants_list_the_message_sender_then_its_recipients_once(f
             for name in ("ada", "bob")
         )
         hidden = Handle._base_manager.create(created_by=other, platform="email", value="hidden@example.com")
-        message, unattributed = (
+        message, unattributed, unsent = (
             Message._base_manager.create(
                 channel=channel, created_by=owner, sender=sender, status="synced", direction="inbound", sent_at=T0,
             )
-            for sender in (ada, hidden)
+            for sender in (ada, hidden, None)
         )
-        to, cc = (
-            Participant._base_manager.create(created_by=owner, message=message, handle=handle, role=role)
-            for handle, role in ((bob, "to"), (hidden, "cc"))
+        to, cc, unsent_to = (
+            Participant._base_manager.create(created_by=owner, message=row, handle=handle, role=role)
+            for row, handle, role in ((message, bob, "to"), (message, hidden, "cc"), (unsent, bob, "to"))
         )
         for minutes, row in enumerate((to, cc)):
             Participant._base_manager.filter(pk=row.pk).update(created_at=T0 + timedelta(minutes=minutes))
@@ -688,6 +689,16 @@ def test_related_participants_list_the_message_sender_then_its_recipients_once(f
         assert [[row.id for row in related.page(page=number, size=1).rows] for number in (1, 2, 3, 4)] == [
             [f"sender:{message.sqid}"], [str(cc.sqid)], [str(to.sqid)], [],
         ]
+        assert [[row.id for row in related.page(oldest=True, page=number, size=2).rows] for number in (1, 2, 3)] == [
+            [f"sender:{message.sqid}", str(to.sqid)], [str(cc.sqid)], [],
+        ]
+        # A message without a sender lists its recipients alone.
+        recipients_only = InboxRelated(inbox, f"participants:{unsent.sqid}")
+        assert recipients_only.summary().count == 1
+        assert [(row.id, row.label, row.role) for row in recipients_only.page().rows] == [
+            (str(unsent_to.sqid), "Bob", "to"),
+        ]
+        assert recipients_only.page(page=2, size=1).rows == []
         for text, expected in (("ada", f"sender:{message.sqid}"), ("bob", str(to.sqid))):
             searched = related.page(text=text)
             assert ([row.id for row in searched.rows], searched.count, searched.message_count) == ([expected], 1, 3)

@@ -101,8 +101,13 @@ def test_nexus_uses_the_timeline_identity_contract(correspondence) -> None:  # n
 
 
 @pytest.mark.parametrize("from_row", [False, True], ids=["sender", "sender-and-from-row"])
-def test_nexus_reads_each_sent_message_once_from_its_sender(correspondence, from_row) -> None:  # noqa: ANN001
-    """A message concerns its sender's records, through a merged alias too; a ``from`` row adds nothing."""
+def test_nexus_reads_sent_messages_from_their_sender(correspondence, from_row) -> None:  # noqa: ANN001
+    """A message concerns its sender's records, through a merged alias too.
+
+    ``records`` compares as a set and the timeline selects ``pk IN``, so a repeat cannot
+    show twice by construction; the ``from``-row case proves only that a row repeating
+    the sender changes nothing.
+    """
     data = correspondence
     with system_context(reason="test nexus sender reads"):
         alias = apps.get_model("parties", "Handle")._base_manager.create(platform="email", value="ada@old.example.com")
@@ -166,6 +171,15 @@ def test_nexus_dependency_removals_are_immediately_visible(correspondence) -> No
     data.message.save(update_fields=["sender"])
     assert all(timeline_entries(record, data.actor) == []
                for record in (data.party, data.other, data.circle, data.parent))
+    grace = apps.get_model("parties", "Handle")._base_manager.create(
+        party=data.other, platform="email", value="grace@example.com",
+    )
+    recipient = apps.get_model("messaging", "Participant")._base_manager.create(
+        message=data.message, thread=data.thread, handle=grace, role="to",
+    )
+    assert len(timeline_entries(data.other, data.actor)) == 1
+    recipient.delete()
+    assert timeline_entries(data.other, data.actor) == []
 
 
 def test_nexus_correspondence_excludes_record_chatter(correspondence) -> None:  # noqa: ANN001

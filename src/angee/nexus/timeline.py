@@ -64,6 +64,7 @@ class CorrespondenceKind(TimelineKind):
         return MessageQuerySet.involving_parties_filter(
             parties,
             handles=apps.get_model("parties", "Handle")._base_manager.all(),
+            messages=apps.get_model("messaging", "Message")._base_manager.all(),
             participants=apps.get_model("messaging", "Participant")._base_manager.all(),
         )
 
@@ -81,9 +82,14 @@ class CorrespondenceKind(TimelineKind):
     def records(self, row: Any) -> Iterable[RecordIdentity]:
         """Find concerned records with SQL membership, without hydrating a message fan-out.
 
-        A message concerns the parties of its ``Message.sender`` and of its recipients.
+        A message concerns the parties of the handles that sent or received it
+        (:meth:`MessageQuerySet.involved_handle_ids`), each read through its merge
+        redirect: the handle's own party and the party of the handle it merged into.
+        Each step is an id union inside ``pk IN``, so no join multiplies rows.
         """
         message = apps.get_model("messaging", "Message")
+        handle = apps.get_model("parties", "Handle")
+        participants = apps.get_model("messaging", "Participant")._base_manager.all()
         party = apps.get_model("parties", "Party")
         label = row._meta.concrete_model._meta.label
         if label == "messaging.Message":
@@ -92,8 +98,10 @@ class CorrespondenceKind(TimelineKind):
             messages = message.objects.filter(pk=row.message_id)
         elif label == "parties.Handle":
             # A handle merge keeps messages on the retired handle; its survivor's group concerns them.
-            handles = apps.get_model("parties", "Handle")._base_manager.redirect_groups([row.merged_into_id or row.pk])
-            messages = message.objects.filter(models.Q(participants__handle__in=handles) | models.Q(sender__in=handles))
+            group = handle._base_manager.redirect_groups([row.merged_into_id or row.pk]).values("pk")
+            messages = message.objects.filter(MessageQuerySet.involving_handles_filter(
+                group, messages=message._base_manager.all(), participants=participants,
+            ))
         elif label in ("messaging.Thread", "messaging.ThreadAttachment"):
             messages = message.objects.for_thread(row if label == "messaging.Thread" else row.thread)
         else:
@@ -104,14 +112,12 @@ class CorrespondenceKind(TimelineKind):
             else:
                 parties = party.objects.filter(pk__in=(row.pk, row.canonical().pk))
             return self._records(parties)
-        involved = messages.order_by().values("pk")
-        senders = messages.order_by().values("sender_id")
+        handles = handle._base_manager.filter(
+            pk__in=MessageQuerySet.involved_handle_ids(messages, participants=participants),
+        ).order_by()
         return self._records(party.objects.canonical().filter(
-            models.Q(handles__in=senders)
-            | models.Q(handles__merged_from__in=senders)
-            | models.Q(handles__participations__message__in=involved)
-            | models.Q(handles__merged_from__participations__message__in=involved),
-        ).distinct())
+            pk__in=handles.values("party_id").union(handles.values("merged_into__party_id"), all=True),
+        ))
 
     @staticmethod
     def _records(parties: Iterable[models.Model]) -> list[RecordIdentity]:
