@@ -539,7 +539,11 @@ pull request's run tests its merge commit, the tree `main` gets, so a push to
 has not moved since the pull request's run started, or run it again. Both events
 also run CI's `guards` job: gitleaks over the whole history, and no tracked
 `.work/` path. A new push to a pull request cancels the run it supersedes; every
-push to `main` runs to completion.
+push to `main` runs to completion. Every job runs where the reusable workflow's
+`runs-on` input says: CI passes the `CI_RUNS_ON` repository or organization
+variable, a JSON `runs-on` value such as `["self-hosted", "angee-local"]`, and
+GitHub-hosted `ubuntu-latest` while it is unset; a pull request from a fork always
+runs on GitHub-hosted runners.
 The current tiers are:
 
 - **Static** (the `python-quality` job): Ruff over the source tree, mypy over

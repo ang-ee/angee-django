@@ -86,6 +86,14 @@ on:
         required: false
         type: string
         default: "[]"
+      runs-on:
+        description: >-
+          Where every job runs, as a JSON runs-on value: "ubuntu-latest" for GitHub-hosted
+          runners, or self-hosted labels such as ["self-hosted", "angee-local"]. Callers pass
+          their CI_RUNS_ON variable.
+        required: false
+        type: string
+        default: '"ubuntu-latest"'
     secrets:
       ADDON_SOURCES_TOKEN:
         description: Token with read access to every private consumer dependency source.
@@ -106,7 +114,7 @@ env:
 jobs:
   python-quality:
     if: ${{ inputs.uv-enabled }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
@@ -135,7 +143,7 @@ jobs:
   # and the whole PostgreSQL selection in six groups.
   select:
     if: ${{ inputs.uv-enabled }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 10
     outputs:
       sqlite: ${{ steps.select.outputs.sqlite }}
@@ -184,7 +192,7 @@ jobs:
     name: uv ${{ matrix.group }}/6
     needs: select
     if: ${{ inputs.uv-enabled && inputs.pr-checks-enabled && needs.select.outputs.sqlite == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -214,7 +222,7 @@ jobs:
     name: uv postgres ${{ matrix.group }}/${{ strategy.job-total }}
     needs: select
     if: ${{ inputs.uv-enabled }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 60
     env:
       # A push to main measures the tests each group runs and keeps the measurements
@@ -302,7 +310,7 @@ jobs:
   uv:
     if: ${{ always() && inputs.uv-enabled }}
     needs: [python-quality, select, uv-shard, uv-postgres]
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 5
     steps:
       - run: |
@@ -318,7 +326,7 @@ jobs:
 
   pnpm:
     if: ${{ inputs.pnpm-enabled && inputs.pr-checks-enabled }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
@@ -350,7 +358,7 @@ jobs:
   stack-shard:
     name: stack ${{ matrix.group }}/${{ strategy.job-total }}
     if: ${{ inputs.stack-enabled && inputs.pr-checks-enabled }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -689,7 +697,7 @@ jobs:
   stack:
     if: ${{ always() && inputs.stack-enabled }}
     needs: [stack-shard]
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 5
     steps:
       - run: test "${{ needs.stack-shard.result }}" = success || { test "${{ inputs.pr-checks-enabled }}" = false && test "${{ needs.stack-shard.result }}" = skipped; }
