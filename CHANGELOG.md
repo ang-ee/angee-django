@@ -10,6 +10,15 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.webforms_messaging`: a form's channel is never blank and is stored
+  without the spaces around its id. A whitespace-only channel is refused under
+  `target_config.channel`, for an acting user before anyone asks whether they may
+  write on it (it was a permission refusal) and for system work (it was stored);
+  a padded id is stored stripped, so a second form on the same channel and slug is
+  refused even when its id was given with spaces. The configuration's JSON
+  schema is unchanged. Upgrade: no migration; a form stored with a blank channel
+  is refused at delivery as `config_invalid` (it was `channel_missing`) until its
+  channel is set.
 - `angee.webforms`: a form stores its target's configuration as the target's
   `config_model` validates it. `Form` composes `ImplDefaultsMixin` with
   `target_config` as its configuration column: every save normalizes it, system

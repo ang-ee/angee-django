@@ -16,6 +16,7 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.test import override_settings
 from rebac import actor_context, system_context
+from rebac.roles import grant as grant_role
 
 from angee.base.build import merged_schemas
 from angee.base.checks import check_stored_impl_keys
@@ -241,6 +242,77 @@ def test_a_second_form_on_one_channel_and_slug_is_refused_at_its_configuration_a
         Form.objects.create(name="A survey", target_class="store")
         Form.objects.create(name="Another survey", target_class="store")
         assert Form._base_manager.filter(target_class="message", target_config__channel=target.sqid).count() == 2
+
+
+def test_a_second_form_naming_the_same_channel_with_spaces_around_its_id_is_refused_the_same_conversation() -> None:
+    """The channel is stored stripped, so the one-form-per-conversation rule compares what is stored."""
+
+    target = channel()
+    form_on(target, slug="shared", name="First form")
+    padded = {"channel": f" {target.sqid} ", "slug": "shared"}
+    second = Form(name="Second form", target_class="message", target_config=padded)
+
+    with pytest.raises(ValidationError) as refused:
+        second.full_clean()
+    with system_context(reason="webforms messaging tests setup"), pytest.raises(IntegrityError), transaction.atomic():
+        Form(name="Second form", target_class="message", target_config=padded).save()
+
+    assert refused.value.message_dict == {
+        "target_config": ["Another form already posts on this channel under this slug."],
+    }
+
+
+@pytest.mark.parametrize("named", [pytest.param(" ", id="blank"), pytest.param("", id="empty")])
+def test_a_blank_channel_is_refused_by_its_field_for_an_acting_user_and_for_system_work(named: str) -> None:
+    """The refusal names the channel before anyone asks who may write on it; nothing is stored."""
+
+    target = channel()
+    with system_context(reason="webforms messaging tests setup"):
+        grant_role(actor=target.owner, role="webforms/role:webforms_admin")
+    config = {"channel": named, "slug": "enquiries"}
+
+    with actor_context(target.owner), pytest.raises(ValidationError) as as_user:
+        Form.objects.create(name="Enquiry form", target_class="message", target_config=config)
+    with system_context(reason="webforms messaging tests setup"), pytest.raises(ValidationError) as as_system:
+        Form.objects.create(name="Enquiry form", target_class="message", target_config=config)
+
+    assert list(as_user.value.message_dict) == list(as_system.value.message_dict) == ["target_config.channel"]
+    with system_context(reason="webforms messaging tests read"):
+        assert not Form._base_manager.filter(name="Enquiry form").exists()
+
+
+def test_a_channel_given_with_spaces_around_its_id_is_stored_stripped_and_delivers() -> None:
+    target = channel()
+    with system_context(reason="webforms messaging tests setup"):
+        grant_role(actor=target.owner, role="webforms/role:webforms_admin")
+    with actor_context(target.owner):
+        padded = {"channel": f" {target.sqid} ", "slug": "enquiries"}
+        made = Form.objects.create(name="Enquiry form", target_class="message", target_config=padded)
+    with system_context(reason="webforms messaging tests setup"):
+        FormVersion.objects.create(
+            form=made, definition=DEFINITION, languages=["en", "es"], default_language="en",
+            personal_questions=["name", "email", "phone"], contact_question="email",
+        ).publish()
+    form = Form._base_manager.get(pk=made.pk)
+    _row, message = delivered(form)
+
+    assert form.target_config == {"channel": target.sqid, "slug": "enquiries"}
+    assert message.channel_id == target.pk
+
+
+def test_a_form_stored_with_a_blank_channel_is_refused_its_delivery_as_an_invalid_configuration() -> None:
+    """Such a row, written before the channel was held to being non-blank, waits for its channel to be set."""
+
+    form = form_on(channel())
+    with system_context(reason="webforms messaging tests setup"):
+        Form._base_manager.filter(pk=form.pk).update(target_config={"channel": " ", "slug": "enquiries"})
+    row, _made = Response.objects.receive(form, version=1, submission_id="r-1", language="en", answers=ANSWERS)
+
+    with pytest.raises(DeliveryFailed) as refused:
+        row.deliver()
+
+    assert refused.value.reason == "refused: config_invalid"
+    assert Response._base_manager.get(pk=row.pk).retry_at is None
 
 
 def test_a_form_leaves_the_message_target_for_store_and_takes_its_own_channel_and_slug_back() -> None:

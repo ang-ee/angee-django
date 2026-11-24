@@ -16,9 +16,11 @@ target_config:
   slug: enquiries
 ```
 
-- `channel` is a channel with the `webform` backend. When a form whose target
-  or configuration changes is validated (`full_clean`), as the console and the
-  resource loader do, a channel that is gone or has another backend is refused
+- `channel` is a channel with the `webform` backend, by its public id: never
+  blank, and stored without the spaces around it, so one channel is always
+  stored the same way. When a form whose target or configuration changes is
+  validated (`full_clean`), as the console and the resource loader do, a
+  channel that is gone or has another backend is refused
   under `target_config` ([`MessageTarget.clean`](targets.py)): no response could
   be posted on it. For an acting user the channel is read through their own
   access, so one they cannot read is refused as a missing one; system work reads
