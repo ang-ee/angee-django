@@ -377,12 +377,24 @@ delivery, since nothing would erase the answers when it goes. Only declared
 types carry the link in their metadata and pay for it when they are deleted or
 merged.
 
+A form stores its target's configuration as the target's `config_model`
+validates it: every save normalizes `target_config`, system work included
+(`ImplDefaultsMixin`), and a refusal is reported under it, at the member it is
+about (`target_config.queue`). `Form.clean` leaves the validated value on the
+form.
+
 `deliver` runs as named system work inside the transaction that records its
 outcome. It returns the record it made or found, or `None`. When the owner
 will not take the response as it is, it raises `DeliveryRefused("<code>")`: the
 code (`unknown_category`) is all that is kept of the refusal, and a refused
-response is not tried again by itself. The web forms addon never names another
-addon's model.
+response is not tried again by itself. Web forms refuses one code of its own,
+for every target:
+
+| Code | The refusal | What staff do |
+|---|---|---|
+| `config_invalid` | The form's stored target configuration no longer validates: its target's `config_model` changed since the form was saved | Correct the form's target configuration, then deliver again |
+
+The web forms addon never names another addon's model.
 
 ## Personal data
 

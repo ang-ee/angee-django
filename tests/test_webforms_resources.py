@@ -549,6 +549,35 @@ def test_a_channels_public_id_is_kept_as_it_is_declared(declaring: Declaring) ->
     assert declaring.form().target_config == {"channel": public_id, "slug": "intake"}
 
 
+def test_a_declared_configuration_its_targets_model_refuses_is_refused_at_the_member_and_makes_nothing(
+    declaring: Declaring,
+) -> None:
+    """The row's configuration is validated as every save of a form validates it: the refusal names the member."""
+
+    with pytest.raises(ResourceLoadError, match=r"target_config\.slug") as refused:
+        declaring.load(target_config={"channel": "webforms_seed.intake", "slug": "Not A Slug"})
+
+    assert "No Public Webform channel" not in str(refused.value)
+    nothing_made(declaring)
+
+
+def test_a_channels_public_id_declared_with_spaces_around_it_is_stored_without_them(declaring: Declaring) -> None:
+    declaring.load_channels()
+    public_id = declaring.channel().sqid
+
+    declaring.load(target_config={"channel": f" {public_id} ", "slug": "intake"})
+
+    assert declaring.form().target_config == {"channel": public_id, "slug": "intake"}
+
+
+def test_a_blank_declared_channel_is_refused_at_the_channel_and_makes_nothing(declaring: Declaring) -> None:
+    with pytest.raises(ResourceLoadError, match=r"target_config\.channel") as refused:
+        declaring.load(target_config={"channel": " ", "slug": "intake"})
+
+    assert "No Public Webform channel" not in str(refused.value)
+    nothing_made(declaring)
+
+
 def test_a_declared_retention_must_be_create_only(tmp_path: Path) -> None:
     declaring = Declaring(tmp_path, create_only=())
 

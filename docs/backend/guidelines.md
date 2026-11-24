@@ -470,10 +470,13 @@ Use these owners instead of maintaining another contract in an addon:
   `ImplementationChoicesMixin` policy; do not put product filtering on a field subclass.
 - **Typed row implementation config has one owner.** A model composing
   [`ImplDefaultsMixin`](../../src/angee/base/models/implementations.py) uses one
-  effective implementation selector for its concrete `config` JSONField. Native
-  model checks reject a missing/wrong config field or ambiguous typed selectors.
-  Untyped field defaults and rowless implementation config do not require a row
-  config column. Pydantic remains the selected implementation's validation owner.
+  effective implementation selector for its concrete `config` JSONField, or for
+  the JSON column the model names in `impl_config_field`. Every save stores the
+  validated configuration there, system work included, and a refusal is reported
+  under that column's name. Native model checks reject a missing/wrong config
+  field or ambiguous typed selectors. Untyped field defaults and rowless
+  implementation config do not require a row config column. Pydantic remains the
+  selected implementation's validation owner.
 - **An `ImplClassField` builds its enum at model-import time from its base's
   `registry_setting`** — the key→path mapping (e.g. `ANGEE_STORAGE_BACKEND_CLASSES`)
   is supplied by the owning addon's `autoconfig`, so every settings module that
