@@ -50,19 +50,15 @@ longer says it is required; a member holding its key with `undefined` still says
 it is required.
 
 Where the record form still checks, or no longer checks, a field against that
-rule: a required field left empty in a contributed section whose permission the
-record lacks, or in a saved-only group on a create, still blocks the save with
-nothing on screen, since the form does not display that section but its fields
-stay among those the save writes; a redacted required field left empty still
-blocks the save, with "This field is required." under its lock, where the person
-has no control; a required field the record cannot write still shows an editable
+rule: a redacted required field left empty still blocks the save, with "This
+field is required." under its lock, where the person has no control; a required
+field the record cannot write still shows an editable
 control, blocks the save while it is empty, and the save drops what is typed
 there; a field declared hidden whose control its page renders itself (with
 `BoundDescriptorField`) is no longer checked by the client, and a server refusal
 of it shows under that control and in the banner; and a control a page renders
 for a field outside the fields the save writes is no longer checked, while what
-is typed there is dropped by the save, as before. A saved-only group's field is
-still sent on a create (a text left empty, as an empty text).
+is typed there is dropped by the save, as before.
 
 A server refusal of a record-form field whose descriptor is hidden, that lies
 outside the fields the save writes, or that its condition hides now shows in the
@@ -70,9 +66,7 @@ banner with its own text, as `name: message` under the field's raw name rather
 than its label, the way a refusal of an undeclared field does. Before, the
 banner said "Please fix the highlighted fields: …" with nothing highlighted and
 without the server's text, and next to a form-level error only that error
-showed. A field in a section the form does not display (a permission the record
-lacks, a saved-only group on a create) is still named among the highlighted
-fields. A shown field's refusal is unchanged, and a field declared hidden whose
+showed. A shown field's refusal is unchanged, and a field declared hidden whose
 control its page renders shows the refusal under that control as well as in the
 banner. What a form saves or sends is unchanged.
 Upgrade: `structuredFieldErrors` returns `required` for a field left out at its

@@ -49,7 +49,12 @@ export interface GroupDescriptor {
   lines?: boolean;
   /** The section is the pane with this id rather than part of the sheet. */
   pane?: string;
-  /** Projected record permission required to show this group; set from a contribution. */
+  /**
+   * Projected record permission required to show this group; set from a contribution. Where the
+   * record lacks it, or on a create, which has no record, a field only this group declares is not
+   * one of the form's fields: it is neither checked nor saved, and no default or create seed of it
+   * is sent.
+   */
   permission?: string;
   /** The container child that contributed it, when the record decides (its `impl` or a variant); set by FormView. */
   containerChild?: string;
