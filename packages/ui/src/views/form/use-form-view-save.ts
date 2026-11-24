@@ -137,9 +137,11 @@ export interface UseFormViewSaveProps {
   modelMetadata: ModelMetadata | null;
   formFields: readonly FieldDescriptor[];
   /**
-   * The fields one record's form saves, when they depend on the record: the
-   * groups of the container children it admits (an `impl` child, a variant in
-   * its original's place). `formFields` holds every candidate.
+   * The fields one record's form saves, when they depend on the record: its
+   * own, and those of the groups it displays and of its rail rows (a
+   * `savedOnly` group only on a saved record, a section or a rail row only with
+   * its permissions, a container child's only where the record admits it).
+   * `formFields` holds every candidate.
    */
   formFieldsFor?: (record: Row | null) => readonly FieldDescriptor[];
   fieldByName: ReadonlyMap<string, FieldDescriptor>;
@@ -303,7 +305,10 @@ export function useFormViewSave({
     ? acknowledgedSource.record
     : read.result ?? null;
   const displayRecord = record;
-  // The record's own fields: where an original and its variant both declare one, the admitted declaration saves.
+  // The record's own fields (`formFieldsFor`): the check, the member marks, the banner's claim, the
+  // payload and the preset writes read these, so a field only an undisplayed group declares is in
+  // none of them; where several displayed declarations name one, the first saves, the page's own
+  // before a contribution's.
   const saveFields = React.useMemo(
     () => formFieldsFor?.(displayRecord) ?? formFields,
     [displayRecord, formFields, formFieldsFor],
@@ -577,8 +582,8 @@ export function useFormViewSave({
     if (!mounted.current) return null;
     // Every refused field's message is set at its path, so a control a page renders itself shows
     // it; the summary calls highlighted only the save's fields whose descriptor is neither hidden
-    // nor excluded by its condition (one in a section the form does not display among them), and
-    // gives any other its own message.
+    // nor excluded by its condition, and gives any other its own message, one only a group the
+    // record does not display declares among them.
     const values = form.getValues();
     const shown = visibleFields(saveFields, values).filter((field) => isFieldControlVisible(field, values));
     return applyFormErrors(form, result, {

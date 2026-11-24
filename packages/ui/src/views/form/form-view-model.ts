@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { get, set, type FieldErrors } from "react-hook-form";
 import { replaceEqualDeep } from "@tanstack/react-query";
 import {
+  holdsPermission,
   publicIdLabel,
   relationModelLabelForField,
   rowPublicId,
@@ -66,10 +67,6 @@ export interface FormSectionModel {
   defaultOpen?: boolean;
   fields: readonly FieldDescriptor[];
   render?: () => ReactNode;
-  /** Projected record permission required to show this section. */
-  permission?: string;
-  /** The container child behind it, shown only on records that admit that child. */
-  containerChild?: string;
   /** The pane this section fills instead of the sheet. */
   pane?: string;
   sequence?: number;
@@ -88,11 +85,45 @@ export interface FormViewFieldLayout {
 /** The section key of a form's editable lines, declared by a `lines` group or trailing the form. */
 export const EDITABLE_LINES_SECTION = "editable-lines";
 
+/**
+ * Whether a record's form displays a declared group: the one place its conditions are decided. A
+ * `savedOnly` group is no part of a create form; a group carrying a `permission` shows on a record
+ * that holds it (`holdsPermission`), so never without a record; a group a row-decided container
+ * child contributed (`containerChild`) shows where `admits`, the form's container admission, admits
+ * that child for the record. The sheet, its panes and the fields the form checks and saves
+ * (`displayedFormFields`) all read it: a field only groups it does not display declare is not that
+ * record's form field. A contribution's tabs ask it for their child's permission and admission, its
+ * actions for their child's admission alone: a contribution's permission does not gate the actions
+ * it contributes.
+ */
+export function formDisplaysGroup(
+  group: Pick<GroupDescriptor, "savedOnly" | "permission" | "containerChild">,
+  record: Row | null,
+  { isCreate, admits }: { isCreate: boolean; admits: (child: string, record: Row | null) => boolean },
+): boolean {
+  return !(isCreate && group.savedOnly)
+    && (group.permission === undefined || holdsPermission(record, group.permission))
+    && (group.containerChild === undefined || admits(group.containerChild, record));
+}
+
+/** The names of the fields `groups` declare: none of them is one of a form's ungrouped fields. */
+function groupFieldNames(groups: readonly GroupDescriptor[]): ReadonlySet<string> {
+  return new Set(groups.flatMap((group) => group.fields.map((field) => field.name)));
+}
+
+/**
+ * A form's sections: its ungrouped fields, then one per declared group it `displays` (see
+ * `formDisplaysGroup`), keyed by the group's index among all `groups`, so a group left out
+ * renumbers no other. The first `pageGroupCount` of `groups` are the page's own, the rest
+ * contributed. The ungrouped section holds the `fields` that neither one of the page's own groups,
+ * displayed or not, nor a displayed contributed group declares.
+ */
 export function formSections(
   fields: readonly FieldDescriptor[],
   groups: readonly GroupDescriptor[],
   sequences: readonly (number | undefined)[] = [],
-  isCreate = false,
+  displays: (group: GroupDescriptor) => boolean = () => true,
+  pageGroupCount = groups.length,
 ): readonly FormSectionModel[] {
   if (groups.length === 0) return [{ key: "fields", fields }];
   if (groups.filter((group) => group.lines).length > 1) {
@@ -101,11 +132,8 @@ export function formSections(
   if (groups.some((group) => group.lines && group.pane !== undefined)) {
     throw new Error("A form's editable lines group cannot also be a pane.");
   }
-  const groupedNames = new Set<string>();
   const sections: FormSectionModel[] = groups.flatMap((group, index) => {
-    // A saved-only group's fields stay out of a create form, never falling back to the ungrouped section.
-    for (const field of group.fields) groupedNames.add(field.name);
-    if (isCreate && group.savedOnly) return [];
+    if (!displays(group)) return [];
     if (group.fields.length === 0 && group.content === undefined && !group.lines) return [];
     return [
       {
@@ -118,15 +146,16 @@ export function formSections(
         defaultOpen: group.defaultOpen,
         fields: group.fields,
         ...(group.content !== undefined ? { render: () => group.content } : {}),
-        ...(group.permission !== undefined ? { permission: group.permission } : {}),
-        ...(group.containerChild !== undefined ? { containerChild: group.containerChild } : {}),
         ...(group.pane !== undefined ? { pane: group.pane } : {}),
         sequence: sequences[index],
         order: index,
       },
     ];
   });
-  const ungrouped = fields.filter((field) => !groupedNames.has(field.name));
+  // A field of the page's own undisplayed group stays out of the form, never falling back to the
+  // ungrouped section; a page's own field only an undisplayed contribution re-declares shows there.
+  const grouped = groupFieldNames(groups.filter((group, index) => index < pageGroupCount || displays(group)));
+  const ungrouped = fields.filter((field) => !grouped.has(field.name));
   if (ungrouped.length > 0) sections.unshift({ key: "fields", fields: ungrouped });
   return sections;
 }
@@ -280,6 +309,25 @@ export function flattenedFormFields(
     for (const field of group.fields) addFormField(flattened, seen, field);
   }
   return flattened;
+}
+
+/**
+ * One record's form fields: `flattenedFormFields` over the declarations its form displays, the
+ * first declaration of a name winning. They are the form's field list `fields`, less the fields of
+ * the page's own groups that `displays` (see `formDisplaysGroup`) rejects, which a page's field list
+ * also lists; then the fields of the `groups` it displays, in their order. The first
+ * `pageGroupCount` of `groups` are the page's own, the rest contributed. A field the page declares
+ * outside its own groups keeps the page's declaration whatever a contribution re-declares, and with
+ * every group displayed this is `flattenedFormFields(fields, groups)`, declaration for declaration.
+ */
+export function displayedFormFields(
+  fields: readonly FieldDescriptor[],
+  groups: readonly GroupDescriptor[],
+  displays: (group: GroupDescriptor) => boolean,
+  pageGroupCount: number,
+): readonly FieldDescriptor[] {
+  const undisplayed = groupFieldNames(groups.filter((group, index) => index < pageGroupCount && !displays(group)));
+  return flattenedFormFields(fields.filter((field) => !undisplayed.has(field.name)), groups.filter(displays));
 }
 
 function addFormField(
@@ -531,11 +579,13 @@ export function isFieldControlVisible(field: FieldDescriptor, values: FormValues
 }
 
 /**
- * A record form's errors for the rules its `fields` fail (the fields its save writes), each
- * field's found by `fieldRuleErrors` and worded by `fieldErrorsFromRules`. As a dialog's check
- * (`dialogRuleErrors`) does, it asks only the fields whose descriptor is shown for `values`
- * (`isFieldControlVisible`: neither hidden nor conditionally excluded) and not read-only, and
- * leaves the others to the server; a field in a section the form does not display is still asked.
+ * A record form's errors for the rules its `fields` fail (the fields its save writes: those the
+ * form displays for the record, `displayedFormFields`, and the rail rows `displayedRailGroups`
+ * holds), each field's found by `fieldRuleErrors` and worded by `fieldErrorsFromRules`. As a
+ * dialog's check (`dialogRuleErrors`) does, it asks only the fields whose descriptor is shown for
+ * `values` (`isFieldControlVisible`: neither hidden nor conditionally excluded) and not read-only,
+ * and leaves the others to the server; a field only a group the record does not display declares
+ * is not among `fields`, so it is not asked.
  * It differs from a dialog's check in four facts only: it reads read-only from the field as
  * resolved for `values` (its own flag, its `resolve`, its mode on a create or an edit), where a
  * dialog also reads `readOnlyWhen`; it reads each value at its dotted path, where a dialog reads

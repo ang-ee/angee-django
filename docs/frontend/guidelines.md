@@ -1199,7 +1199,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **Record rails reuse form fields.** Contribute a `FormView.RailGroup` as a
   `<model>#rail` child with standard field descriptors and optional
   group/row permissions. The form selects those fields and binds them to its
-  save state; unreadable rows stay absent. The rail sits beside the sheet and
+  save state; unreadable rows stay absent, and a row behind a permission the
+  record lacks, or of a child it does not admit, is neither checked nor saved.
+  The rail sits beside the sheet and
   stacks beneath it in a narrow container.
 - **Inline visibility controls bind a server verb.** Declare a
   `<Field name="visibility" widget="visibility" placement="title" visibilityAction={...} />`.
@@ -1335,10 +1337,14 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   [fieldRuleErrors](../../packages/ui/src/views/form/field-values.ts); inside a
   structured field `required` means presence and the field's own bounds judge a
   blank. A record form asks the fields its save writes whose descriptor is
-  neither hidden, nor read-only, nor excluded by its condition (a field whose
-  section the form does not display is still asked), and no form asks a hidden or
-  read-only member or list item: the server answers for what the client does not
-  check.
+  neither hidden, nor read-only, nor excluded by its condition; those are its
+  own fields, the fields of the groups it displays for the record
+  ([formDisplaysGroup](../../packages/ui/src/views/form/form-view-model.ts)) and
+  those of the rail rows whose permissions and child the record holds and admits
+  ([displayedRailGroups](../../packages/ui/src/views/form/form-view-rail.tsx)), so
+  a field only a group it does not display declares is neither asked nor sent.
+  No form asks a hidden or read-only member or list item: the server answers for
+  what the client does not check.
 - A widget that consumes a fixed array of object fields declares
   `acceptsRowTemplate: true` in its widget definition. The FormSpec projector
   passes the parsed `rowTemplate` only through that seam and rejects a selected
@@ -2396,7 +2402,8 @@ seed even for a `readOnly`/`createOnly` field — whether the seed is the field'
 no longer silently dropped from the create payload. Prefer `createOnly` (editable on
 create carrying the seed, locked on edit) when the value should stay visible-but-fixed;
 `readOnly` + `createDefaults` also works for a value the form never renders editable.
-(`editOnly` fields stay excluded on create.)
+(`editOnly` fields stay excluded on create, and so does a field only a group the create does
+not display declares: a `savedOnly` group, or a section behind a permission.)
 
 ## Pitfalls
 

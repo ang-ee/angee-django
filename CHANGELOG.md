@@ -10,6 +10,54 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: **Changed behaviour.** A record form decides in one place which of
+  its declared groups it displays for a record, and its fields are its own and
+  those groups' fields. `formDisplaysGroup` (`form-view-model.ts`) holds the three
+  conditions: a `savedOnly` group is no part of a create form; a group carrying a
+  contribution's `permission` shows on a record that holds it, so never on a
+  create; a group of a row-decided container child shows on the records that
+  admit the child. The sheet's sections, its pane groups and the fields the form
+  checks and saves (`displayedFormFields`) read it; a contribution's tabs ask it
+  for their child's permission and admission, and its actions for their child's
+  admission alone, since a contribution's permission does not gate the actions it
+  contributes. The section filter that decided the permission and the admission a
+  second time and the save's own admission filter are deleted, and `formSections`
+  takes the predicate where it took `isCreate`. The record rail has its own,
+  `displayedRailGroups` (`form-view-rail.tsx`): the child's admission, the group's
+  and the child's permission and each row's permission, read by the rail's
+  display and by the save; a row whose field the metadata does not read stays a
+  display rule. The record's fields are the form's field list less the fields of
+  the page's own groups it does not display (a page's field list also lists its
+  groups' fields), then the fields of the groups it displays, the first
+  declaration of a name winning: where every group is displayed they are the
+  fields the form had, declaration for declaration, and a field the page declares
+  outside its own groups stays, with the page's declaration, whatever a
+  contribution re-declares. A field only undisplayed groups declare is no longer
+  one of them: a required one left empty no longer blocks the save with nothing
+  on screen, nothing is sent for it (no create seed, no `defaultValue`), and a
+  server refusal of it is still named in the banner with its own text but called
+  highlighted nowhere, and marked invalid only on a control a page renders for it
+  itself. Before, a required field left empty in a `savedOnly` group on a create,
+  in a contributed section whose permission the record lacked, or in a rail row
+  behind such a permission blocked the save silently, and a `savedOnly` group's
+  field was sent on a create. The ungrouped section holds the form's fields that
+  neither a page's own group nor a displayed contribution declares, so a page's
+  own field that only an undisplayed contribution re-declares now shows there,
+  with its message when it fails a rule; before, it showed nowhere unless it was
+  the title, status or body, though it was checked and saved, so a required one
+  left empty blocked the save silently. Every group's section keeps its key, order
+  and sequence, and where that field is the page's only ungrouped one the
+  ungrouped section now comes in front of them; the
+  title, status and body are chosen among the record's form fields, so a field
+  only an undisplayed group declares is no longer one on a create (a `savedOnly`
+  group), on a record lacking a section's permission, or on an edit while its
+  record loads. Limits: a control a page renders itself for a field only an
+  undisplayed group declares still takes typing that the save drops (before, it
+  was sent: a `savedOnly` group's field on a create, a permission-gated section's
+  field on a create or on a record lacking the permission); a rail row sharing
+  its name with a field only an undisplayed section declares decides its own
+  visibility. `formFields` still registers every candidate, so any record's
+  values load.
 - Addons require django-zed-rebac 0.38.0, a security release (advisory
   GHSA-r4c4-cvfj-jgcf); versions before it are excluded. A queryset evaluated
   under two decisions, evaluated again after its scope raised, or embedded in a
@@ -81,8 +129,7 @@ live in code docstrings.
   per-field decision each surface wrote. Each surface keeps only its own facts:
   which fields it asks (a record form the fields its save writes for the record,
   `formFieldsFor`, whose descriptor is neither hidden, nor read-only as resolved
-  for its values, nor excluded by its condition, so a field whose section the
-  form does not display is still asked; a dialog the fields shown, neither
+  for its values, nor excluded by its condition; a dialog the fields shown, neither
   `readOnly` nor `readOnlyWhen`), how it reads a value (a dotted path or one flat
   key; both read a top-level key holding `undefined` as absent), which fields
   count as required (a record form adds the model's required-on-create names on
@@ -120,29 +167,24 @@ live in code docstrings.
   control for a hidden member and a read-only control for a read-only one. A
   dialog reads a top-level key holding `undefined` as absent; a member holding
   one still fails `required` (a recorded defect). Where the record form still
-  checks, or no longer checks, a field against that rule: a required field left
-  empty in a contributed section whose permission the record lacks, or in a
-  saved-only group on a create, still blocks the save with nothing on screen,
-  since the form does not display the section while its fields stay among those
-  the save writes; a redacted required field left empty still blocks it, with
-  "This field is required." under its lock and no control; a required field the
+  checks, or no longer checks, a field against that rule: a redacted required
+  field left empty still blocks the save, with "This field is required." under
+  its lock and no control; a required field the
   record cannot write keeps an editable control, blocks the save while empty,
   and the save drops what is typed there; a field declared hidden whose control
   the page renders itself (`BoundDescriptorField`) is no longer checked on the
   client, and a server refusal of it shows under that control and in the banner;
   and a control a page renders for a field outside the fields the save writes is
   no longer checked, what is typed there being dropped by the save, as before.
-  The permission, saved-only, redacted and not-writable cases are recorded as
-  expected failures, with a saved-only group's field still sent on a create. A
+  The redacted and not-writable cases are recorded as expected failures. A
   server refusal of a record-form field whose descriptor is hidden, that lies
   outside the fields the save writes, or that its condition hides now shows in
   the banner with its own text, as `name: message` under the field's raw name,
   as an undeclared field's does: "Please fix the highlighted fields" now names
   only the fields the save writes whose descriptor is neither hidden nor excluded
   by its condition, while every refused field's error is still set at its path,
-  so a control the page renders itself shows it;
-  a field in a section the form does not display is still named among the
-  highlighted. What a form saves or sends, the messages' texts,
+  so a control the page renders itself shows it. What a form saves or sends, the
+  messages' texts,
   `markMemberErrors` and how each submit gate is built are unchanged.
   `structuredFieldErrors` returns `required` for a required field or member left
   out that is not presence-required, returns nothing at or under a hidden or
