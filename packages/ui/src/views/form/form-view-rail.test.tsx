@@ -69,7 +69,7 @@ describe("displayedRailGroups", () => {
     railChild("imap.health", { impl: "imap", content: <RecordRailGroup id="health" label="Health" fields={[{ field: { name: "secret" } }]} /> }),
   ]);
   const displayed = (record: { id: string; kind?: string; permissions: string[] }) =>
-    displayedRailGroups(groups, record, admits).map((group) => [group.id, group.fields?.map(({ field }) => field.name)]);
+    displayedRailGroups(groups, record, admits, metadata).map((group) => [group.id, group.fields?.map(({ field }) => field.name)]);
 
   test.each<[string, { id: string; kind?: string; permissions: string[] }, unknown[]]>([
     ["a record holding no gate's permission, whose child is not admitted", { id: "n", kind: "mail", permissions: ["read"] },
@@ -78,16 +78,23 @@ describe("displayedRailGroups", () => {
       [["properties", ["due_date", "private_note"]], ["settings", ["due_date"]]]],
     ["a record holding the child's permission", { id: "n", kind: "mail", permissions: ["read", "admin"] },
       [["properties", ["due_date"]], ["private", []]]],
-    ["a record admitting the row-decided child", { id: "n", kind: "imap", permissions: ["read"] },
-      [["properties", ["due_date"]], ["health", ["secret"]]]],
+    ["a record admitting the row-decided child, whose one row the metadata does not read", { id: "n", kind: "imap", permissions: ["read"] },
+      [["properties", ["due_date"]], ["health", []]]],
   ])("%s displays exactly the groups and rows it holds every gate of", (_case, record, expected) => {
     expect(displayed(record)).toEqual(expected);
   });
 
-  test("leaves the metadata's readable rule to the display: an unreadable row stays one the record displays", () => {
-    const record = { id: "n", kind: "imap", permissions: ["read"] };
-    expect(displayedRailGroups(groups, record, admits).find((group) => group.id === "health")?.fields?.map(({ field }) => field.name)).toEqual(["secret"]);
-    expect(visibleRecordRailGroups(groups, record, {}, metadata, admits).find((group) => group.id === "health")).toBeUndefined();
+  test.each<[string, ModelMetadata | null, string[]]>([
+    ["reads the row's field", metadata, ["due_date"]],
+    ["marks it unreadable", { fields: { due_date: { readable: false } } } as unknown as ModelMetadata, []],
+    ["lacks it", { fields: {} } as unknown as ModelMetadata, []],
+    ["has not loaded", null, []],
+  ])("holds a row only where the metadata reads its field: where it %s, the save's set and the display agree", (_case, read, expected) => {
+    const record = { id: "n", kind: "mail", permissions: ["read"] };
+    const rows = (found: readonly { id: string; fields?: readonly { field: { name: string } }[] }[]) =>
+      found.find((group) => group.id === "properties")?.fields?.map(({ field }) => field.name) ?? [];
+    expect(rows(displayedRailGroups(groups, record, admits, read))).toEqual(expected);
+    expect(rows(visibleRecordRailGroups(groups, record, {}, read, admits))).toEqual(expected);
   });
 
   test("two alternatives a record admits together clash whatever their permissions", () => {
@@ -95,7 +102,7 @@ describe("displayedRailGroups", () => {
       railChild("imap.health", { impl: "imap", content: <RecordRailGroup id="health" label="Health" content="IMAP" /> }),
       railChild("imap.health-admin", { impl: "imap", permission: "admin", content: <RecordRailGroup id="health" label="Health" content="Admin" /> }),
     ]);
-    expect(() => displayedRailGroups(clashing, { id: "n", kind: "imap", permissions: ["read"] }, admits))
+    expect(() => displayedRailGroups(clashing, { id: "n", kind: "imap", permissions: ["read"] }, admits, metadata))
       .toThrow(/duplicate record rail group id "health"/);
   });
 

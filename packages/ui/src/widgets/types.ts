@@ -212,6 +212,11 @@ export interface WidgetRenderProps<TValue = unknown, TRow = unknown> {
 export interface WidgetDefinition<TValue = unknown, TRow = unknown> {
   /** Accepts a parsed `rowTemplate` for fixed-size arrays of objects in a form spec. */
   acceptsRowTemplate?: true;
+  /**
+   * On a saved record this widget does not write through the form: it commits through its own
+   * action, or not at all, and decides its own editability. On a create it changes nothing.
+   */
+  writesOwnValue?: true;
   edit?: ComponentType<WidgetRenderProps<TValue, TRow>>;
   read: ComponentType<WidgetRenderProps<TValue, TRow>>;
   cell?: ComponentType<WidgetRenderProps<TValue, TRow>>;

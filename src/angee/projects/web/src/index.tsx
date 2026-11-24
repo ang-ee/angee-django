@@ -76,7 +76,7 @@ const projects = defineBaseAddon({
   menus: projectsMenu,
   forms: { [PROJECT_MODEL]: projectForm, [TASK_MODEL]: taskForm },
   i18n: { projects: enProjectsMessages },
-  widgets: { "projects.phase": { read: ProjectPhaseControl, edit: ProjectPhaseControl } },
+  widgets: { "projects.phase": { read: ProjectPhaseControl, edit: ProjectPhaseControl, writesOwnValue: true } },
   containers: {
     // A task's line on the Timeline opens the Tasks tab.
     "timeline#kinds": {
