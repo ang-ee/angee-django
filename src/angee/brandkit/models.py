@@ -119,10 +119,15 @@ def readable_color(color: str, *, on: Sequence[str], ink: str) -> tuple[str, flo
 
 
 def _parsed_seed(color: str) -> str:
-    """Return a seed as lower-case ``#rrggbb``, or raise ``ValidationError`` for one stored past validation."""
+    """Return a seed formatted from its parsed channels as ``#rrggbb``, or raise ``ValidationError``.
+
+    The validator refuses a seed stored past validation; formatting the channels
+    back (:func:`mix_colors` at no shift) drops anything the validator lets past
+    after them, such as a trailing newline, so no role is ever the stored string.
+    """
 
     HEX_COLOR_VALIDATOR(color)
-    return color.lower()
+    return mix_colors(color, color, 0.0)
 
 
 def ink_on(color: str) -> str:

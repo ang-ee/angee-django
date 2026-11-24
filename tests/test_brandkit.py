@@ -488,6 +488,23 @@ def test_a_seed_stored_past_validation_raises_instead_of_coming_back_as_written(
         BrandKit(**{**ANGEE, "neutral": "#-7-7-7"}).mail_palette()
 
 
+@pytest.mark.skipif(
+    connection.vendor == "postgresql", reason="varchar(7) refuses the eight-character value, so it cannot be stored.",
+)
+def test_every_palette_colour_is_formatted_from_parsed_channels(db: None) -> None:
+    """A trailing newline the hex validator lets past never reaches mail: no role is the stored seed string."""
+
+    del db
+    kit = _kit("Newline")
+    with system_context(reason="tests.brandkit.orm"):
+        BrandKit.objects.filter(pk=kit.pk).update(brand="#E7B008\n")
+        stored = BrandKit.objects.get(pk=kit.pk)
+    assert stored.brand == "#E7B008\n"
+    palette = stored.mail_palette()
+    assert palette["light"]["primary"] == "#e7b008"
+    assert all(re.fullmatch(r"#[0-9a-f]{6}\Z", value) for roles in palette.values() for value in roles.values())
+
+
 def test_a_brand_colour_no_ink_reads_on_takes_black_text_and_no_warning() -> None:
     """The theme's two inks fail on a mid grey; black reads wherever white does not."""
 
