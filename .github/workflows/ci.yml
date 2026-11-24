@@ -33,3 +33,26 @@ jobs:
       framework-ref: ${{ github.sha }}
       # Match the bridge dependency artifacts to this framework's manifests.
       bridges-ref: "ef4da950a3d9c08058a4f64b6c96a39e068cf09c"
+
+  # The public repository's guards, one job: no secret anywhere in the history
+  # and no private work-state path tracked (AGENTS.md -> Where Knowledge Lives).
+  guards:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      # The gitleaks CLI is MIT and license-free; gitleaks-action@v2 demands a
+      # paid org license secret. Run the binary directly.
+      - name: Scan for secrets
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz | tar -xz gitleaks
+          ./gitleaks git --no-banner --redact --exit-code 1 .
+      - name: Reject tracked .work/ paths
+        run: |
+          if git ls-files | grep -E '^\.work(/|$)'; then
+            echo "::error::Private .work/ content must never be committed to the public repo."
+            exit 1
+          fi
+          echo "OK: no .work/ paths tracked."
