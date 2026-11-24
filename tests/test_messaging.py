@@ -89,7 +89,7 @@ from angee.provenance.statements import (
     StatementSourceMixin,
 )
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild
-from tests.conftest import Backend, Drive, MimeType, make_integration
+from tests.conftest import Backend, Drive, MimeType, create_platform_admin, make_integration
 from tests.conftest import (
     File as StorageFile,
 )
@@ -3282,9 +3282,15 @@ def test_conversation_labels_name_untitled_threads_by_their_people(channel: Any,
     }
 
 
-@pytest.mark.parametrize("viewer", ["thread-reader", "channel-owner"])
+@pytest.mark.parametrize("viewer", ["administrator", "channel-owner"])
 def test_conversation_labels_never_name_the_sender_of_a_trashed_message(channel: Any, viewer: str) -> None:
-    """A trashed inbound message names no one, whether or not its reader may still read it."""
+    """A trashed inbound message names no one, even to a reader who may still read it.
+
+    Both cases may read a trashed message (``withheld_keeper``: an admin, a channel
+    manager), so each fails without the rule. A plain thread reader is not a case:
+    ``Message.read`` already withholds a trashed message from them, so their label
+    would pass with or without the rule.
+    """
 
     room = ParsedThread(external_id="room-trash", modality="group")
     _ingest(
@@ -3299,16 +3305,9 @@ def test_conversation_labels_never_name_the_sender_of_a_trashed_message(channel:
         ],
         channel=channel,
     )
-    reader = get_user_model().objects.create_user(username="label-thread-reader")
-    with system_context(reason="test conversation label grants"):
-        thread = Thread._base_manager.get(external_id=f"chat:{channel.pk}:room-trash")
-        trashed = Message._base_manager.filter(channel=channel, external_id="trash-2")
-        # A thread reader reads the conversation and, through their own grants, its senders.
-        write_relationships([
-            RelationshipTuple(resource=to_object_ref(row), relation="reader", subject=to_subject_ref(reader))
-            for row in (thread, *Handle._base_manager.filter(sent_messages__thread=thread))
-        ])
-    actor = reader if viewer == "thread-reader" else channel.owner
+    actor = create_platform_admin("label-admin") if viewer == "administrator" else channel.owner
+    thread = Thread._base_manager.get(external_id=f"chat:{channel.pk}:room-trash")
+    trashed = Message._base_manager.filter(channel=channel, external_id="trash-2")
     for is_trashed, label in ((True, "Tim"), (False, "Tim, Anna")):
         with system_context(reason="test conversation label trash"):
             trashed.update(is_trashed=is_trashed)

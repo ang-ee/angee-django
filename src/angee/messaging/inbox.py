@@ -252,10 +252,12 @@ class MessageInbox:
         return rows
 
     def involving_handles(self, rows: Any, handles: Any) -> Any:
-        """Authorship or explicit message recipients; thread membership is insufficient.
+        """Authorship (``Message.sender``) or any participant row of the message; thread membership is insufficient.
 
-        A handle merge keeps messages and recipients on the retired handle, so each
-        handle selects its survivor's redirect group.
+        A ``from`` row written before ingest stopped writing them also matches; it
+        always names the message's sender, so it adds nothing. A handle merge keeps
+        messages and recipients on the retired handle, so each handle selects its
+        survivor's redirect group.
         """
 
         ids = handles.model._base_manager.redirect_groups(Subquery(handles.survivor_ids())).values("pk")

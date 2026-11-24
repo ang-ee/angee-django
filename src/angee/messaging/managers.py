@@ -2699,14 +2699,16 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         return models.Q(pk__in=sent.union(received, all=True))
 
     @staticmethod
-    def involved_handle_ids(messages: models.QuerySet, *, participants: models.QuerySet) -> models.QuerySet:
+    def involved_handle_ids(messages: models.QuerySet) -> models.QuerySet:
         """The ids of the handles that sent or received ``messages``, for an ``__in`` lookup.
 
-        The sender is ``Message.sender``; ``participants`` supplies the recipient rows.
-        Repeats are kept (``union(all=True)``) and a message without a sender adds a
-        null, which matches nothing.
+        The sender is ``Message.sender``; the recipients are the messages' participant
+        rows, read structurally, so ``messages`` is the only scope. Repeats are kept
+        (``union(all=True)``) and a message without a sender adds a null, which
+        matches nothing.
         """
 
+        participants = apps.get_model("messaging", "Participant")._base_manager
         recipients = participants.filter(message_id__in=messages.order_by().values("pk"))
         return messages.order_by().values("sender_id").union(recipients.order_by().values("handle_id"), all=True)
 

@@ -89,7 +89,6 @@ class CorrespondenceKind(TimelineKind):
         """
         message = apps.get_model("messaging", "Message")
         handle = apps.get_model("parties", "Handle")
-        participants = apps.get_model("messaging", "Participant")._base_manager.all()
         party = apps.get_model("parties", "Party")
         label = row._meta.concrete_model._meta.label
         if label == "messaging.Message":
@@ -100,7 +99,9 @@ class CorrespondenceKind(TimelineKind):
             # A handle merge keeps messages on the retired handle; its survivor's group concerns them.
             group = handle._base_manager.redirect_groups([row.merged_into_id or row.pk]).values("pk")
             messages = message.objects.filter(MessageQuerySet.involving_handles_filter(
-                group, messages=message._base_manager.all(), participants=participants,
+                group,
+                messages=message._base_manager.all(),
+                participants=apps.get_model("messaging", "Participant")._base_manager.all(),
             ))
         elif label in ("messaging.Thread", "messaging.ThreadAttachment"):
             messages = message.objects.for_thread(row if label == "messaging.Thread" else row.thread)
@@ -112,9 +113,7 @@ class CorrespondenceKind(TimelineKind):
             else:
                 parties = party.objects.filter(pk__in=(row.pk, row.canonical().pk))
             return self._records(parties)
-        handles = handle._base_manager.filter(
-            pk__in=MessageQuerySet.involved_handle_ids(messages, participants=participants),
-        ).order_by()
+        handles = handle._base_manager.filter(pk__in=MessageQuerySet.involved_handle_ids(messages)).order_by()
         return self._records(party.objects.canonical().filter(
             pk__in=handles.values("party_id").union(handles.values("merged_into__party_id"), all=True),
         ))
