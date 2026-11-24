@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
 import environ
+from django.core.exceptions import ImproperlyConfigured
 
 from angee.base.origins import public_origin
 from angee.base.paths import resolve_path
@@ -63,8 +64,9 @@ SETTINGS: _Settings = {
     "REBAC_ALLOW_SUDO": True,
     # Administrator reach is expressed in schema relations, so every actor uses grants.
     "REBAC_SUPERUSER_BYPASS": False,
-    # Children read with their admitted parent rows, by REBAC's structural prefetch
-    # (`settings` below): off, every relation a read loads keeps its permission statement.
+    # Children read with their admitted parent rows and a referred record's label shown with
+    # the row that refers to it, by REBAC's structural prefetch and display rows (`settings`
+    # below): off, every relation a read loads keeps its permission statement.
     "ANGEE_REBAC_READ_THROUGH_PARENT": False,
     # The deployment's public browser origin (`https://host`, no path), fed by the
     # ANGEE_PUBLIC_ORIGIN environment variable the stack sets. A valid one joins
@@ -79,6 +81,7 @@ _DerivedSettings = TypedDict(
     {
         "REBAC_DEPTH_LIMIT": int,
         "REBAC_STRUCTURAL_PREFETCH": bool,
+        "REBAC_DISPLAY_FIELDS": NotRequired[bool | str],
         "ALLOWED_HOSTS": list[str],
         "ANGEE_DATA_DIR": Path,
         "STATIC_ROOT": Path,
@@ -98,15 +101,19 @@ def settings(namespace: Mapping[str, Any]) -> _DerivedSettings:
     is not.
 
     ``ANGEE_REBAC_READ_THROUGH_PARENT``, authored or from the environment (``true``,
-    ``1``), turns on REBAC's ``REBAC_STRUCTURAL_PREFETCH`` as the boolean ``True``
-    unless the project sets that itself; nothing else follows from it. REBAC 0.36.0
+    ``1``; :func:`read_through_parent`), turns on REBAC's
+    ``REBAC_STRUCTURAL_PREFETCH`` and ``REBAC_DISPLAY_FIELDS``, each as the boolean
+    ``True`` unless the project sets it itself; nothing else follows from it. REBAC 0.36.0
     to 0.37.0 deliver children their own statement withholds (below a parent
     admitted at a recursion's depth limit, on another database, under a recaveat
     override): never turn the switch on with them. A REBAC with those fixes alone
     delivers no child to the console's documents, which admit messages under
     ``read_inbox``; that needs one that proves one action implies another
-    (``rebac.structural.implies``). The backend guidelines' "Reading through the
-    parent" says what is delivered.
+    (``rebac.structural.implies``). With the switch on, ``REBAC_DISPLAY_FIELDS``
+    set to ``"fallback"`` is refused, and so is a REBAC without display rows through
+    a prefetch (``RebacQuerySet.for_display``) while ``REBAC_DISPLAY_FIELDS`` is on:
+    both raise ``ImproperlyConfigured`` here. The backend guidelines' "Reading
+    through the parent" says what is delivered.
     """
 
     data = resolve_path(namespace.get("ANGEE_DATA_DIR", resolve_path(namespace["BASE_DIR"]) / ".angee" / "data"))
@@ -122,8 +129,7 @@ def settings(namespace: Mapping[str, Any]) -> _DerivedSettings:
         },
     })
     engine = databases.get("default", {}).get("ENGINE")
-    # Unset or None reads as off, as ``DEBUG`` does; a string is the environment's spelling.
-    through_parent = bool(environ.Env.parse_value(namespace.get("ANGEE_REBAC_READ_THROUGH_PARENT") or False, bool))
+    through_parent = read_through_parent(namespace.get("ANGEE_REBAC_READ_THROUGH_PARENT"))
     derived: _DerivedSettings = {
         "ALLOWED_HOSTS": namespace.get("ALLOWED_HOSTS", ["*"] if namespace.get("DEBUG", False) else []),
         "ANGEE_DATA_DIR": data,
@@ -135,7 +141,46 @@ def settings(namespace: Mapping[str, Any]) -> _DerivedSettings:
         )),
         "REBAC_STRUCTURAL_PREFETCH": namespace.get("REBAC_STRUCTURAL_PREFETCH", through_parent),
     }
+    if through_parent:
+        derived["REBAC_DISPLAY_FIELDS"] = _display_fields(namespace.get("REBAC_DISPLAY_FIELDS", True))
     origin = public_origin(namespace.get("ANGEE_PUBLIC_ORIGIN"), debug=bool(namespace.get("DEBUG", False)))
     if origin and origin not in namespace.get("CSRF_TRUSTED_ORIGINS", ()):
         derived["CSRF_TRUSTED_ORIGINS:append"] = [origin]
     return derived
+
+
+def read_through_parent(value: object) -> bool:
+    """``ANGEE_REBAC_READ_THROUGH_PARENT`` as the boolean it reads as.
+
+    Unset or ``None`` reads as off, as ``DEBUG`` does; a string is the environment's
+    spelling (``true``, ``1``), which the setting can hold as it is.
+    """
+
+    return bool(environ.Env.parse_value(value or False, bool))
+
+
+def _display_fields(value: Any) -> bool | str:
+    """``REBAC_DISPLAY_FIELDS`` under ``ANGEE_REBAC_READ_THROUGH_PARENT``, or ``ImproperlyConfigured``.
+
+    ``"fallback"`` is refused: under it a row ``rebac_select_related`` joins, of a
+    model with display fields, that the reader may not read is shown with them
+    where the read raised before. On (``True`` or ``"always"``), the installed REBAC
+    must deliver display rows through a prefetch, which the switch's relation fields
+    ask for.
+    """
+
+    if value == "fallback":
+        raise ImproperlyConfigured(
+            'ANGEE_REBAC_READ_THROUGH_PARENT refuses REBAC_DISPLAY_FIELDS = "fallback". '
+            "Leave it unset (the switch sets True) or set it to False."
+        )
+    if value is True or value == "always":
+        from rebac.managers import RebacQuerySet
+
+        if not hasattr(RebacQuerySet, "for_display"):
+            raise ImproperlyConfigured(
+                "ANGEE_REBAC_READ_THROUGH_PARENT shows labels through REBAC's display rows through a prefetch "
+                "(RebacQuerySet.for_display), which the installed django-zed-rebac does not have. Install a "
+                "release that has them, or set REBAC_DISPLAY_FIELDS = False to read children alone."
+            )
+    return value

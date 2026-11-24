@@ -11,35 +11,60 @@ nor their answers are cached across compilations.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any, Self, cast
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from functools import lru_cache
+from typing import TYPE_CHECKING, Any, Self, cast
 
 import strawberry
 import strawberry_django
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
 from django.db.models.expressions import Combinable
 from django.db.models.fields.reverse_related import ForeignObjectRel
 from django.db.models.functions import Cast
 from django.db.models.lookups import Exact, In
-from rebac import current_actor
+from rebac import current_actor, display
 from rebac.graphql.strawberry_django import optimize
 from rebac.managers import RebacQuerySet
 from rebac.resources import model_resource_type
 from strawberry import Info
+from strawberry.types import get_object_definition
 from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.optimizer import OptimizerStore
 from strawberry_django.queryset import run_type_get_queryset
+from strawberry_django.utils.typing import get_django_definition
 
 from angee.base.models.base import record_display_label
 from angee.base.models.refs import RecordRefMixin
-from angee.base.permissions import relation_read_queryset
+from angee.base.permissions import display_rows_requested, read_arms, relation_read_queryset
 from angee.base.prefetch import prefetched, prefetched_objects
 from angee.base.refs import RecordRef
 from angee.graphql.ids import PublicID, optional_public_id, require_public_id, to_public_id
 from angee.graphql.introspection import FieldPathError, fields_for_path, is_to_one_relation
 from angee.graphql.node import AngeeNode
+from graphql import (
+    BREAK,
+    FieldNode,
+    FragmentDefinitionNode,
+    FragmentSpreadNode,
+    GraphQLInterfaceType,
+    GraphQLObjectType,
+    GraphQLSchema,
+    InlineFragmentNode,
+    Node,
+    ObjectFieldNode,
+    SelectionSetNode,
+    TypeInfo,
+    TypeInfoVisitor,
+    Visitor,
+    get_named_type,
+    visit,
+)
+
+if TYPE_CHECKING:
+    from angee.graphql.schema import GraphQLSchemas
 
 
 @strawberry.type
@@ -62,6 +87,14 @@ class RecordPointerType:
 
 _UNCACHED = object()
 _REFERENCE_TARGET = "_angee_reference_target"
+_NODE_RESOLVERS = {
+    field.python_name: field.base_resolver.wrapped_func
+    for field in get_object_definition(AngeeNode, strict=True).fields
+    if field.base_resolver is not None
+}
+# A node's public id reads the row's key, and its redaction ledger the row's own marks.
+_NODE_ID = _NODE_RESOLVERS["id"]
+_ROW_OWN_RESOLVERS = frozenset({_NODE_ID, _NODE_RESOLVERS["redacted_fields"]})
 
 
 class _ActorScopedSubquery(models.Expression):
@@ -353,18 +386,32 @@ def _guarded_to_one_field(field_name: str, resolver: Callable[[models.Model], An
         resolver=resolver,
         field_name=field_name,
         only=[field_name],
-        prefetch_related=[_guarded_relation_prefetch(field_name)],
+        prefetch_related=[_GuardedRelationPrefetch(field_name)],
     )
 
 
-def _guarded_relation_prefetch(field_name: str) -> Callable[[strawberry.Info], models.Prefetch]:
-    """Apply selected node annotations and nested hints alongside the join key.
+class _GuardedRelationPrefetch:
+    """A guarded relation field's prefetch hint over its own relation ``field_name``.
 
-    The native optimizer resolves ``permissions_field`` annotation callbacks on
-    this related queryset, as it does on roots, before any row is materialized.
+    Apply selected node annotations and nested hints alongside the join key. The
+    native optimizer resolves ``permissions_field`` annotation callbacks on this
+    related queryset, as it does on roots, before any row is materialized.
+
+    Under :func:`~angee.base.permissions.display_rows_requested`, the queryset of a
+    forward to-one whose target declares display fields asks REBAC for display rows
+    (``for_display()``) when every reader of the relation in the executing document
+    reads them alone (:func:`_reads_display_fields_alone`). The prefetch fills
+    Django's relation cache either way: REBAC reads the rows by its permission
+    statement wherever it cannot deliver display rows, and a delivered display row
+    is what the relation then holds for every reader, so nothing reading it through
+    its row loads the target.
     """
 
-    def prefetch(info: strawberry.Info) -> models.Prefetch:
+    def __init__(self, field_name: str) -> None:
+        self.field_name = field_name
+
+    def __call__(self, info: strawberry.Info) -> models.Prefetch:
+        field_name = self.field_name
         field = cast(StrawberryDjangoField, info._field)
         related_model = field.django_model
         if related_model is None:
@@ -381,9 +428,293 @@ def _guarded_relation_prefetch(field_name: str) -> Callable[[strawberry.Info], m
             store.only.append(relation.field.attname)
         elif isinstance(relation, models.ForeignKey):
             store.only.append(relation.target_field.attname)
-        return models.Prefetch(field_name, queryset=optimize(queryset, info, store=store))
+        queryset = optimize(queryset, info, store=store)
+        if (
+            isinstance(relation, models.ForeignKey)
+            and display_rows_requested()
+            and _reads_display_fields_alone(info, relation)
+        ):
+            queryset = cast(RebacQuerySet[Any], queryset).for_display()
+        return models.Prefetch(field_name, queryset=queryset)
 
-    return prefetch
+
+def _reads_display_fields_alone(info: strawberry.Info, relation: models.ForeignKey[Any, Any]) -> bool:
+    """Whether every reader of ``relation`` in the executing document reads its target's display fields alone.
+
+    Decided for the whole document (every operation path and fragment, with
+    ``@include`` and ``@skip`` disregarded), so every prefetch of the relation in
+    it decides alike, and because rows of one model resolved at several paths can
+    be one instance: Django sets a reverse relation's rows' foreign key to their
+    parent row. All of:
+
+    - the relation names its target's primary key, is not a parent link, and the
+      target declares display fields its policy does not gate (``rebac.display.fields``);
+    - every field over the relation selects nothing but ``__typename``, the target's
+      ``id`` and stored columns that are display fields (:func:`_selects_display_fields`);
+    - every other field the document selects on a row of the relation's model, or of
+      a parent or child model, reads nothing through the relation (:func:`_reads_through`);
+    - no argument, literal or variable, names the relation: a filter or an ordering
+      on its target keeps the relation's scoped read.
+    """
+
+    target = cast(type[models.Model], relation.related_model)
+    if not relation.target_field.primary_key or relation.remote_field.parent_link:
+        return False
+    shown = display.fields(target)
+    if not shown:
+        return False
+    raw = info._raw_info
+    holders = _model_type_names(raw.schema, cast(type[models.Model], relation.model))
+    names = {relation.name}
+    alone = True
+
+    class _Readers(Visitor):
+        def enter_field(self, node: FieldNode, *_args: object) -> Any:
+            nonlocal alone
+            parent = type_info.get_parent_type()
+            if not isinstance(parent, GraphQLObjectType | GraphQLInterfaceType) or parent.name not in holders:
+                return None
+            field = parent.fields.get(node.name.value)
+            if field is None:
+                return None
+            source = (field.extensions or {}).get("strawberry-definition")
+            reading = _reads_through(source, relation)
+            if reading == "label":
+                names.add(node.name.value)
+                target_type = get_named_type(field.type)
+                if isinstance(target_type, GraphQLObjectType) and _selects_display_fields(
+                    node.selection_set, target_type, target, shown, raw.fragments,
+                ):
+                    return None
+            elif reading == "none":
+                return None
+            alone = False
+            return BREAK
+
+    for definition in (raw.operation, *raw.fragments.values()):
+        type_info = TypeInfo(raw.schema)
+        visit(definition, TypeInfoVisitor(type_info, _Readers()))
+        if not alone:
+            return False
+    return not _names_relation((raw.operation, *raw.fragments.values()), info.variable_values, names)
+
+
+def _reads_through(source: object, relation: models.ForeignKey[Any, Any]) -> str:
+    """How a field selected on a row of ``relation``'s model reads ``relation`` through the row.
+
+    ``"label"``: a field over the relation built by :func:`actor_scoped_to_one`,
+    whose selection decides. ``"none"``: a field that reads no relation through
+    its row, or another one: ``__typename``, the node's ``id`` and redaction
+    ledger, a stored column, a field over another relation, or a resolver that
+    declares what it reads through native optimizer hints, none naming the
+    relation. ``"row"``: any other field, which may read the relation through the
+    row: a public id or another field named for the relation, a resolver that
+    declares nothing or builds a prefetch at execution, or a field that is not
+    strawberry-django's.
+    """
+
+    if source is None:
+        return "none"
+    resolver = getattr(source, "base_resolver", None)
+    if resolver is not None and resolver.wrapped_func in _ROW_OWN_RESOLVERS:
+        return "none"
+    if not isinstance(source, StrawberryDjangoField):
+        return "row"
+    store = source.store
+    guarded = [hint.field_name for hint in store.prefetch_related if isinstance(hint, _GuardedRelationPrefetch)]
+    if guarded:
+        if relation.name not in guarded:
+            return "none"
+        # A public id projects the target's key without a model projection; it is not a label read.
+        return "label" if source.django_model is not None else "row"
+    if str(source.django_name) == relation.name:
+        return "row"
+    if resolver is None and (source.is_relation or _stored_column(source, cast(type[models.Model], relation.model))):
+        return "none"
+    if not store:
+        return "row"
+
+    def names(path: str) -> bool:
+        return path in (relation.name, relation.attname) or path.startswith(f"{relation.name}__")
+
+    paths = [*store.only, *store.select_related]
+    for hint in store.prefetch_related:
+        if isinstance(hint, str):
+            paths.append(hint)
+        elif isinstance(hint, models.Prefetch):
+            paths.append(hint.prefetch_through)
+        else:
+            # A prefetch built at execution is not read here.
+            return "row"
+    return "row" if any(names(path) for path in paths) else "none"
+
+
+def _selects_display_fields(
+    selection_set: SelectionSetNode | None,
+    graphql_type: GraphQLObjectType,
+    model: type[models.Model],
+    shown: frozenset[str],
+    fragments: dict[str, FragmentDefinitionNode],
+) -> bool:
+    """Whether ``selection_set`` selects only ``__typename``, ``id`` and stored columns of ``model`` among ``shown``.
+
+    Fragments and inline fragments are opened; one on another type than
+    ``graphql_type`` or its interfaces, or anything else selected, is not within.
+    """
+
+    if selection_set is None:
+        return False
+    conditions = {graphql_type.name, *(interface.name for interface in graphql_type.interfaces)}
+    for selection in selection_set.selections:
+        if isinstance(selection, FieldNode):
+            if selection.name.value == "__typename":
+                continue
+            field = graphql_type.fields.get(selection.name.value)
+            source = (field.extensions or {}).get("strawberry-definition") if field is not None else None
+            resolver = getattr(source, "base_resolver", None)
+            if selection.selection_set is None and (
+                (resolver is not None and resolver.wrapped_func is _NODE_ID)
+                or _stored_column(source, model) in shown
+            ):
+                continue
+            return False
+        fragment = fragments.get(selection.name.value) if isinstance(selection, FragmentSpreadNode) else selection
+        if not isinstance(fragment, FragmentDefinitionNode | InlineFragmentNode) or (
+            fragment.type_condition is not None and fragment.type_condition.name.value not in conditions
+        ):
+            return False
+        if not _selects_display_fields(fragment.selection_set, graphql_type, model, shown, fragments):
+            return False
+    return True
+
+
+def _stored_column(source: object, model: type[models.Model]) -> str | None:
+    """The column of ``model`` a strawberry-django field projects as stored: no resolver, hint or relation."""
+
+    if not isinstance(source, StrawberryDjangoField) or source.base_resolver is not None:
+        return None
+    if source.is_relation or source.store:
+        return None
+    try:
+        field = model._meta.get_field(str(source.django_name))
+    except FieldDoesNotExist:
+        return None
+    if not isinstance(field, models.Field) or field.is_relation or field not in model._meta.concrete_fields:
+        return None
+    return field.name
+
+
+def _names_relation(definitions: tuple[Node, ...], variables: Mapping[str, Any], names: set[str]) -> bool:
+    """Whether an argument in ``definitions``, as written or through a variable, has an input field in ``names``."""
+
+    found = False
+
+    class _Inputs(Visitor):
+        def enter_object_field(self, node: ObjectFieldNode, *_args: object) -> Any:
+            nonlocal found
+            if node.name.value in names:
+                found = True
+                return BREAK
+            return None
+
+    for definition in definitions:
+        visit(definition, _Inputs())
+    pending: list[Any] = list(variables.values())
+    while pending and not found:
+        value = pending.pop()
+        if isinstance(value, dict):
+            found = any(key in names for key in value)
+            pending.extend(value.values())
+        elif isinstance(value, list | tuple):
+            pending.extend(value)
+    return found
+
+
+@lru_cache(maxsize=64)
+def _model_type_names(schema: GraphQLSchema, model: type[models.Model]) -> frozenset[str]:
+    """The object types of ``schema`` whose rows are ``model``'s, or a parent or child model's, and their interfaces."""
+
+    names: set[str] = set()
+    for graphql_type in schema.type_map.values():
+        rows = _rows_model(graphql_type)
+        if isinstance(graphql_type, GraphQLObjectType) and rows is not None and (
+            issubclass(rows, model) or issubclass(model, rows)
+        ):
+            names.add(graphql_type.name)
+            names.update(interface.name for interface in graphql_type.interfaces)
+    return frozenset(names)
+
+
+def _rows_model(graphql_type: object) -> type[models.Model] | None:
+    """The model whose rows a graphql-core object type resolves, from its optional Strawberry source definition."""
+
+    if not isinstance(graphql_type, GraphQLObjectType):
+        return None
+    origin = getattr((graphql_type.extensions or {}).get("strawberry-definition"), "origin", None)
+    definition = get_django_definition(origin) if isinstance(origin, type) else None
+    return definition.model if definition is not None else None
+
+
+@dataclass(frozen=True, slots=True)
+class DisplayAudience:
+    """A GraphQL field that can show a model's display fields, and who reads the rows that hold its foreign key."""
+
+    schema: str
+    type_name: str
+    field: str
+    holder: str
+    """The model whose rows hold the foreign key, as ``app_label.Model``."""
+    kind: str
+    """``prefetch``: built by :func:`actor_scoped_to_one`, whose prefetch asks for display rows where every
+    reader of the relation in the document reads them alone. ``plain``: a strawberry-django relation field,
+    which REBAC joins and shows display rows through while ``REBAC_DISPLAY_FIELDS`` is on
+    (``angee.graphql.E006`` refuses one). ``other``: any other field named for the relation."""
+    readers: tuple[str, ...]
+    """Who reads the holder: the arms of its read (:func:`~angee.base.permissions.read_arms`)."""
+
+
+def display_audience(model: type[models.Model], schemas: GraphQLSchemas | None = None) -> tuple[DisplayAudience, ...]:
+    """Every field of every named schema named for a foreign key (or one-to-one) to ``model``'s primary key.
+
+    The fields of the types whose rows hold such a relation, whatever ``model``
+    declares: every field that can show its display fields is among them, with the
+    readers of its holder, who see them. ``manage.py display_audience`` prints it.
+    """
+
+    from angee.graphql.schema import GraphQLSchemas
+
+    schemas = schemas if schemas is not None else GraphQLSchemas.from_discovery()
+    found: list[DisplayAudience] = []
+    for name in schemas.names():
+        core = schemas.graphql_schema(name)
+        for type_name in sorted(core.type_map):
+            graphql_type = core.type_map[type_name]
+            holder = _rows_model(graphql_type)
+            if holder is None:
+                continue
+            for wire, graphql_field in cast(GraphQLObjectType, graphql_type).fields.items():
+                source = (graphql_field.extensions or {}).get("strawberry-definition")
+                if not isinstance(source, StrawberryDjangoField):
+                    continue
+                try:
+                    relation = holder._meta.get_field(str(source.django_name))
+                except FieldDoesNotExist:
+                    continue
+                if not (
+                    isinstance(relation, models.ForeignKey)
+                    and relation.related_model is model
+                    and relation.target_field.primary_key
+                    and not relation.remote_field.parent_link
+                ):
+                    continue
+                if _reads_through(source, relation) == "label":
+                    kind = "prefetch"
+                elif source.base_resolver is None and source.is_relation:
+                    kind = "plain"
+                else:
+                    kind = "other"
+                found.append(DisplayAudience(name, type_name, wire, holder._meta.label, kind, read_arms(holder)))
+    return tuple(found)
 
 
 def actor_scoped_to_many(field_name: str) -> Any:
@@ -399,7 +730,7 @@ def actor_scoped_to_many(field_name: str) -> Any:
     return strawberry_django.field(
         resolver=_actor_scoped_to_many_resolver(field_name),
         field_name=field_name,
-        prefetch_related=[_guarded_relation_prefetch(field_name)],
+        prefetch_related=[_GuardedRelationPrefetch(field_name)],
     )
 
 
@@ -422,7 +753,7 @@ def actor_scoped_public_ids(field_name: str) -> Any:
     return strawberry_django.field(
         resolver=resolve_public_ids,
         field_name=field_name,
-        prefetch_related=[_guarded_relation_prefetch(field_name)],
+        prefetch_related=[_GuardedRelationPrefetch(field_name)],
     )
 
 

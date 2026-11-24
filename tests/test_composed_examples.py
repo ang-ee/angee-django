@@ -23,6 +23,8 @@ def test_composed_examples(tmp_path: Path, subtests: pytest.Subtests) -> None:
             ".test_console_reads_through_parent_issue_no_statement_per_row",
             "tests.native_graphql_document_budgets.ConsoleDocumentBudgetTests"
             ".test_console_reads_through_parent_return_the_same_data",
+            "tests.native_graphql_document_budgets.ConsoleDocumentBudgetTests"
+            ".test_console_reads_without_the_switch_ask_for_no_display_rows",
             "tests.native_read_through_parent",
         ),
         postgresql=(

@@ -4,7 +4,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from django.core.exceptions import ImproperlyConfigured
 
+from angee.base.autoconfig import read_through_parent
 from angee.base.conf import configure
 
 
@@ -80,37 +82,73 @@ def test_plain_native_composer_preserves_host_choices_without_capability_default
 
 
 @pytest.mark.parametrize(
-    ("authored", "environment", "explicit", "structural"),
+    ("authored", "environment", "explicit", "structural", "display"),
     [
-        (None, None, {}, False),
-        ("unset", None, {}, False),
-        (True, None, {}, True),
-        (False, None, {}, False),
-        (None, "true", {}, True),
-        (None, "1", {}, True),
-        (True, "false", {}, False),
-        (True, "0", {}, False),
-        (True, None, {"REBAC_STRUCTURAL_PREFETCH": False}, False),
-        (None, None, {"REBAC_STRUCTURAL_PREFETCH": True}, True),
+        (None, None, {}, False, None),
+        ("unset", None, {}, False, None),
+        (True, None, {}, True, True),
+        (False, None, {}, False, None),
+        (None, "true", {}, True, True),
+        (None, "1", {}, True, True),
+        (True, "false", {}, False, None),
+        (True, "0", {}, False, None),
+        (True, None, {"REBAC_STRUCTURAL_PREFETCH": False}, False, True),
+        (None, None, {"REBAC_STRUCTURAL_PREFETCH": True}, True, None),
+        (True, None, {"REBAC_DISPLAY_FIELDS": False}, True, False),
+        (True, None, {"REBAC_DISPLAY_FIELDS": "always"}, True, "always"),
+        (None, None, {"REBAC_DISPLAY_FIELDS": "fallback"}, False, "fallback"),
     ],
 )
-def test_read_through_parent_derives_structural_prefetch_unless_the_project_sets_it(
+def test_read_through_parent_derives_its_library_settings_unless_the_project_sets_them(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     authored: bool | str | None, environment: str | None, explicit: dict[str, object], structural: bool,
+    display: bool | str | None,
 ) -> None:
+    namespace = _through_parent_namespace(tmp_path, monkeypatch, authored, environment, explicit)
+    configure(namespace)
+    # Read where it is used as at derivation: an environment spelling stays a string in the setting.
+    switch = read_through_parent(environment) if environment is not None else authored is True
+    assert read_through_parent(namespace["ANGEE_REBAC_READ_THROUGH_PARENT"]) is switch
+    # REBAC turns structural prefetch on for the boolean True alone.
+    assert namespace["REBAC_STRUCTURAL_PREFETCH"] is structural
+    # Display rows: the switch derives True; off, it derives nothing and REBAC keeps its own default.
+    assert namespace.get("REBAC_DISPLAY_FIELDS") == display
+    assert ("REBAC_DISPLAY_FIELDS" in namespace) is (display is not None)
+
+
+def test_read_through_parent_refuses_fallback_display_fields(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    namespace = _through_parent_namespace(tmp_path, monkeypatch, True, None, {"REBAC_DISPLAY_FIELDS": "fallback"})
+    with pytest.raises(ImproperlyConfigured, match='refuses REBAC_DISPLAY_FIELDS = "fallback"'):
+        configure(namespace)
+
+
+def test_read_through_parent_refuses_a_rebac_without_display_rows_through_a_prefetch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from rebac.managers import RebacQuerySet
+
+    monkeypatch.delattr(RebacQuerySet, "for_display", raising=False)
+    with pytest.raises(ImproperlyConfigured, match="RebacQuerySet.for_display"):
+        configure(_through_parent_namespace(tmp_path, monkeypatch, True, None, {}))
+    # Without display rows asked for, the switch reads children alone and needs nothing more.
+    namespace = _through_parent_namespace(tmp_path, monkeypatch, True, None, {"REBAC_DISPLAY_FIELDS": False})
+    configure(namespace)
+    assert namespace["REBAC_STRUCTURAL_PREFETCH"] is True
+
+
+def _through_parent_namespace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    authored: bool | str | None, environment: str | None, explicit: dict[str, object],
+) -> dict[str, object]:
     monkeypatch.setenv("DJANGO_COMPOSE_MODE", "write")
     monkeypatch.delenv("ANGEE_REBAC_READ_THROUGH_PARENT", raising=False)
     if environment is not None:
         monkeypatch.setenv("ANGEE_REBAC_READ_THROUGH_PARENT", environment)
-    namespace = {
+    namespace: dict[str, object] = {
         "__file__": str(tmp_path / "settings.py"), "INSTALLED_APPS": ["angee.base"],
         "COMPOSE_OUTPUT_DIR": tmp_path / "runtime", **explicit,
     }
     if authored is not None:
         # "unset" authors None, which reads as off.
         namespace["ANGEE_REBAC_READ_THROUGH_PARENT"] = None if authored == "unset" else authored
-    configure(namespace)
-    # REBAC turns structural prefetch on for the boolean True alone.
-    assert namespace["REBAC_STRUCTURAL_PREFETCH"] is structural
-    # The switch derives nothing else: display rows stay REBAC's own default.
-    assert "REBAC_DISPLAY_FIELDS" not in namespace
+    return namespace

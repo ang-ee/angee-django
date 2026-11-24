@@ -37,13 +37,14 @@ class GraphQLConfig(AppConfig):
         from django_compose.serving import mode
 
         from angee.graphql import field_types  # noqa: F401
-        from angee.graphql.checks import check_graphql_channel_layer, check_graphql_schemas
+        from angee.graphql.checks import check_display_fields, check_graphql_channel_layer, check_graphql_schemas
         from angee.graphql.publishing import connect_change_publishers
         from angee.graphql.related_counts import check_related_counts
 
         checks.register(check_settings, checks.Tags.models)
         checks.register(check_related_counts, checks.Tags.models)
         checks.register(check_graphql_schemas)
+        checks.register(check_display_fields)
         checks.register(check_graphql_channel_layer, SERVING_TAG, deploy=True)
         # django-compose publishes snapshot settings only in composed hosts.
         if getattr(settings, "COMPOSE_SNAPSHOT", None) is not None and mode() is None:

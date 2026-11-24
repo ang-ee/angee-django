@@ -525,6 +525,9 @@ class Thread(
         # the live conversations (Postgres puts NULLS FIRST on a bare DESC).
         ordering = (models.F("last_message_at").desc(nulls_last=True), "sqid")
         rebac_resource_type = "messaging/thread"
+        # The thread's label: shown with a row that refers to it, to whoever reads that row
+        # (REBAC display rows, under ANGEE_REBAC_READ_THROUGH_PARENT).
+        rebac_display_fields = ("modality",)
         constraints = (
             # The digest, not the unbounded value, is what the btree carries; the
             # planner proves `external_id = '<value>'` implies the partial predicate.

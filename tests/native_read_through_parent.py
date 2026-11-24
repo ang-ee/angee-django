@@ -1,4 +1,4 @@
-"""Children REBAC reads with their parent under ``ANGEE_REBAC_READ_THROUGH_PARENT``, on the composed policy.
+"""Children and labels REBAC reads with their parent under ``ANGEE_REBAC_READ_THROUGH_PARENT``, on the composed policy.
 
 ``DELIVERED_EDGES`` pins every foreign key along which REBAC's structural prefetch
 reads a child's ``read`` without its permission statement, with the parent
@@ -17,11 +17,21 @@ The withheld cases seed a child its parent's reader may not read along an edge
 REBAC refuses, and require it withheld with the switch on; a stored override stops
 every delivery. Every composed test that turns the switch on fails when REBAC
 delivers along an edge no pinned field reads (``assert_read_by_pinned_fields``).
+
+``DISPLAY_FIELDS`` pins the models that declare display fields, a referred record's
+label; ``DISPLAY_AUDIENCE`` every GraphQL field that can show them and
+``HOLDER_READERS`` who reads each holder (``angee.graphql.relations.display_audience``).
+The label differential reads each pinned field a root lists for its target's key and
+label, off and on, and requires the same data but where the reader may not read the
+record, as ``LABEL_SHOWN`` names; every composed test that turns the switch on fails
+when display rows are asked for a model the pin does not list
+(``assert_labels_through_pinned_fields``).
 """
 
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -44,16 +54,18 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
+from rebac.managers import RebacQuerySet
 
 from angee.base.models.identity import public_id_of
+from angee.graphql import relations
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema
 from angee.iam.permissions import is_platform_admin
 from angee.storage.uploads import DownloadTokenSigner
 from tests import native_graphql_document_budgets as budgets
 
-# The switch's one effect, as base autoconfig derives it.
-READ_THROUGH_PARENT = {"ANGEE_REBAC_READ_THROUGH_PARENT": True, "REBAC_STRUCTURAL_PREFETCH": True}
+# The switch's effects, as base autoconfig derives them.
+READ_THROUGH_PARENT = budgets.READ_THROUGH_PARENT
 
 # "<child model>.<foreign key> -> <parent model>": the parent permissions under which REBAC reads the
 # child's ``read`` with the parent, without its permission statement (``rebac.structural.edges``;
@@ -503,6 +515,74 @@ WITHHELD: dict[str, str] = {
     "parties.Relationship.other_party -> parties.Party": "console PersonType.inbound_relationships",
 }
 
+# Display fields: a referred record's label, shown with the row that refers to it to whoever reads that row.
+# The models that declare them (Meta.rebac_display_fields), with the fields they declare.
+DISPLAY_FIELDS: dict[str, tuple[str, ...]] = {
+    "messaging.Thread": ("modality",),
+    "projects.Milestone": ("name",),
+}
+# model -> the GraphQL fields that can show its display fields: "schema Type.field" -> (holder, kind).
+DISPLAY_AUDIENCE: dict[str, dict[str, tuple[str, str]]] = {
+    "messaging.Thread": {
+        "console MessageType.thread": ("messaging.Message", "prefetch"),
+        "console ThreadAttachmentType.thread": ("messaging.ThreadAttachment", "prefetch"),
+        "console ThreadFollowerType.thread": ("messaging.ThreadFollower", "prefetch"),
+        "console ThreadNotificationType.thread": ("messaging.ThreadNotification", "prefetch"),
+        "public MessageType.thread": ("messaging.Message", "prefetch"),
+    },
+    "projects.Milestone": {
+        "console ConsoleProjectType.current_milestone": ("projects.Project", "prefetch"),
+        "console ConsoleTaskType.milestone": ("projects.Task", "prefetch"),
+        "console ProjectType.current_milestone": ("projects.Project", "prefetch"),
+        "console ProposalRoundType.opens_after": ("proposals.Round", "prefetch"),
+        "console ProposalRoundType.clarifications_shared_until": ("proposals.Round", "prefetch"),
+        "console TaskType.milestone": ("projects.Task", "prefetch"),
+        "public ProjectType.current_milestone": ("projects.Project", "prefetch"),
+        "public ProposalRoundType.opens_after": ("proposals.Round", "prefetch"),
+        "public ProposalRoundType.clarifications_shared_until": ("proposals.Round", "prefetch"),
+        "public TaskType.milestone": ("projects.Task", "prefetch"),
+    },
+}
+# holder -> who reads it: the arms of its read in the composed declaration (read_arms).
+HOLDER_READERS: dict[str, tuple[str, ...]] = {
+    "messaging.Message": (
+        "thread->read", "channel->read", "editor", "reader", "channel->write",
+        "identity_role->effective_member", "admin->member",
+    ),
+    "messaging.ThreadAttachment": (
+        "thread->read", "editor", "reader", "admin->member",
+    ),
+    "messaging.ThreadFollower": (
+        "user", "thread->read", "attachment->read", "admin->member",
+    ),
+    "messaging.ThreadNotification": (
+        "user", "thread->read", "attachment->read", "message->read", "admin->member",
+    ),
+    "projects.Project": (
+        "owner", "reader", "editor", "admin->member", "source_proposal->read_track", "round_responder",
+        "team->post",
+    ),
+    "projects.Task": (
+        "inherited_project->read", "owner", "assignee", "reader", "editor", "requester", "round_responder",
+        "shared_clarification_round->respond", "clarification_asker", "responder_shared_round->respond",
+        "track_proposal->manage", "clarification_round->manage", "inherited_queue->read", "unbound->free",
+        "subject_product->read", "subject_initiative->read", "subject_task->read_as_subject",
+        "subject_project->read", "subject_party->read_as_subject", "subject_page->read_as_subject",
+        "subject_vault->read_as_subject", "subject_round->manage", "subject_note->read",
+        "inherited_project->write", "inherited_queue->write", "trashed->conceal",
+        "subject_task->keeper_as_subject", "admin->member",
+    ),
+    "proposals.Round": (
+        "facilitator", "team->write", "person->active_member", "admin->member", "team->post", "responder",
+        "reader", "evaluator", "requester", "proposal_viewer", "project->proposal_viewer",
+        "task->proposal_viewer", "task_project->proposal_viewer", "global_viewer->effective_member",
+    ),
+}
+
+# (field, actor): the differential's rows whose label shows where the actor may not read the record. The
+# narrow actor reads one of the member's messages and not its thread; every other reader reads both.
+LABEL_SHOWN = {("console MessageType.thread", "narrow")}
+
 
 def _edge(fk: models.ForeignKey[Any, Any]) -> str:
     return f"{fk.model._meta.label}.{fk.name} -> {fk.related_model._meta.label}"
@@ -559,6 +639,55 @@ def assert_read_by_pinned_fields(seen: list[str]) -> None:
         "reads them in tests.native_read_through_parent (EDGE_FIELDS, or RESOLVER_PREFETCHES for a "
         "resolver's own prefetch) so the differential compares it"
     )
+
+
+@contextmanager
+def observed_labels() -> Iterator[list[str]]:
+    """The models whose rows REBAC was asked to read as display rows inside the block.
+
+    REBAC's public request (``RebacQuerySet.for_display``) is observed where the relation
+    fields make it: they ask exactly when every reader of the relation in the document reads
+    its target's display fields alone. Which fields can ask is ``DISPLAY_AUDIENCE``'s.
+    """
+
+    seen: list[str] = []
+    request = RebacQuerySet.for_display
+
+    def observing(queryset: Any) -> Any:
+        seen.append(queryset.model._meta.label)
+        return request(queryset)
+
+    with patch.object(RebacQuerySet, "for_display", observing):
+        yield seen
+
+
+def assert_labels_through_pinned_fields(seen: list[str]) -> None:
+    """Fail when display rows were asked for a model whose display fields ``DISPLAY_AUDIENCE`` does not pin."""
+
+    unpinned = sorted(set(seen) - set(DISPLAY_AUDIENCE))
+    assert not unpinned, (
+        f"display rows of {unpinned} were asked for without a pin: list the model and every field that can "
+        "show its display fields in DISPLAY_AUDIENCE (tests.native_read_through_parent)"
+    )
+
+
+def display_audience_pins() -> tuple[dict[str, tuple[str, ...]], dict[str, dict[str, tuple[str, str]]], dict[str, Any]]:
+    """The declared display fields, every field that can show them and the readers of each holder, as pinned."""
+
+    schemas = GraphQLSchemas.from_discovery()
+    declared = {
+        model._meta.label: tuple(fields)
+        for model in apps.get_models()
+        if (fields := getattr(model._meta, "rebac_display_fields", None))
+    }
+    audience: dict[str, dict[str, tuple[str, str]]] = {}
+    readers: dict[str, Any] = {}
+    for label in declared:
+        for entry in relations.display_audience(apps.get_model(label), schemas):
+            spelled = f"{entry.schema} {entry.type_name}.{entry.field}"
+            audience.setdefault(label, {})[spelled] = (entry.holder, entry.kind)
+            readers[entry.holder] = entry.readers
+    return declared, audience, readers
 
 
 def _graphql_model(graphql_type: Any) -> type[models.Model] | None:
@@ -856,9 +985,14 @@ class ReadThroughParentEdgeTests(TransactionTestCase):
         with _signed_in(self.window):
             with observed_deliveries() as seen_off:
                 off = self.execute(schema, document, actor)
-            with override_settings(**READ_THROUGH_PARENT), observed_deliveries() as seen_on:
+            with (
+                override_settings(**READ_THROUGH_PARENT),
+                observed_deliveries() as seen_on,
+                observed_labels() as labels,
+            ):
                 on = self.execute(schema, document, actor)
         assert_read_by_pinned_fields(seen_on)
+        assert_labels_through_pinned_fields(labels)
         return off, on, seen_off, seen_on
 
     def execute(self, schema: Any, document: str, actor: Any) -> dict[str, Any]:
@@ -1117,3 +1251,163 @@ class ReadThroughParentEdgeTests(TransactionTestCase):
                         sequence=index,
                     )
         return [RelationshipTuple(to_object_ref(dashboards[0]), "viewer", to_subject_ref(self.narrow))]
+
+
+AUDIT_TIME = re.compile(r"'\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?:\.\d+)?(?:\+00:00)?'")
+INBOX_LABELS = """
+query NexusInboxLabels(
+  $coverage: InboxCoverageInput $search: InboxSearchInput $options: InboxResultInput $sender: String!
+  $circle: String! $scope: InboxGroupScopeInput $page: Int! $size: Int!
+) {
+  inbox_results(
+    coverage: $coverage search: $search options: $options sender: $sender circle: $circle scope: $scope
+    page: $page size: $size
+  ) { messages { id thread { id modality } } }
+}
+"""
+
+
+class ReadThroughParentLabelTests(TransactionTestCase):
+    """Display fields on the composed policy: what is declared, who can see them, and where a label shows."""
+
+    def setUp(self):
+        call_command("rebac", "sync", verbosity=0)
+        call_command("resources", "load", verbosity=0)
+        users = get_user_model().objects
+        self.admin, _created = users.ensure_bootstrap_admin(
+            "labels-admin", email="labels-admin@example.test", password="labels-admin",
+        )
+        self.member = users.create_person_as_system(
+            username="labels-member", email="labels-member@example.test", reason="tests.read_through_parent.labels",
+        )
+        self.narrow = users.create_person_as_system(
+            username="labels-narrow", email="labels-narrow@example.test", reason="tests.read_through_parent.labels",
+        )
+        self.actors = {"admin": self.admin, "member": self.member, "narrow": self.narrow}
+        self.window = DownloadTokenSigner().timestamp()
+
+    def test_the_declared_display_fields_and_who_sees_them_are_pinned(self):
+        from angee.graphql.checks import check_display_fields
+
+        declared, audience, readers = display_audience_pins()
+        self.assertEqual(declared, DISPLAY_FIELDS)
+        self.assertEqual(audience, DISPLAY_AUDIENCE)
+        self.assertEqual(readers, HOLDER_READERS)
+        with override_settings(**READ_THROUGH_PARENT):
+            self.assertEqual(check_display_fields(), [])
+
+    def test_a_label_shows_only_where_the_pinned_audience_predicts(self):
+        """Each pinned field a root lists, read for its target's key and label, off and on, as three actors.
+
+        The data is the same, but where the actor may not read the referred record: there the
+        field shows its key and label with the switch and nothing without, and ``LABEL_SHOWN``
+        names every such field and actor. One more field of the record keeps the scoped read.
+        """
+
+        self.seed_narrow_message()
+        schemas = GraphQLSchemas.from_discovery()
+        shown: set[tuple[str, str]] = set()
+        compared: list[str] = []
+        for label, fields in DISPLAY_AUDIENCE.items():
+            target = apps.get_model(label)
+            for spelled, (_holder, kind) in fields.items():
+                schema_name, path = spelled.split(" ")
+                type_name, field_name = path.split(".")
+                core = schemas.graphql_schema(schema_name)
+                root = _root(core, type_name)
+                if kind != "prefetch" or root is None:
+                    continue
+                compared.append(spelled)
+                target_type = _named(core.type_map[type_name].fields[field_name].type)
+                wider = next(leaf for leaf in _leaves(target_type) if leaf not in {"id", *DISPLAY_FIELDS[label]})
+                schema = schemas.build(schema_name)
+                for role, actor in self.actors.items():
+                    with self.subTest(field=spelled, actor=role):
+                        labels = " ".join(DISPLAY_FIELDS[label])
+                        document = f"query {{ {root} {{ id {field_name} {{ id {labels} }} }} }}"
+                        off, on = self.read_both(schema, document, actor)
+                        self.assertEqual(off["errors"], [])
+                        self.assertEqual(on["errors"], [])
+                        before = _compared(off, (str(root),), field_name)["rows"]
+                        after = _compared(on, (str(root),), field_name)["rows"]
+                        self.assertEqual([row_id for row_id, _value in after], [row_id for row_id, _value in before])
+                        for (_row_id, was), (_same, now) in zip(before, after, strict=True):
+                            if now == was:
+                                continue
+                            self.assertIsNone(was)
+                            self.assertEqual(set(now), {"id", *DISPLAY_FIELDS[label]})
+                            with actor_context(actor):
+                                self.assertFalse(target._default_manager.filter(sqid=now["id"]).exists())
+                            shown.add((spelled, role))
+                        document = f"query {{ {root} {{ id {field_name} {{ id {labels} {wider} }} }} }}"
+                        off, on = self.read_both(schema, document, actor)
+                        self.assertEqual(
+                            _compared(on, (str(root),), field_name), _compared(off, (str(root),), field_name),
+                        )
+                        self.assertEqual(on["sql"], off["sql"])
+        self.assertIn("console MessageType.thread", compared)
+        self.assertEqual(shown, LABEL_SHOWN)
+
+    def test_a_stored_override_stops_labels_below_rows_admitted_under_an_implied_action(self):
+        """The inbox admits its messages under ``read_inbox``; REBAC proves nothing while an override is stored."""
+
+        ids = budgets.ConsoleDocumentBudgetTests.seed(self, self.member, "labels")
+        schema = GraphQLSchemas.from_discovery().build("console")
+        variables = budgets.ConsoleDocumentBudgetTests.documents(self, ids)["inbox"][1]
+
+        def thread_reads(read: dict[str, Any]) -> list[bool]:
+            table = apps.get_model("messaging", "Thread")._meta.db_table
+            return [scoped for scoped in (True, False) for found in budgets.table_reads(read["sql"], scoped=scoped)
+                    if found == table]
+
+        off, on = self.read_both(schema, INBOX_LABELS, self.member, variables)
+        self.assertEqual(on["data"], off["data"])
+        self.assertEqual(thread_reads(off), [True])
+        self.assertEqual(thread_reads(on), [False])
+        from rebac.models import SchemaOverride, SchemaPermission
+
+        read = SchemaPermission.objects.get(definition__resource_type="messaging/part", name="read")
+        # Tightened by what it already requires: the same readers, now under an override.
+        SchemaOverride.objects.create(
+            kind=SchemaOverride.KIND_TIGHTEN, target=read, expression="message->read",
+            reason="tests.read_through_parent.labels",
+        )
+        off, on = self.read_both(schema, INBOX_LABELS, self.member, variables)
+        self.assertEqual(on["data"], off["data"])
+        self.assertEqual(thread_reads(on), [True])
+        self.assertEqual(on["sql"], off["sql"])
+
+    def read_both(
+        self, schema: Any, document: str, actor: Any, variables: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """The document read with the switch off and on, each after a warm read; labels only through pinned fields."""
+
+        with _signed_in(self.window):
+            off = self.execute(schema, document, actor, variables or {})
+            with override_settings(**READ_THROUGH_PARENT), observed_labels() as seen:
+                on = self.execute(schema, document, actor, variables or {})
+        assert_labels_through_pinned_fields(seen)
+        return off, on
+
+    def execute(self, schema: Any, document: str, actor: Any, variables: dict[str, Any]) -> dict[str, Any]:
+        from django.db import connection
+
+        execute_schema(schema, document, variables, user=actor)
+        with CaptureQueriesContext(connection) as captured:
+            result = execute_schema(schema, document, variables, user=actor)
+        return {
+            **json.loads(json.dumps(
+                {"data": result.data, "errors": sorted(str(error) for error in result.errors or [])}, default=str,
+            )),
+            # An audit row's time is the one value that differs between two reads of one document.
+            "sql": [AUDIT_TIME.sub("'<time>'", query["sql"]) for query in captured.captured_queries],
+        }
+
+    def seed_narrow_message(self) -> None:
+        """The member's conversations and projects; the narrow actor reads one message and not its thread."""
+
+        ids = budgets.ConsoleDocumentBudgetTests.seed(self, self.member, "labels")
+        Message = apps.get_model("messaging", "Message")
+        with system_context(reason="tests.read_through_parent.labels"):
+            message = Message.objects.get(sqid=ids["message"])
+        write_relationships([RelationshipTuple(to_object_ref(message), "reader", to_subject_ref(self.narrow))])

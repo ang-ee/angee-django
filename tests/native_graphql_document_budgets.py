@@ -391,8 +391,10 @@ ROW_DOCUMENTS = ("inbox", "transcript", "person", "projects", "selected", "conne
 ROW_SIZES = (2, 6)
 
 
-# ANGEE_REBAC_READ_THROUGH_PARENT with the library setting base autoconfig derives from it.
-READ_THROUGH_PARENT = {"ANGEE_REBAC_READ_THROUGH_PARENT": True, "REBAC_STRUCTURAL_PREFETCH": True}
+# ANGEE_REBAC_READ_THROUGH_PARENT with the library settings base autoconfig derives from it.
+READ_THROUGH_PARENT = {
+    "ANGEE_REBAC_READ_THROUGH_PARENT": True, "REBAC_STRUCTURAL_PREFETCH": True, "REBAC_DISPLAY_FIELDS": True,
+}
 
 # document: the tables it reads with their parent rows under READ_THROUGH_PARENT, with no
 # permission statement, and no others: a message's parts, reactions, stars and participants are
@@ -401,6 +403,15 @@ READ_THROUGH_PARENT = {"ANGEE_REBAC_READ_THROUGH_PARENT": True, "REBAC_STRUCTURA
 READ_WITH_PARENT = {
     "transcript": ("messaging_part", "messaging_reaction"),
     "selected": ("messaging_part", "messaging_messagestar", "messaging_participant"),
+}
+
+
+# document: the tables whose rows it reads as display rows under READ_THROUGH_PARENT, a label with no
+# permission statement, and no others: the transcript's reply parents select their thread's key and
+# ``modality`` alone. Elsewhere a thread is read for its title too, and the projects list selects the
+# project's ``display_name``, whose resolver declares nothing it reads.
+SHOWN_AS_LABEL = {
+    "transcript": ("messaging_thread",),
 }
 
 
@@ -739,11 +750,36 @@ class ConsoleDocumentBudgetTests(TransactionTestCase):
     def test_console_reads_through_parent_issue_no_statement_per_row(self):
         """Rows read with the rows that refer to them cost no statement per row either."""
 
-        from tests.native_read_through_parent import assert_read_by_pinned_fields, observed_deliveries
+        from tests.native_read_through_parent import (
+            assert_labels_through_pinned_fields,
+            assert_read_by_pinned_fields,
+            observed_deliveries,
+            observed_labels,
+        )
 
-        with observed_deliveries() as delivered:
+        with observed_deliveries() as delivered, observed_labels() as labels:
             self.assert_no_statement_per_row()
         assert_read_by_pinned_fields(delivered)
+        assert_labels_through_pinned_fields(labels)
+
+    def test_console_reads_without_the_switch_ask_for_no_display_rows(self):
+        """Off, no relation field asks for display rows, even under a project's own REBAC_DISPLAY_FIELDS."""
+
+        from rebac.managers import RebacQuerySet
+
+        def refused(queryset):
+            raise AssertionError("for_display() was asked for with the switch off")
+
+        actors = {"admin": self.admin, "member": self.member}
+        ids = {role: self.seed(actor, role) for role, actor in actors.items()}
+        schema = GraphQLSchemas.from_discovery().build("console")
+        with patch.object(RebacQuerySet, "for_display", refused, create=True):
+            for settings in ({}, {"REBAC_DISPLAY_FIELDS": True}):
+                for role, actor in actors.items():
+                    for name, (document, variables) in self.documents(ids[role]).items():
+                        with self.subTest(actor=role, document=name, settings=settings), override_settings(**settings):
+                            read = measure_graphql_document(schema, document, variables, actor=actor)
+                            self.assertEqual(ROWS[name](read.data), BUDGETS[role, name][0])
 
     def test_console_reads_through_parent_return_the_same_data(self):
         """Under ANGEE_REBAC_READ_THROUGH_PARENT each read returns what it returns without it, in no more statements.
@@ -751,7 +787,12 @@ class ConsoleDocumentBudgetTests(TransactionTestCase):
         The children ``READ_WITH_PARENT`` names, and only those, lose their permission statement.
         """
 
-        from tests.native_read_through_parent import assert_read_by_pinned_fields, observed_deliveries
+        from tests.native_read_through_parent import (
+            assert_labels_through_pinned_fields,
+            assert_read_by_pinned_fields,
+            observed_deliveries,
+            observed_labels,
+        )
 
         actors = {"admin": self.admin, "member": self.member}
         ids = {role: self.seed(actor, role) for role, actor in actors.items()}
@@ -765,16 +806,23 @@ class ConsoleDocumentBudgetTests(TransactionTestCase):
                 ):
                     measure_graphql_document(schema, document, variables, actor=actor)
                     off = measure_graphql_document(schema, document, variables, actor=actor)
-                    with override_settings(**READ_THROUGH_PARENT), observed_deliveries() as delivered:
+                    with (
+                        override_settings(**READ_THROUGH_PARENT),
+                        observed_deliveries() as delivered,
+                        observed_labels() as labels,
+                    ):
                         measure_graphql_document(schema, document, variables, actor=actor)
                         on = measure_graphql_document(schema, document, variables, actor=actor)
                     assert_read_by_pinned_fields(delivered)
+                    assert_labels_through_pinned_fields(labels)
                     self.assertEqual(on.data, off.data)
                     self.assertLessEqual(on.statements, off.statements)
                     scoped = [Counter(table_reads(read.sql, scoped=True)) for read in (off, on)]
                     plain = [Counter(table_reads(read.sql, scoped=False)) for read in (off, on)]
                     delivered = {table for table in scoped[0] if scoped[1][table] < scoped[0][table]}
-                    self.assertEqual(delivered, set(READ_WITH_PARENT.get(name, ())))
+                    self.assertEqual(
+                        delivered, {*READ_WITH_PARENT.get(name, ()), *SHOWN_AS_LABEL.get(name, ())},
+                    )
                     for table in delivered:
                         self.assertGreater(plain[1][table], plain[0][table], table)
 

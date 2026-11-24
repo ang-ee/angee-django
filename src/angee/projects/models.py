@@ -1730,6 +1730,9 @@ class Milestone(
         abstract = True
         ordering = ("project", "sort_order", "sqid")
         rebac_resource_type = "projects/milestone"
+        # The milestone's label: shown with a row that refers to it, to whoever reads that row
+        # (REBAC display rows, under ANGEE_REBAC_READ_THROUGH_PARENT).
+        rebac_display_fields = ("name",)
         constraints: ClassVar[list[models.BaseConstraint] | tuple[models.BaseConstraint, ...]] = (
             models.CheckConstraint(
                 condition=Q(start_date__isnull=True)

@@ -1054,11 +1054,14 @@ data through REBAC, never a queryset bypass.
 ### Reading through the parent
 
 `ANGEE_REBAC_READ_THROUGH_PARENT` (default `False`) reads a relation field's children
-with their admitted parent rows instead of by their own permission statement.
-[Base autoconfig](../../src/angee/base/autoconfig.py) derives REBAC's
-`REBAC_STRUCTURAL_PREFETCH` from it, as the boolean `True`, unless the project sets that
-itself; the environment variable of the same name (`true`, `1`) overrides the project
-setting. It derives nothing else: off, every statement is what it is without it.
+with their admitted parent rows instead of by their own permission statement, and shows
+a referred record's label with the row that refers to it (below). [Base
+autoconfig](../../src/angee/base/autoconfig.py) derives REBAC's
+`REBAC_STRUCTURAL_PREFETCH` and `REBAC_DISPLAY_FIELDS` from it, each as the boolean
+`True`, unless the project sets them itself; the environment variable of the same name
+(`true`, `1`) overrides the project setting. It derives nothing else: off, every
+statement is what it is without it, and no relation field asks for display rows even
+where the project sets `REBAC_DISPLAY_FIELDS` itself.
 
 - **What is read with the parent.** A prefetch's children are read by the foreign key
   that names their admitted parents, with no permission statement, where REBAC proves
@@ -1117,7 +1120,59 @@ setting. It derives nothing else: off, every statement is what it is without it.
   their parents, in the same request. Under READ COMMITTED a parent whose grant is
   revoked between the two statements still delivers them; inside one repeatable-read
   snapshot both read the same data, each at its own instant, so a deadline (a grant's
-  expiry, a caveat that reads the time) can fall between them.
+  expiry, a caveat that reads the time) can fall between them. The same holds for labels.
+
+Labels, REBAC's display rows through a prefetch (its proposal 0024), are the switch's
+other half:
+
+- **What a label is.** A model declares the columns that are its label in REBAC's own
+  `Meta.rebac_display_fields`: a thread's `modality` and a milestone's `name`. Each is a
+  column of the model's own that is not a relation (REBAC's `rebac.E026` refuses one
+  whatever the setting) and carries no read gate (`angee.graphql.E005`, checked with the
+  switch on).
+- **Who sees it.** Whoever reads a row that refers to the record, whether or not they may
+  read the record: a label is shown where the record's key is. Nothing else of the record
+  is shown. `manage.py display_audience` lists, for every declaring model, each GraphQL
+  field named for a foreign key to it with the arms of its holder's `read`;
+  [`tests/native_read_through_parent.py`](../../tests/native_read_through_parent.py) pins
+  them (`DISPLAY_FIELDS`, `DISPLAY_AUDIENCE`, `HOLDER_READERS`), so a new declaration, a
+  new field over such a key or a change to a holder's `read` fails there until someone has
+  looked, and every composed test that turns the switch on fails when display rows are
+  asked for a model it does not list.
+- **When it is shown.** A relation field built by `actor_scoped_to_one` over a foreign key
+  to a declaring model's primary key asks REBAC for display rows when, everywhere in the
+  executing document (every path and fragment, `@include` and `@skip` disregarded): each
+  field over that key selects nothing but `__typename`, `id` and display fields; every
+  other field selected on a row of the holding model, or of a parent or child model of it,
+  is a stored column, `id`, `redacted_fields`, a field over another relation, or a field
+  whose optimizer hints declare what it reads and name nothing through the key (a resolver
+  that declares nothing may read anything); and no argument, as written or through a
+  variable, names the key. REBAC then reads the
+  key and display fields of the records the admitted rows refer to, by primary key, with no
+  permission statement, where those rows were admitted under their `read` or under an
+  action REBAC proves implies it; while an override is stored it proves nothing, so rows
+  the inbox admits under `read_inbox` then refer to nothing. Anywhere else the relation is
+  read by its permission statement as without the switch. Of the console documents, the
+  transcript shows its reply parents' thread this way
+  ([`SHOWN_AS_LABEL`](../../tests/native_graphql_document_budgets.py)); the inbox, the
+  selected message, its connections and its Related target read a thread's title as well,
+  and the projects list selects a project's `display_name`, whose resolver declares
+  nothing.
+- **A label row is not the record.** The display row is what Django's relation cache
+  holds, so code that reads the relation through the row where the document does not say
+  so (a resolver whose hints leave the relation out, code on another row that reaches this
+  one) gets its key and label and `None` for every other field, and loads nothing: no
+  statement reads the record because a label was shown. A write of it is decided as a
+  write of the record and never writes a hidden column. A to-one relation that no field
+  prefetched is still loaded by Django's descriptor, whole and with no permission
+  statement, with the switch or without.
+- **Joins.** A plain strawberry-django relation field is joined, and REBAC delivers a
+  joined row of a declaring model as a display row: under `REBAC_DISPLAY_FIELDS = True`
+  unchecked, to every reader, and under `"fallback"` where the reader may not read it.
+  `angee.graphql.E006` refuses a declaration such a field reaches; this is why a party
+  declares no label: seven plain fields in each schema join parties. With the switch on,
+  `REBAC_DISPLAY_FIELDS = "fallback"` is refused at startup, and so is a REBAC without
+  `RebacQuerySet.for_display` while `REBAC_DISPLAY_FIELDS` is on.
 
 ## Pitfalls
 

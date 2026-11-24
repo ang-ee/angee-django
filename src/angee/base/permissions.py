@@ -2,26 +2,40 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from os import PathLike
 from pathlib import Path
 from typing import Any, overload
 
 from django.apps import AppConfig, apps
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from django.db.models.query import EmptyQuerySet
-from rebac import SubjectRef, check_new, current_actor, proposed_forward_relationships, to_subject_ref
+from rebac import SubjectRef, check_new, current_actor, display, proposed_forward_relationships, to_subject_ref
 from rebac import user_subject_type as _user_subject_type
 from rebac.backends import backend
 from rebac.managers import RebacQuerySet
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_for_resource_type, model_resource_type
-from rebac.schema import Definition, PermArrow, PermBinOp, PermExpr, Schema, resolve_schema_path
+from rebac.schema import Definition, PermArrow, PermBinOp, PermExpr, PermRef, Schema, resolve_schema_path
 from rebac.schema.introspection import relation_dependencies
 from rebac.schema.parser import parse_zed
+
+from angee.base.autoconfig import read_through_parent
+
+
+def display_rows_requested() -> bool:
+    """Whether relation fields ask REBAC for display rows: a referred record's label, not the record.
+
+    Both ``ANGEE_REBAC_READ_THROUGH_PARENT`` (read as base autoconfig reads it) and
+    REBAC's ``REBAC_DISPLAY_FIELDS``, which the switch turns on, must be on. Off,
+    nothing asks for them and no label is shown in place of a record.
+    """
+
+    return read_through_parent(getattr(settings, "ANGEE_REBAC_READ_THROUGH_PARENT", False)) and bool(display.mode())
 
 
 def declared_grants(model: type[models.Model]) -> dict[str, str]:
@@ -204,6 +218,43 @@ def declared_rebac_definition(model: type[models.Model]) -> Definition | None:
         return None
     schema = declared_rebac_schema(config)
     return schema.get_definition(resource_type) if schema is not None else None
+
+
+def read_arms(
+    model: type[models.Model],
+    *,
+    definition_for: Callable[[type[models.Model]], Definition | None] | None = None,
+) -> tuple[str, ...]:
+    """The relations and arrows that grant ``model``'s read action in its composed declaration.
+
+    Every reader of a row holds one of them: the operands of a union or an
+    intersection and the left side of an exclusion, with the definition's own
+    permissions opened (``owner``, ``channel->read``); a subtrahend only narrows
+    who reads. An intersection's operands are each listed, so the list may name
+    more than reads. Read from the declaration (:func:`declared_rebac_definition`),
+    not from the synced store and its overrides, unless ``definition_for`` reads
+    another policy.
+    """
+
+    definition = (definition_for or declared_rebac_definition)(model)
+    if definition is None:
+        return ()
+    permissions = {permission.name: permission.expression for permission in definition.permissions}
+    arms: list[str] = []
+    pending: list[PermExpr] = [PermRef(str(getattr(model._meta, "rebac_default_action", "read")))]
+    opened: set[str] = set()
+    while pending:
+        expression = pending.pop(0)
+        if isinstance(expression, PermBinOp):
+            pending[:0] = [expression.left] if expression.op == "-" else [expression.left, expression.right]
+        elif isinstance(expression, PermArrow):
+            arms.append(f"{expression.via}->{expression.target}")
+        elif isinstance(expression, PermRef) and expression.name not in permissions:
+            arms.append(expression.name)
+        elif isinstance(expression, PermRef) and expression.name not in opened:
+            opened.add(expression.name)
+            pending.insert(0, permissions[expression.name])
+    return tuple(dict.fromkeys(arms))
 
 
 def contextual_action_holds(model: type[models.Model], action: str) -> bool:
