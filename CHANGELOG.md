@@ -10,6 +10,110 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.webforms`, `angee.webforms_messaging`, `angee.messaging`, `angee.resources`,
+  `@angee/webforms`: **Changed behaviour.** **An addon declares a web form as
+  one resource row**, published or left for a person to publish, and a form
+  that names a channel no response could be posted on is refused when it is
+  validated. `webforms.Form` composes
+  `ResourceLoadMixin` with the adapter `FormResource`
+  (`angee.webforms.resources`), as `Workflow` does with its definitions. A row of
+  a `<NNN>_webforms.form.yaml` file names the form's fields, `version` (the
+  content of the version it serves: `definition`, `languages`,
+  `default_language`, `personal_questions`, `contact_question`), optionally
+  `publish: false`, and `aliases` (the slugs it answers at, each a slug or
+  `{slug, language}`). What a load does:
+  - The row's ledger xref is the form's identity, never an alias, so staff may
+    rename or delete an alias and the next load neither fails nor makes a second
+    form.
+  - Every row states its `version`; a row without one is refused, whether it
+    would make the form or change it.
+  - The first load makes the form, publishes its version through
+    `FormVersion.publish` (unless the row declares `publish: false`) and adds
+    its aliases. An unchanged row is skipped, so a form staff closed, a version
+    they published and an alias they renamed stand.
+  - A changed row that publishes applies the form fields it names and serves
+    its content with the new `Form.serve`: the version served now when it holds
+    exactly that content, otherwise the newest version when it is an unpublished
+    one holding it, otherwise a new version, held to the version's fields and
+    rules; either is published in the load's transaction. Content the form
+    served before is published again as a new version. Missing aliases are
+    added with the new `Form.ensure_aliases`, which takes each alias as a slug
+    or a mapping of `FormAlias.ADDRESS_FIELDS` (`slug`, `language`), never
+    removes or changes an alias the form has, reports every alias it refuses
+    under `aliases` naming it (a slug given twice among them), and refuses a
+    slug another form holds, also one it takes at the same moment. A closed
+    form stays closed.
+  - Any change of a row that publishes serves the declared content again: a row
+    that changes only `name` or `theme_id`, reorders `aliases`, or whose entry
+    gains a `create_only` field other than `version` replaces a version staff
+    published since. An entry that leaves the questions to staff once the form exists
+    lists `version` under `create_only`: the form is made serving it, and no
+    later load serves it again.
+  - A row that declares `publish: false` leaves the publication to a person:
+    `Form.serve(content, publish=False)` prepares the declared content as an
+    unpublished version, so the first load makes a draft form that answers no
+    one, and publishes and opens nothing. A changed row makes a new unpublished
+    version only when neither the version served nor the newest version holds
+    the declared content, so a version staff published, a form they closed and
+    a draft they prepared since stand. The publication judges the version when
+    a person publishes it. A row that turns `publish` back on publishes the
+    version it prepared, or serves its content as any published row does. A
+    file that declares the form's `status`, or an entry that lists `publish`
+    under `create_only`, is refused: the form's state follows its verbs, and
+    under `create_only` a changed row would drop `publish: false`.
+  - A version the publication refuses or its fields cannot hold, an alias
+    another form holds, or a `target_config` the target refuses fails the load
+    and leaves nothing; the ledger keeps the declaration that last applied.
+  - `retention_days` is the deployment's once the form exists, since a changed
+    retention removes responses: a file that declares it lists it under the
+    entry's `create_only`, and the load refuses one that does not.
+  - `target_config` names records by xref where the target's `config_model`
+    declares a relation, and the load stores each one's public id. The `message`
+    target already declares `channel` a relation to `messaging.Channel`, so a
+    consumer names the webform channel its resources declare
+    (`channel: acme.intake`); web forms reads only the target's schema.
+    `Resource.objects.resolve`, `resolve_config_references` and
+    `resolve_config_reference` take an optional `addon_aliases`, which the
+    adapter passes so a reference resolves among the load's own addons, as the
+    row's relation columns do. `AngeeResource.is_unchanged(row)` is the public
+    form of the loader's hash skip.
+  - `FormTarget.clean()` is new: a target refuses a configuration its owner will
+    never take. `Form.clean` asks it, under `target_config`, when the target or
+    its configuration changes and the form is validated (`full_clean`), as the
+    console and the resource loader do, for an acting user and for system work
+    alike; a plain `save()` does not ask it. The `message` target refuses a
+    channel that is gone or has another backend. Until now only `permits`
+    refused one, for an acting user, while system work saved such a form and
+    every response was then refused `channel_missing`. Staff who choose such a
+    channel in the console now get that `target_config` error instead of a
+    `permits` denial. For an acting user the channel is read through their own
+    access, so a channel they cannot read is refused exactly as a missing one;
+    system work reads it elevated. `Channel.objects.require_backend_target`
+    takes an optional `actor` for that read.
+  - The writes are the load's: one transaction and its seed changeset. A load
+    runs as system work; `Resource.objects.load_xref(…, actor=…)` saves the row as
+    its named actor, so choosing the target asks the target's `permits`.
+  `@angee/webforms` exports `publicAddress(slug)`, where a form answers, so a
+  consumer links to its form without spelling `/forms/<slug>`.
+  Upgrade: no migration (`ResourceLoadMixin` adds no column). A consumer that
+  installs a form through code of its own declares the row instead, with the
+  channel's file in `depends_on`, and deletes that code. A form that already
+  posts on the declared channel and slug, made by that code or by the
+  `webforms_messaging` migration template, refuses the declared one (one channel
+  and slug take one form) and is not adopted by itself: bind it to the row's
+  xref once, after it exists and before any load that carries the row, with
+  `Resource.objects.bind_instance(addon=<the addon's app config>, xref=<the row's
+  xref>, instance=<the form>, source="resources/<the entry's manifest path>")`
+  under `system_context`, in `manage.py shell`. `provision` runs
+  `resources load` right after `migrate`, so the bind needs a release boundary:
+  when the move template makes the earlier form, ship the template in one
+  release, bind once it has applied, and ship the row in a later release; a form
+  the addon's code made is bound before deploying the release that ships the
+  row. That load then applies the declared fields (not a create-only
+  `retention_days`), serves the declared content (unless the entry lists
+  `version` under `create_only`) and keeps the form's aliases. A form a staff
+  member made on another channel or slug needs nothing, unless it holds a
+  declared alias, which refuses the load until staff rename or delete it.
 - `@angee/ui`: a member of an object field (a FormSpec `object` widget) named
   `type` shows its message. Before, a value that broke such a member's rule showed
   nothing on screen: a `MutationDialog` disabled Save, and a record form and an
@@ -575,6 +679,11 @@ live in code docstrings.
       copy. A copy of the template taken before that mark existed lacks it and
       must be copied again: it fails safe, since `migrate` refuses it as a
       removal that is not the move.
+    - A copy taken before the template carried a date field (a `string` field
+      shown as `widget: date`) refuses every channel whose form holds one, at
+      `check_webform_channels` and at `migrate`, and applies nothing: copy the
+      template again. A copy that applied held no such channel and needs
+      nothing.
     - A host whose channels hold no form anywhere needs no template:
       `makemigrations messaging` removes the empty columns and nothing refuses
       that. `check_webform_channels` says which case a database is in: the
@@ -585,7 +694,8 @@ live in code docstrings.
       channel's slug as its address and as the slug of its `message` target, so
       its conversation continues. The FormSpec becomes the form's first version
       in the project's `LANGUAGE_CODE`; the email field becomes the contact
-      question; a field without a label shows its name. A published channel
+      question; a field shown as a date becomes a date question
+      (`inputType: date`); a field without a label shows its name. A published channel
       becomes a published form whose version states every question personal, to
       be narrowed in a new version, and is judged by the rule publishing applies
       (`validate_publishable`); an unpublished one becomes a draft that states

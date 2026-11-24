@@ -71,6 +71,19 @@ class FormTarget(ImplBase):
 
         raise NotImplementedError
 
+    def clean(self) -> None:
+        """Refuse, with ``ValidationError``, a configuration the owner will never take.
+
+        Asked by ``Form.clean`` when a form's target or its configuration
+        changes and the form is validated, for an acting user and for system
+        work alike, such as a form a resource row declares; ``permits`` then
+        decides whether the acting user may choose it. It may run with no
+        acting user. What it reads for an acting user, it reads through their
+        access (``instance_actor(self.form)``), so it discloses nothing they
+        cannot read. The default takes every configuration its ``config_model``
+        admits.
+        """
+
     def deliver(self, response: Any) -> Any:
         """Make or find the record ``response`` becomes; ``None`` when there is none to make."""
 
