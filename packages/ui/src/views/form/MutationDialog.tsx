@@ -9,9 +9,7 @@ import type { DialogPlacement, DialogSize } from "../../ui/dialog";
 import { useToast } from "../../feedback";
 import { useUiT, type UiTranslate } from "../../i18n";
 import { dateFromUnknown, formatDateTimeStorage } from "../../widgets/date-format";
-import {
-  REQUIRED_RULE, emptyValueForField, isStructuredPresenceField, structuredFieldErrors, type FieldRuleError,
-} from "./field-values";
+import { emptyValueForField, fieldRuleErrors } from "./field-values";
 import { isFieldControlVisible, visibleFields } from "./form-view-model";
 import { DescriptorFieldList, type DescriptorField } from "./DescriptorFieldList";
 import {
@@ -388,17 +386,16 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   );
 }
 
-/** A dialog's errors for the rules its fields fail. A structured field, one with a presence flag,
- * a template or a bound (`isStructuredPresenceField`), answers to presence, nullability and, with
- * `validateConstraints`, its constraints (a number's type, its bounds), and its `required` flag
- * is not read; any other field fails `required` when it is required and empty. It shares with
- * the record form's check (`formRuleErrors`) how a structured field's failed rule is found
- * (`structuredFieldErrors`) and how a failed rule becomes an error with its message
- * (`fieldErrorsFromRules`). They differ in which fields they ask and how they read values: this
- * one asks only the fields shown and editable for `values`, checks a structured field's
- * constraints only with `validateConstraints` (a schema-resolved form leaves them and their
- * messages to that resolver), and reads each name as one flat key, where an own key holding
- * `undefined` is present unless the field is omittable.
+/** A dialog's errors for the rules its fields fail, each field's found by `fieldRuleErrors` and
+ * worded by `fieldErrorsFromRules`. As the record form's check (`formRuleErrors`) does, it asks
+ * only the fields shown for `values` (`isFieldControlVisible`) that the person can change. It
+ * differs from the record form's check in four facts only: it decides read-only by the field's
+ * `readOnly` and `readOnlyWhen`, where the record form reads the resolved field's `readOnly`
+ * alone; it reads each name as one flat key, where the record form reads dotted paths (both read
+ * an own key holding `undefined` as absent); it counts the field's own `required` flag alone,
+ * where the record form adds the model's required-on-create names; and it checks constraints only
+ * with `validateConstraints` (a schema-resolved form leaves them and their messages to that
+ * resolver), where the record form always does.
  * @kind null
  * @reason Descriptor validation shared by form surfaces.
  */
@@ -410,15 +407,13 @@ export function dialogRuleErrors(
 ): FieldErrors<Record<string, unknown>> {
   const resolved = visibleFields(typeof fields === "function" ? fields(values) : fields, values);
   const editable = resolved.filter((field) => isFieldControlVisible(field, values) && !field.readOnly && !field.readOnlyWhen?.(values));
-  return fieldErrorsFromRules(editable.flatMap((field): readonly FieldRuleError[] => {
-    if (isStructuredPresenceField(field)) {
-      const value = values[field.name];
-      const present = Object.hasOwn(values, field.name) && !(field.omittable && value === undefined);
-      return structuredFieldErrors(field, value, present, field.name, validateConstraints);
-    }
-    return field.required && emptyDialogValue(values[field.name])
-      ? [{ path: field.name, ...REQUIRED_RULE }]
-      : [];
+  return fieldErrorsFromRules(editable.flatMap((field) => {
+    const value = values[field.name];
+    return fieldRuleErrors(
+      field,
+      { value, present: Object.hasOwn(values, field.name) && value !== undefined },
+      { required: Boolean(field.required), validateConstraints },
+    );
   }), t);
 }
 
@@ -437,12 +432,4 @@ function initialDialogValues(
     }
   }
   return values;
-}
-
-/** Whether a dialog value counts as unfilled for the required-submit gate. */
-export function emptyDialogValue(value: unknown): boolean {
-  if (value == null) return true;
-  if (typeof value === "string") return value.trim() === "";
-  if (Array.isArray(value)) return value.length === 0;
-  return false;
 }

@@ -58,6 +58,8 @@ test("the native menu opens the shared password dialog, which clears its inputs 
   fireEvent.click(item);
   await screen.findByRole("dialog", { name: "Change password" });
   await waitFor(() => expect(trigger.getAttribute("aria-expanded")).toBe("false"));
+  // A person who opens the dialog and types writes the current password.
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("Current password")));
   for (const label of ["Current password", "New password", "Confirm new password"]) {
     expect(screen.getByLabelText<HTMLInputElement>(label).type).toBe("password");
     expect(screen.getByLabelText<HTMLInputElement>(label).autocomplete).toBe(label === "Current password" ? "current-password" : "new-password");
