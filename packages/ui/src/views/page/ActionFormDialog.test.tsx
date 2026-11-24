@@ -1275,3 +1275,72 @@ describe("a required field in a dialog without a resolver", () => {
     expect(button("Register review").disabled).toBe(true);
   });
 });
+
+describe("where focus is when the dialog opens", () => {
+  // A popup or a validation that a focus started runs after the event; a macrotask lets it settle before asserting.
+  const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+
+  test("an argument dialog puts focus on its first argument's input; no message shows and the submit stays disabled, as it opened", async () => {
+    renderDialog({ id: "rename", label: "Rename", submit: vi.fn(), args: [
+      { name: "name", widget: "text", label: "Name" },
+      { name: "note", widget: "text", label: "Note", optional: true },
+    ] });
+    const dialog = await screen.findByRole("dialog", { name: "Rename" });
+    const submit = screen.getByRole<HTMLButtonElement>("button", { name: "Rename" });
+    expect(submit.disabled).toBe(true);
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Name" })));
+    await settle();
+    expect(screen.queryByText("This field is required.")).toBeNull();
+    expect(dialog.querySelector("[aria-invalid='true']")).toBeNull();
+    expect(submit.disabled).toBe(true);
+  });
+
+  test("guard: an action whose arguments could not be resolved shows only its banner, and focus is where Base UI puts it: on Close", async () => {
+    renderDialog({ id: "review", label: "Review", submit: vi.fn(), args: () => {
+      throw new Error("The saved schema is invalid.");
+    } });
+    await screen.findByRole("dialog", { name: "Review" });
+    expect(screen.getByText("The saved schema is invalid.")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Close" })));
+  });
+
+  test.each<[string, ActionArg, () => HTMLElement]>([
+    ["a relation picker (many2one)", { name: "collection", argKind: "relation", resource: "Collection", label: "Collection" },
+      () => screen.getByRole("combobox", { name: "Collection" })],
+    ["a select (select)", { name: "kind", widget: "select", label: "Kind", options: [{ value: "a", label: "Alpha" }, { value: "b", label: "Beta" }] },
+      () => screen.getByRole("combobox", { name: "Kind" })],
+    ["a switch (switch)", { name: "flag", widget: "switch", label: "Flag" }, () => screen.getByRole("switch", { name: "Flag" })],
+  ])("%s first: its control has focus and no popup opens", async (_kind, arg, control) => {
+    renderDialog({ id: "pick", label: "Pick", submit: vi.fn(), args: [arg, { name: "note", widget: "text", label: "Note", optional: true }] });
+    await screen.findByRole("dialog", { name: "Pick" });
+    await waitFor(() => expect(document.activeElement).toBe(control()));
+    await settle();
+    expect(document.activeElement).toBe(control());
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(control().getAttribute("aria-expanded")).not.toBe("true");
+  });
+
+  test("a date field (date) first, whose control is a plain button with no input role, is passed over: the next field has focus and no popup opens", async () => {
+    renderDialog({ id: "pick", label: "Pick", submit: vi.fn(), args: [
+      { name: "day", widget: "date", label: "Day" },
+      { name: "note", widget: "text", label: "Note", optional: true },
+    ] });
+    await screen.findByRole("dialog", { name: "Pick" });
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Note" })));
+    await settle();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Day" }).getAttribute("aria-expanded")).toBe("false");
+  });
+
+  test("a prefilled many-to-many first field: its picker's own field has focus, not a chip's Remove button, and no popup opens", async () => {
+    renderDialog(registerReviewAction(vi.fn()));
+    await screen.findByRole("dialog", { name: "Register review" });
+    expect(await screen.findByRole("button", { name: "Remove DOC-1" })).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("combobox", { name: "Documents" })));
+    await settle();
+    expect(document.activeElement).toBe(screen.getByRole("combobox", { name: "Documents" }));
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  });
+});

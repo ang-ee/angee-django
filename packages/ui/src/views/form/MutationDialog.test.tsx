@@ -6,8 +6,9 @@ import { testDataResource } from "@angee/metadata/testing";
 
 import type { ReactElement } from "react";
 import { ToastProvider } from "../../feedback";
-import { AppRuntimeProvider } from "../../runtime";
+import { AppRuntimeProvider, type WidgetMap } from "../../runtime";
 import { defaultWidgets } from "../../widgets";
+import { lazyWidget } from "../../widgets/lazy-widget";
 import {
   LabeledDescriptorField,
   MutationDialog,
@@ -1065,4 +1066,82 @@ test("guard: a server refusal of a registered top-level field shows exactly its 
   expect(code.getAttribute("aria-invalid")).toBe("true");
   expect(source.getAttribute("aria-invalid")).toBe("true");
   expect(submit).toHaveBeenCalledTimes(1);
+});
+
+describe("where focus is when the dialog opens", () => {
+  function openDialog(fields: readonly DescriptorField[], options: { initialValues?: Record<string, unknown>; widgets?: WidgetMap } = {}) {
+    return render(<AppRuntimeProvider runtime={{ widgets: options.widgets ?? defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Rename" fields={fields} initialValues={options.initialValues}
+        submitLabel="Save" parseValues={parseRawValues} onSubmit={vi.fn().mockResolvedValue(ok)} />
+    </AppRuntimeProvider>);
+  }
+  // A validation a focus or a blur started runs after the event; a macrotask lets it settle before asserting.
+  const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+  const required = "This field is required.";
+
+  test("the first field has focus; no message shows, nor once focus moves on to the next field", async () => {
+    openDialog([{ name: "name", label: "Name", required: true }, { name: "note", label: "Note", required: true }]);
+    const dialog = await screen.findByRole("dialog", { name: "Rename" });
+    const name = screen.getByRole("textbox", { name: "Name" });
+    await waitFor(() => expect(document.activeElement).toBe(name));
+    await settle();
+    expect(screen.queryByText(required)).toBeNull();
+    expect(dialog.querySelector("[aria-invalid='true']")).toBeNull();
+
+    const note = screen.getByRole("textbox", { name: "Note" });
+    act(() => note.focus());
+    expect(document.activeElement).toBe(note);
+    await settle();
+    expect(screen.queryByText(required)).toBeNull();
+    expect(dialog.querySelector("[aria-invalid='true']")).toBeNull();
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Save" }).disabled).toBe(true);
+  });
+
+  test.each<[string, DescriptorField]>([
+    ["shown by its widget as text", { name: "code", label: "Code", readOnly: true }],
+    ["a control of its own that renders a read-only input", { name: "code", label: "Code", readOnly: true, control: ({ id, value, readOnly }) => (
+      <input id={id} readOnly={readOnly} value={typeof value === "string" ? value : ""} onChange={() => undefined} />
+    ) }],
+  ])("a read-only first field, %s, is passed over: the next field has focus", async (_shape, code) => {
+    openDialog([code, { name: "name", label: "Name" }], { initialValues: { code: "C-1" } });
+    await screen.findByRole("dialog", { name: "Rename" });
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Name" })));
+  });
+
+  test("guard: a dialog whose fields are all read-only keeps focus where Base UI puts it: on Close", async () => {
+    openDialog([{ name: "code", label: "Code", readOnly: true }, { name: "name", label: "Name", readOnly: true }],
+      { initialValues: { code: "C-1", name: "First" } });
+    await screen.findByRole("dialog", { name: "Rename" });
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Close" })));
+  });
+
+  const objectFirst = deserializeFormSpec({ type: "object", properties: {
+    retry: { type: "object", widget: "object", label: "Retry", properties: {
+      handle: { type: "string", label: "Handle" },
+      delay: { type: "integer", label: "Delay" },
+    } },
+    code: { type: "string", label: "Code" },
+  } }, defaultWidgets);
+
+  test("an object field first: its first member's control has focus", async () => {
+    // The object widget's code loads at its first render; a dialog opened after that shows its members at once.
+    openDialog(objectFirst);
+    await screen.findByLabelText("Handle");
+    cleanup();
+    openDialog(objectFirst);
+    await screen.findByRole("dialog", { name: "Rename" });
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("Handle")));
+  });
+
+  test("a first field whose widget's code is still loading when the dialog opens is passed over: the next field has focus, and keeps it once the members show", async () => {
+    // A widget of its own, so its code has never loaded in this run, whichever test ran before.
+    const loading = lazyWidget(() => import("./StructuredField").then((module) => module.objectWidget), { edit: true });
+    const fields = objectFirst.map((field) => field.name === "retry" ? { ...field, widget: "loadingObject" } : field);
+    openDialog(fields, { widgets: { ...defaultWidgets, loadingObject: loading } });
+    await screen.findByRole("dialog", { name: "Rename" });
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Code" })));
+    await screen.findByLabelText("Handle");
+    await settle();
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Code" }));
+  });
 });

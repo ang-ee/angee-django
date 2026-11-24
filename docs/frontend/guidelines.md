@@ -1273,6 +1273,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   provides `DialogReturnFocusContext` with the menu trigger. A dialog-opening
   item declares `aria-haspopup="dialog"` and lets the menu close normally; it
   does not hold the menu open with `closeOnClick={false}`.
+- A form dialog built on [DialogForm](../../packages/ui/src/fragments/DialogForm.tsx), as
+  `MutationDialog` and `ActionFormDialog` are, opens with focus on its first field, else on
+  its Close, and on the dialog itself when opened by touch on its trigger or where the
+  primary pointer is coarse; its callers pass nothing for it.
 - Toolbar dialogs compose [MutationDialog](../../packages/ui/src/views/form/MutationDialog.tsx).
   Declare `DescriptorField`s; the shared [DescriptorFieldList](../../packages/ui/src/views/form/DescriptorFieldList.tsx)
   owns controls and requires an `ActionFormProvider` over the form (a host with its

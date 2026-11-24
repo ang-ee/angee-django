@@ -10,6 +10,53 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: **Changed behaviour.** A form dialog opens with focus on its first
+  field. Before, every dialog built on `DialogForm`, every `MutationDialog` and
+  `ActionFormDialog` among them, opened with focus on its Close button: `DialogForm`
+  set no initial focus, so Base UI focused the first tabbable element in the popup,
+  the header's Close, and a person who opened a dialog and typed at once wrote
+  nothing. `DialogForm` now gives Base UI's `initialFocus` the first field in the
+  dialog's body that a person can change: a control that holds a value (a native
+  `input` other than a button, image or hidden one, a `textarea` or a `select`, an
+  element with one of ARIA's input roles, or an editing host, the element that
+  carries `contenteditable`), in the tab order and shown, and neither disabled
+  (natively or with a reason), read-only, hidden nor inert; of a named radio group,
+  the checked radio, else the first, as Base UI's own tabbable query picks. Whether
+  a field shows is Base UI's own test: its `visibility`, then `checkVisibility`
+  where the platform has it, else its `display`. A control that only performs an
+  action, a button, a link or a menu trigger, is never a field, so a dialog whose
+  body holds only text and buttons (a list of verbs, an error banner with Retry, a
+  person's Remove access) keeps focus on Close, as does a dialog with no field: with
+  none, `DialogForm` returns `null` and Base UI's own choice stands. A field whose
+  control is a plain button with no input role is passed over too: the `date` and
+  `datetime` widgets' pickers, the `statusbar` widget's stage buttons and an empty
+  `list` widget, whose only control adds an item. Opened by touch through its
+  trigger, the dialog focuses itself, as Base UI does for touch, so no on-screen
+  keyboard rises over it. Base UI learns how a dialog was opened only from its
+  trigger, so a dialog opened through its `open` prop cannot tell a touch, and the
+  platform answers instead: where the primary pointer is coarse
+  (`(pointer: coarse)`, read through `useMediaQuery`), every opening focuses the
+  dialog itself, one from the keyboard through its trigger included. A tablet with a
+  hardware keyboard therefore never gets the field at the opening, while on a touch
+  laptop, whose primary pointer is fine, a dialog gets its field unless a touch on
+  its trigger opened it. The choice is made once, as the dialog opens: a field whose
+  widget's code is still loading then is passed over, and focus stays where it went
+  once the field shows. With focus in a text field, Enter submits the form when its
+  submit is enabled, as it always did once a person had clicked into the field;
+  before, Enter at the opening pressed Close; it shows in a dialog whose submit is
+  enabled as it opens, such as one that asks only for an optional reference before
+  marking something done. A key that is already down when the dialog opens does
+  nothing in its form: until a fresh keydown (one that is not a repeat) reaches the
+  form, `DialogForm` stops each repeated keydown and each keyup in the form's
+  capture phase, before any control sees it, so the held Enter or the released Space
+  that opened the dialog neither submits it nor flips, checks or picks its first
+  field; from the first fresh keydown on, keys act as before, and each opening
+  starts over. Where focus is on the dialog itself (opened by touch, or with a
+  coarse pointer), keys do not pass through its form: a held Enter or Space does
+  nothing there, but a held Escape closes the dialog. Focusing a field shows no
+  message, since the dialogs that check their own rules check at a change, and opens
+  no picker. Where focus goes when the dialog closes (`finalFocus`,
+  `DialogReturnFocusContext`) is unchanged, and no caller passes anything new.
 - `@angee/ui`: a member of an object field (a FormSpec `object` widget) named
   `type` shows its message. Before, a value that broke such a member's rule showed
   nothing on screen: a `MutationDialog` disabled Save, and a record form and an
