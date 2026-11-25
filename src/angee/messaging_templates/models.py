@@ -1,12 +1,11 @@
 """Message templates: the layouts, templates, blocks and parts outgoing mail is written from.
 
 A :class:`MessageTemplate` is one row of one kind (:class:`MessageTemplateKind`)
-for one key and one language. A template is the mail itself, with its subject,
-preheader and the layout it sits in; a layout wraps templates; a block and a part
+for one key and one language. A message template of the kind ``template`` is the
+mail itself, with its subject, preheader and the message template layout it sits
+in; a layout wraps templates; a message template block and a message template part
 are pieces rows include. What differs by kind is its handler's
-(:attr:`MessageTemplateKind.handler`): the constraints, :meth:`MessageTemplate.clean`
-and :meth:`MessageTemplate.delete_blocker` read it, and nothing else branches on
-the kind.
+(:attr:`MessageTemplateKind.handler`) or a declarative constraint naming the kind.
 
 **Baselines and overrides.** An addon ships rows in its ``install`` resources as
 baselines (``is_baseline``), which loads alone write. The deployment's override of
@@ -15,17 +14,20 @@ started by :meth:`MessageTemplateManager.override` and kept over a changed defau
 by :meth:`MessageTemplateManager.keep_override`; deleting it resets to the default.
 A non-baseline row with no baseline is the deployment's own. ``content_hash``
 fingerprints what renders, and an override's ``baseline_hash`` is the baseline's
-fingerprint when the override started or was last kept, so "default updated" is a
-comparison of the two (:meth:`MessageTemplateQuerySet.row_facts`).
+fingerprint when the override started or was last kept, so "has an updated default"
+is a comparison of the two (:attr:`MessageTemplateQuerySet.row_fact_expressions`).
+Rows are written one at a time, through ``save()``, which derives the hash: the
+querysets refuse ``update``, ``bulk_update`` and ``bulk_create``.
 
 **Languages.** :meth:`MessageTemplateQuerySet.effective_rows` picks, for each kind
 and key, the row a recipient reads: the first of the requested languages (or the
 person's) and then the default language that has a row, an override before its
-baseline, and else the language of a baseline, English first.
+baseline, and else the language of a baseline, English first. A language is
+spelled as parties stores one (:class:`~angee.parties.fields.LanguageCodeField`).
 
-**Access.** Every signed-in actor reads rows; platform administrators write,
-delete and read samples of non-baseline rows, and nobody but a resource load
-writes a baseline (``permissions.zed``).
+**Access.** Every signed-in actor reads rows; platform administrators create,
+write and delete rows that are not baselines and read every row's sample, and
+nobody but a resource load writes a baseline (``permissions.zed``).
 """
 
 from __future__ import annotations
@@ -33,28 +35,26 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Iterable, Mapping
 from copy import deepcopy
-from functools import reduce
-from operator import and_
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
-from django.db import models, transaction
+from django.db import IntegrityError, models, transaction
 from django.db.models.expressions import BaseExpression
-from django.utils.translation import get_language_info
 
 from angee.base.fields.state import StateField
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.locks import ImmutableFieldsMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
+from angee.base.querysets import ClosedUpdateQuerySet
 from angee.base.serialization import canonical_json_sha256
 from angee.messaging_templates.rendering import MessageTemplateFormat, validate_variables
 from angee.messaging_templates.resources import MessageTemplateResource
-from angee.parties.fields import normalize_language_codes
+from angee.parties.fields import LanguageCodeField, normalize_language_code
 from angee.provenance.contrib.angee.history import HistoryMixin
-from angee.provenance.contrib.angee.managers import AngeeHistoryManager
-from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet, AngeeHistoryUnscopedQuerySet
 from angee.resources.mixins import ResourceLoadMixin
 
 if TYPE_CHECKING:
@@ -63,11 +63,8 @@ if TYPE_CHECKING:
 FALLBACK_LANGUAGE = "en"
 """The language a key falls back to first when no requested language has a row: the one shipped rows are written in."""
 
-CONTENT_HASH_FIELDS = ("format", "subject", "preheader", "source", "text_source", "layout", "variables")
-"""The columns ``content_hash`` fingerprints: what a row renders, not what it is called."""
-
-ROW_FACTS = ("is_effective", "is_overridden", "default_updated")
-"""The facts :meth:`MessageTemplateQuerySet.row_facts` derives for each row from its siblings."""
+CONTENT_HASH_FIELDS = ("kind", "format", "subject", "preheader", "source", "text_source", "layout", "variables")
+"""The columns ``content_hash`` fingerprints: what a row is and renders, not what it is called."""
 
 _KEY = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*\Z")
 """Anchored, since ``RegexValidator`` searches; ``\\Z`` refuses the trailing newline ``$`` admits."""
@@ -78,6 +75,7 @@ UNRESOLVED_DELETE_MESSAGE = (
     "Other message templates use this %(kind)s, which would no longer resolve without this row: "
     "give its key a row in the default language first."
 )
+ONE_AT_A_TIME_MESSAGE = "Message templates are written one at a time, so each save derives its content hash."
 
 
 class MessageTemplateKind(models.TextChoices):
@@ -89,23 +87,20 @@ class MessageTemplateKind(models.TextChoices):
     PART = "part", "Part"
 
     @property
-    def handler(self) -> KindHandler:
+    def handler(self) -> MessageTemplateKindHandler:
         """Return the behaviour owned by this kind."""
 
         return _KIND_HANDLERS[self]
 
 
-class KindHandler:
-    """What one kind of message template is: the columns it fills, its names, and the rows that name it."""
+class MessageTemplateKindHandler:
+    """What one kind of message template is: the columns it fills, its name prefix, and the rows that name it."""
 
     carries_message_fields: ClassVar[bool] = False
     """Whether rows of this kind fill ``subject``, ``preheader`` and ``layout``; the others leave them empty."""
     template_prefix: ClassVar[str] = ""
-    """What precedes a key in the template name the renderer serves the row under (``blocks/`` and a key)."""
-    qualified_key: ClassVar[bool] = False
-    """Whether a key is ``<owning addon label>.<name>``; otherwise it is a bare name."""
-    required_format: ClassVar[MessageTemplateFormat | None] = None
-    """The one format rows of this kind are written in, or ``None`` for either."""
+    """Put before a key, it names a row of this kind among message templates (``blocks/button``);
+    a template is named by its bare key."""
 
     def naming_rows(self, rows: models.QuerySet[Any], key: str) -> models.QuerySet[Any]:
         """Return the rows among ``rows``, in any language, that name ``key`` as a row of this kind."""
@@ -114,11 +109,10 @@ class KindHandler:
         return rows.none()
 
 
-class LayoutHandler(KindHandler):
-    """A layout wraps templates, which name it in their ``layout``; it is HTML."""
+class LayoutHandler(MessageTemplateKindHandler):
+    """A message template layout wraps templates, which name it in their ``layout``."""
 
     template_prefix = "layouts/"
-    required_format = MessageTemplateFormat.HTML
 
     def naming_rows(self, rows: models.QuerySet[Any], key: str) -> models.QuerySet[Any]:
         """Return the rows whose ``layout`` is ``key``: only templates fill the column."""
@@ -126,26 +120,25 @@ class LayoutHandler(KindHandler):
         return rows.filter(layout=key)
 
 
-class TemplateHandler(KindHandler):
-    """A template is a mail: it has a subject, a preheader and the layout it sits in, and its key names its addon."""
+class TemplateHandler(MessageTemplateKindHandler):
+    """A message template of the kind ``template`` is a mail: a subject, a preheader and the layout it sits in."""
 
     carries_message_fields = True
-    qualified_key = True
 
 
-class BlockHandler(KindHandler):
-    """A block is a styled piece of a mail that rows include."""
+class BlockHandler(MessageTemplateKindHandler):
+    """A message template block is a styled piece of a mail that rows include."""
 
     template_prefix = "blocks/"
 
 
-class PartHandler(KindHandler):
-    """A part is a piece of wording that rows include."""
+class PartHandler(MessageTemplateKindHandler):
+    """A message template part is a piece of wording that rows include."""
 
     template_prefix = "parts/"
 
 
-_KIND_HANDLERS: Mapping[MessageTemplateKind, KindHandler] = {
+_KIND_HANDLERS: Mapping[MessageTemplateKind, MessageTemplateKindHandler] = {
     MessageTemplateKind.LAYOUT: LayoutHandler(),
     MessageTemplateKind.TEMPLATE: TemplateHandler(),
     MessageTemplateKind.BLOCK: BlockHandler(),
@@ -153,39 +146,80 @@ _KIND_HANDLERS: Mapping[MessageTemplateKind, KindHandler] = {
 }
 
 _MESSAGE_KINDS = [str(kind) for kind in MessageTemplateKind if kind.handler.carries_message_fields]
-_FIXED_FORMATS = [
-    (str(kind), str(fixed)) for kind in MessageTemplateKind if (fixed := kind.handler.required_format) is not None
-]
 
 
-def _known_language(code: str) -> bool:
-    """Whether ``code`` is spelled as parties stores a language and Django knows it (for its writing direction)."""
+def _siblings(rows: models.QuerySet[Any]) -> models.QuerySet[Any]:
+    """The rows of the outer row's kind, key and language, read unscoped: every reader of a row reads them all."""
 
-    try:
-        normalized = normalize_language_codes([code])
-        get_language_info(code)
-    except (ValidationError, KeyError):
-        return False
-    return normalized == [code]
+    return rows.model._base_manager.filter(
+        kind=models.OuterRef("kind"), key=models.OuterRef("key"), language=models.OuterRef("language"),
+    )
 
 
-class MessageTemplateQuerySet[TemplateT: MessageTemplate](AngeeHistoryQuerySet[TemplateT]):
+def _is_effective(rows: models.QuerySet[Any]) -> BaseExpression:
+    """A non-baseline row, or a baseline with no non-baseline row of its kind, key and language: what renders."""
+
+    return models.ExpressionWrapper(
+        models.Q(is_baseline=False) | ~models.Exists(_siblings(rows).filter(is_baseline=False)),
+        output_field=models.BooleanField(),
+    )
+
+
+def _is_overridden(rows: models.QuerySet[Any]) -> BaseExpression:
+    """A baseline with a non-baseline row of its kind, key and language."""
+
+    return models.ExpressionWrapper(
+        models.Q(is_baseline=True) & models.Exists(_siblings(rows).filter(is_baseline=False)),
+        output_field=models.BooleanField(),
+    )
+
+
+def _has_updated_default(rows: models.QuerySet[Any]) -> BaseExpression:
+    """An override whose ``baseline_hash`` differs from its baseline's ``content_hash``."""
+
+    moved = _siblings(rows).filter(is_baseline=True).exclude(content_hash=models.OuterRef("baseline_hash"))
+    return models.ExpressionWrapper(
+        models.Q(is_baseline=False) & models.Exists(moved), output_field=models.BooleanField(),
+    )
+
+
+class _OneAtATimeQuerySet[TemplateT: MessageTemplate](ClosedUpdateQuerySet[TemplateT]):
+    """Refuse every collection write: ``save()`` derives the content hash and guards the write-once columns."""
+
+    def bulk_create(self, *args: Any, **kwargs: Any) -> list[TemplateT]:
+        """Reject a batched insert, which would skip ``save()``."""
+
+        raise ValidationError(ONE_AT_A_TIME_MESSAGE, code="one_at_a_time")
+
+
+class MessageTemplateQuerySet[TemplateT: MessageTemplate](
+    _OneAtATimeQuerySet[TemplateT], AngeeHistoryQuerySet[TemplateT],
+):
     """Read scopes over message templates: the language rule, whether a key resolves, and the row facts."""
+
+    row_fact_expressions: ClassVar[Mapping[str, Callable[[models.QuerySet[Any]], BaseExpression]]] = {
+        "is_effective": _is_effective,
+        "is_overridden": _is_overridden,
+        "has_updated_default": _has_updated_default,
+    }
+    """Each row fact's builder, taking a queryset of the model; the model's filter expressions are this mapping."""
 
     @staticmethod
     def default_language() -> str:
         """Return the deployment's default language: ``LANGUAGE_CODE``'s primary subtag, as parties spells it."""
 
-        return normalize_language_codes([settings.LANGUAGE_CODE.split("-", 1)[0]])[0]
+        return normalize_language_code(settings.LANGUAGE_CODE.split("-", 1)[0])
 
     def language_candidates(self, *, language: str | None = None, person: Person | None = None) -> list[str]:
         """Return the languages a lookup tries, in order, each once: ``language`` or ``person``'s, then the default.
 
-        ``language``, when given, is normalized as parties stores languages and
-        replaces ``person``'s; a code parties refuses raises ``ValidationError``.
+        Callers pass a language as parties stores one, a primary subtag such as
+        ``en`` or ``zh`` (normalized by :func:`~angee.parties.fields.normalize_language_code`;
+        ``en-us`` is refused with ``ValidationError``). ``language`` replaces
+        ``person``'s languages.
         """
 
-        preferred = normalize_language_codes([language]) if language else list(person.languages) if person else []
+        preferred = [normalize_language_code(language)] if language else list(person.languages) if person else []
         return list(dict.fromkeys([*preferred, self.default_language()]))
 
     def effective_rows(
@@ -202,10 +236,14 @@ class MessageTemplateQuerySet[TemplateT: MessageTemplate](AngeeHistoryQuerySet[T
         override before its baseline; when none has one, the language of a baseline
         of that kind and key wins, :data:`FALLBACK_LANGUAGE` first and then by
         code, again its override before its baseline. A key with neither is
-        absent. ``keys`` ``None`` reads every key of ``kinds``. Rows are read
-        through this queryset's scope.
+        absent. ``kinds`` and ``keys`` are iterables of names (a bare string is
+        refused, not iterated); ``keys`` ``None`` reads every key of ``kinds``.
+        Rows are read through this queryset's scope, so a caller with no actor
+        reads through ``MessageTemplate.system_queryset()``.
         """
 
+        if isinstance(kinds, str) or isinstance(keys, str):
+            raise TypeError("Pass kinds and keys as iterables of names, not one name.")
         candidates = self.language_candidates(language=language, person=person)
         shipped = self.model._base_manager.filter(
             is_baseline=True,
@@ -249,39 +287,19 @@ class MessageTemplateQuerySet[TemplateT: MessageTemplate](AngeeHistoryQuerySet[T
             models.Q(is_baseline=True) | models.Q(language=self.default_language()), kind=kind, key=key,
         ).exists()
 
-    @staticmethod
-    def row_facts(model: type[MessageTemplate]) -> dict[str, BaseExpression]:
-        """Return :data:`ROW_FACTS` as boolean expressions over ``model``'s rows, each read from its siblings.
-
-        ``is_effective``: a non-baseline row, or a baseline with no non-baseline row
-        of its kind, key and language, so what renders for them. ``is_overridden``:
-        a baseline with such a row. ``default_updated``: an override whose
-        ``baseline_hash`` differs from its baseline's ``content_hash``. Siblings are
-        read unscoped: every reader of a row reads them all.
-        """
-
-        siblings = model._base_manager.filter(
-            kind=models.OuterRef("kind"), key=models.OuterRef("key"), language=models.OuterRef("language"),
-        )
-        overridden = models.Exists(siblings.filter(is_baseline=False))
-        moved = models.Exists(siblings.filter(is_baseline=True).exclude(content_hash=models.OuterRef("baseline_hash")))
-        return {
-            "is_effective": models.ExpressionWrapper(
-                models.Q(is_baseline=False) | ~overridden, output_field=models.BooleanField(),
-            ),
-            "is_overridden": models.ExpressionWrapper(
-                models.Q(is_baseline=True) & overridden, output_field=models.BooleanField(),
-            ),
-            "default_updated": models.ExpressionWrapper(
-                models.Q(is_baseline=False) & moved, output_field=models.BooleanField(),
-            ),
-        }
-
     def with_row_facts(self) -> MessageTemplateQuerySet[TemplateT]:
-        """Annotate each of :data:`ROW_FACTS` as ``_<name>``, the annotation the model's properties read."""
+        """Annotate each row fact as ``_<name>``, the annotation the model's properties read."""
 
-        return self.annotate(**{f"_{name}": fact for name, fact in self.row_facts(self.model).items()})
+        return self.annotate(**{f"_{name}": build(self) for name, build in self.row_fact_expressions.items()})
 
+
+class MessageTemplateBaseQuerySet[TemplateT: MessageTemplate](
+    _OneAtATimeQuerySet[TemplateT], AngeeHistoryUnscopedQuerySet[TemplateT],
+):
+    """Unscoped rows for Django's own relation reads, closed to collection writes like the default manager."""
+
+
+_MessageTemplateBaseManager = AngeeHistoryUnscopedManager.from_queryset(MessageTemplateBaseQuerySet)
 
 _MessageTemplateManagerBase = AngeeHistoryManager.from_queryset(MessageTemplateQuerySet)
 
@@ -292,35 +310,47 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
     def override(self, baseline: TemplateT) -> TemplateT:
         """Return the deployment's override of ``baseline``, created from it when there is none.
 
-        In one transaction under ``baseline``'s row lock: refuses a row that is not
-        a baseline, requires ``create`` on the override (named system work always
-        may), and returns the existing override or a new one holding
-        :meth:`MessageTemplate.override_values`, whose ``baseline_hash`` its save
-        stamps. Calling it again returns the same row.
+        Requires ``create`` on the override before anything is locked (named
+        system work always may). Then, in one transaction under ``baseline``'s row
+        lock, refuses a row that is not a baseline and returns the existing
+        override, or saves a new one holding :meth:`MessageTemplate.override_values`,
+        whose ``baseline_hash`` its save stamps. A writer that inserts the same
+        row meanwhile, past the lock, is answered with that row. Calling it again
+        returns the same row.
         """
 
         actor, unscoped = baseline.effective_actor(strict=True)
+        identity = {"kind": baseline.kind, "key": baseline.key, "language": baseline.language}
+        override = self.model(**identity)
+        if unscoped:
+            override.sudo(reason="messaging_templates.message_template.override")
+        else:
+            override.require_access("create", actor)
+        rows = self.model.system_queryset()
         with transaction.atomic():
             locked = self.model.system_queryset(lock=("self",)).filter(pk=baseline.pk).first()
             if locked is None or not locked.is_baseline:
                 raise ValidationError(NOT_A_BASELINE_MESSAGE, code="not_a_baseline")
-            identity = {"kind": locked.kind, "key": locked.key, "language": locked.language}
-            override = self.model(**identity, **locked.override_values())
-            if unscoped:
-                override.sudo(reason="messaging_templates.message_template.override")
-            else:
-                override.require_access("create", actor)
-            existing = self.model.system_queryset().filter(is_baseline=False, **identity).first()
-            if existing is not None:
-                return existing if unscoped else existing.with_actor(actor)
-            override.full_clean()
-            override.save()
+            existing = rows.filter(is_baseline=False, **identity).first()
+            if existing is None:
+                for name, value in locked.override_values().items():
+                    setattr(override, name, value)
+                try:
+                    with transaction.atomic():
+                        override.full_clean()
+                        override.save()
+                except (IntegrityError, ValidationError):
+                    # A writer that does not take the baseline's lock inserted the row meanwhile.
+                    if (existing := rows.filter(is_baseline=False, **identity).first()) is None:
+                        raise
+        if existing is None:
             if unscoped:
                 override.unsudo()
             return override
+        return existing if unscoped else existing.with_actor(actor)
 
     def keep_override(self, override: TemplateT) -> TemplateT:
-        """Keep ``override``'s text over its baseline as it is now, which clears "default updated".
+        """Keep ``override``'s text over its baseline as it is now, which clears "has an updated default".
 
         Under ``override``'s row lock: refuses a row that overrides no baseline,
         requires ``write`` on it (named system work always may), and stamps its
@@ -353,6 +383,11 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
 
     resource_class = MessageTemplateResource
     immutable_fields = ("kind", "key", "language", "is_baseline")
+    edited_fields: ClassVar[tuple[str, ...]] = (
+        "name", "description", "format", "subject", "preheader", "source", "text_source", "layout", "variables",
+        "sample",
+    )
+    """The columns an administrator edits: what an override copies and the console updates."""
     sqid_prefix = "mtl_"
 
     kind = StateField(choices_enum=MessageTemplateKind)
@@ -361,12 +396,12 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         max_length=120,
         validators=[RegexValidator(_KEY, "Use lower-case names of letters, digits and underscores, joined by dots.")],
     )
-    """The name rows and senders use: ``<owning addon label>.<name>`` for a template, else a bare name."""
-    language = models.CharField(max_length=3)
+    """The name rows and senders use; a shipped template's is ``<owning addon label>.<name>`` by convention."""
+    language = LanguageCodeField()
     """The ISO 639 code the row is written in, spelled as parties stores ``Person.languages``."""
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True, default="")
-    format = StateField(choices_enum=MessageTemplateFormat)
+    format = StateField(choices_enum=MessageTemplateFormat, db_index=False)
     """The markup ``source`` is written in (:class:`~angee.messaging_templates.rendering.MessageTemplateFormat`)."""
     subject = models.CharField(max_length=255, blank=True, default="")
     """A template's subject line; empty for the other kinds."""
@@ -389,13 +424,12 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
     baseline_hash = models.CharField(max_length=71, blank=True, default="", editable=False)
     """An override's copy of its baseline's ``content_hash``, stamped when it starts and when it is kept."""
 
+    _angee_base = _MessageTemplateBaseManager()
     objects = MessageTemplateManager()
 
-    hasura_filter_expressions: ClassVar[Mapping[str, Callable[[models.QuerySet[Any]], BaseExpression]]] = {
-        "is_effective": lambda rows: MessageTemplateQuerySet.row_facts(rows.model)["is_effective"],
-        "is_overridden": lambda rows: MessageTemplateQuerySet.row_facts(rows.model)["is_overridden"],
-        "default_updated": lambda rows: MessageTemplateQuerySet.row_facts(rows.model)["default_updated"],
-    }
+    hasura_filter_expressions: ClassVar[Mapping[str, Callable[[models.QuerySet[Any]], BaseExpression]]] = (
+        MessageTemplateQuerySet.row_fact_expressions
+    )
 
     class Meta:
         """Django model options for a message template."""
@@ -426,11 +460,9 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
                 "preheader or layout.",
             ),
             models.CheckConstraint(
-                condition=reduce(
-                    and_, (~models.Q(kind=kind) | models.Q(format=fixed) for kind, fixed in _FIXED_FORMATS),
-                ),
+                condition=~models.Q(kind=MessageTemplateKind.LAYOUT) | models.Q(format=MessageTemplateFormat.HTML),
                 name="%(app_label)s_message_template_layout_html",
-                violation_error_message="A layout is written in HTML.",
+                violation_error_message="A message template layout is written in HTML.",
             ),
             models.CheckConstraint(
                 condition=(models.Q(format=MessageTemplateFormat.HTML) & ~models.Q(text_source=""))
@@ -451,84 +483,69 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         return self.name
 
     @property
-    def handler(self) -> KindHandler:
+    def handler(self) -> MessageTemplateKindHandler:
         """Return the behaviour owned by this row's kind."""
 
         return MessageTemplateKind(self.kind).handler
 
     @property
     def is_effective(self) -> bool:
-        """Whether this row renders for its kind, key and language (:meth:`MessageTemplateQuerySet.row_facts`)."""
+        """Whether this row is what renders for its kind, key and language, of all their rows."""
 
         return self._row_fact("is_effective")
 
     @property
     def is_overridden(self) -> bool:
-        """Whether this baseline has an override (:meth:`MessageTemplateQuerySet.row_facts`)."""
+        """Whether this baseline has an override."""
 
         return self._row_fact("is_overridden")
 
     @property
-    def default_updated(self) -> bool:
-        """Whether this override's baseline changed since it started or was last kept (:data:`ROW_FACTS`)."""
+    def has_updated_default(self) -> bool:
+        """Whether this override's baseline changed since the override started or was last kept."""
 
-        return self._row_fact("default_updated")
+        return self._row_fact("has_updated_default")
 
     def _row_fact(self, name: str) -> bool:
-        """Read one of :data:`ROW_FACTS`: the annotation ``with_row_facts`` set, else one query."""
+        """Read one row fact: the annotation ``with_row_facts`` set, else one query for this fact alone."""
 
         if (annotated := self.__dict__.get(f"_{name}")) is not None:
             return bool(annotated)
-        fact = MessageTemplateQuerySet.row_facts(type(self))[name]
-        rows = type(self).system_queryset().filter(pk=self.pk).annotate(fact=fact)
-        return bool(rows.values_list("fact", flat=True).first())
+        rows = type(self).system_queryset()
+        fact = MessageTemplateQuerySet.row_fact_expressions[name](rows)
+        return bool(rows.filter(pk=self.pk).annotate(fact=fact).values_list("fact", flat=True).first())
 
     def override_values(self) -> dict[str, Any]:
         """Return what an override of this baseline starts from; contributors extend through ``super()``.
 
-        Everything an administrator edits. The identity (kind, key, language) is
+        The :attr:`edited_fields`. The identity (kind, key, language) is
         :meth:`MessageTemplateManager.override`'s, and the flag and the hashes are
         :meth:`save`'s.
         """
 
         return {
-            "name": self.name,
-            "description": self.description,
-            "format": self.format,
-            "subject": self.subject,
-            "preheader": self.preheader,
-            "source": self.source,
-            "text_source": self.text_source,
-            "layout": self.layout,
-            "variables": deepcopy(self.variables),
-            "sample": deepcopy(self.sample),
+            field.name: deepcopy(field.value_from_object(self))
+            for field in self._meta.concrete_fields if field.name in self.edited_fields
         }
 
     def clean(self) -> None:
         """Refuse what the columns' own validators and the constraints cannot see.
 
-        A key shaped against its kind (:attr:`KindHandler.qualified_key`); a language
-        parties would store differently or Django does not know; a template's layout
-        that does not resolve (:meth:`MessageTemplateQuerySet.resolves`); ``variables``
-        or ``sample`` that is not an object. Template syntax, Markdown and HTML are
-        judged when a row renders.
+        A template's layout that does not resolve (:meth:`MessageTemplateQuerySet.resolves`),
+        judged through the acting reader's scope and only when the layout is new
+        or changed, so a later change of the default language never refuses an
+        edit of the rest of the row; ``variables`` or ``sample`` that is not an
+        object. Template syntax, Markdown and HTML are not judged here.
         """
 
         super().clean()
         errors: dict[str, str] = {}
-        if self.kind in MessageTemplateKind.values:
-            handler = self.handler
-            if _KEY.match(self.key) and handler.qualified_key != ("." in self.key):
-                errors["key"] = (
-                    "A template's key is its addon's label and a name, joined by a dot."
-                    if handler.qualified_key else "A layout's, block's or part's key is a bare name, with no dot."
-                )
-            if handler.carries_message_fields and self.layout and not type(self).system_queryset().resolves(
-                MessageTemplateKind.LAYOUT, self.layout,
-            ):
+        if self.kind in MessageTemplateKind.values and self.handler.carries_message_fields and self.layout:
+            stored = None if self._state.adding else (
+                type(self).system_queryset().filter(pk=self.pk).values_list("layout", flat=True).first()
+            )
+            if stored != self.layout and not type(self).objects.resolves(MessageTemplateKind.LAYOUT, self.layout):
                 errors["layout"] = "No layout with this key exists in the default language or as a shipped default."
-        if self.language and not _known_language(self.language):
-            errors["language"] = "Use a language code as parties stores it, such as en or ast, that Django knows."
         for field in ("variables", "sample"):
             if not isinstance(getattr(self, field), dict):
                 errors[field] = "Give an object."
@@ -538,11 +555,14 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
     def delete_blocker(self, *, cascaded: bool = False) -> str | None:
         """Refuse deleting a row other rows name while its key would stop resolving without it.
 
-        Rows name a key through :meth:`KindHandler.naming_rows`; the key keeps
-        resolving while it has a baseline or another row in the default language
-        (:meth:`MessageTemplateQuerySet.resolves`). Enforced on instance, queryset
-        and cascade deletes by
-        :func:`angee.messaging_templates.signals.refuse_unresolved_delete`.
+        Rows name a key through :meth:`MessageTemplateKindHandler.naming_rows`; the
+        key keeps resolving while it has a baseline or another row in the default
+        language (:meth:`MessageTemplateQuerySet.resolves`). Enforced on instance,
+        queryset and cascade deletes by
+        :func:`angee.messaging_templates.signals.refuse_unresolved_delete`. Each row
+        is judged with the others still there, so one queryset delete from code
+        that removes every row keeping a key resolvable, a baseline among them,
+        passes; the console deletes one row by its id and cannot reach it.
         """
 
         del cascaded
@@ -558,18 +578,21 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
 
         A save that writes a column of :data:`CONTENT_HASH_FIELDS` writes the hash
         with it, ``update_fields`` included, since a resource reload saves only the
-        columns its row states. A non-baseline row inserted where its baseline
-        exists takes the baseline's ``content_hash`` as its ``baseline_hash``.
+        columns its row states. A non-baseline row inserted with no
+        ``baseline_hash`` where its baseline exists takes the baseline's
+        ``content_hash``; one that holds a hash already, as a history revert
+        restores it, keeps it.
         """
 
         update_fields = kwargs.get("update_fields")
         if update_fields is None or not set(CONTENT_HASH_FIELDS).isdisjoint(update_fields):
-            self.content_hash = "sha256:" + canonical_json_sha256(
-                {name: str(self.format) if name == "format" else getattr(self, name) for name in CONTENT_HASH_FIELDS}
-            )
+            self.content_hash = "sha256:" + canonical_json_sha256({
+                field.name: field.value_from_object(self)
+                for field in self._meta.concrete_fields if field.name in CONTENT_HASH_FIELDS
+            })
             if update_fields is not None:
                 kwargs["update_fields"] = {*update_fields, "content_hash"}
-        if self._state.adding and not self.is_baseline:
+        if self._state.adding and not self.is_baseline and not self.baseline_hash:
             shipped = (
                 type(self).system_queryset()
                 .filter(is_baseline=True, kind=self.kind, key=self.key, language=self.language)

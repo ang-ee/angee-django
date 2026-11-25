@@ -19,6 +19,7 @@ class MessagingTemplatesConfig(AppConfig):
         """Connect the delete refusal after app population."""
 
         super().ready()
+        # The receivers name the model, which the app registry populates only now.
         from angee.messaging_templates import signals
 
         signals.connect()

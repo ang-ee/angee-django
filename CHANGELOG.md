@@ -12,34 +12,43 @@ live in code docstrings.
 
 - **Message templates: the new addon `angee.messaging_templates`.**
   - **What it holds.** A message template (`MessageTemplate`) is one row of one
-    kind for one key and one language: a template (a mail, with its `subject`,
-    `preheader` and the `layout` it sits in), a layout (HTML that wraps
-    templates), a block or a part (pieces rows include). The kind is written once
-    (`MessageTemplateKind`), and what differs by kind is its handler's
-    (`MessageTemplateKind.handler`). A row's `source` is Markdown or HTML
+    kind for one key and one language: a message template of the kind `template`
+    (a mail, with its `subject`, `preheader` and the `layout` it sits in), a
+    message template layout (HTML that wraps templates), a message template block
+    or a message template part (pieces rows include). The kind is written once
+    (`MessageTemplateKind`); what differs by kind is its handler's
+    (`MessageTemplateKind.handler`, a `MessageTemplateKindHandler`) or a
+    declarative constraint naming the kind. A row's `source` is Markdown or HTML
     (`MessageTemplateFormat`); an HTML row also has its plain-text form,
-    `text_source`. `variables` declares the values a row reads as dotted paths to
-    descriptions, at most 50 paths of at most 8 names, checked by
-    `validate_variables`; `sample` holds preview values.
-    The addon renders nothing yet and ships no rows.
+    `text_source`. `language` is an ISO 639 code as parties stores one
+    (`LanguageCodeField`), any language parties knows, `zh` included.
+    `variables` declares the values a row reads as dotted paths to descriptions,
+    at most 50 paths of at most 8 names, checked by `validate_variables`;
+    `sample` holds preview values. The addon renders nothing and ships no rows.
   - **Shipped defaults and overrides.** Addons ship rows in their `install`
-    resources as baselines, which only loads write.
+    resources as baselines (`BaselineResource`), which only loads write.
     `MessageTemplate.objects.override(baseline)` starts the deployment's override,
-    copying the baseline; deleting the override resets to the default. When a release changes a baseline, its override shows
-    `default_updated` until `MessageTemplate.objects.keep_override(override)` keeps
-    its text. Each row reports `is_effective`, `is_overridden` and
-    `default_updated`, as fields and as console filters.
+    copying the baseline; deleting the override resets to the default, and
+    reverting that delete brings it back as it was. `content_hash` fingerprints a
+    row's kind and what it renders, on every save; rows are written one at a
+    time, so the querysets refuse `update()`, `bulk_update()` and `bulk_create()`.
+    When a release changes a baseline, its override has an updated default until
+    `MessageTemplate.objects.keep_override(override)` keeps its text. Each row
+    reports `is_effective`, `is_overridden` and `has_updated_default`, as fields
+    and as console filters.
   - **Languages.** `effective_rows(kinds, keys=..., language=..., person=...)` and
     `effective(kind, key, ...)` pick the row a recipient reads: the language asked
     for or the person's languages, then the default language (`LANGUAGE_CODE`'s
     primary subtag), an override before its baseline; else the language of a
-    baseline, English first. A template's layout must resolve, and a row other
-    rows use cannot be deleted while its key would stop resolving without it.
+    baseline, English first. A template's layout must resolve when it is set or
+    changed, judged through the reader's own scope, and a row other rows use
+    cannot be deleted while its key would stop resolving without it.
   - **Access.** Every signed-in actor reads message templates; platform admins
     create, edit and delete the deployment's own rows and overrides and read
-    samples (`messaging_templates/message_template`). The console gets the
+    every sample (`messaging_templates/message_template`). The console gets the
     `message_templates` resource and the `override_message_template` and
-    `keep_message_template_override` mutations.
+    `keep_message_template_override` mutations, which refuse in band
+    (`ok: false`).
   - **New projects.** A project rendered from the web project template with the
     `full` addons profile lists `angee.messaging_templates` in its `settings.yaml`
     `INSTALLED_APPS`; the default profile does not. The `angee` meta-distribution
@@ -48,6 +57,16 @@ live in code docstrings.
     roster (`INSTALLED_APPS` in `settings.yaml`), writes its migration with
     `makemigrations messaging_templates`, and provisions, which migrates and
     synchronizes the permission schema.
+- `angee.parties`: `LanguageCodeField` stores one language as parties stores a
+  person's languages, and `normalize_language_code()` is its one rule;
+  `normalize_language_codes()` and `LanguageCodesField` spell each entry through
+  it and behave as before.
+- `angee.resources`: `BaselineResource` installs every row a load creates as a
+  baseline and refuses a row that states the flag or a column the model derives.
+  `Dashboard` loads through it, storing the same rows and ledger entries as
+  before; `angee.dashboards.resources` and its `DashboardResource` are removed.
+  Upgrade: nothing, unless code imported `DashboardResource`; it imports
+  `BaselineResource` from `angee.resources.loader` instead.
 - `angee.messaging`, `angee.webforms_messaging`: the move of forms out of
   messaging channels is removed: the bridge's migration template
   (`compose_migrations/messaging/webform_channels_to_forms.py`), its

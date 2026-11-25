@@ -1,9 +1,9 @@
-"""Message template formats and the grammar of the values a row declares.
+"""The markup a message template is written in and the grammar of the values it declares.
 
-The format a row is written in (:class:`MessageTemplateFormat`) and the one rule
-for its declared ``variables`` (:func:`validate_variables`) live here, beside the
-renderer that reads them, so the model and the renderer's walker import one owner
-and neither imports the other.
+:class:`MessageTemplateFormat` and :func:`validate_variables` live here, in a
+module that imports neither the model nor the database, so the model and any
+other reader of a row's declared values import one owner without a cycle. A
+host's first migration records both by this module's path.
 """
 
 from __future__ import annotations
@@ -24,10 +24,11 @@ class MessageTemplateFormat(models.TextChoices):
 
 
 RESERVED_VARIABLE_ROOTS = frozenset({"brand", "lang", "dir", "subject", "preheader", "forloop", "block"})
-"""Names the renderer supplies itself, so no declared value starts with one."""
+"""Names no declared value starts with: the mail around a row supplies them (the brand, the language and its
+writing direction, the subject and the preheader), and Django's template engine names its loops and blocks so."""
 
 MAX_VARIABLE_SEGMENTS = 8
-"""The most names a declared path joins: the renderer's lookups cost per segment and are not budgeted."""
+"""The most names a declared path joins, so following a declared path stays a short walk."""
 
 _VARIABLE_PATH = re.compile(r"[a-z][a-z0-9_]*(?:\.(?:[a-z][a-z0-9_]*|\*))*")
 
@@ -38,8 +39,8 @@ def validate_variables(variables: Any, *, max_paths: int = 50) -> None:
     Each key is a dotted path of at most :data:`MAX_VARIABLE_SEGMENTS` lower-case
     names (``order.total``) whose later segments may be ``*``, every item of a list
     (``tags.*`` is a list of scalars); each value is a string describing it. There
-    are at most ``max_paths`` keys: a row's own declaration takes the default, and
-    the renderer passes its own limit for a template and its layout together. No
+    are at most ``max_paths`` keys: a row's own declaration takes the default, and a
+    caller judging several rows' declarations together passes its own limit. No
     path is a proper prefix of another (``order`` and ``order.total`` are not both
     declared), no path reads one value both as a list and as an object
     (``items.*`` beside ``items.pop``), and no path starts with a name in
@@ -73,7 +74,7 @@ def validate_variables(variables: Any, *, max_paths: int = 50) -> None:
             )
         if path.split(".", 1)[0] in RESERVED_VARIABLE_ROOTS:
             raise ValidationError(
-                "%(path)s starts with a name the renderer supplies.", code="reserved_variable", params={"path": path},
+                "%(path)s starts with a reserved name.", code="reserved_variable", params={"path": path},
             )
     # Each path's parents, at most seven of them, say what the path reads them as:
     # a parent that is itself declared is a proper prefix, and a parent read both

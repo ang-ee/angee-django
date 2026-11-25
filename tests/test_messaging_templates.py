@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import time
-from typing import Any
+from collections.abc import Callable
+from typing import Any, cast
 
 import pytest
 import tablib
@@ -29,6 +30,7 @@ from angee.messaging_templates.models import (
 )
 from angee.messaging_templates.rendering import RESERVED_VARIABLE_ROOTS, validate_variables
 from angee.messaging_templates.testing.models import MessageTemplate
+from angee.provenance.context import changeset
 from angee.resources.entries import ResourceEntry, ResourceGroup
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.testing.models import Resource
@@ -122,7 +124,7 @@ def test_the_full_clean_names_a_broken_kind_rule(db: None) -> None:
         "__all__": ["A template names its layout; a layout, block or part has no subject, preheader or layout."],
     }
     assert _system_clean(_unsaved("layout", key="plain", format="markdown", text_source="")) == {
-        "__all__": ["A layout is written in HTML."],
+        "__all__": ["A message template layout is written in HTML."],
     }
 
 
@@ -132,12 +134,8 @@ def test_the_full_clean_names_a_broken_kind_rule(db: None) -> None:
         pytest.param("layout", {"key": "Base"}, "key", id="upper-case-key"),
         pytest.param("layout", {"key": "base."}, "key", id="dangling-dot"),
         pytest.param("layout", {"key": "base\n"}, "key", id="trailing-newline"),
-        pytest.param("layout", {"key": "mail.base"}, "key", id="layout-key-with-a-label"),
-        pytest.param("template", {"key": "welcome"}, "key", id="template-key-without-a-label"),
-        pytest.param("layout", {"language": "EN"}, "language", id="language-not-as-parties-stores-it"),
-        pytest.param("layout", {"language": "eng"}, "language", id="three-letters-for-a-two-letter-language"),
         pytest.param("layout", {"language": "xx"}, "language", id="not-a-language"),
-        pytest.param("layout", {"language": "tlh"}, "language", id="a-language-django-does-not-know"),
+        pytest.param("layout", {"language": "en-us"}, "language", id="a-region-subtag"),
         pytest.param(
             "template", {"key": "tests.welcome", "layout": "missing"}, "layout", id="layout-that-does-not-resolve",
         ),
@@ -151,6 +149,25 @@ def test_a_row_the_structure_refuses(db: None, kind: str, values: dict[str, Any]
     _row(baseline=True)  # the layout "base" resolves
     row = _unsaved(kind, **{"key": "tests.welcome" if kind == "template" else "plain", **values})
     assert field in _system_clean(row)
+
+
+@pytest.mark.parametrize(
+    ("given", "stored"),
+    [("EN", "en"), ("eng", "en"), ("zh", "zh"), ("yue", "yue"), ("tlh", "tlh")],
+)
+def test_a_language_is_what_parties_stores(db: None, given: str, stored: str) -> None:
+    """Any ISO 639 code parties stores is a row's language, spelled as parties spells it, whatever Django lists."""
+
+    del db
+    row = _unsaved("part", key="greeting", language=given)
+    assert _system_clean(row) == {}
+    assert row.language == stored
+
+
+def test_a_deployments_own_template_may_have_a_bare_key(db: None) -> None:
+    del db
+    _row(baseline=True)
+    assert _system_clean(_unsaved("template", key="welcome")) == {}
 
 
 def test_a_template_needs_its_layout_in_the_default_language_or_shipped(db: None) -> None:
@@ -223,13 +240,13 @@ def test_declared_variables_are_judged_in_linear_time() -> None:
         {"a" * 1_000_000 + "!": ""},  # a very long name
         {f"{parent}.b": "", f"{parent}.*": ""},  # long keys reading one value as an object and a list
     ]
-    started = time.perf_counter()
+    started = time.process_time()
     for variables in hostile:
         with pytest.raises(ValidationError):
             validate_variables(variables)
     admitted = ".".join(["a" * 10_000] * 7)
     validate_variables({f"{admitted}.v{index}": "" for index in range(50)})
-    assert time.perf_counter() - started < 2
+    assert time.process_time() - started < 2
 
 
 def test_every_save_fingerprints_what_renders(db: None) -> None:
@@ -320,7 +337,8 @@ def test_a_member_reads_rows_and_no_sample_and_cannot_write(db: None) -> None:
         {"key": "base", "sample": None},
     ]
     anonymous = execute_schema(_schema(), document, user=AnonymousUser())
-    assert anonymous.data is None or anonymous.data["message_templates"] == []
+    assert anonymous.errors is None
+    assert anonymous.data == {"message_templates": []}
 
 
 _INSERT = """
@@ -354,8 +372,10 @@ def test_an_admin_writes_the_deployments_rows_and_nobody_writes_a_baseline(db: N
 
     baseline = _row(baseline=True)
     edit = {"id": public_id_of(baseline), "set": {"source": "<main>Edited</main>"}}
-    assert execute_schema(_schema(), _UPDATE, edit, user=admin).errors
-    assert execute_schema(_schema(), _DELETE, {"id": public_id_of(baseline)}, user=admin).errors
+    for document, variables in ((_UPDATE, edit), (_DELETE, {"id": public_id_of(baseline)})):
+        refused = execute_schema(_schema(), document, variables, user=admin)
+        assert refused.errors
+        assert refused.errors[0].extensions["code"] == "PERMISSION_DENIED"
     assert _read(baseline).source == "<main>Body</main>"
 
 
@@ -395,7 +415,7 @@ def test_a_resource_row_never_states_the_flag_or_a_hash(db: None, column: str, r
         assert not MessageTemplate.objects.exists()
 
 
-def test_a_reload_of_a_changed_default_stores_its_fingerprint_and_shows_default_updated(db: None) -> None:
+def test_a_reload_of_a_changed_default_stores_its_fingerprint_and_shows_has_updated_default(db: None) -> None:
     """The reload saves only the row's columns, the hash with them, and the override sees the default moved."""
 
     del db
@@ -407,7 +427,7 @@ def test_a_reload_of_a_changed_default_stores_its_fingerprint_and_shows_default_
         override = MessageTemplate.objects.override(baseline)
     shipped_before = baseline.content_hash
     assert override.baseline_hash == shipped_before
-    assert not _read(override).default_updated
+    assert not _read(override).has_updated_default
 
     second = _load(("base", "layout", "base", "en", "Base", "html", "<main>Two</main>", "Two"), headers=_LAYOUT_HEADERS)
     assert (second.created, second.updated) == (0, 1)
@@ -417,10 +437,10 @@ def test_a_reload_of_a_changed_default_stores_its_fingerprint_and_shows_default_
     with system_context(reason="tests.messaging_templates.resave"):
         reloaded.save()
     assert _read(baseline).content_hash == reloaded.content_hash  # the reload stored the hash a full save derives
-    assert _read(override).default_updated
+    assert _read(override).has_updated_default
     with system_context(reason="tests.messaging_templates.facts"):
         facts = MessageTemplate.objects.with_row_facts().get(pk=override.pk)
-    assert (facts.is_effective, facts.is_overridden, facts.default_updated) == (True, False, True)
+    assert (facts.is_effective, facts.is_overridden, facts.has_updated_default) == (True, False, True)
 
 
 # ---------- override, keep, reset ----------
@@ -466,7 +486,7 @@ def test_override_refuses_a_row_that_is_not_a_default_and_an_actor_who_may_not_c
         assert MessageTemplate.objects.filter(is_baseline=False).count() == 1  # only the own row
 
 
-def test_keep_override_clears_default_updated_and_refuses_a_row_with_no_default(db: None) -> None:
+def test_keep_override_clears_has_updated_default_and_refuses_a_row_with_no_default(db: None) -> None:
     del db
     admin = create_platform_admin("messaging-templates-keeper")
     baseline = _row(baseline=True)
@@ -476,11 +496,11 @@ def test_keep_override_clears_default_updated_and_refuses_a_row_with_no_default(
     with system_context(reason="tests.messaging_templates.release"):
         baseline.source = "<main>Released</main>"
         baseline.save()
-    assert _read(override).default_updated
+    assert _read(override).has_updated_default
     with actor_context(admin):
         kept = MessageTemplate.objects.keep_override(MessageTemplate.objects.get(pk=override.pk))
     assert kept.baseline_hash == _read(baseline).content_hash
-    assert not _read(override).default_updated
+    assert not _read(override).has_updated_default
     assert _read(override).source == "<main>Ours</main>"
     with system_context(reason="tests.messaging_templates.refuse"):
         for row in (baseline, own):
@@ -518,18 +538,24 @@ def test_the_two_verbs_answer_with_an_action_result(db: None) -> None:
     assert first == again == {"ok": True, "message": "Message template overridden.", "id": override.sqid}
 
     for refused in (member, AnonymousUser()):
-        denied = execute_schema(_schema(), _OVERRIDE, variables, user=refused)
-        assert denied.errors and denied.errors[0].extensions["code"] == "PERMISSION_DENIED"
+        denied = result_data(execute_schema(_schema(), _OVERRIDE, variables, user=refused))
+        assert denied["override_message_template"] == {
+            "ok": False, "message": "Override message template failed.", "id": None,
+        }
     not_a_default = result_data(execute_schema(_schema(), _OVERRIDE, {"id": override.sqid}, user=admin))
     assert not_a_default["override_message_template"]["ok"] is False
     assert not_a_default["override_message_template"]["message"] == NOT_A_BASELINE_MESSAGE
 
     kept = result_data(execute_schema(_schema(), _KEEP, {"id": override.sqid}, user=admin))
     assert kept["keep_message_template_override"] == {"ok": True, "message": "Override kept.", "id": override.sqid}
-    unwritable = result_data(execute_schema(_schema(), _KEEP, {"id": override.sqid}, user=member))
-    assert unwritable["keep_message_template_override"]["ok"] is False
-    no_default = result_data(execute_schema(_schema(), _KEEP, {"id": public_id_of(baseline)}, user=admin))
-    assert no_default["keep_message_template_override"]["ok"] is False
+    for refused in (member, AnonymousUser()):
+        unwritable = result_data(execute_schema(_schema(), _KEEP, {"id": override.sqid}, user=refused))
+        assert unwritable["keep_message_template_override"] == {
+            "ok": False, "message": "Keep message template override failed.", "id": None,
+        }
+    own = _row(key="letter")
+    no_default = result_data(execute_schema(_schema(), _KEEP, {"id": public_id_of(own)}, user=admin))
+    assert no_default["keep_message_template_override"] == {"ok": False, "message": NO_BASELINE_MESSAGE, "id": None}
 
 
 # ---------- row facts ----------
@@ -537,7 +563,7 @@ def test_the_two_verbs_answer_with_an_action_result(db: None) -> None:
 
 _FACTS = """
 query($where: message_templates_bool_exp) {
-  message_templates(where: $where) { key language is_baseline is_effective is_overridden default_updated }
+  message_templates(where: $where) { key language is_baseline is_effective is_overridden has_updated_default }
 }
 """
 
@@ -565,15 +591,15 @@ def test_the_row_facts_read_as_fields_and_filter_the_list(db: None) -> None:
     ]
     assert [row[:3] for row in listed({"is_effective": {"_eq": False}})] == [("base", "en", True)]
     assert [row[:3] for row in listed({"is_overridden": {"_eq": True}})] == [("base", "en", True)]
-    assert [row[:3] for row in listed({"default_updated": {"_eq": True}})] == [("base", "en", False)]
+    assert [row[:3] for row in listed({"has_updated_default": {"_eq": True}})] == [("base", "en", False)]
 
 
 def test_a_row_returned_without_annotations_reads_its_facts_itself(db: None) -> None:
     del db
     baseline = _row(baseline=True)
     override = _row()
-    assert (baseline.is_effective, baseline.is_overridden, baseline.default_updated) == (False, True, False)
-    assert (override.is_effective, override.is_overridden, override.default_updated) == (True, False, False)
+    assert (baseline.is_effective, baseline.is_overridden, baseline.has_updated_default) == (False, True, False)
+    assert (override.is_effective, override.is_overridden, override.has_updated_default) == (True, False, False)
 
 
 def test_listing_rows_with_their_facts_costs_the_same_at_one_and_at_twenty_five_rows(db: None) -> None:
@@ -716,3 +742,155 @@ def test_an_overridden_layout_goes_back_to_its_default_when_the_override_is_dele
     with system_context(reason="tests.messaging_templates.delete"):
         assert override.delete_blocker() is None
         override.delete()
+
+
+# ---------- fix pass: write paths, hashes, languages, the console ----------
+
+
+@pytest.mark.parametrize(
+    "write",
+    [
+        pytest.param(lambda rows: rows.filter(key="base").update(source="<main>Bypassed</main>"), id="update"),
+        pytest.param(lambda rows: rows.filter(key="base").update(kind="block"), id="update-write-once-kind"),
+        pytest.param(lambda rows: rows.bulk_update(list(rows.filter(key="base")), ["source"]), id="bulk-update"),
+        pytest.param(lambda rows: rows.bulk_create([_unsaved(key="bulk")]), id="bulk-create"),
+    ],
+)
+@pytest.mark.parametrize("manager", ["objects", "_base_manager"])
+def test_collection_writes_are_refused(db: None, write: Callable[[Any], Any], manager: str) -> None:
+    """Only ``save()`` writes a row, so the hash and the write-once columns hold on every write path."""
+
+    del db
+    row = _row(baseline=True)
+    with system_context(reason="tests.messaging_templates.bulk"):
+        with pytest.raises(ValidationError), transaction.atomic():
+            write(getattr(MessageTemplate, manager).all())
+    assert (_read(row).source, _read(row).kind, _read(row).content_hash) == (row.source, "layout", row.content_hash)
+    with system_context(reason="tests.messaging_templates.read"):
+        assert not MessageTemplate.objects.filter(key="bulk").exists()
+
+
+def test_the_content_hash_covers_the_kind(db: None) -> None:
+    """A layout and a block with the same text are told apart by their fingerprints."""
+
+    del db
+    layout = _row(key="frame")
+    block = _row("block", key="frame", source=layout.source, text_source=layout.text_source)
+    assert layout.content_hash != block.content_hash
+
+
+def test_an_inserted_override_keeps_a_baseline_hash_it_already_holds(db: None) -> None:
+    del db
+    baseline = _row(baseline=True)
+    held = "sha256:" + "0" * 64
+    override = _row(baseline_hash=held)
+    assert held != baseline.content_hash
+    assert _read(override).baseline_hash == held
+    assert _read(override).has_updated_default
+
+
+def test_a_deployment_whose_default_language_moves_can_still_edit_its_template(db: None) -> None:
+    """The layout is judged when it is set or changed, not on an edit of the rest of the row."""
+
+    del db
+    _row(key="letter")  # the deployment's own English layout
+    template = _row("template", "tests.welcome", layout="letter")
+    with override_settings(LANGUAGE_CODE="de"):
+        template = _read(template)
+        template.subject = "Willkommen"
+        assert _system_clean(template) == {}
+        template.layout = "letter_two"
+        assert set(_system_clean(template)) == {"layout"}
+
+
+def test_a_caller_who_reads_no_layout_gets_one_answer_for_any_layout_key(db: None) -> None:
+    """An anonymous insert naming an existing and a missing layout is refused the same way: nothing to learn."""
+
+    del db
+    _row(baseline=True)
+    answers = []
+    for layout in ("base", "nope"):
+        template = {"kind": "template", "key": "tests.welcome", "language": "en", "name": "Welcome",
+                    "format": "markdown", "source": "Hello.", "layout": layout}
+        result = execute_schema(_schema(), _INSERT, {"object": template}, user=AnonymousUser())
+        assert result.errors
+        answers.append([(error.message, error.extensions) for error in result.errors])
+    assert answers[0] == answers[1]
+
+
+def test_an_unchanged_reload_writes_no_message_template_row(db: None) -> None:
+    del db
+    row = ("base", "layout", "base", "en", "Base", "html", "<main>One</main>", "One")
+    _load(row, headers=_LAYOUT_HEADERS)
+    table = MessageTemplate._meta.db_table
+    with CaptureQueriesContext(connection) as captured:
+        result = _load(row, headers=_LAYOUT_HEADERS)
+    assert (result.created, result.updated, result.skipped) == (0, 0, 1)
+    writes = [
+        query["sql"] for query in captured.captured_queries
+        if table in query["sql"] and query["sql"].lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))
+    ]
+    assert writes == []
+
+
+_DELETE_PREVIEW = """
+mutation($id: ID!) { message_templates_delete(id: $id, confirm: false) { has_blockers refusals total_deleted_count } }
+"""
+
+
+def test_the_delete_preview_names_the_refusal(db: None) -> None:
+    del db
+    admin = create_platform_admin("messaging-templates-previewer")
+    layout = _row(key="letter")
+    unused = _row(key="unused")
+    _row("template", "tests.welcome", layout="letter")
+    preview = result_data(execute_schema(_schema(), _DELETE_PREVIEW, {"id": public_id_of(layout)}, user=admin))
+    assert preview["message_templates_delete"]["has_blockers"] is True
+    assert preview["message_templates_delete"]["refusals"] == [layout.delete_blocker()]
+    clear = result_data(execute_schema(_schema(), _DELETE_PREVIEW, {"id": public_id_of(unused)}, user=admin))
+    assert clear["message_templates_delete"] == {"has_blockers": False, "refusals": [], "total_deleted_count": 1}
+
+
+def test_reverting_a_reset_restores_the_override_with_the_fingerprint_it_held(
+    db: None, django_capture_on_commit_callbacks: Any,
+) -> None:
+    """A released default, a reset, then its revert: the override comes back still showing the updated default."""
+
+    del db
+    admin = create_platform_admin("messaging-templates-reverter")
+    baseline = _row(baseline=True)
+    override = _row(source="<main>Ours</main>")
+    held = override.baseline_hash
+    with system_context(reason="tests.messaging_templates.release"):
+        released = MessageTemplate.objects.get(pk=baseline.pk)
+        released.source = "<main>Released</main>"
+        released.save()
+    # The reset's changeset closes on commit; only a closed changeset reverts.
+    with actor_context(admin), django_capture_on_commit_callbacks(execute=True), changeset(fresh=True):
+        MessageTemplate.objects.get(pk=override.pk).delete()
+    with actor_context(admin):
+        reset = cast(Any, MessageTemplate).history.filter(id=override.pk, history_type="-").get()
+        reset.changeset.with_actor(admin).revert()
+    restored = _read(override)
+    assert (restored.source, restored.baseline_hash) == ("<main>Ours</main>", held)
+    assert restored.has_updated_default
+
+
+@override_settings(LANGUAGE_CODE="zh-hans")
+def test_a_deployment_whose_default_language_is_chinese_uses_its_own_rows(db: None) -> None:
+    """``zh`` is the default language: its own layout resolves, a template names it, and recipients read it."""
+
+    del db
+    layout = _row(key="letter", language="zh")
+    template = _unsaved("template", "tests.welcome", language="zh", layout="letter")
+    assert _system_clean(template) == {}
+    with system_context(reason="tests.messaging_templates.read"):
+        assert MessageTemplate.objects.default_language() == "zh"
+        assert MessageTemplate.objects.resolves("layout", "letter")
+        assert MessageTemplate.objects.effective("layout", "letter", person=Person(languages=["fr"])) == layout
+
+
+def test_many_keys_take_names_not_one_name(db: None) -> None:
+    del db
+    with system_context(reason="tests.messaging_templates.read"), pytest.raises(TypeError):
+        MessageTemplate.objects.effective_rows("layout")
