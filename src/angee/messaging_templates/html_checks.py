@@ -26,6 +26,7 @@ between attributes.
 
 from __future__ import annotations
 
+import functools
 import re
 from collections.abc import Callable, Sequence
 from enum import IntEnum
@@ -40,8 +41,8 @@ from angee.messaging_templates.engine import LINK_SCHEMES, MAIL_COLOURS, Message
 
 CONTROL_CHARACTERS = "\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f"
 """The C0 and C1 control characters but tab, line feed and carriage return, as the body of a character class. A
-row's text holds none, nor a carriage return (rule 1, :data:`SOURCE_CONTROLS`); a value drops them
-(:meth:`~angee.messaging_templates.walker.TemplateWalk.prepare`)."""
+row's text holds none, nor a carriage return (rule 1, :data:`SOURCE_CONTROLS`); a value drops them with the
+bidirectional overrides (:data:`~angee.messaging_templates.walker.UNPRINTED`)."""
 
 SOURCE_CONTROLS = re.compile(f"[{CONTROL_CHARACTERS}\r]")
 """What a row's text and its forms may not hold (rule 1): a NUL would forge the checks' placeholders, an escape could
@@ -134,17 +135,31 @@ MAIL_ATTRIBUTES = frozenset({
 """The attributes a mail is written with; every other one, ``on*`` and ``http-equiv`` among them, is refused by
 name."""
 
-LINK_ATTRIBUTES = frozenset({"href", "src", "background", "cite"})
-"""The attributes of :data:`MAIL_ATTRIBUTES` a reader follows as a link: one ``url`` output, or a static link."""
+LINK_ATTRIBUTES: dict[str, frozenset[str]] = {
+    "href": frozenset({"a"}), "src": frozenset({"img"}), "background": frozenset({"body", "table", "td", "th"}),
+    "cite": frozenset({"blockquote"}),
+}
+"""The attributes of :data:`MAIL_ATTRIBUTES` a reader follows as a link, each with the elements a mail links with
+through it; on one of those, one ``url`` output or a static link, on any other element none."""
 
-STATIC_ANCHOR = re.compile(r"(?:#|cid:)[A-Za-z0-9._~!$&'()*+,;=:@/?%-]*")
-"""What a static link may be besides a link ``url`` leaves unchanged: a fragment of the mail, or a ``cid:`` image
-the mail carries."""
+STATIC_LINK = re.compile(r"(?:#|cid:|sms:|webcal:)[A-Za-z0-9._~!$&'()*+,;=:@/?%-]*")
+"""What a static link an author writes may be besides a link ``url`` leaves unchanged: a fragment of the mail, a
+``cid:`` image the mail carries, or an ``sms:`` or ``webcal:`` link, which have no other spelling. A value gives none
+of them."""
 
-STATIC_LINKS = f"an absolute {', '.join(LINK_SCHEMES[:-1])} or {LINK_SCHEMES[-1]} link, a #fragment or a cid: image"
+STATIC_LINKS = (
+    f"an absolute {', '.join(LINK_SCHEMES[:-1])} or {LINK_SCHEMES[-1]} link, a #fragment, a cid: image, or an sms: "
+    "or webcal: link"
+)
 
-OUTPUT_ATTRIBUTES = frozenset({"alt", "title", "aria-label", "lang", "xml:lang", "dir"})
-"""The text attributes an output may write."""
+OUTPUT_ATTRIBUTES = frozenset({"alt", "title", "aria-label"})
+"""The text attributes any output may write."""
+
+ENGINE_OUTPUT_ATTRIBUTES: dict[str, frozenset[tuple[str, ...]]] = {
+    "dir": frozenset({("dir",)}), "lang": frozenset({("lang",)}), "xml:lang": frozenset({("lang",)}),
+}
+"""The attributes the engine's own ``dir`` and ``lang`` outputs alone may write: a value never sets the direction or
+the language of an author's element."""
 
 CONDITION_TAGS = frozenset({"if", "elif", "else", "endif"})
 
@@ -303,7 +318,9 @@ class _HtmlChecker(HTMLParser):
             not _ELEMENT_NAME.fullmatch(tag) or not all(_ATTRIBUTE_NAME.fullmatch(name) for name in names)
             or len(set(names)) != len(names) or not _canonical(written, tag, attrs, closing=closing)
         ):
-            self.broken(SpellingRule.START_TAG, f"the tag {written[:60]!r}")
+            spaced = not closing and written[-2:-1] in (" ", "\t", "\n")
+            self.broken(SpellingRule.START_TAG, f"the tag {written[:60]!r}" + (", with white space before its >"
+                                                                               if spaced else ""))
         office = self.office and tag in OFFICE_ELEMENTS
         if closing and tag not in VOID_ELEMENTS and not office and not tag.startswith(VECTOR_MARKUP):
             self.broken(SpellingRule.SELF_CLOSING, f"<{tag}/>")
@@ -317,22 +334,25 @@ class _HtmlChecker(HTMLParser):
         for name, raw_value in attrs:
             value = raw_value or ""
             if name not in MAIL_ATTRIBUTES:
-                self.refuse(f"the {name} attribute is not one a mail is written with (MAIL_ATTRIBUTES)")
+                self.refuse(f"the {name} attribute is not one a mail is written with (MAIL_ATTRIBUTES)" + (
+                    ': declare the character set with <meta charset="utf-8">' if name == "http-equiv" else ""))
                 continue
             if name == "charset" and value.lower() != MAIL_CHARSET:
                 self.refuse(f"the charset of <{tag}> is {MAIL_CHARSET}, the one a mail is sent in")
                 continue
             ids = self.span_ids(value)
             self.check_conditions(name, ids)
-            if name in LINK_ATTRIBUTES:
+            if name in LINK_ATTRIBUTES and tag not in LINK_ATTRIBUTES[name]:
+                self.refuse(f"the {name} attribute links on <{'>, <'.join(sorted(LINK_ATTRIBUTES[name]))}> alone")
+            elif name in LINK_ATTRIBUTES:
                 self.check_link(tag, name, value, ids)
             elif name == "style":
-                self.check_spans(f"the style attribute of <{tag}>", ids, STYLE_OUTPUTS, conditions=True)
-            else:
                 self.check_spans(
-                    f"the {name} attribute of <{tag}>", ids, None if name in OUTPUT_ATTRIBUTES else frozenset(),
-                    conditions=True,
+                    f"the style attribute of <{tag}>", ids, STYLE_OUTPUTS, conditions=True, comments=True,
                 )
+            else:
+                outputs = None if name in OUTPUT_ATTRIBUTES else ENGINE_OUTPUT_ATTRIBUTES.get(name, frozenset())
+                self.check_spans(f"the {name} attribute of <{tag}>", ids, outputs, conditions=True, comments=True)
         return None
 
     def handle_endtag(self, tag: str) -> None:
@@ -346,6 +366,10 @@ class _HtmlChecker(HTMLParser):
         if not _ELEMENT_NAME.fullmatch(tag) or written.lower() != f"</{tag}>":
             self.following = None
             self.broken(SpellingRule.END_TAG, f"the end tag {self.text[start:][:30]!r}")
+        elif tag not in MAIL_ELEMENTS and not (self.office and tag in OFFICE_ELEMENTS) and not tag.startswith(
+            VECTOR_MARKUP,
+        ):
+            self.broken(SpellingRule.ELEMENTS, f"</{tag}>")
         return None
 
     def check_conditions(self, name: str, ids: list[int]) -> None:
@@ -369,7 +393,7 @@ class _HtmlChecker(HTMLParser):
     def check_link(self, tag: str, name: str, value: str, ids: list[int]) -> None:
         if not ids:
             sent = url(value)
-            if sent == value or STATIC_ANCHOR.fullmatch(value):
+            if sent == value or STATIC_LINK.fullmatch(value):
                 return
             self.refuse(
                 f"the {name} of <{tag}> holds a space or a character a link percent-encodes: write {sent}" if sent
@@ -382,12 +406,14 @@ class _HtmlChecker(HTMLParser):
 
     def check_spans(
         self, where: str, ids: list[int], outputs: frozenset[tuple[str, ...]] | None, *, conditions: bool,
+        comments: bool,
     ) -> None:
-        """Refuse a span ``where`` does not admit: outputs in ``outputs`` (``None``: any), conditions, comments."""
+        """Refuse a span ``where`` does not admit: outputs in ``outputs`` (``None``: any); ``if`` tags unless
+        ``conditions``; ``{# #}`` comments unless ``comments``."""
 
         for index in ids:
             token = self.spans[index]
-            if token.token_type == TokenType.COMMENT and conditions:
+            if token.token_type == TokenType.COMMENT and comments:
                 continue
             if token.token_type == TokenType.BLOCK:
                 command = (token.contents.split() or [""])[0]
@@ -417,9 +443,12 @@ class _HtmlChecker(HTMLParser):
                 f"{self.text[at:at + 20]!r}" + (f" in <{self.cdata_elem}>" if self.cdata_elem else ""),
             )
         if self.cdata_elem == "style":
-            self.check_spans("a <style> element", self.span_ids(data), STYLE_ELEMENT_OUTPUTS, conditions=False)
+            self.check_spans(
+                "a <style> element", self.span_ids(data), STYLE_ELEMENT_OUTPUTS, conditions=False, comments=False,
+            )
         elif self.cdata_elem == "title":
-            self.check_spans("a <title> element", self.span_ids(data), None, conditions=True)
+            # No if: a branch could leave out </title> and hold the rest of the mail in the title.
+            self.check_spans("a <title> element", self.span_ids(data), None, conditions=False, comments=True)
 
     def handle_entityref(self, name: str) -> None:
         self.character_reference(1 + len(name))
@@ -456,7 +485,12 @@ class _HtmlChecker(HTMLParser):
                 return self.refuse("<!--[if !mso]><!--> and <!--<![endif]--> come in pairs, one pair at a time")
             self.revealed = data == REVEALED_OPENS
             return None
-        if (comment := MSO_COMMENT.fullmatch(data)) is None:
+        if (comment := MSO_COMMENT.fullmatch(data)) is None and data.lower().startswith("[if "):
+            return self.misplaced(
+                f"the comment {self.written(start, '-->')}",
+                "write <!--[if mso]>…<![endif]-->: Outlook's other conditions are not admitted",
+            )
+        if comment is None:
             return self.misplaced(
                 f"the comment {self.written(start, '-->')}",
                 f"{NOTE}; a layout holds Outlook's <!--[if mso]>…<![endif]--> and the "
@@ -506,10 +540,11 @@ def check_html(
     attribute value does not hold whole; in an attribute of
     :data:`LINK_ATTRIBUTES` anything but one output whose last filter is ``url``,
     or a static link :func:`~angee.messaging_templates.engine.url` leaves as
-    ``html.parser`` decodes it or a :data:`STATIC_ANCHOR`; in ``style`` an output but :data:`STYLE_OUTPUTS`;
+    ``html.parser`` decodes it or a :data:`STATIC_LINK`; in ``style`` an output but :data:`STYLE_OUTPUTS`;
     in a ``<style>`` element a span but :data:`STYLE_ELEMENT_OUTPUTS`; in a
     ``<title>`` element or any other attribute an output outside
-    :data:`OUTPUT_ATTRIBUTES` (``<title>``: any) or a tag other than an ``if``
+    :data:`OUTPUT_ATTRIBUTES` (``<title>``: any; ``dir`` and ``lang``:
+    :data:`ENGINE_OUTPUT_ATTRIBUTES`) or a tag other than an ``if``
     family one. ``document`` (a layout) admits the opening ``<!doctype html>`` and
     Outlook's ``<!--[if mso]>…<![endif]-->`` and
     ``<!--[if !mso]><!-->…<!--<![endif]-->``, balanced, static, the markup of the
@@ -559,8 +594,10 @@ def _checked(checker: _HtmlChecker) -> list[str]:
 
 
 def compiled_expression(engine: MessageTemplateEngine) -> Callable[[str], FilterExpression | None]:
-    """Return a function compiling one output span in ``engine`` to its ``FilterExpression``."""
+    """Return a function compiling one output span in ``engine`` to its ``FilterExpression``, each distinct span once
+    for the function's life (a walker's)."""
 
+    @functools.cache
     def expression(span: str) -> FilterExpression | None:
         try:
             nodelist = engine.from_string(span).nodelist

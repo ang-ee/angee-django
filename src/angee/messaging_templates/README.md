@@ -67,8 +67,8 @@ Anything else fails to compile.
   (`brand.light.primary`), `lang` and `dir` the row's language and its writing
   direction, and a template or layout reads `subject` and `preheader`.
 - A link a value supplies goes through `url` (`href="{{ link|url }}"`), which
-  gives an absolute `https`, `http`, `mailto` or `tel` link, percent-encoded,
-  or none; dates go through `date` (`date:"DATE_FORMAT"`), money through
+  gives an absolute `https`, `http` (to a named host, with no userinfo),
+  `mailto` or `tel` link, percent-encoded, or none; dates go through `date` (`date:"DATE_FORMAT"`), money through
   `floatformat`. A path printed with a time (`DATETIME_FORMAT`, `H:i`) takes an
   aware `datetime`, never a bare date. `linebreaksbr` writes markup, so it is
   the last filter of a printed value.
@@ -109,23 +109,38 @@ the table as a whole.
 | Filters | `ALLOWED_FILTERS`: Django's thirteen and `url`; at most four to an expression; literal arguments | `register`; walker `_RowRules.expression` | `test_the_walker_refuses_each_rule` |
 | Filter order and markup | `MARKUP_FILTERS` (`linebreaksbr`) the last filter of a printed value; `url` last, after `default` alone; `date` first; no other filter's result marked safe | `_RowRules.expression`; engine `_charged` | `test_a_cut_line_break_is_refused_since_markup_is_the_last_filter`, `test_only_a_markup_filter_returns_markup`, `test_no_chain_of_filters_lets_a_value_become_markup` |
 | Literals | no `<`, `>` or `"`; at most 200 characters; never `_(…)` | walker `_literal_refusal` | `test_the_walker_refuses_each_rule` |
-| A row's characters | none of `CONTROL_CHARACTERS` and no carriage return (rule 1); `clean()` writes a carriage return as a newline | walker `_check`, `check_html` (`SOURCE_CONTROLS`), `MessageTemplate.clean` | `test_a_row_holds_no_control_character_and_a_return_is_a_newline` |
+| A row's characters | none of `CONTROL_CHARACTERS` and no carriage return (rule 1); `clean()` writes a carriage return as a newline; in no column a lone surrogate, nor what JSON cannot write (NaN, an infinity, over 4,300 digits), nor `None` where the column is not null, refused by `clean_fields()` before anything hashes or stores it | walker `_check`, `check_html` (`SOURCE_CONTROLS`), `MessageTemplate.clean_fields`, `MessageTemplate.clean` | `test_a_row_holds_no_control_character_and_a_return_is_a_newline`, `test_clean_raises_only_validation_error_and_what_it_admits_saves`, `test_the_console_refuses_what_no_column_can_store` |
 | HTML spelling | `SpellingRule` 2 to 6 and 8 | [HTML checks](html_checks.py) | `test_each_spelling_rule_refuses_with_its_message`, `test_the_strict_spelling_admits_what_every_reader_reads_alike`, `test_a_refusal_says_how_to_write_the_row` |
-| Elements | `MAIL_ELEMENTS`; `OFFICE_ELEMENTS` inside a layout's Outlook comment alone | HTML checks (rule 7) | `test_a_mail_is_written_with_its_own_elements_and_attributes` |
-| Attributes | `MAIL_ATTRIBUTES` | HTML checks | `test_a_mail_is_written_with_its_own_elements_and_attributes` |
-| Where a value sits | text; `OUTPUT_ATTRIBUTES` (`title`, `alt`, `aria-label`, `lang`, `xml:lang`, `dir`); `LINK_ATTRIBUTES` as one output whose last filter is `url`; a `style` attribute, `STYLE_OUTPUTS`; a `<style>`, `STYLE_ELEMENT_OUTPUTS`; a `<title>`, any output; never a comment | HTML checks `check_spans`, `check_link` | `test_the_html_checks`, `test_link_attributes_follow_url_and_text_attributes_are_text` |
-| A link a value gives | `LINK_SCHEMES`: an absolute `https` or `http` link with a host, a `mailto:` or `tel:` link; any other gives none | engine `url` | `test_a_url_value_gives_a_link_or_nothing` |
-| A link an author writes | what `url` leaves unchanged, a `#fragment` or a `cid:` image (`STATIC_ANCHOR`) | HTML checks `check_link` | `test_a_static_link_is_absolute_or_a_fragment_or_a_cid_image` |
+| Elements | `MAIL_ELEMENTS`, for start and end tags alike; `OFFICE_ELEMENTS` inside a layout's Outlook comment alone | HTML checks (rule 7) | `test_a_mail_is_written_with_its_own_elements_and_attributes` |
+| Attributes | `MAIL_ATTRIBUTES`; a link attribute on the elements it links on alone (`LINK_ATTRIBUTES`: `href` on `a`, `src` on `img`, `background` on `body`, `table`, `td`, `th`, `cite` on `blockquote`) | HTML checks | `test_a_mail_is_written_with_its_own_elements_and_attributes`, `test_link_attributes_follow_url_and_text_attributes_are_text` |
+| Where a value sits | text; `OUTPUT_ATTRIBUTES` (`title`, `alt`, `aria-label`); `dir`, `lang` and `xml:lang` the engine's own `{{ dir }}` and `{{ lang }}` alone (`ENGINE_OUTPUT_ATTRIBUTES`); a link attribute as one output whose last filter is `url`; a `style` attribute, `STYLE_OUTPUTS`; a `<style>`, `STYLE_ELEMENT_OUTPUTS`; a `<title>`, outputs and notes, no tag; never a comment | HTML checks `check_spans`, `check_link` | `test_the_html_checks`, `test_dir_and_lang_take_the_engines_own_outputs_alone`, `test_a_title_holds_outputs_and_comments_only` |
+| A link a value gives | `LINK_SCHEMES`: an absolute `https` or `http` link whose authority is a domain name of two labels or more, the last a name, and a port, with no userinfo (`LINK_HOST`); a `mailto:` or `tel:` link; any other gives none | engine `url` | `test_a_url_value_gives_a_link_or_nothing` |
+| A link an author writes | what `url` leaves unchanged, a `#fragment`, a `cid:` image, an `sms:` or `webcal:` link (`STATIC_LINK`) | HTML checks `check_link` | `test_a_static_link_is_absolute_or_a_fragment_or_a_cid_image` |
 | Comments and declarations | in a layout alone: its opening `<!doctype html>`, `<!--[if mso]>…<![endif]-->` and the `<!--[if !mso]><!-->…<!--<![endif]-->` pair, static and balanced | HTML checks | `test_a_layout_holds_outlooks_conditional_comments_alone`, `test_only_a_layout_carries_outlooks_comments` |
-| Character set | `utf-8` (`MAIL_CHARSET`) | HTML checks | `test_a_mail_declares_one_character_set` |
+| Character set | `utf-8` (`MAIL_CHARSET`) | HTML checks | `test_a_mail_declares_one_character_set`; the value properties read a mail's bytes in the character set it declares |
 | A value's shape | the declared paths; a leaf a string, number, boolean or null | `TemplateWalk.prepare` | `test_required_values_and_shapes` |
-| A value's characters | any but `CONTROL_CHARACTERS`, which are dropped, and a lone surrogate, refused; at most 10,000 characters, 500 list items, 50,000 characters of JSON | `TemplateWalk.prepare` | `test_a_value_drops_its_control_characters`, `test_a_lone_surrogate_is_refused_as_invalid_values`, `test_variables_caps` |
+| A value's characters | any but `UNPRINTED` (the control characters, and the bidirectional embeddings, overrides and isolates), which are dropped, and a lone surrogate, refused; the directional marks stay; at most 10,000 characters, 500 list items, 50,000 characters of JSON | `TemplateWalk.prepare` | `test_a_value_drops_its_control_characters`, `test_a_value_drops_bidirectional_overrides_and_keeps_its_marks`, `test_a_lone_surrogate_is_refused_as_invalid_values`, `test_variables_caps` |
 | Numbers and dates | a number a float holds where `floatformat` or `pluralize` reads it; a date, or an aware datetime where a time is printed, where `date` reads it | `TemplateWalk.prepare` | `test_cheap_filters_spend_a_constant_and_a_raw_number_is_text`, `test_a_date_path_parses_iso_strings_and_refuses_what_is_not_a_date` |
 | Conditions | at most `CONDITION_OPERATOR_LIMIT` (10) operators, each a node; a test reads a declared value, its length or a name the mail supplies; `in` takes a literal | walker | `test_a_condition_holds_at_most_ten_operators_each_a_node`, `test_condition_filters_refused` |
-| Work | the source and line caps; `FORM_SPAN_LIMIT` spans and `TEXT_LIMIT` characters of text in a form, straight after the Markdown pass; nesting, loops, includes, nodes, outputs, text and the walk's sources; a pass's `RenderBudget` | walker, engine | `test_a_form_over_its_caps_is_refused_before_the_html_checks_read_it`, `test_the_costliest_preview_does_bounded_work`, `test_preview_time` (timed) |
+| Work | not a list but caps, each bounding the work where it applies: see the next table | walker, engine | the timed and counted cases named there |
 | Markdown | raw HTML off; template spans whole; a link's target one output through `url` | `MarkdownFormatHandler` | `test_markdown_spans_reach_the_engine_whole`, `test_a_markdown_link_whose_label_and_target_are_values_is_admitted` |
-| Subject and preheader | one line; the control characters and the bidirectional overrides dropped; at most 1,000 characters | walker `_one_line` | `test_subject_and_preheader_drop_control_and_bidirectional_characters` |
-| Author CSS | not closed: the text an author writes in a `<style>` element or a `style` attribute, which a value reaches only as the brand's outputs (above) | — | — |
+| Subject and preheader | one line; the control characters and the bidirectional overrides dropped; every encoded-word opener broken to `= ?` (`ENCODED_WORD_OPENER`: `=?`, a charset, `?`, `b` or `q`, `?`, in either case, terminated or not, inside a word too); at most 1,000 characters | walker `_one_line` | `test_subject_and_preheader_drop_control_and_bidirectional_characters`, `test_a_subject_never_holds_an_encoded_word`, `test_a_subject_never_becomes_an_encoded_word` (the standard library's header machinery the judge) |
+| Author CSS | not closed: the text an author writes in a `<style>` element or a `style` attribute. A value reaches it as the brand's outputs (above), or by the author's own choice: CSS reads an output's attribute (`content: attr(title)`, `[title^=…]` selectors) | — | — |
+
+Work is bounded by caps, not by a list, and each cap bounds the work only where it
+applies. `test_preview_time` and `test_pass_time` (CPU, under `ANGEE_TIMED_TESTS=1`) and
+the counted work of `test_the_costliest_preview_does_bounded_work` pin each bound on a
+measured case.
+
+| Where it applies | Caps | Pinned by |
+|---|---|---|
+| One row, before anything parses it | `SOURCE_LIMIT` (50,000 characters a column), `LINE_LIMIT`, `OPENERS_PER_LINE`, `NESTING_LIMIT`, `MARKDOWN_BRACKETS_PER_LINE`; then `CONDITION_OPERATOR_LIMIT`, `FILTERS_PER_EXPRESSION`, `LITERAL_LIMIT` | `headings`, `rules`: the costliest row checks |
+| One form, straight after the Markdown pass | `FORM_SPAN_LIMIT` (2,000 spans), `TEXT_LIMIT` characters of text, `FORM_OPENERS_PER_LINE` | `headings`, `rules`, refused before the HTML checks read them |
+| The walk, as it gathers rows | `WALK_SOURCE_LIMIT` (150,000 characters of source); each checked row's nodes, outputs and text against the tree's caps | `quotes`, `single`, `fivedeep`, `thousand`: refused after one to three row checks; `admitted`, the worst admitted walk |
+| Each tree a pass renders | `NODE_LIMIT`, `OUTPUT_LIMIT`, `TEXT_LIMIT`, `LOOP_DEPTH_LIMIT`, `INCLUDE_DEPTH_LIMIT` | `review` |
+| Each pass | `RenderBudget`: 500 loop or include renders, 200,000 characters of loop output, 500,000 of filter input; a tenth for the subject and preheader | `q11b-combined`, `review`'s render, `review-subject` |
+| The values | `prepare()` costs a constant per declared path per value; `VALUES_JSON_LIMIT`, `VALUE_STRING_LIMIT`, `VALUE_ITEMS_LIMIT` | `dated` |
+| The call stack | the caps above keep the deepest admitted row 116 frames over its caller's | `test_the_deepest_admitted_row_and_values_render` (under 300) |
 
 ## Rendering
 
@@ -134,7 +149,10 @@ declares (`TemplateWalk.prepare`: undeclared keys dropped, every required value
 present and not null, every declared path filled, ISO dates parsed at the paths
 read through `date`), and renders it on Django's template engine in the row's
 language: the subject and preheader on one line each, the HTML body escaping
-every value, and the plain-text body from the rows' text forms. A render reads
+every value, and the plain-text body from the rows' text forms, with the row's
+`language` and its text `direction` (`rtl` or `ltr`, the one the HTML's `dir`
+says), for whoever shows the subject, preheader or plain text outside the
+HTML. A render reads
 rows and the brand kit through the caller's scope, the default kit when `kit` is
 `None`. It raises `ValidationError` and nothing else, and each item of the error
 carries its code in `error_list`, so a sender tells them apart:
@@ -143,12 +161,16 @@ float holds where `floatformat` or `pluralize` reads it, a moment the local zone
 cannot hold, a bare date printed with a time), `message_template_refused` (the
 walk), `render_budget` (a pass's `RenderBudget`; the subject and preheader get a
 tenth of a body's), `subject_too_long`, `no_brand_kit`, and `render_failed` for
-any other failure, which is logged with its traceback first. Every string value
-drops its control characters; the subject and preheader drop bidirectional
-overrides too. A sender picks the row with
+any other failure, which is logged with its traceback first. Every string value,
+and the subject and preheader, drop the control characters and the bidirectional
+overrides and isolates (`UNPRINTED`). A sender picks the row with
 `effective("template", key, person=recipient)`, renders it as the system actor,
 and sends the HTML part as `charset=utf-8`, the one character set a row
-declares.
+declares. The subject the renderer returns is a plain string a sender passes to
+its mail library as it is: it holds no line break, no control character, no
+bidirectional override and no encoded-word opener, so a mail library stores
+exactly the string it was given. A sender never compiles rendered output as a
+template again, since a value may spell `{{ … }}`.
 
 `row.preview(kit=None)` renders the row's `sample`: a template whole, a layout
 around a fixed body, subject and preheader, a block or part alone. It returns
