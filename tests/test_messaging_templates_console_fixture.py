@@ -163,8 +163,9 @@ _INSERTS = (
 _ROW = (
     "id display_name kind key language name description format subject preheader source text_source layout "
     "variables sample is_baseline created_at updated_at permissions carries_message_fields is_effective "
-    "is_overridden has_updated_default redacted_fields"
+    "is_overridden overrides_default has_updated_default can_override can_keep_override redacted_fields"
 )
+"""Every field a row's list or record read selects; the fixture serves one row shape to both."""
 _KIT = "id display_name name is_default"
 _PREVIEW = (
     "query($template: ID!, $brand_kit: ID) { message_template_preview(template: $template, brand_kit: $brand_kit) "

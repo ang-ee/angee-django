@@ -287,6 +287,8 @@
     "removed": [],
     "rows": [
      {
+      "can_keep_override": false,
+      "can_override": false,
       "carries_message_fields": true,
       "created_at": "2026-11-24T09:00:00+00:00",
       "description": "",
@@ -302,6 +304,7 @@
       "language": "en",
       "layout": "base",
       "name": "Announcement",
+      "overrides_default": false,
       "permissions": [
        "delete",
        "preview",
@@ -442,6 +445,7 @@
  ],
  "member": {
   "mtl_block_button_en_shipped": {
+   "can_override": false,
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -449,6 +453,7 @@
    "sample": null
   },
   "mtl_block_footer_en_shipped": {
+   "can_override": false,
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -456,6 +461,7 @@
    "sample": null
   },
   "mtl_block_header_en_shipped": {
+   "can_override": false,
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -470,6 +476,7 @@
    "sample": null
   },
   "mtl_block_quote_en": {
+   "can_keep_override": false,
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -477,6 +484,7 @@
    "sample": null
   },
   "mtl_block_quote_en_shipped": {
+   "can_override": false,
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -484,6 +492,7 @@
    "sample": null
   },
   "mtl_block_record_card_en": {
+   "can_keep_override": false,
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -491,6 +500,7 @@
    "sample": null
   },
   "mtl_block_record_card_en_shipped": {
+   "can_override": false,
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -498,6 +508,7 @@
    "sample": null
   },
   "mtl_layout_base_en_shipped": {
+   "can_override": false,
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -505,6 +516,7 @@
    "sample": null
   },
   "mtl_layout_compact_en": {
+   "can_keep_override": false,
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -512,6 +524,7 @@
    "sample": null
   },
   "mtl_layout_compact_en_shipped": {
+   "can_override": false,
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -519,6 +532,7 @@
    "sample": null
   },
   "mtl_layout_letter_en": {
+   "can_keep_override": false,
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -526,6 +540,7 @@
    "sample": null
   },
   "mtl_layout_letter_en_shipped": {
+   "can_override": false,
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -533,6 +548,7 @@
    "sample": null
   },
   "mtl_part_greeting_en_shipped": {
+   "can_override": false,
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -540,6 +556,7 @@
    "sample": null
   },
   "mtl_part_greeting_es_shipped": {
+   "can_override": false,
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -547,6 +564,7 @@
    "sample": null
   },
   "mtl_part_ignore_notice_en": {
+   "can_keep_override": false,
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -554,6 +572,7 @@
    "sample": null
   },
   "mtl_part_ignore_notice_en_shipped": {
+   "can_override": false,
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -561,6 +580,7 @@
    "sample": null
   },
   "mtl_part_ignore_notice_es_shipped": {
+   "can_override": false,
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -568,6 +588,7 @@
    "sample": null
   },
   "mtl_part_signature_en": {
+   "can_keep_override": false,
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -575,6 +596,7 @@
    "sample": null
   },
   "mtl_part_signature_en_shipped": {
+   "can_override": false,
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -582,6 +604,7 @@
    "sample": null
   },
   "mtl_template_example_invoice_sent_en": {
+   "can_keep_override": false,
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -589,6 +612,7 @@
    "sample": null
   },
   "mtl_template_example_invoice_sent_en_shipped": {
+   "can_override": false,
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -596,6 +620,7 @@
    "sample": null
   },
   "mtl_template_example_password_reset_en": {
+   "can_keep_override": false,
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -603,6 +628,7 @@
    "sample": null
   },
   "mtl_template_example_password_reset_en_shipped": {
+   "can_override": false,
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -617,6 +643,7 @@
    "sample": null
   },
   "mtl_template_example_welcome_en_shipped": {
+   "can_override": false,
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -2262,6 +2289,60 @@
      "creatable": false,
      "currencyField": null,
      "kind": "scalar",
+     "name": "overrides_default",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "Boolean",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "can_override",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "Boolean",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "can_keep_override",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "Boolean",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "currencyField": null,
+     "kind": "scalar",
      "name": "has_open_decisions",
      "readable": true,
      "relationModelLabel": null,
@@ -2427,6 +2508,36 @@
       "relation": null,
       "row": null,
       "scalar": null,
+      "sort": null,
+      "values": []
+     },
+     "can_keep_override": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "can_keep_override",
+       "paths": [
+        "can_keep_override"
+       ]
+      },
+      "scalar": "Boolean",
+      "sort": null,
+      "values": []
+     },
+     "can_override": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "can_override",
+       "paths": [
+        "can_override"
+       ]
+      },
+      "scalar": "Boolean",
       "sort": null,
       "values": []
      },
@@ -2897,6 +3008,30 @@
       },
       "values": []
      },
+     "overrides_default": {
+      "filter": {
+       "field": "overrides_default",
+       "operators": [
+        "exact",
+        "ne"
+       ],
+       "scalar": "Boolean",
+       "valueMap": [],
+       "values": []
+      },
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "overrides_default",
+       "paths": [
+        "overrides_default"
+       ]
+      },
+      "scalar": "Boolean",
+      "sort": null,
+      "values": []
+     },
      "permissions": {
       "filter": null,
       "kind": "list",
@@ -3151,6 +3286,8 @@
     "removed": [],
     "rows": [
      {
+      "can_keep_override": true,
+      "can_override": false,
       "carries_message_fields": true,
       "created_at": "2026-11-24T09:00:00+00:00",
       "description": "Sent when a person's account is ready.",
@@ -3166,6 +3303,7 @@
       "language": "en",
       "layout": "base",
       "name": "Welcome",
+      "overrides_default": true,
       "permissions": [
        "delete",
        "preview",
@@ -3309,6 +3447,8 @@
  },
  "rows": [
   {
+   "can_keep_override": false,
+   "can_override": true,
    "carries_message_fields": false,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "The one action an email asks for. Real text on the brand's primary colour, 44px tall.",
@@ -3324,6 +3464,7 @@
    "language": "en",
    "layout": "",
    "name": "Button",
+   "overrides_default": false,
    "permissions": [
     "preview"
    ],
@@ -3343,6 +3484,8 @@
    }
   },
   {
+   "can_keep_override": false,
+   "can_override": true,
    "carries_message_fields": false,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "Who sent the email and, when the mail can be stopped, how to stop it.",
@@ -3358,6 +3501,7 @@
    "language": "en",
    "layout": "",
    "name": "Footer",
+   "overrides_default": false,
    "permissions": [
     "preview"
    ],
@@ -3375,6 +3519,8 @@
    }
   },
   {
+   "can_keep_override": false,
+   "can_override": true,
    "carries_message_fields": false,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "The brand mark at the top of every email. It reads the brand kit and takes no arguments.",
@@ -3390,6 +3536,7 @@
    "language": "en",
    "layout": "",
    "name": "Header",
+   "overrides_default": false,
    "permissions": [
     "preview"
    ],
@@ -3403,6 +3550,8 @@
    "variables": {}
   },
   {
+   "can_keep_override": false,
+   "can_override": false,
    "carries_message_fields": false,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "A short boxed note, for news a mail must not bury.",
@@ -3418,6 +3567,7 @@
    "language": "en",
    "layout": "",
    "name": "Notice",
+   "overrides_default": false,
    "permissions": [
     "delete",
     "preview",
@@ -3437,6 +3587,8 @@
    }
   },
   {
+   "can_keep_override": true,
+   "can_override": false,
    "carries_message_fields": false,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "Someone's words, set apart on a thicker rule.",
@@ -3452,6 +3604,7 @@
    "language": "en",
    "layout": "",
    "name": "Quote",
+   "overrides_default": true,
    "permissions": [
     "delete",
     "preview",
@@ -3473,6 +3626,8 @@
    }
   },
   {
+   "can_keep_override": false,
+   "can_override": true,
    "carries_message_fields": false,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "Someone's words, set apart on a rule; a comment, a message, a reply.",
@@ -3488,6 +3643,7 @@
    "language": "en",
    "layout": "",
    "name": "Quote",
+   "overrides_default": false,
    "permissions": [
     "preview"
    ],
@@ -3507,6 +3663,8 @@
    }
   },
   {
+   "can_keep_override": true,
+   "can_override": false,
    "carries_message_fields": false,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "The record an email is about; what it is, its title and its state.",
@@ -3522,6 +3680,7 @@
    "language": "en",
    "layout": "",
    "name": "Record card",
+   "overrides_default": true,
    "permissions": [
     "delete",
     "preview",
@@ -3545,6 +3704,8 @@
    }
   },
   {
+   "can_keep_override": false,
+   "can_override": true,
    "carries_message_fields": false,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "The record an email is about; what it is, its title and its state.",
@@ -3560,6 +3721,7 @@
    "language": "en",
    "layout": "",
    "name": "Record card",
+   "overrides_default": false,
    "permissions": [
     "preview"
    ],
@@ -3581,6 +3743,8 @@
    }
   },
   {
+   "can_keep_override": false,
+   "can_override": true,
    "carries_message_fields": false,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "The wrapper every message template renders into. Header, content, footer, at most 600px wide.",
@@ -3596,6 +3760,7 @@
    "language": "en",
    "layout": "",
    "name": "Base",
+   "overrides_default": false,
    "permissions": [
     "preview"
    ],
@@ -3613,6 +3778,8 @@
    }
   },
   {
+   "can_keep_override": true,
+   "can_override": false,
    "carries_message_fields": false,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "A narrow column without header or footer.",
@@ -3628,6 +3795,7 @@
    "language": "en",
    "layout": "",
    "name": "Compact",
+   "overrides_default": true,
    "permissions": [
     "delete",
     "preview",
@@ -3643,6 +3811,8 @@
    "variables": {}
   },
   {
+   "can_keep_override": false,
+   "can_override": true,
    "carries_message_fields": false,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "A narrow column without header or footer.",
@@ -3658,6 +3828,7 @@
    "language": "en",
    "layout": "",
    "name": "Compact",
+   "overrides_default": false,
    "permissions": [
     "preview"
    ],
@@ -3671,6 +3842,8 @@
    "variables": {}
   },
   {
+   "can_keep_override": true,
+   "can_override": false,
    "carries_message_fields": false,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "One plain column, for mail that reads as a letter.",
@@ -3686,6 +3859,7 @@
    "language": "en",
    "layout": "",
    "name": "Letter (ours)",
+   "overrides_default": true,
    "permissions": [
     "delete",
     "preview",
@@ -3701,6 +3875,8 @@
    "variables": {}
   },
   {
+   "can_keep_override": false,
+   "can_override": true,
    "carries_message_fields": false,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "One plain column, for mail that reads as a letter.",
@@ -3716,6 +3892,7 @@
    "language": "en",
    "layout": "",
    "name": "Letter",
+   "overrides_default": false,
    "permissions": [
     "preview"
    ],
@@ -3729,6 +3906,8 @@
    "variables": {}
   },
   {
+   "can_keep_override": false,
+   "can_override": true,
    "carries_message_fields": false,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "How an email opens; it falls back when the first name is unknown.",
@@ -3744,6 +3923,7 @@
    "language": "en",
    "layout": "",
    "name": "Greeting",
+   "overrides_default": false,
    "permissions": [
     "preview"
    ],
@@ -3763,6 +3943,8 @@
    }
   },
   {
+   "can_keep_override": false,
+   "can_override": true,
    "carries_message_fields": false,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "How an email opens; it leaves the name out when the first name is unknown.",
@@ -3778,6 +3960,7 @@
    "language": "es",
    "layout": "",
    "name": "Greeting",
+   "overrides_default": false,
    "permissions": [
     "preview"
    ],
@@ -3797,6 +3980,8 @@
    }
   },
   {
+   "can_keep_override": true,
+   "can_override": false,
    "carries_message_fields": false,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "The line that closes mail a person may not have asked for.",
@@ -3812,6 +3997,7 @@
    "language": "en",
    "layout": "",
    "name": "Ignore notice",
+   "overrides_default": true,
    "permissions": [
     "delete",
     "preview",
@@ -3827,6 +4013,8 @@
    "variables": {}
   },
   {
+   "can_keep_override": false,
+   "can_override": true,
    "carries_message_fields": false,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "The line that closes mail a person may not have asked for.",
@@ -3842,6 +4030,7 @@
    "language": "en",
    "layout": "",
    "name": "Ignore notice",
+   "overrides_default": false,
    "permissions": [
     "preview"
    ],
@@ -3855,6 +4044,8 @@
    "variables": {}
   },
   {
+   "can_keep_override": false,
+   "can_override": true,
    "carries_message_fields": false,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "The line that closes mail a person may not have asked for.",
@@ -3870,6 +4061,7 @@
    "language": "es",
    "layout": "",
    "name": "Ignore notice",
+   "overrides_default": false,
    "permissions": [
     "preview"
    ],
@@ -3883,6 +4075,8 @@
    "variables": {}
   },
   {
+   "can_keep_override": true,
+   "can_override": false,
    "carries_message_fields": false,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "How an email signs off, in the brand's name.",
@@ -3898,6 +4092,7 @@
    "language": "en",
    "layout": "",
    "name": "Signature",
+   "overrides_default": true,
    "permissions": [
     "delete",
     "preview",
@@ -3913,6 +4108,8 @@
    "variables": {}
   },
   {
+   "can_keep_override": false,
+   "can_override": true,
    "carries_message_fields": false,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "How an email signs off, in the brand's name.",
@@ -3928,6 +4125,7 @@
    "language": "en",
    "layout": "",
    "name": "Signature",
+   "overrides_default": false,
    "permissions": [
     "preview"
    ],
@@ -3941,6 +4139,8 @@
    "variables": {}
   },
   {
+   "can_keep_override": true,
+   "can_override": false,
    "carries_message_fields": true,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "Sent with each invoice.",
@@ -3956,6 +4156,7 @@
    "language": "en",
    "layout": "base",
    "name": "Invoice sent",
+   "overrides_default": true,
    "permissions": [
     "delete",
     "preview",
@@ -3984,6 +4185,8 @@
    }
   },
   {
+   "can_keep_override": false,
+   "can_override": true,
    "carries_message_fields": true,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "Sent with each invoice.",
@@ -3999,6 +4202,7 @@
    "language": "en",
    "layout": "base",
    "name": "Invoice sent",
+   "overrides_default": false,
    "permissions": [
     "preview"
    ],
@@ -4028,6 +4232,8 @@
    }
   },
   {
+   "can_keep_override": true,
+   "can_override": false,
    "carries_message_fields": true,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "Sent when a person asks to choose a new password.",
@@ -4043,6 +4249,7 @@
    "language": "en",
    "layout": "base",
    "name": "Password reset",
+   "overrides_default": true,
    "permissions": [
     "delete",
     "preview",
@@ -4068,6 +4275,8 @@
    }
   },
   {
+   "can_keep_override": false,
+   "can_override": true,
    "carries_message_fields": true,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "Sent when a person asks to choose a new password.",
@@ -4083,6 +4292,7 @@
    "language": "en",
    "layout": "base",
    "name": "Password reset",
+   "overrides_default": false,
    "permissions": [
     "preview"
    ],
@@ -4104,6 +4314,8 @@
    }
   },
   {
+   "can_keep_override": false,
+   "can_override": false,
    "carries_message_fields": true,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "",
@@ -4119,6 +4331,7 @@
    "language": "ar",
    "layout": "base",
    "name": "Welcome (Arabic)",
+   "overrides_default": false,
    "permissions": [
     "delete",
     "preview",
@@ -4138,6 +4351,8 @@
    }
   },
   {
+   "can_keep_override": false,
+   "can_override": true,
    "carries_message_fields": true,
    "created_at": "2026-11-24T09:00:00+00:00",
    "description": "Sent when a person's account is ready.",
@@ -4153,6 +4368,7 @@
    "language": "en",
    "layout": "base",
    "name": "Welcome",
+   "overrides_default": false,
    "permissions": [
     "preview"
    ],
