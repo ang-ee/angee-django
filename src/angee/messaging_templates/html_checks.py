@@ -349,6 +349,10 @@ class _HtmlChecker(HTMLParser):
         if not _ELEMENT_NAME.fullmatch(tag) or written.lower() != f"</{tag}>":
             self.following = None
             self.broken(SpellingRule.END_TAG, f"the end tag {self.text[start:][:30]!r}")
+        elif tag not in MAIL_ELEMENTS and not (self.office and tag in OFFICE_ELEMENTS) and not tag.startswith(
+            VECTOR_MARKUP,
+        ):
+            self.broken(SpellingRule.ELEMENTS, f"</{tag}>")
         return None
 
     def check_conditions(self, name: str, ids: list[int]) -> None:

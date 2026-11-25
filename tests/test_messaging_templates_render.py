@@ -597,6 +597,7 @@ SPELLING_REFUSED: list[tuple[SpellingRule, str, bool]] = [
     (R.TEMPLATE_CODE, "<title>Hi</title{{ v }}><p>x</p></title>", False),
     (R.TEMPLATE_CODE, "<!--{{ x }}-->", True),
     *((R.ELEMENTS, f"<{tag}>x</{tag}>", False) for tag in OFF_THE_LIST),
+    *((R.ELEMENTS, f"<p>x</p></{tag}>", False) for tag in ("frameset", "script", "svg", "template", "plaintext")),
     (R.ENDS_IN_TEXT, "<p>x</p><a", False),
     (R.ENDS_IN_TEXT, '<p>x</p><a title="x', False),
     (R.ENDS_IN_TEXT, '<p>x</p><a href="https://example.test/"', False),
@@ -742,6 +743,7 @@ def test_a_mail_is_written_with_its_own_elements_and_attributes() -> None:
     for tag in sorted(MAIL_ELEMENTS):
         form = f"<{tag}>" if tag in VOID_ELEMENTS else f"<{tag}>x</{tag}>"
         assert check_html(form, expression) == [], tag
+        assert check_html(f"<p>x</p></{tag}>", expression) == [], tag  # an end tag is held to the list too
     values = {"href": "https://example.test/", "src": "https://example.test/a.png", "background": "#",
               "cite": "https://example.test/", "charset": "utf-8"}
     for name in sorted(MAIL_ATTRIBUTES):
