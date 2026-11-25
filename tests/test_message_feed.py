@@ -272,7 +272,6 @@ def _party_scope(owner: Any, rows: list[Any]) -> tuple[Any, Any, Any]:
         for row in rows:
             Recipient._base_manager.create(
                 message=row,
-                thread_id=row.thread_id,
                 handle=handle,
                 role="to",
                 created_by=owner,

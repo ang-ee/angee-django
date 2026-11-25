@@ -143,7 +143,7 @@ def test_the_policy_decides_every_messaging_permission(db):
         )
         part = Part.objects.create(message=message, position=0, file=part_file, created_by=author)
         edge = MessageEdge.objects.create(src=channel_message, dst=message, kind="quote", created_by=author)
-        recipient_row = Recipient.objects.create(thread=thread, message=channel_message, handle=handle)
+        recipient_row = Recipient.objects.create(message=channel_message, handle=handle)
         reaction = Reaction.objects.create(message=message, handle=handle, reaction="ok", created_by=author)
         star = MessageStar.objects.create(message=message, user=seats["starrer"], created_by=author)
         thread_tag, message_tag = (
@@ -205,7 +205,8 @@ def test_the_policy_decides_every_messaging_permission(db):
         (thread, "transfer", "thread-owner admin", "thread-editor"),
         (thread, "write__owner", "thread-owner", "thread-editor"),
         # messaging/message, with a trashed channel message
-        (message, "create", "outsider", "anonymous"),
+        (channel_message, "create", "channel-owner admin", "replier channel-reader outsider anonymous"),
+        (message, "create", "admin", "thread-owner thread-editor outsider"),
         (message, "identity_source", "identity", "outsider"),
         (trashed, "conceal", "outsider", "anonymous"),
         (trashed, "withheld", "outsider", "anonymous"),
@@ -236,7 +237,7 @@ def test_the_policy_decides_every_messaging_permission(db):
         (notification, "read", "recipient thread-reader", "outsider author"),
         (notification, "write", "recipient", "thread-owner"),
         (notification, "delete", "recipient", "thread-owner"),
-        (part, "create", "outsider", "anonymous"),
+        (part, "create", "thread-editor message-editor admin", "outsider thread-reader anonymous"),
         (part, "read_inbox", "thread-reader", "outsider"),
         (part, "read", "thread-reader", "outsider author"),
         (part, "write", "thread-editor", "thread-reader"),
@@ -246,7 +247,7 @@ def test_the_policy_decides_every_messaging_permission(db):
         (edge, "write", "admin", "channel-owner thread-owner"),
         (edge, "delete", "channel-owner thread-owner", "both-reader"),
         (recipient_row, "create", "channel-owner admin", "outsider thread-editor anonymous"),
-        (recipient_row, "read", "channel-reader thread-reader", "outsider"),
+        (recipient_row, "read", "channel-reader", "outsider thread-reader"),
         (recipient_row, "write", "channel-owner", "thread-editor"),
         (recipient_row, "delete", "channel-owner", "thread-owner"),
         (reaction, "create", "outsider", "anonymous"),

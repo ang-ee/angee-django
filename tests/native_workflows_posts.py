@@ -322,7 +322,7 @@ class CommentReplyTests(TransactionTestCase):
         self.assertEqual((run.output["message_id"], run.output["status"]), (reply.sqid, "draft"))
         self.assertIsNone(reply.scheduled_at)
         claim = changeset_model()._base_manager.get(
-            scope=f"messaging.reply:{to_subject_ref(self.workflow.user)}",
+            scope=f"messaging.compose:{to_subject_ref(self.workflow.user)}",
             key=f"workflow-reply:{run.sqid}",
         )
         self.assertEqual(claim.created_row.pk, reply.pk)
