@@ -681,8 +681,10 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         judged through the acting reader's scope and only when the layout is new
         or changed, so a later change of the default language never refuses an
         edit of the rest of the row; ``variables`` or ``sample`` that is not an
-        object. Then, when what the row renders is new or changed (its content
-        hash differs from the stored row's), :meth:`validate_source`, through the
+        object. Then, when the columns a walk reads hold what their own validators
+        admit (:meth:`_walkable`, judged before the row is hashed) and what the row
+        renders is new or changed (its content hash differs from the stored
+        row's), :meth:`validate_source`, through the
         same scope: an edit of only the name, the description or the sample walks
         nothing.
         """
@@ -707,7 +709,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
                 errors[field] = "Give an object."
         if errors:
             raise ValidationError(errors)
-        if stored_hash != self.compute_content_hash() and self._walkable():
+        if self._walkable() and stored_hash != self.compute_content_hash():
             self.validate_source()
 
     def _walkable(self) -> bool:

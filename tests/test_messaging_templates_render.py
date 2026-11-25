@@ -8,6 +8,7 @@ import functools
 import inspect
 import itertools
 import logging
+import math
 import os
 import re
 import sys
@@ -2471,6 +2472,25 @@ mutation($id: String!, $set: message_templates_set_input!) {
 """
 _OVERRIDE = "mutation($id: ID!) { override_message_template(template: $id) { ok message id } }"
 _KEEP = "mutation($id: ID!) { keep_message_template_override(template: $id) { ok message id } }"
+
+
+def test_clean_refuses_a_number_in_variables_and_raises_nothing_else(plain: Any) -> None:
+    """clean() hashed a row before judging it walkable, so a NaN in variables raised ValueError, INTERNAL through the
+    console. It is judged first, and validate_variables refuses it: a description is words."""
+
+    del plain
+    for variables in ({"a": math.nan}, {"a": math.inf}, {"a": "x", "b": {"c": math.nan}}, {"a": 1}):
+        row = _unsaved("part", "nan", variables=variables)
+        with system_context(reason="tests.messaging_templates.render.clean"), pytest.raises(ValidationError) as raised:
+            row.full_clean()
+        assert list(raised.value.message_dict) == ["variables"], raised.value.message_dict
+    schema = addon_schema(messaging_templates_schema.schemas, "console")
+    own = _row("part", "own", source="x")
+    for user, code in ((create_platform_admin("messaging-templates-nan-admin"), "VALIDATION"),
+                       (create_user("messaging-templates-nan-member"), "PERMISSION_DENIED")):
+        result = execute_schema(schema, _UPDATE, {"id": public_id_of(own), "set": {"variables": {"a": math.nan}}},
+                                user=user)
+        assert [(error.extensions or {}).get("code") for error in result.errors or ()] == [code], result.errors
 
 
 def test_the_walk_runs_in_clean_after_the_permission_is_decided(
