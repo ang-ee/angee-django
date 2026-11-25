@@ -16,9 +16,9 @@ A render with no budget set fails.
 
 :class:`MessageTemplateContext` keeps the globals every row reads (``brand``,
 ``lang``, ``dir``) through the ``only`` of an include, which otherwise starts an
-empty context. :class:`MessageTemplateLoader` serves the engine the forms of the
-rows one render reached, by template name. This module imports nothing else of
-the addon.
+empty context; :func:`brand_values` builds the ``brand`` global from a brand kit.
+:class:`MessageTemplateLoader` serves the engine the forms of the rows one render
+reached, by template name. This module imports nothing else of the addon.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ import functools
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
+from operator import attrgetter
 from typing import Any, ClassVar, cast
 
 from django.core.exceptions import ValidationError
@@ -46,6 +47,8 @@ from django.template.loader_tags import IncludeNode
 from django.template.loaders.base import Loader
 from django.utils.safestring import SafeString
 from markdown_it import MarkdownIt
+
+from angee.brandkit.models import BrandKit, MailRole, MailScheme
 
 ALLOWED_TAGS = ("if", "for", "with", "comment", "block", "include", "extends", "templatetag")
 """The tags a message template may use; ``templatetag`` writes a literal ``{{``, ``{%`` or ``{#``."""
@@ -136,6 +139,44 @@ class RenderBudget:
             self.check()
         finally:
             RENDER_BUDGET.reset(token)
+
+
+type Path = tuple[str, ...]
+
+BRAND_FIELDS: Mapping[Path, Callable[[BrandKit], object]] = {
+    ("name",): attrgetter("name"),
+    ("font", "heading"): attrgetter("font_heading"),
+    ("font", "body"): attrgetter("font_body"),
+    ("footer", "organization"): attrgetter("footer_organization"),
+    ("footer", "address"): attrgetter("footer_address"),
+}
+"""What ``brand`` holds besides the mail colours, each path with the brand kit column it reads."""
+
+MAIL_COLOURS = tuple((str(scheme), str(role)) for scheme in MailScheme for role in MailRole)
+"""The mail colours ``brand`` holds, ``<scheme>.<role>``, from :meth:`~angee.brandkit.models.BrandKit.mail_palette`."""
+
+BRAND_PATHS = frozenset(("brand", *path) for path in (*BRAND_FIELDS, *MAIL_COLOURS))
+"""Every value ``brand`` holds (:func:`brand_values`), as a path."""
+
+
+def brand_values(kit: BrandKit) -> dict[str, Any]:
+    """Return what ``brand`` holds in a render, built from a brand kit as plain strings.
+
+    :data:`BRAND_FIELDS` and :data:`MAIL_COLOURS` are its one declaration. The mail
+    colours come from :meth:`~angee.brandkit.models.BrandKit.mail_palette`, which
+    raises ``ValidationError`` for a kit stored past its validation.
+    """
+
+    palette = kit.mail_palette()
+    values: dict[str, Any] = {}
+    readings = [(path, read(kit)) for path, read in BRAND_FIELDS.items()]
+    readings.extend(((scheme, role), palette[scheme][role]) for scheme, role in MAIL_COLOURS)
+    for path, value in readings:
+        node = values
+        for segment in path[:-1]:
+            node = node.setdefault(segment, {})
+        node[path[-1]] = str(value)
+    return values
 
 
 register = Library()

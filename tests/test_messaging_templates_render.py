@@ -45,10 +45,9 @@ from angee.messaging_templates.engine import (
     register,
     url,
 )
+from angee.messaging_templates.html_checks import LINK_ATTRIBUTES, OUTPUT_ATTRIBUTES, check_html, compiled_expression
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import (
-    LINK_ATTRIBUTES,
-    OUTPUT_ATTRIBUTES,
     WALKED_NODES,
     RowPiece,
     TemplateWalk,
@@ -59,8 +58,6 @@ from angee.messaging_templates.walker import (
     _RowRules,
     _Tree,
     _TreeWalker,
-    check_html,
-    compiled_expression,
     walked,
 )
 from tests.conftest import addon_schema, create_platform_admin, create_user
