@@ -191,6 +191,96 @@ live in code docstrings.
   field declared by its widget alone for the empty text tests for `null`, or
   `{}` for a `json` one; a test that pressed "Set value" on a number and
   expected `0` finds the number's own control.
+- **Message templates render, on Django's template engine.**
+  - **What renders.** `MessageTemplate.render(values, *, kit=None)` returns a
+    `RenderedMessage` (`subject`, `preheader`, `html`, `plain_text`,
+    `language`, and `direction`, a `TextDirection` the HTML's `dir` says, for
+    showing the text outside the HTML): the subject and preheader on one line each, the
+    HTML body with every value escaped, and the plain-text body rendered from
+    the rows' text forms, never scraped from the HTML. Rows render on a
+    standalone, restricted
+    Django engine (`MessageTemplateEngine` in `angee.messaging_templates.engine`)
+    whose one library allows the tags `if`, `for`, `with`, `comment`, `block`,
+    `include`, `extends` and `templatetag` and fourteen filters, `url` among them;
+    anything else fails to compile. A template names its layout in its `layout`
+    column and never writes `extends` or `block`; blocks and parts are included
+    by name with `{% include "…" with … only %}`. A Markdown row goes through
+    markdown-it first, with raw HTML off, its template code kept whole. Each pass
+    runs in the row's language, with `dir` from Django's
+    `translation.get_language_bidi()`, and inside a `RenderBudget` (500 loop or
+    include renders, 200,000 characters of loop output, 500,000 characters of
+    filter input; a tenth of that for the subject and preheader). The walk
+    renders itself (`TemplateWalk.render`); the result types
+    (`RenderedMessage`, `TemplatePreview`, `TemplateWarning`) live in
+    `angee.messaging_templates.walker`.
+  - **What is refused.** `TemplateWalker` (`angee.messaging_templates.walker`)
+    walks a row and every row it reaches and refuses what may not render safely:
+    oversized sources and lines, literals holding `<`, `>` or `"`, costly or
+    unsafe filter use, template code the Markdown pass would not keep whole, HTML
+    a mail may not carry, reads no row declares, include cycles and the walk's
+    bounds. Every list a row or a value varies along is closed, and the addon
+    README's table names each with its owner and test: the tags and filters; a
+    markup filter (`linebreaksbr`) as the last filter of a printed value, no
+    other filter's result marked safe; one strict HTML spelling every reader
+    tokenises alike (`SpellingRule` in `angee.messaging_templates.html_checks`);
+    the elements (`MAIL_ELEMENTS`) and attributes (`MAIL_ATTRIBUTES`) a mail is
+    written with, Office's settings inside a layout's Outlook comment alone; the
+    places a value sits; a link `url` gives (an absolute `https`, `http`,
+    `mailto` or `tel` link, an `https` or `http` one to a named host with no
+    userinfo) and one an author writes (that, a `#fragment`, a `cid:` image, an
+    `sms:` or `webcal:` link); the one character set, `utf-8`; no control
+    character in a row's text, a carriage return written as a newline by
+    `clean()`, and none in a value, which drops them with the bidirectional
+    overrides and isolates; `dir` and `lang` set by the engine alone; a `<title>`
+    holding outputs and notes, no tag; end tags held to the element list; link
+    attributes on the elements they link on; at most ten operators in a
+    condition, each a node; every form capped straight after the Markdown pass,
+    and the walk stopped at the tree's caps as it gathers rows. A rendered subject
+    and preheader break every encoded-word opener (`=?charset?b?` or `?q?`), so a
+    mail library stores the subject exactly as rendered. `clean()` refuses
+    with a `ValidationError` whatever a column cannot store: a lone surrogate,
+    a NUL, a value nested over 64 levels, NaN, an infinity, a number over 4,300
+    digits, `None` where the column is not null; and a template with no layout,
+    under `layout`. A walk also stops once what its rows' checks read passes
+    600,000 characters of forms or 4,000 spans, comments included, and a saving
+    walk resolves a level's include targets in one query. A layout alone
+    writes the doctype and Outlook's conditional comments, static and balanced,
+    their markup checked. A Markdown link takes its label and its target from
+    values (`[{{ label }}]({{ link }})`). It runs from `clean()` when what a row
+    renders changed (`MessageTemplate.validate_source()`), after every resource
+    load, and before every render. `TemplateWalk.prepare(values)` drops
+    undeclared keys, refuses a required value missing or null, fills every
+    declared path and parses ISO dates read through `date`; a path printed with a
+    time takes an aware `datetime`. It costs a constant per declared path per
+    value, and drops the control characters from every string. A render raises
+    `ValidationError` and nothing else, every item carrying its code in
+    `error_list` (`invalid_values`, `message_template_refused`,
+    `render_budget`, `subject_too_long`, `no_brand_kit`, and `render_failed`
+    for a failure nobody foresaw, logged with its traceback first).
+  - **Preview.** `MessageTemplate.preview(*, kit=None)` renders a row's `sample`
+    (a layout around a fixed body, a block or part alone) and returns a
+    `TemplatePreview` with `TemplateWarning`s: the subject or preheader length,
+    unused variables, a missing stop link, an empty plain-text body, the size, or
+    the render error. The console's `message_template_preview(template,
+    brand_kit)` read returns it to callers holding the new `preview` permission
+    (platform admins; `messaging_templates/message_template` revision 2).
+  - **Shipped rows.** The addon's install tier ships the `base` layout, the
+    `header`, `footer`, `button`, `quote` and `record_card` blocks and the
+    `greeting`, `ignore_notice` and `signature` parts; the layout carries the
+    Outlook DPI setting, font override and 600-wide ghost table. A block or part
+    other rows include can no longer be deleted while its key would stop
+    resolving. A baseline is walked among shipped rows, so a shipped defect fails
+    its load; a refusal reached only through a deployment's override or own row
+    is logged as a warning on `angee.messaging_templates.models`, the load
+    completes, and that shipped row refuses at render until the deployment's row
+    is fixed.
+  - **Dependencies.** `angee-messaging-templates` requires `angee-brandkit` and
+    `markdown-it-py` below 5. The dev group gains `html5lib`, a test-only reader
+    of HTML as a browser reads it.
+  - **Upgrade.** Synchronize the permission schema (`rebac sync`), load the
+    install tier (`resources load`), and regenerate the console schema and its
+    codegen. No migration: no column changed. Existing rows are walked when they
+    render, and when their source, forms, variables or layout are next edited.
 - **Message templates: the new addon `angee.messaging_templates`.**
   - **What it holds.** A message template (`MessageTemplate`) is one row of one
     kind for one key and one language: a message template of the kind `template`
@@ -205,7 +295,7 @@ live in code docstrings.
     (`LanguageCodeField`), any language parties knows, `zh` included.
     `variables` declares the values a row reads as dotted paths to descriptions,
     at most 50 paths of at most 8 names, checked by `validate_variables`;
-    `sample` holds preview values. The addon renders nothing and ships no rows.
+    `sample` holds preview values.
   - **Shipped defaults and overrides.** Addons ship rows in their `install`
     resources as baselines (`BaselineResource`), which only loads write.
     `MessageTemplate.objects.override(baseline)` starts the deployment's override,
@@ -215,8 +305,8 @@ live in code docstrings.
     time, so the querysets refuse `update()`, `bulk_update()` and `bulk_create()`.
     When a release changes a baseline, its override has an updated default until
     `MessageTemplate.objects.keep_override(override)` keeps its text. Each row
-    reports `is_effective`, `is_overridden` and `has_updated_default`, as fields
-    and as console filters.
+    reports `is_effective`, `is_overridden`, `overrides_default` and
+    `has_updated_default`, as fields and as console filters.
   - **Languages.** `effective_rows(kinds, keys=..., language=..., person=...)` and
     `effective(kind, key, ...)` pick the row a recipient reads: the language asked
     for or the person's languages, then the default language (`LANGUAGE_CODE`'s
@@ -228,11 +318,41 @@ live in code docstrings.
     create, edit and delete the deployment's own rows and overrides and read
     every sample (`messaging_templates/message_template`). The console gets the
     `message_templates` resource and the `override_message_template` and
-    `keep_message_template_override` mutations. They refuse as the framework's
-    actions do: a signed-out caller gets the session's GraphQL error, a caller
-    who may not create or write the override a `PERMISSION_DENIED` GraphQL error,
-    and a row that is not a shipped default (`not_a_baseline`) or overrides none
-    (`no_baseline`) an in-band `ok: false`.
+    `keep_message_template_override` mutations. The resource's insert takes
+    `kind`, `key`, `language` and `name`: `MessageTemplate.objects.create_own`
+    decides `create` on the candidate before any work of its own (a keyed insert
+    is claimed first, as every factory insert is, and a refusal rolls the claim
+    back), refuses a shipped default's identity (`shipped_default`) and an
+    existing one, and seeds the row from its key's content: what that language
+    reads for the key today, else the key's row in another language; only a key
+    with no row starts from the kind's `defaults`.
+    Each row projects `permissions` (`delete`, `preview`, `write`),
+    `carries_message_fields` and, to a reader who may preview it, `backlinks`:
+    the rows naming its kind and key, a read for one record's page. Each verb
+    asks one predicate first (`MessageTemplate.override_refusal()`,
+    `keep_override_refusal()`), and a row projects its answers for the reader as
+    `can_override` and `can_keep_override`. The console's preview returns the
+    rendered `direction` (`MessageTemplateTextDirection`: `RTL` or `LTR`) for
+    the subject, preheader and plain text a page shows outside the mail's frame.
+    The mutations refuse as the framework's actions do: a signed-out caller gets
+    the session's GraphQL error,
+    a caller who may not create or write the override a `PERMISSION_DENIED`
+    GraphQL error, and a row that is not a shipped default (`not_a_baseline`) or
+    overrides none (`no_baseline`) an in-band `ok: false`.
+  - **Console.** The addon's first web fragment, `@angee/messaging-templates`,
+    adds **Message templates** to Settings for whoever holds
+    `messaging_templates.MessageTemplate#preview` (`MessageTemplatesPage`): one
+    library grouped by kind, each row opening in its registered form, the
+    presets `messaging_templates.default-updated` and
+    `messaging_templates.effective`, New over the four insertable fields,
+    Override and Keep override where the record's `can_override` and
+    `can_keep_override` admit the reader, Delete, a notice saying what the row
+    is, a Preview pane of the saved row in the framework's sandboxed message
+    frame with a brand kit select, and a Backlinks group in the record's Links
+    tab for whoever may preview message templates.
+    `angee-messaging-templates` now requires `angee-web`. Upgrade: install the
+    stack's JS dependencies, which links the new fragment, then regenerate the
+    web codegen.
   - **New projects.** A project rendered from the web project template with the
     `full` addons profile lists `angee.messaging_templates` in its `settings.yaml`
     `INSTALLED_APPS`; the default profile does not. The `angee` meta-distribution
