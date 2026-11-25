@@ -98,6 +98,7 @@ from angee.messaging.managers import (
     ThreadManager,
     ThreadNotificationManager,
     normalize_subject,
+    outgoing_subject,
 )
 from angee.messaging.mixins import (
     AudienceMember as AudienceMember,
@@ -1408,7 +1409,7 @@ class Message(
         return ReplyEnvelope(
             addresses=tuple(addresses.items()),
             handle_id=None if addresses else self.sender_id,
-            subject=f"Re: {title}" if title else "",
+            subject=outgoing_subject(f"Re: {title}") if title else "",
             sender=sender,
         )
 

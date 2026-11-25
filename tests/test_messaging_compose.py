@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import email.policy
+import unicodedata
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import timedelta
+from email import message_from_bytes
+from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +35,7 @@ from angee.messaging.backends import (
 from angee.messaging.constants import DELIVER_MESSAGE_TASK
 from angee.messaging.managers import MessageManager, _preview
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient, Thread
+from angee.messaging_integrate_imap.parser import parse_message
 from angee.provenance import context as provenance_context
 from angee.provenance.context import changeset, changeset_model
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
@@ -208,6 +213,78 @@ def test_the_text_part_comes_from_the_text_and_never_from_the_html(desk: Any) ->
     assert types["text"] == ["text/plain"]
     assert types["both"] == ["multipart/alternative", "text/plain", "text/html"]
     assert "text/plain" not in types["html"] and "text/html" in types["html"]
+
+
+def _read_back(raw: bytes) -> str:
+    """The subject a reader's mail library parses out of a message's bytes."""
+
+    return str(message_from_bytes(raw, policy=email.policy.default)["Subject"])
+
+
+def _subjects(channel: Any, message: Any) -> tuple[str, str, str]:
+    """The subject compose stored, the one read back off the wire, and the one a provider's own mail carries.
+
+    A provider's HTTP API takes the subject as a string and writes its own header from it.
+    """
+
+    with system_context(reason="tests.messaging.compose.subject"):
+        stored = message.title()
+        built = channel.backend.email_message(message)
+    provided = EmailMessage(policy=email.policy.default)
+    provided["Subject"] = built.subject
+    return stored, _read_back(built.message().as_bytes()), _read_back(provided.as_bytes())
+
+
+def _one_plain_line(subject: str) -> bool:
+    return not any(unicodedata.category(character) in ("Cc", "Zl", "Zp") for character in subject)
+
+
+ENCODED_WORDS = {
+    "terminated": "Invoice =?utf-8?q?=E2=80=AE?= ready",
+    "unterminated": "x =?utf-8?q?=E2=80=AE y",
+    "mid-word": "abc=?utf-8?b?4oCu?=def",
+    "empty charset": "a =??q?=E2=80=AE?= b",
+    "unknown charset": "a =?x-nope?q?=E2=80=AE?= b",
+    "upper case": "a =?UTF-8?Q?=E2=80=AE?= b",
+    "encoded CR LF": "Hi =?utf-8?q?a=0D=0ABcc=3A?= evil@example.com there",
+    "encoded NUL": "x =?utf-8?q?=00?= y",
+    "escape sequence": "x =?utf-8?q?=1B[31m?= y",
+    "typed control": "Tab\there \x1b[31m red",
+}
+
+
+@pytest.mark.parametrize("subject", ENCODED_WORDS.values(), ids=ENCODED_WORDS)
+def test_a_subject_is_sent_and_read_back_as_it_is_stored(desk: Any, subject: str) -> None:
+    """No encoded word or control character survives into what is stored, sent or read: they are one string."""
+
+    message = Message.objects.compose(channel=desk, to=["r@example.test"], subject=subject, text="t", actor=desk.owner)
+    stored, wire, provided = _subjects(desk, message)
+    assert stored == wire == provided
+    assert _one_plain_line(stored)
+
+
+def test_a_subject_that_opens_no_encoded_word_is_kept_as_typed(desk: Any) -> None:
+    message = Message.objects.compose(
+        channel=desk, to=["r@example.test"], subject="2+2=? and more", text="t", actor=desk.owner,
+    )
+    assert _subjects(desk, message) == ("2+2=? and more",) * 3
+
+
+def test_a_reply_to_a_title_holding_an_encoded_word_is_written_on_one_line(desk: Any) -> None:
+    """A hostile inbound subject never makes its conversation unanswerable, nor reaches a reader decoded."""
+
+    raw = (
+        b"From: Mallory <mallory@example.test>\r\nTo: desk@example.test\r\nMessage-ID: <hostile@example.test>\r\n"
+        b"Subject: =?utf-8?q?=3D=3Futf-8=3Fq=3F=3DE2=3D80=3DAE=3F=3D_and_=3D=3Futf-8=3Fq=3Fa=3D0D=3D0ABcc=3A=3F=3D?="
+        b"\r\n\r\nbody\r\n"
+    )
+    with system_context(reason="tests.messaging.compose.hostile"):
+        (parent,) = Message.objects.ingest([parse_message(raw, mailbox="INBOX", uid=1, uidvalidity=1)], channel=desk)
+        assert "=?utf-8?q?" in parent.thread.display_title
+    reply = Message.objects.compose(parent=parent, text="Answer.", actor=desk.owner)
+    stored, wire, provided = _subjects(desk, reply)
+    assert stored == wire == provided
+    assert stored.startswith("Re: ") and _one_plain_line(stored)
 
 
 @pytest.mark.parametrize(

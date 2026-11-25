@@ -50,7 +50,12 @@ live in code docstrings.
     comment's answered check does not count, a second reply is written. A reply's
     preview is 280 characters, like every message's, and chatter posts and edits
     preview through the same rule as ingest. An HTML-only email is sent without a
-    text part; it was made by stripping the HTML's tags. A recipient row's thread
+    text part; it was made by stripping the HTML's tags. An outgoing subject, typed
+    or derived from a conversation's title, has each control character and line
+    break written as a space and each RFC 2047 encoded-word opener broken (`= ?`),
+    so no mail library, client or provider decodes anything out of it: the subject
+    stored, sent and read back are one string (`outgoing_subject`); a typed line
+    break is still refused. A recipient row's thread
     is its message's, set by the model on insert (`Recipient.save`), which
     refuses a different one. `Message.reply_addresses` keeps only what
     `Handle.is_email_address` accepts, in the form `Handle.email_value` stores. A
