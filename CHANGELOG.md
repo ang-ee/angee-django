@@ -10,6 +10,20 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/refine`: A write's refresh no longer leaves an unanswered first read
+  idle before replacing it. `invalidateAuthoredQueries` cancels such a read, so
+  that a request sent before the write cannot commit after it, and awaited the
+  cancellation before the resend; in between the read was neither answered nor
+  on its way (`isFetching` and `isLoading` false with no data), and a reader
+  that waits for a first answer takes that for one that will not come. A record
+  form's confirmation, which used to come after this refresh, renders in that
+  gap. The cancellation and the resend now happen in one synchronous call: the
+  request is rejected synchronously, so the resend is a new request, and the
+  read is reverted synchronously, so nothing overwrites the resend's state.
+  `useSetAuthoredQueryData` is changed the same way, and cancels nothing when
+  its updater accepts nothing (it left such a read idle with no data). Two
+  writes whose refreshes start within a few microtasks of each other during one
+  unanswered first read now each restart it.
 - `@angee/ui`: A refused save brings the person to its reason. With the
   record's sheet scrolled down to the field being edited, the banner at its
   top was out of view, and focus fell to the page because Save was disabled
