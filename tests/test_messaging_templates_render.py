@@ -2687,6 +2687,12 @@ def test_preview_warnings(plain: Any, kit: Any) -> None:
         TemplateWarningCode.STOP_LINK,
     }
     assert any("spare" in warning.detail for warning in preview.warnings)
+    assert [warning.detail for warning in preview.warnings if warning.code == TemplateWarningCode.PREHEADER] == [
+        "The preheader is missing: an inbox shows the start of the body after the subject instead."]
+    long = _mail("{{ name }}", {"name": "x"}, key="tests.long", preheader="p" * 101, sample={"name": "Ana"})
+    with system_context(reason="tests.messaging_templates.render.preview"):
+        assert [warning.detail for warning in long.preview(kit=kit).warnings
+                if warning.code == TemplateWarningCode.PREHEADER] == ["The preheader is 101 characters long."]
     empty = _mail("{% if name %}{% endif %}", {"name": "x"}, key="tests.empty", sample={"name": ""})
     big = _mail("{{ name }}" * 11, {"name": "x"}, key="tests.big", sample={"name": "x" * 9_999},
                 format="html", text_source="x")

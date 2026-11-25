@@ -597,7 +597,12 @@ class TemplateWalk:
             warnings.append(TemplateWarning(
                 TemplateWarningCode.SUBJECT_LENGTH, f"The subject is {len(rendered.subject)} characters long.",
             ))
-        if carries_message_fields and not 0 < len(rendered.preheader) <= PREHEADER_WARNING_LENGTH:
+        if carries_message_fields and not rendered.preheader:
+            warnings.append(TemplateWarning(
+                TemplateWarningCode.PREHEADER,
+                "The preheader is missing: an inbox shows the start of the body after the subject instead.",
+            ))
+        elif carries_message_fields and len(rendered.preheader) > PREHEADER_WARNING_LENGTH:
             warnings.append(TemplateWarning(
                 TemplateWarningCode.PREHEADER, f"The preheader is {len(rendered.preheader)} characters long.",
             ))
