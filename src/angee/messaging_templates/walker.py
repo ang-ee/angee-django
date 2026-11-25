@@ -279,6 +279,10 @@ class RenderedMessage:
     html: str
     plain_text: str
     language: str
+    direction: str
+    """``"rtl"`` or ``"ltr"``: the direction of the mail's own text, the one the HTML's ``dir`` says, for whoever
+    shows the subject, the preheader or the plain text outside the HTML. Django's bidi answer for the row's language,
+    ``"ltr"`` for a language Django does not know."""
 
 
 class TemplateWarningCode(StrEnum):
@@ -528,10 +532,8 @@ class TemplateWalk:
         language = self.language
         with translation.override(language):
             prepared = self.prepare(values)
-            mail_globals = {
-                "brand": brand_values(kit), "lang": language,
-                "dir": "rtl" if translation.get_language_bidi() else "ltr",
-            }
+            direction = "rtl" if translation.get_language_bidi() else "ltr"
+            mail_globals = {"brand": brand_values(kit), "lang": language, "dir": direction}
             text_engine = self._engine(RowPiece.TEXT, mail_globals)
             html_engine = self._engine(RowPiece.HTML, mail_globals)
             with RenderBudget.for_lines().spend():
@@ -559,6 +561,7 @@ class TemplateWalk:
                 text = text_root.render(text_engine.context(prepared))
         return RenderedMessage(
             subject=subject, preheader=preheader, html=html, plain_text=_plain(text), language=language,
+            direction=direction,
         )
 
     def _engine(self, form: RowPiece, mail_globals: Mapping[str, Any]) -> MessageTemplateEngine:

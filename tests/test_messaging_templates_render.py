@@ -1717,18 +1717,20 @@ def test_an_override_saved_between_two_renders_shows_in_the_second(plain: Any, k
         ("ar", "24 نوفمبر، 2026", "rtl"),
         ("he", None, "rtl"),
         ("fa", None, "rtl"),
+        ("tlh", None, "ltr"),  # a language parties stores and Django does not know: left to right, as the HTML
     ],
 )
 def test_dates_numbers_and_direction_follow_the_rows_language(
     plain: Any, kit: Any, language: str, date: str | None, direction: str,
 ) -> None:
-    """Property 9: each pass runs in the row's language; a date path takes a date or an aware datetime."""
+    """Property 9: each pass runs in the row's language; a date path takes a date or an aware datetime; the
+    rendered message carries the direction its HTML's dir says."""
 
     del plain
     template = _mail("{{ when|date:'DATE_FORMAT' }}|{{ dir }}|{{ ok|yesno }}", {"when": "x", "ok": "x"},
                      language=language, key="tests.dated")
     rendered = _render(template, {"when": datetime.date(2026, 11, 24), "ok": True}, kit)
-    assert rendered.language == language
+    assert (rendered.language, rendered.direction) == (language, direction)
     assert f'dir="{direction}"' in rendered.html and f"|{direction}|" in rendered.plain_text
     if date is not None:
         assert rendered.plain_text.startswith(date)

@@ -13,9 +13,11 @@ live in code docstrings.
 - **Message templates render, on Django's template engine.**
   - **What renders.** `MessageTemplate.render(values, *, kit=None)` returns a
     `RenderedMessage` (`subject`, `preheader`, `html`, `plain_text`,
-    `language`): the subject and preheader on one line each, the HTML body with
-    every value escaped, and the plain-text body rendered from the rows' text
-    forms, never scraped from the HTML. Rows render on a standalone, restricted
+    `language`, and `direction`, the one the HTML's `dir` says, for showing the
+    text outside the HTML): the subject and preheader on one line each, the
+    HTML body with every value escaped, and the plain-text body rendered from
+    the rows' text forms, never scraped from the HTML. Rows render on a
+    standalone, restricted
     Django engine (`MessageTemplateEngine` in `angee.messaging_templates.engine`)
     whose one library allows the tags `if`, `for`, `with`, `comment`, `block`,
     `include`, `extends` and `templatetag` and fourteen filters, `url` among them;
