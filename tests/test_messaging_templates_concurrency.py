@@ -38,7 +38,7 @@ def _keep(pk: Any, admin: Any) -> Any:
         return MessageTemplate.objects.keep_override(MessageTemplate.objects.get(pk=pk))
 
 
-EDITED = f"<main>{_CONTENT}Edited</main>"
+EDITED = f"<div>{_CONTENT}Edited</div>"
 """An edit a save walks: a layout's forms hold the content block."""
 
 
@@ -50,7 +50,7 @@ def _overrides(key: str = "base") -> list[Any]:
 def _release(baseline: Any) -> None:
     with system_context(reason="tests.messaging_templates.concurrency.release"):
         released = MessageTemplate.objects.get(pk=baseline.pk)
-        released.source = "<main>Released</main>"
+        released.source = "<div>Released</div>"
         released.save()
 
 
@@ -76,7 +76,7 @@ def test_the_override_verb_racing_an_insert_of_the_same_row_returns_that_row() -
     )["override_message_template"]
     with ThreadPoolExecutor(max_workers=1) as pool:
         with transaction.atomic():
-            own = _row(source="<main>Inserted first</main>")
+            own = _row(source="<div>Inserted first</div>")
             contender, pid = submit(pool, verb)
             wait_for_lock(pid, contender)
         answer = contender.result(timeout=10)
@@ -88,7 +88,7 @@ def test_the_override_verb_racing_an_insert_of_the_same_row_returns_that_row() -
 def test_keep_and_an_edit_of_the_override_serialise_and_lose_nothing(holder: str) -> None:
     admin = create_platform_admin(f"messaging-templates-race-{holder}")
     baseline = _row(baseline=True)
-    override = _row(source="<main>Ours</main>")
+    override = _row(source="<div>Ours</div>")
     _release(baseline)
 
     def edit() -> Any:
@@ -119,8 +119,8 @@ def test_an_override_and_a_reload_of_its_default_serialise_and_tell_the_truth(ho
     """Reload first: the override copies the new text. Override first: the reload waits, then the default moved."""
 
     admin = create_platform_admin(f"messaging-templates-race-{holder}-first")
-    one = ("base", "layout", "base", "en", "Base", "html", f"<main>{_CONTENT}One</main>", f"{_CONTENT}One")
-    two = ("base", "layout", "base", "en", "Base", "html", f"<main>{_CONTENT}Two</main>", f"{_CONTENT}Two")
+    one = ("base", "layout", "base", "en", "Base", "html", f"<div>{_CONTENT}One</div>", f"{_CONTENT}One")
+    two = ("base", "layout", "base", "en", "Base", "html", f"<div>{_CONTENT}Two</div>", f"{_CONTENT}Two")
     _load(one, headers=_LAYOUT_HEADERS)
     with system_context(reason="tests.messaging_templates.concurrency.read"):
         baseline = MessageTemplate.objects.get(key="base", is_baseline=True)
@@ -135,8 +135,8 @@ def test_an_override_and_a_reload_of_its_default_serialise_and_tell_the_truth(ho
             wait_for_lock(pid, contender)
         contender.result(timeout=10)
     (override,) = _overrides()
-    assert _read(baseline).source == f"<main>{_CONTENT}Two</main>"
+    assert _read(baseline).source == f"<div>{_CONTENT}Two</div>"
     if holder == "reload":
-        assert (override.source, override.has_updated_default) == (f"<main>{_CONTENT}Two</main>", False)
+        assert (override.source, override.has_updated_default) == (f"<div>{_CONTENT}Two</div>", False)
     else:
-        assert (override.source, override.has_updated_default) == (f"<main>{_CONTENT}One</main>", True)
+        assert (override.source, override.has_updated_default) == (f"<div>{_CONTENT}One</div>", True)
