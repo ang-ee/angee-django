@@ -1,0 +1,60 @@
+import { createNamespaceT } from "@angee/ui/i18n";
+
+// Only the keys the page, the form, its notice, its preview and the Backlinks
+// group resolve. What the server words (warnings, refusals, the verbs' outcomes)
+// is shown as it comes; no key here repeats it. No key family is built from a
+// server value.
+export const enMessagingTemplatesMessages: Record<string, string> = {
+  "col.name": "Name",
+  "col.language": "Language",
+  "col.shipped": "Shipped",
+  "col.renders": "Renders",
+  "col.defaultUpdated": "Default updated",
+  "form.identity": "Message template",
+  "form.message": "Message",
+  "form.content": "Content",
+  "form.variables": "Template variables",
+  "form.details": "Details",
+  "form.sample": "Sample values",
+  "field.kind": "Kind",
+  "field.key": "Key",
+  "field.language": "Language",
+  "field.subject": "Subject",
+  "field.preheader": "Preheader",
+  "field.layout": "Layout",
+  "field.format": "Format",
+  "field.source": "Source",
+  "field.textSource": "Plain-text source",
+  "field.variables": "Variables",
+  "field.description": "Description",
+  "field.sample": "Sample",
+  "notice.shipped": "This is a shipped default.",
+  "notice.shippedOverride": "Override it to change it for this deployment.",
+  "notice.overridden": "This is a shipped default. This deployment's override renders instead.",
+  "notice.defaultUpdated": "The shipped default changed since this override started or was last kept.",
+  "notice.keepHint": "Keep override keeps this text.",
+  "notice.deleteNew": "Delete returns this deployment to the new shipped default.",
+  "notice.live": "Saved changes go live for every message at once.",
+  "notice.deleteDefault": "Delete returns this deployment to the shipped default, where there is one.",
+  "action.override": "Override",
+  "action.keepOverride": "Keep override",
+  "tab.preview": "Preview",
+  "preview.kit": "Brand kit",
+  "preview.kitDefault": "Default kit",
+  "preview.saved": "Preview of the saved message template",
+  "preview.fidelity":
+    "Shown in a safe frame that blocks remote content; a mail client may space and size it slightly differently.",
+  "preview.html": "HTML",
+  "preview.text": "Plain text",
+  "preview.format": "Show",
+  "preview.subject": "Subject",
+  "preview.preheader": "Preheader",
+  "preview.frameTitle": "Message preview",
+  "preview.refused": "This message template does not render",
+  "preview.loadError": "The preview could not be loaded.",
+  "backlinks.label": "Backlinks",
+  "backlinks.overridden": "Overridden",
+  "backlinks.loadError": "Backlinks could not be loaded.",
+};
+
+export const useMessagingTemplatesT = createNamespaceT("messaging_templates", enMessagingTemplatesMessages);
