@@ -31,7 +31,7 @@ jobs:
       framework-repository: ${{ github.repository }}
       framework-ref: ${{ github.sha }}
       # Match the bridge dependency artifacts to this framework's manifests.
-      bridges-ref: "cf43cda002b37eb9f9fd2ef886c98a949f9ef02b"
+      bridges-ref: "735baa7d4ddf7e7f02ae792ffa425973295214e1"
       # CI_RUNS_ON (a JSON runs-on value) moves every job to self-hosted runners; a
       # pull request from a fork always runs on GitHub-hosted ones.
       runs-on: ${{ (github.event.pull_request.head.repo.fork && '"ubuntu-latest"') || vars.CI_RUNS_ON || '"ubuntu-latest"' }}
