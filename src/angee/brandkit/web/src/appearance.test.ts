@@ -99,7 +99,6 @@ describe("brandKitOptions: what each kind of host wears", () => {
     expect(tokens.shared).toMatchObject(theme.tokens.shared);
   });
 
-  // The architect's ruling on build options changes this row and the one branch in `brandKitOptions`.
   test("a build that states options keeps its font, radius, density, elevation and logo, and wears the kit's colours", () => {
     const options = brandKitOptions(stock, CLAY, BUILD);
     expect(valueOf(options)).toEqual({ ...CLAY, font: "inter", radius: "soft", density: "compact", elevation: "flat", logo: "brand" });
