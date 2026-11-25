@@ -526,7 +526,9 @@ differs by kind is the kind's handler. See
 **Shipped default / override** — a **shipped default** (a baseline) is a row an
 addon ships in its `install` resources, written only by a resource load. The
 deployment's **override** is its own row with the default's kind, key and
-language; deleting it resets to the default. See
+language (`overrides_default`); deleting it resets to the default. A row says
+whether its reader may start or keep an override (`can_override`,
+`can_keep_override`), as the verbs decide. See
 [shipped defaults, overrides and reset](../src/angee/messaging_templates/README.md#shipped-defaults-overrides-and-reset).
 
 **Backlinks (message templates)** — the rows, in any language, naming a message

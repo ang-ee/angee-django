@@ -249,8 +249,9 @@ can race that key's delete; the render judges the result. A baseline a later
 release no longer ships stays, and stays effective.
 
 Each row reports `is_effective` (what renders for its kind, key and language),
-`is_overridden` (a baseline with an override) and `has_updated_default`, as fields
-and as console filters.
+`is_overridden` (a baseline with an override), `overrides_default` (the
+deployment's override of a baseline; a deployment's own row has none) and
+`has_updated_default`, as fields and as console filters.
 
 ## Access
 
@@ -292,6 +293,13 @@ actions do: a signed-out caller gets the session's GraphQL error, and a caller
 who may not create or write the override a `PERMISSION_DENIED` GraphQL error; an
 unreadable or missing row, a row that is not a shipped default (`not_a_baseline`)
 and an override of none (`no_baseline`) come back in band as `ok: false`.
+Each verb first asks one predicate on the row,
+`MessageTemplate.override_refusal()` and `keep_override_refusal()`, and raises
+what it answers; a row projects the same answers for its reader as
+`can_override` and `can_keep_override`, so a page offers a verb exactly where it
+runs. `can_keep_override` rides the list's statement; `can_override` decides the
+reader's `create` on the override for each row, so it is a read for one record's
+page.
 
 `message_template_preview(template, brand_kit)` returns a row's preview, in the
 named kit or the default one, to a caller who may preview it. It refuses as the

@@ -109,8 +109,8 @@ live in code docstrings.
     time, so the querysets refuse `update()`, `bulk_update()` and `bulk_create()`.
     When a release changes a baseline, its override has an updated default until
     `MessageTemplate.objects.keep_override(override)` keeps its text. Each row
-    reports `is_effective`, `is_overridden` and `has_updated_default`, as fields
-    and as console filters.
+    reports `is_effective`, `is_overridden`, `overrides_default` and
+    `has_updated_default`, as fields and as console filters.
   - **Languages.** `effective_rows(kinds, keys=..., language=..., person=...)` and
     `effective(kind, key, ...)` pick the row a recipient reads: the language asked
     for or the person's languages, then the default language (`LANGUAGE_CODE`'s
@@ -130,11 +130,14 @@ live in code docstrings.
     another language; only a key with no row starts from the kind's `defaults`.
     Each row projects `permissions` (`delete`, `preview`, `write`),
     `carries_message_fields` and, to a reader who may preview it, `backlinks`:
-    the rows naming its kind and key, a read for one record's page. The mutations
-    refuse as the framework's actions do: a signed-out caller gets the session's
-    GraphQL error, a caller who may not create or write the override a
-    `PERMISSION_DENIED` GraphQL error, and a row that is not a shipped default
-    (`not_a_baseline`) or overrides none (`no_baseline`) an in-band `ok: false`.
+    the rows naming its kind and key, a read for one record's page. Each verb
+    asks one predicate first (`MessageTemplate.override_refusal()`,
+    `keep_override_refusal()`), and a row projects its answers for the reader as
+    `can_override` and `can_keep_override`. The mutations refuse as the
+    framework's actions do: a signed-out caller gets the session's GraphQL error,
+    a caller who may not create or write the override a `PERMISSION_DENIED`
+    GraphQL error, and a row that is not a shipped default (`not_a_baseline`) or
+    overrides none (`no_baseline`) an in-band `ok: false`.
   - **New projects.** A project rendered from the web project template with the
     `full` addons profile lists `angee.messaging_templates` in its `settings.yaml`
     `INSTALLED_APPS`; the default profile does not. The `angee` meta-distribution
