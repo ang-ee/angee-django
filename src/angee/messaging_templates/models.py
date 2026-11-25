@@ -70,7 +70,6 @@ from angee.messaging_templates.walker import (
     TemplateWarning,
     TemplateWarningCode,
     in_layout,
-    included_names,
 )
 from angee.parties.fields import LanguageCodeField, normalize_language_code
 from angee.provenance.contrib.angee.history import HistoryMixin
@@ -222,14 +221,14 @@ class IncludedHandler(MessageTemplateKindHandler):
         """Return the rows among ``rows`` whose compiled forms include this kind's row named ``key``.
 
         Found at delete time: the rows whose source or plain-text form holds the
-        name, then each confirmed by compiling it, remembered by content
-        (:func:`~angee.messaging_templates.walker.included_names`). A row that
-        does not compile names nothing.
+        name, then each confirmed by compiling it. A row that does not compile
+        names nothing.
         """
 
         name = self.template_name(key)
+        walker = TemplateWalker()
         candidates = rows.filter(models.Q(source__contains=name) | models.Q(text_source__contains=name))
-        return rows.filter(pk__in=[row.pk for row in candidates if name in included_names(row)])
+        return rows.filter(pk__in=[row.pk for row in candidates if name in walker.includes(row)])
 
 
 class BlockHandler(IncludedHandler):

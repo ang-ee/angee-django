@@ -118,6 +118,9 @@ PREHEADER_WARNING_LENGTH = 100
 SIZE_WARNING_BYTES = 104_448
 """Gmail clips a message's HTML past about 102 KB."""
 
+FLOAT_FILTERS = frozenset({"floatformat", "pluralize"})
+"""The filters that read their input as a float: a number no float holds raises in them, and nowhere else."""
+
 FORLOOP_KEYS = frozenset({"counter", "counter0", "revcounter", "revcounter0", "first", "last", "length"})
 FORLOOP_PATHS = frozenset({("forloop",), *(("forloop", key) for key in FORLOOP_KEYS)})
 CONSTANTS = frozenset({"True", "False", "None"})
@@ -357,7 +360,8 @@ class TemplateWalk:
     ``rows`` and ``forms`` are keyed by template name; ``declared`` is ``D``;
     ``required`` the paths a render's values must hold, not null, in every list
     item present; ``date_paths`` the paths read through ``date``, each with the
-    formats it is printed in; ``reads`` every path of ``D`` some row reads.
+    formats it is printed in; ``float_paths`` the paths a filter reads as a float
+    (:data:`FLOAT_FILTERS`); ``reads`` every path of ``D`` some row reads.
     """
 
     root: WalkedRow
@@ -368,6 +372,7 @@ class TemplateWalk:
     declared: dict[str, str] = field(default_factory=dict)
     required: set[Path] = field(default_factory=set)
     date_paths: dict[Path, set[str]] = field(default_factory=dict)
+    float_paths: set[Path] = field(default_factory=set)
     reads: set[Path] = field(default_factory=set)
     includes: set[str] = field(default_factory=set)
     refusals: list[str] = field(default_factory=list)
@@ -395,7 +400,8 @@ class TemplateWalk:
            surrogate).
         2. Keys outside ``D`` dropped at every level and in every list item; a
            present inner segment is an object, a ``*`` parent a list, a leaf a
-           string, number, boolean or null, a number one a float holds.
+           string, number, boolean or null; at a :attr:`float_paths` path, a
+           number one a float holds.
         3. Each :attr:`required` path present and not null, in every present item.
         4. Every absent or null declared segment filled: an object with ``{}``, a
            list with ``[]``, a leaf with ``""``; so every lookup lands on a key.
@@ -439,6 +445,11 @@ class TemplateWalk:
         if errors:
             raise _refused(errors, "invalid_values")
         filled = {key: _filled(shaped.get(key), subtree) for key, subtree in tree.items()}
+        for path in sorted(self.float_paths):
+            errors.extend(f"{_dotted(path)} is not a number a float holds." for number in _at(filled, path)
+                          if isinstance(number, (int, float)) and not isinstance(number, bool) and not _finite(number))
+        if errors:
+            raise _refused(errors, "invalid_values")
         printer = _DatePrinter(self.date_paths)
         for path in sorted(self.date_paths):
             _parse_dates(filled, path, path, printer, errors)
@@ -601,9 +612,6 @@ def _shaped(value: Any, tree: dict[str, Any], here: Path, errors: list[str]) -> 
     if value is None:
         return None
     if not tree:
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and not _finite(value):
-            errors.append(f"{_dotted(here)} is not a number a float holds.")
-            return None
         if isinstance(value, (str, int, float, bool)):
             return value
         errors.append(f"{_dotted(here)} is a string, a number, true, false or null.")
@@ -626,6 +634,20 @@ def _finite(number: float) -> bool:
         return math.isfinite(float(number))
     except OverflowError:
         return False
+
+
+def _at(value: Any, path: Path) -> Iterator[Any]:
+    """Every value ``path`` reaches in ``value``, a ``*`` reaching each item of a list."""
+
+    if not path:
+        yield value
+        return
+    head, rest = path[0], path[1:]
+    if head == "*" and isinstance(value, list):
+        for item in value:
+            yield from _at(item, rest)
+    elif isinstance(value, dict) and head in value:
+        yield from _at(value[head], rest)
 
 
 def _lacks(value: Any, path: Path) -> bool:
@@ -1227,29 +1249,6 @@ def _date_format(expression: FilterExpression) -> str:
     return str(argument.literal if lookup else argument)
 
 
-INCLUDED_MEMO_LIMIT = 1_024
-"""How many rows' include targets :func:`included_names` remembers before it starts again."""
-
-_INCLUDED: dict[tuple[str, str], frozenset[str]] = {}
-
-
-def included_names(row: WalkedRow) -> frozenset[str]:
-    """The template names ``row``'s compiled forms include, remembered by its name and content hash.
-
-    What a row includes depends on its content alone, so the delete preview and
-    the ``pre_delete`` receiver of one confirmed delete, which each judge the
-    rows naming a key, share the check; a changed row has another hash.
-    """
-
-    key = (row.handler.template_name(row.key), row.compute_content_hash())
-    names = _INCLUDED.get(key)
-    if names is None:
-        if len(_INCLUDED) >= INCLUDED_MEMO_LIMIT:
-            _INCLUDED.clear()
-        names = _INCLUDED[key] = TemplateWalker().includes(row)
-    return names
-
-
 def _frame(name: str, row: WalkedRow, form: RowPiece, *, top: bool, scope: Mapping[str, _Binding] | None = None,
            loops: int = 0, includes: tuple[str, ...] = ()) -> _Frame:
     variables = row.variables if isinstance(row.variables, dict) else {}
@@ -1445,6 +1444,8 @@ class _TreeWalker:
                     self.refuse(frame, f"{expression.token} reads {binding.local[0]}, which it was not passed")
                 elif binding.effective is not None:
                     self.walk.required.add(binding.effective)
+            if FLOAT_FILTERS.intersection(names) and binding.effective is not None:
+                self.walk.float_paths.add(binding.effective)
             if names[:1] == ["date"] and binding.effective is not None:
                 self.walk.date_paths.setdefault(binding.effective, set()).add(_date_format(expression))
         if names and use != ReadUse.SEQUENCE:

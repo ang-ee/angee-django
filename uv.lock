@@ -1268,7 +1268,7 @@ requires-dist = [
     { name = "angee-parties", editable = "src/angee/parties" },
     { name = "angee-provenance", editable = "src/angee/provenance" },
     { name = "angee-resources", editable = "src/angee/resources" },
-    { name = "markdown-it-py", specifier = ">=4.2" },
+    { name = "markdown-it-py", specifier = ">=4.2,<5" },
 ]
 
 [[package]]

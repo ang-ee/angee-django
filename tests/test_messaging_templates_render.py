@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import html5lib
+import markdown_it
 import pytest
 import yaml
 from asgiref.sync import sync_to_async
@@ -30,6 +31,10 @@ from django.utils import timezone, translation
 from django.utils.safestring import SafeString, mark_safe
 from hypothesis import HealthCheck, event, example, given, settings
 from hypothesis import strategies as st
+from markdown_it import MarkdownIt
+from markdown_it.helpers import parseLinkLabel
+from markdown_it.renderer import RendererHTML
+from markdown_it.rules_inline import StateInline
 from rebac import system_context
 
 from angee.base.models.identity import public_id_of
@@ -1306,6 +1311,49 @@ def test_dates_numbers_and_direction_follow_the_rows_language(
         assert rendered.plain_text.startswith(date)
 
 
+def test_cheap_filters_spend_a_constant_and_a_raw_number_is_text(plain: Any, kit: Any) -> None:
+    """A subject and preheader showing snippets of one long value fit their budget: default, length and yesno read
+    nothing. A number too large for a float is refused only where floatformat or pluralize reads it."""
+
+    del plain
+    message = "word " * 2_000
+    snippets = _mail(
+        "Body.", {"name": "x", "message": "x"}, key="tests.snippets",
+        subject="{{ name }}: {{ message|default:''|truncatechars:40 }}{% if message|length > 40 %}!{% endif %}",
+        preheader="{{ message|default:''|truncatechars:90 }}",
+    )
+    rendered = _render(snippets, {"name": "Ana", "message": message}, kit)
+    assert rendered.subject.startswith("Ana: word") and rendered.subject.endswith("!")
+    raw = _mail("Order {{ number }}.", {"number": "x"}, key="tests.huge")
+    for number in (2 ** 60, 10 ** 308, 10 ** 309, float("inf")):
+        assert _render(raw, {"number": number}, kit).plain_text.startswith("Order ")
+
+
+def test_the_markdown_pass_reads_internals_markdown_it_still_has() -> None:
+    """The guard a markdown-it-py upgrade runs: the manifest caps it below 5, and these are what the pass reads."""
+
+    assert markdown_it.__version__.split(".")[0] == "4"
+    assert str(inspect.signature(parseLinkLabel)) == (
+        "(state: markdown_it.rules_inline.state_inline.StateInline, start: int, disableNested: bool = False) -> int"
+    )
+    state = StateInline("x", MarkdownIt(), {}, [])
+    for name in ("src", "pos", "posMax", "env", "md", "tokens"):
+        assert hasattr(state, name), name
+    assert list(inspect.signature(StateInline.push).parameters) == ["self", "ttype", "tag", "nesting"]
+    assert list(inspect.signature(RendererHTML.renderToken).parameters) == ["self", "tokens", "idx", "options", "env"]
+    parser = MarkdownIt("commonmark")
+    for method in ("normalizeLink", "validateLink", "add_render_rule"):
+        assert callable(getattr(parser, method)), method
+    assert callable(parser.inline.ruler.before) and callable(parser.core.ruler.push)
+    tokens = parser.parse("# Title\n\n[a](https://example.test/) **b**\n")
+    assert [token.type for token in tokens] == [
+        "heading_open", "inline", "heading_close", "paragraph_open", "inline", "paragraph_close"]
+    for name in ("type", "tag", "content", "info", "attrs", "children", "hidden", "map", "nesting"):
+        assert hasattr(tokens[4], name), name
+    assert [child.type for child in tokens[4].children or ()] == [
+        "link_open", "text", "link_close", "text", "strong_open", "text", "strong_close", "text"]
+
+
 def test_only_a_validation_error_leaves_render_and_preview(plain: Any, kit: Any) -> None:
     """Django review 2 (a3, a2, q7, q10): values the walk admits that Django's filters would raise on are refused,
     naming the path; a bare date printed with a time takes an aware datetime; preview reports the refusal."""
@@ -2023,8 +2071,8 @@ def test_deleting_an_included_block_or_part_is_refused_while_its_key_would_stop_
         MessageTemplate.objects.get(key="used", language="es").delete()
 
 
-def test_a_delete_checks_each_row_naming_its_key_once(plain: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fix 6: the delete preview and the pre_delete receiver share each candidate's include check."""
+def test_a_delete_checks_the_rows_naming_its_key_each_time(plain: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The delete preview and the pre_delete receiver each check the rows naming a key: no state outlives a call."""
 
     del plain
     part = _row("part", "shared", source="Shared.")
@@ -2034,10 +2082,9 @@ def test_a_delete_checks_each_row_naming_its_key_once(plain: Any, monkeypatch: p
     _recording(monkeypatch, TemplateWalker, "_check", lambda walker, row, name: checked.append(name))
     with system_context(reason="tests.messaging_templates.render.delete"):
         first = MessageTemplate.objects.get(pk=part.pk).delete_blocker()
-        held = len(checked)
         second = MessageTemplate.objects.get(pk=part.pk).delete_blocker()
     assert first is not None and first == second
-    assert held <= 3 and len(checked) == held
+    assert len(checked) == 6
 
 
 def test_a_load_reports_what_a_deployment_row_breaks_and_completes(

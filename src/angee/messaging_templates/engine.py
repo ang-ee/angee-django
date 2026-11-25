@@ -63,7 +63,15 @@ URL_INPUT_LIMIT = 2_048
 """The longest value :func:`url` reads; a longer one gives no link."""
 
 FILTER_CHARGE = 100
-"""What a filter call charges a pass's ``filter_input`` besides the length of a string it reads."""
+"""What a filter call charges a pass's ``filter_input``, besides the length of a string a reading filter reads."""
+
+INPUT_READING_FILTERS = frozenset({
+    "upper", "lower", "capfirst", "title", "truncatechars", "truncatewords", "linebreaksbr", "floatformat",
+    "pluralize", "url",
+})
+"""The filters whose work grows with their input: they copy, scan or parse the string they read, so each call also
+charges its length. ``default``, ``length`` and ``yesno`` hand on or test their input, and ``date`` reads a date, so
+they charge :data:`FILTER_CHARGE` alone."""
 
 LINE_BUDGET_SHARE = 10
 """The pass rendering a subject and a preheader spends this fraction of a body pass's budget: two lines of at
@@ -256,12 +264,15 @@ register.tag("block", loader_tags.do_block)
 register.tag("templatetag", defaulttags.templatetag)
 
 
-def _charged(function: Callable[..., Any]) -> Callable[..., Any]:
-    """Wrap a filter so each call charges the pass's budget; its flags and signature stay Django's."""
+def _charged(name: str, function: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap the filter ``name`` so each call charges the pass's budget; its flags and signature stay Django's."""
+
+    reads_input = name in INPUT_READING_FILTERS
 
     @functools.wraps(function)
     def charged(value: Any, *args: Any, **kwargs: Any) -> Any:
-        RenderBudget.current().charge(filter_input=FILTER_CHARGE + (len(value) if isinstance(value, str) else 0))
+        length = len(value) if reads_input and isinstance(value, str) else 0
+        RenderBudget.current().charge(filter_input=FILTER_CHARGE + length)
         return function(value, *args, **kwargs)
 
     return charged
@@ -293,8 +304,8 @@ def url(value: Any) -> str:
 
 for _name in ALLOWED_FILTERS[:-1]:
     # No flags: Library.filter would set them on Django's own function, which every engine shares.
-    register.filter(_name, _charged(defaultfilters.register.filters[_name]))
-register.filter("url", _charged(url), is_safe=False)
+    register.filter(_name, _charged(_name, defaultfilters.register.filters[_name]))
+register.filter("url", _charged("url", url), is_safe=False)
 
 
 def filter_names(expression: FilterExpression) -> list[str]:
