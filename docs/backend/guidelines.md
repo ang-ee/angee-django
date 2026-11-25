@@ -1670,6 +1670,9 @@ retains its native routing contract.
   the complete ordered domain lock set; it must not consume groups or write rows.
   `AngeeResource.resolve_existing` resolves declared targets and retained ledgers
   through the same native instance loader; preflights compose this public owner.
+  A row removed from an addon's files keeps its ledger row and its record; its xref
+  stays bound to that record ([the loader](../../src/angee/resources/loader.py)), so a
+  removed xref is never reused for a different record.
   `Resource.objects.load_xref` imports one declared dotted xref through that
   pipeline, preserving widgets, the demo-tier guard, and caller authorization
   before updating existing targets and on unchanged replays. It does not import
