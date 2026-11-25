@@ -57,9 +57,11 @@ from angee.base.fields.state import StateField
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.locks import ImmutableFieldsMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
+from angee.base.prefetch import InstancePrefetch
 from angee.base.querysets import ClosedUpdateQuerySet
 from angee.base.serialization import canonical_json_sha256
 from angee.brandkit.models import BrandKit
+from angee.graphql.capabilities import held_permissions
 from angee.messaging_templates.rendering import MessageTemplateFormat, validate_variables
 from angee.messaging_templates.resources import MessageTemplateResource
 from angee.messaging_templates.walker import (
@@ -173,11 +175,14 @@ class MessageTemplateKindHandler:
         del row
         return form
 
-    def naming_rows(self, rows: models.QuerySet[Any], key: str) -> models.QuerySet[Any]:
-        """Return the rows among ``rows``, in any language, that name ``key`` as a row of this kind."""
+    def naming_rows(self, rows: models.QuerySet[Any], keys: Iterable[str]) -> dict[str, list[Any]]:
+        """Return the rows among ``rows``, in any language, naming each of ``keys`` as a row of this kind, by key.
 
-        del key
-        return rows.none()
+        One read answers every key; a key nothing names is absent.
+        """
+
+        del rows, keys
+        return {}
 
 
 class LayoutHandler(MessageTemplateKindHandler):
@@ -189,10 +194,13 @@ class LayoutHandler(MessageTemplateKindHandler):
     writes_document = True
     preview_frame = LAYOUT_PREVIEW
 
-    def naming_rows(self, rows: models.QuerySet[Any], key: str) -> models.QuerySet[Any]:
-        """Return the rows whose ``layout`` is ``key``: only templates fill the column."""
+    def naming_rows(self, rows: models.QuerySet[Any], keys: Iterable[str]) -> dict[str, list[Any]]:
+        """Return, for each of ``keys``, the rows whose ``layout`` is it, in one read; only templates fill it."""
 
-        return rows.filter(layout=key)
+        named: dict[str, list[Any]] = {}
+        for row in rows.filter(layout__in=[*keys]).annotate(_backlink_layout=models.F("layout")):
+            named.setdefault(row._backlink_layout, []).append(row)
+        return named
 
 
 class TemplateHandler(MessageTemplateKindHandler):
@@ -217,18 +225,27 @@ class IncludedHandler(MessageTemplateKindHandler):
 
     includable = True
 
-    def naming_rows(self, rows: models.QuerySet[Any], key: str) -> models.QuerySet[Any]:
-        """Return the rows among ``rows`` whose compiled forms include this kind's row named ``key``.
+    def naming_rows(self, rows: models.QuerySet[Any], keys: Iterable[str]) -> dict[str, list[Any]]:
+        """Return, for each of ``keys``, the rows among ``rows`` whose compiled forms include this kind's row of it.
 
-        Found at delete time: the rows whose source or plain-text form holds the
-        name, then each confirmed by compiling it. A row that does not compile
-        names nothing.
+        One read of the rows whose source or plain-text form holds one of the
+        names, with every column a check reads whatever ``rows`` defers; then one
+        walker checks each of them once (:meth:`TemplateWalker.includes`). A row
+        that does not compile names nothing.
         """
 
-        name = self.template_name(key)
+        names = {self.template_name(key): key for key in keys}
+        if not names:
+            return {}
+        holding = models.Q()
+        for name in names:
+            holding |= models.Q(source__contains=name) | models.Q(text_source__contains=name)
         walker = TemplateWalker()
-        candidates = rows.filter(models.Q(source__contains=name) | models.Q(text_source__contains=name))
-        return rows.filter(pk__in=[row.pk for row in candidates if name in walker.includes(row)])
+        named: dict[str, list[Any]] = {}
+        for row in rows.defer(None).filter(holding):
+            for name in names.keys() & walker.includes(row):
+                named.setdefault(names[name], []).append(row)
+        return named
 
 
 class BlockHandler(IncludedHandler):
@@ -519,6 +536,34 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
             return locked
 
 
+class _Backlinks(InstancePrefetch):
+    """The rows naming each listed row's kind and key, read once per kind for the rows the reader may preview.
+
+    The rows of one kind and key share one answer, ``((kind, key), rows)``,
+    whatever their language: what names a key names each of its rows. A row
+    naming several listed keys sits in each of their answers, and nothing is
+    copied. A row the reader may not preview
+    (:func:`~angee.graphql.capabilities.held_permissions`) gets ``None`` and
+    causes no read, as does a row nothing names.
+    """
+
+    def related(
+        self, instances: list[Any], queryset: models.QuerySet[Any],
+    ) -> tuple[list[tuple[tuple[str, str], list[Any]]], Callable[[Any], object], Callable[[Any], object]]:
+        identities = {
+            row.pk: (str(row.kind), row.key) for row in instances if "preview" in held_permissions(row, ("preview",))
+        }
+        keys: dict[str, set[str]] = {}
+        for kind, key in identities.values():
+            keys.setdefault(kind, set()).add(key)
+        answers = [
+            ((kind, key), rows)
+            for kind in sorted(keys)
+            for key, rows in MessageTemplateKind(kind).handler.naming_rows(queryset, sorted(keys[kind])).items()
+        ]
+        return answers, lambda answer: answer[0], lambda row: identities.get(row.pk)
+
+
 class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """One message template: a layout, template, block or part, for one key and one language."""
 
@@ -571,6 +616,21 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
     hasura_filter_expressions: ClassVar[Mapping[str, Callable[[models.QuerySet[Any]], BaseExpression]]] = (
         MessageTemplateQuerySet.row_fact_expressions
     )
+
+    _backlinks = _Backlinks()
+
+    @classmethod
+    def backlinks_prefetch(cls, queryset: models.QuerySet[Any], *, to_attr: str) -> models.Prefetch:
+        """Batch, through the supplied scope, the rows naming each listed row's kind and key into ``to_attr``.
+
+        Each listed row gets ``((kind, key), rows)``, or ``None`` when its reader
+        may not preview it or nothing names its key (:class:`_Backlinks`). Select
+        ``kind`` and ``key`` on the requesting rows and project ``preview`` on
+        them; the supplied queryset owns the reader and the hints of the rows it
+        returns, and the columns a check reads are loaded whatever it defers.
+        """
+
+        return models.Prefetch("_backlinks", queryset=queryset, to_attr=to_attr)
 
     class Meta:
         """Django model options for a message template."""
@@ -837,7 +897,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
 
         del cascaded
         rows = type(self).system_queryset()
-        if not self.handler.naming_rows(rows, self.key).exists():
+        if not self.handler.naming_rows(rows, [self.key]):
             return None
         if rows.exclude(pk=self.pk).resolves(self.kind, self.key):
             return None

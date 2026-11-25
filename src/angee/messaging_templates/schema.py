@@ -20,15 +20,20 @@ and a reader who may not preview the row a ``PERMISSION_DENIED`` GraphQL error.
 
 from __future__ import annotations
 
+from typing import cast
+
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.db.models import Prefetch
 from django.db.models.expressions import BaseExpression
 from strawberry import auto
 from strawberry.scalars import JSON
+from strawberry_django.optimizer import optimize
 
+from angee.base.prefetch import prefetched
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target, session_user
-from angee.graphql.capabilities import permissions_field
+from angee.graphql.capabilities import PermissionsExtension, held_permissions, permissions_field
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
@@ -49,6 +54,15 @@ def _row_fact(name: str) -> BaseExpression:
     """Build one row fact for the list's annotation, from the queryset's one mapping of them."""
 
     return MessageTemplateQuerySet.row_fact_expressions[name](MessageTemplate._base_manager.all())
+
+
+_BACKLINKS = "_messaging_templates_backlinks"
+
+
+def _backlinks_prefetch(info: strawberry.Info) -> Prefetch:
+    """Batch the rows naming each listed row's kind and key, read with the nested selection's native hints."""
+
+    return MessageTemplate.backlinks_prefetch(optimize(MessageTemplate.objects.all(), info), to_attr=_BACKLINKS)
 
 
 @strawberry_django.type(MessageTemplate)
@@ -81,6 +95,20 @@ class MessageTemplateType(AngeeNode):
         """Whether rows of this kind fill ``subject``, ``preheader`` and ``layout``; the others leave them empty."""
 
         return parent.handler.carries_message_fields
+
+    @strawberry_django.field(
+        only=["kind", "key"], prefetch_related=[_backlinks_prefetch], extensions=[PermissionsExtension(("preview",))],
+    )
+    def backlinks(
+        parent: strawberry.Parent[MessageTemplateModel], info: strawberry.Info,
+    ) -> list[MessageTemplateType] | None:
+        """The rows, in any language, that name this row's kind and key: a template its layout, any row a block or
+        part it includes. Null for a reader who may not preview this row."""
+
+        if "preview" not in held_permissions(parent, ("preview",)):
+            return None
+        answer = prefetched(parent, _BACKLINKS, lambda: _backlinks_prefetch(info))
+        return cast("list[MessageTemplateType]", answer[1] if answer is not None else [])
 
     @strawberry_django.field(annotate={"_is_effective": lambda info: _row_fact("is_effective")})
     def is_effective(parent: strawberry.Parent[MessageTemplateModel]) -> bool:
