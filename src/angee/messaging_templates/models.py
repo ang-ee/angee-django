@@ -99,6 +99,9 @@ def _fallback_order(language: str) -> tuple[bool, str]:
 CONTENT_HASH_FIELDS = ("kind", "format", "subject", "preheader", "source", "text_source", "layout", "variables")
 """The columns ``content_hash`` fingerprints: what a row is and renders, not what it is called."""
 
+TEXT_COLUMNS = ("subject", "preheader", "source", "text_source")
+"""The columns a row's text is written in, whose line endings :meth:`MessageTemplate.clean` makes newlines."""
+
 _KEY = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*\Z")
 """Anchored, since ``RegexValidator`` searches; ``\\Z`` refuses the trailing newline ``$`` admits."""
 
@@ -881,17 +884,25 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
     def clean(self) -> None:
         """Refuse what the columns' own validators and the constraints cannot see.
 
+        First the text columns' line endings become newlines, so text pasted with
+        carriage returns has the content hash of the same text written with newlines.
         A template's layout that does not resolve (:meth:`MessageTemplateQuerySet.resolves`),
         judged through the acting reader's scope and only when the layout is new
         or changed, so a later change of the default language never refuses an
         edit of the rest of the row; ``variables`` or ``sample`` that is not an
-        object. Then, when what the row renders is new or changed (its content
-        hash differs from the stored row's), :meth:`validate_source`, through the
+        object. Then, when the columns a walk reads hold what their own validators
+        admit (:meth:`_walkable`, judged before the row is hashed) and what the row
+        renders is new or changed (its content hash differs from the stored
+        row's), :meth:`validate_source`, through the
         same scope: an edit of only the name, the description or the sample walks
         nothing.
         """
 
         super().clean()
+        for column in TEXT_COLUMNS:
+            text = getattr(self, column)
+            if isinstance(text, str) and "\r" in text:
+                setattr(self, column, text.replace("\r\n", "\n").replace("\r", "\n"))
         errors: dict[str, str] = {}
         stored_layout, stored_hash = (None, None) if self._state.adding else (
             type(self).system_queryset().filter(pk=self.pk).values_list("layout", "content_hash").first()
@@ -907,7 +918,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
                 errors[field] = "Give an object."
         if errors:
             raise ValidationError(errors)
-        if stored_hash != self.compute_content_hash() and self._walkable():
+        if self._walkable() and stored_hash != self.compute_content_hash():
             self.validate_source()
 
     def _walkable(self) -> bool:
