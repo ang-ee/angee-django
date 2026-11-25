@@ -246,7 +246,7 @@ fragment MessageReaderFields on MessageType {
   title preview sent_at created_at starred
   sender { ...MessageSenderFields }
   parent { ...MessageReplyFields }
-  participants { id role handle { ...MessageSenderFields } }
+  recipients { id role handle { ...MessageSenderFields } }
   parts { ...MessagePartFields }
 }
 """

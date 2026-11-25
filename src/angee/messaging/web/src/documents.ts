@@ -143,7 +143,7 @@ export const MessageReaderFields = graphql(`
     starred
     sender { ...MessageSenderFields }
     parent { ...MessageReplyFields }
-    participants {
+    recipients {
       id
       role
       handle { ...MessageSenderFields }

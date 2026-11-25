@@ -73,10 +73,10 @@ from angee.messaging.testing.models import (
     MessageSubtype,
     Organization,
     Part,
-    Participant,
     Party,
     Person,
     Reaction,
+    Recipient,
     Thread,
     ThreadAttachment,
     ThreadFollower,
@@ -2083,7 +2083,7 @@ def test_ingest_dedup_is_channel_scoped(channel: Any) -> None:
     assert thread.message_count == 1
 
 
-def test_group_ingest_resolves_visibility_and_accumulates_unique_participants(channel: Any) -> None:
+def test_group_ingest_resolves_visibility_and_accumulates_unique_recipients(channel: Any) -> None:
     """GROUP ingest keeps one thread while each message contributes its envelope."""
 
     alice = ParsedHandle(platform="whatsapp", value="+15550001", display_name="Alice")
@@ -2123,10 +2123,10 @@ def test_group_ingest_resolves_visibility_and_accumulates_unique_participants(ch
     assert thread.modality == Thread.Modality.GROUP
     assert thread.visibility == Thread.Visibility.RESTRICTED
     assert {message.thread_id for message in landed} == {thread.pk}
-    # The sender is the message's own; the participant rows are its recipients.
+    # The sender is the message's own; the recipient rows are the rest of its envelope.
     assert [message.sender.value for message in landed] == ["+15550001", "+15550003"]
     assert list(
-        Participant._base_manager.filter(thread=thread)
+        Recipient._base_manager.filter(thread=thread)
         .order_by("message__external_id", "role", "handle__value")
         .values_list("message__external_id", "role", "handle__value")
     ) == [
@@ -2156,13 +2156,13 @@ def test_group_ingest_resolves_visibility_and_accumulates_unique_participants(ch
     assert thread.modality == Thread.Modality.GROUP
     assert thread.visibility == Thread.Visibility.RESTRICTED
 
-    duplicate = Participant._base_manager.get(
+    duplicate = Recipient._base_manager.get(
         message=landed[0],
-        role=Participant.ParticipantRole.TO,
+        role=Recipient.RecipientRole.TO,
     )
     with system_context(reason="test group messaging constraints"):
         with pytest.raises(IntegrityError), transaction.atomic():
-            Participant._base_manager.create(
+            Recipient._base_manager.create(
                 message=landed[0],
                 thread=thread,
                 handle=duplicate.handle,
@@ -3228,12 +3228,8 @@ def test_handle_upsert_converges_a_value_collision_on_the_external_id_refresh_pa
     assert lid.external_id == "113352894324870@lid"
 
 
-@pytest.mark.parametrize("from_rows", [False, True], ids=["sender", "sender-and-from-rows"])
-def test_conversation_labels_name_untitled_threads_by_their_people(channel: Any, from_rows: bool) -> None:
-    """Untitled chats read as who they are with; outbound senders are the account holder.
-
-    People are read from ``Message.sender``: a ``from`` row repeating it never counts a turn twice.
-    """
+def test_conversation_labels_name_untitled_threads_by_their_people(channel: Any) -> None:
+    """Untitled chats read as who they are with, from ``Message.sender``; outbound senders are the account holder."""
 
     def said(external_id: str, thread: ParsedThread, name: str, *, outbound: bool = False) -> ParsedMessage:
         sender = ParsedHandle(platform="email", value=f"{name.lower()}@example.com", display_name=name)
@@ -3264,12 +3260,6 @@ def test_conversation_labels_name_untitled_threads_by_their_people(channel: Any,
         ],
         channel=channel,
     )
-    if from_rows:
-        with system_context(reason="test conversation labels from rows"):
-            for message in Message._base_manager.filter(channel=channel, external_id__in=("m4", "m6", "m7")):
-                Participant._base_manager.create(
-                    message=message, thread_id=message.thread_id, handle_id=message.sender_id, role="from",
-                )
     scope = channel.pk
     with actor_context(channel.owner):
         labels = Thread.objects.all().conversation_labels()

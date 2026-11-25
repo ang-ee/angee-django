@@ -46,6 +46,61 @@ live in code docstrings.
     `TypeError`, or `RuntimeError` when the override accepts `claim` but never asks it;
     either way nothing is kept, and a keyless insert is served as before.
 
+- `angee.messaging`, `angee.nexus`: **Renamed and removed.** A message has a
+  sender, `Message.sender`, and recipients: what was left of `messaging.Participant`
+  is `messaging.Recipient`, one row per handle a message is addressed to, in its
+  envelope role `to`, `cc` or `bcc`. The `from` role, the row without a message
+  (a thread membership nothing wrote or read) with its constraint
+  `uq_participant_thread_handle_role`, and `joined_at` and `left_at` are gone;
+  `message` is required, the one unique constraint is
+  `uq_recipient_message_handle_role`, and public ids take the prefix `rcp_`
+  (were `ptp_`), so a stored `ptp_` id no longer resolves. Renamed with it:
+  `ParticipantRole` to `Recipient.RecipientRole`; the reverse names
+  `Message.participants` and `Thread.participants` to `recipients`, and
+  `Handle.participations` to `recipient_rows`; `MessageInbox.participants` to
+  `recipients`; the `participants=` keyword of `MessageQuerySet.ids_involving_handles`
+  and `ids_involving_parties` to `recipients=`; the model label in resource
+  metadata and live invalidation to `messaging.Recipient`; the REBAC type
+  `messaging/participant` to `messaging/recipient` (schema revision 27), without
+  the `membership_thread`, `editor` and `reader` relations, so a recipient row is
+  read through its message or thread and created and changed through its message:
+  creating one is no longer open to every signed-in user. In the
+  console GraphQL schema, `ParticipantType` is `RecipientType`, without
+  `joined_at` and `left_at`; the `participants`, `participants_by_pk` and
+  `participants_aggregate` roots and their inputs are `recipients…`;
+  `MessageType.participants` is `recipients`; the subscription
+  `participantChanged` is `recipientChanged`; the role enum is `RecipientRole`,
+  without `FROM`; and `ThreadType.participants` is removed. The inbox
+  Participants pane keeps its name and lists the sender, labelled From, then the
+  recipients, each labelled by its role. `InboxConnection.role` holds one
+  vocabulary, a recipient's role or `sender` for the message's sender: a Handles
+  row's is now empty, its platform being its `handle.platform`.
+  **Upgrade:** copy the migration template
+  `src/angee/messaging/compose_migrations/messaging/participants_to_recipients.py`
+  into `runtime/messaging/migrations/` as its docstring says, run `makemigrations
+  messaging` until it reports no changes, then migrate with the services stopped,
+  as provision does: the migration locks the recipient table for its whole run and
+  the message table for its last moments, and the previous release reads the old
+  table. Allow on the order of ten seconds per million messages, most of it one
+  rewrite of the recipient table. The template first refuses, changing nothing,
+  while a row without a message exists, and names the statement that deletes those
+  rows; then it renames the model with its table and rows, gives a message without
+  a sender the handle of its `from` row, logs how many `from` rows named someone
+  other than their message's sender (each message's source keeps its `From`
+  header) and deletes the `from` rows. A migration `makemigrations` writes without
+  the template deletes `Participant` and creates `Recipient`: the drop guard
+  refuses that where the participant table holds rows, but one generated on an
+  empty database drops the recipient rows when it is applied elsewhere, and those
+  rows are a projection of each message's stored envelope. Provision prunes the
+  retired REBAC type `messaging/participant`; grants written directly on its
+  `editor` or `reader` relations, which no framework surface wrote, are not
+  carried over. On a stack whose `operator-schema` job does not wait for
+  `provision`, the first chained restart after this upgrade can fail `rebac.E009`
+  on the retired `messaging/participant` type until provision's sync has run; run
+  the chain once more. Upgrade cutoff: the template ships through the 3.x releases
+  and is removed in 4.0, and `angee.base.querysets.MergeableQuerySet.survivor_id`
+  stays while retained migrations import it; a host upgrading from an earlier
+  release applies the template through a 3.x release first.
 - **Message templates: the new addon `angee.messaging_templates`.**
   - **What it holds.** A message template (`MessageTemplate`) is one row of one
     kind for one key and one language: a message template of the kind `template`
@@ -196,15 +251,15 @@ live in code docstrings.
   inbound message no longer names an untitled thread, for any reader.
   **Upgrade:** `MessageQuerySet.involving_parties` is removed; select
   `pk__in=MessageQuerySet.ids_involving_parties(parties, handles=..., messages=...,
-  participants=...)`, the ids of the messages given parties sent or received, built
+  recipients=...)`, the ids of the messages given parties sent or received, built
   on `MessageQuerySet.ids_involving_handles` (the same for given handles), or test
   `.exists()` on it with the eligibility inside `messages`.
   `MessageQuerySet.involving_parties_filter(parties, handles=..., participants=...)`
   is removed too; filter with `pk__in=MessageQuerySet.ids_involving_parties(parties,
-  handles=..., messages=..., participants=...)` instead.
+  handles=..., messages=..., recipients=...)` instead.
   `MessageQuerySet.involved_handle_ids` is the reverse, the handles that sent or
   received given messages. Read a message's sender from `Message.sender`, never
-  from its `participants`.
+  from its recipients.
 - `angee.base`: `MergeableQuerySet.redirect_groups` given a subquery selects
   `pk IN` the `UNION ALL` of its two indexed arms, the survivors and the rows
   redirecting to them, where it compiled to `pk IN (…) OR merged_into_id IN (…)`.
