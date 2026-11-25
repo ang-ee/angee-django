@@ -15,20 +15,22 @@ from __future__ import annotations
 
 import importlib
 import logging
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import httpx2
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection
 from django.db.models.signals import post_save
 from django.test import TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from openai import DefaultHttpxClient, OpenAI
-from rebac import actor_context, system_context
+from rebac import PermissionDenied, actor_context, system_context
 
 from angee.base.models.identity import public_id_for
 from angee.graphql.actions import ActionResult, action_guard
@@ -52,6 +54,7 @@ from tests.conftest import (
     Credential,
     ExternalAccount,
     Integration,
+    NotionConnection,
     OAuthClient,
     SchemaAddon,
     VcsBridge,
@@ -2329,3 +2332,94 @@ def test_the_shared_action_guard_leaves_an_integration_error_to_its_caller() -> 
 
     with pytest.raises(IntegrationError):
         act()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("caller", ("anonymous", "member"))
+def test_integration_insert_refuses_before_the_capability_is_validated(
+    caller: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A caller the integration create gate refuses gets the save's own refusal; no validator runs."""
+
+    with system_context(reason="test.integration_insert.vendor"):
+        Vendor.objects.create(slug="notion", display_name="Notion")
+    user = AnonymousUser() if caller == "anonymous" else User.objects.create_user(username="integration-member")
+    spy = Mock(side_effect=ValidationError("Not a label.", code="invalid"))
+    monkeypatch.setattr(NotionConnection._meta.get_field("display_name"), "validators", [spy])
+    backend = integrate_schema.IntegrationWriteBackend(NotionConnection, public_id_fields=("credential", "owner"))
+
+    with actor_context(user):
+        with pytest.raises(PermissionDenied) as refused:
+            backend.create(SimpleNamespace(), {"display_name": "Refused"})
+        with pytest.raises(PermissionDenied) as saved:
+            NotionConnection.objects.build(display_name="Refused").save()
+
+    assert str(refused.value) == str(saved.value)
+    spy.assert_not_called()
+    assert not NotionConnection._base_manager.exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("caller", ("anonymous", "member"))
+def test_integration_insert_refuses_an_unknown_key_as_it_refuses_a_known_one(caller: str) -> None:
+    """A caller the create gate refuses learns nothing of which implementation keys exist."""
+
+    with system_context(reason="test.integration_insert.vendor"):
+        Vendor.objects.create(slug="notion", display_name="Notion")
+    user = AnonymousUser() if caller == "anonymous" else User.objects.create_user(username="integration-key-member")
+    backend = integrate_schema.IntegrationWriteBackend(NotionConnection, public_id_fields=("credential", "owner"))
+
+    with actor_context(user):
+        with pytest.raises(PermissionDenied) as unknown:
+            backend.create(SimpleNamespace(), {"display_name": "Refused", "backend_class": "no-such-backend"})
+        with pytest.raises(PermissionDenied) as known:
+            backend.create(SimpleNamespace(), {"display_name": "Refused", "backend_class": "notion"})
+
+    assert str(unknown.value) == str(known.value)
+    assert not NotionConnection._base_manager.exists()
+
+
+@pytest.mark.django_db
+def test_an_unknown_implementation_key_is_refused_on_its_field() -> None:
+    """A caller who may create learns the unknown key from its field, as a direct save does."""
+
+    with system_context(reason="test.integration_insert.vendor"):
+        vendor = Vendor.objects.create(slug="notion", display_name="Notion")
+    admin = _platform_admin("integration-key-admin")
+    backend = integrate_schema.IntegrationWriteBackend(NotionConnection, public_id_fields=("credential", "owner"))
+
+    with actor_context(admin), pytest.raises(ValidationError) as validated:
+        backend.create(SimpleNamespace(), {"display_name": "Typo", "backend_class": "no-such-backend"})
+    with system_context(reason="test.integration_insert.direct"), pytest.raises(ValidationError) as written:
+        NotionConnection(display_name="Direct", backend_class="no-such-backend", vendor=vendor).save()
+
+    refusal = {"backend_class": ["Value 'no-such-backend' is not a valid choice."]}
+    assert validated.value.message_dict == refusal
+    assert written.value.message_dict == refusal
+    assert not NotionConnection._base_manager.exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("caller", ("anonymous", "member", "admin"))
+def test_a_missing_seeded_default_answers_only_once_the_create_is_decided(caller: str) -> None:
+    """Without the seeded vendor a refused caller gets the refusal; only an admitted one gets the load guidance."""
+
+    user = {
+        "anonymous": lambda: AnonymousUser(),
+        "member": lambda: User.objects.create_user(username="seedless-member"),
+        "admin": lambda: _platform_admin("seedless-admin"),
+    }[caller]()
+    backend = integrate_schema.IntegrationWriteBackend(NotionConnection, public_id_fields=("credential", "owner"))
+
+    with actor_context(user):
+        if caller == "admin":
+            with pytest.raises(ImproperlyConfigured, match="resources load"):
+                backend.create(SimpleNamespace(), {"display_name": "Seedless", "backend_class": "notion"})
+        else:
+            with pytest.raises(PermissionDenied) as known:
+                backend.create(SimpleNamespace(), {"display_name": "Seedless", "backend_class": "notion"})
+            with pytest.raises(PermissionDenied) as unknown:
+                backend.create(SimpleNamespace(), {"display_name": "Seedless", "backend_class": "no-such-backend"})
+            assert str(known.value) == str(unknown.value)
+
+    assert not NotionConnection._base_manager.exists()
