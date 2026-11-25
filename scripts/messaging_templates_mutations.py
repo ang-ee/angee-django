@@ -36,8 +36,8 @@ _SAFE_MARKS: list[Edit] = [
 MUTATIONS: dict[str, tuple[bool, list[Edit]]] = {
     "M0 no mutation": (False, []),
     "M1 admit a self-closing style": (True, [(
-        "html_checks.py", "if closing and tag not in VOID_ELEMENTS and not office:",
-        'if closing and tag not in VOID_ELEMENTS and tag != "style" and not office:')]),
+        "html_checks.py", "if closing and tag not in VOID_ELEMENTS and not office",
+        'if closing and tag not in VOID_ELEMENTS and tag != "style" and not office')]),
     "M2 drop rule 5": (False, [(
         "html_checks.py", 'if not _ELEMENT_NAME.fullmatch(tag) or written.lower() != f"</{tag}>":',
         "if not _ELEMENT_NAME.fullmatch(tag):")]),
@@ -115,6 +115,10 @@ def main() -> None:
     if changed.strip():
         sys.exit(f"The addon holds uncommitted changes; commit them first:\n{changed}")
     pristine = {path: path.read_text() for path in ADDON.glob("*.py")}
+    for label, (_, edits) in MUTATIONS.items():
+        for name, old, _new in edits:
+            if (count := pristine[ADDON / name].count(old)) != 1:
+                sys.exit(f"{label}: {old!r} is in {name} {count} times; update the mutation")
     with tempfile.TemporaryDirectory() as plugins:
         (Path(plugins) / "messaging_templates_profiles.py").write_text(PROFILE)
         try:
@@ -125,10 +129,7 @@ def main() -> None:
                     path.write_text(text)
                 for name, old, new in edits:
                     path = ADDON / name
-                    text = path.read_text()
-                    if text.count(old) != 1:
-                        sys.exit(f"{label}: {old!r} is in {name} {text.count(old)} times; update the mutation")
-                    path.write_text(text.replace(old, new))
+                    path.write_text(path.read_text().replace(old, new))
                 print(f"{label} (real break: {'yes' if real else 'no'})", flush=True)
                 for mode, arguments in (
                     ("with examples", ["--hypothesis-profile=examples", MODULE]),
