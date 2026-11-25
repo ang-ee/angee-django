@@ -11,7 +11,7 @@ import re
 import threading
 import time
 import zoneinfo
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from decimal import Decimal
 from html.parser import HTMLParser
 from pathlib import Path
@@ -137,6 +137,18 @@ def plain(kit: Any) -> Any:
 
 def _mail(source: str, variables: dict[str, str] | None = None, **values: Any) -> Any:
     return _row("template", values.pop("key", "tests.mail"), variables=variables or {}, source=source, **values)
+
+
+def _recording(monkeypatch: pytest.MonkeyPatch, owner: type, name: str, record: Callable[..., None]) -> None:
+    """Wrap ``owner.name`` so ``record`` sees each call's arguments before it runs."""
+
+    original = getattr(owner, name)
+
+    def recorded(*args: Any) -> Any:
+        record(*args)
+        return original(*args)
+
+    monkeypatch.setattr(owner, name, recorded)
 
 
 # ---------- the engine ----------
@@ -1077,9 +1089,9 @@ def test_only_a_validation_error_leaves_render_and_preview(plain: Any, kit: Any)
 
     del plain
     numbers = _mail("[{{ n|pluralize }}][{{ n|floatformat:2 }}][{{ n|yesno }}][{{ n }}]", {"n": "x"}, key="tests.n")
-    for value in (10 ** 400, -(10 ** 400), float("inf"), float("nan")):
+    for number in (10 ** 400, -(10 ** 400), float("inf"), float("nan")):
         with pytest.raises(ValidationError, match="n is not a number a float holds"):
-            _render(numbers, {"n": value}, kit)
+            _render(numbers, {"n": number}, kit)
     assert _render(numbers, {"n": 1e308}, kit).plain_text.startswith("[s]")
     printed = {"d": "DATETIME_FORMAT", "e": "H:i", "f": "TIME_FORMAT", "g": "SHORT_DATETIME_FORMAT"}
     timed = _mail("".join(f"[{{{{ {path}|date:'{name}' }}}}]" for path, name in printed.items()),
@@ -1090,15 +1102,15 @@ def test_only_a_validation_error_leaves_render_and_preview(plain: Any, kit: Any)
         with pytest.raises(ValidationError, match=f"{path} is printed with a time \\({name}\\)"):
             _render(timed, {**moments, path: "2026-11-24"}, kit)
     dated = _mail("[{{ d|date:'DATE_FORMAT' }}]", {"d": "x"}, key="tests.far")
-    for value in ("9999-12-31T23:59:59-23:59", "0001-01-01T00:00:00+23:59"):
+    for moment in ("9999-12-31T23:59:59-23:59", "0001-01-01T00:00:00+23:59"):
         with pytest.raises(ValidationError, match="d is a moment the local time zone cannot hold"):
-            _render(dated, {"d": value}, kit)
+            _render(dated, {"d": moment}, kit)
     epoch = _mail("[{{ d|date:'U' }}]", {"d": "x"}, key="tests.epoch")
     for zone in ("UTC", "Pacific/Kiritimati"):
-        for value in ("0001-01-01", "9999-12-31", "2026-11-24"):
+        for day in ("0001-01-01", "9999-12-31", "2026-11-24"):
             with timezone.override(zoneinfo.ZoneInfo(zone)):
                 try:  # The contract: a refusal is a ValidationError, never another exception.
-                    _render(epoch, {"d": value}, kit)
+                    _render(epoch, {"d": day}, kit)
                 except ValidationError:
                     pass
     with system_context(reason="tests.messaging_templates.render.preview"):
@@ -1137,8 +1149,7 @@ def test_an_over_long_subject_is_refused_by_its_column_and_never_lexed(
 
     del plain
     checked: list[Any] = []
-    check = TemplateWalker.check
-    monkeypatch.setattr(TemplateWalker, "check", lambda walker, row: checked.append(row) or check(walker, row))
+    _recording(monkeypatch, TemplateWalker, "check", lambda walker, row: checked.append(row))
     row = _unsaved(subject="{{ a }}" * 7_000, preheader="x" * 50_000, variables={"a": "x"})
     with system_context(reason="tests.messaging_templates.render.clean"), pytest.raises(ValidationError) as raised:
         row.full_clean()
@@ -1489,10 +1500,9 @@ def work(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[Any]]:
     """Record what walks and renders do: each tree's nodes, outputs and text, and what each pass charged."""
 
     seen: dict[str, list[Any]] = {"trees": [], "passes": []}
-    close, spend = _TreeWalker.close, RenderBudget.spend
-    monkeypatch.setattr(_TreeWalker, "close", lambda walker, tree: seen["trees"].append(
-        (str(tree.form), tree.nodes, tree.outputs, tree.text)) or close(walker, tree))
-    monkeypatch.setattr(RenderBudget, "spend", lambda budget: seen["passes"].append(budget) or spend(budget))
+    _recording(monkeypatch, _TreeWalker, "close", lambda walker, tree: seen["trees"].append(
+        (str(tree.form), tree.nodes, tree.outputs, tree.text)))
+    _recording(monkeypatch, RenderBudget, "spend", lambda budget: seen["passes"].append(budget))
     return seen
 
 
@@ -1652,9 +1662,7 @@ def test_a_delete_checks_each_row_naming_its_key_once(plain: Any, monkeypatch: p
     for index in range(3):
         _mail('{% include "parts/shared" only %}' + f"\n\nNaming {index}.", key=f"tests.naming{index}")
     checked: list[str] = []
-    check = TemplateWalker._check
-    monkeypatch.setattr(TemplateWalker, "_check", lambda walker, row, name: checked.append(name) or check(
-        walker, row, name))
+    _recording(monkeypatch, TemplateWalker, "_check", lambda walker, row, name: checked.append(name))
     with system_context(reason="tests.messaging_templates.render.delete"):
         first = MessageTemplate.objects.get(pk=part.pk).delete_blocker()
         held = len(checked)
@@ -1748,9 +1756,7 @@ def test_the_walk_runs_in_clean_after_the_permission_is_decided(
 
     del plain, kit
     checked: list[str] = []
-    check = TemplateWalker._check
-    monkeypatch.setattr(TemplateWalker, "_check", lambda walker, row, name: checked.append(name) or check(
-        walker, row, name))
+    _recording(monkeypatch, TemplateWalker, "_check", lambda walker, row, name: checked.append(name))
     own = _row("part", "own", source="{% if %}")  # save() of a row the walk refuses
     with system_context(reason="tests.messaging_templates.render.save"):
         own.source = "Still {% if %}"
@@ -1764,7 +1770,7 @@ def test_the_walk_runs_in_clean_after_the_permission_is_decided(
     shipped = _row("part", "shipped", source="{% if %}", is_baseline=True)
     schema = addon_schema(messaging_templates_schema.schemas, "console")
     member = create_user("messaging-templates-writer")
-    cases = {
+    cases: dict[str, tuple[str, dict[str, Any]]] = {
         "update": (_UPDATE, {"id": public_id_of(own), "set": {"source": "{% if %} again"}}),
         "override": (_OVERRIDE, {"id": public_id_of(shipped)}),
         "keep": (_KEEP, {"id": public_id_of(own)}),

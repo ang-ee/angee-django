@@ -64,7 +64,7 @@ from django.utils import translation
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.functional import Promise
 from django.utils.html import escape
-from django.utils.timezone import template_localtime
+from django.utils.timezone import template_localtime  # type: ignore[attr-defined]  # django-stubs lacks it
 
 from angee.brandkit.models import BrandKit, MailRole, MailScheme
 from angee.messaging_templates.engine import (
