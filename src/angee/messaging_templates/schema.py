@@ -7,7 +7,10 @@ seeds the rest (``MessageTemplateManager.create_own``), deciding ``create``
 before any work. A row reports what its reader may do with it (``permissions``),
 whether its kind carries a subject, preheader and layout, and, to a reader who
 may preview it, the rows naming its kind and key (``backlinks``), a read for one
-record's page. ``override_message_template`` starts the deployment's override
+record's page. ``can_override`` and ``can_keep_override`` answer, for the reader,
+what the two verbs below ask first (``MessageTemplate.override_refusal`` and
+``keep_override_refusal``); ``can_override`` is a read for one record's page.
+``override_message_template`` starts the deployment's override
 of a shipped default and ``keep_message_template_override`` keeps an override
 over a default that changed; both return an ``ActionResult`` naming the override.
 Both refuse as the framework's actions do: a signed-out caller gets the session's
@@ -15,8 +18,9 @@ GraphQL error, and a caller who may not create or write the override gets a
 ``PERMISSION_DENIED`` GraphQL error; an unreadable or missing row, a row that is
 not a shipped default and an override of none are refused in band (``ok: false``,
 with the codes ``not_a_baseline`` and ``no_baseline``). A row's
-``is_effective``, ``is_overridden`` and ``has_updated_default`` are read from its
-siblings and filter through the model's ``hasura_filter_expressions``.
+``is_effective``, ``is_overridden``, ``has_updated_default`` and
+``overrides_default`` are read from its siblings and filter through the model's
+``hasura_filter_expressions``.
 ``message_template_preview`` renders a row with its sample for a caller who may
 preview it (``MessageTemplate.preview``), in the kit it names or the default one;
 it refuses as the verbs do: a signed-out caller gets the session's GraphQL error,
@@ -136,6 +140,32 @@ class MessageTemplateType(AngeeNode):
         """Whether this override's shipped default changed since the override started or was last kept."""
 
         return parent.has_updated_default
+
+    @strawberry_django.field(annotate={"_overrides_default": lambda info: _row_fact("overrides_default")})
+    def overrides_default(parent: strawberry.Parent[MessageTemplateModel]) -> bool:
+        """Whether this row is the deployment's override of a shipped default; a deployment's own row is not."""
+
+        return parent.overrides_default
+
+    @strawberry_django.field(only=["kind", "key", "language", "is_baseline"])
+    def can_override(parent: strawberry.Parent[MessageTemplateModel]) -> bool:
+        """Whether ``override_message_template`` admits the reader on this row: what the verb asks first.
+
+        A read for one record's page, not for a list: the reader's ``create``
+        on the override is decided for each row read.
+        """
+
+        return parent.override_refusal() is None
+
+    @strawberry_django.field(
+        only=["kind", "key", "language", "is_baseline"],
+        annotate={"_overrides_default": lambda info: _row_fact("overrides_default")},
+        extensions=[PermissionsExtension(("write",))],
+    )
+    def can_keep_override(parent: strawberry.Parent[MessageTemplateModel]) -> bool:
+        """Whether ``keep_message_template_override`` admits the reader on this row: what the verb asks first."""
+
+        return parent.keep_override_refusal() is None
 
 
 class MessageTemplateWriteBackend(AngeeHasuraWriteBackend):
