@@ -57,8 +57,17 @@ decides before it claims or writes: who may answer a message is
 `Message.reply_envelope` (its refusal is `Message.reply_error`, which intake's
 email route asks too), and posting on a record is the chatter's own gate,
 `ThreadedModelMixin.require_post`. An email is sent from its channel's default
-sender, and its text part is only its own text, never made from its HTML. The
-docstrings own the exact refusals and hold rules.
+sender, and its text part is only its own text, never made from its HTML.
+Each typed recipient is one entry, as
+[`MessageManager.clean_recipient`](managers.py) reads it and as `compose` lands
+it: a bare address or one explicit `Name <address>`. An entry a mail library
+would read as another address or as several, or one carrying a NUL byte, is
+refused (`invalid`) under its role, never re-read. A message takes at most `ANGEE_MESSAGING_MAX_RECIPIENTS` addresses across `to`, `cc`
+and `bcc` (50) and `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (20), both
+contributed in [`autoconfig.py`](autoconfig.py); more is refused (`too_many`)
+under the argument that crosses the bound, before anything is read. A
+`scheduled_at` without an offset is refused (`naive_datetime`), never read in
+the server's zone. The docstrings own the exact refusals and hold rules.
 
 An email answer carries a Message-ID minted as Django mints one and renders
 the parent's as `In-Reply-To` and `References`, so an answer arriving on the
@@ -171,7 +180,8 @@ a draft with no release instant requires operator approval indefinitely.
 `ActionResult` outcomes. They authorize one bounded selection through channel
 `write`, check every revision, and use `many_actions` for per-row refusals. The
 channel's grantable `replier` relation grants `reply` (answering on the channel and
-composing a new message there) together with comment read.
+composing a new message there) together with comment read; `Channel.reply_permission`
+is that permission's one name, which `Message.require_reply` and `compose` decide.
 All untrashed messages count in their thread, including drafts, queues and failures.
 Inserts use `F()` deltas; loss/restoration and settlement use a thread-scoped
 aggregate with the same model predicate. Queueing never changes the count.

@@ -595,7 +595,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         if not external_id:
             return self.find_identities([(platform, value)]).get((platform, value))
         handles = self.filter(platform=platform)
-        handle = handles.filter(external_id=external_id).first() if external_id else None
+        handle = handles.filter(external_id=external_id).first()
         if handle is None or handle.value != value:
             owner = handles.filter(value=value).exclude(pk=(handle.pk if handle is not None else None)).first()
             handle = owner or handle
@@ -607,16 +607,20 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         :meth:`find_identity`'s rule without an external id, for many identities in
         one read: the row owning ``(platform, value)``, resolved to its merge
         survivor (``canonical``, a read only for a merged row). Read-only, for a
-        caller that resolves a whole batch (a sync page's attendees) at once.
+        caller that resolves a whole batch (a sync page's attendees) at once. Each
+        platform's values are one arm naming that platform, so the ``(platform,
+        value)`` key's index serves every arm.
         """
 
-        wanted = set(identities)
-        if not wanted:
+        values: defaultdict[str, set[str]] = defaultdict(set)
+        for platform, value in identities:
+            values[platform].add(value)
+        if not values:
             return {}
-        rows = self.filter(value__in=sorted({value for _platform, value in wanted}))
-        return {
-            (row.platform, row.value): row.canonical() for row in rows if (row.platform, row.value) in wanted
-        }
+        match = Q()
+        for platform, spelled in sorted(values.items()):
+            match |= Q(platform=platform, value__in=sorted(spelled))
+        return {(row.platform, row.value): row.canonical() for row in self.filter(match)}
 
     @staticmethod
     def _refresh(handle: Any, fields: dict[str, Any], *, fill_only: Collection[str] = ()) -> None:

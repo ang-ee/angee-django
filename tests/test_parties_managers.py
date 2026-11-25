@@ -90,6 +90,26 @@ def test_a_fill_only_name_fills_a_blank_handle_and_never_renames_a_named_one(db:
     assert Handle._base_manager.get(value="named@example.test").display_name == "Source"
 
 
+def test_find_identities_reads_a_batch_in_one_statement_with_each_arm_naming_its_platform(db: None) -> None:
+    """A value one platform holds answers only for that platform, and every arm is served by the identity key.
+
+    The statement is the plan's evidence: an arm without its platform cannot use
+    ``(platform, value)``'s index, and PostgreSQL then scans the table on every upsert.
+    """
+
+    del db
+    with system_context(reason="test batched handle lookup"):
+        ada = Handle.objects.upsert(platform="telegram", value="ada")
+        Handle.objects.upsert(platform="slack", value="ada")
+        mail = Handle.objects.upsert(platform="email", value="ada@example.test")
+        wanted = [("telegram", "ada"), ("email", "ada@example.test"), ("email", "ada"), ("telegram", "bo")]
+        with CaptureQueriesContext(connection) as queries:
+            found = Handle.objects.find_identities(wanted)
+    assert found == {("telegram", "ada"): ada, ("email", "ada@example.test"): mail}
+    (statement,) = queries.captured_queries
+    assert statement["sql"].count('."platform" = ') == 2
+
+
 @pytest.fixture
 def owner(db: None) -> Any:
     """Create an ordinary actor after the parties test graph is prepared."""

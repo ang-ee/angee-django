@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import unicodedata
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -39,6 +40,7 @@ from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from django.apps import apps
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
@@ -176,6 +178,30 @@ def normalize_subject(subject: str) -> str:
     # normalized subject still reads naturally and two subjects differing only in
     # case stay distinct conversations.
     return text.strip()
+
+
+_ENCODED_WORD_OPENER = re.compile(r"=(?=\?[^?]*\?[bq]\?)", re.IGNORECASE)
+"""The ``=`` that opens an RFC 2047 encoded word: a mail library decodes one with any or no charset, either
+encoding letter in either case, terminated or not, and inside a word too."""
+
+
+def outgoing_subject(subject: str) -> str:
+    """Return ``subject`` as an outgoing message carries it: one line, with no control character and no encoded word.
+
+    Each control character and line break becomes a space, and every encoded-word
+    opener (``=?charset?q?`` or ``?b?``) is broken with a space after its ``=``, so
+    neither a mail library nor a reader's client decodes anything out of it, and no
+    provider that receives the subject as a string can either: the subject written,
+    the one on the wire and the one a reader sees are the same string. Text that
+    opens no word (``2+2=?``) is kept. Every outgoing subject takes it, a typed one
+    and one derived from a conversation's title.
+    """
+
+    text = "".join(
+        " " if unicodedata.category(character) in ("Cc", "Zl", "Zp") else character
+        for character in strip_null_bytes(subject or "")
+    )
+    return _ENCODED_WORD_OPENER.sub("= ", text).strip()
 
 
 # One rule for naming a message part that arrived without its own filename. It lives
@@ -3077,6 +3103,26 @@ class _Outgoing:
     scheduled_at: datetime | None = None
 
 
+_OUTGOING_ACTOR = SubjectRef.of("messaging/system", "outgoing")
+"""Non-user attribution for handles messaging lands on nobody's behalf: a handle it creates there has no creator.
+
+A channel's own sender handle is the channel's, not the first composer's; a recipient a
+person types keeps that person as creator, by the handle owner's rule.
+"""
+
+
+def _require_at_most(limit: int, what: str, groups: Iterable[tuple[str, Sequence[Any]]]) -> None:
+    """Refuse more than ``limit`` entries across ``groups`` together, under the key of the group that crosses it."""
+
+    total = 0
+    for key, entries in groups:
+        total += len(entries)
+        if total > limit:
+            raise ValidationError({key: ValidationError(
+                "A message takes at most %(limit)s %(what)s.", code="too_many", params={"limit": limit, "what": what},
+            )})
+
+
 def _require_landable(handle_model: Any, addresses: Iterable[tuple[str, str]]) -> None:
     """Refuse, under its key, each ``(key, address)`` whose email address the handle owner cannot land."""
 
@@ -3120,8 +3166,12 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         ``channel`` sends a new email, on ``record``'s chatter when given and else
         on a thread of its own (:meth:`ThreadManager.open_thread`).
 
-        It runs as its actor and refuses an elevated call. Who may write it is
-        decided first: :meth:`Message.require_reply` for an answer, else
+        It runs as its actor and refuses an elevated call. Its shape is checked
+        first, reading nothing: its anchor, and at most
+        ``ANGEE_MESSAGING_MAX_RECIPIENTS`` addresses across ``to``, ``cc`` and
+        ``bcc`` and ``ANGEE_MESSAGING_MAX_ATTACHMENTS`` attachments, each refused
+        (``too_many``) under the argument that crosses it. Who may write it is
+        decided next: :meth:`Message.require_reply` for an answer, else
         ``reply`` on ``channel`` and the record's post gate
         (:meth:`ThreadedModelMixin.require_post`), and read on every attachment.
         Its arguments are checked next (:meth:`_validate_outgoing`), and
@@ -3132,8 +3182,9 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         and the refusal rolls the claim back with everything else. ``admit()``
         checks domain eligibility once, on insertion, after replay. ``queued``
         hands the message to delivery when the outermost transaction commits,
-        ``scheduled_at`` holds a draft until then, neither holds it for approval,
-        and both are refused. ``local`` is the caller's provenance, never
+        ``scheduled_at`` holds a draft until then (a time without an offset is
+        refused, ``naive_datetime``), neither holds it for approval, and both are
+        refused. ``local`` is the caller's provenance, never
         messaging's delivery facts. ``idempotency_key`` replays the same intent
         (the hold aside) for the same actor, whatever the channel can do now.
         """
@@ -3148,6 +3199,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             )})
         if parent is None and channel is None:
             raise ValidationError({"channel": ValidationError("Choose the channel to send from.", code="required")})
+        _require_at_most(settings.ANGEE_MESSAGING_MAX_RECIPIENTS, "recipients", (("to", to), ("cc", cc), ("bcc", bcc)))
+        _require_at_most(settings.ANGEE_MESSAGING_MAX_ATTACHMENTS, "attachments", (("attachments", attachments),))
         values = dict(local or {})
         intent = {
             "channel": channel, "parent": parent, "record": record, "sender": sender,
@@ -3160,7 +3213,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             else:
                 assert channel is not None
                 channel = apps.get_model("messaging", "Channel").objects.with_actor(actor).filter(pk=channel.pk).first()
-                if channel is None or not channel.has_access("reply"):
+                if channel is None or not channel.has_access(channel.reply_permission):
                     raise PermissionDenied("Sending a message requires reply on its channel.")
                 if record is not None:
                     record.require_post(actor=actor)
@@ -3179,6 +3232,35 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             return self._write_outgoing(
                 outgoing, actor=actor, fingerprint=intent, idempotency_key=idempotency_key, admit=admit,
             )
+
+    def clean_recipient(self, entry: str, *, key: str = "to") -> tuple[str, str]:
+        """Return the display name and the address :meth:`compose` sends ``entry`` to, or refuse it under ``key``.
+
+        An entry is one recipient: a bare address, read as itself, or one explicit
+        ``Name <address>``. An entry a mail library would read as another address,
+        or as several (a comment, a group, a list, trailing text, ``address
+        (Name)``), is refused rather than re-read, and so is one carrying a NUL
+        byte, which no messaging write stores. The handle owner then decides
+        whether the address can be one and can be stored on a handle
+        (``Handle.is_email_address``, ``HandleManager.clean_identity``). It reads
+        nothing, so a caller can ask it before expensive work, and ``compose``
+        lands exactly what it returns. The refusal is ``invalid``, naming the
+        entry as typed.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        text = str(entry or "").strip()
+        parsed = getaddresses([text])
+        name, address = parsed[0] if len(parsed) == 1 else ("", "")
+        explicit = text.endswith(f"<{address}>") and text.count("<") == text.count(">") == 1
+        landable = "\x00" not in text and handle_model.is_email_address(address)
+        if not address or not (text == address or explicit) or not landable:
+            raise ValidationError({key: ValidationError(
+                "%(entry)s is not one email address.", code="invalid", params={"entry": str(entry or "") or "An entry"},
+            )})
+        address = handle_model.email_value(address)
+        _require_landable(handle_model, ((key, address),))
+        return name.strip(), address
 
     def _validate_outgoing(
         self,
@@ -3203,8 +3285,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         An answer takes its parent's kind and platform and names no subject or
         address; one of a non-email kind is plain text from an explicit, saved
         ``sender`` on the parent's platform. A new message is an email to at least
-        one address the handle owner takes (``Handle.is_email_address``,
-        ``HandleManager.clean_identity``), with an optional one-line subject. An
+        one recipient, each entry as :meth:`clean_recipient` reads it, with an
+        optional one-line subject. An
         email has ``text``, ``html`` or both and names no sender: its channel's
         default sends it.
         """
@@ -3218,11 +3300,16 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             raise ValidationError({"scheduled_at": ValidationError(
                 "A queued message is sent now; schedule a held one instead.", code="queued",
             )})
+        if scheduled_at is not None and timezone.is_naive(scheduled_at):
+            raise ValidationError({"scheduled_at": ValidationError(
+                "A schedule time needs its offset; it is never read in the server's zone.", code="naive_datetime",
+            )})
         text, html, subject = (strip_null_bytes(value or "").strip() for value in (text, html, subject))
         if not text and not html:
             raise ValidationError({"text": ValidationError("Write the message.", code="required")})
         if "\r" in subject or "\n" in subject:
             raise ValidationError({"subject": ValidationError("A subject is one line.", code="invalid")})
+        subject = outgoing_subject(subject)
         recipients: tuple[_Addressee, ...] = ()
         if parent is not None:
             kind, platform = parent.message_type, parent.platform
@@ -3237,21 +3324,14 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         else:
             kind, platform = email_kind, handle_model.Platform.EMAIL
             recipients = tuple(
-                _Addressee(role, handle_model.email_value(address), name.strip())
+                _Addressee(role, address, name)
                 for role, entries in (("to", to), ("cc", cc), ("bcc", bcc))
-                for name, address in getaddresses([str(entry) for entry in entries])
+                for name, address in (self.clean_recipient(entry, key=role) for entry in entries)
             )
             if not recipients:
                 raise ValidationError({"to": ValidationError(
                     "Address the message to at least one recipient.", code="required",
                 )})
-            for addressee in recipients:
-                if not handle_model.is_email_address(addressee.address):
-                    raise ValidationError({addressee.role: ValidationError(
-                        "%(entry)s is not an email address.", code="invalid",
-                        params={"entry": addressee.address or "An entry"},
-                    )})
-            _require_landable(handle_model, ((addressee.role, addressee.address) for addressee in recipients))
         if kind == email_kind:
             if sender is not None:
                 raise ValidationError({"sender": ValidationError(
@@ -3362,11 +3442,13 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     ).pk
                 sender = outgoing.sender
                 if sender_address is not None:
-                    # The channel's configured name is the operator's, so it refreshes the handle.
+                    # The channel's configured name is the operator's, so it refreshes the handle;
+                    # the handle is the channel's, so no composer becomes its creator.
                     name, address = sender_address
-                    sender = handle_model.objects.upsert(
-                        platform=handle_model.Platform.EMAIL, value=address, display_name=name,
-                    )
+                    with actor_context(_OUTGOING_ACTOR):
+                        sender = handle_model.objects.upsert(
+                            platform=handle_model.Platform.EMAIL, value=address, display_name=name,
+                        )
                 message = self.create(
                     parent=outgoing.parent, thread_id=thread_id, channel_id=outgoing.channel.pk, sender=sender,
                     platform=outgoing.platform, direction=self.model.Direction.OUTBOUND,

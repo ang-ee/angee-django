@@ -30,7 +30,23 @@ live in code docstrings.
     (`channel=` with `record=`): its row, parts, recipients, sender, thread,
     idempotency and delivery hand-off, decided under the actor by `reply` on the
     channel (and posting on the record) before anything is claimed or written.
-    A new message takes `to`, `cc` and `bcc` addresses, a one-line `subject`,
+    A new message takes `to`, `cc` and `bcc` entries, each one recipient as
+    `Message.objects.clean_recipient(entry, *, key="to")` reads it: a bare
+    address read as itself or one explicit `Name <address>`, returned as
+    `(name, address)` exactly as `compose` lands it, or refused (`invalid`). An
+    entry a mail library would read as another address or as several (a
+    comment, a group, a list, trailing text), or carrying a NUL byte (which
+    failed the write on PostgreSQL after it began), is refused, never re-read; a caller
+    asks `clean_recipient` before expensive work. A message takes at most
+    `ANGEE_MESSAGING_MAX_RECIPIENTS` addresses across `to`, `cc` and `bcc`
+    (default 50, the strictest common provider's per-message limit; each new
+    address costs a call about 34 statements) and
+    `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (default 20, about 17
+    statements each); more is refused (`too_many`) under the argument that
+    crosses the bound, before anything is read. A `scheduled_at` without an
+    offset is refused (`naive_datetime`, as scheduling, calendar and workflows
+    refuse one) instead of being read in the server's zone. A new message also
+    takes a one-line `subject`,
     `text`, `html` and readable `attachments`, and starts a thread of its own
     through the new `ThreadManager.open_thread`, which `resolve` now shares.
     `Message.require_reply(actor)` decides who may answer a message and returns
@@ -38,11 +54,16 @@ live in code docstrings.
     whom an answer goes to (a `ReplyEnvelope`) or refuses, and
     `Message.reply_error` is that refusal, without side effects.
     `ThreadedModelMixin.require_post(*, actor=None)` is chatter's post gate,
-    which `compose` shares. `HandleManager.clean_identity` validates a handle
+    which `compose` shares. `Channel.reply_permission` (`"reply"`) is the one
+    name of the channel permission to send, which `require_reply` and `compose`
+    decide. `HandleManager.clean_identity` validates a handle
     identity without writing, `HandleManager.upsert(fill_only=...)` names display
     fields it only fills while blank, and `Handle.email_value` is the one form an
     email address is stored in on a handle. `PartManager.attach_files` attaches
-    several files under one message lock.
+    several files under one message lock. `HandleManager.find_identities` (and so
+    `find_identity`, `upsert` and every compose lookup) names the platform in each
+    arm of its one statement, so the `(platform, value)` key's index serves it; it
+    was a sequential scan on PostgreSQL for every upsert. Matching is unchanged.
   - **Removed.** `Message.objects.compose_reply`. Use
     `compose(parent=..., text=..., actor=..., ...)`: `body=` is `text=`, `admit`
     takes no argument, and an email reply takes no `sender`.
@@ -63,7 +84,18 @@ live in code docstrings.
     comment's answered check does not count, a second reply is written. A reply's
     preview is 280 characters, like every message's, and chatter posts and edits
     preview through the same rule as ingest. An HTML-only email is sent without a
-    text part; it was made by stripping the HTML's tags. A recipient row's thread
+    text part; it was made by stripping the HTML's tags. An outgoing subject, typed
+    or derived from a conversation's title, has each control character and line
+    break written as a space and each RFC 2047 encoded-word opener broken (`= ?`),
+    so no mail library, client or provider decodes anything out of it: the subject
+    stored, sent and read back are one string (`outgoing_subject`); a typed line
+    break is still refused. A channel's own sender handle is landed with no
+    creator, under a non-user attribution (`messaging/system:outgoing`): the
+    first person to compose on a channel no longer holds read, write and delete
+    on it, so cannot rename, re-address or delete the desk's sender. A recipient
+    a person types keeps that person as its creator, as the handle owner rules.
+    A sender handle created before the upgrade keeps the creator it was given; a
+    deployment can clear `created_by` on its channels' sender handles. A recipient row's thread
     is its message's, set by the model on insert (`Recipient.save`), which
     refuses a different one. `Message.reply_addresses` keeps only what
     `Handle.is_email_address` accepts, in the form `Handle.email_value` stores. A

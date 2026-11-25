@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import email.policy
+import string
+import unicodedata
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
+from email import message_from_bytes
+from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +18,8 @@ from django.core.exceptions import ValidationError
 from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext, override_settings
 from django.utils import timezone
-from hypothesis import given
+from hypothesis import example, given
+from hypothesis import settings as hypothesis_settings
 from hypothesis import strategies as st
 from rebac import PermissionDenied, system_context
 from rebac.models import PermissionAuditEvent
@@ -31,6 +37,7 @@ from angee.messaging.backends import (
 from angee.messaging.constants import DELIVER_MESSAGE_TASK
 from angee.messaging.managers import MessageManager, _preview
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient, Thread
+from angee.messaging_integrate_imap.parser import parse_message
 from angee.provenance import context as provenance_context
 from angee.provenance.context import changeset, changeset_model
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
@@ -210,6 +217,78 @@ def test_the_text_part_comes_from_the_text_and_never_from_the_html(desk: Any) ->
     assert "text/plain" not in types["html"] and "text/html" in types["html"]
 
 
+def _read_back(raw: bytes) -> str:
+    """The subject a reader's mail library parses out of a message's bytes."""
+
+    return str(message_from_bytes(raw, policy=email.policy.default)["Subject"])
+
+
+def _subjects(channel: Any, message: Any) -> tuple[str, str, str]:
+    """The subject compose stored, the one read back off the wire, and the one a provider's own mail carries.
+
+    A provider's HTTP API takes the subject as a string and writes its own header from it.
+    """
+
+    with system_context(reason="tests.messaging.compose.subject"):
+        stored = message.title()
+        built = channel.backend.email_message(message)
+    provided = EmailMessage(policy=email.policy.default)
+    provided["Subject"] = built.subject
+    return stored, _read_back(built.message().as_bytes()), _read_back(provided.as_bytes())
+
+
+def _one_plain_line(subject: str) -> bool:
+    return not any(unicodedata.category(character) in ("Cc", "Zl", "Zp") for character in subject)
+
+
+ENCODED_WORDS = {
+    "terminated": "Invoice =?utf-8?q?=E2=80=AE?= ready",
+    "unterminated": "x =?utf-8?q?=E2=80=AE y",
+    "mid-word": "abc=?utf-8?b?4oCu?=def",
+    "empty charset": "a =??q?=E2=80=AE?= b",
+    "unknown charset": "a =?x-nope?q?=E2=80=AE?= b",
+    "upper case": "a =?UTF-8?Q?=E2=80=AE?= b",
+    "encoded CR LF": "Hi =?utf-8?q?a=0D=0ABcc=3A?= evil@example.com there",
+    "encoded NUL": "x =?utf-8?q?=00?= y",
+    "escape sequence": "x =?utf-8?q?=1B[31m?= y",
+    "typed control": "Tab\there \x1b[31m red",
+}
+
+
+@pytest.mark.parametrize("subject", ENCODED_WORDS.values(), ids=ENCODED_WORDS)
+def test_a_subject_is_sent_and_read_back_as_it_is_stored(desk: Any, subject: str) -> None:
+    """No encoded word or control character survives into what is stored, sent or read: they are one string."""
+
+    message = Message.objects.compose(channel=desk, to=["r@example.test"], subject=subject, text="t", actor=desk.owner)
+    stored, wire, provided = _subjects(desk, message)
+    assert stored == wire == provided
+    assert _one_plain_line(stored)
+
+
+def test_a_subject_that_opens_no_encoded_word_is_kept_as_typed(desk: Any) -> None:
+    message = Message.objects.compose(
+        channel=desk, to=["r@example.test"], subject="2+2=? and more", text="t", actor=desk.owner,
+    )
+    assert _subjects(desk, message) == ("2+2=? and more",) * 3
+
+
+def test_a_reply_to_a_title_holding_an_encoded_word_is_written_on_one_line(desk: Any) -> None:
+    """A hostile inbound subject never makes its conversation unanswerable, nor reaches a reader decoded."""
+
+    raw = (
+        b"From: Mallory <mallory@example.test>\r\nTo: desk@example.test\r\nMessage-ID: <hostile@example.test>\r\n"
+        b"Subject: =?utf-8?q?=3D=3Futf-8=3Fq=3F=3DE2=3D80=3DAE=3F=3D_and_=3D=3Futf-8=3Fq=3Fa=3D0D=3D0ABcc=3A=3F=3D?="
+        b"\r\n\r\nbody\r\n"
+    )
+    with system_context(reason="tests.messaging.compose.hostile"):
+        (parent,) = Message.objects.ingest([parse_message(raw, mailbox="INBOX", uid=1, uidvalidity=1)], channel=desk)
+        assert "=?utf-8?q?" in parent.thread.display_title
+    reply = Message.objects.compose(parent=parent, text="Answer.", actor=desk.owner)
+    stored, wire, provided = _subjects(desk, reply)
+    assert stored == wire == provided
+    assert stored.startswith("Re: ") and _one_plain_line(stored)
+
+
 @pytest.mark.parametrize(
     ("values", "key", "code"),
     [
@@ -279,6 +358,22 @@ def test_an_email_reply_on_a_channel_that_cannot_send_is_refused_even_held(desk:
         Message.objects.compose(channel=manual, to=["reader@example.test"], text="Hello.", actor=manual.owner)
 
 
+def test_the_permission_to_send_is_the_channels_one_named_permission(
+    desk: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The answer gate and the new-message gate both decide ``Channel.reply_permission``, so renaming it moves both."""
+
+    request = _receive(desk, "named-permission")
+    reader = make_user("compose-named-permission-reader")
+    grant(desk, "reader", reader)
+    with pytest.raises(PermissionDenied):
+        Message.objects.compose(channel=desk, to=["named@example.test"], text="Hi.", actor=reader)
+    monkeypatch.setattr(Channel, "reply_permission", "read")
+    answer = Message.objects.compose(parent=request, text="Which team?", actor=reader)
+    new = Message.objects.compose(channel=desk, to=["named@example.test"], text="Hi.", actor=reader)
+    assert (answer.parent_id, new.channel_id) == (request.pk, desk.pk)
+
+
 def test_a_refused_reply_writes_no_permission_audit_row(desk: Any) -> None:
     """Who may answer is decided under the actor before anything is read elevated, so no refusal is audited."""
 
@@ -333,6 +428,153 @@ def test_a_chat_reply_is_plain_text_from_an_explicit_sender_on_its_platform(desk
     reply = Message.objects.compose(parent=question, text="Yes.", sender=slack, actor=chat.owner)
     assert (reply.message_type, reply.sender_id, reply.title()) == ("chat", slack.pk, "")
     assert not Recipient._base_manager.filter(message=reply).exists()
+
+
+REREAD = {
+    "a<b@example.test": ("b@example.test",),
+    "a:b@example.test": ("b@example.test",),
+    "a(comment)@example.test": ("a@example.test",),
+    "team:a@example.test;": ("a@example.test",),
+    "a@x.test,b@example.test": ("a@x.test", "b@example.test"),
+    "a@example.test junk": ("a@example.testjunk",),
+    "a@example.test(c)": ("a@example.test",),
+    "eve@example.test (Eve)": ("eve@example.test",),
+}
+"""Entries a mail library reads as another address, or as several: each would land the addresses beside it."""
+
+
+@pytest.mark.parametrize("entry", REREAD)
+def test_an_entry_compose_would_read_as_another_address_is_refused(desk: Any, entry: str) -> None:
+    with _refused(key="to", code="invalid"):
+        Message.objects.compose(channel=desk, to=[entry], text="Hi.", actor=desk.owner)
+    assert not Handle._base_manager.filter(value__in=REREAD[entry]).exists()
+
+
+@pytest.mark.parametrize("role", ["to", "cc", "bcc"])
+@pytest.mark.parametrize("entry", ["Na\x00me <nul@example.test>", "nul@example.test\x00", "nu\x00l@example.test"])
+def test_an_entry_carrying_a_nul_is_refused_under_its_role(desk: Any, role: str, entry: str) -> None:
+    """PostgreSQL stores no NUL, so a name holding one would fail the write after it began; it is refused first."""
+
+    with _refused(key=role, code="invalid"):
+        Message.objects.compose(channel=desk, **{role: [entry]}, text="Hi.", actor=desk.owner)
+
+
+@pytest.mark.parametrize(("entry", "expected"), [
+    ("Customer@Example.COM", ("", "customer@example.com")),
+    ("Name <a@example.test>", ("Name", "a@example.test")),
+    ('"Doe, Jane" <jane@example.test>', ("Doe, Jane", "jane@example.test")),
+    ("jörg@example.test", ("", "jörg@example.test")),
+])
+def test_clean_recipient_returns_exactly_what_compose_lands(desk: Any, entry: str, expected: tuple[str, str]) -> None:
+    assert Message.objects.clean_recipient(entry) == expected
+    message = Message.objects.compose(channel=desk, to=[entry], text="Hi.", actor=desk.owner)
+    with system_context(reason="tests.messaging.compose.clean_recipient"):
+        assert Recipient._base_manager.get(message=message).handle.value == expected[1]
+
+
+@given(st.text(alphabet=string.ascii_letters + '@.<>:;,()" ', max_size=40))
+@example("a<b@example.test")
+@example("a(b)@example.test")
+@example("a@example.test c")
+@example("a:b@example.test")
+@hypothesis_settings(max_examples=300, deadline=None)
+def test_an_entry_is_refused_or_lands_exactly_the_address_it_names(entry: str) -> None:
+    """Whatever is typed, compose refuses it or lands one address that the entry itself names."""
+
+    try:
+        outgoing = Message.objects._validate_outgoing(
+            channel=None, parent=None, record=None, sender=None, to=(entry,), cc=(), bcc=(), subject="",
+            text="x", html="", attachments=(), local={}, queued=False, scheduled_at=None,
+        )
+    except ValidationError as error:
+        assert "to" in error.error_dict
+        return
+    (addressee,) = outgoing.recipients
+    typed = Handle.email_value(entry.strip())
+    assert addressee.address == typed or typed.endswith(f"<{addressee.address}>")
+
+
+def test_a_schedule_time_without_an_offset_is_refused_before_the_claim(desk: Any) -> None:
+    """A naive time is never read in the server's zone; an aware one holds the draft until then."""
+
+    naive = datetime(2030, 1, 1, 10, 0)
+    with _refused(key="scheduled_at", code="naive_datetime"):
+        Message.objects.compose(
+            channel=desk, to=["later@example.test"], text="Hi.", scheduled_at=naive, idempotency_key="naive",
+            actor=desk.owner,
+        )
+    held = Message.objects.compose(
+        channel=desk, to=["later@example.test"], text="Hi.", scheduled_at=naive.replace(tzinfo=UTC),
+        actor=desk.owner,
+    )
+    assert held.scheduled_at == naive.replace(tzinfo=UTC)
+
+
+def _addresses(role: str, count: int) -> list[str]:
+    return [f"{role}-{index}@example.test" for index in range(count)]
+
+
+@pytest.mark.parametrize(("to", "cc", "bcc", "key"), [(51, 0, 0, "to"), (30, 21, 0, "cc"), (20, 20, 11, "bcc")])
+def test_more_recipients_than_the_bound_are_refused_under_the_role_that_crosses_it(
+    desk: Any, to: int, cc: int, bcc: int, key: str,
+) -> None:
+    """The three roles share one bound (50 by default), checked before anything is read."""
+
+    with CaptureQueriesContext(connection) as queries, pytest.raises(ValidationError) as refused:
+        Message.objects.compose(
+            channel=desk, to=_addresses("to", to), cc=_addresses("cc", cc), bcc=_addresses("bcc", bcc),
+            text="Hi.", actor=desk.owner,
+        )
+    assert [(field, error.code) for field, errors in refused.value.error_dict.items() for error in errors] == [
+        (key, "too_many"),
+    ]
+    assert not queries.captured_queries
+
+
+def test_a_message_at_the_recipient_bound_is_sent(desk: Any) -> None:
+    message = Message.objects.compose(
+        channel=desk, to=_addresses("to", 48), cc=_addresses("cc", 1), bcc=_addresses("bcc", 1),
+        text="Hi.", actor=desk.owner,
+    )
+    with system_context(reason="tests.messaging.compose.bound"):
+        assert Recipient._base_manager.filter(message=message).count() == 50
+
+
+def test_more_attachments_than_the_bound_are_refused_before_any_file_is_read(desk: Any, settings: Any) -> None:
+    files = [_file(desk.owner, f"attachment {index}".encode(), name=f"a{index}.txt") for index in range(3)]
+    with CaptureQueriesContext(connection) as queries, pytest.raises(ValidationError) as refused:
+        Message.objects.compose(
+            channel=desk, to=["bound@example.test"], text="Hi.", attachments=[files[0]] * 21, actor=desk.owner,
+        )
+    assert [(field, error.code) for field, errors in refused.value.error_dict.items() for error in errors] == [
+        ("attachments", "too_many"),
+    ]
+    assert not queries.captured_queries
+    settings.ANGEE_MESSAGING_MAX_ATTACHMENTS = 2
+    with _refused(key="attachments", code="too_many"):
+        Message.objects.compose(
+            channel=desk, to=["bound@example.test"], text="Hi.", attachments=files, actor=desk.owner,
+        )
+    message = Message.objects.compose(
+        channel=desk, to=["bound@example.test"], text="Hi.", attachments=files[:2], actor=desk.owner,
+    )
+    with system_context(reason="tests.messaging.compose.bound"):
+        assert Part._base_manager.filter(message=message, file__isnull=False).count() == 2
+
+
+def test_the_channels_sender_handle_has_no_creator_and_a_typed_contact_keeps_its_composer(desk: Any) -> None:
+    """The first composer on a channel holds nothing of its sender; the person who types a contact holds that."""
+
+    replier = make_user("compose-first-replier")
+    grant(desk, "replier", replier)
+    message = Message.objects.compose(channel=desk, to=["first-contact@example.test"], text="Hi.", actor=replier)
+    with system_context(reason="tests.messaging.compose.sender_creator"):
+        sender = Handle._base_manager.get(pk=message.sender_id)
+        recipient = Recipient._base_manager.select_related("handle").get(message=message).handle
+    assert sender.created_by_id is None
+    for action in ("read", "write", "delete"):
+        assert not Handle._base_manager.get(pk=sender.pk).with_actor(replier).has_access(action), action
+    assert recipient.created_by_id == replier.pk
 
 
 def test_every_writer_lands_an_email_address_on_one_handle(db: None, settings: Any) -> None:
@@ -535,6 +777,16 @@ def test_an_email_reply_goes_to_its_reply_to_else_its_sender_and_a_reply_to_with
     assert to == {"reply-to": ["ann@example.test"], "sender": ["requester@example.test"]}
     unaddressed = _receive(desk, "unaddressed", sender=None)
     assert unaddressed.reply_error(actor=owner).error_dict["parent"][0].code == "reply_unaddressed"
+
+
+def test_an_answer_to_a_message_with_a_channel_and_no_thread_is_refused_unwritten(desk: Any) -> None:
+    """``Message.thread`` is nullable and nothing ties it to the channel, so the envelope refuses such a parent."""
+
+    with system_context(reason="tests.messaging.compose.threadless"):
+        parent = Message._base_manager.create(channel=desk, platform="email", message_type="email")
+    assert parent.reply_error(actor=desk.owner).error_dict["parent"][0].code == "reply_incomplete"
+    with _refused(key="parent", code="reply_incomplete"):
+        Message.objects.compose(parent=parent, text="Thanks.", actor=desk.owner)
 
 
 @given(st.text())
