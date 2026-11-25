@@ -57,8 +57,12 @@ decides before it claims or writes: who may answer a message is
 `Message.reply_envelope` (its refusal is `Message.reply_error`, which intake's
 email route asks too), and posting on a record is the chatter's own gate,
 `ThreadedModelMixin.require_post`. An email is sent from its channel's default
-sender, and its text part is only its own text, never made from its HTML. A
-message takes at most `ANGEE_MESSAGING_MAX_RECIPIENTS` addresses across `to`, `cc`
+sender, and its text part is only its own text, never made from its HTML.
+Each typed recipient is one entry, as
+[`MessageManager.clean_recipient`](managers.py) reads it and as `compose` lands
+it: a bare address or one explicit `Name <address>`. An entry a mail library
+would read as another address or as several, or one carrying a NUL byte, is
+refused (`invalid`) under its role, never re-read. A message takes at most `ANGEE_MESSAGING_MAX_RECIPIENTS` addresses across `to`, `cc`
 and `bcc` (50) and `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (20), both
 contributed in [`autoconfig.py`](autoconfig.py); more is refused (`too_many`)
 under the argument that crosses the bound, before anything is read. A

@@ -450,6 +450,15 @@ def test_an_entry_compose_would_read_as_another_address_is_refused(desk: Any, en
     assert not Handle._base_manager.filter(value__in=REREAD[entry]).exists()
 
 
+@pytest.mark.parametrize("role", ["to", "cc", "bcc"])
+@pytest.mark.parametrize("entry", ["Na\x00me <nul@example.test>", "nul@example.test\x00", "nu\x00l@example.test"])
+def test_an_entry_carrying_a_nul_is_refused_under_its_role(desk: Any, role: str, entry: str) -> None:
+    """PostgreSQL stores no NUL, so a name holding one would fail the write after it began; it is refused first."""
+
+    with _refused(key=role, code="invalid"):
+        Message.objects.compose(channel=desk, **{role: [entry]}, text="Hi.", actor=desk.owner)
+
+
 @pytest.mark.parametrize(("entry", "expected"), [
     ("Customer@Example.COM", ("", "customer@example.com")),
     ("Name <a@example.test>", ("Name", "a@example.test")),

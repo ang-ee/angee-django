@@ -3239,7 +3239,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         An entry is one recipient: a bare address, read as itself, or one explicit
         ``Name <address>``. An entry a mail library would read as another address,
         or as several (a comment, a group, a list, trailing text, ``address
-        (Name)``), is refused rather than re-read. The handle owner then decides
+        (Name)``), is refused rather than re-read, and so is one carrying a NUL
+        byte, which no messaging write stores. The handle owner then decides
         whether the address can be one and can be stored on a handle
         (``Handle.is_email_address``, ``HandleManager.clean_identity``). It reads
         nothing, so a caller can ask it before expensive work, and ``compose``
@@ -3252,7 +3253,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         parsed = getaddresses([text])
         name, address = parsed[0] if len(parsed) == 1 else ("", "")
         explicit = text.endswith(f"<{address}>") and text.count("<") == text.count(">") == 1
-        if not address or not (text == address or explicit) or not handle_model.is_email_address(address):
+        landable = "\x00" not in text and handle_model.is_email_address(address)
+        if not address or not (text == address or explicit) or not landable:
             raise ValidationError({key: ValidationError(
                 "%(entry)s is not one email address.", code="invalid", params={"entry": str(entry or "") or "An entry"},
             )})

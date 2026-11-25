@@ -22,7 +22,8 @@ live in code docstrings.
     address read as itself or one explicit `Name <address>`, returned as
     `(name, address)` exactly as `compose` lands it, or refused (`invalid`). An
     entry a mail library would read as another address or as several (a
-    comment, a group, a list, trailing text) is refused, never re-read; a caller
+    comment, a group, a list, trailing text), or carrying a NUL byte (which
+    failed the write on PostgreSQL after it began), is refused, never re-read; a caller
     asks `clean_recipient` before expensive work. A message takes at most
     `ANGEE_MESSAGING_MAX_RECIPIENTS` addresses across `to`, `cc` and `bcc`
     (default 50, the strictest common provider's per-message limit; each new
