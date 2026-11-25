@@ -2,9 +2,15 @@
 
 :func:`check_html` reads one HTML form (a row's HTML source, a Markdown row's
 HTML form, the markup inside an Outlook comment) with its template spans read as
-placeholders, and returns what a mail may not carry. Property 1's static side, a
-value never becomes markup, an attribute, a link target or CSS, is this
-module's alone; the walker calls it on every row it checks.
+placeholders, and returns what a mail may not carry; the walker calls it on every
+row it checks. Promise 1, a value never becomes markup, an attribute, a link
+target or CSS, holds because every list a row or a value varies along is closed.
+This module owns the HTML lines of that table (the spelling, the elements and
+attributes, where a value sits, an author's links and the character set); the
+filters and their order are the engine's and the walker's row rules, a value's
+characters :meth:`~angee.messaging_templates.walker.TemplateWalk.prepare`'s and
+the schemes :func:`~angee.messaging_templates.engine.url`'s. The addon README's
+table of closed lists names the owner and the test of each line.
 
 A form is admitted only when it is written in one strict spelling every HTML
 reader tokenises the same way (:class:`SpellingRule`): the text equals the
