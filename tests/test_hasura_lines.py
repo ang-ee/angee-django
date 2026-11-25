@@ -1144,18 +1144,18 @@ mutation($product: ID!, $key: String) {
 """
 
 
-@pytest.mark.parametrize("key", (None, "k" * 129), ids=("keyless", "keyed"))
-def test_insert_decides_the_document_before_its_lines_or_its_claim(db: None, key: str | None) -> None:
-    """A refused caller gets the document's refusal before a line's product is resolved or its key is claimed.
+def test_insert_decides_the_document_before_its_lines(db: None) -> None:
+    """A refused caller gets the document's refusal before a line's product is resolved.
 
-    The key is longer than a claim admits, so a claim made before the decision
-    would answer with the key's own validation error instead of the refusal.
+    Only an anonymous caller may not create a document, and an anonymous key is
+    refused ahead of the backend; a keyed insert's claim waits for the same
+    decision (``test_a_defaulting_insert_is_decided_before_its_key_is_claimed``).
     """
 
     with system_context(reason="seed"):
         hidden = Product.objects.create(name="Hidden")
 
-    result = execute_schema(_SCHEMA_WITH_PRODUCT, _INSERT_WITH_PRODUCT_LINE, {"product": hidden.public_id, "key": key})
+    result = execute_schema(_SCHEMA_WITH_PRODUCT, _INSERT_WITH_PRODUCT_LINE, {"product": hidden.public_id, "key": None})
 
     assert result.errors is not None
     assert isinstance(result.errors[0].original_error, PermissionDenied), result.errors[0].original_error

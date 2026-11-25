@@ -424,7 +424,7 @@ class VaultWriteBackend(AngeeHasuraWriteBackend):
     def _create_row(self, info: strawberry.Info, data: dict[str, Any], *, claim: CreationClaim | None = None) -> Any:
         """Create a vault owned by the requesting user, claimed before the factory decides."""
 
-        if claim is not None and (replay := claim(self._decode_public_id_fields(data))) is not None:
+        if claim is not None and (replay := claim()) is not None:
             return replay
         user = get_current_user(info)
         fields = dict(data)
@@ -440,7 +440,7 @@ class PageWriteBackend(AngeeHasuraWriteBackend):
         """Create a page in a vault the requesting user can write, claimed before the factory decides."""
 
         del info
-        if claim is not None and (replay := claim(self._decode_public_id_fields(data))) is not None:
+        if claim is not None and (replay := claim()) is not None:
             return replay
         vault = require_instance_for_id(Vault, data["vault"])
         parent = None

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Self, cast
 
@@ -260,20 +260,19 @@ class ChangesetManager[ChangesetT: Changeset](_ChangesetManagerBase[ChangesetT])
         scope: str,
         key: str,
         *,
-        values: Callable[[], Any],
+        values: Any,
         model: type[CreatedT],
         unavailable: Exception,
     ) -> CreatedT | None:
         """Return the row an earlier claim of ``(scope, key)`` created, reading without claiming.
 
         ``None`` when the key is unclaimed, including a key no claim could hold.
-        ``values`` is called only when a claim exists, so a first attempt
-        neither decodes nor fingerprints its content here; content other than
-        the claim's is a conflict. The caller owns every refusal specific to
-        the returned row.
+        ``values`` is fingerprinted only when a claim exists; content other
+        than the claim's is a conflict. The caller owns every refusal specific
+        to the returned row.
         """
 
         existing = self.model._base_manager.filter(scope=scope, key=key).first()
         if existing is None:
             return None
-        return _created_row(_same_content(existing, creation_fingerprint(values())), model, unavailable)
+        return _created_row(_same_content(existing, creation_fingerprint(values)), model, unavailable)

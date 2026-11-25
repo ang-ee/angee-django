@@ -1774,7 +1774,9 @@ open fresh evaluator scopes for authorization and change-feed reads.
   `insert_<resource>_one` also accepts `idempotency_key: String`; replaying the same
   actor/resource-scoped key and content returns the readable original, looked up
   before the create is decided again, and changed content fails with
-  `CREATION_KEY_CONFLICT`. A first attempt is decided before its key is claimed;
+  `CREATION_KEY_CONFLICT`. Content is the request's input as sent, whatever the
+  backend fills in before inserting; an anonymous caller's key is refused, since
+  anonymous callers share one actor. A first attempt is decided before its key is claimed;
   a backend that decides inside its own factory claims before that factory runs. Neither token belongs in `_set` or `object`.
   The [Hasura adapter](../../src/angee/graphql/data/hasura.py) composes native
   write backends and their declared arguments; provenance owns creation claims,

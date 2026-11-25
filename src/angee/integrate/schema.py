@@ -1845,7 +1845,7 @@ class IntegrationWriteBackend(AngeeHasuraWriteBackend):
 
         del info
         values = self._decode_public_id_fields(data)
-        if claim is not None and (replay := claim(values)) is not None:
+        if claim is not None and (replay := claim()) is not None:
             return replay
         manager = cast(IntegrationManager, self.model._default_manager)
         return manager.create_capability(**values)

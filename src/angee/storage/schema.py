@@ -339,7 +339,7 @@ class FolderWriteBackend(AngeeHasuraWriteBackend):
         """Create a real folder through ``Folder.objects.create_in_drive``, claimed before it decides."""
 
         del info
-        if claim is not None and (replay := claim(self._decode_public_id_fields(data))) is not None:
+        if claim is not None and (replay := claim()) is not None:
             return replay
         try:
             return Folder.objects.create_in_drive(

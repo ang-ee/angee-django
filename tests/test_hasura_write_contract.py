@@ -418,7 +418,7 @@ class _FactoryDocBackend(AngeeHasuraWriteBackend):
         self.made = made
 
     def _create_row(self, info: strawberry.Info, data: dict[str, Any], *, claim: Any = None) -> Any:
-        if claim is not None and (replay := claim(self._decode_public_id_fields(data))) is not None:
+        if claim is not None and (replay := claim()) is not None:
             return replay
         self.made.append(data["title"])
         return SharedDoc.objects.create(title=data["title"], is_shared=True)

@@ -200,8 +200,12 @@ class _MutationResultExtension(FieldExtension):
         return await sync_to_async(self.refetch)(row, info)
 
 
-CreationClaim = Callable[[dict[str, Any]], Any]
-"""An idempotency adapter's claim: given decoded creation values, the row it replays, or ``None``."""
+CreationClaim = Callable[[], Any]
+"""An idempotency adapter's claim, asked at the creation's decision point: the row it replays, or ``None``.
+
+The adapter fingerprints the request's input as sent, so a backend that fills or
+changes values before it inserts still matches its retry.
+"""
 
 
 class _DeletePreviewBackend(WriteBackend, Protocol):
@@ -285,40 +289,35 @@ class AngeeHasuraWriteBackend:
         """Insert one row, its declared nested child lines and input extensions atomically.
 
         The row's create is decided first (:meth:`_create_row`); its lines are
-        decoded only then. ``claim`` is an idempotency adapter's: it is asked
-        with the creation's decoded values (``object``, ``lines``) at the row's
-        decision point, before anything is written, and a row it returns is the
-        earlier creation, replayed as it is. A subclass whose ``insert`` decides
-        by itself asks ``claim`` at its own decision point. Only a keyed insert
-        passes ``claim``: an ``insert`` or ``_create_row`` override that does not
-        take it still serves a keyless insert.
+        decoded only then. ``claim`` is an idempotency adapter's: the row's
+        decision point asks it, before anything is written, and a row it
+        returns is the earlier creation, replayed as it is. A subclass whose
+        ``insert`` decides by itself asks ``claim`` at its own decision point.
+        Only a keyed insert passes ``claim``: an ``insert`` or ``_create_row``
+        override that does not take it still serves a keyless insert.
         """
 
         data, extensions = self._split_input(data)
         line_rows = self._pop_line_rows(data) if self.lines is not None else None
-        lines: list[tuple[str | None, dict[str, Any]]] | None = None
         replayed = False
 
-        def claim_row(values: dict[str, Any]) -> Any:
-            nonlocal lines, replayed
+        def ask() -> Any:
+            nonlocal replayed
             assert claim is not None
-            lines = self._prepare_line_rows(line_rows) if line_rows is not None else None
-            replay = claim({"object": {**values, **extensions}, "lines": lines})
+            replay = claim()
             replayed = replay is not None
             return replay
 
         with transaction.atomic():
-            instance = self._create_row(info, data) if claim is None else self._create_row(info, data, claim=claim_row)
+            instance = self._create_row(info, data) if claim is None else self._create_row(info, data, claim=ask)
             if replayed:
                 return instance
-            if lines is None and line_rows is not None:
-                lines = self._prepare_line_rows(line_rows)
-            if self.lines is not None and lines is not None:
+            if self.lines is not None and line_rows is not None:
                 # The caller's creation admitted this row and the lines created with it, even when
                 # the caller may not write the row afterwards: name that admission explicitly.
                 instance.replace_lines(
                     self.lines.field,
-                    lines,
+                    self._prepare_line_rows(line_rows),
                     position_field=self.lines.position_field,
                     replace=False,
                     permission="create",
@@ -326,16 +325,6 @@ class AngeeHasuraWriteBackend:
             if extensions:
                 instance.apply_input_extensions(**extensions)
         return instance
-
-    def creation_values(self, data: dict[str, Any]) -> dict[str, Any]:
-        """Decode raw write input into the creation values a claim fingerprints, lines included."""
-
-        data, extensions = self._split_input(data)
-        line_rows = self._pop_line_rows(data) if self.lines is not None else None
-        return {
-            "object": {**self._decode_public_id_fields(data), **extensions},
-            "lines": self._prepare_line_rows(line_rows) if line_rows is not None else None,
-        }
 
     def save(
         self,
@@ -387,15 +376,15 @@ class AngeeHasuraWriteBackend:
     def _create_row(self, info: strawberry.Info, data: dict[str, Any], *, claim: CreationClaim | None = None) -> Any:
         """Create one row from its write input: decode its public ids once, decide its create, then write it.
 
-        ``claim`` is asked with the decoded row values once the create is
-        decided, before the row is validated or written; a row it returns is
-        returned instead. A factory backend overrides this hook: its factory
-        decides as it writes, so it asks ``claim`` first, before calling it.
+        ``claim`` is asked once the create is decided, before the row is
+        validated or written; a row it returns is returned instead. A factory
+        backend overrides this hook: its factory decides as it writes, so it
+        asks ``claim`` first, before calling it.
         """
 
         values = self._decode_public_id_fields(data)
         self._require_create(info, values)
-        if claim is not None and (replay := claim(values)) is not None:
+        if claim is not None and (replay := claim()) is not None:
             return replay
         return self._create_decided(info, values)
 

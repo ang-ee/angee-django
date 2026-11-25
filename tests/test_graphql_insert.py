@@ -26,6 +26,7 @@ from rebac.roles import revoke as revoke_role
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.node import AngeeNode
 from angee.graphql.testing.documents import execute_schema, result_data
+from angee.provenance.context import changeset_model
 from tests.conftest import create_platform_admin, create_user
 from tests.scopedemo.models import FactoryCompanion, FactoryDoc, ProjectionDoc, Scope, SharedDoc, ValidatedDoc
 
@@ -356,3 +357,19 @@ def test_a_retry_replays_the_earlier_creation_after_the_create_right_is_lost() -
 
     assert retry == first
     assert ValidatedDoc._base_manager.count() == 1
+
+
+@pytest.mark.django_db
+def test_an_anonymous_caller_cannot_use_an_idempotency_key() -> None:
+    """Anonymous callers share one actor, so no key can be held for one of them: the key is a field error."""
+
+    variables = {"title": "aa", "code": "anonymous", "key": "anonymous-key"}
+
+    refused = execute_schema(_VALIDATED_SCHEMA, _VALIDATED_KEYED_INSERT, variables, user=None)
+
+    assert refused.errors is not None and len(refused.errors) == 1, refused.errors
+    error = refused.errors[0].original_error
+    assert isinstance(error, ValidationError), repr(error)
+    assert list(error.message_dict) == ["idempotency_key"]
+    assert not changeset_model()._base_manager.filter(key="anonymous-key").exists()
+    assert not ValidatedDoc._base_manager.exists()
