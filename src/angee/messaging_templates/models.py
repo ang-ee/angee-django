@@ -192,14 +192,23 @@ class MessageTemplateKindHandler:
         del row
         return form
 
-    def naming_rows(self, rows: models.QuerySet[Any], keys: Iterable[str]) -> dict[str, list[Any]]:
+    def naming_rows(
+        self, rows: models.QuerySet[Any], keys: Iterable[str], *, walker: TemplateWalker,
+    ) -> dict[str, list[Any]]:
         """Return the rows among ``rows``, in any language, naming each of ``keys`` as a row of this kind, by key.
 
-        One read answers every key; a key nothing names is absent.
+        One read answers every key; a key nothing names is absent. ``walker``
+        checks what a row includes and remembers each row it checked, so a caller
+        asking several kinds with one walker checks a row once.
         """
 
-        del rows, keys
+        del rows, keys, walker
         return {}
+
+    def is_named(self, rows: models.QuerySet[Any], key: str) -> bool:
+        """Whether some row among ``rows``, in any language, names ``key`` as a row of this kind."""
+
+        return bool(self.naming_rows(rows, [key], walker=TemplateWalker()))
 
 
 class LayoutHandler(MessageTemplateKindHandler):
@@ -226,13 +235,27 @@ class LayoutHandler(MessageTemplateKindHandler):
         "sample": {},
     }
 
-    def naming_rows(self, rows: models.QuerySet[Any], keys: Iterable[str]) -> dict[str, list[Any]]:
-        """Return, for each of ``keys``, the rows whose ``layout`` is it, in one read; only templates fill it."""
+    def naming_rows(
+        self, rows: models.QuerySet[Any], keys: Iterable[str], *, walker: TemplateWalker,
+    ) -> dict[str, list[Any]]:
+        """Return, for each of ``keys``, the rows whose ``layout`` is it, in one read; nothing is checked."""
 
+        del walker
         named: dict[str, list[Any]] = {}
-        for row in rows.filter(layout__in=[*keys]).annotate(_backlink_layout=models.F("layout")):
+        for row in self._naming(rows, keys).annotate(_backlink_layout=models.F("layout")):
             named.setdefault(row._backlink_layout, []).append(row)
         return named
+
+    def is_named(self, rows: models.QuerySet[Any], key: str) -> bool:
+        """Whether a template among ``rows`` sits in the layout ``key``: one ``EXISTS``, no row loaded."""
+
+        return self._naming(rows, [key]).exists()
+
+    @staticmethod
+    def _naming(rows: models.QuerySet[Any], keys: Iterable[str]) -> models.QuerySet[Any]:
+        """The rows naming one of ``keys`` as their layout: only templates fill the column."""
+
+        return rows.filter(layout__in=[*keys])
 
 
 class TemplateHandler(MessageTemplateKindHandler):
@@ -267,13 +290,16 @@ class IncludedHandler(MessageTemplateKindHandler):
 
     includable = True
 
-    def naming_rows(self, rows: models.QuerySet[Any], keys: Iterable[str]) -> dict[str, list[Any]]:
+    def naming_rows(
+        self, rows: models.QuerySet[Any], keys: Iterable[str], *, walker: TemplateWalker,
+    ) -> dict[str, list[Any]]:
         """Return, for each of ``keys``, the rows among ``rows`` whose compiled forms include this kind's row of it.
 
         One read of the rows whose source or plain-text form holds one of the
-        names, with every column a check reads whatever ``rows`` defers; then one
-        walker checks each of them once (:meth:`TemplateWalker.includes`). A row
-        that does not compile names nothing.
+        names, every column loaded whatever ``rows`` defers (``sample`` too, which
+        the reader's field gate redacts after the fetch); then ``walker`` checks
+        each of them (:meth:`TemplateWalker.includes`). A row that does not
+        compile names nothing.
         """
 
         names = {self.template_name(key): key for key in keys}
@@ -282,7 +308,6 @@ class IncludedHandler(MessageTemplateKindHandler):
         holding = models.Q()
         for name in names:
             holding |= models.Q(source__contains=name) | models.Q(text_source__contains=name)
-        walker = TemplateWalker()
         named: dict[str, list[Any]] = {}
         for row in rows.defer(None).filter(holding):
             for name in names.keys() & walker.includes(row):
@@ -662,7 +687,8 @@ class _Backlinks(InstancePrefetch):
     The rows of one kind and key share one answer, ``((kind, key), rows)``,
     whatever their language: what names a key names each of its rows. A row
     naming several listed keys sits in each of their answers, and nothing is
-    copied. A row the reader may not preview
+    copied; one walker serves every kind, so a row naming a listed block and a
+    listed part is checked once. A row the reader may not preview
     (:func:`~angee.graphql.capabilities.held_permissions`) gets ``None`` and
     causes no read, as does a row nothing names.
     """
@@ -676,10 +702,13 @@ class _Backlinks(InstancePrefetch):
         keys: dict[str, set[str]] = {}
         for kind, key in identities.values():
             keys.setdefault(kind, set()).add(key)
+        walker = TemplateWalker()
         answers = [
             ((kind, key), rows)
             for kind in sorted(keys)
-            for key, rows in MessageTemplateKind(kind).handler.naming_rows(queryset, sorted(keys[kind])).items()
+            for key, rows in MessageTemplateKind(kind).handler.naming_rows(
+                queryset, sorted(keys[kind]), walker=walker,
+            ).items()
         ]
         return answers, lambda answer: answer[0], lambda row: identities.get(row.pk)
 
@@ -1017,7 +1046,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
 
         del cascaded
         rows = type(self).system_queryset()
-        if not self.handler.naming_rows(rows, [self.key]):
+        if not self.handler.is_named(rows, self.key):
             return None
         if rows.exclude(pk=self.pk).resolves(self.kind, self.key):
             return None

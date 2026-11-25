@@ -161,6 +161,10 @@ def test_backlinks_are_the_rows_in_any_language_that_name_a_kind_and_key(db: Non
     }
     assert set(read(member).values()) == {None}
     with system_context(reason="tests.messaging_templates.console.delete"):
+        spanish = MessageTemplate.objects.get(kind="layout", key="base", language="es")
+        with CaptureQueriesContext(connection) as captured:
+            assert spanish.delete_blocker() is None  # named by both templates, and the shipped row still resolves
+        assert not any('"source"' in query["sql"] for query in captured.captured_queries)  # whether, not which
         assert MessageTemplate.objects.get(pk=button.pk).delete_blocker() == (
             "Other message templates use this block, which would no longer resolve without this row: "
             "give its key a row in the default language first."
@@ -171,6 +175,25 @@ def test_backlinks_are_the_rows_in_any_language_that_name_a_kind_and_key(db: Non
     assert alone["message_templates_by_pk"]["backlinks"] == [
         {"key": "letter", "language": "en"}, {"key": "tests.welcome", "language": "en"},
     ]
+
+
+def test_a_row_naming_a_listed_block_and_a_listed_part_is_checked_once(
+    db: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del db
+    admin = create_platform_admin("messaging-templates-console-both")
+    _row("layout", "base", baseline=True, **_LAYOUT)
+    _row("block", "button", source="<p>Open</p>", text_source="Open")
+    _row("part", "thanks", source="Thank you.")
+    _template("tests.both", _include("blocks/button") + "\n\n" + _include("parts/thanks"))
+    checked: list[str] = []
+    _recording(monkeypatch, TemplateWalker, "_check", lambda walker, row, name: checked.append(name))
+    variables = {"where": {"key": {"_in": ["button", "thanks"]}}}
+    rows = result_data(execute_schema(_schema(), _BLOCK_BACKLINKS, variables, user=admin))["message_templates"]
+    assert {row["key"]: [named["key"] for named in row["backlinks"]] for row in rows} == {
+        "button": ["tests.both"], "thanks": ["tests.both"],
+    }
+    assert checked == ["tests.both"]
 
 
 _BLOCK_KEYS = [f"b{index:02}" for index in range(1, 26)]

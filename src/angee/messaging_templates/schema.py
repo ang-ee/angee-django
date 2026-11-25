@@ -108,7 +108,11 @@ class MessageTemplateType(AngeeNode):
         parent: strawberry.Parent[MessageTemplateModel], info: strawberry.Info,
     ) -> list[MessageTemplateType] | None:
         """The rows, in any language, that name this row's kind and key: a template its layout, any row a block or
-        part it includes. Null for a reader who may not preview this row."""
+        part it includes. Null for a reader who may not preview this row.
+
+        A read for one record's page, not for a list: its statements are fixed,
+        but every read checks each row that holds a listed block's or part's name.
+        """
 
         if "preview" not in held_permissions(parent, ("preview",)):
             return None
