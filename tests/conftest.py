@@ -656,6 +656,7 @@ class ExtcontribRole(Role):
 # Every installed backing needs its concrete model before native database setup.
 # The brand kit's logos point at the storage File registered above.
 from angee.brandkit.testing import models as brandkit_models  # noqa: E402, F401
+from angee.messaging_templates.testing import models as messaging_templates_models  # noqa: E402, F401
 from angee.nexus.testing import models as nexus_models  # noqa: E402, F401
 from angee.operator.testing import models as operator_models  # noqa: E402, F401
 from angee.portfolio.testing import models as portfolio_models  # noqa: E402, F401
