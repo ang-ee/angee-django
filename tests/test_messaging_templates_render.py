@@ -31,10 +31,11 @@ import yaml
 from asgiref.sync import sync_to_async
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import connection, transaction
 from django.template import Engine, TemplateSyntaxError
 from django.template.base import DebugLexer, Node, Parser, tag_re
 from django.template.defaulttags import TemplateLiteral
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone, translation
 from django.utils.safestring import SafeString, mark_safe
 from hypothesis import HealthCheck, event, example, given, settings
@@ -80,6 +81,7 @@ from angee.messaging_templates.walker import (
     TemplateWalker,
     TemplateWarning,
     TemplateWarningCode,
+    TextDirection,
     _frame,
     _RowRules,
     _Tree,
@@ -162,14 +164,42 @@ TIMED_RUN = os.environ.get("ANGEE_TIMED_TESTS") == "1"
 """Whether CPU-time bounds are asserted: every one of them runs on request (docs/checks.md), never by default."""
 
 
+REFERENCE_ITERATIONS = 1_000_000
+NOMINAL_REFERENCE_SECONDS = 0.048
+"""The reference workload's CPU seconds on the machine class the bounds were set on: an 18-core Apple M-series
+machine, CPython 3.14.9, at a load near 13. A bound written in seconds holds that many there."""
+
+
+def _reference_seconds() -> float:
+    """CPU seconds of a fixed pure-Python workload (string building and arithmetic), the least of three runs."""
+
+    best = math.inf
+    for _ in range(3):
+        started = time.process_time()
+        total = 0
+        for index in range(REFERENCE_ITERATIONS):
+            total += len(str(index)) + index % 7
+        best = min(best, time.process_time() - started)
+    return best
+
+
+def _scaled(seconds: float) -> float:
+    """``seconds`` as a bound here: scaled by the reference workload measured now, in this process, so a busy machine
+    slows the case and the unit alike and the bound neither fails for a neighbour nor loosens for a fast host."""
+
+    return seconds * _reference_seconds() / NOMINAL_REFERENCE_SECONDS
+
+
 @contextmanager
 def _within(seconds: float, case: object = None) -> Iterator[None]:
-    """Time the block in CPU seconds; the bound is asserted only when ``ANGEE_TIMED_TESTS=1``, as every CPU bound is."""
+    """Time the block in CPU seconds against :func:`_scaled` ``seconds``; the bound is asserted only when
+    ``ANGEE_TIMED_TESTS=1``, as every CPU bound is."""
 
+    bound = _scaled(seconds) if TIMED_RUN else math.inf
     started = time.process_time()
     yield
     spent = time.process_time() - started
-    assert not TIMED_RUN or spent < seconds, (case, f"{spent:.3f} s of CPU, over {seconds} s")
+    assert spent < bound, (case, f"{spent:.3f} s of CPU, over {bound:.3f} s ({seconds} s at the reference)")
 
 
 def _mail(source: str, variables: dict[str, str] | None = None, **values: Any) -> Any:
@@ -1198,8 +1228,8 @@ class _Rows:
         del language
         return {name: self.rows[name] for name in names if name in self.rows}
 
-    def resolves_name(self, name: str) -> bool:
-        return name in self.rows
+    def resolving_names(self, names: Iterable[str]) -> frozenset[str]:
+        return frozenset(name for name in names if name in self.rows)
 
 
 SENT_SCHEMES = ("https://", "http://", "mailto:", "tel:")
@@ -1730,7 +1760,7 @@ def test_dates_numbers_and_direction_follow_the_rows_language(
     template = _mail("{{ when|date:'DATE_FORMAT' }}|{{ dir }}|{{ ok|yesno }}", {"when": "x", "ok": "x"},
                      language=language, key="tests.dated")
     rendered = _render(template, {"when": datetime.date(2026, 11, 24), "ok": True}, kit)
-    assert (rendered.language, rendered.direction) == (language, direction)
+    assert (rendered.language, rendered.direction) == (language, TextDirection(direction))
     assert f'dir="{direction}"' in rendered.html and f"|{direction}|" in rendered.plain_text
     if date is not None:
         assert rendered.plain_text.startswith(date)
@@ -1922,22 +1952,26 @@ def test_a_lone_surrogate_is_refused_as_invalid_values(plain: Any, kit: Any) -> 
 
 
 def test_the_deepest_admitted_row_and_values_render(plain: Any, kit: Any) -> None:
-    """Tags nested 16 deep, three includes, two loops, eight-segment paths and a condition of ten operators: the walk
-    and the render stay far under Python's default recursion limit, so no RecursionError, which stays unconverted,
-    can arise from a row."""
+    """Tags nested 16 deep in each of four rows, three includes, two loops, eight-segment paths and a condition of
+    ten operators: the walk and the render stay far under Python's default recursion limit, so no RecursionError,
+    which stays unconverted, can arise from a row."""
 
     del plain
+
+    def nested(inner: str, depth: int = 16) -> str:
+        return "\n".join(["{% if x %}"] * depth) + inner + "\n".join(["{% endif %}"] * depth)
+
     condition = "{% if " + "not " * CONDITION_OPERATOR_LIMIT + "x %}"
-    nested = "\n".join(["{% if x %}"] * 15) + condition + "{{ x }}" + "\n".join(["{% endif %}"] * 16)
-    _row("part", "depth3", source=nested, variables={"x": "x"})
-    _row("part", "depth2", source='{% include "parts/depth3" with x=x only %}', variables={"x": "x"})
-    _row("part", "depth1", source='{% include "parts/depth2" with x=x only %}', variables={"x": "x"})
+    for name, source in (("depth3", nested(condition + "{{ x }}{% endif %}", 15)),
+                         ("depth2", nested('{% include "parts/depth3" with x=x only %}')),
+                         ("depth1", nested('{% include "parts/depth2" with x=x only %}'))):
+        _row("part", name, format="html", source=source, text_source=source, variables={"x": "x"})
     deep = "a.b.c.d.e.f.g.h"
-    template = _mail(
-        "{% for o in outer %}\n\n{% for i in o.inner %}\n\n"
-        '{% include "parts/depth1" with x=i.v only %}\n\n{% endfor %}\n\n{% endfor %}\n\n{{ ' + deep + " }}",
-        {"outer.*.inner.*.v": "x", deep: "x"}, key="tests.deepest",
-    )
+    body = ("{% for o in outer %}{% for i in o.inner %}{% with x=i.v %}"
+            + nested('{% include "parts/depth1" with x=x only %}', 13)
+            + "{% endwith %}{% endfor %}{% endfor %}{{ " + deep + " }}")
+    template = _mail(body, {"outer.*.inner.*.v": "x", deep: "x"}, format="html", text_source=body,
+                     key="tests.deepest")
     assert _refusals(template) == []
     values: dict[str, Any] = {"outer": [{"inner": [{"v": "Deep"}] * 10}] * 10}
     node = values
@@ -2397,6 +2431,9 @@ def _preview_cases() -> dict[str, Any]:
     for name, (part, count) in WALKED_PARTS.items():
         for index in range(count):
             _row("part", f"{name}{index}", source=part)
+    for index in range(45):
+        _row("part", f"commented{index}", source=COMMENTED_QUOTES)
+    combined = _loop(DATED + _deep_ifs(6) + CHAINS)
     hidden = '\n{% include "parts/hidden0" only %}{% include "parts/hidden1" only %}'
     loop = _loop(DATED + _deep_ifs(30))
     heavy = _loop(DATED + _deep_ifs(10) + CHAINS)
@@ -2431,7 +2468,37 @@ def _preview_cases() -> dict[str, Any]:
         **{name: _mail("\n".join(f'{{% include "parts/{name}{index}" only %}}' for index in range(count)),
                        format="html", text_source="x", key=f"tests.{name}")
            for name, (_, count) in WALKED_PARTS.items()},
+        "combined": _mail(
+            combined + "\n" + "\n".join(f'{{% include "parts/commented{index}" only %}}' for index in range(45)),
+            {**TIMED_VARIABLES, "x": "x", "y": "x", "few.*": "x"}, format="html", text_source=combined,
+            key="tests.combined", subject=LINE, sample={**review, "items": [0] * 450, "few": [0] * 50},
+        ),
     }
+
+
+COMMENTED_QUOTES = "{% comment %}\n\n" + "\n\n".join(["> > > a"] * 333) + "\n\n{% endcomment %}"
+"""A part admitted alone that renders nothing, whose comment the Markdown pass and the HTML checks read in full: 333
+three-deep quotes, each quote an element carrying two brand outputs."""
+
+
+def test_a_walk_stops_at_what_its_checks_read(plain: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The heavy review loop beside 45 commented parts was admitted and read 8.6 million form characters; the walk
+    now stops once the forms its checks have read pass the walk's read caps, comments included."""
+
+    del plain
+    with system_context(reason="tests.messaging_templates.render.walk"):
+        _unsaved("part", "alone", source=COMMENTED_QUOTES).full_clean()
+    template = _preview_cases()["combined"]
+    checked: list[str] = []
+    _recording(monkeypatch, TemplateWalker, "_check", lambda walker, row, name: checked.append(name))
+    assert _refusals(template) == [
+        "tests.combined: the forms of the rows it reaches hold over 600000 characters or 4000 template spans for its "
+        "checks to read, comments included"]
+    assert len(checked) == CHECKED_FOR_THE_READ_CAP, checked
+
+
+CHECKED_FOR_THE_READ_CAP = 4
+"""The template, its layout and two commented parts, whose forms pass the walk's span read cap."""
 
 
 WALKED_PARTS = {
@@ -2469,6 +2536,27 @@ def test_a_walk_over_parts_each_admitted_alone_stops_at_the_trees_caps(
 
 CHECKED_BEFORE_THE_CAPS = ["tests.walked", "layouts/plain", "parts/walked0"]
 """The template, its layout and one part: the part's 300 outputs and the layout's pass the tree's caps."""
+
+
+def test_a_saving_walk_resolves_a_level_in_one_query(plain: Any) -> None:
+    """A part including 10 hubs of 49 parts each asked, on the saving walk, whether each of 490 targets resolves, one
+    query a target; it asks once a level."""
+
+    del plain
+    for hub in range(10):
+        for index in range(49):
+            _row("part", f"leaf{hub}x{index}", source="x")
+        _row("part", f"hub{hub}", source="\n\n".join(
+            f'{{% include "parts/leaf{hub}x{index}" only %}}' for index in range(49)))
+    fan = _unsaved("part", "fan", source="\n\n".join(f'{{% include "parts/hub{hub}" only %}}' for hub in range(10)))
+    with system_context(reason="tests.messaging_templates.render.save"), CaptureQueriesContext(connection) as queries:
+        with pytest.raises(ValidationError, match="reaches over 1000 nodes"):
+            fan.full_clean()
+    assert len(queries) == SAVING_WALK_QUERIES, len(queries)
+
+
+SAVING_WALK_QUERIES = 22
+"""The queries of that saving walk: 520 before a level resolved in one query."""
 
 
 def test_a_walk_compiles_each_span_once(plain: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2580,6 +2668,7 @@ PREVIEW_WORK: dict[str, tuple[int, list[tuple[str, int, int, int]], list[tuple[i
     "single": (8_067, [], []),
     "fivedeep": (4_968, [], []),
     "thousand": (6_304, [], []),
+    "combined": (19_515, [], []),
     "rules": (49_068, [], []),
     "dated": (
         23_322, [("html", 579, 284, 382), ("text", 569, 280, 281), *LINES], [(0, 0, 0), (500, 0, 0), (500, 0, 0)],
@@ -2638,7 +2727,7 @@ def test_pass_time(plain: Any, kit: Any, name: str) -> None:
         walk.render(values, kit=kit)
     spent = time.process_time() - started
     print(f"pass CPU {name} {spent:.3f}s load {os.getloadavg()[0]:.0f}")  # noqa: T201 -- the report quotes it
-    assert spent < 1.0
+    assert spent < _scaled(1.0), (spent, _scaled(1.0))
 
 
 @TIMED
@@ -2667,7 +2756,9 @@ def test_preview_time(plain: Any, kit: Any) -> None:
                 template.render(template.sample, kit=kit)
                 spent[f"{name} render"] = round(time.process_time() - started, 3)
     print(f"preview CPU {spent} load {os.getloadavg()[0]:.0f}")  # noqa: T201 -- the report quotes it
-    assert max(spent.values()) < 2.0
+    bound = _scaled(2.0)
+    print(f"preview bound {bound:.3f}s (2.0 s at the reference)")  # noqa: T201 -- the report quotes it
+    assert max(spent.values()) < bound, (spent, bound)
 
 
 # ---------- preview, its warnings and its read ----------
@@ -2686,6 +2777,12 @@ def test_preview_warnings(plain: Any, kit: Any) -> None:
         TemplateWarningCode.STOP_LINK,
     }
     assert any("spare" in warning.detail for warning in preview.warnings)
+    assert [warning.detail for warning in preview.warnings if warning.code == TemplateWarningCode.PREHEADER] == [
+        "The preheader is missing: an inbox shows the start of the body after the subject instead."]
+    long = _mail("{{ name }}", {"name": "x"}, key="tests.long", preheader="p" * 101, sample={"name": "Ana"})
+    with system_context(reason="tests.messaging_templates.render.preview"):
+        assert [warning.detail for warning in long.preview(kit=kit).warnings
+                if warning.code == TemplateWarningCode.PREHEADER] == ["The preheader is 101 characters long."]
     empty = _mail("{% if name %}{% endif %}", {"name": "x"}, key="tests.empty", sample={"name": ""})
     big = _mail("{{ name }}" * 11, {"name": "x"}, key="tests.big", sample={"name": "x" * 9_999},
                 format="html", text_source="x")
@@ -2864,9 +2961,68 @@ def test_clean_raises_only_validation_error_and_what_it_admits_saves(
             assert [record.getMessage() for record in caplog.records[logged:] if record.levelno >= logging.ERROR] == []
             return
         event("admitted")
+        # What PostgreSQL alone refuses, which the SQLite the property saves on would store: a NUL in any string.
+        assert not any("\x00" in text for column in CLEANED_COLUMNS for text in _strings(getattr(row, column)))
         with transaction.atomic():
             row.save()
             transaction.set_rollback(True)
+
+
+def _strings(value: Any) -> Iterator[str]:
+    """Every string ``value`` holds, keys included."""
+
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, str):
+            yield item
+        elif isinstance(item, dict):
+            pending.extend((*item.keys(), *item.values()))
+        elif isinstance(item, list):
+            pending.extend(item)
+
+
+def test_a_nul_is_refused_by_full_clean(plain: Any) -> None:
+    """A NUL in text or inside a JSON column's string passed full_clean() and failed at save on PostgreSQL (SQLite
+    stores it): refused in every column, keys included; a value nested deeper than JSON writes is refused too."""
+
+    del plain
+    nested: Any = "x"
+    for _ in range(50_000):
+        nested = [nested]
+    for column, value in (("name", "a\x00b"), ("description", "a\x00b"), ("source", "a\x00b"),
+                          ("sample", {"a": "x\x00y"}), ("sample", {"a\x00": 1}), ("variables", {"a": "x\x00"}),
+                          ("description", nested)):
+        row = _unsaved("part", "nul")
+        setattr(row, column, value)
+        with system_context(reason="tests.messaging_templates.render.nul"), pytest.raises(ValidationError) as raised:
+            row.full_clean()
+        assert column in raised.value.message_dict, (column, raised.value.message_dict)
+
+
+def test_a_null_json_column_is_refused_in_one_sentence(plain: Any) -> None:
+    """variables or sample set to null is refused by Django's own null message alone; clean() adds nothing."""
+
+    del plain
+    for column in ("variables", "sample"):
+        row = _unsaved("part", "nulled")
+        setattr(row, column, None)
+        with system_context(reason="tests.messaging_templates.render.null"), pytest.raises(ValidationError) as raised:
+            row.full_clean()
+        assert raised.value.message_dict == {column: ["This field cannot be null."]}, raised.value.message_dict
+
+
+def test_a_template_names_its_layout(plain: Any) -> None:
+    """An empty layout is refused under layout in words a person can act on, before the walk would reach for a
+    layout named layouts/."""
+
+    del plain
+    row = _unsaved(format="html", source="<p>Hi</p>", text_source="Hi", layout="")
+    with system_context(reason="tests.messaging_templates.render.layout"), pytest.raises(ValidationError) as raised:
+        row.full_clean()
+    assert raised.value.message_dict == {"layout": [
+        "Name the layout this template sits in: a mail renders inside its layout, which gives it its document, its "
+        "brand and its stop link."]}
 
 
 def test_the_console_refuses_what_no_column_can_store(plain: Any) -> None:
@@ -2879,7 +3035,8 @@ def test_the_console_refuses_what_no_column_can_store(plain: Any) -> None:
     admin = create_platform_admin("messaging-templates-storer")
     member = create_user("messaging-templates-non-storer")
     for written in ({"source": "a\ud800"}, {"name": "a\udfff"}, {"layout": "\ud800"}, {"sample": {"a": math.nan}},
-                    {"sample": {"a": -math.inf}}, {"variables": {"a": math.nan}}):
+                    {"sample": {"a": -math.inf}}, {"variables": {"a": math.nan}}, {"name": "a\x00b"},
+                    {"description": "a\x00b"}, {"sample": {"a": "x\x00y"}}, {"variables": {"a": "x\x00"}}):
         for user, code in ((admin, "VALIDATION"), (member, "PERMISSION_DENIED")):
             result = execute_schema(schema, _UPDATE, {"id": public_id_of(own), "set": written}, user=user)
             assert [(error.extensions or {}).get("code") for error in result.errors or ()] == [code], (written, user)

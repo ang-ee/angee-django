@@ -156,8 +156,8 @@ live in code docstrings.
 - **Message templates render, on Django's template engine.**
   - **What renders.** `MessageTemplate.render(values, *, kit=None)` returns a
     `RenderedMessage` (`subject`, `preheader`, `html`, `plain_text`,
-    `language`, and `direction`, the one the HTML's `dir` says, for showing the
-    text outside the HTML): the subject and preheader on one line each, the
+    `language`, and `direction`, a `TextDirection` the HTML's `dir` says, for
+    showing the text outside the HTML): the subject and preheader on one line each, the
     HTML body with every value escaped, and the plain-text body rendered from
     the rows' text forms, never scraped from the HTML. Rows render on a
     standalone, restricted
@@ -201,8 +201,11 @@ live in code docstrings.
     and preheader break every encoded-word opener (`=?charset?b?` or `?q?`), so a
     mail library stores the subject exactly as rendered. `clean()` refuses
     with a `ValidationError` whatever a column cannot store: a lone surrogate,
-    NaN, an infinity, a number over 4,300 digits, `None` where the column is not
-    null. A layout alone
+    a NUL, a value nested over 64 levels, NaN, an infinity, a number over 4,300
+    digits, `None` where the column is not null; and a template with no layout,
+    under `layout`. A walk also stops once what its rows' checks read passes
+    600,000 characters of forms or 4,000 spans, comments included, and a saving
+    walk resolves a level's include targets in one query. A layout alone
     writes the doctype and Outlook's conditional comments, static and balanced,
     their markup checked. A Markdown link takes its label and its target from
     values (`[{{ label }}]({{ link }})`). It runs from `clean()` when what a row

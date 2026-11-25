@@ -117,9 +117,27 @@ STORED_COLUMNS = (
 reads them."""
 
 
-def _unstorable(value: Any) -> str | None:
-    """Why no column can store, hash or render ``value``, or ``None``: a lone surrogate, or what JSON cannot write."""
+STORED_DEPTH_LIMIT = 64
+"""The deepest a value in a column nests: a row's own values nest a few levels, and Django's text conversion and a
+render recurse over what nests deeper."""
 
+
+def _unstorable(value: Any) -> str | None:
+    """Why no column can store, hash or render ``value``, or ``None``: a value nested over
+    :data:`STORED_DEPTH_LIMIT`, a NUL in any string, key or text (PostgreSQL refuses it in text and JSON alike), a
+    lone surrogate, or what JSON cannot write."""
+
+    pending: list[tuple[Any, int]] = [(value, 0)]
+    while pending:
+        item, depth = pending.pop()
+        if depth > STORED_DEPTH_LIMIT:
+            return f"Nest the value at most {STORED_DEPTH_LIMIT} levels deep."
+        if isinstance(item, str) and "\x00" in item:
+            return "Remove the NUL character: the database stores none."
+        if isinstance(item, dict):
+            pending.extend((child, depth + 1) for child in (*item.keys(), *item.values()))
+        elif isinstance(item, list | tuple):
+            pending.extend((child, depth + 1) for child in item)
     try:
         json.dumps(value, allow_nan=False, ensure_ascii=False).encode()
     except UnicodeEncodeError:
@@ -550,11 +568,20 @@ class MessageTemplateQuerySet[TemplateT: MessageTemplate](
         )
         return {identities[identity]: row for identity, row in rows.items() if identity in identities}
 
-    def resolves_name(self, name: str) -> bool:
-        """Whether every recipient finds the row a template name names (:meth:`resolves`)."""
+    def resolving_names(self, names: Iterable[str]) -> frozenset[str]:
+        """The template names among ``names`` every recipient finds (:meth:`resolves`), judged in one query."""
 
-        identity = MessageTemplateKind.for_template_name(name)
-        return identity is not None and self.resolves(*identity)
+        identities: dict[tuple[str, str], str] = {}
+        for name in names:
+            if (identity := MessageTemplateKind.for_template_name(name)) is not None:
+                identities[identity] = name
+        if not identities:
+            return frozenset()
+        found = self.filter(
+            models.Q(is_baseline=True) | models.Q(language=self.default_language()),
+            kind__in={kind for kind, _ in identities}, key__in={key for _, key in identities},
+        ).values_list("kind", "key")
+        return frozenset(identities[identity] for identity in found if identity in identities)
 
     def with_row_facts(self) -> MessageTemplateQuerySet[TemplateT]:
         """Annotate each row fact as ``_<name>``, the annotation the model's properties read."""
@@ -1006,7 +1033,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
 
         First the text columns' line endings become newlines, so text pasted with
         carriage returns has the content hash of the same text written with newlines.
-        A template's layout that does not resolve (:meth:`MessageTemplateQuerySet.resolves`),
+        A template's layout that is empty or does not resolve (:meth:`MessageTemplateQuerySet.resolves`),
         judged through the acting reader's scope and only when the layout is new
         or changed, so a later change of the default language never refuses an
         edit of the rest of the row; ``variables`` or ``sample`` that is not an
@@ -1030,8 +1057,13 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
             type(self).system_queryset().filter(pk=self.pk).values_list("layout", "content_hash").first()
             or (None, None)
         )
-        if self.kind in MessageTemplateKind.values and self.handler.carries_message_fields and self.layout:
-            if stored_layout != self.layout and not type(self).objects.resolves(
+        if self.kind in MessageTemplateKind.values and self.handler.carries_message_fields:
+            if not self.layout:
+                errors["layout"] = (
+                    "Name the layout this template sits in: a mail renders inside its layout, which gives it its "
+                    "document, its brand and its stop link."
+                )
+            elif stored_layout != self.layout and not type(self).objects.resolves(
                 MessageTemplateKind.LAYOUT, self.layout,
             ):
                 errors["layout"] = "No layout with this key exists in the default language or as a shipped default."
@@ -1050,8 +1082,8 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
 
         return all(
             _unstorable(value := getattr(self, field.name)) is None
-            and (value is None and field.null or not isinstance(field, models.CharField | models.TextField)
-                 or isinstance(value, str))
+            and (field.null if value is None else (
+                not isinstance(field, models.CharField | models.TextField) or isinstance(value, str)))
             for field in self._meta.concrete_fields if field.name in STORED_COLUMNS
         )
 

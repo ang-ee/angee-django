@@ -109,7 +109,7 @@ the table as a whole.
 | Filters | `ALLOWED_FILTERS`: Django's thirteen and `url`; at most four to an expression; literal arguments | `register`; walker `_RowRules.expression` | `test_the_walker_refuses_each_rule` |
 | Filter order and markup | `MARKUP_FILTERS` (`linebreaksbr`) the last filter of a printed value; `url` last, after `default` alone; `date` first; no other filter's result marked safe | `_RowRules.expression`; engine `_charged` | `test_a_cut_line_break_is_refused_since_markup_is_the_last_filter`, `test_only_a_markup_filter_returns_markup`, `test_no_chain_of_filters_lets_a_value_become_markup` |
 | Literals | no `<`, `>` or `"`; at most 200 characters; never `_(…)` | walker `_literal_refusal` | `test_the_walker_refuses_each_rule` |
-| A row's characters | none of `CONTROL_CHARACTERS` and no carriage return (rule 1); `clean()` writes a carriage return as a newline; in no column a lone surrogate, nor what JSON cannot write (NaN, an infinity, over 4,300 digits), nor `None` where the column is not null, refused by `clean_fields()` before anything hashes or stores it | walker `_check`, `check_html` (`SOURCE_CONTROLS`), `MessageTemplate.clean_fields`, `MessageTemplate.clean` | `test_a_row_holds_no_control_character_and_a_return_is_a_newline`, `test_clean_raises_only_validation_error_and_what_it_admits_saves`, `test_the_console_refuses_what_no_column_can_store` |
+| A row's characters | none of `CONTROL_CHARACTERS` and no carriage return (rule 1); `clean()` writes a carriage return as a newline; in no column a lone surrogate, a NUL, a value nested over 64 levels, what JSON cannot write (NaN, an infinity, over 4,300 digits), nor `None` where the column is not null, refused by `clean_fields()` before anything hashes or stores it | walker `_check`, `check_html` (`SOURCE_CONTROLS`), `MessageTemplate.clean_fields`, `MessageTemplate.clean` | `test_a_row_holds_no_control_character_and_a_return_is_a_newline`, `test_clean_raises_only_validation_error_and_what_it_admits_saves`, `test_a_nul_is_refused_by_full_clean`, `test_the_console_refuses_what_no_column_can_store` |
 | HTML spelling | `SpellingRule` 2 to 6 and 8 | [HTML checks](html_checks.py) | `test_each_spelling_rule_refuses_with_its_message`, `test_the_strict_spelling_admits_what_every_reader_reads_alike`, `test_a_refusal_says_how_to_write_the_row` |
 | Elements | `MAIL_ELEMENTS`, for start and end tags alike; `OFFICE_ELEMENTS` inside a layout's Outlook comment alone | HTML checks (rule 7) | `test_a_mail_is_written_with_its_own_elements_and_attributes` |
 | Attributes | `MAIL_ATTRIBUTES`; a link attribute on the elements it links on alone (`LINK_ATTRIBUTES`: `href` on `a`, `src` on `img`, `background` on `body`, `table`, `td`, `th`, `cite` on `blockquote`) | HTML checks | `test_a_mail_is_written_with_its_own_elements_and_attributes`, `test_link_attributes_follow_url_and_text_attributes_are_text` |
@@ -128,19 +128,25 @@ the table as a whole.
 | Author CSS | not closed: the text an author writes in a `<style>` element or a `style` attribute. A value reaches it as the brand's outputs (above), or by the author's own choice: CSS reads an output's attribute (`content: attr(title)`, `[title^=…]` selectors) | — | — |
 
 Work is bounded by caps, not by a list, and each cap bounds the work only where it
-applies. `test_preview_time` and `test_pass_time` (CPU, under `ANGEE_TIMED_TESTS=1`) and
-the counted work of `test_the_costliest_preview_does_bounded_work` pin each bound on a
-measured case.
+applies. What is guaranteed is the work, counted, which does not depend on the
+machine: the caps below, and the counted work of
+`test_the_costliest_preview_does_bounded_work`, `test_the_costliest_pass_does_bounded_work`
+and `test_a_saving_walk_resolves_a_level_in_one_query`. The time is a
+measurement: CPU seconds on an 18-core Apple M-series machine with CPython 3.14.9,
+taken at the load each run states. `test_preview_time` and `test_pass_time` (under
+`ANGEE_TIMED_TESTS=1`) state their bounds as measured there at a load near 13 (2 s
+a preview, 1 s a pass) and scale them by a fixed reference workload measured in
+the same process, so a busy machine slows the case and the bound alike.
 
 | Where it applies | Caps | Pinned by |
 |---|---|---|
 | One row, before anything parses it | `SOURCE_LIMIT` (50,000 characters a column), `LINE_LIMIT`, `OPENERS_PER_LINE`, `NESTING_LIMIT`, `MARKDOWN_BRACKETS_PER_LINE`; then `CONDITION_OPERATOR_LIMIT`, `FILTERS_PER_EXPRESSION`, `LITERAL_LIMIT` | `headings`, `rules`: the costliest row checks |
 | One form, straight after the Markdown pass | `FORM_SPAN_LIMIT` (2,000 spans), `TEXT_LIMIT` characters of text, `FORM_OPENERS_PER_LINE` | `headings`, `rules`, refused before the HTML checks read them |
-| The walk, as it gathers rows | `WALK_SOURCE_LIMIT` (150,000 characters of source); each checked row's nodes, outputs and text against the tree's caps | `quotes`, `single`, `fivedeep`, `thousand`: refused after one to three row checks; `admitted`, the worst admitted walk |
+| The walk, as it gathers rows | `WALK_SOURCE_LIMIT` (150,000 characters of source); each checked row's nodes, outputs and text against the tree's caps; what its rows' checks read, `WALK_READ_LIMIT` (600,000 characters of forms) and `WALK_SPAN_READ_LIMIT` (4,000 spans), comments included; a saving walk's include targets resolved in one query a level | `quotes`, `single`, `fivedeep`, `thousand`: refused after one to three row checks; `combined`: refused at the read caps after four; `review`, the worst admitted walk; `test_a_saving_walk_resolves_a_level_in_one_query` (22 queries) |
 | Each tree a pass renders | `NODE_LIMIT`, `OUTPUT_LIMIT`, `TEXT_LIMIT`, `LOOP_DEPTH_LIMIT`, `INCLUDE_DEPTH_LIMIT` | `review` |
 | Each pass | `RenderBudget`: 500 loop or include renders, 200,000 characters of loop output, 500,000 of filter input; a tenth for the subject and preheader | `q11b-combined`, `review`'s render, `review-subject` |
 | The values | `prepare()` costs a constant per declared path per value; `VALUES_JSON_LIMIT`, `VALUE_STRING_LIMIT`, `VALUE_ITEMS_LIMIT` | `dated` |
-| The call stack | the caps above keep the deepest admitted row 116 frames over its caller's | `test_the_deepest_admitted_row_and_values_render` (under 300) |
+| The call stack | the caps above keep the deepest admitted row (16 nested tags in each of four rows, three includes, two loops, a ten-operator condition) 254 frames over its caller's | `test_the_deepest_admitted_row_and_values_render` (under 300) |
 
 ## Rendering
 
@@ -150,8 +156,8 @@ present and not null, every declared path filled, ISO dates parsed at the paths
 read through `date`), and renders it on Django's template engine in the row's
 language: the subject and preheader on one line each, the HTML body escaping
 every value, and the plain-text body from the rows' text forms, with the row's
-`language` and its text `direction` (`rtl` or `ltr`, the one the HTML's `dir`
-says), for whoever shows the subject, preheader or plain text outside the
+`language` and its text `direction` (`TextDirection`: `rtl` or `ltr`, the one
+the HTML's `dir` says), for whoever shows the subject, preheader or plain text outside the
 HTML. A render reads
 rows and the brand kit through the caller's scope, the default kit when `kit` is
 `None`. It raises `ValidationError` and nothing else, and each item of the error
