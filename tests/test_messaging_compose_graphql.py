@@ -141,19 +141,35 @@ def test_a_new_email_carries_each_argument_to_compose(console: Any, desk: Any) -
         pytest.param({"text": "  "}, "text", id="text"),
         pytest.param({"subject": "One\nTwo"}, "subject", id="subject"),
         pytest.param({"to": ["not an address"]}, "to", id="to"),
+        pytest.param({"to": ["alice@example.test, bob@example.test"]}, "to", id="to-read-as-other-addresses"),
+        pytest.param({"to": ["Na\x00me <nul@example.test>"]}, "to", id="to-with-a-nul"),
+        pytest.param({"to": "over the bound"}, "to", id="too-many-recipients"),
         pytest.param({"to": [], "cc": ["Reader <reader@example>"]}, "cc", id="cc"),
         pytest.param({"to": [], "bcc": ["x" * 320 + "@example.test"]}, "bcc", id="bcc"),
+        pytest.param({"attachments": "over the bound"}, "attachments", id="too-many-attachments"),
         pytest.param({"queued": True, "scheduled_at": "later"}, "scheduledAt", id="scheduled-at"),
+        pytest.param({"queued": False, "scheduled_at": "2030-01-01T10:00:00"}, "scheduledAt",
+                     id="scheduled-at-without-an-offset"),
         pytest.param({"idempotency_key": " "}, "idempotencyKey", id="idempotency-key"),
     ],
 )
 def test_compose_refuses_an_argument_under_its_name(
-    console: Any, desk: Any, arguments: dict[str, Any], key: str,
+    console: Any, desk: Any, settings: Any, arguments: dict[str, Any], key: str,
 ) -> None:
-    """The mutation's arguments are compose's names, so each refusal binds to the argument it is about."""
+    """The mutation's arguments are compose's names, so each refusal binds to the argument it is about.
+
+    Each rule is compose's and proved there; a row here proves the key the console shows for it.
+    """
 
     if arguments.get("scheduled_at") == "later":
         arguments = {**arguments, "scheduled_at": (timezone.now() + timedelta(hours=1)).isoformat()}
+    if arguments.get("to") == "over the bound":
+        arguments = {**arguments, "to": [
+            f"reader-{index}@example.test" for index in range(settings.ANGEE_MESSAGING_MAX_RECIPIENTS + 1)
+        ]}
+    if arguments.get("attachments") == "over the bound":
+        attached = _file(desk.owner, b"Attached.").public_id
+        arguments = {**arguments, "attachments": [attached] * (settings.ANGEE_MESSAGING_MAX_ATTACHMENTS + 1)}
     with pytest.raises(_Refusal) as refused:
         _compose(console, desk.owner, **{**_new(desk), "idempotency_key": f"refused-{key}", **arguments})
     assert refused.value.payload is not None and list(refused.value.payload["validation_errors"]) == [key]
@@ -238,7 +254,7 @@ def test_whether_one_may_send_on_a_channel_is_answered_to_each_viewer(console: A
     message = _receive(desk, "permissions")
     answers = {seat: _delivery(console, actor, message.public_id, desk)[1]["permissions"]
                for seat, actor in (("replier", replier), ("reader", reader))}
-    assert answers == {"replier": ["reply"], "reader": []}
+    assert answers == {"replier": [Channel.reply_permission], "reader": []}
 
 
 @pytest.mark.parametrize(
@@ -459,6 +475,7 @@ def test_the_delivery_facts_are_read_with_the_rows_of_every_list_the_composer_re
 def test_whether_one_may_send_is_read_with_the_channels(console: Any, db: None) -> None:
     """``permissions`` is answered in the channels' own statement, for 1 channel as for 25."""
 
+    send = Channel.reply_permission
     for seat in ("owner", "replier"):
         counts = {}
         for size in SIZES:
@@ -472,7 +489,7 @@ def test_whether_one_may_send_is_read_with_the_channels(console: Any, db: None) 
             for fields in ("id", "id permissions"):
                 read = _measured(console, "query Channels { channels { %s } }" % fields, {}, viewer)
                 assert len(read.data["channels"]) == size
-                assert all(row.get("permissions", ["reply"]) == ["reply"] for row in read.data["channels"])
+                assert all(row.get("permissions", [send]) == [send] for row in read.data["channels"])
                 counts[size, fields] = (read.statements, read.repeated)
             read.assert_ceiling(**READ_BUDGETS["channels"])
         assert counts[1, "id permissions"] == counts[25, "id permissions"], (seat, counts)
@@ -499,7 +516,7 @@ def test_the_mutation_executes_what_compose_executes(console: Any, desk: Any) ->
         **{size: ({"channel": desk}, {"channel": desk.public_id}, {"to": known[:size]}) for size in (1, 20)},
         "answer": ({"parent": request}, {"parent": request.public_id}, {}),
     }
-    added = {}
+    counts = {}
     for case, (direct_anchor, mutation_anchor, values) in cases.items():
         reset_queries()
         with evaluator_scope(), CaptureQueriesContext(connection) as direct:
@@ -509,5 +526,6 @@ def test_the_mutation_executes_what_compose_executes(console: Any, desk: Any) ->
             _compose(console, desk.owner, **mutation_anchor, **values, text="Hi.", queued=False,
                      idempotency_key=f"mutation-{case}")
         assert len(direct) and len(mutation), case
-        added[case] = len(mutation) - len(direct)
-    assert added == {1: 0, 20: 0, "answer": PARENT_READ_STATEMENTS}, added
+        counts[case] = (len(direct), len(mutation))
+    added = {case: mutation - direct for case, (direct, mutation) in counts.items()}
+    assert added == {1: 0, 20: 0, "answer": PARENT_READ_STATEMENTS}, counts
