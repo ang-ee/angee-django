@@ -696,9 +696,18 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
             self.validate_source()
 
     def _walkable(self) -> bool:
-        """Whether the columns a walk reads hold what their own validators admit; when not, those refuse the row."""
+        """Whether the columns a walk reads hold what their own validators admit; when not, those refuse the row.
+
+        A column longer than its ``max_length`` is refused by its own validator, so
+        an over-long subject or preheader is never lexed.
+        """
 
         if self.kind not in MessageTemplateKind.values or self.format not in MessageTemplateFormat.values:
+            return False
+        if any(
+            len(str(field.value_from_object(self))) > field.max_length
+            for field in self._meta.concrete_fields if field.name in CONTENT_HASH_FIELDS and field.max_length
+        ):
             return False
         try:
             validate_variables(self.variables)

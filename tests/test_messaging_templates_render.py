@@ -51,6 +51,7 @@ from angee.messaging_templates.walker import (
     RowPiece,
     TemplateWalk,
     TemplateWalker,
+    TemplateWarning,
     TemplateWarningCode,
     _frame,
     _RowRules,
@@ -272,7 +273,7 @@ def test_walker_reads_every_node(plain: Any, kit: Any) -> None:
         _RowRules([], "probe", text_form=False).node(spaceless)
     tree_walker = _TreeWalker(walk, {})
     with pytest.raises(TypeError, match="does not know SpacelessNode"):
-        tree_walker.node(_frame("probe", template, top=True), spaceless, _Tree(RowPiece.HTML))
+        tree_walker.node(_frame("probe", template, RowPiece.HTML, top=True), spaceless, _Tree(RowPiece.HTML))
 
 
 # ---------- the walker's refusals, one rule at a time ----------
@@ -1011,6 +1012,112 @@ def test_dates_numbers_and_direction_follow_the_rows_language(
         assert rendered.plain_text.startswith(date)
 
 
+def test_only_a_validation_error_leaves_render_and_preview(plain: Any, kit: Any) -> None:
+    """Django review 2 (a3, a2, q7, q10): values the walk admits that Django's filters would raise on are refused,
+    naming the path; a bare date printed with a time takes an aware datetime; preview reports the refusal."""
+
+    del plain
+    numbers = _mail("[{{ n|pluralize }}][{{ n|floatformat:2 }}][{{ n|yesno }}][{{ n }}]", {"n": "x"}, key="tests.n")
+    for value in (10 ** 400, -(10 ** 400), float("inf"), float("nan")):
+        with pytest.raises(ValidationError, match="n is not a number a float holds"):
+            _render(numbers, {"n": value}, kit)
+    assert _render(numbers, {"n": 1e308}, kit).plain_text.startswith("[s]")
+    printed = {"d": "DATETIME_FORMAT", "e": "H:i", "f": "TIME_FORMAT", "g": "SHORT_DATETIME_FORMAT"}
+    timed = _mail("".join(f"[{{{{ {path}|date:'{name}' }}}}]" for path, name in printed.items()),
+                  dict.fromkeys(printed, "x"), key="tests.timed")
+    moments = dict.fromkeys(printed, "2026-11-24T10:00:00+00:00")
+    assert _render(timed, moments, kit).plain_text.count("[") == 4
+    for path, name in printed.items():
+        with pytest.raises(ValidationError, match=f"{path} is printed with a time \\({name}\\)"):
+            _render(timed, {**moments, path: "2026-11-24"}, kit)
+    dated = _mail("[{{ d|date:'DATE_FORMAT' }}]", {"d": "x"}, key="tests.far")
+    for value in ("9999-12-31T23:59:59-23:59", "0001-01-01T00:00:00+23:59"):
+        with pytest.raises(ValidationError, match="d is a moment the local time zone cannot hold"):
+            _render(dated, {"d": value}, kit)
+    epoch = _mail("[{{ d|date:'U' }}]", {"d": "x"}, key="tests.epoch")
+    for zone in ("UTC", "Pacific/Kiritimati"):
+        for value in ("0001-01-01", "9999-12-31", "2026-11-24"):
+            with timezone.override(zoneinfo.ZoneInfo(zone)):
+                try:  # The contract: a refusal is a ValidationError, never another exception.
+                    _render(epoch, {"d": value}, kit)
+                except ValidationError:
+                    pass
+    with system_context(reason="tests.messaging_templates.render.preview"):
+        timed.sample = {**moments, "d": "2026-11-24"}
+        preview = timed.preview(kit=kit)
+    assert preview.rendered is None and [warning.code for warning in preview.warnings] == [
+        TemplateWarningCode.RENDER_ERROR]
+    assert "d is printed with a time" in preview.warnings[0].detail
+
+
+def test_any_other_failure_in_a_pass_is_a_render_error(plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Whatever nobody thought of leaves render() as ValidationError(code="render_failed"), and preview reports it."""
+
+    del plain
+
+    def upper(value: Any) -> str:
+        raise RuntimeError("a filter nobody thought of")
+
+    upper._filter_name = "upper"  # type: ignore[attr-defined]  # what Library.filter records
+    monkeypatch.setitem(register.filters, "upper", upper)
+    template = _mail("{{ name|upper }}", {"name": "x"}, sample={"name": "Ana"})
+    with pytest.raises(ValidationError) as raised:
+        _render(template, {"name": "Ana"}, kit)
+    assert raised.value.code == "render_failed"
+    assert "RuntimeError: a filter nobody thought of" in raised.value.messages[0]
+    with system_context(reason="tests.messaging_templates.render.preview"):
+        preview = template.preview(kit=kit)
+    assert preview.rendered is None
+    assert preview.warnings == [TemplateWarning(TemplateWarningCode.RENDER_ERROR, raised.value.messages[0])]
+
+
+def test_an_over_long_subject_is_refused_by_its_column_and_never_lexed(
+    plain: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fix 1 (Django review 3): a column over its max_length refuses the row before the walk reads it."""
+
+    del plain
+    checked: list[Any] = []
+    check = TemplateWalker.check
+    monkeypatch.setattr(TemplateWalker, "check", lambda walker, row: checked.append(row) or check(walker, row))
+    row = _unsaved(subject="{{ a }}" * 7_000, preheader="x" * 50_000, variables={"a": "x"})
+    with system_context(reason="tests.messaging_templates.render.clean"), pytest.raises(ValidationError) as raised:
+        row.full_clean()
+    assert {"subject", "preheader"} <= set(raised.value.message_dict) and checked == []
+
+
+def test_the_values_cap_counts_characters_not_escapes(plain: Any) -> None:
+    """Fix 2 (Django review 4): 50,000 characters of JSON, whatever the script; escapes are not counted."""
+
+    del plain
+    walk = _walk(_unsaved(source="{% for i in items %}{{ i }}{% endfor %}", variables={"items.*": "x"}))
+    assert len(walk.prepare({"items": ["名" * 9_000] * 5})["items"]) == 5
+    assert len(walk.prepare({"items": ["😀" * 9_000] * 5})["items"]) == 5
+    with pytest.raises(ValidationError, match="characters of JSON"):
+        walk.prepare({"items": ["名" * 9_000] * 6})
+
+
+def test_subject_and_preheader_drop_control_and_bidirectional_characters(plain: Any, kit: Any) -> None:
+    """Fix 3 (Django review 8, i5): NUL, C0 and C1 controls and bidi overrides never reach a header line."""
+
+    del plain
+    template = _mail("Hi.", {"name": "x"}, subject="Hi {{ name }}", preheader="{{ name }}")
+    rendered = _render(template, {"name": "a\x00b\x1b[1m\u202eevil\u202c\u2066x\u2069\x85c\x9fd\r\nBcc: e"}, kit)
+    assert rendered.subject == "Hi ab[1mevilx cd Bcc: e" and rendered.preheader == "ab[1mevilx cd Bcc: e"
+
+
+def test_the_plain_text_body_never_reads_the_subject_or_the_preheader(plain: Any) -> None:
+    """D3 (i4): subject and preheader are read in the HTML form alone, the one pass that supplies them."""
+
+    del plain
+    _row("layout", "subjected", source=PLAIN_LAYOUT,
+         text_source="Subject: {{ subject }}\n\n{% block content %}{% endblock %}")
+    for row in (_unsaved(layout="subjected"), _unsaved(subject="{{ preheader }}"), _unsaved(
+            "layout", "other", source=PLAIN_LAYOUT, text_source="{{ preheader }}{% block content %}{% endblock %}")):
+        assert any("read in the HTML form alone" in refusal for refusal in _refusals(row)), row.key
+    assert _refusals(_unsaved()) == []
+
+
 def test_a_date_path_parses_iso_strings_and_refuses_what_is_not_a_date(plain: Any, kit: Any) -> None:
     del plain
     template = _mail("{{ when|date:'Y-m-d' }}", {"when": "x"})
@@ -1096,6 +1203,20 @@ def test_expression_shapes(plain: Any, kit: Any) -> None:
         ("{{ x|floatformat:1e3 }}", True),
         ("{{ x|floatformat:'6g' }}", False),
         ("{{ x|linebreaksbr:'a' }}", True),
+        # Rule 5 refuses what Django's filters raise on rather than refuse (Django review 2, p7, q8).
+        ("{{ x|floatformat:'' }}", True),
+        ("{{ x|floatformat:1e400 }}", True),
+        ("{{ x|floatformat:'abc' }}", True),
+        ("{{ x|truncatechars:1e400 }}", True),
+        ("{{ x|truncatewords:'many' }}", True),
+        ("{{ x|yesno:1 }}", True),
+        ("{{ x|pluralize:2 }}", True),
+        ("{{ 'x'|date:'U' }}", True),
+        ("{{ lang|date:'U' }}", True),
+        ("{% for i in items %}{{ forloop.counter|date:'U' }}{% endfor %}", True),
+        ("{% with d=lang %}{{ d|date }}{% endwith %}", True),
+        ("{{ x|date:'U' }}{% with d=x %}{{ d|date }}{% endwith %}", False),
+        ("{{ x|yesno:'a,b' }}{{ x|pluralize:'es' }}{{ x|truncatechars:'5' }}{{ x|floatformat:'-2u' }}", False),
         ("{% with x as y %}{{ y }}{% endwith %}", False),
         ("{% for i in items reversed %}{{ i }}{% endfor %}", False),
         ("{% if x|length > 2 and not y or y not in 'abc' %}z{% endif %}", False),

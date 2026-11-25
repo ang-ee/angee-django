@@ -30,6 +30,7 @@ other class, so a Django upgrade that changes the nodes fails loudly.
 from __future__ import annotations
 
 import json
+import math
 import quopri
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -56,12 +57,14 @@ from django.template.base import (
     TokenType,
     VariableNode,
 )
+from django.template.defaultfilters import date as date_filter
 from django.template.defaulttags import CommentNode, ForNode, IfNode, TemplateLiteral, TemplateTagNode, WithNode
 from django.template.loader_tags import BlockNode, ExtendsNode
 from django.utils import translation
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.functional import Promise
 from django.utils.html import escape
+from django.utils.timezone import template_localtime
 
 from angee.brandkit.models import BrandKit, MailRole, MailScheme
 from angee.messaging_templates.engine import (
@@ -106,6 +109,10 @@ VALUE_STRING_LIMIT = 10_000
 VALUE_ITEMS_LIMIT = 500
 SUBJECT_LIMIT = 1_000
 """The longest rendered subject or preheader, after it is made one line."""
+
+_UNPRINTED = re.compile("[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]")
+"""NUL, the C0 and C1 control characters and the bidirectional embeddings, overrides and isolates, which a
+subject or preheader drops."""
 
 SUBJECT_WARNING_LENGTH = 60
 PREHEADER_WARNING_LENGTH = 100
@@ -592,8 +599,8 @@ class TemplateWalk:
 
     ``rows`` and ``forms`` are keyed by template name; ``declared`` is ``D``;
     ``required`` the paths a render's values must hold, not null, in every list
-    item present; ``date_paths`` the paths read through ``date``; ``reads`` every
-    path of ``D`` some row reads.
+    item present; ``date_paths`` the paths read through ``date``, each with the
+    formats it is printed in; ``reads`` every path of ``D`` some row reads.
     """
 
     root: WalkedRow
@@ -603,7 +610,7 @@ class TemplateWalk:
     forms: dict[str, RowForms] = field(default_factory=dict)
     declared: dict[str, str] = field(default_factory=dict)
     required: set[Path] = field(default_factory=set)
-    date_paths: set[Path] = field(default_factory=set)
+    date_paths: dict[Path, set[str]] = field(default_factory=dict)
     reads: set[Path] = field(default_factory=set)
     includes: set[str] = field(default_factory=set)
     refusals: list[str] = field(default_factory=list)
@@ -624,22 +631,26 @@ class TemplateWalk:
 
         1. ``values`` as JSON (``DjangoJSONEncoder``: dates and decimals become
            strings, a ``SafeString`` a plain string, any other object is refused),
-           refused over 50,000 characters, with a string over 10,000, with over 500
-           list items in all, or with a reserved root.
+           refused over 50,000 characters of JSON (characters, not escapes), with
+           a string over 10,000, with over 500 list items in all, or with a
+           reserved root.
         2. Keys outside ``D`` dropped at every level and in every list item; a
            present inner segment is an object, a ``*`` parent a list, a leaf a
-           string, number, boolean or null.
+           string, number, boolean or null, a number one a float holds.
         3. Each :attr:`required` path present and not null, in every present item.
         4. Every absent or null declared segment filled: an object with ``{}``, a
            list with ``[]``, a leaf with ``""``; so every lookup lands on a key.
         5. At each :attr:`date_paths` path a non-empty string becomes a ``date``,
-           or else an aware ``datetime``.
+           or else an aware ``datetime``; refused, a moment the local time zone
+           cannot hold, and one ``date`` cannot print in a format the row prints
+           it in: a bare date printed with a time takes an aware ``datetime``.
+           Named formats resolve in the active language, the row's in a render.
         """
 
         if not isinstance(values, Mapping):
             raise ValidationError("Pass the values as an object of names to values.", code="invalid_values")
         try:
-            text = json.dumps(values, cls=DjangoJSONEncoder)
+            text = json.dumps(values, cls=DjangoJSONEncoder, ensure_ascii=False)
             data = json.loads(text)
         except (TypeError, ValueError, RecursionError) as error:
             raise ValidationError(f"The values are not JSON: {error}", code="invalid_values") from error
@@ -659,8 +670,8 @@ class TemplateWalk:
         if errors:
             raise ValidationError(errors, code="invalid_values")
         filled = {key: _filled(shaped.get(key), subtree) for key, subtree in tree.items()}
-        for path in sorted(self.date_paths):
-            _parse_dates(filled, path, path, errors)
+        for path, formats in sorted(self.date_paths.items()):
+            _parse_dates(filled, path, path, sorted(formats), errors)
         if errors:
             raise ValidationError(errors, code="invalid_values")
         return filled
@@ -674,9 +685,21 @@ class TemplateWalk:
         preheader on the text engine, each made one line; (3) the HTML body on the
         HTML engine, the subject and preheader at its top level; (4) the plain-text
         body on the text engine, from the rows' text forms. ``frame`` renders a
-        layout around a fixed body, subject and preheader. Raises ``ValidationError``.
+        layout around a fixed body, subject and preheader. Raises ``ValidationError``
+        alone: any other exception out of a pass becomes one, ``render_failed``.
         """
 
+        try:
+            return self._render(values, kit=kit, frame=frame)
+        except ValidationError:
+            raise
+        except Exception as error:
+            raise ValidationError(
+                "The message template did not render: %(error)s", code="render_failed",
+                params={"error": f"{type(error).__name__}: {error}"},
+            ) from error
+
+    def _render(self, values: Mapping[str, Any], *, kit: BrandKit, frame: PreviewFrame | None) -> RenderedMessage:
         language = self.language
         with translation.override(language):
             prepared = self.prepare(values)
@@ -764,7 +787,7 @@ class TemplateWalk:
 
 
 def _one_line(text: str, name: str) -> str:
-    line = " ".join(text.split())
+    line = " ".join(word for word in (_UNPRINTED.sub("", word) for word in text.split()) if word)
     if len(line) > SUBJECT_LIMIT:
         raise ValidationError(
             "The rendered %(name)s is over %(limit)s characters.",
@@ -815,6 +838,9 @@ def _shaped(value: Any, tree: dict[str, Any], here: Path, errors: list[str]) -> 
     if value is None:
         return None
     if not tree:
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and not _finite(value):
+            errors.append(f"{_dotted(here)} is not a number a float holds.")
+            return None
         if isinstance(value, (str, int, float, bool)):
             return value
         errors.append(f"{_dotted(here)} is a string, a number, true, false or null.")
@@ -828,6 +854,15 @@ def _shaped(value: Any, tree: dict[str, Any], here: Path, errors: list[str]) -> 
         errors.append(f"{_dotted(here) or 'The values'} is an object.")
         return None
     return {key: _shaped(value[key], subtree, (*here, key), errors) for key, subtree in tree.items() if key in value}
+
+
+def _finite(number: float) -> bool:
+    """Whether ``number`` is a finite float, or an integer a float holds, as filters such as ``pluralize`` read it."""
+
+    try:
+        return math.isfinite(float(number))
+    except OverflowError:
+        return False
 
 
 def _lacks(value: Any, path: Path) -> bool:
@@ -855,8 +890,12 @@ def _filled(value: Any, tree: dict[str, Any]) -> Any:
     return {key: _filled(present.get(key), subtree) for key, subtree in tree.items()}
 
 
-def _parse_dates(value: Any, path: Path, full: Path, errors: list[str]) -> None:
-    """Turn each non-empty string at ``path`` into a ``date``, else an aware ``datetime``, in place."""
+def _parse_dates(value: Any, path: Path, full: Path, formats: Sequence[str], errors: list[str]) -> None:
+    """Turn each non-empty string at ``path`` into a ``date``, else an aware ``datetime``, in place.
+
+    Refuse, naming the path, a string that is neither, and a moment the render
+    could not print in one of ``formats`` (:func:`_unprintable`).
+    """
 
     head, rest = path[0], path[1:]
     children = list(enumerate(value)) if head == "*" and isinstance(value, list) else (
@@ -864,7 +903,7 @@ def _parse_dates(value: Any, path: Path, full: Path, errors: list[str]) -> None:
     )
     for key, child in children:
         if rest:
-            _parse_dates(child, rest, full, errors)
+            _parse_dates(child, rest, full, formats, errors)
             continue
         if child == "":
             continue
@@ -880,7 +919,33 @@ def _parse_dates(value: Any, path: Path, full: Path, errors: list[str]) -> None:
         if parsed is None:
             errors.append(f"{_dotted(full)} is not a date, or a date and time with its offset: {str(child)[:40]!r}.")
             continue
+        if (refusal := _unprintable(parsed, formats)) is not None:
+            errors.append(f"{_dotted(full)} {refusal}")
+            continue
         value[key] = parsed
+
+
+def _unprintable(moment: date | datetime, formats: Sequence[str]) -> str | None:
+    """Why the render could not print ``moment`` in one of ``formats``, or ``None``.
+
+    The engine converts an aware datetime to the current time zone before
+    ``date`` reads it (``template_localtime``); Django's ``date`` filter then
+    raises ``TypeError`` for a bare date printed with a time and fails on a moment
+    outside the range it prints. Both are asked of Django itself.
+    """
+
+    try:
+        local = template_localtime(moment)
+    except (OverflowError, ValueError):
+        return "is a moment the local time zone cannot hold."
+    for name in formats:
+        try:
+            date_filter(local, name)
+        except TypeError:
+            return f"is printed with a time ({name}): pass a date and time with its offset."
+        except (OverflowError, ValueError):
+            return f"cannot be printed as {name}."
+    return None
 
 
 # ---------- one row's own checks ----------
@@ -899,10 +964,22 @@ def _literal_refusal(value: Any) -> str | None:
     return None
 
 
-def _floatformat_precision(argument: Any) -> int | None:
-    """The precision ``floatformat`` reads from ``argument``, parsed as the filter parses it."""
+WHOLE_NUMBER_FILTERS = frozenset({"floatformat", "truncatechars", "truncatewords"})
+"""The filters whose argument is a whole number, which Django reads with ``int()``."""
 
-    if isinstance(argument, str):
+TEXT_ARGUMENT_FILTERS = frozenset({"yesno", "pluralize"})
+"""The filters whose argument Django splits as text, so a number there raises."""
+
+
+def _whole_number(name: str, argument: Any) -> int | None:
+    """The whole number filter ``name`` reads from ``argument``, as Django parses it, or ``None`` when it cannot.
+
+    ``floatformat`` first strips a ``g``, ``u``, ``gu`` or ``ug`` suffix; an
+    empty argument, text or a number beyond what ``int()`` takes (``1e400`` is
+    infinite) raises in Django's filter, so the walker refuses it.
+    """
+
+    if name == "floatformat" and isinstance(argument, str) and argument:
         if argument[-2:] in ("gu", "ug"):
             argument = argument[:-2] or -1
         elif argument[-1:] in ("g", "u"):
@@ -994,10 +1071,14 @@ class _RowRules:
                     continue
                 value = argument.literal if lookup else argument
                 self.literal(argument.var if lookup else argument)
-                if name == "floatformat" and (precision := _floatformat_precision(value)) is not None and abs(
-                    precision,
-                ) > FLOATFORMAT_PRECISION:
-                    self.refuse(f"floatformat precision {value} is beyond ±{FLOATFORMAT_PRECISION}")
+                if name in WHOLE_NUMBER_FILTERS:
+                    number = _whole_number(name, value)
+                    if number is None:
+                        self.refuse(f"{name} takes a whole number, not {value!r}")
+                    elif name == "floatformat" and abs(number) > FLOATFORMAT_PRECISION:
+                        self.refuse(f"floatformat precision {value} is beyond ±{FLOATFORMAT_PRECISION}")
+                if name in TEXT_ARGUMENT_FILTERS and not isinstance(value, str):
+                    self.refuse(f"{name} takes a quoted argument, not {value!r}")
                 if name == "date" and str(value) not in DATE_FORMAT_NAMES and len(str(value)) > DATE_FORMAT_LIMIT:
                     self.refuse(f"a date format is a format name or at most {DATE_FORMAT_LIMIT} characters")
                 if name == "linebreaksbr":
@@ -1077,6 +1158,7 @@ class _Frame:
 
     name: str
     row: WalkedRow
+    form: RowPiece
     declared: frozenset[Path]
     leaves: frozenset[Path]
     top: bool
@@ -1306,34 +1388,45 @@ class TemplateWalker:
 
     def _walk_trees(self, walk: TemplateWalk, checks: Mapping[str, _RowCheck]) -> None:
         root = walk.root
-        frame = _frame(walk.root_name, root, top=True)
         pieces = checks[walk.root_name].pieces
         layout = root.handler.layout_name(root)
         walker = _TreeWalker(walk, checks)
         for form in (RowPiece.HTML, RowPiece.TEXT):
             tree = _Tree(form)
+            frame = _frame(walk.root_name, root, form, top=True)
             if layout is not None:
                 extends = cast(ExtendsNode, pieces[form].nodelist[0])
                 tree.content = (frame, extends.blocks[CONTENT_BLOCK].nodelist)
                 tree.nodes += 2
-                walker.nodes(_frame(layout, walk.rows[layout], top=True), checks[layout].pieces[form].nodelist, tree)
+                walker.nodes(_frame(layout, walk.rows[layout], form, top=True), checks[layout].pieces[form].nodelist,
+                             tree)
             else:
                 walker.nodes(frame, pieces[form].nodelist, tree)
             walker.close(tree)
         for piece in (RowPiece.SUBJECT, RowPiece.PREHEADER):
             if piece in pieces:
                 tree = _Tree(piece)
-                walker.nodes(frame, pieces[piece].nodelist, tree)
+                walker.nodes(_frame(walk.root_name, root, piece, top=True), pieces[piece].nodelist, tree)
                 walker.close(tree)
 
 
-def _frame(name: str, row: WalkedRow, *, top: bool, scope: Mapping[str, _Binding] | None = None,
+def _date_format(expression: FilterExpression) -> str:
+    """The format ``expression``'s first filter, ``date``, prints in: its literal argument, else ``DATE_FORMAT``."""
+
+    arguments = expression.filters[0][1]
+    if not arguments:
+        return "DATE_FORMAT"
+    lookup, argument = arguments[0]
+    return str(argument.literal if lookup else argument)
+
+
+def _frame(name: str, row: WalkedRow, form: RowPiece, *, top: bool, scope: Mapping[str, _Binding] | None = None,
            loops: int = 0, includes: tuple[str, ...] = ()) -> _Frame:
     variables = row.variables if isinstance(row.variables, dict) else {}
     leaves = frozenset(tuple(path.split(".")) for path in variables)
     return _Frame(
-        name=name, row=row, declared=_prefixes(leaves), leaves=leaves, top=top, scope=scope or {}, loops=loops,
-        includes=includes,
+        name=name, row=row, form=form, declared=_prefixes(leaves), leaves=leaves, top=top, scope=scope or {},
+        loops=loops, includes=includes,
     )
 
 
@@ -1424,6 +1517,10 @@ class _TreeWalker:
                 if not frame.row.handler.reads_message_fields:
                     self.refuse(frame, f"{head} is read in a template or a layout alone")
                     return None
+                if frame.form != RowPiece.HTML:
+                    self.refuse(frame, f"{head} is read in the HTML form alone: the plain-text body, the subject and "
+                                       "the preheader never hold it")
+                    return None
                 binding = _Binding(BindingKind.MESSAGE, effective=(head,))
             elif head in ("forloop", "block"):
                 self.refuse(frame, f"{_dotted(lookups)} is read outside a loop or is the engine's own")
@@ -1479,6 +1576,8 @@ class _TreeWalker:
         names = filter_names(expression)
         variable = expression.var
         if not expression.is_var or variable.lookups is None:
+            if names[:1] == ["date"]:
+                self.refuse(frame, f"date reads a declared value, not {expression.token}")
             if use == ReadUse.TEST and names:
                 self.refuse(frame, f"an if tests a literal through a filter ({expression.token})")
             if use == ReadUse.SEQUENCE:
@@ -1489,6 +1588,8 @@ class _TreeWalker:
             return None
         leaf = self.leaf(frame, binding)
         value = binding.kind in _VALUES
+        if names[:1] == ["date"] and not value:
+            self.refuse(frame, f"date reads a declared value, not {expression.token}")
         if names and names[0] != "length" and not leaf:
             self.refuse(frame, f"{expression.token} filters an object or a list; only length reads one")
         if use == ReadUse.OUTPUT and not leaf and not (value and names[:1] == ["length"]):
@@ -1515,7 +1616,7 @@ class _TreeWalker:
                 elif binding.effective is not None:
                     self.walk.required.add(binding.effective)
             if names[:1] == ["date"] and binding.effective is not None:
-                self.walk.date_paths.add(binding.effective)
+                self.walk.date_paths.setdefault(binding.effective, set()).add(_date_format(expression))
         if names and use != ReadUse.SEQUENCE:
             return _Binding(BindingKind.COMPUTED)
         return binding
@@ -1596,7 +1697,7 @@ class _TreeWalker:
             binding = self.bind(frame, expression)
             scope[name] = _Binding(binding.kind, local=(name,), effective=binding.effective)
         self.nodes(
-            _frame(target, row, top=False, scope=scope, loops=frame.loops, includes=stack),
+            _frame(target, row, tree.form, top=False, scope=scope, loops=frame.loops, includes=stack),
             self.checks[target].pieces[tree.form].nodelist,
             tree,
         )
