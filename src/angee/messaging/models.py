@@ -97,6 +97,7 @@ from angee.messaging.managers import (
     ThreadFollowerManager,
     ThreadManager,
     ThreadNotificationManager,
+    normalize_subject,
 )
 from angee.messaging.mixins import (
     AudienceMember as AudienceMember,
@@ -919,6 +920,23 @@ class MessageReactionGroup:
 
 
 @dataclass(frozen=True)
+class ReplyEnvelope:
+    """Whom an answer to a message goes to, under which subject, from which address (``Message.reply_envelope``).
+
+    An email answer goes to ``addresses`` (the ``Reply-To``'s, each ``(address,
+    display name)``), else to the handle ``handle_id`` names (the sender); it is
+    titled ``subject`` and sent from the channel's default ``sender``, ``(name,
+    address)``. An answer of another kind carries none of these: its transport's
+    own sender answers, and it addresses nobody.
+    """
+
+    addresses: tuple[tuple[str, str], ...] = ()
+    handle_id: Any = None
+    subject: str = ""
+    sender: tuple[str, str] | None = None
+
+
+@dataclass(frozen=True)
 class WebformSubmission:
     """A public form's answers and claimed email; the email proves no identity."""
 
@@ -1318,13 +1336,13 @@ class Message(
         ).order_by("position", "pk").values_list("fragment__text", flat=True))
 
     def reply_addresses(self, *, actor: Any = None) -> dict[str, str]:
-        """Return the addresses this message's ``Reply-To`` names, lower-cased, each with its display name.
+        """Return the addresses this message's ``Reply-To`` names, each with its display name.
 
         The header is read through :meth:`source_header_values` with the caller's
-        access, in header order; a repeated address keeps its first display name and
-        an entry the handle owner's predicate (``Handle.is_email_address``) rejects is
-        no address. Without a ``Reply-To`` the mapping is empty: whether a reply then
-        goes to the sender is the caller's decision.
+        access, in header order. Each address is in the form a handle stores it
+        (``Handle.email_value``); a repeated address keeps its first display name,
+        and an entry the handle owner's predicate (``Handle.is_email_address``)
+        rejects is no address. Without a ``Reply-To`` the mapping is empty.
         """
 
         addresses: dict[str, str] = {}
@@ -1334,28 +1352,76 @@ class Message(
                 addresses.setdefault(address, name.strip())
         return addresses
 
-    def reply_error(self, *, actor: Any = None) -> ValidationError | None:
-        """Why ``MessageManager.compose`` cannot answer this message, or ``None`` when it can.
+    def require_reply(self, actor: Any) -> Channel:
+        """Return the channel ``actor`` answers this message on, once they may read it and reply there.
 
-        Side-effect free; it decides nothing about who may answer. A reply needs a
-        saved message with a thread and a channel. An email is answered from its
-        channel's default sender (``Channel.outbound_sender``, whose refusal is
-        returned as raised) and to its ``Reply-To`` (:meth:`reply_addresses`, read
-        with ``actor``'s access), else to its sender. A message of another kind is
-        answered by its transport's own sender and needs nothing more here.
+        Read on the message is decided first, so a refusal reads nothing of a
+        channel the actor may not know of; the channel is then read once, under
+        the actor, and its ``reply`` decided. Who may answer is decided here alone;
+        whether the message can be answered is :meth:`reply_envelope`'s. A
+        refusal raises ``PermissionDenied``.
+        """
+
+        if self.pk is None or self.channel_id is None or not self.with_actor(actor).has_access("read"):
+            raise PermissionDenied("Answering a message requires reading it and reply on its channel.")
+        channel = apps.get_model("messaging", "Channel").objects.with_actor(actor).filter(pk=self.channel_id).first()
+        if channel is None or not channel.has_access("reply"):
+            raise PermissionDenied("Answering a message requires reading it and reply on its channel.")
+        return cast(Channel, channel)
+
+    def reply_envelope(self, *, actor: Any = None, channel: Channel | None = None) -> ReplyEnvelope:
+        """Return whom ``MessageManager.compose`` answers this message to, or raise why it cannot.
+
+        An answer needs a saved message with a thread and a channel (``parent``,
+        code ``reply_incomplete``). An email is answered from its channel's default
+        sender (``Channel.outbound_sender``, whose refusal is raised as it is) under
+        ``Re: <thread title>``, to its ``Reply-To`` (:meth:`reply_addresses`, read
+        with ``actor``'s access). A ``Reply-To`` that names no address is refused
+        (``reply_to``, ``reply_to_invalid``) rather than answered at its sender,
+        which may be a relay; only a message with no ``Reply-To`` is answered at
+        its sender (``parent``, ``reply_unaddressed`` when it has none). Any other
+        kind is answered by its transport's own sender: the envelope is empty.
+        ``channel`` is the transport channel when the caller has read it
+        (:meth:`require_reply`); otherwise it is read here. Who may answer is
+        :meth:`require_reply`'s.
         """
 
         if self.pk is None or self.thread_id is None or self.channel_id is None:
-            return ValidationError("A reply requires a saved parent, thread, and channel.")
+            raise ValidationError({"parent": ValidationError(
+                "An answer needs a saved message with a thread and a channel.", code="reply_incomplete",
+            )})
         if self.message_type != self.MessageKind.EMAIL:
-            return None
-        channel = cast(Channel, self.transport_channel(reason="messaging.reply_error"))
+            return ReplyEnvelope()
+        if channel is None:
+            channel = cast(Channel, self.transport_channel(reason="messaging.reply_envelope"))
+        sender = channel.outbound_sender()
+        addresses = self.reply_addresses(actor=actor)
+        if not addresses and any(value.strip() for value in self.source_header_values("reply-to", actor=actor)):
+            raise ValidationError({"reply_to": ValidationError(
+                "The message's Reply-To names no address to answer.", code="reply_to_invalid",
+            )})
+        if not addresses and self.sender_id is None:
+            raise ValidationError({"parent": ValidationError(
+                "An email answer needs a Reply-To or a sender to address.", code="reply_unaddressed",
+            )})
+        title = normalize_subject(cast(Thread, self.thread).display_title)
+        return ReplyEnvelope(
+            addresses=tuple(addresses.items()),
+            handle_id=None if addresses else self.sender_id,
+            subject=f"Re: {title}" if title else "",
+            sender=sender,
+        )
+
+    def reply_error(self, *, actor: Any = None, channel: Channel | None = None) -> ValidationError | None:
+        """Why ``MessageManager.compose`` cannot answer this message (:meth:`reply_envelope`'s refusal), or ``None``.
+
+        Side-effect free; who may answer is :meth:`require_reply`'s.
+        """
+
         try:
-            channel.outbound_sender()
+            self.reply_envelope(actor=actor, channel=channel)
         except ValidationError as error:
             return error
-        if self.sender_id is None and not self.reply_addresses(actor=actor):
-            return ValidationError("An email reply requires a parent Reply-To or sender to address.")
         return None
 
     def webform_submission(self) -> WebformSubmission | None:

@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 from datetime import timedelta
 from email.utils import parseaddr
+from types import SimpleNamespace
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
@@ -10,7 +11,7 @@ from django.core import mail
 from django.core.exceptions import ValidationError
 from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
-from rebac import actor_context, system_context
+from rebac import PermissionDenied, actor_context, system_context
 
 from angee.base.models.locks import StaleRevisionError
 from angee.graphql.schema import GraphQLSchemas
@@ -409,6 +410,48 @@ class ClarifyTests(IntakeAccessCase):
         )
         self.assertTrue(data["clarify_task"]["ok"], data)
         self.assertEqual(self.task(need).snoozed_awaiting_id, self.reader.pk)
+
+    @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+    def test_a_request_whose_reply_to_names_no_address_is_never_asked_at_its_relay(self):
+        request = email(
+            self.channel(), "intranet@example.test", sender="relay@example.test",
+            headers=(("Reply-To", "Requester <requester@intranet>"),),
+        )
+        with self.assertRaises(ValidationError) as refused:
+            self.clarify(self.Need._base_manager.get(source_message=request))
+        self.assertIn("to", refused.exception.error_dict)
+        self.assertFalse(apps.get_model("messaging", "Message")._base_manager.filter(direction="outbound").exists())
+
+    @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+    def test_the_email_route_asks_what_compose_enforces_for_a_reviewer_who_does_not_own_the_channel(self):
+        message_model = apps.get_model("messaging", "Message")
+        channel = self.channel()
+        replier = self.writer
+        channel.with_actor(self.owner).grant_record_access("replier", replier)
+        with system_context(reason="tests.intake.review.stranger"):
+            stranger = self.User.objects.create_user(username="route-stranger")
+        rows = {
+            "sender": (email(channel, "row-sender@example.test"), True),
+            "reply-to": (email(channel, "row-relay@example.test", sender="relay@example.test",
+                               headers=(("Reply-To", REQUESTER),)), True),
+            "reply-to without an address": (email(channel, "row-intranet@example.test", sender="relay@example.test",
+                                                  headers=(("Reply-To", "requester@intranet"),)), True),
+            "delivery not configured": (email(channel, "row-unconfigured@example.test"), False),
+        }
+        for name, (source, configured) in rows.items():
+            for user in (replier, stranger):
+                with self.subTest(row=name, user=user.username), override_settings(
+                    ANGEE_EMAIL_DELIVERY_CONFIGURED=configured,
+                ), actor_context(user):
+                    route = self.Task._email_reply_route([SimpleNamespace(source_message=source)], actor=user)
+                    try:
+                        message_model.objects.compose(parent=source, text="Which dates?", actor=user)
+                    except (PermissionDenied, ValidationError):
+                        composed = False
+                    else:
+                        composed = True
+                    self.assertEqual(route is source, composed)
+                    self.assertEqual(composed, user == replier and name in ("sender", "reply-to"))
 
 
 class RequestPositionTests(IntakeAccessCase):

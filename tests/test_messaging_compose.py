@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import timedelta
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -16,7 +15,6 @@ from hypothesis import given
 from hypothesis import strategies as st
 from rebac import PermissionDenied, system_context
 
-from angee.intake.models import TaskIntake
 from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import (
     OutboundEmailChannelMissing,
@@ -422,38 +420,35 @@ def test_compose_writes_each_recipient_on_its_messages_thread(desk: Any) -> None
     _assert_recipients_on_their_messages_threads()
 
 
-def test_compose_and_intakes_route_agree_on_which_message_can_be_answered(desk: Any) -> None:
+def test_an_email_reply_goes_to_its_reply_to_else_its_sender_and_a_reply_to_without_an_address_is_refused(
+    desk: Any,
+) -> None:
+    """A relay's sender is never answered in place of a Reply-To the handle owner cannot take."""
+
     owner = desk.owner
-    paused = make_integration("compose-paused", model=Channel, backend_class="email", lifecycle="paused",
-                              config={"from_email": DESK})
-    chat = make_integration("compose-chat-row", model=Channel, backend_class="manual")
-    with system_context(reason="tests.messaging.compose.chat_sender"):
-        slack = Handle.objects.upsert(platform="slack", value="U-desk")
-    rows = {
-        "email with a sender": (_receive(desk, "with-sender"), {}, None),
-        "email with only a Reply-To": (_receive(desk, "relayed", sender=None, reply_to="a@example.test"), {}, None),
-        "email with neither": (_receive(desk, "neither", sender=None), {}, ValidationError),
-        "delivery not configured": (_receive(desk, "unconfigured"), {}, OutboundEmailNotConfigured),
-        "channel paused": (_receive(paused, "paused"), {}, OutboundEmailChannelMissing),
-        "chat": (_receive(chat, "room/2", sender="U-asker", platform="slack", thread=ParsedThread(external_id="r")),
-                 {"sender": slack}, None),
+    rejected = ("Applicant <applicant@intranet>", "applicant@example.test.", '"a b"@example.test')
+    for index, reply_to in enumerate(rejected):
+        relayed = _receive(desk, f"relayed-{index}", sender="noreply@forms.example.test", reply_to=reply_to)
+        assert relayed.reply_error(actor=owner).error_dict["reply_to"][0].code == "reply_to_invalid"
+        before = _rows()
+        with pytest.raises(ValidationError) as refused:
+            Message.objects.compose(parent=relayed, text="Thanks.", actor=owner)
+        assert refused.value.error_dict["reply_to"][0].code == "reply_to_invalid"
+        assert _rows() == before
+    answered = {
+        "reply-to": _receive(desk, "relayed-ok", sender="relay@example.test", reply_to="Ann <Ann@Example.test>"),
+        "sender": _receive(desk, "direct", sender="requester@example.test"),
     }
-    for name, (message, values, refusal) in rows.items():
-        configured = name != "delivery not configured"
-        with override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=configured):
-            with system_context(reason="tests.messaging.compose.reply_error"):
-                error = message.reply_error()
-            route = TaskIntake._email_reply_route([SimpleNamespace(source_message=message)])
-            actor = chat.owner if name == "chat" else paused.owner if name == "channel paused" else owner
-            if refusal is None:
-                assert error is None, name
-                reply = Message.objects.compose(parent=message, text="Answer.", actor=actor, **values)
-                assert reply.parent_id == message.pk, name
-            else:
-                assert isinstance(error, refusal), name
-                with pytest.raises(refusal):
-                    Message.objects.compose(parent=message, text="Answer.", actor=actor, **values)
-        assert (route is message) == (error is None and message.message_type == "email"), name
+    with system_context(reason="tests.messaging.compose.reply_to.read"):
+        to = {
+            name: list(Recipient._base_manager.filter(
+                message=Message.objects.compose(parent=parent, text="Thanks.", actor=owner),
+            ).values_list("handle__value", flat=True))
+            for name, parent in answered.items()
+        }
+    assert to == {"reply-to": ["ann@example.test"], "sender": ["requester@example.test"]}
+    unaddressed = _receive(desk, "unaddressed", sender=None)
+    assert unaddressed.reply_error(actor=owner).error_dict["parent"][0].code == "reply_unaddressed"
 
 
 @given(st.text())

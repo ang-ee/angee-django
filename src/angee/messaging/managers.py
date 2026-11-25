@@ -3154,11 +3154,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         actor_ref = to_subject_ref(actor)
         with actor_context(actor):
             if parent is not None:
-                parent = parent.with_actor(actor)
-                channel = parent.transport_channel(reason="messaging.compose.channel")
-                reads = parent.has_access("read")
-                if channel is None or not reads or not channel.with_actor(actor).has_access("reply"):
-                    raise PermissionDenied("Answering a message requires reading it and reply on its channel.")
+                channel = parent.require_reply(actor)
             else:
                 assert channel is not None
                 channel = apps.get_model("messaging", "Channel").objects.with_actor(actor).filter(pk=channel.pk).first()
@@ -3238,15 +3234,13 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             if to or cc or bcc:
                 role = "to" if to else "cc" if cc else "bcc"
                 raise ValidationError({role: "A reply goes to the message it answers."})
-            if (error := parent.reply_error(actor=actor)) is not None:
-                raise error
+            envelope = parent.reply_envelope(actor=actor, channel=channel)
             kind, platform = parent.message_type, parent.platform
             if kind == email_kind:
-                recipients = tuple(
-                    _Addressee("to", address, name) for address, name in parent.reply_addresses(actor=actor).items()
-                ) or (_Addressee("to", handle_id=parent.sender_id),)
-                title = normalize_subject(parent.thread.display_title)
-                subject = f"Re: {title}" if title else ""
+                recipients = tuple(_Addressee("to", address, name) for address, name in envelope.addresses) or (
+                    _Addressee("to", handle_id=envelope.handle_id),
+                )
+                subject = envelope.subject
             elif sender is None or sender.pk is None or sender.platform != platform:
                 raise ValidationError({"sender": "The reply sender must use the platform of the message it answers."})
             elif html or attachments:
@@ -3265,7 +3259,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         if kind == email_kind:
             if sender is not None:
                 raise ValidationError({"sender": "An email is sent from its channel's sender."})
-            sender_address = channel.outbound_sender()
+            sender_address = envelope.sender if parent is not None else channel.outbound_sender()
+            assert sender_address is not None
             landed.append(("channel", sender_address[1]))
         for addressee in recipients:
             if addressee.handle_id is None:

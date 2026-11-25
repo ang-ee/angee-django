@@ -366,8 +366,9 @@ def test_an_email_reply_requires_a_parent_reply_to_or_sender_to_address(mail_des
         ),
         uid=4,
     )
-    with pytest.raises(ValidationError, match="Reply-To or sender"):
+    with pytest.raises(ValidationError) as refused:
         Message.objects.compose(parent=unsigned, text="Who are you?", actor=channel.owner)
+    assert refused.value.error_dict["parent"][0].code == "reply_unaddressed"
     assert not Message._base_manager.filter(parent=unsigned).exists()
 
 
