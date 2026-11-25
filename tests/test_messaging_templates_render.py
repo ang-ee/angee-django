@@ -552,7 +552,7 @@ OFF_THE_LIST = [
     "select", "option", "frameset", "frame", "object", "embed", "applet", "param", "form", "input", "button", "label",
     "link", "base", "video", "audio", "source", "track", "picture", "map", "area", "colgroup", "col", "caption",
     "marquee", "isindex", "image", "portal", "bgsound", "keygen", "dialog", "details", "summary", "menu", "slot",
-    "search", "nobr", "listing", "xml", "o:p", "v:rect", "abbr", "q", "wbr",
+    "search", "nobr", "listing", "xml", "o:p", "abbr", "q", "wbr",
 ]
 """Elements off :data:`MAIL_ELEMENTS`: every mode-switching, framing, form, embedded and foreign element, and others."""
 
@@ -566,11 +566,6 @@ SPELLING_REFUSED: list[tuple[SpellingRule, str, bool]] = [
     (R.LESS_THAN, "<title>a<b</title>", False),
     (R.LESS_THAN, "<style>a<b{}</style>", False),
     (R.LESS_THAN, '<p title="a<b">x</p>', False),
-    (R.LESS_THAN, "<p>x</p><!-- note -->", False),
-    (R.LESS_THAN, "<!doctype html><p>x</p>", False),
-    (R.LESS_THAN, "<p>x</p><!doctype html>", True),
-    (R.LESS_THAN, "<?php x ?>", False),
-    (R.LESS_THAN, "<![CDATA[x]]>", False),
     (R.LESS_THAN, "<!x>", False),
     (R.LESS_THAN, "</ x>", False),
     (R.LESS_THAN, "<p>5 <", False),
@@ -630,6 +625,56 @@ def test_each_spelling_rule_refuses_with_its_message(rule: SpellingRule, html: s
 
     refusals = check_html(html, compiled_expression(HTML_ENGINE), document=document)
     assert any(rule.message in refusal and f"(rule {rule.value})" in refusal for refusal in refusals), refusals
+
+
+XHTML = (
+    '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" '
+    '"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">'
+)
+VML_BUTTON = (
+    '<div><!--[if mso]><v:roundrect href="https://example.test/" arcsize="10%"><w:anchorlock/><center><![endif]-->'
+    '<a href="https://example.test/">Go</a><!--[if mso]></center></v:roundrect><![endif]--></div>'
+)
+DECLARATION = "a layout opens with <!doctype html>, the one declaration a mail holds (rule 2)"
+MESSAGES: list[tuple[str, bool, str]] = [
+    ("<p>x</p><!-- note -->", False, "the comment '<!-- note -->': write a note as {# … #}, which no mail carries; a "
+     "layout alone holds Outlook's comments (rule 2)"),
+    ("<!-- Preheader --><p>x</p>", True, "the comment '<!-- Preheader -->': write a note as {# … #}, which no mail "
+     "carries; a layout holds Outlook's <!--[if mso]>…<![endif]--> and the <!--[if !mso]><!-->…<!--<![endif]--> "
+     "pair (rule 2)"),
+    (XHTML + "<p>x</p>", True,
+     f"the declaration '<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//…': {DECLARATION}"),
+    ("<!doctype html><p>x</p>", False, f"the declaration '<!doctype html>': {DECLARATION}"),
+    ("<p>x</p><!doctype html>", True, f"the declaration '<!doctype html>': {DECLARATION}"),
+    ("<?php x ?>", False, "the processing instruction '<?php x ?>': a mail holds none; write a note as {# … #}, which "
+     "no mail carries (rule 2)"),
+    ("<![CDATA[x]]>", False, "the marked section '<![CDATA[x]]>': a mail holds none; write its text with &lt; and "
+     "&amp; (rule 2)"),
+    (VML_BUTTON, True, "in an Outlook comment: <v:roundrect> is Office vector markup, which a mail does not carry: a "
+     "button drawn with it would need a value inside a comment, so write the button as a link (rule 7)"),
+    ('<a href="https://example.test/café">x</a>', False,
+     "the href of <a> holds a space or a character a link percent-encodes: write https://example.test/caf%C3%A9"),
+    ("<p>x</p >", False, "the end tag '</p >': an end tag is </name> and nothing else (rule 5)"),
+]
+"""Refusals that say what to write: a note, the one doctype, no vector markup, a percent-encoded link."""
+
+
+@pytest.mark.parametrize(("html", "document", "message"), MESSAGES)
+def test_a_refusal_says_how_to_write_the_row(html: str, document: bool, message: str) -> None:
+    """Each refusal quotes what the author wrote and says what a mail holds instead."""
+
+    assert message in check_html(html, compiled_expression(HTML_ENGINE), document=document)
+
+
+def test_a_markdown_link_whose_label_and_target_are_values_is_admitted(plain: Any, kit: Any) -> None:
+    """[{{ label }}]({{ link }}): the HTML writes the target before the label, and both reach the template whole."""
+
+    del plain
+    template = _mail("Hello, [{{ label }}]({{ link }}).", {"label": "x", "link": "x"}, key="tests.link")
+    assert _refusals(template) == []
+    rendered = _render(template, {"label": "Sign in", "link": "https://example.test/a b"}, kit)
+    assert '<a href="https://example.test/a%20b"' in rendered.html and ">Sign in</a>" in rendered.html
+    assert "Sign in (https://example.test/a%20b)" in rendered.plain_text
 
 
 @pytest.mark.parametrize(("html", "document"), SPELLING_ADMITTED)
@@ -889,7 +934,7 @@ def test_only_a_layout_carries_outlooks_comments(plain: Any) -> None:
     assert _refusals(_unsaved("layout", "outlook", source=OUTLOOK_DPI + PLAIN_LAYOUT, text_source=PLAIN_TEXT)) == []
     for row in (_unsaved(format="html", source=OUTLOOK_DPI, text_source="x"),
                 _unsaved("block", "outlook", source=OUTLOOK_DPI, text_source="x")):
-        assert any("which a layout alone holds for Outlook" in refusal for refusal in _refusals(row)), row.kind
+        assert any("a layout alone holds Outlook's comments" in refusal for refusal in _refusals(row)), row.kind
 
 
 def test_static_url_as_decoded() -> None:

@@ -151,6 +151,13 @@ REVEALED_CLOSES = "<![endif]"
 DOCTYPE = "doctype html"
 """The one declaration, a layout's opening ``<!doctype html>``."""
 
+NOTE = "write a note as {# … #}, which no mail carries"
+"""What an author writes where an HTML comment or a processing instruction was meant as a note."""
+
+VECTOR_MARKUP = ("v:", "w:")
+"""Office's vector and Word markup, which a mail does not carry: a button drawn with it would need a value inside a
+comment, where no value goes."""
+
 _ELEMENT_NAME = re.compile(r"[a-z][a-z0-9]*(?::[a-z][a-z0-9]*)?")
 _ATTRIBUTE_NAME = re.compile(r"[a-z_:][a-z0-9_:.-]*")
 _GAP = " \t\n"
@@ -242,6 +249,18 @@ class _HtmlChecker(HTMLParser):
         self.following = None if length is None else start + length
         return start
 
+    def written(self, start: int, end: str = ">") -> str:
+        """The author's own text from ``start`` through the next ``end``, quoted, cut after 60 characters."""
+
+        stop = self.text.find(end, start)
+        text = self.text[start:] if stop < 0 else self.text[start:stop + len(end)]
+        return repr(text if len(text) <= 60 else text[:59] + "…")
+
+    def misplaced(self, what: str, advice: str) -> None:
+        """Refuse ``what``, a ``<`` that opens no tag a mail holds (rule 2), saying what to write instead."""
+
+        self.refuse(f"{what}: {advice} (rule {SpellingRule.LESS_THAN.value})")
+
     def span_ids(self, text: str) -> list[int]:
         return [int(index) for index in _PLACEHOLDER.findall(text)]
 
@@ -280,9 +299,14 @@ class _HtmlChecker(HTMLParser):
         ):
             self.broken(SpellingRule.START_TAG, f"the tag {written[:60]!r}")
         office = self.office and tag in OFFICE_ELEMENTS
-        if closing and tag not in VOID_ELEMENTS and not office:
+        if closing and tag not in VOID_ELEMENTS and not office and not tag.startswith(VECTOR_MARKUP):
             self.broken(SpellingRule.SELF_CLOSING, f"<{tag}/>")
-        if tag not in MAIL_ELEMENTS and not office:
+        if tag.startswith(VECTOR_MARKUP):
+            self.refuse(
+                f"<{tag}> is Office vector markup, which a mail does not carry: a button drawn with it would need a "
+                f"value inside a comment, so write the button as a link (rule {SpellingRule.ELEMENTS.value})",
+            )
+        elif tag not in MAIL_ELEMENTS and not office:
             self.broken(SpellingRule.ELEMENTS, f"<{tag}>")
         for name, raw_value in attrs:
             value = raw_value or ""
@@ -418,17 +442,19 @@ class _HtmlChecker(HTMLParser):
         if "\x00" in data:
             return self.broken(SpellingRule.TEMPLATE_CODE, "template code in an HTML comment")
         if not self.document:
-            return self.broken(SpellingRule.LESS_THAN, "an HTML comment, which a layout alone holds for Outlook")
+            return self.misplaced(
+                f"the comment {self.written(start, '-->')}", f"{NOTE}; a layout alone holds Outlook's comments",
+            )
         if data in (REVEALED_OPENS, REVEALED_CLOSES):
             if self.revealed is (data == REVEALED_OPENS):
                 return self.refuse("<!--[if !mso]><!--> and <!--<![endif]--> come in pairs, one pair at a time")
             self.revealed = data == REVEALED_OPENS
             return None
         if (comment := MSO_COMMENT.fullmatch(data)) is None:
-            return self.broken(
-                SpellingRule.LESS_THAN,
-                "an HTML comment other than <!--[if mso]>…<![endif]--> or the <!--[if !mso]><!-->…<!--<![endif]--> "
-                "pair",
+            return self.misplaced(
+                f"the comment {self.written(start, '-->')}",
+                f"{NOTE}; a layout holds Outlook's <!--[if mso]>…<![endif]--> and the "
+                "<!--[if !mso]><!-->…<!--<![endif]--> pair",
             )
         if self.revealed:
             return self.refuse("an Outlook comment sits inside <!--[if !mso]><!-->…<!--<![endif]-->")
@@ -447,15 +473,20 @@ class _HtmlChecker(HTMLParser):
             self.broken(SpellingRule.TEMPLATE_CODE, "template code in a declaration")
         elif not (self.document and start == 0 and decl.lower() == DOCTYPE):
             self.following = None
-            self.broken(SpellingRule.LESS_THAN, f"the declaration <!{decl[:20]}>")
+            self.misplaced(
+                f"the declaration {self.written(start)}",
+                "a layout opens with <!doctype html>, the one declaration a mail holds",
+            )
 
     def unknown_decl(self, data: str) -> None:
-        if self.event(None) is not None:
-            self.broken(SpellingRule.LESS_THAN, "a marked section")
+        if (start := self.event(None)) is not None:
+            self.misplaced(
+                f"the marked section {self.written(start)}", "a mail holds none; write its text with &lt; and &amp;",
+            )
 
     def handle_pi(self, data: str) -> None:
-        if self.event(None) is not None:
-            self.broken(SpellingRule.LESS_THAN, "a processing instruction")
+        if (start := self.event(None)) is not None:
+            self.misplaced(f"the processing instruction {self.written(start)}", f"a mail holds none; {NOTE}")
 
 
 def check_html(

@@ -441,7 +441,7 @@ class MarkdownFormatHandler(MessageTemplateFormatHandler):
         unstyled = self.parser.renderer.render(tokens, self.parser.options, {})
         html = self.parser.renderer.render(tokens, self.parser.options, {"styled": True})
         text = _MarkdownText().write(tokens)
-        refusals.extend(self._span_refusals(source, unstyled, text))
+        refusals.extend(self._span_refusals(source, text, unstyled))
         refusals.extend(self._token_refusals(tokens))
         refusals.extend(self._pair_refusals(tokens))
         if refusals:
@@ -449,18 +449,25 @@ class MarkdownFormatHandler(MessageTemplateFormatHandler):
         return RowForms(html=html, text=text)
 
     @staticmethod
-    def _span_refusals(source: str, *forms: str) -> Iterator[str]:
-        expected = _spans(source)
-        for form in forms:
-            found = _spans(form)
-            if len(found) != len(expected) or not all(map(_same_span, expected, found)):
-                changed = next(
-                    (f"{left} became {right}" for left, right in zip(expected, found, strict=False)
-                     if not _same_span(left, right)),
-                    "a span was added or lost",
-                )
-                yield f"template code in the Markdown does not reach the template whole ({changed})"
-                return
+    def _span_refusals(source: str, text: str, html: str) -> Iterator[str]:
+        """Refuse template spans the forms do not keep whole.
+
+        The text form keeps the source's spans unchanged and in order, a link's
+        destination output taking ``|url``. The HTML form holds the same spans: a
+        link writes its destination in its tag, before its label, so
+        ``[{{ label }}]({{ link }})`` keeps both, in another order.
+        """
+
+        expected, written = _spans(source), _spans(text)
+        if len(written) != len(expected) or not all(map(_same_span, expected, written)):
+            changed = next(
+                (f"{left} became {right}" for left, right in zip(expected, written, strict=False)
+                 if not _same_span(left, right)),
+                "a span was added or lost",
+            )
+            yield f"template code in the Markdown does not reach the template whole ({changed})"
+        elif sorted(_spans(html)) != sorted(written):
+            yield "template code in the Markdown does not reach the template whole (its HTML adds, loses or alters one)"
 
     @staticmethod
     def _token_refusals(tokens: Sequence[MarkdownToken]) -> Iterator[str]:
