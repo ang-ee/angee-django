@@ -16,9 +16,11 @@ target_config:
   slug: enquiries
 ```
 
-- `channel` is a channel with the `webform` backend. When a form whose target
-  or configuration changes is validated (`full_clean`), as the console and the
-  resource loader do, a channel that is gone or has another backend is refused
+- `channel` is a channel with the `webform` backend, by its public id: never
+  blank, and stored without the spaces around it, so one channel is always
+  stored the same way. When a form whose target or configuration changes is
+  validated (`full_clean`), as the console and the resource loader do, a
+  channel that is gone or has another backend is refused
   under `target_config` ([`MessageTarget.clean`](targets.py)): no response could
   be posted on it. For an acting user the channel is read through their own
   access, so one they cannot read is refused as a missing one; system work reads
@@ -61,7 +63,9 @@ A response is refused in three ways. Each is kept on the response as
 | `message_exists` | The channel already holds a message under this submission's id that the response did not make: one received before forms had responses, whose id was sent again. Posting would replace it | Dismiss the response; the earlier message stands |
 | `message_refused` | Messaging will not take the message as it is: its envelope is past messaging's size bound | Dismiss the response, or shorten what the form asks |
 
-Any other error is a failure, which web forms tries again.
+Web forms' own `config_invalid` (its README) applies here too: a form whose
+stored channel and slug no longer validate is refused before the channel is
+read. Any other error is a failure, which web forms tries again.
 
 ## The envelope
 
