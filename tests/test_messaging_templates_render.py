@@ -658,6 +658,14 @@ MESSAGES: list[tuple[str, bool, str]] = [
     ('<a href="https://example.test/café">x</a>', False,
      "the href of <a> holds a space or a character a link percent-encodes: write https://example.test/caf%C3%A9"),
     ("<p>x</p >", False, "the end tag '</p >': an end tag is </name> and nothing else (rule 5)"),
+    *((f"<!--[if {condition}]><p>x</p><![endif]-->", True,
+       f"the comment '<!--[if {condition}]><p>x</p><![endif]-->': write <!--[if mso]>…<![endif]-->: Outlook's other "
+       "conditions are not admitted (rule 2)") for condition in ("gte mso 9", "mso | IE", "lte mso 11")),
+    ('<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">', True,
+     'the http-equiv attribute is not one a mail is written with (MAIL_ATTRIBUTES): declare the character set with '
+     '<meta charset="utf-8">'),
+    ('<td style="padding:0" >x</td>', False, "the tag '<td style=\"padding:0\" >', with white space before its >: a "
+     "start tag is written plainly"),
 ]
 """Refusals that say what to write: a note, the one doctype, no vector markup, a percent-encoded link."""
 
@@ -666,7 +674,8 @@ MESSAGES: list[tuple[str, bool, str]] = [
 def test_a_refusal_says_how_to_write_the_row(html: str, document: bool, message: str) -> None:
     """Each refusal quotes what the author wrote and says what a mail holds instead."""
 
-    assert message in check_html(html, compiled_expression(HTML_ENGINE), document=document)
+    refusals = check_html(html, compiled_expression(HTML_ENGINE), document=document)
+    assert any(refusal.startswith(message) for refusal in refusals), refusals
 
 
 def test_a_markdown_link_whose_label_and_target_are_values_is_admitted(plain: Any, kit: Any) -> None:
@@ -761,8 +770,9 @@ def test_a_mail_is_written_with_its_own_elements_and_attributes() -> None:
         assert check_html(f'<p {name}="{values.get(name, "x")}">x</p>', expression) == [], name
     for name in ("onclick", "onerror", "http-equiv", "srcset", "srcdoc", "formaction", "ping", "longdesc", "data",
                  "data-x", "poster", "action", "popover", "xlink:href", "usemap", "is"):
-        assert check_html(f'<p {name}="x">x</p>', expression) == [
-            f"the {name} attribute is not one a mail is written with (MAIL_ATTRIBUTES)"], name
+        refusals = check_html(f'<p {name}="x">x</p>', expression)
+        assert len(refusals) == 1 and refusals[0].startswith(
+            f"the {name} attribute is not one a mail is written with (MAIL_ATTRIBUTES)"), refusals
     office = "<!--[if mso]><xml><o:OfficeDocumentSettings><o:AllowPNG/><o:PixelsPerInch>96</o:PixelsPerInch>" \
              "</o:OfficeDocumentSettings></xml><![endif]-->"
     assert check_html(office, expression, document=True) == []
@@ -886,12 +896,12 @@ def test_a_static_link_is_absolute_or_a_fragment_or_a_cid_image() -> None:
 
     expression = compiled_expression(HTML_ENGINE)
     for link in ("https://example.test/a?b=1&amp;c=2", "mailto:a@example.test", "tel:+1", "#", "#top", "cid:logo",
-                 "HTTPS://EXAMPLE.TEST/"):
+                 "HTTPS://EXAMPLE.TEST/", "sms:+15550100?body=Hi%20there", "webcal://example.test/c.ics"):
         assert check_html(f'<a href="{link}">x</a>', expression) == [], link
     for link in ("//example.test/", "/settings", "settings", "ms-msdt:/id", "cid:a b", "#a b"):
         assert check_html(f'<a href="{link}">x</a>', expression) == [
             "the href of <a> is not a link a mail may carry: an absolute https, http, mailto or tel link, "
-            "a #fragment or a cid: image"], link
+            "a #fragment, a cid: image, or an sms: or webcal: link"], link
     assert check_html('<a href="https://example.test/café">x</a>', expression) == [
         "the href of <a> holds a space or a character a link percent-encodes: write https://example.test/caf%C3%A9"]
     assert check_html('<a href="mailto:a@example.test?subject=Hi there">x</a>', expression) == [
@@ -1510,7 +1520,8 @@ REFUSED_LINKS = (
     "settings", "https:example.test", "https:///x", "https://", "http://?x", " javascript:x", "java\tscript:x",
     "\x01javascript:x", "https://:80/x", "https://:@/", "http://.", "https://user:pw@good.example@evil.example/",
     "https://user@example.test/", "http://localhost/", "http://192.168.0.1/", "https://example.test./",
-    "https://-example.test/", "https://example.t/", "https://exa_mple.test/",
+    "https://-example.test/", "https://example.t/", "https://exa_mple.test/", "sms:+15550100",
+    "webcal://example.test/c.ics",
 )
 """Links a value may not give: every scheme but the four, and every link a mail with no base cannot resolve."""
 ADMITTED_LINKS = {

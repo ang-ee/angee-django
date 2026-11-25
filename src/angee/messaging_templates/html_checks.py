@@ -138,11 +138,15 @@ name."""
 LINK_ATTRIBUTES = frozenset({"href", "src", "background", "cite"})
 """The attributes of :data:`MAIL_ATTRIBUTES` a reader follows as a link: one ``url`` output, or a static link."""
 
-STATIC_ANCHOR = re.compile(r"(?:#|cid:)[A-Za-z0-9._~!$&'()*+,;=:@/?%-]*")
-"""What a static link may be besides a link ``url`` leaves unchanged: a fragment of the mail, or a ``cid:`` image
-the mail carries."""
+STATIC_LINK = re.compile(r"(?:#|cid:|sms:|webcal:)[A-Za-z0-9._~!$&'()*+,;=:@/?%-]*")
+"""What a static link an author writes may be besides a link ``url`` leaves unchanged: a fragment of the mail, a
+``cid:`` image the mail carries, or an ``sms:`` or ``webcal:`` link, which have no other spelling. A value gives none
+of them."""
 
-STATIC_LINKS = f"an absolute {', '.join(LINK_SCHEMES[:-1])} or {LINK_SCHEMES[-1]} link, a #fragment or a cid: image"
+STATIC_LINKS = (
+    f"an absolute {', '.join(LINK_SCHEMES[:-1])} or {LINK_SCHEMES[-1]} link, a #fragment, a cid: image, or an sms: "
+    "or webcal: link"
+)
 
 OUTPUT_ATTRIBUTES = frozenset({"alt", "title", "aria-label"})
 """The text attributes any output may write."""
@@ -310,7 +314,9 @@ class _HtmlChecker(HTMLParser):
             not _ELEMENT_NAME.fullmatch(tag) or not all(_ATTRIBUTE_NAME.fullmatch(name) for name in names)
             or len(set(names)) != len(names) or not _canonical(written, tag, attrs, closing=closing)
         ):
-            self.broken(SpellingRule.START_TAG, f"the tag {written[:60]!r}")
+            spaced = not closing and written[-2:-1] in (" ", "\t", "\n")
+            self.broken(SpellingRule.START_TAG, f"the tag {written[:60]!r}" + (", with white space before its >"
+                                                                               if spaced else ""))
         office = self.office and tag in OFFICE_ELEMENTS
         if closing and tag not in VOID_ELEMENTS and not office and not tag.startswith(VECTOR_MARKUP):
             self.broken(SpellingRule.SELF_CLOSING, f"<{tag}/>")
@@ -324,7 +330,8 @@ class _HtmlChecker(HTMLParser):
         for name, raw_value in attrs:
             value = raw_value or ""
             if name not in MAIL_ATTRIBUTES:
-                self.refuse(f"the {name} attribute is not one a mail is written with (MAIL_ATTRIBUTES)")
+                self.refuse(f"the {name} attribute is not one a mail is written with (MAIL_ATTRIBUTES)" + (
+                    ': declare the character set with <meta charset="utf-8">' if name == "http-equiv" else ""))
                 continue
             if name == "charset" and value.lower() != MAIL_CHARSET:
                 self.refuse(f"the charset of <{tag}> is {MAIL_CHARSET}, the one a mail is sent in")
@@ -380,7 +387,7 @@ class _HtmlChecker(HTMLParser):
     def check_link(self, tag: str, name: str, value: str, ids: list[int]) -> None:
         if not ids:
             sent = url(value)
-            if sent == value or STATIC_ANCHOR.fullmatch(value):
+            if sent == value or STATIC_LINK.fullmatch(value):
                 return
             self.refuse(
                 f"the {name} of <{tag}> holds a space or a character a link percent-encodes: write {sent}" if sent
@@ -472,7 +479,12 @@ class _HtmlChecker(HTMLParser):
                 return self.refuse("<!--[if !mso]><!--> and <!--<![endif]--> come in pairs, one pair at a time")
             self.revealed = data == REVEALED_OPENS
             return None
-        if (comment := MSO_COMMENT.fullmatch(data)) is None:
+        if (comment := MSO_COMMENT.fullmatch(data)) is None and data.lower().startswith("[if "):
+            return self.misplaced(
+                f"the comment {self.written(start, '-->')}",
+                "write <!--[if mso]>…<![endif]-->: Outlook's other conditions are not admitted",
+            )
+        if comment is None:
             return self.misplaced(
                 f"the comment {self.written(start, '-->')}",
                 f"{NOTE}; a layout holds Outlook's <!--[if mso]>…<![endif]--> and the "
@@ -522,7 +534,7 @@ def check_html(
     attribute value does not hold whole; in an attribute of
     :data:`LINK_ATTRIBUTES` anything but one output whose last filter is ``url``,
     or a static link :func:`~angee.messaging_templates.engine.url` leaves as
-    ``html.parser`` decodes it or a :data:`STATIC_ANCHOR`; in ``style`` an output but :data:`STYLE_OUTPUTS`;
+    ``html.parser`` decodes it or a :data:`STATIC_LINK`; in ``style`` an output but :data:`STYLE_OUTPUTS`;
     in a ``<style>`` element a span but :data:`STYLE_ELEMENT_OUTPUTS`; in a
     ``<title>`` element or any other attribute an output outside
     :data:`OUTPUT_ATTRIBUTES` (``<title>``: any; ``dir`` and ``lang``:
