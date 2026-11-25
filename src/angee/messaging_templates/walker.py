@@ -370,6 +370,38 @@ class _RowCheck:
     pieces: Mapping[RowPiece, Template] = field(default_factory=dict)
     includes: frozenset[str] = frozenset()
     refusals: tuple[str, ...] = ()
+    sizes: Mapping[RowPiece, tuple[int, int, int]] = field(default_factory=dict)
+    """What each body form's own nodes add to any tree reaching the row, at least: nodes, outputs, text
+    (:func:`_own_size`)."""
+
+
+def _own_size(nodelist: NodeList) -> tuple[int, int, int]:
+    """The nodes (loop bodies aside), outputs and text a compiled piece adds to every tree that reaches it.
+
+    A tree walks every node of every row it reaches at least once, both branches of an ``if`` and a loop body once,
+    and counts conditions, ``with`` values and include arguments besides; so this is a floor of the tree's count,
+    and the rows it includes add theirs.
+    """
+
+    nodes = nodelist.get_nodes_by_type(Node)
+    return (
+        sum(type(node) is not BudgetedLoopBody for node in nodes),
+        sum(type(node) is VariableNode for node in nodes),
+        sum(len(cast(TextNode, node).s) for node in nodes if type(node) is TextNode),
+    )
+
+
+def _over_caps(root_name: str, form: RowPiece, nodes: int, outputs: int, text: int) -> list[str]:
+    """The tree caps a form's count passes: :data:`NODE_LIMIT`, :data:`OUTPUT_LIMIT`, :data:`TEXT_LIMIT`."""
+
+    refusals = []
+    if nodes > NODE_LIMIT:
+        refusals.append(f"{root_name}: its {form} reaches over {NODE_LIMIT} nodes")
+    if outputs > OUTPUT_LIMIT:
+        refusals.append(f"{root_name}: its {form} reaches over {OUTPUT_LIMIT} outputs")
+    if text > TEXT_LIMIT:
+        refusals.append(f"{root_name}: its {form} writes over {TEXT_LIMIT} characters of text")
+    return refusals
 
 
 @dataclass
@@ -1053,6 +1085,7 @@ class TemplateWalker:
         self.html_engine = MessageTemplateEngine(autoescape=True)
         self.text_engine = MessageTemplateEngine(autoescape=False)
         self.checked: dict[tuple[str, str], _RowCheck] = {}
+        self.expression = compiled_expression(self.html_engine)
 
     # -- one row's own checks --------------------------------------------------
 
@@ -1149,9 +1182,12 @@ class TemplateWalker:
             pieces[piece] = template
         if RowPiece.HTML in pieces:
             refusals.extend(f"{name}: {reason}" for reason in check_html(
-                forms.html, compiled_expression(self.html_engine), document=handler.writes_document,
+                forms.html, self.expression, document=handler.writes_document,
             ))
-        return _RowCheck(name, forms=served, pieces=pieces, includes=frozenset(includes), refusals=tuple(refusals))
+        sizes = {piece: _own_size(pieces[piece].nodelist) for piece in (RowPiece.HTML, RowPiece.TEXT)
+                 if piece in pieces}
+        return _RowCheck(name, forms=served, pieces=pieces, includes=frozenset(includes), refusals=tuple(refusals),
+                         sizes=sizes)
 
     @staticmethod
     def _structure(nodelist: NodeList, piece: RowPiece, row: WalkedRow, refuse: Callable[[str], None]) -> None:
@@ -1210,9 +1246,14 @@ class TemplateWalker:
         return walk
 
     def _gather(self, walk: TemplateWalk, reader: RowReader) -> dict[str, _RowCheck]:
-        """Rows reached, level by level, each counted before it is parsed and checked alone."""
+        """Rows reached, level by level, each counted before it is parsed and checked alone.
+
+        Each checked row's own size (:attr:`_RowCheck.sizes`) adds to the walk's totals, and the walk stops as soon as
+        a total passes a tree cap: every row reached is in the tree at least once, so no admitted walk reaches it.
+        """
 
         checks: dict[str, _RowCheck] = {}
+        totals: dict[RowPiece, tuple[int, int, int]] = {}
         characters = 0
         level = [walk.root_name]
         while level:
@@ -1227,6 +1268,12 @@ class TemplateWalker:
                     return checks
                 check = checks[name] = self.check(row)
                 walk.refusals.extend(check.refusals)
+                for piece, size in check.sizes.items():
+                    total = totals[piece] = cast(tuple[int, int, int], tuple(
+                        map(sum, zip(totals.get(piece, (0, 0, 0)), size, strict=True))))
+                    if over := _over_caps(walk.root_name, piece, *total):
+                        walk.refusals.extend(over)
+                        return checks
                 if check.forms is not None:
                     walk.forms[name] = check.forms
                 walk.includes |= check.includes
@@ -1322,14 +1369,7 @@ class _TreeWalker:
         self.walk.refusals.append(f"{frame.name}: {reason}")
 
     def close(self, tree: _Tree) -> None:
-        if tree.nodes > NODE_LIMIT:
-            self.walk.refusals.append(f"{self.walk.root_name}: its {tree.form} reaches over {NODE_LIMIT} nodes")
-        if tree.outputs > OUTPUT_LIMIT:
-            self.walk.refusals.append(f"{self.walk.root_name}: its {tree.form} reaches over {OUTPUT_LIMIT} outputs")
-        if tree.text > TEXT_LIMIT:
-            self.walk.refusals.append(
-                f"{self.walk.root_name}: its {tree.form} writes over {TEXT_LIMIT} characters of text",
-            )
+        self.walk.refusals.extend(_over_caps(self.walk.root_name, tree.form, tree.nodes, tree.outputs, tree.text))
 
     def nodes(self, frame: _Frame, nodelist: Iterable[Node], tree: _Tree) -> None:
         for node in nodelist:

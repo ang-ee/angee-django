@@ -2247,6 +2247,9 @@ def _preview_cases() -> dict[str, Any]:
         _row("part", f"hidden{index}", source=commented)
         for name, multiplied in MULTIPLIED.items():
             _row("part", f"{name}{index}", source=multiplied)
+    for name, (part, count) in WALKED_PARTS.items():
+        for index in range(count):
+            _row("part", f"{name}{index}", source=part)
     hidden = '\n{% include "parts/hidden0" only %}{% include "parts/hidden1" only %}'
     loop = _loop(DATED + _deep_ifs(30))
     heavy = _loop(DATED + _deep_ifs(10) + CHAINS)
@@ -2278,7 +2281,61 @@ def _preview_cases() -> dict[str, Any]:
         **{name: _mail(source + "".join(f'\n\n{{% include "parts/{name}{index}" only %}}' for index in range(2)),
                        key=f"tests.{name}")
            for name, source in MULTIPLIED.items()},
+        **{name: _mail("\n".join(f'{{% include "parts/{name}{index}" only %}}' for index in range(count)),
+                       format="html", text_source="x", key=f"tests.{name}")
+           for name, (_, count) in WALKED_PARTS.items()},
     }
+
+
+WALKED_PARTS = {
+    "quotes": ("\n\n".join(["> > > a"] * 50), 325),
+    "single": ("\n\n".join(["> a"] * 150), 195),
+    "fivedeep": ("\n\n".join(["> > > > > a"] * 200), 57),
+    "thousand": ("\n\n".join(["> a"] * 1_000), 29),
+}
+"""Templates including many Markdown parts of quotes, each quote an element carrying two brand outputs: 325 parts of
+three-deep quotes and 195 of single ones, each admitted alone; 57 of five-deep quotes and 29 of a thousand, written
+past their check. A walk over them cost 2.4 to 3.9 s of CPU before the tree's caps refused it; it now stops as soon as
+the rows it has checked pass one."""
+
+
+def test_a_walk_over_parts_each_admitted_alone_stops_at_the_trees_caps(
+    plain: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A part of 50 three-deep quotes passes clean() alone; a template including 325 of them is refused after the
+    template, its layout and one part are checked, at the tree's caps, never after all 325."""
+
+    del plain
+    source, count = WALKED_PARTS["quotes"]
+    with system_context(reason="tests.messaging_templates.render.walk"):
+        _unsaved("part", "alone", source=source).full_clean()
+    for index in range(count):
+        _row("part", f"walked{index}", source=source)
+    template = _mail("\n".join(f'{{% include "parts/walked{index}" only %}}' for index in range(count)),
+                     format="html", text_source="x", key="tests.walked")
+    checked: list[str] = []
+    _recording(monkeypatch, TemplateWalker, "_check", lambda walker, row, name: checked.append(name))
+    assert _refusals(template) == [
+        "tests.walked: its html reaches over 1000 nodes", "tests.walked: its html reaches over 300 outputs"]
+    assert checked == CHECKED_BEFORE_THE_CAPS, checked
+
+
+CHECKED_BEFORE_THE_CAPS = ["tests.walked", "layouts/plain", "parts/walked0"]
+"""The template, its layout and one part: the part's 300 outputs and the layout's pass the tree's caps."""
+
+
+def test_a_walk_compiles_each_span_once(plain: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The HTML checks compile an output span the first time a walk meets its text, never again in that walk."""
+
+    del plain
+    for index in range(3):
+        _row("part", f"once{index}", source="\n\n".join(["> a"] * 5))
+    template = _mail("\n".join(f'{{% include "parts/once{index}" only %}}' for index in range(3)), format="html",
+                     text_source="x", key="tests.once")
+    compiled: list[str] = []
+    _recording(monkeypatch, MessageTemplateEngine, "from_string", lambda engine, text: compiled.append(text))
+    assert _refusals(template) == []
+    assert compiled.count("{{ brand.light.border }}") == 1 and compiled.count("{{ brand.light.muted }}") == 1
 
 
 MULTIPLIED = {
@@ -2305,9 +2362,11 @@ def test_a_form_over_its_caps_is_refused_before_the_html_checks_read_it(
 
 @pytest.fixture
 def work(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[Any]]:
-    """Record what walks and renders do: each tree's nodes, outputs and text, and what each pass charged."""
+    """Record what walks and renders do: each row checked, each tree's nodes, outputs and text, each pass's charges."""
 
-    seen: dict[str, list[Any]] = {"trees": [], "passes": []}
+    seen: dict[str, list[Any]] = {"trees": [], "passes": [], "checked": []}
+    _recording(monkeypatch, TemplateWalker, "_check", lambda walker, row, name: seen["checked"].append(
+        len(row.source) + len(row.text_source)))
     _recording(monkeypatch, _TreeWalker, "close", lambda walker, tree: seen["trees"].append(
         (str(tree.form), tree.nodes, tree.outputs, tree.text)))
     _recording(monkeypatch, RenderBudget, "spend", lambda budget: seen["passes"].append(budget))
@@ -2366,9 +2425,14 @@ PREVIEW_WORK: dict[str, tuple[int, list[tuple[str, int, int, int]], list[tuple[i
     "review-subject": (
         149_981, [("html", 983, 4, 144), ("text", 966, 0, 42), ("subject", 8, 0, 0), LINES[1]], [(51, 0, 30_000)],
     ),
-    "refused": (149_861, [("html", 19, 4, 498_344), ("text", 12, 0, 49_953), *LINES], []),
+    # Stopped while gathering: the third row's text passes the tree's text cap before any tree is walked.
+    "refused": (100_012, [], []),
     # Refused at the root's own check: its form holds over 2,000 spans, so no part is reached and nothing walked.
     "headings": (49_076, [], []),
+    "quotes": (12_577, [], []),
+    "single": (8_067, [], []),
+    "fivedeep": (4_968, [], []),
+    "thousand": (6_304, [], []),
     "rules": (49_068, [], []),
     "dated": (
         23_322, [("html", 579, 284, 382), ("text", 569, 280, 281), *LINES], [(0, 0, 0), (500, 0, 0), (500, 0, 0)],
@@ -2406,10 +2470,11 @@ def test_the_costliest_preview_does_bounded_work(plain: Any, kit: Any, work: dic
     for name, template in _preview_cases().items():
         work["trees"].clear()
         work["passes"].clear()
+        work["checked"].clear()
         with system_context(reason="tests.messaging_templates.render.work"):
-            walk = TemplateWalker().judge(template, MessageTemplate.objects)
+            TemplateWalker().judge(template, MessageTemplate.objects)
+            source = sum(work["checked"])
             preview = template.preview(kit=kit)
-        source = sum(len(row.source) + len(row.text_source) for row in walk.rows.values())
         assert (preview.rendered is not None) is (name in ADMITTED_PREVIEWS), preview.warnings
         assert (source, work["trees"][len(work["trees"]) // 2:], _charges(work["passes"])) == PREVIEW_WORK[name]
 

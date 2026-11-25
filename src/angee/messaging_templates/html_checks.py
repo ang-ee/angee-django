@@ -26,6 +26,7 @@ between attributes.
 
 from __future__ import annotations
 
+import functools
 import re
 from collections.abc import Callable, Sequence
 from enum import IntEnum
@@ -559,8 +560,10 @@ def _checked(checker: _HtmlChecker) -> list[str]:
 
 
 def compiled_expression(engine: MessageTemplateEngine) -> Callable[[str], FilterExpression | None]:
-    """Return a function compiling one output span in ``engine`` to its ``FilterExpression``."""
+    """Return a function compiling one output span in ``engine`` to its ``FilterExpression``, each distinct span once
+    for the function's life (a walker's)."""
 
+    @functools.cache
     def expression(span: str) -> FilterExpression | None:
         try:
             nodelist = engine.from_string(span).nodelist
