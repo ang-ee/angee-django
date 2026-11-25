@@ -3,7 +3,8 @@
 :class:`MessageTemplateFormat` and :func:`validate_variables` live here, in a
 module that imports neither the model nor the database, so the model and any
 other reader of a row's declared values import one owner without a cycle. A
-host's first migration records both by this module's path.
+host's first migration records ``validate_variables`` by this module's path (the
+format's choices it writes as literals).
 """
 
 from __future__ import annotations

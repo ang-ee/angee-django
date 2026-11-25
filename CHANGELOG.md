@@ -47,8 +47,11 @@ live in code docstrings.
     create, edit and delete the deployment's own rows and overrides and read
     every sample (`messaging_templates/message_template`). The console gets the
     `message_templates` resource and the `override_message_template` and
-    `keep_message_template_override` mutations, which refuse in band
-    (`ok: false`).
+    `keep_message_template_override` mutations. They refuse as the framework's
+    actions do: a signed-out caller gets the session's GraphQL error, a caller
+    who may not create or write the override a `PERMISSION_DENIED` GraphQL error,
+    and a row that is not a shipped default (`not_a_baseline`) or overrides none
+    (`no_baseline`) an in-band `ok: false`.
   - **New projects.** A project rendered from the web project template with the
     `full` addons profile lists `angee.messaging_templates` in its `settings.yaml`
     `INSTALLED_APPS`; the default profile does not. The `angee` meta-distribution
@@ -66,7 +69,10 @@ live in code docstrings.
   `Dashboard` loads through it, storing the same rows and ledger entries as
   before; `angee.dashboards.resources` and its `DashboardResource` are removed.
   Upgrade: nothing, unless code imported `DashboardResource`; it imports
-  `BaselineResource` from `angee.resources.loader` instead.
+  `BaselineResource` from `angee.resources.loader` instead. A row that states an
+  auto-managed stamp (`created_at`) now loads into a model whose queryset closes
+  collection edits (`ClosedUpdateQuerySet`): the loader restores the stamp
+  through `owner_update`.
 - `angee.messaging`, `angee.webforms_messaging`: the move of forms out of
   messaging channels is removed: the bridge's migration template
   (`compose_migrations/messaging/webform_channels_to_forms.py`), its

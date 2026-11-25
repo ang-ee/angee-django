@@ -25,6 +25,7 @@ from angee.messaging_templates import schema as messaging_templates_schema
 from angee.messaging_templates.models import (
     NO_BASELINE_MESSAGE,
     NOT_A_BASELINE_MESSAGE,
+    ONE_AT_A_TIME_MESSAGE,
     LayoutHandler,
     MessageTemplateKind,
 )
@@ -524,38 +525,67 @@ _OVERRIDE = "mutation($id: ID!) { override_message_template(template: $id) { ok 
 _KEEP = "mutation($id: ID!) { keep_message_template_override(template: $id) { ok message id } }"
 
 
-def test_the_two_verbs_answer_with_an_action_result(db: None) -> None:
+_RESULT = "{ ok message code id }"
+_OVERRIDE_RESULT = f"mutation($id: ID!) {{ override_message_template(template: $id) {_RESULT} }}"
+_KEEP_RESULT = f"mutation($id: ID!) {{ keep_message_template_override(template: $id) {_RESULT} }}"
+
+
+def test_the_two_verbs_refuse_in_one_shape(db: None) -> None:
+    """Signed out and not permitted are GraphQL errors; a domain refusal is in band with its code; both verbs alike."""
+
     del db
-    admin = create_platform_admin("messaging-templates-verbs-admin")
-    member = create_user("messaging-templates-verbs-member")
-    baseline = _row(baseline=True)
-    variables = {"id": public_id_of(baseline)}
+    seats = {
+        "signed out": AnonymousUser(),
+        "member": create_user("messaging-templates-verbs-member"),
+        "admin": create_platform_admin("messaging-templates-verbs-admin"),
+    }
+    targets = {"baseline": _row(baseline=True), "override": _row(source="<main>Ours</main>"), "local": _row(key="own")}
+    denied = {"code": "PERMISSION_DENIED"}
+    signed_out = {"code": "PERMISSION_DENIED", "message": "Authentication required."}
 
-    first = result_data(execute_schema(_schema(), _OVERRIDE, variables, user=admin))["override_message_template"]
-    again = result_data(execute_schema(_schema(), _OVERRIDE, variables, user=admin))["override_message_template"]
-    with system_context(reason="tests.messaging_templates.read"):
-        override = MessageTemplate.objects.get(is_baseline=False)
-    assert first == again == {"ok": True, "message": "Message template overridden.", "id": override.sqid}
+    def answer(document: str, root: str, seat: str, target: str) -> dict[str, Any]:
+        result = execute_schema(_schema(), document, {"id": public_id_of(targets[target])}, user=seats[seat])
+        if result.errors:
+            (error,) = result.errors
+            shape = {"code": error.extensions["code"]}
+            return {**shape, "message": error.message} if seat == "signed out" else shape
+        return dict(result.data[root])
 
-    for refused in (member, AnonymousUser()):
-        denied = result_data(execute_schema(_schema(), _OVERRIDE, variables, user=refused))
-        assert denied["override_message_template"] == {
-            "ok": False, "message": "Override message template failed.", "id": None,
-        }
-    not_a_default = result_data(execute_schema(_schema(), _OVERRIDE, {"id": override.sqid}, user=admin))
-    assert not_a_default["override_message_template"]["ok"] is False
-    assert not_a_default["override_message_template"]["message"] == NOT_A_BASELINE_MESSAGE
+    overridden = {"ok": True, "message": "Message template overridden.", "code": None, "id": targets["override"].sqid}
+    kept = {"ok": True, "message": "Override kept.", "code": None, "id": targets["override"].sqid}
+    not_a_default = {"ok": False, "message": NOT_A_BASELINE_MESSAGE, "code": "not_a_baseline", "id": None}
+    no_default = {"ok": False, "message": NO_BASELINE_MESSAGE, "code": "no_baseline", "id": None}
+    expected = {
+        ("override", "signed out"): {"baseline": signed_out, "override": signed_out, "local": signed_out},
+        ("override", "member"): {"baseline": denied, "override": denied, "local": denied},
+        ("override", "admin"): {"baseline": overridden, "override": not_a_default, "local": not_a_default},
+        ("keep", "signed out"): {"baseline": signed_out, "override": signed_out, "local": signed_out},
+        ("keep", "member"): {"baseline": denied, "override": denied, "local": denied},
+        ("keep", "admin"): {"baseline": denied, "override": kept, "local": no_default},
+    }
+    verbs = {
+        "override": (_OVERRIDE_RESULT, "override_message_template"),
+        "keep": (_KEEP_RESULT, "keep_message_template_override"),
+    }
+    answers = {
+        (verb, seat): {target: answer(*verbs[verb], seat, target) for target in targets}
+        for verb, seat in expected
+    }
+    assert answers == expected
+    assert [row.pk for row in MessageTemplate.system_queryset().filter(is_baseline=False, key="base")] == [
+        targets["override"].pk,
+    ]
 
-    kept = result_data(execute_schema(_schema(), _KEEP, {"id": override.sqid}, user=admin))
-    assert kept["keep_message_template_override"] == {"ok": True, "message": "Override kept.", "id": override.sqid}
-    for refused in (member, AnonymousUser()):
-        unwritable = result_data(execute_schema(_schema(), _KEEP, {"id": override.sqid}, user=refused))
-        assert unwritable["keep_message_template_override"] == {
-            "ok": False, "message": "Keep message template override failed.", "id": None,
-        }
-    own = _row(key="letter")
-    no_default = result_data(execute_schema(_schema(), _KEEP, {"id": public_id_of(own)}, user=admin))
-    assert no_default["keep_message_template_override"] == {"ok": False, "message": NO_BASELINE_MESSAGE, "id": None}
+
+def test_override_of_a_default_bound_to_an_actor_needs_no_ambient_actor(db: None) -> None:
+    """The candidate is validated and saved under the actor the verb resolved, a template's layout check included."""
+
+    del db
+    admin = create_platform_admin("messaging-templates-bound-overrider")
+    _row(baseline=True)
+    template = _row("template", "tests.welcome", baseline=True)
+    override = MessageTemplate.objects.override(_read(template).with_actor(admin))
+    assert (override.is_baseline, override.key, override.layout) == (False, "tests.welcome", "base")
 
 
 # ---------- row facts ----------
@@ -718,20 +748,41 @@ def test_a_layout_templates_use_cannot_be_deleted_while_its_key_would_stop_resol
             "Other message templates use this layout, which would no longer resolve without this row: "
             "give its key a row in the default language first."
         )
-        with pytest.raises(ValidationError), transaction.atomic():
+        unresolved = "would no longer resolve without this row"
+        with pytest.raises(ValidationError, match=unresolved), transaction.atomic():
             MessageTemplate.objects.get(pk=layout.pk).delete()
-        with pytest.raises(ValidationError), transaction.atomic():
-            MessageTemplate.objects.filter(pk=layout.pk).delete()
+        # The layout and its translation together: the German row alone never resolves the key.
+        with pytest.raises(ValidationError, match=unresolved), transaction.atomic():
+            MessageTemplate.objects.filter(key="letter").delete()
         cascade = Collector(using="default", origin=admin)
         cascade.collect([MessageTemplate.objects.get(pk=layout.pk)])
-        with pytest.raises(ValidationError), transaction.atomic():
+        with pytest.raises(ValidationError, match=unresolved), transaction.atomic():
             cascade.delete()
     console = execute_schema(_schema(), _DELETE, {"id": public_id_of(layout)}, user=admin)
     assert console.errors
+    assert unresolved in console.errors[0].message
     with system_context(reason="tests.messaging_templates.delete"):
         translation.delete()
         unused.delete()
         assert MessageTemplate.objects.filter(pk=layout.pk).exists()
+
+
+def test_one_queryset_delete_of_every_row_keeping_a_key_resolvable_passes(db: None) -> None:
+    """The limit ``delete_blocker`` states: each row is judged with the others still there, a baseline among them."""
+
+    del db
+    admin = create_platform_admin("messaging-templates-batch-deleter")
+    shipped = _row(key="letter", language="fr", baseline=True)
+    own = _row(key="letter")
+    _row("template", "tests.welcome", layout="letter")
+    with system_context(reason="tests.messaging_templates.delete"):
+        assert shipped.delete_blocker() is None and own.delete_blocker() is None  # each has the other
+        MessageTemplate.objects.filter(key="letter", kind="layout").delete()
+        assert not MessageTemplate.objects.resolves("layout", "letter")
+    # The console deletes one row by its id, so it meets the last row that resolves the key, and refuses.
+    lone = _row(key="letter")
+    refused = execute_schema(_schema(), _DELETE, {"id": public_id_of(lone)}, user=admin)
+    assert refused.errors and "would no longer resolve" in refused.errors[0].message
 
 
 def test_an_overridden_layout_goes_back_to_its_default_when_the_override_is_deleted(db: None) -> None:
@@ -763,8 +814,9 @@ def test_collection_writes_are_refused(db: None, write: Callable[[Any], Any], ma
     del db
     row = _row(baseline=True)
     with system_context(reason="tests.messaging_templates.bulk"):
-        with pytest.raises(ValidationError), transaction.atomic():
+        with pytest.raises(ValidationError) as refused, transaction.atomic():
             write(getattr(MessageTemplate, manager).all())
+    assert (refused.value.code, refused.value.messages) == ("one_at_a_time", [ONE_AT_A_TIME_MESSAGE])
     assert (_read(row).source, _read(row).kind, _read(row).content_hash) == (row.source, "layout", row.content_hash)
     with system_context(reason="tests.messaging_templates.read"):
         assert not MessageTemplate.objects.filter(key="bulk").exists()

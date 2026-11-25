@@ -5,8 +5,11 @@ detail, insert, update, delete); deleting an override is resetting it to its
 shipped default. ``override_message_template`` starts the deployment's override
 of a shipped default and ``keep_message_template_override`` keeps an override
 over a default that changed; both return an ``ActionResult`` naming the override.
-Both refuse in band, ``ok: false``, whatever stops them: an unreadable or missing
-row, a caller who may not create or write, a row with no shipped default. A row's
+Both refuse as the framework's actions do: a signed-out caller gets the session's
+GraphQL error, and a caller who may not create or write the override gets a
+``PERMISSION_DENIED`` GraphQL error; an unreadable or missing row, a row that is
+not a shipped default and an override of none are refused in band (``ok: false``,
+with the codes ``not_a_baseline`` and ``no_baseline``). A row's
 ``is_effective``, ``is_overridden`` and ``has_updated_default`` are read from its
 siblings and filter through the model's ``hasura_filter_expressions``.
 """
@@ -17,7 +20,6 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.db.models.expressions import BaseExpression
-from rebac import PermissionDenied
 from strawberry import auto
 from strawberry.scalars import JSON
 
@@ -100,7 +102,7 @@ class MessageTemplateMutation:
     """Verbs that start from a shipped default."""
 
     @strawberry.mutation
-    @action_guard("Override message template failed.", errors=(PermissionDenied,))
+    @action_guard("Override message template failed.")
     def override_message_template(self, info: strawberry.Info, template: PublicID) -> ActionResult:
         """Start the deployment's override of a shipped default, or return the one it has."""
 
@@ -109,11 +111,11 @@ class MessageTemplateMutation:
         return ActionResult(ok=True, message="Message template overridden.", id=override.sqid)
 
     @strawberry.mutation
-    @action_guard("Keep message template override failed.", errors=(PermissionDenied,))
+    @action_guard("Keep message template override failed.")
     def keep_message_template_override(self, info: strawberry.Info, template: PublicID) -> ActionResult:
         """Keep an override's text over its shipped default as it is now, which clears ``has_updated_default``."""
 
-        override = authorized_permission_target(info, MessageTemplate, template, "write")
+        override = authorized_permission_target(info, MessageTemplate, template, "read")
         MessageTemplate.objects.keep_override(override)
         return ActionResult(ok=True, message="Override kept.", id=override.sqid)
 

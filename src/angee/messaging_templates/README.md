@@ -80,9 +80,10 @@ resolves many keys in one query; `effective(kind, key, ...)` resolves one, and
 raises when none is found. Per key, the languages tried are the one asked for, or
 else the person's languages, then the default language (`LANGUAGE_CODE`'s primary
 subtag); the first with a row wins, its override before its baseline. When none
-has one, the language of a baseline wins, English first and then by code. Both
-read through the caller's scope; work with no actor reads through
-`MessageTemplate.system_queryset()`.
+has one, the language of a baseline wins, English first and then by code.
+Callers pass languages as parties stores them, a primary subtag (`en`, `zh`), not
+a locale such as `en-us`. Both read through the caller's scope; work with no actor
+reads through `MessageTemplate.system_queryset()`.
 
 A key **resolves** (`resolves(kind, key)`) when it has a baseline in some language
 or a row in the default language, so every recipient finds it. A template's
@@ -109,6 +110,8 @@ a resource load writes a baseline ([permissions](permissions.zed):
 
 The `message_templates` resource lists, reads, inserts, edits and deletes rows;
 `override_message_template` and `keep_message_template_override` take a row's id
-and return an `ActionResult` naming the override, or `ok: false` when they refuse:
-an unreadable or missing row, a caller who may not create or write the override,
-a row that is not a shipped default or overrides none.
+and return an `ActionResult` naming the override. They refuse as the framework's
+actions do: a signed-out caller gets the session's GraphQL error, and a caller
+who may not create or write the override a `PERMISSION_DENIED` GraphQL error; an
+unreadable or missing row, a row that is not a shipped default (`not_a_baseline`)
+and an override of none (`no_baseline`) come back in band as `ok: false`.

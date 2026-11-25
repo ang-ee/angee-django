@@ -42,6 +42,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db import IntegrityError, models, transaction
 from django.db.models.expressions import BaseExpression
+from rebac import actor_context, system_context
 
 from angee.base.fields.state import StateField
 from angee.base.models.base import AngeeDataModel
@@ -186,10 +187,16 @@ def _has_updated_default(rows: models.QuerySet[Any]) -> BaseExpression:
 class _OneAtATimeQuerySet[TemplateT: MessageTemplate](ClosedUpdateQuerySet[TemplateT]):
     """Refuse every collection write: ``save()`` derives the content hash and guards the write-once columns."""
 
+    def immutable_error(self, operation: str) -> ValidationError:
+        """Refuse ``operation`` with the one message every closed write path gives."""
+
+        del operation
+        return ValidationError(ONE_AT_A_TIME_MESSAGE, code="one_at_a_time")
+
     def bulk_create(self, *args: Any, **kwargs: Any) -> list[TemplateT]:
         """Reject a batched insert, which would skip ``save()``."""
 
-        raise ValidationError(ONE_AT_A_TIME_MESSAGE, code="one_at_a_time")
+        raise self.immutable_error("bulk_create")
 
 
 class MessageTemplateQuerySet[TemplateT: MessageTemplate](
@@ -336,7 +343,11 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
                 for name, value in locked.override_values().items():
                     setattr(override, name, value)
                 try:
-                    with transaction.atomic():
+                    # Validation reads through the resolved actor's scope, whatever the ambient one is.
+                    with (
+                        system_context(reason="messaging_templates.message_template.override")
+                        if unscoped else actor_context(actor)
+                    ), transaction.atomic():
                         override.full_clean()
                         override.save()
                 except (IntegrityError, ValidationError):
@@ -352,12 +363,14 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
     def keep_override(self, override: TemplateT) -> TemplateT:
         """Keep ``override``'s text over its baseline as it is now, which clears "has an updated default".
 
-        Under ``override``'s row lock: refuses a row that overrides no baseline,
-        requires ``write`` on it (named system work always may), and stamps its
-        ``baseline_hash`` with the baseline's ``content_hash``.
+        Requires ``write`` on ``override`` before anything is locked (named system
+        work always may). Then, under its row lock, refuses a row that overrides no
+        baseline and stamps its ``baseline_hash`` with the baseline's ``content_hash``.
         """
 
         actor, unscoped = override.effective_actor(strict=True)
+        if not unscoped:
+            override.require_access("write", actor)
         with transaction.atomic():
             locked = self.model.system_queryset(lock=("self",)).filter(pk=override.pk).first()
             shipped = None if locked is None or locked.is_baseline else (
@@ -370,7 +383,7 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
             if unscoped:
                 locked.sudo(reason="messaging_templates.message_template.keep_override")
             else:
-                locked.require_access("write", actor)
+                locked.with_actor(actor)
             locked.baseline_hash = shipped.content_hash
             locked.save(update_fields=update_fields_with_auto_now(locked, {"baseline_hash"}))
             if unscoped:
