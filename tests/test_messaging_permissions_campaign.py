@@ -29,9 +29,9 @@ from angee.messaging.testing.models import (
     MessageEdge,
     MessageStar,
     Part,
-    Participant,
     Party,
     Reaction,
+    Recipient,
     Thread,
     ThreadAttachment,
     ThreadFollower,
@@ -143,8 +143,7 @@ def test_the_policy_decides_every_messaging_permission(db):
         )
         part = Part.objects.create(message=message, position=0, file=part_file, created_by=author)
         edge = MessageEdge.objects.create(src=channel_message, dst=message, kind="quote", created_by=author)
-        membership = Participant.objects.create(thread=thread, handle=handle, created_by=author)
-        participant = Participant.objects.create(thread=thread, message=channel_message, handle=handle)
+        recipient_row = Recipient.objects.create(thread=thread, message=channel_message, handle=handle)
         reaction = Reaction.objects.create(message=message, handle=handle, reaction="ok", created_by=author)
         star = MessageStar.objects.create(message=message, user=seats["starrer"], created_by=author)
         thread_tag, message_tag = (
@@ -246,13 +245,10 @@ def test_the_policy_decides_every_messaging_permission(db):
         (edge, "read", "both-reader", "channel-owner thread-owner author"),
         (edge, "write", "admin", "channel-owner thread-owner"),
         (edge, "delete", "channel-owner thread-owner", "both-reader"),
-        (membership, "create", "outsider", "anonymous"),
-        (membership, "read", "thread-reader", "outsider"),
-        (membership, "write", "thread-editor", "thread-reader"),
-        (membership, "delete", "thread-owner", "thread-editor"),
-        (participant, "read", "channel-reader thread-reader", "outsider"),
-        (participant, "write", "channel-owner", "thread-editor"),
-        (participant, "delete", "channel-owner", "thread-owner"),
+        (recipient_row, "create", "channel-owner admin", "outsider thread-editor anonymous"),
+        (recipient_row, "read", "channel-reader thread-reader", "outsider"),
+        (recipient_row, "write", "channel-owner", "thread-editor"),
+        (recipient_row, "delete", "channel-owner", "thread-owner"),
         (reaction, "create", "outsider", "anonymous"),
         (reaction, "read", "thread-reader", "outsider author"),
         (reaction, "write", "thread-editor", "thread-reader"),

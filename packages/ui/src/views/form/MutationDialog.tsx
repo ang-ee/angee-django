@@ -9,7 +9,7 @@ import type { DialogPlacement, DialogSize } from "../../ui/dialog";
 import { useToast } from "../../feedback";
 import { useUiT, type UiTranslate } from "../../i18n";
 import { dateFromUnknown, formatDateTimeStorage } from "../../widgets/date-format";
-import { emptyValueForField, fieldRuleErrors } from "./field-values";
+import { emptyValueForField, fieldRuleErrors, refusesSeed } from "./field-values";
 import { isFieldControlVisible, visibleFields } from "./form-view-model";
 import { DescriptorFieldList, type DescriptorField } from "./DescriptorFieldList";
 import {
@@ -24,7 +24,6 @@ import { useLatestRef } from "../../lib/use-latest-ref";
 export {
   LabeledDescriptorField,
 } from "./DescriptorFieldList";
-export { emptyValueForField } from "./field-values";
 
 /** Raw values held by dialog controls before the authored mutation boundary. */
 export type MutationDialogValues = Readonly<Record<string, unknown>>;
@@ -417,6 +416,7 @@ export function dialogRuleErrors(
   }), t);
 }
 
+/** Each field's seed: its initial value, else its default, else `null` where it is nullable or its empty value; an omittable or presence-required field, and one that may be left out whose declared type refuses its seed (`refusesSeed`), stays absent. */
 function initialDialogValues(
   fields: readonly DescriptorField[],
   initialValues: Readonly<Record<string, unknown>> | undefined,
@@ -428,7 +428,8 @@ function initialDialogValues(
     } else if (field.hasDefault) {
       values[field.name] = field.defaultValue;
     } else if (!field.omittable && !field.presenceRequired) {
-      values[field.name] = field.nullable ? null : emptyValueForField(field);
+      const seed = field.nullable ? null : emptyValueForField(field);
+      if (!refusesSeed(field, seed)) values[field.name] = seed;
     }
   }
   return values;

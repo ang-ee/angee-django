@@ -26,7 +26,7 @@ import {
   type GroupDescriptor,
 } from "../page";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
-import { fieldRuleErrors, isEmptyFieldValue, textValue } from "./field-values";
+import { DATE_TIME_WIDGETS, NUMBER_WIDGETS, emptyValueForField, fieldRuleErrors, refusesSeed, textValue } from "./field-values";
 import { fieldErrorsFromRules } from "./validation-errors";
 
 export type FormValues = Record<string, unknown>;
@@ -521,6 +521,11 @@ export function hiddenResetWrites(
   return writes;
 }
 
+/**
+ * A create draft's seed for `field`: the page's default value, else the field's own, else nothing
+ * for an omittable or presence-required field, else its empty value (`emptyValueForField`), which a
+ * field that may be left out does not take where its declared type refuses it (`refusesSeed`).
+ */
 function initialDraftFieldValue(
   field: FieldDescriptor,
   defaultValues: Record<string, unknown> | undefined,
@@ -528,7 +533,8 @@ function initialDraftFieldValue(
   if (hasDottedValue(defaultValues, field.name)) return dottedValue(defaultValues, field.name);
   if (field.hasDefault || field.defaultValue !== undefined) return field.defaultValue;
   if (field.omittable || field.presenceRequired) return MISSING_DOTTED_VALUE;
-  return emptyValue(field);
+  const seed = emptyValueForField(field);
+  return refusesSeed(field, seed) ? MISSING_DOTTED_VALUE : seed;
 }
 
 export function recordToValues(
@@ -544,7 +550,7 @@ export function recordToValues(
     const value = isRelationIdField(field)
       ? raw ?? null
       : recordFieldValue({ ...record, [field.name]: raw }, field);
-    setDottedValue(values, field.name, value === undefined ? emptyValue(field) : value);
+    setDottedValue(values, field.name, value === undefined ? emptyValueForField(field) : value);
   }
   if (lines) values[lines.field] = lines.rows;
   return values;
@@ -716,19 +722,32 @@ export function fieldControlReadOnly(
  * The record form's decision whether it displays a field, as `formDisplaysGroup` is its decision on a
  * group; on a create that decision reads the `value` the field holds. Whether a field is visible (its
  * `showWhen`, its `hidden`; `isFieldControlVisible`) is another fact, which this does not decide.
- * On a create, a field that holds no value (`isEmptyFieldValue`) is not displayed where its save
- * cannot write it (`writable`, `pathWritable`), nor where it is the form's status and its control is
- * read-only (`readOnlyStatus`): a status nobody sets on a create holds nothing to display until the
- * server gives it one. A field that holds a value (a seed, a default, a preset's write) is
- * displayed, read-only where it is, and an edit displays every field. The sheet's sections, its
- * panes and the form's status and body read it; a control a page renders itself is the page's to
- * display.
+ * On a create, a field that holds nothing to display (`holdsNothingToDisplay`, an empty object
+ * included) is not displayed where its save cannot write it (`writable`, `pathWritable`), nor where it
+ * is the form's status and its control is read-only (`readOnlyStatus`): a status nobody sets on a
+ * create holds nothing to display until the server gives it one. A field that holds a value (a seed,
+ * a default, a preset's write) is displayed, read-only where it is, and an edit displays every
+ * field. The sheet's sections, its panes and the form's status and body read it; a control a page
+ * renders itself is the page's to display.
  */
 export function formDisplaysField(
   value: unknown,
   { writable, isCreate, readOnlyStatus = false }: { writable: boolean; isCreate: boolean; readOnlyStatus?: boolean },
 ): boolean {
-  return !isCreate || !isEmptyFieldValue(value) || (writable && !readOnlyStatus);
+  return !isCreate || !holdsNothingToDisplay(value) || (writable && !readOnlyStatus);
+}
+
+/**
+ * Whether `value` gives a record form nothing to display: `null` or `undefined`, a text of blanks
+ * only, an empty list, an empty object. It is the display's own fact: what the rule check counts as
+ * missing (`isEmptyFieldValue`, for which an empty object is a value) and what a create leaves out of
+ * its payload (`isBlankCreateValue`) are others.
+ */
+export function holdsNothingToDisplay(value: unknown): boolean {
+  if (value == null) return true;
+  if (typeof value === "string") return value.trim() === "";
+  if (Array.isArray(value)) return value.length === 0;
+  return typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype && Object.keys(value).length === 0;
 }
 
 export function mutationData(
@@ -841,27 +860,12 @@ function mutationFieldValue(field: FieldDescriptor, value: unknown): unknown {
   return value;
 }
 
-function emptyValue(field: FieldDescriptor): unknown {
-  if (isNumericField(field)) return null;
-  if (isNullableScalarWidget(field)) return null;
-  if (field.widget === "tagInput" || isRelationListField(field)) return [];
-  if (field.kind === "switch" || field.widget === "switch") return false;
-  // The `json` and `object` widgets get an empty object, the `list` and `rows` widgets an empty
-  // list; `object`, `list` and `rows` throw on a string.
-  const widget = fieldWidgetId(field);
-  if (widget === "json" || widget === "object") return {};
-  if (widget === "list" || widget === "rows") return [];
-  return "";
-}
-
 function isNullableScalarWidget(field: FieldDescriptor): boolean {
-  const id = fieldWidgetId(field);
-  return id === "date" || id === "datetime" || id === "time";
+  return DATE_TIME_WIDGETS.has(fieldWidgetId(field));
 }
 
 function isNumericField(field: FieldDescriptor): boolean {
-  const id = fieldWidgetId(field);
-  return id === "integer" || id === "float";
+  return NUMBER_WIDGETS.has(fieldWidgetId(field));
 }
 
 function hasOptionValue(field: FieldDescriptor): boolean {

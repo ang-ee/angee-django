@@ -7,7 +7,8 @@ import type { Row } from "@angee/metadata";
 
 import type { FieldDescriptor, GroupDescriptor } from "../page";
 import type { DescriptorField } from "./DescriptorFieldList";
-import type { FormSpecFieldDescriptor } from "./form-spec";
+import { defaultWidgets } from "../../widgets";
+import { deserializeFormSpec, formSpecInitialValues, type FormSpecFieldDescriptor } from "./form-spec";
 import {
   EDITABLE_LINES_SECTION,
   emptyDraft,
@@ -22,6 +23,7 @@ import {
   formRuleErrors,
   formSections,
   formViewFieldLayout,
+  holdsNothingToDisplay,
   formWritablePaths,
   isCompositeFieldDescriptor,
   isEmptySection,
@@ -292,6 +294,23 @@ test("an empty object or json field drafts as an empty object and an empty list 
   expect(recordToValues({ id: "row-1" }, structured)).toStrictEqual(empty);
   expect(recordToValues({ id: "row-1", layout: null, steps: null, mappings: null, config: null }, structured))
     .toStrictEqual({ layout: null, steps: null, mappings: null, config: null });
+});
+
+test("a create draft leaves out a member that may be left out where its own type refuses its empty value, as a schema dialog does", () => {
+  const members = deserializeFormSpec({ type: "object", required: ["count"], properties: {
+    limit: { type: "integer" }, ratio: { type: "number" }, label: { type: "string" }, count: { type: "integer" },
+  } }, defaultWidgets).map((field) => ({ ...field, name: `config.${field.name}` }));
+  expect(emptyDraft(members)).toStrictEqual({ config: { label: "", count: null } });
+});
+
+test("guard: a create draft seeds a nullable member its empty value and a templated object an empty object, not a dialog's null and template", () => {
+  const fields = deserializeFormSpec({ type: "object", properties: {
+    note: { type: "string", nullable: true },
+    size: { anyOf: [{ type: "integer" }, { type: "null" }] },
+    retry: { type: "object", properties: { mode: { type: "string" } } },
+  } }, defaultWidgets);
+  expect(emptyDraft(fields)).toStrictEqual({ note: "", size: null, retry: {} });
+  expect(formSpecInitialValues(fields, {})).toStrictEqual({ note: null, size: null, retry: { mode: "" } });
 });
 
 test("a required json field holding an empty object is not missing, in a record form as in a dialog", () => {
@@ -700,8 +719,36 @@ describe("formDisplaysField", () => {
     ["on a create, a read-only status holding a value", "OPEN", true, true, true, true],
     ["on an edit, a field the save cannot write that holds no value", null, false, false, false, true],
     ["on an edit, a read-only status that holds no value", null, true, false, true, true],
+    ["on a create, a field the save cannot write holding an empty object", {}, false, true, false, false],
+    ["on a create, a field the save cannot write holding an object with a member", { region: "eu" }, false, true, false, true],
+    ["on a create, a field the save writes holding an empty object", {}, true, true, false, true],
+    ["on an edit, a field the save cannot write holding an empty object", {}, false, false, false, true],
   ])("%s", (_case, value, writable, isCreate, readOnlyStatus, displayed) => {
     expect(formDisplaysField(value, { writable, isCreate, readOnlyStatus })).toBe(displayed);
+  });
+});
+
+describe("what gives a record form nothing to display (holdsNothingToDisplay)", () => {
+  test.each<[string, unknown, boolean]>([
+    ["null", null, true],
+    ["undefined", undefined, true],
+    ["a text of blanks only", "  ", true],
+    ["an empty list", [], true],
+    ["an empty object", {}, true],
+    ["a text", "a", false],
+    ["false", false, false],
+    ["zero", 0, false],
+    ["a list with an item", [""], false],
+    ["an object with a member", { region: undefined }, false],
+    ["a date", new Date(0), false],
+  ])("%s", (_case, value, nothing) => {
+    expect(holdsNothingToDisplay(value)).toBe(nothing);
+  });
+
+  test("guard: the rule check still counts an empty object as a value and an empty list as missing", () => {
+    const config: FieldDescriptor = { name: "config", widget: "json", required: true };
+    const tags: FieldDescriptor = { name: "tags", widget: "tagInput", required: true };
+    expect(formRuleErrors({ config: {}, tags: [] }, [config, tags], new Set(), t)).toEqual({ tags: required });
   });
 });
 

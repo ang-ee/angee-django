@@ -9,14 +9,14 @@ from typing import Any
 import strawberry
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models, transaction
-from rebac import PermissionDenied, current_actor
+from rebac import PermissionDenied, current_actor, is_anonymous_actor
 from rebac.resources import model_resource_type
 from strawberry.extensions import SchemaExtension
 from strawberry_django_hasura import WriteBackend
 
 from angee.base.permissions import require_rebac_queryset
 from angee.base.signals import bulk_updated, connect_for_models, publish_bulk_update
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend, CreationClaim
 from angee.provenance.context import (
     changeset,
     changeset_model,
@@ -27,38 +27,57 @@ from angee.provenance.context import (
 
 def _claimed_create(
     model: type[models.Model],
-    idempotency_key: str | None,
+    idempotency_key: str,
     *,
     values: Any,
-    insert: Callable[[], Any],
+    create: Callable[[CreationClaim], Any],
 ) -> Any:
     """Insert once for one actor-scoped resource and replay its claimed row.
 
-    Without a key the insert runs as the backend wrote it: a custom backend owns
-    its own transaction, as upstream calls it.
+    An earlier creation under this actor's key is looked up first, without
+    claiming, and replayed while the actor can read it: a retry returns what
+    was created, whatever the actor may create now. Only a first attempt runs
+    ``create``, which hands its insert the claim; the insert asks it once the
+    create is decided and before anything is written. ``values`` is the
+    request's input as sent, the one content the lookup and the claim both
+    fingerprint, so a backend that fills values before it inserts still
+    matches its retry. Anonymous callers share one actor, so their keys are
+    refused.
     """
 
-    if idempotency_key is None:
-        return insert()
     with changeset(fresh=True), transaction.atomic():
         actor = current_actor()
         if not model_resource_type(model) or actor is None:
             raise ImproperlyConfigured("Idempotent resources require an actor-scoped queryset.")
-        replay = changeset_model().objects.claim_created(
-            f"graphql.create:{model._meta.label_lower}:{actor}",
-            idempotency_key,
-            values=values, model=model,
-            unavailable=ValidationError(
-                {"idempotency_key": "The claimed creation result is unavailable."},
-            ),
-        )
-        if replay is not None:
-            instance = require_rebac_queryset(model, actor=actor).filter(pk=replay.pk).first()
+        if is_anonymous_actor(actor):
+            raise ValidationError({"idempotency_key": "Sign in to use an idempotency key."})
+        claims = changeset_model().objects
+        scope = f"graphql.create:{model._meta.label_lower}:{actor}"
+        unavailable = ValidationError({"idempotency_key": "The claimed creation result is unavailable."})
+
+        def readable(created: models.Model) -> Any:
+            instance = require_rebac_queryset(model, actor=actor).filter(pk=created.pk).first()
             if instance is None:
                 raise PermissionDenied("The claimed creation result is not readable.")
             return instance
-        instance = insert()
-        require_changeset().record_created(instance)
+
+        earlier = claims.replay_created(scope, idempotency_key, values=values, model=model, unavailable=unavailable)
+        if earlier is not None:
+            return readable(earlier)
+        replayed: list[Any] = []
+
+        def claim() -> Any:
+            created = claims.claim_created(
+                scope, idempotency_key, values=values, model=model, unavailable=unavailable,
+            )
+            if created is None:
+                return None
+            replayed.append(readable(created))
+            return replayed[0]
+
+        instance = create(claim)
+        if not replayed:
+            require_changeset().record_created(instance)
         return instance
 
 
@@ -75,11 +94,27 @@ class ClaimingWriteBackend:
     def create(
         self, info: strawberry.Info, data: dict[str, Any], *, idempotency_key: str | None = None,
     ) -> Any:
-        values = self.backend.creation_values(data) if isinstance(self.backend, AngeeHasuraWriteBackend) else data
-        return _claimed_create(
-            self.model, idempotency_key, values=values,
-            insert=lambda: self.backend.create(info, data),
-        )
+        """Create as the backend does; with a key, replay an earlier creation or claim this one.
+
+        Without a key nothing happens ahead of the backend. With one, the
+        request's input is the key's content; an Angee backend asks the claim
+        at its own decision point, and any other backend's create runs once it
+        is claimed.
+        """
+
+        if idempotency_key is None:
+            return self.backend.create(info, data)
+        backend = self.backend
+        if isinstance(backend, AngeeHasuraWriteBackend):
+            return _claimed_create(
+                self.model, idempotency_key, values=data, create=lambda claim: backend.create(info, data, claim=claim),
+            )
+
+        def claim_first(claim: CreationClaim) -> Any:
+            replay = claim()
+            return replay if replay is not None else backend.create(info, data)
+
+        return _claimed_create(self.model, idempotency_key, values=data, create=claim_first)
 
 
 def write_backend(model: type[models.Model], backend: WriteBackend) -> tuple[WriteBackend, dict[str, Any]]:

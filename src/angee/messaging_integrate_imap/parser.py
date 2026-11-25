@@ -93,7 +93,7 @@ _RECIPIENT_HEADERS = (("To", "to"), ("Cc", "cc"), ("Bcc", "bcc"))
 
 # Headers retained as standalone, queryable HEADER parts (fragment-backed, so a
 # List-Id shared by a whole mailing list is one row). Everything else either has a
-# better owner (addresses → Participant, Message-ID/References → identity/threading,
+# better owner (addresses → Recipient, Message-ID/References → identity/threading,
 # Subject → the TITLE part, Date → sent_at, Content-* → the part tree) or is
 # transport diagnostics that stay in the lossless ``metadata["headers"]`` envelope.
 # They are emitted in this order, which the ingest sync hash covers: reordering

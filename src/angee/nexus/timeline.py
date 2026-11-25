@@ -25,7 +25,7 @@ class CorrespondenceKind(TimelineKind):
         "messaging.Message": ("sender", "thread", "platform", "direction", "sent_at", "created_at",
                               "preview", "created_by", "is_trashed", "merged_into"),
         "messaging.Part": ("message", "role", "fragment"),
-        "messaging.Participant": ("message", "handle"),
+        "messaging.Recipient": ("message", "handle"),
         "messaging.Thread": ("merged_into",),
         "messaging.ThreadAttachment": ("thread", "role"),
         "parties.Handle": ("party", "display_name"),
@@ -72,7 +72,7 @@ class CorrespondenceKind(TimelineKind):
             parties,
             handles=apps.get_model("parties", "Handle")._base_manager.all(),
             messages=messages,
-            participants=apps.get_model("messaging", "Participant")._base_manager.all(),
+            recipients=apps.get_model("messaging", "Recipient")._base_manager.all(),
         )
 
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
@@ -101,7 +101,7 @@ class CorrespondenceKind(TimelineKind):
         label = row._meta.concrete_model._meta.label
         if label == "messaging.Message":
             messages = message.objects.filter(pk=row.pk)
-        elif label in ("messaging.Participant", "messaging.Part"):
+        elif label in ("messaging.Recipient", "messaging.Part"):
             messages = message.objects.filter(pk=row.message_id)
         elif label == "parties.Handle":
             # A handle merge keeps messages on the retired handle; its survivor's group concerns them.
@@ -109,7 +109,7 @@ class CorrespondenceKind(TimelineKind):
             messages = message.objects.filter(pk__in=MessageQuerySet.ids_involving_handles(
                 group,
                 messages=message._base_manager.all(),
-                participants=apps.get_model("messaging", "Participant")._base_manager.all(),
+                recipients=apps.get_model("messaging", "Recipient")._base_manager.all(),
             ))
         elif label in ("messaging.Thread", "messaging.ThreadAttachment"):
             messages = message.objects.for_thread(row if label == "messaging.Thread" else row.thread)

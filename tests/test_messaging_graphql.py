@@ -464,8 +464,8 @@ def test_inbox_labels_coexist_with_guarded_relation_selections(db: None) -> None
         assert hidden == [{"id": message.sqid, "thread_title": "", "channel_vendor_name": ""}]
 
 
-def test_message_sender_and_participant_expose_resolved_party(db: None) -> None:
-    """Message and participant handles expose the curated party identity."""
+def test_message_sender_and_recipient_expose_resolved_party(db: None) -> None:
+    """Message sender and recipient handles expose the curated party identity."""
 
     admin = _platform_admin("msg-party-handle-admin")
     thread, message = _seed_thread_and_message(admin)
@@ -483,11 +483,11 @@ def test_message_sender_and_participant_expose_resolved_party(db: None) -> None:
         party.with_actor(admin).confirm_statement(aspect="handle", handle=handle, values={})
         message.sender = handle
         message.save(update_fields=("sender", "updated_at"))
-        messaging_models.Participant.objects.create(
+        messaging_models.Recipient.objects.create(
             thread=thread,
             message=message,
             handle=handle,
-            role=messaging_models.Participant.ParticipantRole.TO,
+            role=messaging_models.Recipient.RecipientRole.TO,
             created_by_id=admin.pk,
         )
 
@@ -498,7 +498,7 @@ def test_message_sender_and_participant_expose_resolved_party(db: None) -> None:
             query MessageIdentity($id: String!) {
               messages_by_pk(id: $id) {
                 sender { display_name party_link_confirmed party { display_name } }
-                participants { handle { display_name party_link_confirmed party { display_name } } }
+                recipients { handle { display_name party_link_confirmed party { display_name } } }
               }
             }
             """,
@@ -513,7 +513,7 @@ def test_message_sender_and_participant_expose_resolved_party(db: None) -> None:
             "party_link_confirmed": True,
             "party": {"display_name": "Ada Curated"},
         },
-        "participants": [
+        "recipients": [
             {
                 "handle": {
                     "display_name": "Ada Envelope",
@@ -3306,7 +3306,7 @@ def test_delete_channel_preview_total_matches_real_deleted_rows(db: None) -> Non
 
     Fix 2: the inventory (:meth:`ChannelManager.inventory`) counts the channel's
     threads/messages AND their top-level CASCADE children (parts, reactions, stars,
-    edges, participants, notifications, followers), so the count-based
+    edges, recipients, notifications, followers), so the count-based
     forecast matches what ``teardown_for_channel`` + the channel delete remove — no
     under-count from omitted subtrees. Compared against Django's authoritative per-call
     ``.delete()`` totals over the exact same scope.
@@ -3332,16 +3332,18 @@ def test_delete_channel_preview_total_matches_real_deleted_rows(db: None) -> Non
             thread=thread2, channel=channel, external_id="acc-a2", status="synced", created_by_id=owner_id
         )
         # Message-rooted CASCADE children on msg1: a nested part tree, a reaction, a star,
-        # a cross-message edge; and both participant flavors (message- and
-        # thread-attached, to exercise the OR predicate) plus a delivery notification.
+        # a cross-message edge; a recipient on each message, plus a delivery notification
+        # (message- and thread-attached, to exercise the OR predicate).
         root_part = messaging_models.Part._base_manager.create(message=msg1, fragment=fragment, role="body")
         messaging_models.Part._base_manager.create(message=msg1, parent=root_part, fragment=fragment, role="quoted")
         messaging_models.Part._base_manager.create(message=msg2, fragment=fragment, role="body")
         messaging_models.Reaction._base_manager.create(message=msg1, reaction="like", created_by_id=owner_id)
         messaging_models.MessageStar._base_manager.create(message=msg1, user_id=owner_id, created_by_id=owner_id)
         messaging_models.MessageEdge._base_manager.create(src=msg1, dst=msg2, created_by_id=owner_id)
-        messaging_models.Participant._base_manager.create(message=msg1, handle=handle, created_by_id=owner_id)
-        messaging_models.Participant._base_manager.create(thread=thread2, handle=handle, created_by_id=owner_id)
+        messaging_models.Recipient._base_manager.create(message=msg1, handle=handle, created_by_id=owner_id)
+        messaging_models.Recipient._base_manager.create(
+            message=msg2, thread=thread2, handle=handle, created_by_id=owner_id,
+        )
         # Thread-rooted CASCADE children: a bare follower and a delivery notification.
         messaging_models.ThreadFollower._base_manager.create(
             thread=thread1,

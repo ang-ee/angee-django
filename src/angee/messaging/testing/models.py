@@ -18,8 +18,8 @@ from angee.messaging.models import MessageEdge as AbstractMessageEdge
 from angee.messaging.models import MessageStar as AbstractMessageStar
 from angee.messaging.models import MessageSubtype as AbstractMessageSubtype
 from angee.messaging.models import Part as AbstractPart
-from angee.messaging.models import Participant as AbstractParticipant
 from angee.messaging.models import Reaction as AbstractReaction
+from angee.messaging.models import Recipient as AbstractRecipient
 from angee.messaging.models import Thread as AbstractThread
 from angee.messaging.models import ThreadAttachment as AbstractThreadAttachment
 from angee.messaging.models import ThreadFollower as AbstractThreadFollower
@@ -366,16 +366,16 @@ class MessageEdge(AbstractMessageEdge):
         rebac_resource_type = "messaging/message_edge"
 
 
-class Participant(AbstractParticipant):
-    """Concrete participant used by messaging tests."""
+class Recipient(AbstractRecipient):
+    """Concrete recipient used by messaging tests."""
 
-    class Meta(AbstractParticipant.Meta):
-        """Django model options for the canonical test participant."""
+    class Meta(AbstractRecipient.Meta):
+        """Django model options for the canonical test recipient."""
 
         abstract = False
         app_label = "messaging"
-        db_table = "test_messaging_participant"
-        rebac_resource_type = "messaging/participant"
+        db_table = "test_messaging_recipient"
+        rebac_resource_type = "messaging/recipient"
 
 
 class PartiesRole(AbstractPartiesRole):

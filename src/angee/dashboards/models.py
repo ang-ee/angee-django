@@ -574,13 +574,13 @@ class DashboardManager[DashboardT: Dashboard](_DashboardManagerBase[DashboardT])
         name: str = "",
         description: str = "",
     ) -> DashboardT:
-        canonical = canonical_dashboard_snapshot(snapshot)
-        validate_dashboard_queries(canonical)
         actor = current_actor()
         if actor is None:
             raise PermissionDenied("Dashboard snapshots require an acting user.")
         if scope not in {"personal", "addon", "resource"}:
             raise ValidationError({"scope": "Unknown dashboard scope."})
+        # The caller's widget queries are validated once their write is decided, never before.
+        canonical: dict[str, Any] | None = None
         with transaction.atomic(), system_context(reason="dashboards.save_snapshot"):
             current = None
             if persisted_id is not None:
@@ -612,6 +612,8 @@ class DashboardManager[DashboardT: Dashboard](_DashboardManagerBase[DashboardT])
                 )
                 if current is not None:
                     raise DashboardConflictError(current.revision)
+                canonical = canonical_dashboard_snapshot(snapshot)
+                validate_dashboard_queries(canonical)
                 current = self.model(
                     owner=owner,
                     scope=scope,
@@ -632,6 +634,9 @@ class DashboardManager[DashboardT: Dashboard](_DashboardManagerBase[DashboardT])
                 raise PermissionDenied("Scoped dashboards can only be edited by their owner.")
             if not current.with_actor(actor).has_access("write"):
                 raise PermissionDenied("You cannot edit this dashboard.")
+            if canonical is None:
+                canonical = canonical_dashboard_snapshot(snapshot)
+                validate_dashboard_queries(canonical)
             widget_model = current._meta.get_field("widgets").related_model
             assert widget_model is not None and issubclass(widget_model, DashboardWidget)
             existing_widgets = {

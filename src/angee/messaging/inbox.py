@@ -161,7 +161,7 @@ class MessageInbox:
         self.parties = self.collection("parties", "Party")
         self.threads = self.collection("messaging", "Thread").inbox()
         self.parts = self.parts_for()
-        self.participants = self.collection("messaging", "Participant")
+        self.recipients = self.collection("messaging", "Recipient")
 
     @staticmethod
     def eligible(through: str = "") -> Q:
@@ -252,12 +252,10 @@ class MessageInbox:
         return rows
 
     def involving_handles(self, rows: Any, handles: Any) -> Any:
-        """Authorship (``Message.sender``) or any participant row of the message; thread membership is insufficient.
+        """Authorship (``Message.sender``) or any recipient row of the message.
 
-        A ``from`` row written before ingest stopped writing them also matches; it
-        always names the message's sender, so it adds nothing. A handle merge keeps
-        messages and recipients on the retired handle, so each handle selects its
-        survivor's redirect group.
+        A handle merge keeps messages and recipients on the retired handle, so each
+        handle selects its survivor's redirect group.
         """
 
         ids = handles.model._base_manager.redirect_groups(Subquery(handles.survivor_ids())).values("pk")
@@ -265,7 +263,7 @@ class MessageInbox:
         # caller's scope once: reusing rows inside each arm recursively duplicates
         # its earlier sender/circle predicates when an exact-handle filter is added.
         return rows.filter(pk__in=MessageQuerySet.ids_involving_handles(
-            ids, messages=self.messages, participants=self.participants,
+            ids, messages=self.messages, recipients=self.recipients,
         ))
 
     def selection(self, *, sender: str = "", circle: str = "") -> InboxSelection | None:
