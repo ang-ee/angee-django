@@ -43,11 +43,21 @@ live in code docstrings.
     the elements (`MAIL_ELEMENTS`) and attributes (`MAIL_ATTRIBUTES`) a mail is
     written with, Office's settings inside a layout's Outlook comment alone; the
     places a value sits; a link `url` gives (an absolute `https`, `http`,
-    `mailto` or `tel` link) and one an author writes (that, a `#fragment` or a
-    `cid:` image); the one character set, `utf-8`; no control character in a
-    row's text, a carriage return written as a newline by `clean()`, and none in
-    a value, which drops them; at most ten operators in a condition, each a node;
-    and every form capped straight after the Markdown pass. A layout alone
+    `mailto` or `tel` link, an `https` or `http` one to a named host with no
+    userinfo) and one an author writes (that, a `#fragment`, a `cid:` image, an
+    `sms:` or `webcal:` link); the one character set, `utf-8`; no control
+    character in a row's text, a carriage return written as a newline by
+    `clean()`, and none in a value, which drops them with the bidirectional
+    overrides and isolates; `dir` and `lang` set by the engine alone; a `<title>`
+    holding outputs and notes, no tag; end tags held to the element list; link
+    attributes on the elements they link on; at most ten operators in a
+    condition, each a node; every form capped straight after the Markdown pass,
+    and the walk stopped at the tree's caps as it gathers rows. A rendered subject
+    and preheader break every encoded-word opener (`=?charset?b?` or `?q?`), so a
+    mail library stores the subject exactly as rendered. `clean()` refuses
+    with a `ValidationError` whatever a column cannot store: a lone surrogate,
+    NaN, an infinity, a number over 4,300 digits, `None` where the column is not
+    null. A layout alone
     writes the doctype and Outlook's conditional comments, static and balanced,
     their markup checked. A Markdown link takes its label and its target from
     values (`[{{ label }}]({{ link }})`). It runs from `clean()` when what a row
