@@ -1,10 +1,12 @@
 # Message templates
 
 The library outgoing mail is written from: shipped defaults that addons install,
-the deployment's own text over them, and the rule that picks a recipient's row.
-The [models module](models.py) and the [rendering module](rendering.py) own the
-contracts below; their docstrings carry the exact API. This addon renders nothing
-and ships no rows.
+the deployment's own text over them, the rule that picks a recipient's row, and the
+renderer that turns a row and its values into a subject, a preheader, an HTML body
+and a plain-text body. The [models module](models.py), the
+[rendering module](rendering.py), the [engine](engine.py) and the
+[walker](walker.py) own the contracts below; their docstrings carry the exact API.
+This addon sends nothing: a sender renders a row and hands the result on.
 
 ## The rows
 
@@ -45,14 +47,82 @@ module is the one rule; a caller judging several rows' declarations together
 passes its own limit on their paths. `sample` holds values to preview the row
 with.
 
+## Writing a row
+
+A row is Django template code with a restricted library: the tags `if`, `for`,
+`with`, `comment`, `include`, `templatetag` (`{% templatetag openvariable %}`
+writes a literal `{{`) and the filters `default`, `upper`, `lower`, `capfirst`,
+`title`, `truncatechars`, `truncatewords`, `linebreaksbr`, `length`, `date`,
+`floatformat`, `pluralize`, `yesno` and `url`. Anything else fails to compile.
+
+- A template names its layout in its `layout` column and never writes
+  `{% extends %}` or `{% block %}`; a layout holds one empty top-level
+  `{% block content %}{% endblock %}` in each form, where the template goes.
+- Blocks and parts are included by name, every value passed by name, always
+  `only`: `{% include "blocks/button" with label="Sign in" url=link only %}`.
+  An included row reads only its arguments and `brand`, `lang` and `dir`.
+- Every value a row reads is declared in its `variables`, `*` for list items.
+  `brand` holds the kit's name, fonts, footer and mail colours
+  (`brand.light.primary`), `lang` and `dir` the row's language and its writing
+  direction, and a template or layout reads `subject` and `preheader`.
+- A link a value supplies goes through `url` (`href="{{ link|url }}"`), which
+  gives an empty link for anything but a safe URL; dates go through `date`
+  (`date:"DATE_FORMAT"`), money through `floatformat`.
+- A Markdown row is rendered by markdown-it first, with raw HTML off: template
+  code stays whole, `[label]({{ link }})` is a link through `url`, a paragraph
+  holding only tags writes no `<p>`, and an `include` stands alone in its
+  paragraph. Its plain-text form is written from the same Markdown.
+
+The walker (`TemplateWalker`) refuses what would not render safely when a row is
+saved (`clean()`, when what it renders changed), after each resource load, and
+again before every render: oversized sources and lines, literals holding `<`,
+`>` or `"`, costly filter use, template code the Markdown pass would not keep
+whole, HTML a mail may not carry (scripts, event attributes, comments, a link
+that is not one `url` output or a safe static URL, styles reading anything but
+the brand's colours and fonts), reads no row declares, include cycles, and the
+walk's bounds on nodes, outputs, loops, includes, text and the rows it reaches.
+
+## Rendering
+
+`row.render(values, kit=None)` walks the row, shapes `values` to what it
+declares (`TemplateWalk.prepare`: undeclared keys dropped, every required value
+present and not null, every declared path filled, ISO dates parsed at the paths
+read through `date`), and renders it on Django's template engine in the row's
+language: the subject and preheader on one line each, the HTML body escaping
+every value, and the plain-text body from the rows' text forms. A render reads
+rows and the brand kit through the caller's scope, the default kit when `kit` is
+`None`, and raises `ValidationError` when the row, the values, a row it needs,
+the kit or its work budget (500 loop or include renders, 200,000 characters of
+loop output, 500,000 characters of filter input a pass) refuses. A sender picks
+the row with `effective("template", key, person=recipient)` and renders it as
+the system actor.
+
+`row.preview(kit=None)` renders the row's `sample`: a template whole, a layout
+around a fixed body, subject and preheader, a block or part alone. It returns
+the rendered message, or none, and warnings: a subject over 60 characters, a
+preheader empty or over 100, a declared value nothing reads, a declared
+`unsubscribe_url` the body does not show, an empty plain-text body, HTML over
+104,448 bytes, or the render error. The console's `message_template_preview`
+read returns it to administrators (`preview` permission), in the kit it names or
+the default one.
+
 ## Shipped defaults, overrides and reset
 
 An addon ships rows in its `install` resources, loaded through
 `MessageTemplateResource` (resources' `BaselineResource`): each is a
 **baseline**, readable by every signed-in person and written only by loads; a
 changed row in a later release re-applies to it. A row's `content_hash`
-fingerprints its kind and what it renders. A load saves rows in file order, so a
-template's layout loads before it.
+fingerprints its kind and what it renders. A load saves rows in file order and a
+save walks what the row includes, so a template's layout and every block or part
+a row includes load before it (`depends_on`).
+
+This addon ships the `base` layout, the `header`, `footer`, `button`, `quote` and
+`record_card` blocks and the `greeting`, `ignore_notice` and `signature` parts, in
+English and, for the parts, Spanish. The layout is one 600px column with the
+header and footer blocks around the content; it writes the light colours inline
+and sets the dark ones in `<style>` from role classes (`brand-text`,
+`brand-primary`, …), and `.brand-radius` rounds the button and the record card.
+A mail's HTML holds no comment, so the layout has no Outlook-only markup.
 
 - `MessageTemplate.objects.override(baseline)` starts the deployment's
   **override**: the non-baseline row with the baseline's kind, key and language,
@@ -88,12 +158,14 @@ reads through `MessageTemplate.system_queryset()`.
 A key **resolves** (`resolves(kind, key)`) when it has a baseline in some language
 or a row in the default language, so every recipient finds it. A template's
 layout must resolve, judged when the layout is set or changed, through the
-reader's own scope. A row cannot be deleted while other rows use its key and the
-key would stop resolving without it. Each row is judged with the others still
-there: one queryset delete from code that removes every row keeping a key
-resolvable, a baseline among them, passes, and the console, which deletes one row
-by its id, cannot reach it. A template naming a key can race that key's delete. A
-baseline a later release no longer ships stays, and stays effective.
+reader's own scope, and so must every block or part a saved row includes. A row
+cannot be deleted while other rows use its key (a template its layout, any row a
+block or part it includes) and the key would stop resolving without it. Each row
+is judged with the others still there: one queryset delete from code that
+removes every row keeping a key resolvable, a baseline among them, passes, and
+the console, which deletes one row by its id, cannot reach it. A row naming a key
+can race that key's delete; the render judges the result. A baseline a later
+release no longer ships stays, and stays effective.
 
 Each row reports `is_effective` (what renders for its kind, key and language),
 `is_overridden` (a baseline with an override) and `has_updated_default`, as fields
@@ -102,9 +174,9 @@ and as console filters.
 ## Access
 
 Every signed-in actor reads message templates; platform admins create, edit and
-delete the deployment's own rows and overrides and read every sample. Nobody but
-a resource load writes a baseline ([permissions](permissions.zed):
-`messaging_templates/message_template`).
+delete the deployment's own rows and overrides, read every sample and preview
+every row. Nobody but a resource load writes a baseline
+([permissions](permissions.zed): `messaging_templates/message_template`).
 
 ## Console
 
@@ -115,3 +187,6 @@ actions do: a signed-out caller gets the session's GraphQL error, and a caller
 who may not create or write the override a `PERMISSION_DENIED` GraphQL error; an
 unreadable or missing row, a row that is not a shipped default (`not_a_baseline`)
 and an override of none (`no_baseline`) come back in band as `ok: false`.
+
+`message_template_preview(template, brand_kit)` returns a row's preview to a
+caller who may preview it, in the named kit or the default one.

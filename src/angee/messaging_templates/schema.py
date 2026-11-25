@@ -12,6 +12,8 @@ not a shipped default and an override of none are refused in band (``ok: false``
 with the codes ``not_a_baseline`` and ``no_baseline``). A row's
 ``is_effective``, ``is_overridden`` and ``has_updated_default`` are read from its
 siblings and filter through the model's ``hasura_filter_expressions``.
+``message_template_preview`` renders a row with its sample for a caller who may
+preview it (``MessageTemplate.preview``), in the kit it names or the default one.
 """
 
 from __future__ import annotations
@@ -23,14 +25,21 @@ from django.db.models.expressions import BaseExpression
 from strawberry import auto
 from strawberry.scalars import JSON
 
-from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
+from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target, session_user
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource
-from angee.graphql.ids import PublicID
+from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.messaging_templates.models import MessageTemplate as MessageTemplateModel
 from angee.messaging_templates.models import MessageTemplateQuerySet
+from angee.messaging_templates.rendering import RenderedMessage, TemplatePreview, TemplateWarning, TemplateWarningCode
 
 MessageTemplate = apps.get_model("messaging_templates", "MessageTemplate")
+BrandKit = apps.get_model("brandkit", "BrandKit")
+
+MessageTemplateWarningCode = strawberry.enum(TemplateWarningCode, name="MessageTemplateWarningCode")
+MessageTemplateWarningType = strawberry.type(TemplateWarning, name="MessageTemplateWarningType")
+RenderedMessageType = strawberry.type(RenderedMessage, name="RenderedMessageType")
+MessageTemplatePreviewType = strawberry.type(TemplatePreview, name="MessageTemplatePreviewType")
 
 
 def _row_fact(name: str) -> BaseExpression:
@@ -120,10 +129,27 @@ class MessageTemplateMutation:
         return ActionResult(ok=True, message="Override kept.", id=override.sqid)
 
 
+@strawberry.type
+class MessageTemplatePreviewQuery:
+    """A message template rendered with its sample, for a caller who may preview it."""
+
+    @strawberry.field
+    def message_template_preview(
+        self, info: strawberry.Info, template: PublicID, brand_kit: PublicID | None = None,
+    ) -> TemplatePreview:
+        """Render the row with its sample in the named kit, or the default one, and say what it warns about."""
+
+        row = authorized_permission_target(info, MessageTemplate, template, "preview")
+        kit = None if brand_kit is None else require_instance_for_id(
+            BrandKit, brand_kit, queryset=BrandKit.objects.with_actor(session_user(info)),
+        )
+        return row.preview(kit=kit)
+
+
 schemas = {
     "console": {
-        "query": [_MESSAGE_TEMPLATE_RESOURCE.query],
+        "query": [_MESSAGE_TEMPLATE_RESOURCE.query, MessageTemplatePreviewQuery],
         "mutation": [MessageTemplateMutation, _MESSAGE_TEMPLATE_RESOURCE.mutation],
-        "types": [MessageTemplateType, *_MESSAGE_TEMPLATE_RESOURCE.types],
+        "types": [MessageTemplateType, MessageTemplatePreviewType, *_MESSAGE_TEMPLATE_RESOURCE.types],
     },
 }
