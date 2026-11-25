@@ -264,7 +264,7 @@ class MessageInbox:
         # Membership is built from the authorized corpus, then intersects the
         # caller's scope once: reusing rows inside each arm recursively duplicates
         # its earlier sender/circle predicates when an exact-handle filter is added.
-        return rows.filter(MessageQuerySet.involving_handles_filter(
+        return rows.filter(pk__in=MessageQuerySet.ids_involving_handles(
             ids, messages=self.messages, participants=self.participants,
         ))
 

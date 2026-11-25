@@ -41,15 +41,22 @@ class CorrespondenceKind(TimelineKind):
         """Probe membership without the reader-dependent canonical-message collapse.
 
         A readable redirect remains visible when its survivor is unreadable, so
-        this actor-free probe deliberately includes all untrashed inbox copies.
+        this actor-free probe deliberately includes all untrashed inbox copies. The
+        eligibility sits inside each arm of the membership and the probe tests the
+        arms' existence, so a record whose mail is all trashed or record chatter
+        costs its own membership, never a scan of every message.
         """
-        return apps.get_model("messaging", "Message")._base_manager.filter(
-            self._record_filter(record), MessageQuerySet.inbox_q(), MessageQuerySet.untrashed_q(),
-        ).exists()
+        eligible = apps.get_model("messaging", "Message")._base_manager.filter(
+            MessageQuerySet.inbox_q(), MessageQuerySet.untrashed_q(),
+        )
+        return self._record_messages(record, eligible).exists()
 
     @staticmethod
-    def _record_filter(record: Any) -> models.Q:
-        """The readable message owns its envelope, including private membership edges."""
+    def _record_messages(record: Any, messages: models.QuerySet) -> models.QuerySet:
+        """The ids of ``messages`` the record's parties sent or received (``MessageQuerySet.ids_involving_parties``).
+
+        The readable message owns its envelope, including private membership edges.
+        """
         party = apps.get_model("parties", "Party")
         circle = apps.get_model("parties", "Circle")
         parties = party._base_manager.all().canonical().filter(party.objects.untrashed_q())
@@ -61,15 +68,16 @@ class CorrespondenceKind(TimelineKind):
             parties = parties.filter(pk__in=members.order_by().values("party_id"))
         else:
             parties = parties.filter(pk=record.pk)
-        return MessageQuerySet.involving_parties_filter(
+        return MessageQuerySet.ids_involving_parties(
             parties,
             handles=apps.get_model("parties", "Handle")._base_manager.all(),
-            messages=apps.get_model("messaging", "Message")._base_manager.all(),
+            messages=messages,
             participants=apps.get_model("messaging", "Participant")._base_manager.all(),
         )
 
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
-        rows = apps.get_model("messaging", "Message").objects.filter(self._record_filter(record))
+        message = apps.get_model("messaging", "Message")
+        rows = message.objects.filter(pk__in=self._record_messages(record, message._base_manager.all()))
         return rows.with_actor(actor).inbox().canonical().scoped().annotate(
             _order_at=rows.chronological_time(),
         ).select_related("sender", "created_by").with_title_text()
@@ -98,7 +106,7 @@ class CorrespondenceKind(TimelineKind):
         elif label == "parties.Handle":
             # A handle merge keeps messages on the retired handle; its survivor's group concerns them.
             group = handle._base_manager.redirect_groups([row.merged_into_id or row.pk]).values("pk")
-            messages = message.objects.filter(MessageQuerySet.involving_handles_filter(
+            messages = message.objects.filter(pk__in=MessageQuerySet.ids_involving_handles(
                 group,
                 messages=message._base_manager.all(),
                 participants=apps.get_model("messaging", "Participant")._base_manager.all(),

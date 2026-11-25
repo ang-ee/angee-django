@@ -23,12 +23,14 @@ live in code docstrings.
   email envelope's `From`. Mail sent from here, whose messages never had a `from`
   row, now appears on the sender's timeline and in their party reads. A trashed
   inbound message no longer names an untitled thread, for any reader.
-  **Upgrade:** `MessageQuerySet.involving_parties` is removed; filter with
-  `MessageQuerySet.involving_parties_filter(parties, handles=..., messages=...,
-  participants=...)`, which composes `MessageQuerySet.involving_handles_filter`,
-  the messages given handles sent or received. `MessageQuerySet.involved_handle_ids`
-  is its reverse, the handles that sent or received given messages. Read a
-  message's sender from `Message.sender`, never from its `participants`.
+  **Upgrade:** `MessageQuerySet.involving_parties` is removed; select
+  `pk__in=MessageQuerySet.ids_involving_parties(parties, handles=..., messages=...,
+  participants=...)`, the ids of the messages given parties sent or received, built
+  on `MessageQuerySet.ids_involving_handles` (the same for given handles), or test
+  `.exists()` on it with the eligibility inside `messages`.
+  `MessageQuerySet.involved_handle_ids` is the reverse, the handles that sent or
+  received given messages. Read a message's sender from `Message.sender`, never
+  from its `participants`.
 - `angee.base`: `MergeableQuerySet.redirect_groups` given a subquery selects
   `pk IN` the `UNION ALL` of its two indexed arms, the survivors and the rows
   redirecting to them, where it compiled to `pk IN (…) OR merged_into_id IN (…)`.

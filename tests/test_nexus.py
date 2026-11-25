@@ -87,7 +87,7 @@ def _address(message: Any, handle: Any, role: str = "to") -> Any:
 def _messages_involving(*parties: Any) -> list[Any]:
     """The pks of the messages ``parties`` sent or received, as the correspondence timeline selects them."""
 
-    return sorted(Message._base_manager.filter(MessageQuerySet.involving_parties_filter(
+    return sorted(Message._base_manager.filter(pk__in=MessageQuerySet.ids_involving_parties(
         parties,
         handles=Handle._base_manager.all(),
         messages=Message._base_manager.all(),

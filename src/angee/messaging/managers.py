@@ -2678,25 +2678,29 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         return _external_id_annotated(self).filter(_eid_digest__in=digests, external_id__in=values)
 
     @staticmethod
-    def involving_handles_filter(
+    def ids_involving_handles(
         handle_ids: Any, *, messages: models.QuerySet, participants: models.QuerySet,
-    ) -> models.Q:
-        """Select the messages ``handle_ids`` sent (``Message.sender``) or received (a participant row).
+    ) -> models.QuerySet:
+        """The ids of the ``messages`` ``handle_ids`` sent (``Message.sender``) or received (a participant row).
 
-        Both arms read inside ``messages``, the caller's authorized or structural
-        message population, and ``participants`` supplies the recipient rows. Keep the
-        two indexed access paths separate: a correlated recipient ``EXISTS`` inside an
-        ``OR`` makes PostgreSQL estimate almost every message as a match. Pass the
-        population, never the narrowed rows being filtered, or each arm repeats their
-        predicates. ``pk IN`` reads a message once, so a ``from`` row repeating its
-        sender changes nothing.
+        Two indexed arms joined by ``union(all=True)``, each read inside ``messages``:
+        the caller's authorized or structural population, carrying any eligibility the
+        caller needs, so each arm applies it. A filter selects ``pk__in`` the result;
+        an existence probe tests ``.exists()`` on it, never ``pk IN`` it over the whole
+        table with the eligibility outside, which PostgreSQL answers under ``LIMIT 1``
+        by scanning messages in order against the whole membership. Keep the arms
+        apart: a correlated recipient ``EXISTS`` inside an ``OR`` makes PostgreSQL
+        estimate almost every message as a match. Pass the population, never the
+        narrowed rows being filtered, or each arm repeats their predicates. A message
+        may come from both arms (a ``from`` row repeats its sender); ``pk IN`` and
+        ``exists()`` read it once.
         """
 
         sent = messages.filter(sender_id__in=handle_ids).order_by().values("pk")
         received = messages.filter(
             pk__in=participants.filter(handle_id__in=handle_ids).order_by().values("message_id"),
         ).order_by().values("pk")
-        return models.Q(pk__in=sent.union(received, all=True))
+        return sent.union(received, all=True)
 
     @staticmethod
     def involved_handle_ids(messages: models.QuerySet) -> models.QuerySet:
@@ -2713,19 +2717,19 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         return messages.order_by().values("sender_id").union(recipients.order_by().values("handle_id"), all=True)
 
     @staticmethod
-    def involving_parties_filter(
+    def ids_involving_parties(
         parties: Any, *, handles: models.QuerySet, messages: models.QuerySet, participants: models.QuerySet,
-    ) -> models.Q:
-        """Select the messages ``parties``' resolved handles sent or received, within the given populations.
+    ) -> models.QuerySet:
+        """The ids of the ``messages`` ``parties``' resolved handles sent or received (:meth:`ids_involving_handles`).
 
         ``parties`` is a lazy Party queryset (a circle subtree) or a concrete iterable;
         ``Handle.party`` is the resolution-materialised owner. A handle merge keeps
         senders and participants on the retired handle, so each matching handle
-        selects its redirect group (:meth:`involving_handles_filter`).
+        selects its redirect group.
         """
         survivors = handles.filter(party__in=parties, merged_into__isnull=True).order_by().values("pk")
         handle_ids = handles.model._base_manager.redirect_groups(models.Subquery(survivors)).values("pk")
-        return MessageQuerySet.involving_handles_filter(handle_ids, messages=messages, participants=participants)
+        return MessageQuerySet.ids_involving_handles(handle_ids, messages=messages, participants=participants)
 
     def for_feed(self, search: str = "", *, all_copies: bool = False, anchor: str = "") -> Self:
         """Apply read/search scope and tuple order, retaining an explicitly addressed occurrence.
