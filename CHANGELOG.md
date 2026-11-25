@@ -10,6 +10,40 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.brandkit`, `@angee/app`, `@angee/ui`, `angee.appearance`: **Changed behaviour.**
+  The default brand kit's colours dress the app at run time, on every page inside
+  it, signed in or not.
+  - `@angee/app` gains the install-one manifest key `hostAppearance`, a
+    `HostAppearanceSource` whose `useOptions(theme, build)` hook `createApp` calls once
+    per render of its session frame; two providers fail composition, as two dashboard
+    stores do. `@angee/ui`'s `HostAppearanceDefaults` gains `pending`, which keeps the
+    first paint and the boot cache until the source's first read answers, fails or
+    pauses; only the session frame sets it, and `CreateAppInput.appearance` takes none.
+    Where the source's options rank: `docs/frontend/appearance.md`, "Host and user
+    precedence".
+  - `angee.brandkit` is that source; its mapping is the brand kit README, "The app's
+    colours". The ten colour names are declared once, `BrandKit.THEME_COLORS`.
+  - Everyone, signed in or not, reads the default kit's ten colours, and nothing else
+    of any kit, through the new public root `default_brand_kit_colors`
+    (`BrandKitColors`), under `read_colors`, a deliberate disclosure on the kit's own
+    `is_default` column (`brandkit/brand_kit` at schema revision 2; no tuple). Console
+    reads stay signed-in.
+  - The Appearance page's customisation editor starts from the options the person
+    wears, so customising while following the app default keeps its other choices.
+  - **Upgrade:** the console root `default_brand_kit` is removed; read
+    `default_brand_kit_colors` on the public schema, or `BrandKit.objects.default()` in
+    Python. Provision applies the permission revision through `rebac sync`; until it
+    has, the public root answers `null` with no error and the app wears the build's
+    colours. Once the addon is provisioned a default kit always exists, so on a host with
+    `angee.brandkit`: a project on the stock theme (the full profile's default) wears
+    the shipped Angee kit's colours; a project on another customisable theme, such as
+    Fyltr or Ledger, wears the kit's palette in place of its own; colours a build
+    states in `appearance_options` show only on a device's first visit, before the read
+    answers; and every app of a deployment with per-app themes wears the kit's palette,
+    locked apps too. Unchanged: the Angee theme under the shipped kit, fixed themes,
+    hosts without the addon, and a theme that ships its own default kit stating its own
+    colours. To keep other colours, edit the default kit in Settings > Brand kits.
+
 - `@angee/ui`, `angee.base`: A field descriptor carries the declared format of
   a value held as text: `FieldDescriptor.format`, one of `"date"`,
   `"date-time"` or `"time"`, the JSON Schema `format` of a string. It is the
@@ -382,9 +416,8 @@ live in code docstrings.
     kit as the default takes the flag from the previous one, and the default can
     be neither unticked nor deleted, on any delete path. A conditional unique
     constraint refuses a second default written past the save.
-    `BrandKit.objects.default()` and the console's `default_brand_kit` query
-    return it, or `None` before any kit exists, after a write past `save()` and
-    `clean()`, and for an actor who reads no kit.
+    `BrandKit.objects.default()` returns it, or `None` before any kit exists,
+    after a write past `save()` and `clean()`, and for an actor who reads no kit.
   - **The mail palette.** `BrandKit.mail_palette()` works out the colours a mail
     layout paints with (`canvas`, `surface`, `text`, `muted`, `border`,
     `primary`, `on_primary`, `link`) for a light and a dark scheme from the kit's

@@ -58,6 +58,13 @@ export interface HostAppearanceDefaults {
   colorScheme?: ColorSchemePreference;
   options?: ThemeOptionsEnvelope;
   fingerprint?: string;
+  /**
+   * The host's own options are still being read: keep the first paint and the boot
+   * cache until they arrive, as while identity resolves. Only the app's session frame
+   * sets it, from its host appearance source, which clears it when its read settles,
+   * fails or pauses; a build never does.
+   */
+  pending?: boolean;
 }
 
 export interface AppearanceState {
@@ -163,25 +170,28 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST, themeLocked:
     () => draft ? resolvePreferredAppearance(draft, null, catalogue, host, system, lockRequested) : savedAppearance,
     [draft, catalogue, host, system, lockRequested, savedAppearance],
   );
-  let hostOptions: ThemeOptionsEnvelope | undefined;
-  if (hostTheme?.definition.options) {
+  // One value per input, so the context value keeps its identity across renders that change nothing.
+  const hostOptions = useMemo<ThemeOptionsEnvelope | undefined>(() => {
+    if (!hostTheme?.definition.options) return undefined;
+    let resolved;
     try {
-      const resolved = resolveThemeOptions(hostTheme.definition, host.options);
-      hostOptions = { version: resolved.version, value: resolved.value };
+      resolved = resolveThemeOptions(hostTheme.definition, host.options);
     } catch {
-      const resolved = resolveThemeOptions(hostTheme.definition);
-      hostOptions = { version: resolved.version, value: resolved.value };
+      resolved = resolveThemeOptions(hostTheme.definition);
     }
-  }
+    return { version: resolved.version, value: resolved.value };
+  }, [hostTheme, host.options]);
 
   const resolvingIdentity = auth.status === "resolving";
+  // The first paint and the boot cache wait for identity and for the host's own options.
+  const holding = resolvingIdentity || host.pending === true;
   useEffect(() => {
-    if (resolvingIdentity) return;
+    if (holding) return;
     applyAppearanceRoot({ themeId: effectiveThemeId, colorScheme, tokens: effectiveTokens });
-  }, [colorScheme, effectiveThemeId, effectiveTokens, resolvingIdentity]);
+  }, [colorScheme, effectiveThemeId, effectiveTokens, holding]);
 
   useEffect(() => {
-    if (resolvingIdentity) return;
+    if (holding) return;
     writeAppearanceCache({
       schema: APPEARANCE_CACHE_SCHEMA,
       fingerprint: host.fingerprint ?? "",
@@ -190,7 +200,7 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST, themeLocked:
       colorSchemePreference: ownAppearance.colorSchemePreference,
       tokenLayers: ownAppearance.tokenLayers,
     });
-  }, [auth.user?.id, ownAppearance, host.fingerprint, resolvingIdentity]);
+  }, [auth.user?.id, ownAppearance, host.fingerprint, holding]);
 
   const update = useCallback(async (
     apply: (current: AppearancePreferences) => AppearancePreferences | undefined,

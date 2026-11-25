@@ -36,8 +36,23 @@ before the application entry loads. Vite bundles the React-free
 [`bootstrapAppearance`](../../packages/ui/src/theme/runtime.mjs) owner; bootstrap
 and React share its token validation, cache protocol and root application.
 
-A signed-in user's `iam.User.preferences.appearance` fields override the host
-independently. The stored document contains stable IDs and versioned inputs:
+One installed addon may supply the host theme's options at run time, through the
+install-one `hostAppearance` manifest key
+([`HostAppearanceSource`](../../packages/app/src/define-addon.ts)). `createApp` asks
+it about the host theme: the selected app's, else the build's, locked or not. The
+options it answers replace the build's options for that theme; when it answers
+none, the build's stand. The [brand kit](../../src/angee/brandkit/README.md#the-apps-colours)
+is that source. While the source's first read is on its way, the provider keeps
+the first paint and the boot cache; a failure or a pause releases them onto the
+build's options. Pages render meanwhile under that paint: on a device's first
+visit it is the build's appearance, which changes once when the answer arrives;
+on later visits it is the cached answer, so nothing changes. Every page inside the app wears the answer where it draws from
+tokens, signed in or out; a standalone web form page (`/forms/*`) keeps the build's
+look.
+
+A signed-in user's `iam.User.preferences.appearance` fields override the host,
+run-time options included, independently. The stored document contains stable
+IDs and versioned inputs:
 
 ```json
 {
@@ -140,9 +155,11 @@ appearance choice. A theme preference therefore stores a small stable name
 rather than image data or a remote asset URL.
 
 An unchanged field emits no override. This keeps the selected addon's authored
-tokens authoritative and makes **Restore theme defaults** exact. Customizing
-while following the app default pins the current base theme in the user's
-preference so a later host-default change cannot reinterpret those options.
+tokens authoritative and makes **Restore theme defaults** exact. The editor
+starts from the options the person wears: their own, else the app default's.
+Customizing while following the app default therefore keeps the default's other
+fields and pins the current base theme in the user's preference so a later
+host-default change cannot reinterpret those options.
 
 Theme authors opt into the shared customization contract from the pure headless
 entry and attach the matching shared editor in the browser contribution:
