@@ -208,8 +208,8 @@ export interface FormViewSaveSurface {
   fieldReadOnly: (field: FieldDescriptor) => boolean;
   /**
    * Whether the form displays `field`, holding `value`, at all (`formDisplaysField`): on a create,
-   * not a field its save cannot write that holds no value, nor, as the form's `status`, one whose
-   * control is read-only and holds no value. A control a page renders itself does not ask it.
+   * not a field its save cannot write that holds nothing to display, nor, as the form's `status`, one
+   * whose control is read-only and holds nothing to display. A control a page renders itself does not ask it.
    */
   displaysField: (field: FieldDescriptor, value: unknown, options?: { status?: boolean }) => boolean;
   startFieldInteraction: (path: string) => void;

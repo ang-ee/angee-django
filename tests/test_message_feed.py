@@ -24,9 +24,9 @@ from angee.messaging.testing.models import (
     Handle,
     Message,
     Part,
-    Participant,
     Party,
     Reaction,
+    Recipient,
     Thread,
 )
 from angee.nexus.timeline import CorrespondenceKind
@@ -259,7 +259,7 @@ def test_record_chatter_never_enters_the_inbox_thread_feed() -> None:
 
 
 def _party_scope(owner: Any, rows: list[Any]) -> tuple[Any, Any, Any]:
-    """Attach visible participants and a visible circle membership to a party."""
+    """Address the rows to a party's handle and give the party a visible circle membership."""
 
     with system_context(reason="test party feed scope seed"):
         party = Party._base_manager.create(display_name="Feed party", created_by=owner)
@@ -270,7 +270,7 @@ def _party_scope(owner: Any, rows: list[Any]) -> tuple[Any, Any, Any]:
             created_by=owner,
         )
         for row in rows:
-            Participant._base_manager.create(
+            Recipient._base_manager.create(
                 message=row,
                 thread_id=row.thread_id,
                 handle=handle,

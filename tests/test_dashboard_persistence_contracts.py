@@ -1,10 +1,13 @@
 """Dashboard factories and authored verbs adopt the shared persistence rules."""
 
+from unittest.mock import Mock
+
 import pytest
 from django.core.exceptions import ValidationError
 from rebac import PermissionDenied, actor_context, system_context
 
 from angee.base.models.locks import StaleRevisionError
+from angee.dashboards import models as dashboard_models
 from angee.dashboards.models import DashboardConflictError
 from angee.graphql.schema import GraphQLSchemas
 from angee.provenance.context import changeset_model
@@ -163,3 +166,22 @@ def test_catalogue_lists_personal_owned_and_installed_dashboards():
         listed = list(DashboardTarget.objects.catalogue(owner).values_list("pk", flat=True))
     # The public id encodes the primary key, so its ordering is the key's.
     assert listed == sorted((owned.pk, baseline.pk, personal.pk))
+
+
+def test_snapshot_validates_widget_queries_only_once_the_write_is_decided(monkeypatch):
+    """A caller who may not edit the dashboard is refused before any of its widget queries is compiled."""
+
+    monkeypatch.setattr(GraphQLSchemas, "resources", lambda self, name: ())
+    owner, other = create_user("snapshot-owner"), create_user("snapshot-other")
+    with actor_context(owner):
+        row = DashboardTarget.objects.create_personal(owner, name="Mine", idempotency_key="mine")
+    spy = Mock()
+    monkeypatch.setattr(dashboard_models, "validate_dashboard_queries", spy)
+
+    with actor_context(other), pytest.raises(PermissionDenied):
+        DashboardTarget.objects.save_snapshot(
+            other, scope="personal", scope_key=None, persisted_id=row.pk, expected_revision=row.revision,
+            snapshot={"schemaVersion": 1, "columns": 6, "widgets": []},
+        )
+
+    spy.assert_not_called()

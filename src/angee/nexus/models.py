@@ -1,10 +1,10 @@
 """Relationship analytics derived from deliberate party-to-party interactions.
 
-``Tie`` is fully recomputable from messaging: directed message recipients,
-replies, and mentions become one canonical party pair. Thread-roster
-co-membership is deliberately not evidence of a tie — a message sent into a
-100-member group is not 99 relationships. Record chatter and public-post threads
-are outside this analytics surface.
+``Tie`` is fully recomputable from messaging: a message's sender and each of its
+``to`` and ``cc`` recipients, a reply's sender and its parent's, and a mention
+become one canonical party pair. Two recipients of one message are never a pair,
+and a ``bcc`` recipient is not a deliberate interaction. Record chatter and
+public-post threads are outside this analytics surface.
 
 Gravity is ``log2(message_count + 1) × recency × reciprocity × diversity``.
 Recency decays on a 30-day scale, reciprocity is the smaller directional count

@@ -55,7 +55,7 @@ from angee.base.models.merge_references import MergePolicy
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.trash import TrashMixin, TrashQuerySet
-from angee.base.permissions import actor_user_id, scoped_relation_read
+from angee.base.permissions import actor_user_id, require_save_allowed, scoped_relation_read
 from angee.base.querysets import row_lock_queryset
 from angee.base.signals import send_created_batch
 from angee.knowledge.retrieval import MAX_SEARCH_PAGE_SIZE, RetrievalBackend, RetrievalHit, RetrievalResult
@@ -1138,8 +1138,10 @@ class MarkdownPageManager[MarkdownT: MarkdownPage](_MarkdownPageManager[Markdown
             fields = {"body"}
             if title is not None:
                 markdown.title = title
-                markdown.full_clean()
                 fields.add("title")
+                # Decided first: a caller who may not write the page runs none of its field validators.
+                require_save_allowed(markdown, update_fields=fields)
+                markdown.full_clean()
             markdown.save(update_fields=fields, expected_revision=expected_revision)
             return markdown
 

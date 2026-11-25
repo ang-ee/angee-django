@@ -1,6 +1,7 @@
 """Health reports authorize their target through the portfolio schema."""
 
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from django.core.exceptions import ValidationError
@@ -18,6 +19,7 @@ from rebac import (
 )
 
 from angee.portfolio.testing.models import Initiative, Product, Update
+from angee.projects.testing.models import Project
 from tests.conftest import create_user
 
 pytestmark = pytest.mark.django_db
@@ -138,3 +140,36 @@ def test_report_target_is_write_once(reportable: dict[str, Any]) -> None:
             report.save()
     assert set(refused.value.message_dict) == {"object"}
     assert Update._base_manager.get(pk=report.pk).object_id == reportable["initiative"].pk
+
+
+def test_report_refuses_a_reader_before_the_report_is_validated(
+    reportable: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reader of the target gets the report save's refusal, and the report's validators never run."""
+
+    spy = Mock(side_effect=ValidationError("Not a body.", code="invalid"))
+    monkeypatch.setattr(Update._meta.get_field("body"), "validators", [spy])
+
+    with actor_context(reportable["reader"]), pytest.raises(PermissionDenied):
+        Update.objects.report(target=reportable["initiative"], health="on_track", body="Refused")
+
+    spy.assert_not_called()
+    assert not Update._base_manager.exists()
+
+
+def test_promotion_refuses_a_project_writer_before_the_product_is_validated(
+    reportable: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A project writer without the portfolio role gets the product save's refusal; its validators never run."""
+
+    writer = create_user("promotion-writer")
+    with actor_context(writer):
+        project = Project.objects.create(title="Promoted")
+    spy = Mock(side_effect=ValidationError("Not a name.", code="invalid"))
+    monkeypatch.setattr(Product._meta.get_field("name"), "validators", [spy])
+
+    with actor_context(writer), pytest.raises(PermissionDenied):
+        Product.objects.from_project(project)
+
+    spy.assert_not_called()
+    assert not Product._base_manager.filter(originated_from_id=project.pk).exists()

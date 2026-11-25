@@ -2,7 +2,7 @@
 
 Messages arrive through channel sync and the manager-owned ingest path; the
 console browses and moderates them through Hasura resources. Parts,
-participants and edges expose read-only collections; ingest and relation
+recipients and edges expose read-only collections; ingest and relation
 producers retain their writes. Reactions remain nested message projections.
 """
 
@@ -91,8 +91,8 @@ Message = apps.get_model("messaging", "Message")
 Part = apps.get_model("messaging", "Part")
 Fragment = apps.get_model("messaging", "Fragment")
 MessageEdge = apps.get_model("messaging", "MessageEdge")
-Participant = apps.get_model("messaging", "Participant")
 Reaction = apps.get_model("messaging", "Reaction")
+Recipient = apps.get_model("messaging", "Recipient")
 MessageStar = apps.get_model("messaging", "MessageStar")
 
 _CHANNEL_EXTENSION_READ_FIELDS = declared_hasura_resource_fields(
@@ -271,14 +271,12 @@ class MessageSubtypeType(AngeeNode):
     hidden: auto
 
 
-@strawberry_django.type(Participant)
-class ParticipantType(AngeeNode):
-    """GraphQL projection of a thread/message participant."""
+@strawberry_django.type(Recipient)
+class RecipientType(AngeeNode):
+    """GraphQL projection of one recipient of a message."""
 
     role: auto
     handle: HandleType | None = actor_scoped_to_one("handle")
-    joined_at: auto
-    left_at: auto
 
 
 @strawberry.type
@@ -389,7 +387,7 @@ class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
     subtype: MessageSubtypeType | None
     thread: "ThreadType | None" = actor_scoped_to_one("thread")
     channel: ChannelType | None = actor_scoped_to_one("channel")
-    participants: list[ParticipantType] = actor_scoped_to_many("participants")
+    recipients: list[RecipientType] = actor_scoped_to_many("recipients")
     created_at: auto
     updated_at: auto
 
@@ -613,7 +611,6 @@ class ThreadType(TaggedNode, AngeeNode):
     last_message_at: auto
     channel: "ChannelType | None" = actor_scoped_to_one("channel")
     messages: list[MessageType] = actor_scoped_to_many("messages")
-    participants: list[ParticipantType] = actor_scoped_to_many("participants")
     created_at: auto
     updated_at: auto
 
@@ -1892,10 +1889,10 @@ _PART_RESOURCE = hasura_model_resource(
 
 # Read-only collections expose canonical model metadata and live interests for
 # authored explorer reads; ingest and relation producers remain the write owners.
-_PARTICIPANT_RESOURCE = hasura_model_resource(
-    ParticipantType,
-    model=Participant,
-    name="participants",
+_RECIPIENT_RESOURCE = hasura_model_resource(
+    RecipientType,
+    model=Recipient,
+    name="recipients",
     filterable=["id", "message", "thread", "handle", "role"],
     sortable=["created_at"],
     aggregatable=["id"],
@@ -1957,7 +1954,7 @@ _RESOURCE_TYPES = [
     *_MESSAGE_RESOURCE.types,
     *_THREAD_RESOURCE.types,
     *_PART_RESOURCE.types,
-    *_PARTICIPANT_RESOURCE.types,
+    *_RECIPIENT_RESOURCE.types,
     *_MESSAGE_EDGE_RESOURCE.types,
     *_NOTIFICATION_INBOX_RESOURCE.types,
 ]
@@ -1971,7 +1968,7 @@ _MESSAGING_SCHEMA_BUCKET = {
         _MESSAGE_RESOURCE.query,
         _THREAD_RESOURCE.query,
         _PART_RESOURCE.query,
-        _PARTICIPANT_RESOURCE.query,
+        _RECIPIENT_RESOURCE.query,
         _MESSAGE_EDGE_RESOURCE.query,
         _NOTIFICATION_INBOX_RESOURCE.query,
     ],
@@ -1996,7 +1993,7 @@ _MESSAGING_SCHEMA_BUCKET = {
         PartType,
         FragmentType,
         MessageEdgeType,
-        ParticipantType,
+        RecipientType,
         ReactionType,
         MessageStarType,
         MessageSubtypeOptionType,
@@ -2039,7 +2036,7 @@ schemas = {
             changes(ThreadNotification, field="threadNotificationChanged"),
             changes(MessageStar, field="messageStarChanged"),
             changes(Part, field="partChanged"),
-            changes(Participant, field="participantChanged"),
+            changes(Recipient, field="recipientChanged"),
             changes(MessageEdge, field="messageEdgeChanged"),
         ],
     },

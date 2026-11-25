@@ -49,6 +49,7 @@ from angee.graphql.actions import session_user as _session_user
 from angee.graphql.capabilities import PermissionsExtension, held_permissions
 from angee.graphql.data.hasura import (
     AngeeHasuraWriteBackend,
+    CreationClaim,
     declared_hasura_resource_fields,
     hasura_model_resource,
     public_pk_decoder,
@@ -1839,12 +1840,15 @@ class IntegrationWriteBackend(AngeeHasuraWriteBackend):
                 target.lock_capability()
             return super().update(info, pk, data, expected_revision=expected_revision)
 
-    def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
-        """The integration factory owns defaults and candidate validation."""
+    def _create_row(self, info: strawberry.Info, data: dict[str, Any], *, claim: CreationClaim | None = None) -> Any:
+        """The integration factory owns defaults, the create decision and validation; it is claimed first."""
 
         del info
+        values = self._decode_public_id_fields(data)
+        if claim is not None and (replay := claim()) is not None:
+            return replay
         manager = cast(IntegrationManager, self.model._default_manager)
-        return manager.create_capability(**self._decode_public_id_fields(data))
+        return manager.create_capability(**values)
 
     def _update_row(self, info: strawberry.Info, instance: Any, data: dict[str, Any]) -> Any:
         """Dispatch native values through the integration's transition and config owners."""

@@ -10,6 +10,149 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.graphql`, `angee.base`, `angee.integrate`, `angee.projects`, `angee.knowledge`,
+  `angee.portfolio`, `angee.intake`, `angee.dashboards`, `angee.provenance`, `angee.storage`,
+  `angee.calendar`: **Changed behaviour.**
+  A generic GraphQL insert, and the verbs that validate a row before saving it (an
+  integration's creation, a scheduled record task, a page title saved with its body,
+  a product promoted from a project, a project or initiative report, a captured need),
+  now ask REBAC whether the caller may make that save before validating the row
+  (`angee.base.permissions.require_save_allowed`, over REBAC's `check_save`); a caller
+  it refuses gets the save's `PermissionDenied` text, and no field validator, `clean()`,
+  uniqueness check or constraint check runs for them. A dashboard snapshot validates its
+  widget queries only once its write is decided.
+  - The rule's limit: validation a model performs in its own `save()`, before the save
+    gate, runs before the decision and still answers a refused caller. A model that
+    needs the guarantee moves that validation to `clean()`. REBAC deciding a save before
+    validating and writing it will close the limit and retire the rehearsal.
+  - For a caller who may save, a `ValidationError` a model's `save()` raises now comes
+    before the field errors `full_clean` reports, and an admitted insert rehearses its
+    save once more.
+  - An implementation key outside its field's choices is refused when a new row is
+    validated or inserted, as a field error naming the key; a stored row saves its key
+    as before. An integration's creation decides its caller before it reports a seeded
+    default whose catalogue row is missing.
+  - An idempotency key's earlier creation is still replayed while the caller can read
+    it, looked up before the create is decided again; a first attempt is decided before
+    its key is claimed. The key's content is the request's input as sent, which the
+    provenance adapter no longer decodes, so a backend that fills values before it
+    inserts still replays its retry. `AngeeHasuraWriteBackend.creation_values` is
+    removed, and a key an Angee backend claimed before the upgrade answers its retry
+    with `CREATION_KEY_CONFLICT`. An anonymous caller's key is refused as a field error
+    on `idempotency_key`: anonymous callers share one actor.
+  - **Upgrade:** a write backend that overrides `insert` or `_create_row` accepts
+    `*, claim=None` and, where it decides, asks `claim()` before it writes, returning
+    the row it returns as the earlier creation. Otherwise a keyed insert into it raises
+    `TypeError`, or `RuntimeError` when the override accepts `claim` but never asks it;
+    either way nothing is kept, and a keyless insert is served as before.
+
+- `angee.messaging`, `angee.nexus`: **Renamed and removed.** A message has a
+  sender, `Message.sender`, and recipients: what was left of `messaging.Participant`
+  is `messaging.Recipient`, one row per handle a message is addressed to, in its
+  envelope role `to`, `cc` or `bcc`. The `from` role, the row without a message
+  (a thread membership nothing wrote or read) with its constraint
+  `uq_participant_thread_handle_role`, and `joined_at` and `left_at` are gone;
+  `message` is required, the one unique constraint is
+  `uq_recipient_message_handle_role`, and public ids take the prefix `rcp_`
+  (were `ptp_`), so a stored `ptp_` id no longer resolves. Renamed with it:
+  `ParticipantRole` to `Recipient.RecipientRole`; the reverse names
+  `Message.participants` and `Thread.participants` to `recipients`, and
+  `Handle.participations` to `recipient_rows`; `MessageInbox.participants` to
+  `recipients`; the `participants=` keyword of `MessageQuerySet.ids_involving_handles`
+  and `ids_involving_parties` to `recipients=`; the model label in resource
+  metadata and live invalidation to `messaging.Recipient`; the REBAC type
+  `messaging/participant` to `messaging/recipient` (schema revision 27), without
+  the `membership_thread`, `editor` and `reader` relations, so a recipient row is
+  read through its message or thread and created and changed through its message:
+  creating one is no longer open to every signed-in user. In the
+  console GraphQL schema, `ParticipantType` is `RecipientType`, without
+  `joined_at` and `left_at`; the `participants`, `participants_by_pk` and
+  `participants_aggregate` roots and their inputs are `recipients…`;
+  `MessageType.participants` is `recipients`; the subscription
+  `participantChanged` is `recipientChanged`; the role enum is `RecipientRole`,
+  without `FROM`; and `ThreadType.participants` is removed. The inbox
+  Participants pane keeps its name and lists the sender, labelled From, then the
+  recipients, each labelled by its role. `InboxConnection.role` holds one
+  vocabulary, a recipient's role or `sender` for the message's sender: a Handles
+  row's is now empty, its platform being its `handle.platform`.
+  **Upgrade:** copy the migration template
+  `src/angee/messaging/compose_migrations/messaging/participants_to_recipients.py`
+  into `runtime/messaging/migrations/` as its docstring says, run `makemigrations
+  messaging` until it reports no changes, then migrate with the services stopped,
+  as provision does: the migration locks the recipient table for its whole run and
+  the message table for its last moments, and the previous release reads the old
+  table. Allow on the order of ten seconds per million messages, most of it one
+  rewrite of the recipient table. The template first refuses, changing nothing,
+  while a row without a message exists, and names the statement that deletes those
+  rows; then it renames the model with its table and rows, gives a message without
+  a sender the handle of its `from` row, logs how many `from` rows named someone
+  other than their message's sender (each message's source keeps its `From`
+  header) and deletes the `from` rows. A migration `makemigrations` writes without
+  the template deletes `Participant` and creates `Recipient`: the drop guard
+  refuses that where the participant table holds rows, but one generated on an
+  empty database drops the recipient rows when it is applied elsewhere, and those
+  rows are a projection of each message's stored envelope. Provision prunes the
+  retired REBAC type `messaging/participant`; grants written directly on its
+  `editor` or `reader` relations, which no framework surface wrote, are not
+  carried over. On a stack whose `operator-schema` job does not wait for
+  `provision`, the first chained restart after this upgrade can fail `rebac.E009`
+  on the retired `messaging/participant` type until provision's sync has run; run
+  the chain once more. Upgrade cutoff: the template ships through the 3.x releases
+  and is removed in 4.0, and `angee.base.querysets.MergeableQuerySet.survivor_id`
+  stays while retained migrations import it; a host upgrading from an earlier
+  release applies the template through a 3.x release first.
+- `@angee/ui`: A record form's create no longer displays a field its save
+  cannot write that holds an empty object. What a record form displays reads
+  its own fact, `holdsNothingToDisplay` (`form-view-model.ts`: no value, a
+  text of blanks, an empty list or an empty object), where it read the rule
+  check's `isEmptyFieldValue`, for which an empty object is a value. The
+  read-only `{}` rows of a feed, a Notion connection, a version-control bridge
+  and a box office create are no longer shown, and a group left with nothing
+  to show is left out; an edit displays every field, and what the form checks
+  and what a create sends are unchanged.
+- `@angee/ui`: **Changed behaviour.** What a form field holds when it holds
+  nothing has one owner, `emptyValueForField` (`field-values.ts`), read by the
+  record form's draft and seeds, `ActionFormDialog`'s arguments,
+  `MutationDialog`'s and a schema dialog's seeds and the presence control; the
+  record form's own rule is deleted. A lines editor's new cell keeps its own
+  rule (`emptyCellValue`). First match wins: an explicit `string` kind holds
+  `""` whatever its widget; the `integer` and `float` widgets and the date and
+  time widgets hold `null`; the list widgets and a relation list `[]`; the
+  `switch` widget `false`, the `object` widget `{}`, the `json` widget `[]`
+  for an `array` kind, `null` for an untyped value and `{}` otherwise; then
+  the kind decides. An untouched field seeds and sends its new empty value
+  wherever that changed. On a record form (a create, or an edit that changed a
+  sibling member of the same structured field, for a member the record lacks):
+  a form-spec boolean is `false` where it was `""`; an array under `json` `[]`
+  where `{}`; an untyped value under `json` left out of a create and `null` on
+  such an edit, where `{}`; a number kind under a widget that is not a
+  number's left out of a create and `null` on such an edit, where `""`. At an
+  action dialog's `submit` and a `MutationDialog`'s `parseValues`: a date,
+  time, `integer` or `float` widget with no kind is `null`, and a `json`
+  widget `{}`, where `""`. A field whose empty value is `null` has no "present
+  but empty" state: holding `null` it shows its own control with its hint, and
+  "Set value" no longer writes a `0` nobody chose for a number; two step
+  configurations show it, the extraction steps' `thinking` and the
+  start-conversation step's `timeout`. A member that may be left out is not
+  seeded with a value its own declared type refuses (`refusesSeed`, read by a
+  schema dialog's and `MutationDialog`'s seeding and by the record form's
+  create draft, not by its edit seeding): a number that is neither required
+  nor nullable, and an optional integer choice, stay absent; the seeding
+  policies otherwise keep their differences. Of the declared forms measured,
+  one payload changes: an action that passes an untouched optional date on as
+  it is sends `null`, which a date parameter accepts, where it sent `""`. A
+  step back, recorded as expected failures until the descriptor carries a
+  declared format: a date, a time or a date and time carried as text (a
+  `string` kind with only its widget to tell it from text) seeds `""`, so a
+  record form's edit that changed a sibling member sends `""` for it where it
+  sent `null`, and "Set value" on a nullable one writes `""`; no form declares
+  such a member today. Not changed, and known: the other boolean widgets
+  (`boolean`, `booleanToggle`, `booleanBadge`) and number widgets (`percent`,
+  `progressBar`, `money`) with no kind still hold `""`. **Upgrade:** a
+  `submit` or a `parseValues` that tested an untouched date, time or number
+  field declared by its widget alone for the empty text tests for `null`, or
+  `{}` for a `json` one; a test that pressed "Set value" on a number and
+  expected `0` finds the number's own control.
 - **Message templates render, on Django's template engine.**
   - **What renders.** `MessageTemplate.render(values, *, kit=None)` returns a
     `RenderedMessage` (`subject`, `preheader`, `html`, `plain_text`,
@@ -246,15 +389,15 @@ live in code docstrings.
   inbound message no longer names an untitled thread, for any reader.
   **Upgrade:** `MessageQuerySet.involving_parties` is removed; select
   `pk__in=MessageQuerySet.ids_involving_parties(parties, handles=..., messages=...,
-  participants=...)`, the ids of the messages given parties sent or received, built
+  recipients=...)`, the ids of the messages given parties sent or received, built
   on `MessageQuerySet.ids_involving_handles` (the same for given handles), or test
   `.exists()` on it with the eligibility inside `messages`.
   `MessageQuerySet.involving_parties_filter(parties, handles=..., participants=...)`
   is removed too; filter with `pk__in=MessageQuerySet.ids_involving_parties(parties,
-  handles=..., messages=..., participants=...)` instead.
+  handles=..., messages=..., recipients=...)` instead.
   `MessageQuerySet.involved_handle_ids` is the reverse, the handles that sent or
   received given messages. Read a message's sender from `Message.sender`, never
-  from its `participants`.
+  from its recipients.
 - `angee.base`: `MergeableQuerySet.redirect_groups` given a subquery selects
   `pk IN` the `UNION ALL` of its two indexed arms, the survivors and the rows
   redirecting to them, where it compiled to `pk IN (…) OR merged_into_id IN (…)`.

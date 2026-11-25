@@ -37,7 +37,7 @@ from angee.base.models.merge_references import (
 from angee.base.models.refs import RecordRefMixin
 from angee.graphql import records
 from angee.graphql.testing.documents import execute_schema, result_data
-from angee.messaging.testing.models import Directory, Handle, Message, Participant, Party, Reaction
+from angee.messaging.testing.models import Directory, Handle, Message, Party, Reaction, Recipient
 from angee.projects.testing.models import Link, Project, Queue, Task
 from angee.provenance import checks as provenance_checks
 from angee.provenance.context import changeset
@@ -513,7 +513,7 @@ def test_a_merge_identity_must_be_a_declared_unique_set(monkeypatch: pytest.Monk
     """Edges and plain pointing rows (a message's reactions) declare their identity alike."""
 
     pointing = [model for model in apps.get_models() if issubclass(model, MergeContractMixin)]
-    assert {Participant, Reaction} <= set(pointing)
+    assert {Recipient, Reaction} <= set(pointing)
     assert not [error for model in pointing for error in model.check() if error.id == "angee.E037"]
 
     monkeypatch.setattr(CustomColumnEdge, "merge_identity", (("target_ct", "target_id"),))
@@ -549,7 +549,7 @@ def test_merge_policies_merge_along_the_class_hierarchy(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(AngeeDataModel, "merge_policies", {"handle": MergePolicy.BLOCK, "message": MergePolicy.BLOCK})
     policies = {(ref.model, ref.name): ref.policy for owner in (Handle, Message) for ref in references(owner)}
-    assert (policies[Participant, "handle"], policies[Participant, "message"]) == (MergePolicy.KEEP, MergePolicy.BLOCK)
+    assert (policies[Recipient, "handle"], policies[Recipient, "message"]) == (MergePolicy.KEEP, MergePolicy.BLOCK)
 
 
 def test_a_moved_stance_keeps_its_recency_so_the_tie_break_keeps_its_winner() -> None:
