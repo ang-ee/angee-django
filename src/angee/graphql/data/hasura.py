@@ -289,7 +289,9 @@ class AngeeHasuraWriteBackend:
         with the creation's decoded values (``object``, ``lines``) at the row's
         decision point, before anything is written, and a row it returns is the
         earlier creation, replayed as it is. A subclass whose ``insert`` decides
-        by itself asks ``claim`` at its own decision point.
+        by itself asks ``claim`` at its own decision point. Only a keyed insert
+        passes ``claim``: an ``insert`` or ``_create_row`` override that does not
+        take it still serves a keyless insert.
         """
 
         data, extensions = self._split_input(data)
@@ -306,7 +308,7 @@ class AngeeHasuraWriteBackend:
             return replay
 
         with transaction.atomic():
-            instance = self._create_row(info, data, claim=None if claim is None else claim_row)
+            instance = self._create_row(info, data) if claim is None else self._create_row(info, data, claim=claim_row)
             if replayed:
                 return instance
             if lines is None and line_rows is not None:

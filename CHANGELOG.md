@@ -28,13 +28,19 @@ live in code docstrings.
     before the field errors `full_clean` reports, and an admitted insert rehearses its
     save once more.
   - An implementation key outside its field's choices is refused when a new row is
-    validated or inserted, as a field error naming the key, and a seeded default whose
-    catalogue row is missing is reported only when the row is validated; a stored row
-    saves its key as before.
+    validated or inserted, as a field error naming the key; a stored row saves its key
+    as before. An integration's creation decides its caller before it reports a seeded
+    default whose catalogue row is missing.
   - An idempotency key's earlier creation is still replayed while the caller can read
     it, looked up before the create is decided again; a first attempt is decided before
     its key is claimed. Without a key, the provenance adapter no longer decodes the
     input ahead of the backend.
+  - **Upgrade:** a write backend that overrides `insert` or `_create_row` accepts
+    `*, claim=None`, and asks the claim before it writes, at the point where it decides:
+    an `insert` override with its `creation_values(data)`, a `_create_row` override with
+    the decoded values, returning the row a claim returns as the earlier creation.
+    Otherwise a keyed insert into it raises `TypeError`; a keyless insert is served as
+    before.
 
 - `@angee/ui`: **Changed behaviour.** A record form decides in one place which of
   its declared groups it displays for a record, and its fields are its own and

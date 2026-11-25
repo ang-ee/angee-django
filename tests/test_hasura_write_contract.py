@@ -476,3 +476,38 @@ def test_a_defaulting_insert_is_decided_before_its_key_is_claimed(db: None) -> N
     assert refused.errors is not None
     assert isinstance(refused.errors[0].original_error, PermissionDenied), refused.errors[0].original_error
     assert not SharedDoc._base_manager.exists()
+
+
+class _UnclaimedRowBackend(AngeeHasuraWriteBackend):
+    """Overrides ``_create_row`` without taking ``claim``."""
+
+    def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+        return SharedDoc.objects.create(title=data["title"], is_shared=True)
+
+
+class _UnclaimedInsertBackend(AngeeHasuraWriteBackend):
+    """Overrides ``insert`` without taking ``claim``."""
+
+    def insert(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+        return super().insert(info, {"is_shared": True, **data})
+
+
+@pytest.mark.parametrize("backend", (_UnclaimedRowBackend, _UnclaimedInsertBackend))
+def test_an_override_without_claim_serves_a_keyless_insert_and_refuses_a_key(
+    db: None, backend: type, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Only a keyed insert needs ``claim``: without it the override cannot replay, so the key fails before a write."""
+
+    name = f"{backend.__name__.strip('_').lower()}_docs"
+    schema = _claimed_schema(backend(SharedDoc), name)
+    author = create_user(f"{name}-author")
+    keyless = f'mutation {{ insert_{name}_one(object:{{title:"Kept"}}) {{title}} }}'
+    keyed = f'mutation {{ insert_{name}_one(object:{{title:"Keyed"}}, idempotency_key:"unclaimed") {{title}} }}'
+
+    assert result_data(execute_schema(schema, keyless, {}, user=author)) == {f"insert_{name}_one": {"title": "Kept"}}
+    refused = execute_schema(schema, keyed, {}, user=author)
+
+    assert refused.errors is not None
+    assert (refused.errors[0].extensions or {}).get("code") == "INTERNAL"
+    assert "Unexpected GraphQL resolver error (TypeError)" in caplog.text
+    assert list(SharedDoc._base_manager.values_list("title", flat=True)) == ["Kept"]
