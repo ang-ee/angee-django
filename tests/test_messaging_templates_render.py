@@ -2870,9 +2870,43 @@ def test_clean_raises_only_validation_error_and_what_it_admits_saves(
             assert [record.getMessage() for record in caplog.records[logged:] if record.levelno >= logging.ERROR] == []
             return
         event("admitted")
+        # What PostgreSQL alone refuses, which the SQLite the property saves on would store: a NUL in any string.
+        assert not any("\x00" in text for column in CLEANED_COLUMNS for text in _strings(getattr(row, column)))
         with transaction.atomic():
             row.save()
             transaction.set_rollback(True)
+
+
+def _strings(value: Any) -> Iterator[str]:
+    """Every string ``value`` holds, keys included."""
+
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, str):
+            yield item
+        elif isinstance(item, dict):
+            pending.extend((*item.keys(), *item.values()))
+        elif isinstance(item, list):
+            pending.extend(item)
+
+
+def test_a_nul_is_refused_by_full_clean(plain: Any) -> None:
+    """A NUL in text or inside a JSON column's string passed full_clean() and failed at save on PostgreSQL (SQLite
+    stores it): refused in every column, keys included; a value nested deeper than JSON writes is refused too."""
+
+    del plain
+    nested: Any = "x"
+    for _ in range(50_000):
+        nested = [nested]
+    for column, value in (("name", "a\x00b"), ("description", "a\x00b"), ("source", "a\x00b"),
+                          ("sample", {"a": "x\x00y"}), ("sample", {"a\x00": 1}), ("variables", {"a": "x\x00"}),
+                          ("description", nested)):
+        row = _unsaved("part", "nul")
+        setattr(row, column, value)
+        with system_context(reason="tests.messaging_templates.render.nul"), pytest.raises(ValidationError) as raised:
+            row.full_clean()
+        assert column in raised.value.message_dict, (column, raised.value.message_dict)
 
 
 def test_a_null_json_column_is_refused_in_one_sentence(plain: Any) -> None:
@@ -2910,7 +2944,8 @@ def test_the_console_refuses_what_no_column_can_store(plain: Any) -> None:
     admin = create_platform_admin("messaging-templates-storer")
     member = create_user("messaging-templates-non-storer")
     for written in ({"source": "a\ud800"}, {"name": "a\udfff"}, {"layout": "\ud800"}, {"sample": {"a": math.nan}},
-                    {"sample": {"a": -math.inf}}, {"variables": {"a": math.nan}}):
+                    {"sample": {"a": -math.inf}}, {"variables": {"a": math.nan}}, {"name": "a\x00b"},
+                    {"description": "a\x00b"}, {"sample": {"a": "x\x00y"}}, {"variables": {"a": "x\x00"}}):
         for user, code in ((admin, "VALIDATION"), (member, "PERMISSION_DENIED")):
             result = execute_schema(schema, _UPDATE, {"id": public_id_of(own), "set": written}, user=user)
             assert [(error.extensions or {}).get("code") for error in result.errors or ()] == [code], (written, user)

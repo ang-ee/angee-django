@@ -106,9 +106,27 @@ STORED_COLUMNS = (
 reads them."""
 
 
-def _unstorable(value: Any) -> str | None:
-    """Why no column can store, hash or render ``value``, or ``None``: a lone surrogate, or what JSON cannot write."""
+STORED_DEPTH_LIMIT = 64
+"""The deepest a value in a column nests: a row's own values nest a few levels, and Django's text conversion and a
+render recurse over what nests deeper."""
 
+
+def _unstorable(value: Any) -> str | None:
+    """Why no column can store, hash or render ``value``, or ``None``: a value nested over
+    :data:`STORED_DEPTH_LIMIT`, a NUL in any string, key or text (PostgreSQL refuses it in text and JSON alike), a
+    lone surrogate, or what JSON cannot write."""
+
+    pending: list[tuple[Any, int]] = [(value, 0)]
+    while pending:
+        item, depth = pending.pop()
+        if depth > STORED_DEPTH_LIMIT:
+            return f"Nest the value at most {STORED_DEPTH_LIMIT} levels deep."
+        if isinstance(item, str) and "\x00" in item:
+            return "Remove the NUL character: the database stores none."
+        if isinstance(item, dict):
+            pending.extend((child, depth + 1) for child in (*item.keys(), *item.values()))
+        elif isinstance(item, list | tuple):
+            pending.extend((child, depth + 1) for child in item)
     try:
         json.dumps(value, allow_nan=False, ensure_ascii=False).encode()
     except UnicodeEncodeError:
