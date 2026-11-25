@@ -30,7 +30,7 @@ from typing import cast
 from django.template import TemplateSyntaxError
 from django.template.base import DebugLexer, FilterExpression, Token, TokenType, VariableNode
 
-from angee.messaging_templates.engine import MAIL_COLOURS, MessageTemplateEngine, filter_names, url
+from angee.messaging_templates.engine import LINK_SCHEMES, MAIL_COLOURS, MessageTemplateEngine, filter_names, url
 
 STYLE_ELEMENT_OUTPUTS = frozenset(("brand", *path) for path in MAIL_COLOURS)
 """The outputs a ``<style>`` element may hold, without filters: the mail colours."""
@@ -116,6 +116,12 @@ name."""
 
 LINK_ATTRIBUTES = frozenset({"href", "src", "background", "cite"})
 """The attributes of :data:`MAIL_ATTRIBUTES` a reader follows as a link: one ``url`` output, or a static link."""
+
+STATIC_ANCHOR = re.compile(r"(?:#|cid:)[A-Za-z0-9._~!$&'()*+,;=:@/?%-]*")
+"""What a static link may be besides a link ``url`` leaves unchanged: a fragment of the mail, or a ``cid:`` image
+the mail carries."""
+
+STATIC_LINKS = f"an absolute {', '.join(LINK_SCHEMES[:-1])} or {LINK_SCHEMES[-1]} link, a #fragment or a cid: image"
 
 OUTPUT_ATTRIBUTES = frozenset({"alt", "title", "aria-label", "lang", "xml:lang", "dir"})
 """The text attributes an output may write."""
@@ -296,8 +302,13 @@ class _HtmlChecker(HTMLParser):
 
     def check_link(self, tag: str, name: str, value: str, ids: list[int]) -> None:
         if not ids:
-            if url(value) != value:
-                self.refuse(f"the {name} of <{tag}> is not a link a mail may carry")
+            sent = url(value)
+            if sent == value or STATIC_ANCHOR.fullmatch(value):
+                return
+            self.refuse(
+                f"the {name} of <{tag}> holds a space or a character a link percent-encodes: write {sent}" if sent
+                else f"the {name} of <{tag}> is not a link a mail may carry: {STATIC_LINKS}",
+            )
             return
         _path, filters = self.output_path(ids[0])
         if value != f"\x00{ids[0]}\x00" or not filters or filters[-1] != "url":
@@ -422,7 +433,7 @@ def check_html(
     attribute value does not hold whole; in an attribute of
     :data:`LINK_ATTRIBUTES` anything but one output whose last filter is ``url``,
     or a static link :func:`~angee.messaging_templates.engine.url` leaves as
-    ``html.parser`` decodes it; in ``style`` an output but :data:`STYLE_OUTPUTS`;
+    ``html.parser`` decodes it or a :data:`STATIC_ANCHOR`; in ``style`` an output but :data:`STYLE_OUTPUTS`;
     in a ``<style>`` element a span but :data:`STYLE_ELEMENT_OUTPUTS`; in a
     ``<title>`` element or any other attribute an output outside
     :data:`OUTPUT_ATTRIBUTES` (``<title>``: any) or a tag other than an ``if``

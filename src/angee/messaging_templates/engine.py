@@ -68,6 +68,10 @@ filter's whole output."""
 URL_INPUT_LIMIT = 2_048
 """The longest value :func:`url` reads; a longer one gives no link."""
 
+LINK_SCHEMES = ("https", "http", "mailto", "tel")
+"""The schemes of a link :func:`url` gives. A mail has no base, so the link is absolute: ``https`` and ``http``
+with a host, or a ``mailto:`` or ``tel:`` link."""
+
 FILTER_CHARGE = 100
 """What a filter call charges a pass's ``filter_input``, besides the length of a string a reading filter reads."""
 
@@ -294,26 +298,30 @@ def _charged(name: str, function: Callable[..., Any]) -> Callable[..., Any]:
 
 
 _LINKS = MarkdownIt("commonmark")
-"""The parser whose public ``normalizeLink`` and ``validateLink`` judge a link, as Markdown links are judged."""
-
-
-def _link(text: str) -> str:
-    """Return ``text`` normalised as a link, or ``""`` for a scheme markdown-it refuses or any ``data:`` URL."""
-
-    link = _LINKS.normalizeLink(text.strip())
-    return link if _LINKS.validateLink(link) and not link.lower().startswith("data:") else ""
+"""The parser whose public ``normalizeLink`` writes a link as Markdown links are written: percent-encoded, its host
+in punycode."""
 
 
 def url(value: Any) -> str:
     """Return ``value`` as a link a message may carry, or ``""``.
 
-    markdown-it's own normalisation, then its validation, which refuses
-    ``javascript:``, ``vbscript:`` and ``file:``; every ``data:`` URL is refused
-    too, and so is input over :data:`URL_INPUT_LIMIT` characters.
+    markdown-it's own normalisation of the value without its surrounding white
+    space, kept only when it is an absolute link of :data:`LINK_SCHEMES`; any
+    other scheme, a protocol- or path-relative link, a fragment, and input over
+    :data:`URL_INPUT_LIMIT` characters give ``""``.
     """
 
     text = str(value)
-    return "" if len(text) > URL_INPUT_LIMIT else _link(text)
+    if len(text) > URL_INPUT_LIMIT:
+        return ""
+    link = _LINKS.normalizeLink(text.strip())
+    scheme, colon, rest = link.partition(":")
+    scheme = scheme.lower()
+    if not colon or scheme not in LINK_SCHEMES:
+        return ""
+    if scheme in ("https", "http") and not (rest.startswith("//") and rest[2:3] not in ("", "/", "?", "#")):
+        return ""
+    return link
 
 
 for _name in ALLOWED_FILTERS[:-1]:

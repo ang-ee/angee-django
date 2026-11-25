@@ -743,6 +743,25 @@ def test_a_row_cannot_leave_the_next_row_inside_a_tag_or_a_style(plain: Any, kit
             _render(template, {"link": "javascript:alert(document.domain)"}, kit)
 
 
+def test_a_static_link_is_absolute_or_a_fragment_or_a_cid_image() -> None:
+    """An author's link: what url leaves unchanged, a #fragment or a cid: image; a space or a character outside
+    ASCII is refused with the percent-encoded link to write."""
+
+    expression = compiled_expression(HTML_ENGINE)
+    for link in ("https://example.test/a?b=1&amp;c=2", "mailto:a@example.test", "tel:+1", "#", "#top", "cid:logo",
+                 "HTTPS://EXAMPLE.TEST/"):
+        assert check_html(f'<a href="{link}">x</a>', expression) == [], link
+    for link in ("//example.test/", "/settings", "settings", "ms-msdt:/id", "cid:a b", "#a b"):
+        assert check_html(f'<a href="{link}">x</a>', expression) == [
+            "the href of <a> is not a link a mail may carry: an absolute https, http, mailto or tel link, "
+            "a #fragment or a cid: image"], link
+    assert check_html('<a href="https://example.test/café">x</a>', expression) == [
+        "the href of <a> holds a space or a character a link percent-encodes: write https://example.test/caf%C3%A9"]
+    assert check_html('<a href="mailto:a@example.test?subject=Hi there">x</a>', expression) == [
+        "the href of <a> holds a space or a character a link percent-encodes: write "
+        "mailto:a@example.test?subject=Hi%20there"]
+
+
 def test_link_attributes_follow_url_and_text_attributes_are_text() -> None:
     """URL-valued attributes: the ones mail links with follow url; the others are refused by name; text is text."""
 
@@ -1265,14 +1284,38 @@ def test_no_chain_of_filters_lets_a_value_become_markup(kit: Any, longest: int) 
     assert admitted and compared
 
 
+REFUSED_LINKS = (
+    "ms-msdt:/id PCWDiagnostic /skip force", "search-ms:query=x", "ms-officecmd:x", "ms-word:ofe|u|https://x.test/a",
+    "smb://evil.example/share", "intent://x#Intent;scheme=x;end", "chrome://settings", "view-source:https://x.test",
+    "blob:https://x.test/1", "filesystem:https://x.test/temporary/a", "mhtml:file://x", "res://x", "about:blank",
+    "jar:https://x.test!/", "feed:https://x.test", "cid:logo", "#top", "//evil.example/x", "/settings/forward",
+    "settings", "https:example.test", "https:///x", "https://", "http://?x", " javascript:x", "java\tscript:x",
+    "\x01javascript:x",
+)
+"""Links a value may not give: every scheme but the four, and every link a mail with no base cannot resolve."""
+ADMITTED_LINKS = {
+    "https://example.test/a?b=1&c=2": "https://example.test/a?b=1&amp;c=2",
+    "HTTPS://Example.test/": "HTTPS://Example.test/",
+    " http://example.test/x ": "http://example.test/x",
+    "https://example.test/café": "https://example.test/caf%C3%A9",
+    "https://bücher.example/a b": "https://xn--bcher-kva.example/a%20b",
+    "mailto:hello@example.test?subject=Hi there": "mailto:hello@example.test?subject=Hi%20there",
+    "tel:+1-555-0100": "tel:+1-555-0100",
+}
+"""Values url makes links of, percent-encoded and in punycode as markdown-it writes them, then escaped."""
+
+
 def test_a_url_value_gives_a_link_or_nothing(plain: Any, kit: Any) -> None:
-    """Property 3: unsafe schemes and every data: URL give an empty target; a quote cannot leave an attribute."""
+    """Property 3: a value gives an absolute https, http, mailto or tel link, or an empty target; a quote cannot
+    leave an attribute."""
 
     del plain
     template = _mail('<a href="{{ link|url }}">x</a>', {"link": "x"}, format="html", text_source="{{ link|url }}")
     for link in ("javascript:alert(1)", "JaVaScRiPt:alert(1)", "vbscript:x", "file:///etc/passwd",
-                 "data:text/html,x", "data:image/png;base64,AAAA", "https://" + "a" * 2_050):
+                 "data:text/html,x", "data:image/png;base64,AAAA", "https://" + "a" * 2_050, *REFUSED_LINKS):
         assert 'href=""' in _render(template, {"link": link}, kit).html, link
+    for link, sent in ADMITTED_LINKS.items():
+        assert f'href="{sent}"' in _render(template, {"link": link}, kit).html, link
     rendered = _render(template, {"link": 'https://example.test/" onclick="x'}, kit)
     marker = _render(template, {"link": MARKER}, kit).html
     _assert_value_stays_text(marker, rendered.html, 'https://example.test/" onclick="x')
