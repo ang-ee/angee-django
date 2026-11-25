@@ -115,6 +115,11 @@ export interface MessageTemplateFixtureOptions {
   refuseSave?: boolean;
   /** Keep override is refused as the console refuses it for a row that overrides no shipped default. */
   refuseKeep?: boolean;
+  /**
+   * The server says no row admits the reader to Override (`can_override` false), though the reader may still
+   * preview every row. The permission schema has no such reader today, so this one answer is the fake's.
+   */
+  overrideDenied?: boolean;
   onRequest?: (request: GraphQLWireRequest) => void;
   onCall?: (call: MessageTemplateFixtureCall) => void;
 }
@@ -137,10 +142,12 @@ function sameObject(left: Readonly<Record<string, unknown>>, right: unknown): bo
 
 /** The schemas a story or a test mounts: the console over the fake, with the recorded metadata. */
 export function messageTemplateSchemas({
-  viewer = "admin", refuseSave = false, refuseKeep = false, onRequest, onCall,
+  viewer = "admin", refuseSave = false, refuseKeep = false, overrideDenied = false, onRequest, onCall,
 }: MessageTemplateFixtureOptions = {}) {
   const member = viewer === "member";
-  let rows: WireRow[] = RECORDED.rows.map((row) => (member ? { ...row, ...RECORDED.member[row.id], id: row.id } : row));
+  let rows: WireRow[] = RECORDED.rows
+    .map((row) => (member ? { ...row, ...RECORDED.member[row.id], id: row.id } : row))
+    .map((row) => (overrideDenied ? { ...row, can_override: false } : row));
   const previews: Record<string, Preview> = member ? {} : { ...RECORDED.previews };
   const backlinks: Record<string, Backlinks> = member ? {} : { ...RECORDED.backlinks };
   const find = (id: unknown) => rows.find((row) => row.id === id) ?? null;

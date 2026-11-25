@@ -15,11 +15,17 @@ import {
 
 import { useMessagingTemplatesT } from "../i18n";
 import { MESSAGE_TEMPLATE_MODEL } from "../resources";
-import { MessageTemplateNotice } from "./MessageTemplateNotice";
+import { MessageTemplateNotice, offersKeepOverride, offersOverride } from "./MessageTemplateNotice";
 import { MessageTemplatePreviewPane } from "./MessageTemplatePreviewPane";
 
-/** The row facts the notice and the verbs read beside the form's fields. */
-const ROW_FACTS = ["is_baseline", "is_overridden", "has_updated_default"];
+/**
+ * What the notice and the verbs read beside the form's fields: the row facts, and
+ * the server's answer to whether each verb admits this reader on this row, which
+ * the record's own read selects (`can_override` decides a permission per row).
+ */
+const ROW_FACTS = [
+  "is_baseline", "is_overridden", "overrides_default", "has_updated_default", "can_override", "can_keep_override",
+];
 
 /** Only a template fills a subject, a preheader and a layout; the server says which kinds do. */
 function carriesMessageFields(values: Row): boolean {
@@ -37,9 +43,11 @@ function carriesMessageFields(values: Row): boolean {
  *
  * A shipped default is read-only (it projects no `write`); Override starts the
  * deployment's override of it and opens it. An override whose shipped default
- * changed offers Keep override. Delete shows where the row projects `delete`:
- * deleting an override resets it to its shipped default. The notice above the
- * sheet says which of these the row is.
+ * changed offers Keep override. Each verb shows where the server says it admits
+ * the reader (`can_override`, `can_keep_override`) and the row is in the state
+ * the verb changes. Delete shows where the row projects `delete`: deleting an
+ * override resets it to its shipped default. The notice above the sheet says
+ * which of these the row is.
  */
 function MessageTemplateForm({
   resource: _resource, recordTabs, returning, headerExtras, ...props
@@ -86,7 +94,8 @@ function MessageTemplateForm({
         <Field name="source" label={t("field.source")} widget="textarea" body={false} />
         <Field name="text_source" label={t("field.textSource")} widget="textarea" body={false} />
       </Group>
-      {/* A json field holds `{}` on a create form, which would show it there; the server seeds it. */}
+      {/* The server seeds both. A json field holds `{}` on a create form, which the form's create display
+          (`form-view-model.ts`) still counts as a value to show; drop `savedOnly` once it does not. */}
       <Group label={t("form.variables")} columns={1} savedOnly>
         <Field name="variables" label={t("field.variables")} widget="json" />
       </Group>
@@ -96,10 +105,8 @@ function MessageTemplateForm({
       <Group label={t("form.sample")} pane="sample" savedOnly>
         <Field name="sample" label={t("field.sample")} widget="json" />
       </Group>
-      <Action id="override" label={t("action.override")} permission="preview"
-        visibleWhen={(record) => record.is_baseline === true && record.is_overridden !== true} run={override} />
-      <Action id="keep-override" label={t("action.keepOverride")} permission="write"
-        visibleWhen={(record) => record.has_updated_default === true} run={keep} />
+      <Action id="override" label={t("action.override")} visibleWhen={offersOverride} run={override} />
+      <Action id="keep-override" label={t("action.keepOverride")} visibleWhen={offersKeepOverride} run={keep} />
     </Form>
   );
 }

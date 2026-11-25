@@ -136,19 +136,25 @@ describe("MessageTemplateForm", () => {
     ]);
   });
 
-  test("offers Override to whoever may preview a shipped default nobody overrides, and Keep override to a writer", () => {
+  test("offers Override and Keep override where the server admits the reader, on a row in the state each changes", () => {
     const actions = parsePageActions(children(formDeclaration()));
     const override = actions.find((action) => action.id === "override");
     const keep = actions.find((action) => action.id === "keep-override");
 
+    // The server's answer is the gate: no projected permission stands in for it.
     expect(actions.map((action) => [action.id, action.label, action.permission])).toEqual([
-      ["override", M["action.override"], "preview"], ["keep-override", M["action.keepOverride"], "write"],
+      ["override", M["action.override"], undefined], ["keep-override", M["action.keepOverride"], undefined],
     ]);
-    expect(override?.visibleWhen?.({ is_baseline: true, is_overridden: false })).toBe(true);
-    expect(override?.visibleWhen?.({ is_baseline: true, is_overridden: true })).toBe(false);
-    expect(override?.visibleWhen?.({ is_baseline: false, is_overridden: false })).toBe(false);
-    expect(keep?.visibleWhen?.({ is_baseline: false, has_updated_default: true })).toBe(true);
-    expect(keep?.visibleWhen?.({ is_baseline: false, has_updated_default: false })).toBe(false);
+    expect(override?.visibleWhen?.({ can_override: true, is_overridden: false })).toBe(true);
+    expect(override?.visibleWhen?.({ can_override: true, is_overridden: true })).toBe(false);
+    expect(override?.visibleWhen?.({
+      can_override: false, is_baseline: true, is_overridden: false, permissions: ["preview"],
+    })).toBe(false);
+    expect(keep?.visibleWhen?.({ can_keep_override: true, has_updated_default: true })).toBe(true);
+    expect(keep?.visibleWhen?.({ can_keep_override: true, has_updated_default: false })).toBe(false);
+    expect(keep?.visibleWhen?.({
+      can_keep_override: false, has_updated_default: true, overrides_default: true, permissions: ["write"],
+    })).toBe(false);
   });
 
   test("shows Delete where the row projects delete", () => {
@@ -162,7 +168,10 @@ describe("MessageTemplateForm", () => {
     const extra: RecordTabDescriptor = { id: "extra", label: "Extra", render: () => null };
     const form = formDeclaration({ returning: ["display_name"], recordTabs: [extra] });
 
-    expect(form.returning).toEqual(["display_name", "is_baseline", "is_overridden", "has_updated_default"]);
+    expect(form.returning).toEqual([
+      "display_name", "is_baseline", "is_overridden", "overrides_default", "has_updated_default", "can_override",
+      "can_keep_override",
+    ]);
     expect(form.recordTabs?.map((tab) => tab.id)).toEqual(["preview", "extra"]);
     const preview = form.recordTabs?.[0];
     expect(preview?.presentation).toBe("full-bleed");
@@ -188,21 +197,30 @@ describe("MessageTemplateNotice", () => {
     return { role: alert?.getAttribute("role") ?? null, text: container.textContent ?? "" };
   }
 
+  const override = { is_baseline: false, overrides_default: true };
   test.each<[string, Record<string, unknown>, readonly Sentence[]]>([
     ["a shipped default nobody overrides, to an administrator",
-      { is_baseline: true, is_overridden: false, permissions: shipped }, ["notice.shipped", "notice.shippedOverride"]],
+      { is_baseline: true, is_overridden: false, can_override: true, permissions: shipped },
+      ["notice.shipped", "notice.shippedOverride"]],
+    ["a shipped default nobody overrides, to a reader who may preview it but whom the server does not admit to Override",
+      { is_baseline: true, is_overridden: false, can_override: false, permissions: shipped }, ["notice.shipped"]],
     ["an overridden shipped default, to an administrator",
-      { is_baseline: true, is_overridden: true, permissions: shipped }, ["notice.overridden"]],
+      { is_baseline: true, is_overridden: true, can_override: true, permissions: shipped }, ["notice.overridden"]],
     ["an override whose default changed, to an administrator",
-      { is_baseline: false, has_updated_default: true, permissions: writable },
+      { ...override, has_updated_default: true, can_keep_override: true, permissions: writable },
       ["notice.defaultUpdated", "notice.keepHint", "notice.deleteNew"]],
-    ["the deployment's own row or a current override, to an administrator",
-      { is_baseline: false, has_updated_default: false, permissions: writable }, ["notice.live", "notice.deleteDefault"]],
+    ["a current override, to an administrator",
+      { ...override, has_updated_default: false, can_keep_override: true, permissions: writable },
+      ["notice.live", "notice.deleteDefault"]],
+    ["the deployment's own row, to an administrator",
+      { is_baseline: false, overrides_default: false, has_updated_default: false, permissions: writable },
+      ["notice.live"]],
     ["a shipped default nobody overrides, to a member",
-      { is_baseline: true, is_overridden: false, permissions: [] }, ["notice.shipped"]],
+      { is_baseline: true, is_overridden: false, can_override: false, permissions: [] }, ["notice.shipped"]],
     ["an override whose default changed, to a member",
-      { is_baseline: false, has_updated_default: true, permissions: [] }, ["notice.defaultUpdated"]],
-  ])("says what %s is, and each hint only where its verb is the reader's", (_case, record, shown) => {
+      { ...override, has_updated_default: true, can_keep_override: false, permissions: [] },
+      ["notice.defaultUpdated"]],
+  ])("says what %s is, and each hint only where the server admits the reader to its verb", (_case, record, shown) => {
     const { role, text } = notice(record);
 
     expect(role).toBe("status");
@@ -213,6 +231,7 @@ describe("MessageTemplateNotice", () => {
   });
 
   test("says nothing to a member about a row whose only sentences are a writer's", () => {
-    expect(notice({ is_baseline: false, has_updated_default: false, permissions: [] })).toEqual({ role: null, text: "" });
+    expect(notice({ ...override, has_updated_default: false, can_keep_override: false, permissions: [] }))
+      .toEqual({ role: null, text: "" });
   });
 });

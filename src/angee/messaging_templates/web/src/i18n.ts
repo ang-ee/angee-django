@@ -35,7 +35,7 @@ export const enMessagingTemplatesMessages: Record<string, string> = {
   "notice.keepHint": "Keep override keeps this text.",
   "notice.deleteNew": "Delete returns this deployment to the new shipped default.",
   "notice.live": "Saved changes go live for every message at once.",
-  "notice.deleteDefault": "Delete returns this deployment to the shipped default, where there is one.",
+  "notice.deleteDefault": "Delete returns this deployment to the shipped default.",
   "action.override": "Override",
   "action.keepOverride": "Keep override",
   "tab.preview": "Preview",

@@ -173,6 +173,23 @@ test("Keep override sends the override's id, and the default-updated warning goe
   expect(screen.queryByRole("button", { name: word("action.keepOverride") })).toBeNull();
 });
 
+test("a reader who may preview a shipped default but whom the server does not admit to Override is offered neither", async () => {
+  render(<MessageTemplateStory open={ROW.welcome} overrideDenied />);
+  await screen.findByText(word("notice.shipped"));
+  // The reader holds preview: the Preview tab is there, and only the server's answer hides Override.
+  expect(await screen.findByRole("tab", { name: word("tab.preview") })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: word("action.override") })).toBeNull();
+  expect(screen.queryByText(word("notice.shippedOverride"), { exact: false })).toBeNull();
+});
+
+test("a current override offers no Keep override, and says Delete returns to the shipped default", async () => {
+  render(<MessageTemplateStory open={ROW.quote} />);
+  expect(await screen.findByText(word("notice.deleteDefault"), { exact: false })).toBeTruthy();
+  expect(screen.getByText(word("notice.live"), { exact: false })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: word("action.keepOverride") })).toBeNull();
+  expect(screen.queryByRole("button", { name: word("action.override") })).toBeNull();
+});
+
 test("a refused Keep override says why, in the server's words, and the warning stays", async () => {
   render(<MessageTemplateStory open={ROW.recordCard} refuseKeep />);
   await screen.findByText(word("notice.defaultUpdated"));
@@ -186,6 +203,8 @@ test("a refused Keep override says why, in the server's words, and the warning s
 test("Delete on a block another row includes shows the server's refusal", async () => {
   render(<MessageTemplateStory open={ROW.notice} />);
   await screen.findByText(word("notice.live"), { exact: false });
+  // The deployment's own block overrides no shipped default, so its notice names none.
+  expect(screen.queryByText(word("notice.deleteDefault"), { exact: false })).toBeNull();
   fireEvent.click(await screen.findByRole("button", { name: ui("list.actions") }));
   fireEvent.click(await screen.findByRole("menuitem", { name: ui("actions.delete") }));
 
@@ -279,7 +298,7 @@ test("a member reads a shipped default with its fact alone: no verb, no Preview,
   expect(await screen.findByRole("heading", { name: word("form.sample") })).toBeTruthy();
   expect(screen.getAllByText(ui("form.restricted")).length).toBeGreaterThan(0);
   expect(screen.queryByText(word("notice.shippedOverride"), { exact: false })).toBeNull();
-  // On a shipped default nobody overrides only the reader's permission hides Override.
+  // On a shipped default nobody overrides only the server's answer for this reader (can_override) hides Override.
   expect(screen.queryByRole("button", { name: word("action.override") })).toBeNull();
   expect(screen.queryByRole("button", { name: word("action.keepOverride") })).toBeNull();
   expect(screen.queryByRole("button", { name: ui("list.actions") })).toBeNull();

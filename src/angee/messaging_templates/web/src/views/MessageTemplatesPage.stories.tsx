@@ -59,7 +59,8 @@ const documents = { console: operationDocuments };
  * and refuses anything else with a GraphQL error that names it.
  */
 export function MessageTemplateStory({
-  appearance, open, viewer = "admin", refuseSave = false, refuseKeep = false, onRequest, onCall,
+  appearance, open, viewer = "admin", refuseSave = false, refuseKeep = false, overrideDenied = false,
+  onRequest, onCall,
 }: {
   appearance?: RuntimeFixtureProps["appearance"];
   /** The row whose record opens, or `new` for the create form; the library when absent. */
@@ -67,12 +68,13 @@ export function MessageTemplateStory({
   viewer?: MessageTemplateViewer;
   refuseSave?: boolean;
   refuseKeep?: boolean;
+  overrideDenied?: boolean;
   onRequest?: (request: GraphQLWireRequest) => void;
   onCall?: (call: MessageTemplateFixtureCall) => void;
 }) {
   const schemas = useMemo(
-    () => messageTemplateSchemas({ viewer, refuseSave, refuseKeep, onRequest, onCall }),
-    [viewer, refuseSave, refuseKeep, onRequest, onCall],
+    () => messageTemplateSchemas({ viewer, refuseSave, refuseKeep, overrideDenied, onRequest, onCall }),
+    [viewer, refuseSave, refuseKeep, overrideDenied, onRequest, onCall],
   );
   const collectionPath = MESSAGE_TEMPLATE_ROUTE_HREF(MESSAGE_TEMPLATES_ROUTE);
   const initialEntry = open
