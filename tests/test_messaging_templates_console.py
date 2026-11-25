@@ -26,6 +26,7 @@ from angee.iam.roles import subject_permitted
 from angee.messaging_templates.models import SHIPPED_DEFAULT_MESSAGE, MessageTemplateKind, MessageTemplateQuerySet
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import TemplateWalker
+from angee.provenance.context import changeset_model
 from tests.conftest import create_platform_admin, create_user
 from tests.test_messaging_templates import _row, _schema
 from tests.test_messaging_templates_layout import library as library
@@ -435,6 +436,13 @@ def _insert(
     return execute_schema(_schema(), _INSERT, variables, user=user)
 
 
+def _claimed(key: str) -> bool:
+    """Whether provenance holds a creation claim under ``key``."""
+
+    with system_context(reason="tests.messaging_templates.console.claims"):
+        return changeset_model()._base_manager.filter(key=key).exists()
+
+
 def _rows(kind: str, key: str) -> list[Any]:
     with system_context(reason="tests.messaging_templates.console.read"):
         return list(MessageTemplate.objects.filter(kind=kind, key=key).order_by("language", "is_baseline"))
@@ -500,9 +508,10 @@ def test_starter_text_lands_only_on_a_key_with_no_row(db: None) -> None:
 def test_a_shipped_identity_is_overridden_never_created(library: dict[str, Any]) -> None:
     del library
     admin = create_platform_admin("messaging-templates-console-shadower")
-    refused = _insert(admin, "part", "greeting", "en")
-    (error,) = refused.errors
-    assert (error.extensions["code"], error.extensions["formErrors"]) == ("VALIDATION", [SHIPPED_DEFAULT_MESSAGE])
+    for idempotency in (None, "console-shadow"):
+        (error,) = _insert(admin, "part", "greeting", "en", idempotency=idempotency).errors
+        assert (error.extensions["code"], error.extensions["formErrors"]) == ("VALIDATION", [SHIPPED_DEFAULT_MESSAGE])
+    assert not _claimed("console-shadow")
     with actor_context(admin), pytest.raises(ValidationError) as raised:
         MessageTemplate.objects.create_own(kind="part", key="greeting", language="EN", name="Greeting")
     assert raised.value.code == "shipped_default"
@@ -522,9 +531,10 @@ def test_a_duplicate_is_refused_in_the_constraints_words_even_past_full_clean(
     cleaned: list[str] = []
     _recording(monkeypatch, TemplateWalker, "_check", lambda walker, row, name: checked.append(name))
     _recording(monkeypatch, MessageTemplate, "full_clean", lambda row: cleaned.append(row.key))
-    (error,) = _insert(admin, "part", "fresh").errors
-    assert error.extensions["formErrors"] == [_DUPLICATE_MESSAGE]
-    assert (checked, cleaned) == ([], [])
+    for idempotency in (None, "console-again"):
+        (error,) = _insert(admin, "part", "fresh", idempotency=idempotency).errors
+        assert error.extensions["formErrors"] == [_DUPLICATE_MESSAGE]
+    assert (checked, cleaned, _claimed("console-again")) == ([], [], False)
     judged: list[Any] = []
     validate_constraints = MessageTemplate.validate_constraints
 
@@ -587,30 +597,42 @@ def test_a_default_shipped_while_a_row_is_created_is_never_hidden(db: None, monk
 def test_a_member_or_a_signed_out_caller_is_refused_before_anything_is_judged(
     library: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Create is decided first: a malformed identity and a shipped one get the same refusal, and nothing is lexed."""
+    """Create is decided first: a malformed identity and a shipped one get the same refusal, and nothing is lexed.
+
+    With an idempotency key, a member's insert is claimed first and refused as without one, the claim rolled back;
+    a signed-out caller's key is refused by provenance before anything else.
+    """
 
     del library
     member = create_user("messaging-templates-console-intruder")
     checked: list[str] = []
     _recording(monkeypatch, TemplateWalker, "_check", lambda walker, row, name: checked.append(name))
-    for user in (member, AnonymousUser()):
+    keys = []
+    for label, user in (("member", member), ("signed-out", AnonymousUser())):
         for kind, key, language, name in (
             ("part", "fresh", "en", "Fresh"), ("part", "Not A Key", "en-us", ""), ("part", "greeting", "en", "Shadow"),
             ("template", "tests.fresh", "de", "Fresh"),
         ):
-            (error,) = _insert(user, kind, key, language, name).errors
-            assert error.extensions["code"] == "PERMISSION_DENIED", (user, key)
+            for idempotency in (None, f"console-{label}-{kind}-{key}"):
+                (error,) = _insert(user, kind, key, language, name, idempotency=idempotency).errors
+                refusal = (error.extensions["code"], sorted(error.extensions.get("validationErrors", {})))
+                keyed_signed_out = idempotency is not None and label == "signed-out"
+                assert refusal == (("VALIDATION", ["idempotency_key"]) if keyed_signed_out else (
+                    "PERMISSION_DENIED", [])), (label, key, idempotency)
+                keys.append(idempotency)
     assert checked == []
     assert _rows("part", "fresh") == [] and _rows("template", "tests.fresh") == []
+    assert not any(_claimed(key) for key in keys if key is not None)
 
 
 def test_an_identity_its_validators_refuse_is_refused_under_its_fields(db: None) -> None:
     del db
     admin = create_platform_admin("messaging-templates-console-misspeller")
-    (error,) = _insert(admin, "part", "Not A Key", "en-us").errors
-    assert error.extensions["code"] == "VALIDATION"
-    assert set(error.extensions["validationErrors"]) == {"key", "language"}
-    assert _rows("part", "Not A Key") == []
+    for idempotency in (None, "console-misspelled"):
+        (error,) = _insert(admin, "part", "Not A Key", "en-us", idempotency=idempotency).errors
+        assert error.extensions["code"] == "VALIDATION"
+        assert set(error.extensions["validationErrors"]) == {"key", "language"}
+    assert _rows("part", "Not A Key") == [] and not _claimed("console-misspelled")
 
 
 def test_a_replayed_insert_returns_the_row_it_created(db: None) -> None:
@@ -618,4 +640,4 @@ def test_a_replayed_insert_returns_the_row_it_created(db: None) -> None:
     admin = create_platform_admin("messaging-templates-console-replayer")
     first = result_data(_insert(admin, "part", "fresh", idempotency="console-create"))
     assert result_data(_insert(admin, "part", "fresh", idempotency="console-create")) == first
-    assert len(_rows("part", "fresh")) == 1
+    assert len(_rows("part", "fresh")) == 1 and _claimed("console-create")
