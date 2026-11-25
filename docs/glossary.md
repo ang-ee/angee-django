@@ -380,6 +380,11 @@ addresses, the message's `Recipient` rows, one per handle and envelope role
 (`recipient_user_ids`, `suggested_recipients`). See
 [messaging's contracts](../src/angee/messaging/README.md).
 
+**Compose (a message)** — write one outgoing message through
+`MessageManager.compose`: its row, parts, recipients, sender, thread and delivery
+hand-off, decided by the caller's `reply` on the channel. Not the **Composer**
+(`django-compose`). See [messaging's contracts](../src/angee/messaging/README.md).
+
 **Workflow version** — an immutable published definition, including the
 normalized contracts of any child workflows it awaits. A run pins one version.
 

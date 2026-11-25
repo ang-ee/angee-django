@@ -10,6 +10,40 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.messaging`, `angee.parties`, `angee.posts`, `angee.intake`: **One owner
+  writes an outgoing message.**
+  - **New.** `Message.objects.compose(*, actor, ...)` writes a reply (`parent=`),
+    a new email on a channel (`channel=`), or a new email on a record's chatter
+    (`channel=` with `record=`): its row, parts, recipients, sender, thread,
+    idempotency and delivery hand-off, decided under the actor by `reply` on the
+    channel (and posting on the record) before anything is claimed or written.
+    A new message takes `to`, `cc` and `bcc` addresses, a one-line `subject`,
+    `text`, `html` and readable `attachments`, and starts a thread of its own
+    through the new `ThreadManager.open_thread`, which `resolve` now shares.
+    `Message.reply_error(*, actor=None)` says, without side effects, whether
+    `compose` can answer a message. `HandleManager.clean_identity` validates a
+    handle identity without writing, and `HandleManager.upsert(fill_only=...)`
+    names display fields it only fills while blank.
+  - **Removed.** `Message.objects.compose_reply`. Use
+    `compose(parent=..., text=..., actor=..., ...)`: `body=` is `text=`, `admit`
+    takes no argument, and an email reply takes no `sender`.
+  - **Changed.** An email reply is sent from its channel's default sender, so a
+    held or queued email reply on a channel whose delivery is not configured,
+    that is not connected, or whose default sender is invalid is refused.
+    Idempotency keys claimed through `compose_reply` (scope `messaging.reply:`)
+    do not replay through `compose` (scope `messaging.compose:`). A reply's
+    preview is 280 characters, like every message's, and chatter posts and edits
+    preview through the same rule as ingest. An HTML-only email is sent without a
+    text part; it was made by stripping the HTML's tags. A recipient row's thread
+    is its message's, set by the model on insert (`Recipient.save`), which
+    refuses a different one. `Message.reply_addresses` keeps only what
+    `Handle.is_email_address` accepts. A name typed with a recipient address
+    fills only a handle that has none. Intake asks a requester by email when
+    their request has only a `Reply-To`. Creating a message part
+    (`messaging/part#create`) requires `write` on its message or the
+    administrators (schema revision 28); every framework writer of parts runs as
+    system work.
+  - **Upgrade:** `rebac sync` (provision runs it). No migration.
 - `angee.graphql`, `angee.base`, `angee.integrate`, `angee.projects`, `angee.knowledge`,
   `angee.portfolio`, `angee.intake`, `angee.dashboards`, `angee.provenance`, `angee.storage`,
   `angee.calendar`: **Changed behaviour.**

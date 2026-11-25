@@ -26,10 +26,11 @@ awaits the asker.
 The question is a comment on the task's chatter, addressed to the requester when
 their account may reply there, as an admitted requester may. A requester without
 an admitted account also gets it by email when their request came as an email
-with a sender, on a channel with an outbound sender: messaging's `compose_reply`
-addresses, titles and threads the reply and queues its delivery, and the
-reviewer needs the channel's `reply` permission. A requester reachable neither
-way is refused, not awaited: approve their access first.
+messaging can answer (`Message.reply_error`): one with a sender or a `Reply-To`,
+on a channel with an outbound sender. Messaging's `compose` addresses, titles
+and threads the reply and queues its delivery, and the reviewer needs the
+channel's `reply` permission. A requester reachable neither way is refused, not
+awaited: approve their access first.
 
 One rule decides which message wakes the hold, and work owns it
 (`TaskWorkQuerySet.wake_replied`): only the awaited account's reply. On chatter

@@ -48,21 +48,41 @@ with envelope ingestion; absent the exact precondition, changing an explicit
 source thread remains refused. Historical ingestion suppresses live message
 events while retaining native content history and counter updates.
 
-`Message.objects.compose_reply(parent, *, body, sender, actor, ...)` writes a reply
-on its parent's thread and channel under the channel's `reply` grant; the reply's
-`parent` is its In-Reply-To. An email reply (the parent's kind is `email`) is a
-complete envelope: `to` recipients naming the parent's `Reply-To` addresses
-when it carries any (`Message.reply_addresses`, the one reader of that header),
-else the handle it was sent from (RFC 5322 §3.6.2); the
+`Message.objects.compose(*, actor, ...)` is the one writer of an outgoing message:
+its row, parts, recipients, sender, thread, idempotency and delivery hand-off.
+Callers pass intent and never write its rows. `parent=` answers that message on
+its thread and channel; otherwise `channel=` sends a new email, on `record=`'s
+chatter when given, else on a thread of its own (`ThreadManager.open_thread`,
+the create step `resolve` shares), so mails that only share a subject never fuse.
+It decides everything under the actor before anything is claimed or written:
+reading the parent and `reply` on its channel, or `reply` on the channel and
+posting on the record as its chatter admits a post, and reading every
+attachment. It then validates the whole envelope, so no refusal follows a write.
+Whether a message can be answered at all is `Message.reply_error`, side-effect
+free, which intake asks too. An email is sent from its channel's default sender
+(`Channel.outbound_sender`), so a channel that cannot send refuses even a held
+draft. Recipients are `to`, `cc` and `bcc` addresses for a new message; every
+address must be one `Handle.is_email_address` accepts and the handle owner can
+land, and a typed name fills only a handle that has none, never renaming a
+shared contact. An email has `text`, `html` or both, and its text part is only
+its own text, never made from the HTML. `queued` hands the message to delivery
+when the outermost transaction commits, `scheduled_at` holds a draft until then,
+neither holds it for approval, and both are refused. `idempotency_key` replays
+the same intent for the same actor, before `admit()` checks domain eligibility.
+
+An email reply is a complete envelope: `to` recipients naming the parent's
+`Reply-To` addresses when it carries any (`Message.reply_addresses`, the one
+reader of that header), else the handle it was sent from (RFC 5322 §3.6.2); the
 subject `Re: <thread title>` (the title is the normalized subject, so prefixes
 never stack); and a Message-ID minted as Django mints one, stored bare as its
-external id like a received email's. A parent with neither is refused. The
-email transport renders that id as `Message-ID` and the parent's as `In-Reply-To`
-and `References`, so an answer threads back onto the conversation through
-`In-Reply-To`, through `References` when a provider rewrote the reply's
-Message-ID, or through its subject; a retained header part never renders a second
-copy of these. A reply of any other kind keeps a client token for its transport's
-provider id and writes no envelope.
+external id like a received email's. The email transport renders that id as
+`Message-ID` and the parent's as `In-Reply-To` and `References`, so an answer
+arriving on the channel the message was sent from threads back onto the
+conversation through `In-Reply-To`, through `References` when a provider
+rewrote the Message-ID, or through its subject; a retained header part never
+renders a second copy of these. A reply of any other kind is plain text from an
+explicit sender on the parent's platform, keeps a client token for its
+transport's provider id and writes no envelope.
 
 Outbound transport implements `ChannelBackend.deliver(message)` and returns the
 two-field `DeliveryOutcome(accepted, provider_id=None)` from
@@ -157,7 +177,8 @@ a draft with no release instant requires operator approval indefinitely.
 `ActionSelectionInput(id, expected_revision)` selection and return ordered
 `ActionResult` outcomes. They authorize one bounded selection through channel
 `write`, check every revision, and use `many_actions` for per-row refusals. The
-channel's grantable `replier` relation grants `reply` together with comment read.
+channel's grantable `replier` relation grants `reply` (answering on the channel and
+composing a new message there) together with comment read.
 All untrashed messages count in their thread, including drafts, queues and failures.
 Inserts use `F()` deltas; loss/restoration and settlement use a thread-scoped
 aggregate with the same model predicate. Queueing never changes the count.
