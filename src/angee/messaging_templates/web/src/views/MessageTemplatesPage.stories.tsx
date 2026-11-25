@@ -28,7 +28,7 @@ export const ShippedDefault = { render: (_args: unknown, { globals }: StoryConte
 export const Override = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.quote} /> };
 /** An override whose shipped default changed: the warning, Keep override and Delete. Keep it: the warning goes. */
 export const DefaultUpdated = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.recordCard} /> };
-/** Every save is refused as the console refused a template set to HTML with no layout: choose HTML in Format, empty Layout and save. One banner holds every reason, run together. */
+/** Every save is refused as the console refused a template set to HTML with no layout: choose HTML in Format, empty Layout and save. The banner holds the row's reason; the layout's sits under Layout. */
 export const RefusedSave = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.passwordReset} refuseSave /> };
 /**
  * New: the name, kind, key and language, nothing else. The recorded inserts: Template, example.announcement, en,
@@ -37,11 +37,11 @@ export const RefusedSave = { render: (_args: unknown, { globals }: StoryContext)
  * key under Key.
  */
 export const NewMessageTemplate = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open="new" /> };
-/** A template whose preview warns: an empty preheader and a value nothing reads, above the frame, which keeps most of the pane and scrolls the mail. */
+/** A template whose preview warns: a missing preheader and a value nothing reads, first in the band above the frame, which keeps most of the pane and scrolls the mail. */
 export const PreviewWarnings = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.passwordReset} /> };
 /** A template whose sample no longer renders: that it does not render, then each reason as the server words it; no frame. */
 export const PreviewRenderError = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.invoiceSent} /> };
-/** The deployment's own Arabic template: the frame's document reads right to left. */
+/** The deployment's own Arabic template: the frame's document, its subject, preheader and plain text read right to left. */
 export const RightToLeft = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.welcomeArabic} /> };
 /** The deployment's own block an override includes: Delete in the record's menu shows the server's refusal. */
 export const DeleteRefused = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.notice} /> };

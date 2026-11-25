@@ -130,17 +130,21 @@ test.each(refusedIdentities())("New refuses the identity %s in the Save failed b
   expect(screen.getByRole("textbox", { name: "Name" })).toBeTruthy();
 });
 
+/** Whether a control is marked invalid and described by the given words, as the form shows a field's error. */
+async function expectFieldError(control: HTMLElement, words: string): Promise<void> {
+  await waitFor(() => expect(control.getAttribute("aria-invalid")).toBe("true"));
+  const described = (control.getAttribute("aria-describedby") ?? "").split(" ")
+    .map((id) => document.getElementById(id)?.textContent ?? "");
+  expect(described.some((text) => text.includes(words))).toBe(true);
+}
+
 test("New shows a key the server refuses under the key", async () => {
   const refused = RECORDED.insert.find((entry) => "error" in entry && entry.error.extensions.validationErrors?.key);
   if (!refused || !("error" in refused)) throw new Error("The recorded fixtures have no refused key.");
   render(<MessageTemplateStory open="new" />);
   await fillNew(refused.object);
   fireEvent.click(screen.getByRole("button", { name: ui("form.create") }));
-  const key = screen.getByLabelText(word("field.key"));
-  await waitFor(() => expect(key.getAttribute("aria-invalid")).toBe("true"));
-  const described = (key.getAttribute("aria-describedby") ?? "").split(" ")
-    .map((id) => document.getElementById(id)?.textContent ?? "");
-  expect(described.some((text) => text.includes(refused.error.extensions.validationErrors!.key![0]!))).toBe(true);
+  await expectFieldError(screen.getByLabelText(word("field.key")), refused.error.extensions.validationErrors!.key![0]!);
 });
 
 test("Override on a shipped default sends its id and lands on the deployment's override", async () => {
@@ -217,7 +221,7 @@ test("Delete on a block another row includes shows the server's refusal", async 
   expect(await screen.findByText(refusal)).toBeTruthy();
 });
 
-test("a save the server refuses shows each of its reasons in the one Save failed banner, run together", async () => {
+test("a save the server refuses shows its row-wide reasons in the Save failed banner and each field's under the field", async () => {
   const calls: MessageTemplateFixtureCall[] = [];
   const refusal = RECORDED.save[0]!;
   render(<MessageTemplateStory open={ROW.passwordReset} refuseSave onCall={(call) => calls.push(call)} />);
@@ -230,6 +234,9 @@ test("a save the server refuses shows each of its reasons in the one Save failed
 
   await screen.findByText(ui("form.saveFailed"));
   expect(await screen.findByText(refusal.error.extensions.formErrors!.join(" "))).toBeTruthy();
+  for (const words of refusal.error.extensions.validationErrors?.layout ?? []) {
+    await expectFieldError(within(form).getByLabelText(word("field.layout")), words);
+  }
   expect(argsOf(calls, "update_message_templates_by_pk").map((args) => args._set)).toEqual([refusal.set]);
 });
 
@@ -301,19 +308,62 @@ test("the preview's HTML is in the frame's document and never a node of the page
   expect(document.body.textContent).not.toContain("Your Angee account is ready");
 });
 
-test("the Arabic template's frame document reads right to left", async () => {
+test("the Arabic template reads right to left in its frame, its subject, its preheader and its plain text", async () => {
+  const rendered = RECORDED.previews[ROW.welcomeArabic]!.rendered!;
+  expect(rendered.direction).toBe("RTL");
   render(<MessageTemplateStory open={ROW.welcomeArabic} />);
   const frame = await screen.findByTitle(word("preview.frameTitle"));
   await waitFor(() => expect(frame.getAttribute("srcdoc")).toContain('dir="rtl"'));
   expect(frame.getAttribute("srcdoc")).toContain('<html lang="ar"');
+  // The direction the server rendered in, not a guess from the first letter: the subject starts in Arabic and
+  // carries the Latin brand name, and the plain text starts with that Latin name.
+  for (const text of [rendered.subject, rendered.preheader]) {
+    const span = within(frame.parentElement!.parentElement!).getByText(text);
+    expect([span.getAttribute("dir"), span.getAttribute("lang")]).toEqual(["rtl", "ar"]);
+  }
+  fireEvent.click(within(await previewToolbar()).getByRole("button", { name: word("preview.text") }));
+  const plain = await screen.findByRole("region", { name: word("preview.text") });
+  expect([plain.getAttribute("dir"), plain.getAttribute("lang")]).toEqual(["rtl", "ar"]);
 });
 
-test("a template whose preview warns lists each warning in the server's words", async () => {
+test("a left-to-right mail's subject, preheader and plain text say so, from the recorded direction", async () => {
+  const rendered = RECORDED.previews[ROW.welcome]!.rendered!;
+  expect(rendered.direction).toBe("LTR");
+  render(<MessageTemplateStory open={ROW.welcome} />);
+  const pane = (await screen.findByTitle(word("preview.frameTitle"))).parentElement!.parentElement!;
+  expect(within(pane).getByText(rendered.subject).getAttribute("dir")).toBe("ltr");
+  fireEvent.click(within(await previewToolbar()).getByRole("button", { name: word("preview.text") }));
+  expect((await screen.findByRole("region", { name: word("preview.text") })).getAttribute("dir")).toBe("ltr");
+});
+
+test("a template whose preview warns lists each warning in the server's words, first in the band", async () => {
   render(<MessageTemplateStory open={ROW.passwordReset} />);
   await screen.findByTitle(word("preview.frameTitle"));
+  const band = screen.getByRole("region", { name: word("preview.factsRegion") });
+  const saved = within(band).getByText(word("preview.saved"));
+  const subject = within(band).getByText(word("preview.subject"));
   for (const warning of RECORDED.previews[ROW.passwordReset]!.warnings) {
-    expect(await screen.findByText(warning.detail)).toBeTruthy();
+    const shown = await within(band).findByText(warning.detail);
+    // Before the saved-row line and the subject: seen whole before the rest of the band.
+    expect(shown.compareDocumentPosition(saved) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(shown.compareDocumentPosition(subject) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   }
+});
+
+test("the Format line is said to a reader who may change the format, not on a read-only form", async () => {
+  render(<MessageTemplateStory open={ROW.quote} />);
+  expect(await screen.findByText(word("field.formatHint"))).toBeTruthy();
+  cleanup();
+
+  render(<MessageTemplateStory open={ROW.welcome} />);
+  await screen.findByText(word("notice.shipped"));
+  await within(await recordForm()).findByText(word("field.format"));
+  expect(screen.queryByText(word("field.formatHint"))).toBeNull();
+  cleanup();
+
+  render(<MessageTemplateStory open={ROW.quote} viewer="member" />);
+  await within(await recordForm()).findByText(word("field.format"));
+  expect(screen.queryByText(word("field.formatHint"))).toBeNull();
 });
 
 test("a template that does not render says so first, then why in the server's words, with no frame and no frame caveat", async () => {

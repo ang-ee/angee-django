@@ -1,4 +1,5 @@
 import * as React from "react";
+import type { MessageTemplateTextDirection } from "@angee/gql/console/graphql";
 import { useAuthoredQuery } from "@angee/refine";
 import {
   EmptyState,
@@ -27,6 +28,9 @@ const KIT_FIELDS = ["is_default"];
 
 type PreviewFormat = "html" | "text";
 
+/** The HTML `dir` of the direction the server rendered the mail in, which the mail's own HTML says. */
+const TEXT_DIRECTION: Readonly<Record<MessageTemplateTextDirection, "rtl" | "ltr">> = { RTL: "rtl", LTR: "ltr" };
+
 export interface MessageTemplatePreviewPaneProps {
   /** The saved row's public id. */
   template: string;
@@ -54,6 +58,9 @@ export interface MessageTemplatePreviewPaneProps {
  * server says of the render take at most part of the height and scroll within it;
  * the body takes the rest, and the frame or the plain text scrolls the whole mail
  * within it. Each region that scrolls can be reached and scrolled from the keyboard.
+ * The warnings lead that band, so they are seen whole before anything else in it.
+ * The subject, the preheader and the plain text read in the direction the server
+ * rendered the mail in, as its frame does, whatever their first letter.
  */
 export function MessageTemplatePreviewPane({
   template, active, carriesMessageFields,
@@ -93,6 +100,7 @@ export function MessageTemplatePreviewPane({
     message: warning.detail,
   }));
   const framed = rendered !== null && format === "html";
+  const dir = rendered ? TEXT_DIRECTION[rendered.direction] : undefined;
 
   const toolbar = (
     <PaneToolbar
@@ -103,26 +111,26 @@ export function MessageTemplatePreviewPane({
     />
   );
 
-  // That this is the saved row, then what the server says of the render, above the body: never more than
-  // part of the pane, scrolling within it.
+  // What the server warns about first, then that this is the saved row and the rest of what it says of the
+  // render, above the body: never more than part of the pane, scrolling within it.
   const facts = [
-    <p key="saved" className={textRoleVariants({ role: "meta" })}>{t("preview.saved")}</p>,
     preview.error ? <ErrorBanner key="error" description={errorMessage(preview.error, t("preview.loadError"))} /> : null,
+    rendered ? <RecordIssues key="warnings" items={issues} /> : null,
+    <p key="saved" className={textRoleVariants({ role: "meta" })}>{t("preview.saved")}</p>,
     rendered && carriesMessageFields ? (
       <MetaGrid key="message" rows={[
         {
           id: "subject",
           label: t("preview.subject"),
-          value: <span lang={rendered.language} dir="auto">{rendered.subject}</span>,
+          value: <span lang={rendered.language} dir={dir}>{rendered.subject}</span>,
         },
         {
           id: "preheader",
           label: t("preview.preheader"),
-          value: <span lang={rendered.language} dir="auto">{rendered.preheader}</span>,
+          value: <span lang={rendered.language} dir={dir}>{rendered.preheader}</span>,
         },
       ]} />
     ) : null,
-    rendered ? <RecordIssues key="warnings" items={issues} /> : null,
     framed ? <p key="fidelity" className={textRoleVariants({ role: "caption" })}>{t("preview.fidelity")}</p> : null,
   ].filter((node) => node !== null);
 
@@ -140,7 +148,7 @@ export function MessageTemplatePreviewPane({
     );
   } else if (format === "text") {
     body = (
-      <div lang={rendered.language} dir="auto" tabIndex={0} role="region" aria-label={t("preview.text")}
+      <div lang={rendered.language} dir={dir} tabIndex={0} role="region" aria-label={t("preview.text")}
         className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words p-4 text-sm text-fg">
         {rendered.plain_text}
       </div>
@@ -157,7 +165,7 @@ export function MessageTemplatePreviewPane({
       {toolbar}
       {result || preview.error ? (
         <div tabIndex={0} role="region" aria-label={t("preview.factsRegion")}
-          className="grid max-h-[40%] flex-none content-start gap-3 overflow-y-auto border-b border-border-subtle px-4 py-3">
+          className="grid max-h-[40%] flex-none content-start gap-3 overflow-y-auto border-b border-border-subtle px-4 py-2">
           {facts}
         </div>
       ) : null}

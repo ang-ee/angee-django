@@ -348,8 +348,10 @@ in Settings for whoever holds `messaging_templates.MessageTemplate#preview`
 (`MessageTemplatesPage`). The library is one list, grouped by kind; its presets
 list the overrides whose shipped default changed and the effective rows. A row
 opens its form in place of the list. The intended shape is the list beside the
-record, one placement away, once the list's split placement gives the record a
-scrolling container. **New** opens the form with the name, kind, key
+record; it waits for the shared list's side of a split, which overflows its pane
+and shows no empty state while no row is open. Once those are fixed the page
+moves to the split placement, stacking the record under the list on a narrow
+screen. **New** opens the form with the name, kind, key
 and language alone, the four fields the insert takes; the server seeds the rest
 and the new row opens. A shipped default is read-only: **Override** starts the
 deployment's override and opens it, offered where the record's `can_override`
@@ -362,8 +364,9 @@ returns to the shipped default.
 
 The **Preview** pane renders the saved row with its sample, in a brand kit chosen
 there or the default one, and lists what the preview warns about, or why the row
-does not render, in the server's words. The HTML shows only in the framework's
-sandboxed message frame, which runs no script, has no same origin and loads
-remote images only when asked; the frame's own body styles sit under the mail,
-so a mail client may space and size it slightly differently. A message
+does not render, in the server's words. It shows a mail's subject, preheader and
+plain text in the direction the mail is rendered in. The HTML shows only in the
+framework's sandboxed message frame, which runs no script, has no same origin and
+loads remote images only when asked; the frame's own body styles sit under the
+mail, so a mail client may space and size it slightly differently. A message
 template's Links tab lists its **Backlinks**, the rows naming its kind and key.

@@ -106,6 +106,7 @@ function MessageTemplateForm({
         <Field name="key" label={t("field.key")} createOnly />
         <Field name="language" label={t("field.language")} createOnly />
         <Field name="carries_message_fields" readOnly hidden />
+        <Field name="permissions" readOnly hidden />
       </Group>
       <Group label={t("form.message")} columns={2}>
         <Field name="subject" label={t("field.subject")} showWhen={carriesMessageFields} />
@@ -113,8 +114,10 @@ function MessageTemplateForm({
         <Field name="layout" label={t("field.layout")} showWhen={carriesMessageFields} />
       </Group>
       <Group label={t("form.content")} columns={1}>
-        <Field name="format" label={t("field.format")} description={t("field.formatHint")} widget="select"
-          options={formatOptions} prefill={plainTextSourceFor} />
+        {/* What switching the format does is said to whoever may switch it: a reader who may write the row. */}
+        <Field name="format" label={t("field.format")} widget="select" options={formatOptions}
+          prefill={plainTextSourceFor}
+          resolve={(values) => (holdsPermission(values, "write") ? { description: t("field.formatHint") } : {})} />
         <Field name="source" label={t("field.source")} widget="textarea" body={false} />
         <Field name="text_source" label={t("field.textSource")} widget="textarea" body={false}
           showWhen={hasPlainTextSource} />

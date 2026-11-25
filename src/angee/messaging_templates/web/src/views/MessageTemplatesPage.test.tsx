@@ -93,7 +93,7 @@ describe("MessageTemplateForm", () => {
 
     expect(parsePageFields(children(form)).map((field) => field.name)).toEqual([
       "name",
-      "kind", "key", "language", "carries_message_fields",
+      "kind", "key", "language", "carries_message_fields", "permissions",
       "subject", "preheader", "layout",
       "format", "source", "text_source",
       "variables",
@@ -127,6 +127,7 @@ describe("MessageTemplateForm", () => {
       expect(field.showWhen?.({})).toBe(false);
     }
     expect(fields.find((field) => field.name === "carries_message_fields")).toMatchObject({ hidden: true, readOnly: true });
+    expect(fields.find((field) => field.name === "permissions")).toMatchObject({ hidden: true, readOnly: true });
   });
 
   test("shows the plain-text source for an HTML row only, and leaving HTML empties it as the server requires", () => {
@@ -143,7 +144,11 @@ describe("MessageTemplateForm", () => {
     expect(format?.prefill?.("markdown", loaded, loaded)).toEqual({ text_source: "" });
     // HTML sets nothing: the form gives the field it shows again its loaded value.
     expect(format?.prefill?.("html", { format: "html" }, loaded)).toEqual({});
-    expect(format?.description).toBe(M["field.formatHint"]);
+    // What switching does is said only to a reader who may write the row, and so switch the format.
+    expect(format?.description).toBeUndefined();
+    expect(format?.resolve?.({ permissions: ["delete", "preview", "write"] })).toEqual({ description: M["field.formatHint"] });
+    expect(format?.resolve?.({ permissions: ["preview"] })).toEqual({});
+    expect(format?.resolve?.({})).toEqual({});
   });
 
   test("lifts no field above the sheet as the record's body", () => {

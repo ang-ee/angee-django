@@ -15,9 +15,11 @@ const FLAG_WIDGET = "boolean";
  * shipped default changed since it was overridden; the presets list those
  * overrides and the effective rows.
  *
- * The record opens in place of the list. Beside it is the intended shape, one
- * placement away (`placement="split"`), once the list's split gives the record a
- * scrolling container as its in-place record has.
+ * The record opens in place of the list. Beside it is the intended shape: split
+ * waits for the shared list's side of a split, which overflows its pane and shows
+ * no empty state while no row is open; once those land, the page takes
+ * `placement="split"` with `splitLayout={{ stackBelow: 720 }}`, which stacks the
+ * record under the list on a narrow screen.
  */
 export function MessageTemplatesPage(): React.ReactElement {
   const t = useMessagingTemplatesT();
