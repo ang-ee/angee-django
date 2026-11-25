@@ -185,8 +185,12 @@ def _reference_seconds() -> float:
 
 
 def _scaled(seconds: float) -> float:
-    """``seconds`` as a bound here: scaled by the reference workload measured now, in this process, so a busy machine
-    slows the case and the unit alike and the bound neither fails for a neighbour nor loosens for a fast host."""
+    """``seconds`` as a smoke bound here: scaled by the reference workload measured now, in this process.
+
+    The timed tests are a smoke measurement on the stated machine class that catches a gross regression; the counted
+    caps (the work the counted tests pin) are the guarantee. The scaling is noisy and does not track load: a case near
+    its bound can pass or fail with its neighbours, and a slower path can pass.
+    """
 
     return seconds * _reference_seconds() / NOMINAL_REFERENCE_SECONDS
 
@@ -2834,7 +2838,8 @@ def test_the_costliest_preview_does_bounded_work(plain: Any, kit: Any, work: dic
 @TIMED
 @pytest.mark.parametrize("name", list(PASS_CASES))
 def test_pass_time(plain: Any, kit: Any, name: str) -> None:
-    """One pass of the costliest rows the caps admit takes under a second of CPU (passes 2 to 4, one heavy)."""
+    """A smoke measurement: one pass of the costliest rows the caps admit stays under a second of CPU at the reference
+    (passes 2 to 4, one heavy). The counted work of ``test_the_costliest_pass_does_bounded_work`` is the guarantee."""
 
     del plain
     walk, values = _pass_case(name)
@@ -2848,8 +2853,9 @@ def test_pass_time(plain: Any, kit: Any, name: str) -> None:
 
 @TIMED
 def test_preview_time(plain: Any, kit: Any) -> None:
-    """The costliest previews and renders the caps admit take under two seconds of CPU, and so do their walk and
-    prepare() alone; the refused cases stop as soon."""
+    """A smoke measurement: the costliest previews and renders the caps admit, their walks and prepare() stay under two
+    seconds of CPU at the reference, and the refused cases stop as soon. It catches a gross regression; the counted
+    work of ``test_the_costliest_preview_does_bounded_work`` is the guarantee."""
 
     del plain
     spent: dict[str, float] = {}
