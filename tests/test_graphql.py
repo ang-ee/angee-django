@@ -28,6 +28,7 @@ from rebac import (
     RebacMixin,
     RelationshipTuple,
     SubjectRef,
+    actor_context,
     system_context,
     to_object_ref,
     to_subject_ref,
@@ -55,9 +56,10 @@ from angee.graphql.schema import (
     GraphQLSchemas,
 )
 from angee.graphql.view_as import ViewAsReadOnlyExtension
-from tests.conftest import make_addon
+from tests.conftest import create_platform_admin, create_user, make_addon
 from tests.core_persistence import OwnedRow
 from tests.hierdemo.models import HierNode
+from tests.scopedemo.models import FactoryDoc, Scope
 
 
 @strawberry.type
@@ -302,45 +304,39 @@ def test_hasura_write_backend_decodes_public_relations_through_write_owner(
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("admitted", (True, False), ids=("admitted", "refused"))
 def test_hasura_write_backend_create_delegates_prepared_insertion(
+    admitted: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Hasura only decodes public IDs before native preparation and insertion, in one transaction."""
+    """Hasura decodes public IDs once and REBAC decides the row before native validation and insertion."""
 
-    related = SimpleNamespace(pk=7)
-    created: dict[str, Any] = {}
+    actor = create_platform_admin("delegating-admin") if admitted else create_user("delegating-member")
+    with system_context(reason="test.delegation.scope"):
+        scope = Scope.objects.create(name="Delegated")
+    write_relationships([RelationshipTuple(to_object_ref(scope), "direct_member", to_subject_ref(actor))])
+    delegated: list[dict[str, Any]] = []
 
-    def fake_require_instance_for_id(
-        model: type[models.Model],
-        value: str,
-        *,
-        queryset: object | None = None,
-    ) -> object:
-        del model, value, queryset
-        return related
-
-    def fake_create(
-        info: Any,
-        model: type[models.Model],
-        data: dict[str, Any],
-        **kwargs: Any,
-    ) -> models.Model:
+    def fake_create(info: Any, model: type[models.Model], data: dict[str, Any], **kwargs: Any) -> models.Model:
         del info
-        assert model is GatedWriteThing
-        assert data == {"owner_id": related.pk, "name": "Row"}
+        assert model is FactoryDoc
         assert kwargs == {"key_attr": "sqid", "full_clean": True}
-        instance = model(owner_id=data["owner_id"], name=data["name"])
-        created["row"] = instance
-        return instance
+        delegated.append(data)
+        return model(**data)
 
-    monkeypatch.setattr(hasura_data, "require_instance_for_id", fake_require_instance_for_id)
     monkeypatch.setattr(hasura_data.mutation_resolvers, "create", fake_create)
+    backend = AngeeHasuraWriteBackend(FactoryDoc, public_id_fields=("scope",))
+    data = {"scope": scope.public_id, "title": "Row"}
 
-    backend = AngeeHasuraWriteBackend(GatedWriteThing, public_id_fields=("owner",))
+    with actor_context(actor):
+        if not admitted:
+            with pytest.raises(PermissionDenied):
+                backend.create(cast(Any, SimpleNamespace()), data)
+            assert delegated == []
+            return
+        result = backend.create(cast(Any, SimpleNamespace()), data)
 
-    result = backend.create(cast(Any, SimpleNamespace()), {"owner": "pub-owner", "name": "Row"})
-
-    assert result is created["row"]
+    assert delegated == [{"scope_id": scope.pk, "title": "Row"}]
     assert not result.is_sudo()
 
 
