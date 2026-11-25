@@ -997,20 +997,56 @@ class ThreadManager[ThreadT: Thread](_ThreadManagerBase[ThreadT]):
                     )
                     if existing is not None:
                         return existing
-            deterministic_id = f"subj:{normalized}" if normalized else f"msg:{message_external_id}"
-            title = fragment_model.objects.upsert(text=normalized, created_by_id=created_by_id) if normalized else None
-            thread, _created = self.get_or_create_by_external_id(
+            return self.open_thread(
                 platform=platform,
-                external_id=deterministic_id,
-                defaults={
-                    "channel_id": channel.pk if channel is not None else None,
-                    "title_id": title.pk if title is not None else None,
-                    "modality": modality or self.model.Modality.EMAIL_THREAD,
-                    "visibility": visibility or self.model.Visibility.PRIVATE,
-                    "created_by_id": created_by_id,
-                },
+                channel=channel,
+                message_external_id=message_external_id,
+                subject=normalized,
+                group_by_subject=True,
+                created_by_id=created_by_id,
+                modality=modality,
+                visibility=visibility,
             )
-            return thread
+
+    def open_thread(
+        self,
+        *,
+        platform: str,
+        channel: Any,
+        message_external_id: str,
+        subject: str = "",
+        group_by_subject: bool,
+        created_by_id: Any = None,
+        modality: Any = None,
+        visibility: Any = None,
+    ) -> ThreadT:
+        """Get or create the thread a message without a threading hint starts, on its deterministic key.
+
+        ``group_by_subject`` keys a subject-bearing thread on its normalised
+        subject (``subj:``), as a received email is grouped; otherwise the thread
+        is the message's own, ``msg:<external id>``, titled with the normalised
+        subject when there is one, so messages that only share a subject never
+        fuse. The one create step of :meth:`resolve`: the key prefixes and a new
+        thread's title, modality and visibility defaults are written here alone.
+        """
+
+        normalized = normalize_subject(subject)
+        title = (
+            apps.get_model("messaging", "Fragment").objects.upsert(text=normalized, created_by_id=created_by_id)
+            if normalized else None
+        )
+        thread, _created = self.get_or_create_by_external_id(
+            platform=platform,
+            external_id=f"subj:{normalized}" if normalized and group_by_subject else f"msg:{message_external_id}",
+            defaults={
+                "channel_id": channel.pk if channel is not None else None,
+                "title_id": title.pk if title is not None else None,
+                "modality": modality or self.model.Modality.EMAIL_THREAD,
+                "visibility": visibility or self.model.Visibility.PRIVATE,
+                "created_by_id": created_by_id,
+            },
+        )
+        return cast("ThreadT", thread)
 
     def get_or_create_by_external_id(
         self,
