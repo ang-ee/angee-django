@@ -2594,6 +2594,7 @@ mutation($id: String!, $set: message_templates_set_input!) {
   update_message_templates_by_pk(pk_columns: {id: $id}, _set: $set) { id }
 }
 """
+_INSERT = "mutation($object: message_templates_insert_input!) { insert_message_templates_one(object: $object) { id } }"
 _OVERRIDE = "mutation($id: ID!) { override_message_template(template: $id) { ok message id } }"
 _KEEP = "mutation($id: ID!) { keep_message_template_override(template: $id) { ok message id } }"
 
@@ -2621,8 +2622,9 @@ def test_the_walk_runs_in_clean_after_the_permission_is_decided(
     plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The three confirmations (probes j, b, b2): save() never walks; the console update, override, keep and
-    preview decide the caller's permission before anything is lexed or compiled. The console insert, which
-    validates before it decides create, is the framework's to fix."""
+    preview decide the caller's permission before anything is lexed or compiled, and so does the console insert,
+    whose write backend hands it to ``MessageTemplateManager.create_own``: a new language of a shipped row whose
+    walk refuses would be seeded from that row and walked, were create not decided first."""
 
     del plain, kit
     checked: list[str] = []
@@ -2641,12 +2643,15 @@ def test_the_walk_runs_in_clean_after_the_permission_is_decided(
     schema = addon_schema(messaging_templates_schema.schemas, "console")
     member = create_user("messaging-templates-writer")
     cases: dict[str, tuple[str, dict[str, Any]]] = {
+        "insert": (_INSERT, {"object": {"kind": "part", "key": "shipped", "language": "es", "name": "Spanish"}}),
         "update": (_UPDATE, {"id": public_id_of(own), "set": {"source": "{% if %} again"}}),
         "override": (_OVERRIDE, {"id": public_id_of(shipped)}),
         "keep": (_KEEP, {"id": public_id_of(own)}),
         "preview": (_PREVIEW, {"id": public_id_of(own), "kit": None}),
     }
     refusals = {
+        ("insert", "member"): ("PERMISSION_DENIED", "lacks 'create'"),
+        ("insert", "anonymous"): ("PERMISSION_DENIED", "lacks 'create'"),
         ("update", "member"): ("PERMISSION_DENIED", "cannot write"),
         ("update", "anonymous"): ("VALIDATION", "not found"),
         ("override", "member"): ("PERMISSION_DENIED", "lacks 'create'"),
@@ -2664,3 +2669,4 @@ def test_the_walk_runs_in_clean_after_the_permission_is_decided(
                 name, label, result.errors)
     with system_context(reason="tests.messaging_templates.render.save"):
         assert MessageTemplate.objects.get(pk=own.pk).source == "Still {% if %}"
+        assert not MessageTemplate.objects.filter(key="shipped", language="es").exists()
