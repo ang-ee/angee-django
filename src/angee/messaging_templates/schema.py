@@ -141,7 +141,7 @@ class MessageTemplateWriteBackend(AngeeHasuraWriteBackend):
         """Create the deployment's own row; the manager decides create before any work."""
 
         del info
-        return MessageTemplate.objects.create_own(**data)
+        return MessageTemplate.objects.create_own(**self._decode_public_id_fields(data))
 
 
 _MESSAGE_TEMPLATE_RESOURCE = hasura_model_resource(

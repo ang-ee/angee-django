@@ -88,6 +88,14 @@ logger = logging.getLogger(__name__)
 FALLBACK_LANGUAGE = "en"
 """The language a key falls back to first when no requested language has a row: the one shipped rows are written in."""
 
+
+def _fallback_order(language: str) -> tuple[bool, str]:
+    """The order a key's languages are taken in when no requested one has a row: :data:`FALLBACK_LANGUAGE`, then by
+    code."""
+
+    return language != FALLBACK_LANGUAGE, language
+
+
 CONTENT_HASH_FIELDS = ("kind", "format", "subject", "preheader", "source", "text_source", "layout", "variables")
 """The columns ``content_hash`` fingerprints: what a row is and renders, not what it is called."""
 
@@ -436,7 +444,7 @@ class MessageTemplateQuerySet[TemplateT: MessageTemplate](
         effective: dict[tuple[str, str], TemplateT] = {}
         for identity, languages in found.items():
             chosen = next((code for code in candidates if code in languages), None) or min(
-                languages, key=lambda code: (code != FALLBACK_LANGUAGE, code)
+                languages, key=_fallback_order,
             )
             pair = languages[chosen]
             effective[identity] = pair[False] if False in pair else pair[True]
@@ -588,31 +596,48 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
         """Create the deployment's own row of ``kind``, ``key`` and ``language``, called ``name``; the rest is seeded.
 
         Requires ``create`` on the candidate row for the acting reader before
-        anything is cleaned, read or written. Then refuses, keyed by field, what
-        the identity's own validators refuse, and an identity a shipped default
-        holds in this language (``shipped_default``): that row is overridden
-        (:meth:`override`), never shadowed. The row starts as what a recipient in
-        its language reads for its kind and key today (:meth:`MessageTemplate.override_values`
-        of :meth:`MessageTemplateQuerySet.effective`), so creating it changes no
-        recipient's mail; a key nothing resolves starts from its kind's
-        :attr:`MessageTemplateKindHandler.defaults`. ``full_clean()`` then judges
-        the row before it is saved, and a writer that inserts the same identity
-        meanwhile is refused with the constraint's own message.
+        anything is cleaned, read or written; named system work with no actor
+        passes that check, as ``require_access`` lets it, and reads every row.
+        Then, before anything is seeded or walked, refuses what the identity's
+        own validators refuse, keyed by field; an identity a shipped default holds
+        in this language (``shipped_default``: that row is overridden,
+        :meth:`override`, never shadowed); and an identity the deployment already
+        has, in the local unique constraint's words.
+
+        The row is seeded from its key's content: what a recipient in its
+        language reads for the kind and key today (:meth:`MessageTemplateQuerySet.effective`),
+        else, when nothing resolves the key for that language, the key's row in
+        another language (:data:`FALLBACK_LANGUAGE` first, then by code); in
+        both cases that row's :meth:`MessageTemplate.override_values` but the
+        name. Only a key with no row at all starts from its kind's
+        :attr:`MessageTemplateKindHandler.defaults`, so creating a row puts no
+        starter text live on a key that already has content.
+
+        ``full_clean()`` then judges the row, and it is saved. A writer that
+        inserts the same identity meanwhile is refused in the constraint's own
+        words, and a load that ships the identity meanwhile with
+        ``shipped_default``, the row rolled back; an ``IntegrityError`` the
+        constraints do not explain propagates.
         """
 
         row = self.model(kind=kind, key=key, language=language, name=name, is_baseline=False)
         row.require_access("create", current_actor())
-        identity = {"kind", "key", "language", "name"}
-        row.clean_fields(exclude=[field.name for field in self.model._meta.fields if field.name not in identity])
+        identity = {"kind", "key", "language", "name", "is_baseline"}
+        unjudged = [field.name for field in self.model._meta.fields if field.name not in identity]
+        row.clean_fields(exclude=unjudged)
         shipped = self.model.system_queryset().filter(
             is_baseline=True, kind=row.kind, key=row.key, language=row.language,
         )
         if shipped.exists():
             raise ValidationError(SHIPPED_DEFAULT_MESSAGE, code="shipped_default")
+        row.validate_constraints(exclude=unjudged)
+        source: TemplateT | None
         try:
-            values = self.effective(row.kind, row.key, language=row.language).override_values()
+            source = self.effective(row.kind, row.key, language=row.language)
         except self.model.DoesNotExist:
-            values = deepcopy(dict(row.handler.defaults))
+            others = self.filter(kind=row.kind, key=row.key)
+            source = min(others, key=lambda other: _fallback_order(other.language), default=None)
+        values = deepcopy(dict(row.handler.defaults)) if source is None else source.override_values()
         values.pop("name", None)
         for field, value in values.items():
             setattr(row, field, value)
@@ -620,6 +645,10 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
             with transaction.atomic():
                 row.full_clean()
                 row.save()
+                if row.baseline_hash:
+                    # save() met a shipped default of this identity, loaded since the check above: the row would
+                    # hide it with nothing flagged, so it is rolled back.
+                    raise ValidationError(SHIPPED_DEFAULT_MESSAGE, code="shipped_default")
         except IntegrityError:
             # A writer inserted the same identity after full_clean() judged it: refuse in its words.
             row.validate_constraints()

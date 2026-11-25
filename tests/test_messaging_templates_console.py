@@ -10,14 +10,15 @@ from typing import Any
 import pytest
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
-from django.db import connection
+from django.db import IntegrityError, connection
+from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context, to_subject_ref
 
 from angee.base.models.identity import public_id_of
 from angee.graphql.testing.documents import GraphQLDocumentRead, execute_schema, measure_graphql_document, result_data
 from angee.iam.roles import subject_permitted
-from angee.messaging_templates.models import SHIPPED_DEFAULT_MESSAGE, MessageTemplateKind
+from angee.messaging_templates.models import SHIPPED_DEFAULT_MESSAGE, MessageTemplateKind, MessageTemplateQuerySet
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import TemplateWalker
 from tests.conftest import create_platform_admin, create_user
@@ -333,6 +334,24 @@ def test_a_new_language_of_a_key_starts_as_what_that_language_reads_today(librar
     assert (after.html, after.plain_text) == (before.html, before.plain_text)
 
 
+def test_starter_text_lands_only_on_a_key_with_no_row(db: None) -> None:
+    """A key held only in languages a new one does not fall back to starts as one of them: English, else by code."""
+
+    del db
+    admin = create_platform_admin("messaging-templates-console-borrower")
+    french = _row("part", "abroad", "fr", source="Bonjour.")
+    _row("part", "abroad", "it", source="Ciao.")
+    result_data(_insert(admin, "part", "abroad", "de", name="Gruß"))
+    (german,) = [row for row in _rows("part", "abroad") if row.language == "de"]
+    assert german.override_values() == {**french.override_values(), "name": "Gruß"}
+    with override_settings(LANGUAGE_CODE="pt-br"):
+        english = _row("part", "away", "en", source="Hello.")  # not the default language here: nothing resolves
+        _row("part", "away", "de", source="Hallo.")
+        with actor_context(admin):
+            dutch = MessageTemplate.objects.create_own(kind="part", key="away", language="nl", name="Hoi")
+    assert dutch.override_values() == {**english.override_values(), "name": "Hoi"}
+
+
 def test_a_shipped_identity_is_overridden_never_created(library: dict[str, Any]) -> None:
     del library
     admin = create_platform_admin("messaging-templates-console-shadower")
@@ -348,26 +367,76 @@ def test_a_shipped_identity_is_overridden_never_created(library: dict[str, Any])
 def test_a_duplicate_is_refused_in_the_constraints_words_even_past_full_clean(
     db: None, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A second insert of one identity, then one a racing writer won after ``full_clean()`` judged it."""
+    """A second insert of one identity is refused before it is seeded, cleaned or walked; one a racing writer won
+    after every check is refused at the save, in the same words."""
 
     del db
     admin = create_platform_admin("messaging-templates-console-duplicator")
     result_data(_insert(admin, "part", "fresh"))
+    checked: list[str] = []
+    cleaned: list[str] = []
+    _recording(monkeypatch, TemplateWalker, "_check", lambda walker, row, name: checked.append(name))
+    _recording(monkeypatch, MessageTemplate, "full_clean", lambda row: cleaned.append(row.key))
     (error,) = _insert(admin, "part", "fresh").errors
     assert error.extensions["formErrors"] == [_DUPLICATE_MESSAGE]
+    assert (checked, cleaned) == ([], [])
     judged: list[Any] = []
     validate_constraints = MessageTemplate.validate_constraints
 
     def won_by_a_racer(row: Any, exclude: Any = None) -> None:
-        judged.append(row)
-        if len(judged) > 1:  # full_clean()'s own judgement saw no rival: the racer's insert came after it
-            validate_constraints(row, exclude=exclude)
+        judged.append(exclude)
+        if exclude is None:  # the save's handler: every earlier judgement saw no rival, the racer came after
+            validate_constraints(row)
 
     monkeypatch.setattr(MessageTemplate, "validate_constraints", won_by_a_racer)
     with actor_context(admin), pytest.raises(ValidationError) as raised:
         MessageTemplate.objects.create_own(kind="part", key="fresh", language="en", name="Again")
-    assert (raised.value.messages, len(judged)) == ([_DUPLICATE_MESSAGE], 2)
+    assert (raised.value.messages, judged[-1]) == ([_DUPLICATE_MESSAGE], None)
     assert len(_rows("part", "fresh")) == 1
+
+
+def test_an_integrity_error_the_constraints_do_not_explain_propagates_and_creates_nothing(db: None) -> None:
+    """The database refuses the row's insert itself, for a reason no constraint states: the error is not swallowed."""
+
+    del db
+    admin = create_platform_admin("messaging-templates-console-refused-by-the-database")
+    insert = f'INSERT INTO "{MessageTemplate._meta.db_table}"'
+
+    def refused_by_the_database(execute: Any, sql: str, params: Any, many: bool, context: Any) -> Any:
+        if sql.startswith(insert):
+            raise IntegrityError("refused for a reason no constraint states")
+        return execute(sql, params, many, context)
+
+    with (
+        connection.execute_wrapper(refused_by_the_database), actor_context(admin),
+        pytest.raises(IntegrityError, match="no constraint states"),
+    ):
+        MessageTemplate.objects.create_own(kind="part", key="fresh", language="en", name="Fresh")
+    assert _rows("part", "fresh") == []
+
+
+def test_a_default_shipped_while_a_row_is_created_is_never_hidden(db: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A load ships the identity after the shipped-default check: the saved row would hide it unflagged, so the
+    create is refused as that check refuses and the row is rolled back."""
+
+    del db
+    admin = create_platform_admin("messaging-templates-console-overtaken")
+    effective_rows = MessageTemplateQuerySet.effective_rows
+    loaded: list[Any] = []
+
+    def a_load_ships_it_meanwhile(rows: Any, *args: Any, **kwargs: Any) -> Any:
+        answer = effective_rows(rows, *args, **kwargs)
+        if not loaded:
+            loaded.append(_row("part", "racy", baseline=True, source="Shipped meanwhile."))
+        return answer
+
+    monkeypatch.setattr(MessageTemplateQuerySet, "effective_rows", a_load_ships_it_meanwhile)
+    with actor_context(admin), pytest.raises(ValidationError) as raised:
+        MessageTemplate.objects.create_own(kind="part", key="racy", language="en", name="Racy")
+    assert raised.value.code == "shipped_default"
+    assert [(row.language, row.is_baseline, row.source) for row in _rows("part", "racy")] == [
+        ("en", True, "Shipped meanwhile."),
+    ]
 
 
 def test_a_member_or_a_signed_out_caller_is_refused_before_anything_is_judged(
