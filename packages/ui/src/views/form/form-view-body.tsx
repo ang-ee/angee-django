@@ -36,8 +36,10 @@ import { relationSelectedOption } from "../relation/relation-options";
 import {
   fieldAriaLabel,
   fieldErrorMessages,
+  fieldIsRedacted,
   gridFieldClass,
   isCompositeFieldDescriptor,
+  isEmptySection,
   recordRepresentationValue,
   relationListValue,
   resolveField,
@@ -149,6 +151,7 @@ export function FormViewRecordHeader({
     subtitleParts,
     statusField,
     fieldReadOnly,
+    displaysField,
     clearServerFieldError,
     afterFieldChange,
     startFieldInteraction,
@@ -165,9 +168,9 @@ export function FormViewRecordHeader({
     ? resolveField(statusField, headerValues)
     : undefined;
   const statusValue = useWatch({ control: form.control, name: statusField?.name ?? "", disabled: !statusField });
-  const emptyGeneratedStatus = surface.isCreate && resolvedStatusField && fieldReadOnly(resolvedStatusField)
-    && (statusValue == null || statusValue === "");
-  const currentStatusField = resolvedStatusField && !resolvedStatusField.hidden && !emptyGeneratedStatus
+  // The status the form displays (`displaysField`): a create leaves it out where it holds no value.
+  const currentStatusField = resolvedStatusField && !resolvedStatusField.hidden
+    && displaysField(resolvedStatusField, statusValue, { status: true })
     && (!resolvedStatusField.showWhen || resolvedStatusField.showWhen(headerValues))
     ? resolvedStatusField : undefined;
   const statusRestricted = Boolean(currentStatusField && fieldIsRedacted(displayRecord, currentStatusField.name));
@@ -415,6 +418,7 @@ export function FormViewSheet({
     clearServerFieldError,
     afterFieldChange,
     fieldReadOnly,
+    displaysField,
     startFieldInteraction,
     commitFieldInteraction,
     requestedFocusPath,
@@ -423,9 +427,12 @@ export function FormViewSheet({
     control: form.control,
     disabled: !bodyField,
   }) as FormValues;
-  const currentBodyField = bodyField
+  const resolvedBodyField = bodyField
     ? resolveField(bodyField, bodyValues)
     : undefined;
+  // The body the form displays (`displaysField`): a create leaves it out where it holds no value.
+  const currentBodyField = resolvedBodyField && displaysField(resolvedBodyField, get(bodyValues, resolvedBodyField.name))
+    ? resolvedBodyField : undefined;
   const bodyRestricted = Boolean(currentBodyField && fieldIsRedacted(surface.displayRecord, currentBodyField.name));
   const renderField = boundFieldRenderer(surface);
   // A declared `lines` group holds the editable lines in its place in the sheet.
@@ -681,7 +688,7 @@ function FormSection({
       setOpen(true);
     }
   }, [requestedFocusPath, section.fields]);
-  if (section.fields.length === 0 && section.render === undefined) return null;
+  if (isEmptySection(section)) return null;
   const content = (
     <>
       {section.fields.length > 0 ? (
@@ -829,11 +836,6 @@ function BoundFieldRow({
       <FieldFooter description={field.description} errors={displayedMessages} descriptionId={descriptionId} errorId={errorId} />
     </FieldRoot>
   );
-}
-
-function fieldIsRedacted(record: FormValues | null | undefined, field: string): boolean {
-  const redacted = record?.redacted_fields;
-  return Array.isArray(redacted) && redacted.includes(field.split(".", 1)[0]);
 }
 
 function BodyFieldControl({

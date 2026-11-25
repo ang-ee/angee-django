@@ -103,4 +103,6 @@ function RecordVisibilityWidget({ field }: WidgetRenderProps): ReactElement {
     }} />;
 }
 
-export const visibilityWidget = { read: VisibilityWidget, edit: VisibilityWidget, cell: VisibilityWidget } satisfies WidgetDefinition;
+export const visibilityWidget = {
+  read: VisibilityWidget, edit: VisibilityWidget, cell: VisibilityWidget, writesOwnValue: true,
+} satisfies WidgetDefinition;

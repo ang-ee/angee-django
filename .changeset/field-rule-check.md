@@ -50,15 +50,12 @@ longer says it is required; a member holding its key with `undefined` still says
 it is required.
 
 Where the record form still checks, or no longer checks, a field against that
-rule: a redacted required field left empty still blocks the save, with "This
-field is required." under its lock, where the person has no control; a required
-field the record cannot write still shows an editable
-control, blocks the save while it is empty, and the save drops what is typed
-there; a field declared hidden whose control its page renders itself (with
+rule: a field declared hidden whose control its page renders itself (with
 `BoundDescriptorField`) is no longer checked by the client, and a server refusal
 of it shows under that control and in the banner; and a control a page renders
-for a field outside the fields the save writes is no longer checked, while what
-is typed there is dropped by the save, as before.
+for a field outside the fields the save writes is no longer checked, and is
+read-only unless the form's own submit owner saves it, which receives what is
+typed there.
 
 A server refusal of a record-form field whose descriptor is hidden, that lies
 outside the fields the save writes, or that its condition hides now shows in the

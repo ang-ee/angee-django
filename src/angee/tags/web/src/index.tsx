@@ -53,7 +53,7 @@ const tags = defineBaseAddon({
     tag: TagIcon,
   },
   forms: { "tags.Tag": tagForm },
-  widgets: { "angee.tags.recordTags": recordTagsWidget },
+  widgets: { "angee.tags.recordTags": { ...recordTagsWidget, writesOwnValue: true } },
   containers: {
     // Scope-specific tag addons add facets, columns and form fields to the Tags page.
     "tags.tags#facets": {},

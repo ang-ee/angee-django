@@ -70,7 +70,9 @@ export function useFormViewValues<T = FormValues>(form: FormViewSaveSurface, pat
   return watched as T;
 }
 
-/** Bind one descriptor to a nested path in FormView's existing RHF tree.
+/** Bind one descriptor to a nested path in FormView's existing RHF tree. Its control is read-only
+ * where the form's `fieldReadOnly` says so for that path; declare a field for the path, hidden if
+ * need be, to let the form's own save write it.
  * @kind surface
  */
 export function BoundDescriptorField({
@@ -96,7 +98,7 @@ export function BoundDescriptorField({
     field={resolved}
     value={bound.value}
     dialogValues={siblingValues}
-    readOnly={readOnly || surface.fieldReadOnly(resolved)}
+    readOnly={readOnly || surface.fieldReadOnly({ ...resolved, name })}
     controlRef={bound.controlRef}
     messages={bound.messages}
     onCommit={bound.onCommit}

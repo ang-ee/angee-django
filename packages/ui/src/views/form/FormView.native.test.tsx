@@ -637,6 +637,7 @@ test("bound descriptors scope prefill, null, errors and readonly to the declarin
   const f = await fixture({
     acknowledgedSource: source,
     mountedFields: [],
+    viewFields: [...fields, { name: "definition", hidden: true }],
     boundFields: [
       { field: operation, scope: "definition.node" },
       { field: optional, scope: "definition.node" },
@@ -670,6 +671,7 @@ test("a preset that gives a sibling its loaded value back leaves the form clean,
   const f = await fixture({
     acknowledgedSource: source,
     mountedFields: [],
+    viewFields: [...fields, { name: "kind", hidden: true }, { name: "config", hidden: true }],
     boundFields: [{ field: kind }, { field: { name: "config", label: "Configuration", widget: "json" }, readOnly: true }],
   });
   expect(f.surface().form.formState.isDirty).toBe(false);
@@ -1559,6 +1561,7 @@ test("a stateful bound widget remounts when its nested scope changes", async () 
       },
     },
     mountedFields: [],
+    viewFields: [...fields, { name: "definition", hidden: true }],
     boundFields: [{ field: until, scope: "definition.nodes.first.config" }],
   });
   await waitFor(() => expect(screen.getByLabelText("Until").textContent).toContain("Sep 10, 2026"));
