@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -295,20 +296,27 @@ def _library(model: Any, kit_model: Any) -> None:
 
 
 def _aliased(value: Any, ids: dict[str, str]) -> Any:
-    """``value`` with every public id it holds, as a key, a value or a part of a value, replaced by its alias."""
+    """``value`` with every public id it holds, as a key, a value or a part of a value, replaced by its alias.
 
-    if isinstance(value, dict):
-        return {ids.get(key, key): _aliased(item, ids) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_aliased(item, ids) for item in value]
-    if not isinstance(value, str):
+    One substitution over all the ids at once, the longest first in the alternation, so an id that is a
+    prefix of another never matches inside it and nothing is substituted inside an alias already written.
+    """
+
+    if not ids:
         return value
-    if value in ids:
-        return ids[value]
-    # The server's words may name a row by its public id; the longest id first, so none is a prefix of another.
-    for public_id in sorted((id_ for id_ in ids if id_ in value), key=len, reverse=True):
-        value = value.replace(public_id, ids[public_id])
-    return value
+    pattern = re.compile("|".join(re.escape(id_) for id_ in sorted(ids, key=len, reverse=True)))
+
+    def alias(text: str) -> str:
+        return pattern.sub(lambda match: ids[match.group(0)], text)
+
+    def walk(item: Any) -> Any:
+        if isinstance(item, dict):
+            return {alias(key) if isinstance(key, str) else key: walk(inner) for key, inner in item.items()}
+        if isinstance(item, list):
+            return [walk(inner) for inner in item]
+        return alias(item) if isinstance(item, str) else item
+
+    return walk(value)
 
 
 def _settled(row: dict[str, Any]) -> dict[str, Any]:
