@@ -525,9 +525,12 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   and keep any callbacks they close over stable; when a callback wraps
   Refine/query mutation objects that may refresh identity, expose a stable
   callback that reads the latest execution context from a ref (`useLatestRef`).
-  Explorer pages compose `ScopedExplorerPane`, which owns the primary-pane
-  navigator publication plus the root loading/empty gate; addons provide row
-  projection, route transitions, DnD policy, and domain actions. Context another
+  Explorer pages over a scoped tree (storage, knowledge) compose
+  `ScopedExplorerPane`, which owns the primary-pane navigator publication plus the
+  root loading/empty gate; addons provide row projection, route transitions, DnD
+  policy, and domain actions. An explorer page whose navigator is another surface
+  (the iam schema explorer, the agents session rail) renders it with
+  `PrimaryPanePublisher`. Context another
   addon owns beside a page's list is that addon's pane component, published with
   `usePrimaryPane` rather than stacked as a second list. The left pane never
   describes the record (see the shell's regions below). Page tests use
@@ -1759,10 +1762,13 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   ancestor, refreshes on local writes only (no live push, no error). Add the subscription to opt a model into
   live updates; omit it and you simply get local-write invalidation.
 - **`Workbench` (`layouts/Workbench.tsx`) is the collapsible inner-shell owner;
-  `Explorer` is removed.** Every multi-pane content region (console body, storage,
-  knowledge, iam schema, agents sessions) composes `Workbench` over `page/SplitPanes`
-  (v4) — `primary` is the navigator pane, `children` the content, `secondary` the
-  aside, with size/collapse persistence via `autoSave`. Do not
+  `Explorer` is removed.** The console body and a list's split placement compose
+  `Workbench` over `page/SplitPanes` (v4) — `primary` is the navigator pane,
+  `children` the content, `secondary` the aside, with size/collapse persistence via
+  `autoSave`. Explorer pages do not compose it: they publish their navigator into the
+  console's primary pane (the shell-published surfaces rule above).
+  A pane scrolls its content: the library sets `overflow: auto` on it
+  ([`SplitPane`](../../packages/ui/src/page/SplitPanes.tsx)). Do not
   hand-roll a fixed `grid`/`w-60` multi-pane shell or a pointer/arrow resize handle;
   the library owns sizing/collapse/persistence and Workbench owns the composition.
 - **`barVariants` (`layouts/bar.ts`) owns bar chrome.** Bar height/edge/pad/tone/
