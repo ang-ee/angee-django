@@ -13,7 +13,9 @@ session frame, above every layout, and passes its `HostAppearanceRead`
 (`{ options, pending }`) to the appearance provider; where those options rank is
 the appearance guide's "Host and user precedence". `HostAppearanceDefaults`
 gains `pending`: while it is set, `AppearanceProvider` keeps the first paint and
-the boot cache, as it does while identity resolves. Only the session frame sets
+the boot cache, as it does while identity resolves, for appearance that wears the
+host's options (a person following the app default, or a locked app); a person's
+own theme, customisation or draft applies at once. Only the session frame sets
 it: `CreateAppInput.appearance` is now `Omit<HostAppearanceDefaults, "pending">`.
 `AppearanceState.hostOptions` keeps its identity across renders that change
 nothing. A host with no source installed is unchanged.

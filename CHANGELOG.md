@@ -18,8 +18,10 @@ live in code docstrings.
     `HostAppearanceSource` whose `useOptions(theme, build)` hook `createApp` calls once
     per render of its session frame; two providers fail composition, as two dashboard
     stores do. `@angee/ui`'s `HostAppearanceDefaults` gains `pending`, which keeps the
-    first paint and the boot cache until the source's first read answers, fails or
-    pauses; only the session frame sets it, and `CreateAppInput.appearance` takes none.
+    first paint and the boot cache, for appearance that wears the host's options, until
+    the source's first read answers, fails or pauses; a person's own theme,
+    customisation or draft applies at once. Only the session frame sets it, and
+    `CreateAppInput.appearance` takes none.
     Where the source's options rank: `docs/frontend/appearance.md`, "Host and user
     precedence".
   - A customisable theme declines the source with

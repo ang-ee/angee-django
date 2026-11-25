@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import { act, cleanup, render, renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { Storage as TestStorage } from "happy-dom";
 import * as v from "valibot";
 
@@ -309,6 +309,45 @@ test("a pending host keeps the first paint and the boot cache until its options 
   expect(root.style.getPropertyValue("--brand")).toBe("#abcdef");
   expect(JSON.parse(window.localStorage.getItem(APPEARANCE_CACHE_KEY)!)).toMatchObject({
     themeId: paper.definition.id, tokenLayers: { shared: { "--brand": "#abcdef" } },
+  });
+});
+
+describe("while the host's own options are pending", () => {
+  // Only appearance that wears the host's options waits for them: a person following the app default, or a locked app.
+  const pendingHost: HostAppearanceDefaults = { themeId: paper.definition.id, colorScheme: "light", fingerprint: "test-host", pending: true };
+  const cache = () => JSON.parse(window.localStorage.getItem(APPEARANCE_CACHE_KEY) ?? "null");
+
+  test("a person who chose nothing keeps the first paint and writes no boot cache", () => {
+    renderAppearance({ preferences: {}, defaults: pendingHost });
+    expect(document.documentElement.dataset.themeId).toBeUndefined();
+    expect(cache()).toBeNull();
+  });
+
+  test.each([
+    { case: "a saved customisable theme", appearance: { version: 1, themeId: paper.definition.id }, themeId: paper.definition.id, brand: "#112233" },
+    { case: "a saved fixed theme", appearance: { version: 1, themeId: ink.definition.id }, themeId: ink.definition.id, brand: "#556677" },
+    { case: "a saved customisation", appearance: saved, themeId: paper.definition.id, brand: "#445566" },
+  ])("$case is worn and cached at once", ({ appearance, themeId, brand }) => {
+    renderAppearance({ preferences: { appearance }, defaults: pendingHost });
+    expect(document.documentElement.dataset.themeId).toBe(themeId);
+    expect(document.documentElement.style.getPropertyValue("--brand")).toBe(brand);
+    expect(cache()).toMatchObject({ themeId });
+  });
+
+  test("a locked app keeps the first paint, and the boot cache takes the person's own theme at once", () => {
+    renderAppearance({ preferences: { appearance: { version: 1, themeId: ink.definition.id } }, defaults: pendingHost, themeLocked: true });
+    expect(document.documentElement.dataset.themeId).toBeUndefined();
+    expect(cache()).toMatchObject({ themeId: ink.definition.id });
+  });
+
+  test("a theme picked in a draft applies at once; a draft that follows the app default keeps waiting", async () => {
+    const { result } = renderAppearance({ preferences: {}, defaults: pendingHost });
+    act(() => result.current.openDraft());
+    await act(async () => { await result.current.setColorScheme("dark"); });
+    expect(document.documentElement.dataset.themeId).toBeUndefined();
+    await act(async () => { await result.current.setTheme(ink.definition.id); });
+    expect(document.documentElement.dataset).toMatchObject({ themeId: ink.definition.id, colorScheme: "dark" });
+    expect(cache()).toBeNull();
   });
 });
 
