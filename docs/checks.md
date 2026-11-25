@@ -167,14 +167,20 @@ lane's executed coverage.
 
 ### SQLite Version
 
-SQLite runs need SQLite 3.53 or newer. Earlier releases (3.51.2 and older were
-checked) reject a subquery whose `ORDER BY` names an outer query's column and report
-`no such column`; messaging's redirect-aware follower reads depend on that. Python
-reports its library as `uv run --locked python -c "import sqlite3; print(sqlite3.sqlite_version)"`.
-uv's managed CPython bundles a current SQLite, while a distribution's system Python
-links the distribution's library (Ubuntu 26.04 and Debian trixie ship 3.46.1). CI sets
-`UV_PYTHON_PREFERENCE: only-managed` for that reason; locally, pass `--managed-python`
-or set the same variable when the system Python is older.
+SQLite runs need SQLite 3.53, and the [test settings](../tests/settings.py) refuse any
+other release. Earlier releases (3.51.2 and older were checked) reject a subquery whose
+`ORDER BY` names an outer query's column and report `no such column`; messaging's
+redirect-aware follower reads depend on that. SQLite 3.54.0 and 3.54.1 count each common
+table expression against the nesting limit, and django-zed-rebac's permission reads, one
+`WITH RECURSIVE` of many id-set expressions, exceed it and report `VIEWs and/or subqueries
+nested too deep`. Python reports its library as
+`uv run --locked python -c "import sqlite3; print(sqlite3.sqlite_version)"`. uv's managed
+CPython 3.14.9 bundles SQLite 3.53.1 and 3.14.10 bundles 3.54.1, so the
+[reusable checks](../.github/workflows/reusable-checks.yml) default to 3.14.9 until those
+reads fit the limit or a SQLite release lifts it. A distribution's system Python links the
+distribution's library (Ubuntu 26.04 and Debian trixie ship 3.46.1); CI sets
+`UV_PYTHON_PREFERENCE: only-managed` for that reason. Locally, run the SQLite suite with
+`--managed-python --python 3.14.9`.
 
 ### Local PostgreSQL Prerequisites
 
