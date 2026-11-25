@@ -350,7 +350,12 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: "26"
-          cache: pnpm
+          # GitHub's cache only on GitHub-hosted runners; a self-hosted runner keeps its own
+          # pnpm store, and the path setup-node reads there is not the one install fills.
+          # package-manager-cache turns off the caching v5 otherwise starts on its own
+          # from package.json's packageManager.
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
+          package-manager-cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r --filter './packages/**' typecheck
@@ -393,6 +398,10 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
+      # The checkouts below clean only their own paths; a reused self-hosted runner keeps
+      # the previous job's stack/ beside them, so start from an empty one.
+      - name: Start from an empty stack directory
+        run: rm -rf stack
       - uses: actions/checkout@v5
         with:
           repository: ${{ inputs.framework-repository }}
