@@ -149,6 +149,17 @@ def _message(thread: Any, key: str, sender: Any | None) -> Any:
     return Message._base_manager.create(thread=thread, sender=sender, external_id=key, platform="email")
 
 
+def _other_senders(count: int) -> str:
+    return (
+        f"{count} 'from' row(s) named a handle other than their message's sender and are deleted when this migration "
+        "commits; each message keeps its sender, and its source keeps the From header."
+    )
+
+
+def _logged(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [record.getMessage() for record in caplog.records if record.name == template.__name__]
+
+
 def _participant(state: ProjectState, message: Any | None, thread: Any, handle: Any, role: str = "to") -> Any:
     """A previous release's row, written through its historical model by the installed rows' keys."""
 
@@ -179,7 +190,6 @@ def test_the_template_renames_the_rows_moves_their_senders_and_reverses(caplog: 
         }
         for message, name in (
             (sent, "ada"), (unsent, "dan"), (twice, "eve"), (twice, "fay"), (other, "cat"), (merged, "eve-old"),
-            (None, "bob"),  # A thread membership's ``from`` row goes with the others and refuses nothing.
         ):
             row(message, name, "from")
         expected = {(row.pk, row.message_id, thread.pk, row.handle_id, row.role) for row in recipients}
@@ -198,11 +208,8 @@ def test_the_template_renames_the_rows_moves_their_senders_and_reverses(caplog: 
             "other": people["ada"].pk, "merged": people["eve"].pk,
         }
         # 3. Two ``from`` rows named someone else: Fay beside Eve, Cat for Ada. Eve's old
-        # address is Eve's merge group, and the membership row has no message to differ from.
-        assert [record.getMessage() for record in caplog.records if record.name == template.__name__] == [
-            "2 'from' row(s) named a handle other than their message's sender and are deleted; each message keeps "
-            "its sender, and its source keeps the From header."
-        ]
+        # address is Eve's merge group.
+        assert _logged(caplog) == [_other_senders(2)]
         # 4. No ``from`` row is left (the expected rows are exactly the recipients).
         # 6. The columns, the constraint and the model state are the installed model's.
         columns = _columns(_RECIPIENTS)
@@ -230,25 +237,35 @@ def test_the_template_renames_the_rows_moves_their_senders_and_reverses(caplog: 
         assert Message._base_manager.get(pk=unsent.pk).sender_id == people["dan"].pk
 
 
-def test_a_row_without_a_message_refuses_the_template_until_the_stated_remedy_runs() -> None:
-    """The refusal counts the rows and gives the statement that deletes them; nothing is applied until then."""
+def test_a_row_without_a_message_refuses_the_template_until_the_stated_remedy_runs(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A refusing run says what it would have deleted and how many rows refuse it, and its remedy deletes exactly those.
+
+    The rows without a message are counted whatever their role, a ``from`` row
+    included, so the count the refusal states is the count its statement deletes.
+    """
 
     executor = MigrationExecutor(connection)
     with system_context(reason="test recipients upgrade refusal"), _previous_release() as before:
         people = _people("ada", "bob", "cat")
         thread = Thread._base_manager.create(platform="email")
         unsent = _message(thread, "unsent", None)
+        other = _message(thread, "other", people["bob"])
         for message, name, role in (
-            (unsent, "ada", "from"), (unsent, "bob", "to"), (None, "cat", "to"), (None, "ada", "from"),
+            (unsent, "ada", "from"), (unsent, "bob", "to"), (other, "cat", "from"), (None, "cat", "to"),
+            (None, "ada", "from"),
         ):
             _participant(before, message, thread, people[name], role)
         kept = _rows(before, "Participant")
 
-        with pytest.raises(CommandError) as refused:
+        with caplog.at_level(logging.WARNING, logger=template.__name__), pytest.raises(CommandError) as refused:
             executor.apply_migration(before.clone(), _migration())
 
+        # Cat for Bob would be deleted on commit; the run never commits.
+        assert _logged(caplog) == [_other_senders(1)]
         assert str(refused.value) == (
-            "Nothing was applied: 1 messaging.Participant row(s) have no message and cannot become recipients; "
+            "Nothing was applied: 2 messaging.Participant row(s) have no message and cannot become recipients; "
             "delete them with `DELETE FROM messaging_participant WHERE message_id IS NULL;` in "
             "`manage.py dbshell --database default`, then migrate again."
         )
@@ -259,6 +276,7 @@ def test_a_row_without_a_message_refuses_the_template_until_the_stated_remedy_ru
 
         with connection.cursor() as cursor:
             cursor.execute(str(refused.value).split("`")[1])
+            assert cursor.rowcount == 2
         executor.apply_migration(before.clone(), _migration())
 
         assert _rows(_after(before), "Recipient") == {

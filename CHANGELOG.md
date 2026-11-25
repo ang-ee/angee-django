@@ -45,11 +45,15 @@ live in code docstrings.
   of its `from` row, logs how many `from` rows named someone other than their
   message's sender (each message's source keeps its `From` header), deletes the
   `from` rows, and refuses, with the statement that deletes them, while a row
-  without a message exists. A migration `makemigrations` writes without the
-  template deletes `Participant` and creates `Recipient`: the drop guard refuses
-  that where the participant table holds rows, but one generated on an empty
-  database drops the recipient rows when it is applied elsewhere, and those rows
-  are a projection of each message's stored envelope. Provision prunes the
+  without a message exists. Run it with the services stopped, as provision does:
+  it locks the recipient table for its whole run and the message table for its
+  last moments, and the previous release reads the old table; it takes about eight
+  seconds per million messages, most of it one rewrite of the recipient table. A
+  migration `makemigrations` writes without the template deletes `Participant` and
+  creates `Recipient`: the drop guard refuses that where the participant table
+  holds rows, but one generated on an empty database drops the recipient rows
+  when it is applied elsewhere, and those rows are a projection of each message's
+  stored envelope. Provision prunes the
   retired REBAC type `messaging/participant`; grants written directly on its
   `editor` or `reader` relations, which no framework surface wrote, are not
   carried over.

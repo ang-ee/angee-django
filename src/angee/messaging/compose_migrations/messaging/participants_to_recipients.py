@@ -17,16 +17,26 @@ In this order, in one transaction:
 3. The ``from`` rows naming a handle other than their message's sender, outside
    the sender's merge group, are counted and the count is logged. Nothing is
    stored: each message's source keeps its ``From`` header.
-4. The ``from`` rows are deleted: a message's sender is ``Message.sender`` alone.
-5. A row without a message (a thread membership, which nothing in the framework
-   writes or reads) refuses the migration with their count and the statement
-   that deletes them. Nothing is applied.
-6. ``message`` becomes required, ``role`` keeps ``to``, ``cc`` and ``bcc`` (its
-   column narrows to three characters), the relations take their new reverse
-   names, the two old unique constraints give way to
-   ``uq_recipient_message_handle_role``, and ``joined_at`` and ``left_at`` are
-   dropped. The public id prefix (``rcp_``, was ``ptp_``) is the model's
-   ``sqid_prefix``: the field is not migration state, so no operation names it.
+4. The ``from`` rows of a message are deleted: a message's sender is
+   ``Message.sender`` alone.
+5. A row without a message, of any role (a thread membership, which nothing in
+   the framework writes or reads), refuses the migration with their count and the
+   statement that deletes exactly those rows. Nothing is applied.
+6. ``role`` keeps ``to``, ``cc`` and ``bcc`` (its column narrows to three
+   characters, which rewrites the recipient table), the relations take their new
+   reverse names, the two old unique constraints give way to
+   ``uq_recipient_message_handle_role``, ``joined_at`` and ``left_at`` are
+   dropped, and last ``message`` becomes required. Making it required re-creates
+   its foreign key, which locks the message table until the migration commits, so
+   it comes after the rewrite: the message table stays readable and writable
+   until the last moments. The public id prefix (``rcp_``, was ``ptp_``) is the
+   model's ``sqid_prefix``: the field is not migration state, so no operation
+   names it.
+
+The recipient table is locked from the rename to the commit, and the release
+before this one reads ``messaging_participant``, so run it with the services
+stopped; it takes about eight seconds per million messages, most of it the
+rewrite of the recipient table.
 
 The reverse restores the columns, constraints, choices and names. It writes no
 ``from`` row back and keeps the senders step 2 set: the release before this one
@@ -45,9 +55,9 @@ from django.core.management.base import CommandError
 from django.db import migrations, models
 from django.db.backends.base.schema import BaseDatabaseSchemaEditor
 from django.db.migrations.state import StateApps
-from django.db.models.functions import Coalesce
 
 from angee.base.fields.state import StateField
+from angee.base.querysets import MergeableQuerySet
 
 FROM = "from"
 PREVIOUS_TABLE = "messaging_participant"
@@ -77,24 +87,28 @@ def count_other_senders(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor
     """Step 3: count and log the ``from`` rows naming a handle outside their sender's merge group."""
 
     other = _rows(apps, schema_editor, "Recipient").filter(role=FROM).alias(
-        _named=Coalesce("handle__merged_into_id", "handle_id"),
-        _sender=Coalesce("message__sender__merged_into_id", "message__sender_id"),
+        _named=MergeableQuerySet.survivor_id("handle__"),
+        _sender=MergeableQuerySet.survivor_id("message__sender__"),
     ).exclude(_named=models.F("_sender")).count()
     logger.warning(
-        "%s 'from' row(s) named a handle other than their message's sender and are deleted; each message keeps "
-        "its sender, and its source keeps the From header.",
+        "%s 'from' row(s) named a handle other than their message's sender and are deleted when this migration "
+        "commits; each message keeps its sender, and its source keeps the From header.",
         other,
     )
 
 
 def delete_from_rows(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:
-    """Step 4: delete the ``from`` rows; the sender is ``Message.sender`` alone."""
+    """Step 4: delete the ``from`` rows of a message; the sender is ``Message.sender`` alone.
 
-    _rows(apps, schema_editor, "Recipient").filter(role=FROM).delete()
+    A ``from`` row without a message stays for step 5, which counts it with the
+    other rows without one, so its count is what its remedy deletes.
+    """
+
+    _rows(apps, schema_editor, "Recipient").filter(role=FROM, message__isnull=False).delete()
 
 
 def refuse_rows_without_a_message(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:
-    """Step 5: refuse while a row has no message, with their count and the statement that deletes them."""
+    """Step 5: refuse while a row of any role has no message, with their count and the statement that deletes them."""
 
     orphans = _rows(apps, schema_editor, "Recipient").filter(message__isnull=True).count()
     if orphans:
@@ -117,11 +131,6 @@ class Migration(migrations.Migration):
         migrations.RunPython(count_other_senders, migrations.RunPython.noop),
         migrations.RunPython(delete_from_rows, migrations.RunPython.noop),
         migrations.RunPython(refuse_rows_without_a_message, migrations.RunPython.noop),
-        migrations.AlterField(
-            "recipient",
-            "message",
-            models.ForeignKey(on_delete=models.CASCADE, related_name="recipients", to="messaging.message"),
-        ),
         migrations.AlterField(
             "recipient",
             "role",
@@ -147,4 +156,10 @@ class Migration(migrations.Migration):
         ),
         migrations.RemoveField("recipient", "joined_at"),
         migrations.RemoveField("recipient", "left_at"),
+        # Last: re-creating the foreign key locks the message table until the commit.
+        migrations.AlterField(
+            "recipient",
+            "message",
+            models.ForeignKey(on_delete=models.CASCADE, related_name="recipients", to="messaging.message"),
+        ),
     ]
